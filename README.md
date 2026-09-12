@@ -1,6 +1,6 @@
 # Daedalus
 
-Daedalus is a macOS-first, local-first control plane for coding agents. This repository currently contains the Phase 0 terminal proof and the Phase 1 foundation: a Bun workspace, shared core/platform/protocol packages, a thin `daedal` CLI, and an Electrobun + React + ghostty-web desktop shell.
+Daedalus is a macOS-first, local-first control plane for coding agents. Phases 0–4 are implemented: the terminal proof, shared foundation, complete workspace/task CLI, and durable tmux-backed agent CLI. The Electrobun + React + ghostty-web desktop remains the Phase 0 terminal shell; desktop CRUD and terminal productization are intentionally deferred to Phases 5 and 6.
 
 Workspaces are ordinary directories. They are not Git worktrees. SQLite stores searchable metadata, while the filesystem remains authoritative for workspace existence and tmux remains authoritative for live sessions.
 
@@ -43,15 +43,26 @@ The default data directory is `~/.daedalus`, containing `config.json`, `state.db
 ## Commands
 
 - `bun test` — fast unit and SQLite migration integration tests
+- `bun run test:agent-tmux` — isolated production agent/tmux lifecycle verification
+- `bun run test:cli-agent` — full workspace → task → agent → cleanup CLI integration
 - `bun run test:terminal-spike` — real isolated tmux transport verification
 - `bun run format:check` — formatting validation
 - `bun run typecheck` — strict TypeScript validation
 - `bun run build` — shared packages, CLI, Vite renderer, and packaged Electrobun app
 - `bun run verify:versions` — exact dependency and Bun runtime guard
-- `bun run daedal --help` — Phase 1 CLI surface
+- `bun run daedal --help` — complete Phase 2–4 CLI surface
 - `bun run daedal doctor [--json]` — environment diagnostics
 
-Workspace/task CRUD and production agent lifecycle behavior deliberately begin in later phases. The Phase 1 migration establishes their schema, but no CRUD handler bypasses the shared core.
+Quick start:
+
+```sh
+bun run daedal workspace create "My project"
+bun run daedal task create --workspace my-project --title "Implement feature"
+bun run daedal agent spawn --workspace my-project --provider codex
+bun run daedal agent list --running
+```
+
+Every mutation flows through `@daedalus/core`. Workspace removal preserves files unless both `--delete-files` and `--force` are supplied; task removal requires `--force`; live agents block workspace and task removal.
 
 ## Documentation
 

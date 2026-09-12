@@ -12,3 +12,19 @@ export interface DoctorCheck {
   version?: string;
   detail: string;
 }
+
+export interface CliSuccess<T> {
+  ok: true;
+  data: T;
+}
+
+export interface CliFailure {
+  ok: false;
+  error: {
+    code: "VALIDATION" | "NOT_FOUND" | "CONFLICT" | "DEPENDENCY" | "INTERNAL";
+    message: string;
+    details?: Record<string, unknown>;
+  };
+}
+
+export type CliEnvelope<T> = CliSuccess<T> | CliFailure;

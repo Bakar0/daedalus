@@ -13,7 +13,7 @@ tmux control client ─> loopback WebSocket ─> ghostty-web renderer
 
 ## Package boundaries
 
-- `@daedalus/core` owns configuration, domain types, structured errors, application context, events, and SQLite migrations. Future mutations belong in services here.
+- `@daedalus/core` owns configuration, domain types, structured errors, application context, events, SQLite repositories, and all workspace/task/agent services.
 - `@daedalus/platform` owns operating-system boundaries: filesystem creation, argv-safe process execution, and tmux control-mode transport.
 - `@daedalus/protocol` owns serializable CLI/desktop DTOs and terminal wire messages.
 - `apps/cli` maps arguments, results, errors, and exit codes onto the shared application layer.
@@ -24,7 +24,11 @@ tmux control client ─> loopback WebSocket ─> ghostty-web renderer
 
 `DAEDALUS_HOME` overrides the default `~/.daedalus` root. Configuration resolves all data paths from that root. SQLite starts in WAL mode with a five-second busy timeout. Migrations are sorted SQL files applied transactionally and recorded in `schema_migrations`.
 
-The initial migration defines the planned workspace, task, and agent-session tables so later phases can add repositories without changing the foundation. No Phase 2–4 CRUD behavior is implemented yet.
+The initial migration defines workspace, task, and agent-session tables. Small repositories share one WAL-mode connection and expose an explicit transaction boundary. Services own every mutation; CLI and desktop startup only construct an application context and call those services.
+
+Workspace rows are indexes, not proof of existence. Services require a real non-symlink directory with a matching `.daedalus/workspace.json` ID marker before returning or using a workspace. Slugs are mutable aliases; IDs and paths are stable. File deletion additionally rejects root-like targets, symlinks, and invalid markers.
+
+Agent sessions use names derived only from immutable UUIDs. Provider adapters build executable and argument arrays, and the tmux adapter preserves those argv boundaries. On startup, live SQLite rows are reconciled against the isolated Daedalus tmux server; missing sessions become `lost`, while task status remains untouched.
 
 ## Terminal lifecycle
 

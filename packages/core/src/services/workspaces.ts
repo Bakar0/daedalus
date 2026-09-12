@@ -1,0 +1,255 @@
+import { dirname, join, resolve } from "node:path";
+import {
+  canonicalPath,
+  createDirectoryExclusive,
+  ensureDirectory,
+  isDirectory,
+  isRootLikePath,
+  isSymbolicLink,
+  pathExists,
+  readTextFile,
+  removeDirectory,
+  writeTextFile,
+} from "@daedalus/platform";
+import type { Workspace } from "../domain";
+import { DaedalusError } from "../errors";
+import type { SqliteRepositories } from "../repositories";
+
+const MARKER_DIRECTORY = ".daedalus";
+const MARKER_FILE = "workspace.json";
+
+export function workspaceSlug(value: string): string {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (
+    !slug ||
+    slug.length > 63 ||
+    !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(slug)
+  ) {
+    throw new DaedalusError(
+      "VALIDATION",
+      "Workspace slug must contain 1–63 lowercase letters, numbers, or hyphens",
+    );
+  }
+  return slug;
+}
+
+function requiredName(value: string): string {
+  const name = value.trim();
+  if (!name || name.length > 120)
+    throw new DaedalusError(
+      "VALIDATION",
+      "Workspace name must contain 1–120 characters",
+    );
+  return name;
+}
+
+function workspaceConflict(error: unknown, slug: string, path: string): Error {
+  const code = (error as NodeJS.ErrnoException).code;
+  const message = error instanceof Error ? error.message : String(error);
+  if (code === "EEXIST" || message.includes("UNIQUE constraint failed"))
+    return new DaedalusError(
+      "CONFLICT",
+      `Workspace '${slug}' or path '${path}' already exists`,
+    );
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+export class WorkspaceService {
+  constructor(
+    private readonly repositories: SqliteRepositories,
+    private readonly workspaceRoot: string,
+    private readonly hasLiveAgents: (workspaceId: string) => Promise<boolean>,
+  ) {}
+
+  async create(input: {
+    name: string;
+    slug?: string;
+    path?: string;
+  }): Promise<Workspace> {
+    const name = requiredName(input.name);
+    const slug = workspaceSlug(input.slug ?? name);
+    const path = resolve(input.path ?? join(this.workspaceRoot, slug));
+    if (this.repositories.findWorkspace(slug))
+      throw new DaedalusError("CONFLICT", `Workspace '${slug}' already exists`);
+    if (this.repositories.listWorkspaces().some((item) => item.path === path))
+      throw new DaedalusError(
+        "CONFLICT",
+        `Workspace path '${path}' is already registered`,
+      );
+    if (await pathExists(path))
+      throw new DaedalusError(
+        "CONFLICT",
+        `Workspace path '${path}' already exists`,
+      );
+
+    const now = new Date().toISOString();
+    const workspace: Workspace = {
+      id: crypto.randomUUID(),
+      slug,
+      name,
+      path,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    };
+    let created = false;
+    try {
+      await ensureDirectory(dirname(path));
+      await createDirectoryExclusive(path);
+      created = true;
+      await ensureDirectory(join(path, MARKER_DIRECTORY));
+      await writeTextFile(
+        join(path, MARKER_DIRECTORY, MARKER_FILE),
+        `${JSON.stringify({ id: workspace.id }, null, 2)}\n`,
+      );
+      this.repositories.createWorkspace(workspace);
+      return workspace;
+    } catch (error) {
+      if (created && (await pathExists(path))) await removeDirectory(path);
+      throw workspaceConflict(error, slug, path);
+    }
+  }
+
+  async list(): Promise<Workspace[]> {
+    const result: Workspace[] = [];
+    for (const workspace of this.repositories.listWorkspaces()) {
+      if (await this.isAuthoritativeWorkspace(workspace))
+        result.push(workspace);
+    }
+    return result;
+  }
+
+  async get(reference: string): Promise<Workspace> {
+    const workspace = this.repositories.findWorkspace(reference);
+    if (!workspace)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Workspace '${reference}' was not found`,
+      );
+    if (!(await this.isAuthoritativeWorkspace(workspace)))
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Workspace folder '${workspace.path}' or its identity marker is missing`,
+        { workspaceId: workspace.id },
+      );
+    return workspace;
+  }
+
+  async update(
+    reference: string,
+    changes: { name?: string; slug?: string },
+  ): Promise<Workspace> {
+    const workspace = await this.get(reference);
+    if (changes.name === undefined && changes.slug === undefined)
+      throw new DaedalusError(
+        "VALIDATION",
+        "At least one workspace field is required",
+      );
+    const slug =
+      changes.slug === undefined ? workspace.slug : workspaceSlug(changes.slug);
+    const collision = this.repositories.findWorkspace(slug);
+    if (collision && collision.id !== workspace.id)
+      throw new DaedalusError("CONFLICT", `Workspace '${slug}' already exists`);
+    const updated: Workspace = {
+      ...workspace,
+      name:
+        changes.name === undefined
+          ? workspace.name
+          : requiredName(changes.name),
+      slug,
+      updatedAt: new Date().toISOString(),
+    };
+    try {
+      this.repositories.updateWorkspace(updated);
+    } catch (error) {
+      throw workspaceConflict(error, slug, workspace.path);
+    }
+    return updated;
+  }
+
+  async remove(
+    reference: string,
+    options: { deleteFiles?: boolean; force?: boolean },
+  ): Promise<{ workspace: Workspace; filesDeleted: boolean }> {
+    if (!options.force)
+      throw new DaedalusError(
+        "VALIDATION",
+        "Workspace removal requires --force",
+      );
+    const workspace = await this.get(reference);
+    if (await this.hasLiveAgents(workspace.id))
+      throw new DaedalusError(
+        "CONFLICT",
+        "Workspace has live agent sessions; stop them before removal",
+      );
+    if (options.deleteFiles) await this.verifyDeletionTarget(workspace);
+    if (options.deleteFiles) await removeDirectory(workspace.path);
+    this.repositories.transaction(() =>
+      this.repositories.deleteWorkspace(workspace.id),
+    );
+    return { workspace, filesDeleted: Boolean(options.deleteFiles) };
+  }
+
+  private async verifyDeletionTarget(workspace: Workspace): Promise<void> {
+    if (
+      isRootLikePath(workspace.path) ||
+      resolve(workspace.path) === resolve(this.workspaceRoot)
+    )
+      throw new DaedalusError(
+        "VALIDATION",
+        "Refusing to delete a root-like workspace path",
+      );
+    if (await isSymbolicLink(workspace.path))
+      throw new DaedalusError(
+        "VALIDATION",
+        "Refusing to delete a symbolic-link workspace",
+      );
+    const canonical = await canonicalPath(workspace.path);
+    const markerDirectory = join(canonical, MARKER_DIRECTORY);
+    const markerPath = join(markerDirectory, MARKER_FILE);
+    if (
+      (await isSymbolicLink(markerDirectory)) ||
+      (await isSymbolicLink(markerPath))
+    )
+      throw new DaedalusError(
+        "VALIDATION",
+        "Workspace identity marker must not be a symbolic link",
+      );
+    let marker: { id?: string };
+    try {
+      marker = JSON.parse(await readTextFile(markerPath)) as { id?: string };
+    } catch {
+      throw new DaedalusError(
+        "VALIDATION",
+        "Workspace identity marker is missing or invalid",
+      );
+    }
+    if (marker.id !== workspace.id)
+      throw new DaedalusError(
+        "VALIDATION",
+        "Workspace identity marker does not match",
+      );
+  }
+
+  private async isAuthoritativeWorkspace(
+    workspace: Workspace,
+  ): Promise<boolean> {
+    if (
+      !(await isDirectory(workspace.path)) ||
+      (await isSymbolicLink(workspace.path))
+    )
+      return false;
+    try {
+      const marker = JSON.parse(
+        await readTextFile(join(workspace.path, MARKER_DIRECTORY, MARKER_FILE)),
+      ) as { id?: string };
+      return marker.id === workspace.id;
+    } catch {
+      return false;
+    }
+  }
+}

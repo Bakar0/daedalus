@@ -1,4 +1,136 @@
-import { runCommand } from "./process";
+import { runCommand, type CommandOptions, type CommandResult } from "./process";
+
+export interface TmuxLaunch {
+  session: string;
+  cwd: string;
+  executable: string;
+  args: string[];
+  env?: Record<string, string>;
+}
+
+export interface TmuxClient {
+  probe(): Promise<string | undefined>;
+  createSession(launch: TmuxLaunch): Promise<void>;
+  hasSession(session: string): Promise<boolean>;
+  listSessions(): Promise<string[]>;
+  attach(session: string): Promise<number>;
+  send(session: string, text: string): Promise<void>;
+  stop(session: string, force?: boolean): Promise<void>;
+}
+
+export class CommandTmuxClient implements TmuxClient {
+  constructor(
+    readonly socketName = "daedalus",
+    private readonly executable = "tmux",
+    private readonly command: (
+      executable: string,
+      args: string[],
+      options?: CommandOptions,
+    ) => Promise<CommandResult> = runCommand,
+  ) {}
+
+  private args(...args: string[]): string[] {
+    return ["-L", this.socketName, ...args];
+  }
+
+  async probe(): Promise<string | undefined> {
+    try {
+      const result = await this.command(this.executable, ["-V"]);
+      return result.exitCode === 0
+        ? result.stdout.trim() || result.stderr.trim()
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async createSession(launch: TmuxLaunch): Promise<void> {
+    const environment = Object.entries(launch.env ?? {}).flatMap(
+      ([key, value]) => ["-e", `${key}=${value}`],
+    );
+    const result = await this.command(
+      this.executable,
+      this.args(
+        "new-session",
+        "-d",
+        "-s",
+        launch.session,
+        "-c",
+        launch.cwd,
+        ...environment,
+        "--",
+        launch.executable,
+        ...launch.args,
+      ),
+    );
+    if (result.exitCode !== 0)
+      throw new Error(result.stderr.trim() || "tmux session creation failed");
+  }
+
+  async hasSession(session: string): Promise<boolean> {
+    const result = await this.command(
+      this.executable,
+      this.args("has-session", "-t", session),
+    );
+    return result.exitCode === 0;
+  }
+
+  async listSessions(): Promise<string[]> {
+    const result = await this.command(
+      this.executable,
+      this.args("list-sessions", "-F", "#{session_name}"),
+    );
+    if (result.exitCode !== 0) return [];
+    return result.stdout
+      .split(/\r?\n/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+  }
+
+  async attach(session: string): Promise<number> {
+    const result = await this.command(
+      this.executable,
+      this.args("attach-session", "-t", session),
+      { stdin: "inherit", stdout: "inherit", stderr: "inherit" },
+    );
+    return result.exitCode;
+  }
+
+  async send(session: string, text: string): Promise<void> {
+    const literal = await this.command(
+      this.executable,
+      this.args("send-keys", "-t", session, "-l", "--", text),
+    );
+    if (literal.exitCode !== 0)
+      throw new Error(literal.stderr.trim() || "tmux input failed");
+    const enter = await this.command(
+      this.executable,
+      this.args("send-keys", "-t", session, "Enter"),
+    );
+    if (enter.exitCode !== 0)
+      throw new Error(enter.stderr.trim() || "tmux Enter input failed");
+  }
+
+  async stop(session: string, force = false): Promise<void> {
+    if (!force) {
+      const interrupt = await this.command(
+        this.executable,
+        this.args("send-keys", "-t", session, "C-c"),
+      );
+      if (interrupt.exitCode !== 0)
+        throw new Error(interrupt.stderr.trim() || "tmux interrupt failed");
+      await Bun.sleep(100);
+    }
+    if (await this.hasSession(session)) {
+      const killed = await this.command(
+        this.executable,
+        this.args("kill-session", "-t", session),
+      );
+      if (killed.exitCode !== 0)
+        throw new Error(killed.stderr.trim() || "tmux stop failed");
+    }
+  }
+}
 
 export const SPIKE_SOCKET = "daedalus-spike";
 export const SPIKE_SESSION = "daedalus_spike";

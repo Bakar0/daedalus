@@ -5,3 +5,7 @@ export * from "./events";
 export * from "./logging";
 export * from "./repositories";
 export * from "./services/context";
+export * from "./services/agents";
+export * from "./services/providers";
+export * from "./services/tasks";
+export * from "./services/workspaces";

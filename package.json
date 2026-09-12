@@ -20,6 +20,8 @@
     "format:check": "prettier --check .",
     "lint": "tsc --noEmit",
     "test": "vitest run",
+    "test:agent-tmux": "bun run scripts/agent-tmux-check.ts",
+    "test:cli-agent": "bun run scripts/cli-agent-check.ts",
     "test:terminal-spike": "bun run scripts/terminal-spike-check.ts",
     "typecheck": "tsc --noEmit",
     "verify:versions": "bun run scripts/verify-versions.ts",

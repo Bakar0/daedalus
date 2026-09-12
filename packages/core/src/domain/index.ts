@@ -25,3 +25,20 @@ export interface Task {
   updatedAt: string;
   completedAt: string | null;
 }
+
+export type AgentSessionStatus = "starting" | "running" | "exited" | "lost";
+
+export interface AgentSession {
+  id: UUID;
+  workspaceId: UUID;
+  taskId: UUID | null;
+  provider: AgentProviderName;
+  tmuxSession: string;
+  command: string;
+  args: string[];
+  workingDirectory: string;
+  status: AgentSessionStatus;
+  exitCode: number | null;
+  startedAt: string;
+  endedAt: string | null;
+}
