@@ -1,5 +1,5 @@
 import { FitAddon, init, Terminal } from "ghostty-web";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
@@ -250,48 +250,6 @@ function SessionTerminal({ session }: { session: AgentSessionDto }) {
   );
 }
 
-type Activity = {
-  id: string;
-  title: string;
-  detail: string;
-  timestamp: string;
-  state: string;
-};
-
-export function workspaceActivities(
-  snapshot: DesktopSnapshotDto,
-  workspaceId: string,
-): Activity[] {
-  const tasks = snapshot.tasks.filter(
-    (task) => task.workspaceId === workspaceId,
-  );
-  const taskNames = new Map(tasks.map((task) => [task.id, task.title]));
-  const activities: Activity[] = tasks.map((task) => ({
-    id: `task-${task.id}`,
-    title: `Task ${task.status === "done" ? "completed" : "updated"}`,
-    detail: task.title,
-    timestamp: task.completedAt ?? task.updatedAt,
-    state: task.status,
-  }));
-  for (const session of snapshot.agents.filter(
-    (item) => item.workspaceId === workspaceId,
-  )) {
-    activities.push({
-      id: `session-${session.id}`,
-      title: `${sessionName(session)} ${session.status}`,
-      detail: session.taskId
-        ? (taskNames.get(session.taskId) ?? "Linked task")
-        : "Workspace session",
-      timestamp: session.endedAt ?? session.startedAt,
-      state: session.status,
-    });
-  }
-  return activities.sort(
-    (left, right) =>
-      new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime(),
-  );
-}
-
 export function WorkspaceApp({
   injectedClient,
   initialSnapshot,
@@ -304,7 +262,7 @@ export function WorkspaceApp({
   initialSelectedTaskId?: string;
   initialActiveAgentId?: string;
   initialDetailView?: "brief" | "terminal";
-  initialWorkspaceView?: "board" | "activity";
+  initialWorkspaceView?: "board" | "sessions";
 } = {}) {
   const clientRef = useRef(injectedClient);
   if (!clientRef.current)
@@ -316,7 +274,7 @@ export function WorkspaceApp({
   );
   const [selectedTaskId, setSelectedTaskId] = useState(initialSelectedTaskId);
   const [activeSessionId, setActiveSessionId] = useState(initialActiveAgentId);
-  const [view, setView] = useState<"board" | "activity">(initialWorkspaceView);
+  const [view, setView] = useState<"board" | "sessions">(initialWorkspaceView);
   const [filter, setFilter] = useState<TaskStatus | "all">("all");
   const [modal, setModal] = useState<
     "workspace" | "task" | "taskDetail" | "session" | "settings"
@@ -417,11 +375,6 @@ export function WorkspaceApp({
     (item) => item.id === selectedTaskId,
   );
   const activeSession = sessions.find((item) => item.id === activeSessionId);
-  const activities = useMemo(
-    () =>
-      snapshot && workspaceId ? workspaceActivities(snapshot, workspaceId) : [],
-    [snapshot, workspaceId],
-  );
 
   async function createWorkspace(event: React.FormEvent) {
     event.preventDefault();
@@ -472,6 +425,7 @@ export function WorkspaceApp({
     );
     if (created) {
       setActiveSessionId(created.id);
+      setView("sessions");
       setModal(undefined);
     }
   }
@@ -608,18 +562,18 @@ export function WorkspaceApp({
                 Board
               </button>
               <button
-                className={view === "activity" ? "active" : ""}
-                onClick={() => setView("activity")}
+                className={view === "sessions" ? "active" : ""}
+                onClick={() => setView("sessions")}
                 role="tab"
               >
-                Activity
+                Sessions
               </button>
             </div>
           </div>
           {!workspace ? (
             <div className="empty large">
               <strong>Choose a workspace</strong>
-              <span>Its board and activity will appear here.</span>
+              <span>Its board and sessions will appear here.</span>
             </div>
           ) : view === "board" ? (
             <>
@@ -703,99 +657,79 @@ export function WorkspaceApp({
               </div>
             </>
           ) : (
-            <div className="activity-list">
-              {activities.length === 0 && (
-                <div className="empty large">
-                  <strong>No activity yet</strong>
-                  <span>Task and session changes will appear here.</span>
+            <>
+              <div className="sessions-toolbar">
+                <div>
+                  <strong>Sessions</strong>
+                  <span className="count-badge">{sessions.length}</span>
                 </div>
-              )}
-              {activities.map((activity) => (
-                <article className="activity-item" key={activity.id}>
-                  <span className={`agent-dot ${activity.state}`} />
-                  <div>
-                    <strong>{activity.title}</strong>
-                    <span>{activity.detail}</span>
+                <button
+                  disabled={!snapshot?.settings.tmuxAvailable}
+                  onClick={() => setModal("session")}
+                >
+                  + New session
+                </button>
+              </div>
+              <div className="session-grid item-list">
+                {sessions.length === 0 && (
+                  <div className="empty large">
+                    <strong>No sessions yet</strong>
+                    <span>Create an agent or free terminal.</span>
                   </div>
-                  <time>{new Date(activity.timestamp).toLocaleString()}</time>
-                </article>
-              ))}
-            </div>
+                )}
+                {sessions.map((session) => {
+                  const task = allTasks.find(
+                    (item) => item.id === session.taskId,
+                  );
+                  const live =
+                    session.status === "running" ||
+                    session.status === "starting";
+                  const timestamp = session.endedAt ?? session.startedAt;
+                  return (
+                    <div
+                      className={`session-card ${session.id === activeSessionId ? "selected" : ""}`}
+                      key={session.id}
+                    >
+                      <button
+                        className="session-card-main"
+                        onClick={() => setActiveSessionId(session.id)}
+                      >
+                        <span className={`session-kind-icon ${session.kind}`}>
+                          {session.kind === "terminal"
+                            ? ">_"
+                            : session.provider.slice(0, 1).toUpperCase()}
+                        </span>
+                        <span>
+                          <strong>{sessionName(session)}</strong>
+                          <small>{task?.title ?? "Workspace session"}</small>
+                          <em>
+                            <span className={`agent-dot ${session.status}`} />
+                            {session.status} · {session.id.slice(0, 6)}
+                          </em>
+                          <time dateTime={timestamp}>
+                            {session.endedAt ? "Ended" : "Started"} ·{" "}
+                            {new Date(timestamp).toLocaleString()}
+                          </time>
+                        </span>
+                      </button>
+                      <button
+                        aria-label={`${live ? "Stop" : "Remove"} ${sessionName(session)} session`}
+                        className="session-card-action"
+                        onClick={() =>
+                          void (live
+                            ? stopSession(session)
+                            : removeSession(session))
+                        }
+                      >
+                        {live ? "■" : "×"}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
           )}
         </section>
-
-        <aside className="sessions-column">
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">Workspace</span>
-              <h1>Sessions</h1>
-            </div>
-            <button
-              aria-label="Create session"
-              className="icon-button"
-              disabled={!workspace || !snapshot?.settings.tmuxAvailable}
-              onClick={() => setModal("session")}
-            >
-              +
-            </button>
-          </div>
-          <div className="session-rail item-list">
-            {workspace && sessions.length === 0 && (
-              <div className="empty large">
-                <strong>No sessions</strong>
-                <span>Create an agent or terminal.</span>
-              </div>
-            )}
-            {sessions.map((session) => {
-              const task = allTasks.find((item) => item.id === session.taskId);
-              const live =
-                session.status === "running" || session.status === "starting";
-              return (
-                <div
-                  className={`session-card ${session.id === activeSessionId ? "selected" : ""}`}
-                  key={session.id}
-                >
-                  <button
-                    className="session-card-main"
-                    onClick={() => setActiveSessionId(session.id)}
-                  >
-                    <span className={`session-kind-icon ${session.kind}`}>
-                      {session.kind === "terminal"
-                        ? ">_"
-                        : session.provider.slice(0, 1).toUpperCase()}
-                    </span>
-                    <span>
-                      <strong>{sessionName(session)}</strong>
-                      <small>{task?.title ?? "Workspace session"}</small>
-                      <em>
-                        <span className={`agent-dot ${session.status}`} />
-                        {session.status} · {session.id.slice(0, 6)}
-                      </em>
-                    </span>
-                  </button>
-                  <button
-                    aria-label={`${live ? "Stop" : "Remove"} ${sessionName(session)} session`}
-                    className="session-card-action"
-                    onClick={() =>
-                      void (live
-                        ? stopSession(session)
-                        : removeSession(session))
-                    }
-                  >
-                    {live ? "■" : "×"}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-          <button
-            className="new-session-button"
-            disabled={!workspace || !snapshot?.settings.tmuxAvailable}
-            onClick={() => setModal("session")}
-          >
-            + New session
-          </button>
-        </aside>
 
         <section className="terminal-column">
           <div className="terminal-heading">
@@ -1071,6 +1005,7 @@ export function WorkspaceApp({
                       key={session.id}
                       onClick={() => {
                         setActiveSessionId(session.id);
+                        setView("sessions");
                         setModal(undefined);
                       }}
                     >

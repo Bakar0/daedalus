@@ -30,7 +30,7 @@ Start the desktop application with:
 bun run dev
 ```
 
-The workspace UI keeps the task Board and Activity feed together, with a compact vertical Sessions rail beside them. Use **New session** to start a Codex agent, Claude agent, or free login-shell terminal, optionally linked to a task. Selecting a session card opens it in the single right-side terminal area. Task briefs open from board cards and remain editable as GitHub-flavored Markdown. Closing or reopening the app detaches and reconnects terminals without terminating their tmux-owned sessions. Split-terminal presets are intentionally deferred.
+The workspace UI switches between **Board** and **Sessions**. Use **New session** in the Sessions view to start a Codex agent, Claude agent, or free login-shell terminal, optionally linked to a task. Session cards include lifecycle status and start/end time; selecting one opens it in the single right-side terminal area. Task briefs open from board cards and remain editable as GitHub-flavored Markdown. Closing or reopening the app detaches and reconnects terminals without terminating their tmux-owned sessions. Split-terminal presets are intentionally deferred.
 
 Terminal traffic uses a token-authenticated loopback WebSocket. The app restores up to 10,000 lines or 1 MiB of tmux history, retains 10,000 renderer scrollback lines, and bounds both Bun-side and renderer-side pending output to 1 MiB. When a noisy producer outruns the UI, Daedalus drops old pending bytes, reports the amount, and leaves the durable tmux pane available for a fresh bounded capture. Live, reconnecting, exited, and lost states are shown explicitly. CLI `agent attach` remains compatible with the same session.
 

@@ -1,5 +1,1 @@
-export {
-  MarkdownPreview,
-  WorkspaceApp as App,
-  workspaceActivities,
-} from "./WorkspaceApp";
+export { MarkdownPreview, WorkspaceApp as App } from "./WorkspaceApp";

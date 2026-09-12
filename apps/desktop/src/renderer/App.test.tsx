@@ -26,18 +26,17 @@ const base: DesktopSnapshotDto = {
 };
 
 describe("desktop application shell", () => {
-  test("renders the workspace board, session rail, and terminal area", () => {
+  test("renders Board and Sessions workspace tabs with a terminal area", () => {
     const html = renderToStaticMarkup(
       <App injectedClient={client} initialSnapshot={base} />,
     );
     expect(html).toContain("Workspaces");
     expect(html).toContain("Board");
-    expect(html).toContain("Activity");
     expect(html).toContain("Sessions");
+    expect(html).not.toContain("Activity");
     expect(html).toContain("No session selected");
     expect(html).toContain("No workspaces yet");
     expect(html).toContain('aria-label="Create workspace"');
-    expect(html).toContain('aria-label="Create session"');
   });
 
   test("renders workspace, task, and session lifecycle state", () => {
@@ -102,7 +101,6 @@ describe("desktop application shell", () => {
     expect(html).toContain("Demo");
     expect(html).toContain("Ship desktop");
     expect(html).toContain("in progress");
-    expect(html).toContain("running · agent-");
     expect(html).toContain("1 live");
     expect(html).toContain("Sessions");
     expect(html).not.toContain("Priority");
@@ -150,7 +148,7 @@ describe("desktop application shell", () => {
     expect(html).toContain("folder missing");
   });
 
-  test("renders an active terminal beside the vertical session cards", () => {
+  test("renders an active terminal beside the Sessions view cards", () => {
     const running = {
       id: "11111111-1111-4111-8111-111111111111",
       workspaceId: "w1",
@@ -211,6 +209,7 @@ describe("desktop application shell", () => {
         initialDetailView="terminal"
         initialSelectedTaskId="t1"
         initialSnapshot={snapshot}
+        initialWorkspaceView="sessions"
       />,
     );
     expect(html).toContain("Codex");
@@ -220,7 +219,7 @@ describe("desktop application shell", () => {
     expect(html).toContain("Terminal for Codex session 11111111");
   });
 
-  test("renders workspace activity and identifies free terminals", () => {
+  test("renders free terminals with lifecycle timestamps in Sessions", () => {
     const snapshot: DesktopSnapshotDto = {
       ...base,
       workspaces: [
@@ -257,11 +256,13 @@ describe("desktop application shell", () => {
       <App
         injectedClient={client}
         initialSnapshot={snapshot}
-        initialWorkspaceView="activity"
+        initialWorkspaceView="sessions"
       />,
     );
-    expect(html).toContain("Terminal running");
     expect(html).toContain("Workspace session");
     expect(html).toContain("session-kind-icon terminal");
+    expect(html).toContain("Started ·");
+    expect(html).toContain("1/1/2026");
+    expect(html).not.toContain("Activity");
   });
 });
