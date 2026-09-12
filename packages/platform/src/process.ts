@@ -1,3 +1,6 @@
+import { accessSync, constants } from "node:fs";
+import { isAbsolute } from "node:path";
+
 export interface CommandResult {
   exitCode: number;
   stdout: string;
@@ -40,8 +43,17 @@ export function findExecutable(
   executable: string,
   fallbacks: string[] = [],
   which: (candidate: string) => string | null = Bun.which,
+  isExecutable: (candidate: string) => boolean = (candidate) => {
+    try {
+      accessSync(candidate, constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  },
 ): string | undefined {
   for (const candidate of [executable, ...fallbacks]) {
+    if (isAbsolute(candidate) && isExecutable(candidate)) return candidate;
     const resolved = which(candidate);
     if (resolved) return resolved;
   }
