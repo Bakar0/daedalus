@@ -279,6 +279,7 @@ describe("desktop application shell", () => {
     expect(html).toContain("1/1/2026");
     expect(html).toContain('role="radiogroup"');
     expect(html).toContain("Session name");
+    expect(html).toContain("session-tool-icon tool-terminal");
     expect(html).toContain("Codex");
     expect(html).toContain("Claude");
     expect(html).toContain("Terminal");

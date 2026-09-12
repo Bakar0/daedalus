@@ -1093,7 +1093,7 @@ export function WorkspaceApp({
                       role="radio"
                       type="button"
                     >
-                      <span className={`session-tool-icon ${tool.id}`}>
+                      <span className={`session-tool-icon tool-${tool.id}`}>
                         <ToolIcon tool={tool.id} />
                       </span>
                       <strong>{tool.label}</strong>

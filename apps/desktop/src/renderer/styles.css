@@ -1010,20 +1010,20 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   height: 32px;
   width: 32px;
 }
-.session-tool-icon.claude {
+.session-tool-icon.tool-claude {
   color: #d97757;
 }
-.session-tool-icon.terminal {
+.session-tool-icon.tool-terminal {
   color: #75dfb5;
 }
-.session-tool-icon.terminal svg {
+.session-tool-icon.tool-terminal svg {
   height: 30px;
   width: 30px;
 }
-.app[data-theme="light"] .session-tool-icon.codex {
+.app[data-theme="light"] .session-tool-icon.tool-codex {
   color: #172033;
 }
-.app[data-theme="light"] .session-tool-icon.terminal {
+.app[data-theme="light"] .session-tool-icon.tool-terminal {
   color: #187a59;
 }
 .session-workspace-note {
