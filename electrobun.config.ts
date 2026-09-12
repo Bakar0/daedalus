@@ -14,8 +14,7 @@ export default {
     copy: {
       "apps/desktop/dist/index.html": "views/mainview/index.html",
       "apps/desktop/dist/assets": "views/mainview/assets",
-      "migrations/001_initial.sql": "migrations/001_initial.sql",
-      "migrations/002_session_kind.sql": "migrations/002_session_kind.sql",
+      migrations: "migrations",
     },
     watchIgnore: ["apps/desktop/dist/**"],
     mac: { bundleCEF: false },
