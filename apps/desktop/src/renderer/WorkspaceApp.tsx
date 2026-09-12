@@ -62,6 +62,56 @@ function ToolIcon({ tool }: { tool: "codex" | "claude" | "terminal" }) {
   );
 }
 
+function CreateButton({
+  disabled,
+  label,
+  onClick,
+}: {
+  disabled?: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      aria-label={label}
+      className="create-button"
+      disabled={disabled}
+      onClick={onClick}
+      title={label}
+      type="button"
+    >
+      <svg
+        aria-hidden="true"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="2"
+        viewBox="0 0 16 16"
+      >
+        <path d="M8 3v10M3 8h10" />
+      </svg>
+      <span>New</span>
+    </button>
+  );
+}
+
+function SessionLaunchIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.6"
+      viewBox="0 0 18 18"
+    >
+      <rect height="13" rx="2" width="16" x="1" y="2.5" />
+      <path d="m5 7 2 2-2 2M9.5 11h3" />
+    </svg>
+  );
+}
+
 const taskExcerpt = (markdown: string) =>
   markdown
     .replace(/```[\s\S]*?```/g, "Code example")
@@ -673,13 +723,10 @@ export function WorkspaceApp({
               <span className="eyebrow">Projects</span>
               <h1>Workspaces</h1>
             </div>
-            <button
-              aria-label="Create workspace"
-              className="icon-button"
+            <CreateButton
+              label="Create workspace"
               onClick={() => setModal("workspace")}
-            >
-              +
-            </button>
+            />
           </div>
           <nav aria-label="Workspaces" className="item-list">
             {!snapshot && !error && (
@@ -688,7 +735,7 @@ export function WorkspaceApp({
             {snapshot?.workspaces.length === 0 && (
               <div className="empty large">
                 <strong>No workspaces yet</strong>
-                <span>Use + to create one.</span>
+                <span>Use New to create one.</span>
               </div>
             )}
             {snapshot?.workspaces.map((item) => (
@@ -751,20 +798,17 @@ export function WorkspaceApp({
                       </option>
                     ))}
                   </select>
-                  <button
-                    aria-label="Create task"
-                    className="icon-button"
+                  <CreateButton
+                    label="Create task"
                     onClick={() => setModal("task")}
-                  >
-                    +
-                  </button>
+                  />
                 </div>
               </div>
               <div className="board-grid">
                 {tasks.length === 0 && (
                   <div className="empty large">
                     <strong>No matching tasks</strong>
-                    <span>Use + to create a task.</span>
+                    <span>Use New to create a task.</span>
                   </div>
                 )}
                 {tasks.map((task) => {
@@ -815,7 +859,8 @@ export function WorkspaceApp({
                           }}
                           type="button"
                         >
-                          + Session
+                          <SessionLaunchIcon />
+                          <span>Start session…</span>
                         </button>
                       </div>
                     </article>
@@ -830,12 +875,11 @@ export function WorkspaceApp({
                   <strong>Sessions</strong>
                   <span className="count-badge">{sessions.length}</span>
                 </div>
-                <button
+                <CreateButton
                   disabled={!snapshot?.settings.tmuxAvailable}
+                  label="Create session"
                   onClick={() => openSessionModal()}
-                >
-                  + New session
-                </button>
+                />
               </div>
               <div className="session-grid item-list">
                 {sessions.length === 0 && (

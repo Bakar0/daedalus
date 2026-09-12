@@ -39,6 +39,7 @@ describe("desktop application shell", () => {
     expect(html).not.toContain("No session selected");
     expect(html).toContain("No workspaces yet");
     expect(html).toContain('aria-label="Create workspace"');
+    expect(html).toContain('class="create-button"');
   });
 
   test("renders workspace, task, and session lifecycle state", () => {
@@ -105,7 +106,7 @@ describe("desktop application shell", () => {
     expect(html).toContain("Ship desktop");
     expect(html).toContain("in progress");
     expect(html).toContain("1 live");
-    expect(html).toContain("+ Session");
+    expect(html).toContain("Start session…");
     expect(html).toContain("Sessions");
     expect(html).toContain("Acceptance criteria");
     expect(html).toContain("Edit");
