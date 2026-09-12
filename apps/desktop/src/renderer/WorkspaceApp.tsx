@@ -277,7 +277,7 @@ export function WorkspaceApp({
   const [view, setView] = useState<"board" | "sessions">(initialWorkspaceView);
   const [filter, setFilter] = useState<TaskStatus | "all">("all");
   const [modal, setModal] = useState<
-    "workspace" | "task" | "taskDetail" | "session" | "settings"
+    "workspace" | "task" | "session" | "settings"
   >();
   const [editingTask, setEditingTask] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -405,7 +405,7 @@ export function WorkspaceApp({
     if (created) {
       setSelectedTaskId(created.id);
       setTaskForm({ title: "", description: "" });
-      setModal("taskDetail");
+      setModal(undefined);
     }
   }
 
@@ -465,6 +465,113 @@ export function WorkspaceApp({
     setView("board");
   }
 
+  const taskInspector = !selectedTask ? (
+    <div className="empty large">
+      <strong>Select a task</strong>
+      <span>Its brief and linked sessions will appear here.</span>
+    </div>
+  ) : editingTask ? (
+    <form className="task-editor brief-editor" onSubmit={updateTask}>
+      <label>
+        Title
+        <input name="title" defaultValue={selectedTask.title} required />
+      </label>
+      <label>
+        <span className="field-heading">
+          Markdown <small>⌘↵ to save</small>
+        </span>
+        <textarea
+          name="description"
+          defaultValue={selectedTask.description}
+          rows={16}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter")
+              event.currentTarget.form?.requestSubmit();
+          }}
+        />
+      </label>
+      <div className="editor-actions">
+        <button
+          className="quiet"
+          onClick={() => setEditingTask(false)}
+          type="button"
+        >
+          Cancel
+        </button>
+        <button disabled={busy} type="submit">
+          Save brief
+        </button>
+      </div>
+    </form>
+  ) : (
+    <div className="task-brief">
+      <div className="brief-modal-toolbar">
+        <select
+          aria-label="Task status"
+          value={selectedTask.status}
+          onChange={(event) =>
+            void perform(
+              client.request.taskSetStatus({
+                id: selectedTask.id,
+                status: event.target.value as TaskStatus,
+              }),
+            )
+          }
+        >
+          {STATUSES.map((status) => (
+            <option key={status} value={status}>
+              {status.replace("_", " ")}
+            </option>
+          ))}
+        </select>
+      </div>
+      <h2>{selectedTask.title}</h2>
+      <MarkdownPreview source={selectedTask.description} />
+      <section className="linked-sessions">
+        <span className="eyebrow">Sessions</span>
+        {sessions
+          .filter((item) => item.taskId === selectedTask.id)
+          .map((session) => (
+            <button
+              className="linked-session"
+              key={session.id}
+              onClick={() => {
+                setActiveSessionId(session.id);
+                setView("sessions");
+              }}
+            >
+              <span className={`agent-dot ${session.status}`} />
+              <span>
+                <strong>{sessionName(session)}</strong>
+                <small>
+                  {session.status} · {session.id.slice(0, 8)}
+                </small>
+              </span>
+            </button>
+          ))}
+      </section>
+      <button
+        className="danger-link brief-delete"
+        onClick={() =>
+          void (async () => {
+            if (
+              !window.confirm(
+                `Permanently delete task “${selectedTask.title}”?`,
+              )
+            )
+              return;
+            await perform(
+              client.request.taskRemove({ id: selectedTask.id, force: true }),
+            );
+            setSelectedTaskId(undefined);
+          })()
+        }
+      >
+        Delete task
+      </button>
+    </div>
+  );
+
   return (
     <main className="app" data-theme={theme}>
       <header className="topbar">
@@ -477,6 +584,24 @@ export function WorkspaceApp({
             <small>Agent workspace</small>
           </span>
         </div>
+        <nav className="app-mode-switcher" aria-label="Workspace mode">
+          <button
+            aria-current={view === "board" ? "page" : undefined}
+            className={view === "board" ? "active" : ""}
+            disabled={!workspace}
+            onClick={() => setView("board")}
+          >
+            Board
+          </button>
+          <button
+            aria-current={view === "sessions" ? "page" : undefined}
+            className={view === "sessions" ? "active" : ""}
+            disabled={!workspace}
+            onClick={() => setView("sessions")}
+          >
+            Sessions
+          </button>
+        </nav>
         <div className="top-actions">
           {busy && <span className="syncing">Working…</span>}
           <button className="quiet" onClick={() => void refresh()}>
@@ -494,7 +619,7 @@ export function WorkspaceApp({
         </div>
       )}
 
-      <div className="workspace-shell">
+      <div className={`workspace-shell mode-${view}`}>
         <aside className="workspace-column">
           <div className="section-heading">
             <div>
@@ -541,33 +666,15 @@ export function WorkspaceApp({
           </nav>
         </aside>
 
-        <section className="workspace-main">
+        <section
+          className={`workspace-main ${view === "board" ? "board-column" : "session-navigator"}`}
+        >
           <div className="workspace-main-header">
             <div>
               <span className="eyebrow">
                 {workspace?.slug ?? "Select a workspace"}
               </span>
               <h1>{workspace?.name ?? "Workspace"}</h1>
-            </div>
-            <div
-              className="workspace-tabs"
-              role="tablist"
-              aria-label="Workspace view"
-            >
-              <button
-                className={view === "board" ? "active" : ""}
-                onClick={() => setView("board")}
-                role="tab"
-              >
-                Board
-              </button>
-              <button
-                className={view === "sessions" ? "active" : ""}
-                onClick={() => setView("sessions")}
-                role="tab"
-              >
-                Sessions
-              </button>
             </div>
           </div>
           {!workspace ? (
@@ -623,12 +730,11 @@ export function WorkspaceApp({
                   );
                   return (
                     <article
-                      className={`task-item status-card-${task.status}`}
+                      className={`task-item status-card-${task.status} ${task.id === selectedTaskId ? "selected" : ""}`}
                       key={task.id}
                       onClick={() => {
                         setSelectedTaskId(task.id);
                         setEditingTask(false);
-                        setModal("taskDetail");
                       }}
                     >
                       <div className="task-card-top">
@@ -731,27 +837,51 @@ export function WorkspaceApp({
           )}
         </section>
 
-        <section className="terminal-column">
-          <div className="terminal-heading">
-            <div>
-              <span className="eyebrow">Terminal</span>
-              <h1>
-                {activeSession
-                  ? sessionName(activeSession)
-                  : "No session selected"}
-              </h1>
+        {view === "board" && workspace && (
+          <aside className="board-detail-column">
+            <div className="section-heading">
+              <div>
+                <span className="eyebrow">Inspector</span>
+                <h1>Task brief</h1>
+              </div>
+              {selectedTask && (
+                <button
+                  className="quiet"
+                  onClick={() => setEditingTask((current) => !current)}
+                >
+                  {editingTask ? "Cancel" : "Edit"}
+                </button>
+              )}
             </div>
-            {activeSession && <small>{activeSession.status}</small>}
-          </div>
-          {activeSession ? (
-            <SessionTerminal key={activeSession.id} session={activeSession} />
-          ) : (
-            <div className="terminal-empty">
-              <strong>Select a session</strong>
-              <span>Choose a card or create a new agent or free terminal.</span>
+            {taskInspector}
+          </aside>
+        )}
+
+        {view === "sessions" && workspace && (
+          <section className="terminal-column">
+            <div className="terminal-heading">
+              <div>
+                <span className="eyebrow">Terminal</span>
+                <h1>
+                  {activeSession
+                    ? sessionName(activeSession)
+                    : "No session selected"}
+                </h1>
+              </div>
+              {activeSession && <small>{activeSession.status}</small>}
             </div>
-          )}
-        </section>
+            {activeSession ? (
+              <SessionTerminal key={activeSession.id} session={activeSession} />
+            ) : (
+              <div className="terminal-empty">
+                <strong>Select a session</strong>
+                <span>
+                  Choose a card or create a new agent or free terminal.
+                </span>
+              </div>
+            )}
+          </section>
+        )}
       </div>
 
       {modal === "workspace" && (
@@ -923,126 +1053,6 @@ export function WorkspaceApp({
               </button>
             </div>
           </form>
-        </Modal>
-      )}
-
-      {modal === "taskDetail" && selectedTask && (
-        <Modal onClose={() => setModal(undefined)} title="Task brief" wide>
-          {editingTask ? (
-            <form className="task-editor brief-editor" onSubmit={updateTask}>
-              <label>
-                Title
-                <input
-                  name="title"
-                  defaultValue={selectedTask.title}
-                  required
-                />
-              </label>
-              <label>
-                <span className="field-heading">
-                  Markdown <small>⌘↵ to save</small>
-                </span>
-                <textarea
-                  name="description"
-                  defaultValue={selectedTask.description}
-                  rows={16}
-                  onKeyDown={(event) => {
-                    if (
-                      (event.metaKey || event.ctrlKey) &&
-                      event.key === "Enter"
-                    )
-                      event.currentTarget.form?.requestSubmit();
-                  }}
-                />
-              </label>
-              <div className="editor-actions">
-                <button
-                  className="quiet"
-                  onClick={() => setEditingTask(false)}
-                  type="button"
-                >
-                  Cancel
-                </button>
-                <button disabled={busy} type="submit">
-                  Save brief
-                </button>
-              </div>
-            </form>
-          ) : (
-            <div className="task-brief">
-              <div className="brief-modal-toolbar">
-                <select
-                  aria-label="Task status"
-                  value={selectedTask.status}
-                  onChange={(event) =>
-                    void perform(
-                      client.request.taskSetStatus({
-                        id: selectedTask.id,
-                        status: event.target.value as TaskStatus,
-                      }),
-                    )
-                  }
-                >
-                  {STATUSES.map((status) => (
-                    <option key={status} value={status}>
-                      {status.replace("_", " ")}
-                    </option>
-                  ))}
-                </select>
-                <button className="quiet" onClick={() => setEditingTask(true)}>
-                  Edit
-                </button>
-              </div>
-              <h2>{selectedTask.title}</h2>
-              <MarkdownPreview source={selectedTask.description} />
-              <section className="linked-sessions">
-                <span className="eyebrow">Sessions</span>
-                {sessions
-                  .filter((item) => item.taskId === selectedTask.id)
-                  .map((session) => (
-                    <button
-                      className="linked-session"
-                      key={session.id}
-                      onClick={() => {
-                        setActiveSessionId(session.id);
-                        setView("sessions");
-                        setModal(undefined);
-                      }}
-                    >
-                      <span className={`agent-dot ${session.status}`} />
-                      <span>
-                        <strong>{sessionName(session)}</strong>
-                        <small>
-                          {session.status} · {session.id.slice(0, 8)}
-                        </small>
-                      </span>
-                    </button>
-                  ))}
-              </section>
-              <button
-                className="danger-link brief-delete"
-                onClick={() =>
-                  void (async () => {
-                    if (
-                      !window.confirm(
-                        `Permanently delete task “${selectedTask.title}”?`,
-                      )
-                    )
-                      return;
-                    await perform(
-                      client.request.taskRemove({
-                        id: selectedTask.id,
-                        force: true,
-                      }),
-                    );
-                    setModal(undefined);
-                  })()
-                }
-              >
-                Delete task
-              </button>
-            </div>
-          )}
         </Modal>
       )}
 

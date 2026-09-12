@@ -26,7 +26,7 @@ const base: DesktopSnapshotDto = {
 };
 
 describe("desktop application shell", () => {
-  test("renders Board and Sessions workspace tabs with a terminal area", () => {
+  test("renders Board and Sessions as complete workspace modes", () => {
     const html = renderToStaticMarkup(
       <App injectedClient={client} initialSnapshot={base} />,
     );
@@ -34,7 +34,9 @@ describe("desktop application shell", () => {
     expect(html).toContain("Board");
     expect(html).toContain("Sessions");
     expect(html).not.toContain("Activity");
-    expect(html).toContain("No session selected");
+    expect(html).toContain('aria-label="Workspace mode"');
+    expect(html).toContain("mode-board");
+    expect(html).not.toContain("No session selected");
     expect(html).toContain("No workspaces yet");
     expect(html).toContain('aria-label="Create workspace"');
   });
@@ -103,6 +105,10 @@ describe("desktop application shell", () => {
     expect(html).toContain("in progress");
     expect(html).toContain("1 live");
     expect(html).toContain("Sessions");
+    expect(html).toContain("Acceptance criteria");
+    expect(html).toContain("Edit");
+    expect(html).toContain("board-detail-column");
+    expect(html).not.toContain("terminal-column");
     expect(html).not.toContain("Priority");
   });
 
@@ -217,6 +223,8 @@ describe("desktop application shell", () => {
     expect(html).toContain("running · 111111");
     expect(html).toContain("running · 222222");
     expect(html).toContain("Terminal for Codex session 11111111");
+    expect(html).toContain("session-navigator");
+    expect(html).not.toContain("board-detail-column");
   });
 
   test("renders free terminals with lifecycle timestamps in Sessions", () => {
