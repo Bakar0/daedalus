@@ -80,9 +80,12 @@ const server = Bun.serve<SocketData>({
           agentId: agent.id,
           socket,
           status: preexistingLiveIds.has(agent.id) ? "reconnected" : "live",
-          capture: () => captureTmuxPane(target),
-          sendInput: (data) => sendTmuxInput(target, data),
-          createBridge: (onOutput) => new TmuxControlBridge(onOutput, target),
+          capture: () =>
+            captureTmuxPane(target, undefined, terminalTmux.executable),
+          sendInput: (data) =>
+            sendTmuxInput(target, data, terminalTmux.executable),
+          createBridge: (onOutput) =>
+            new TmuxControlBridge(onOutput, target, terminalTmux.executable),
           onError: (error) =>
             void context.logger.write("error", "terminal_connection_failed", {
               agentId: agent.id,

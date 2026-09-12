@@ -388,6 +388,10 @@ export function WorkspaceApp({
     name: string;
     taskId?: string;
   }>({ name: "" });
+  const [sessionAction, setSessionAction] = useState<{
+    action: "stop" | "remove";
+    session: AgentSessionDto;
+  }>();
 
   const refresh = useCallback(async () => {
     try {
@@ -549,17 +553,17 @@ export function WorkspaceApp({
   }
 
   async function stopSession(session: AgentSessionDto) {
-    if (
-      !window.confirm(`Stop ${sessionName(session)} ${session.id.slice(0, 8)}?`)
-    )
-      return;
-    await perform(client.request.agentStop({ id: session.id, force: false }));
+    const stopped = await perform(
+      client.request.agentStop({ id: session.id, force: false }),
+    );
+    if (stopped) setSessionAction(undefined);
   }
 
   async function removeSession(session: AgentSessionDto) {
-    if (!window.confirm(`Remove session history ${session.id.slice(0, 8)}?`))
-      return;
-    await perform(client.request.agentRemove({ id: session.id }));
+    const removed = await perform(
+      client.request.agentRemove({ id: session.id }),
+    );
+    if (removed) setSessionAction(undefined);
   }
 
   function selectWorkspace(id: string) {
@@ -925,9 +929,10 @@ export function WorkspaceApp({
                         aria-label={`${live ? "Stop" : "Remove"} ${sessionName(session)} session`}
                         className="session-card-action"
                         onClick={() =>
-                          void (live
-                            ? stopSession(session)
-                            : removeSession(session))
+                          setSessionAction({
+                            action: live ? "stop" : "remove",
+                            session,
+                          })
                         }
                       >
                         {live ? "■" : "×"}
@@ -1211,6 +1216,55 @@ export function WorkspaceApp({
                 </small>
               </div>
             ))}
+          </div>
+        </Modal>
+      )}
+
+      {sessionAction && (
+        <Modal
+          onClose={() => setSessionAction(undefined)}
+          title={
+            sessionAction.action === "stop" ? "Stop session" : "Remove session"
+          }
+        >
+          <div className="confirmation-content">
+            <p>
+              {sessionAction.action === "stop" ? (
+                <>
+                  Stop <strong>{sessionName(sessionAction.session)}</strong> and
+                  close its running process? Its history will remain available.
+                </>
+              ) : (
+                <>
+                  Remove <strong>{sessionName(sessionAction.session)}</strong>{" "}
+                  from session history? Workspace files won’t be deleted.
+                </>
+              )}
+            </p>
+            <div className="modal-actions">
+              <button
+                className="quiet"
+                onClick={() => setSessionAction(undefined)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                autoFocus
+                className="danger-action"
+                disabled={busy}
+                onClick={() =>
+                  void (sessionAction.action === "stop"
+                    ? stopSession(sessionAction.session)
+                    : removeSession(sessionAction.session))
+                }
+                type="button"
+              >
+                {sessionAction.action === "stop"
+                  ? "Stop session"
+                  : "Remove session"}
+              </button>
+            </div>
           </div>
         </Modal>
       )}

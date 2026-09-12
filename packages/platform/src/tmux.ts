@@ -1,10 +1,18 @@
-import { runCommand, type CommandOptions, type CommandResult } from "./process";
+import {
+  findExecutable,
+  runCommand,
+  type CommandOptions,
+  type CommandResult,
+} from "./process";
 
 export const TMUX_EXECUTABLE_FALLBACKS = [
   "/opt/homebrew/bin/tmux",
   "/usr/local/bin/tmux",
   "/usr/bin/tmux",
 ];
+
+export const resolveTmuxExecutable = () =>
+  findExecutable("tmux", TMUX_EXECUTABLE_FALLBACKS) ?? "tmux";
 
 export interface TmuxLaunch {
   session: string;
@@ -32,7 +40,7 @@ export interface TmuxTerminalTarget {
 export class CommandTmuxClient implements TmuxClient {
   constructor(
     readonly socketName = "daedalus",
-    private readonly executable = "tmux",
+    readonly executable = resolveTmuxExecutable(),
     private readonly command: (
       executable: string,
       args: string[],
@@ -175,13 +183,14 @@ const terminalArgs = (socketName: string, ...args: string[]) => [
 const tmuxArgs = (...args: string[]) => ["-L", SPIKE_SOCKET, ...args];
 
 export async function ensureSpikeSession(cwd: string): Promise<boolean> {
+  const executable = resolveTmuxExecutable();
   const exists = await runCommand(
-    "tmux",
+    executable,
     tmuxArgs("has-session", "-t", SPIKE_SESSION),
   );
   if (exists.exitCode === 0) return false;
   const created = await runCommand(
-    "tmux",
+    executable,
     tmuxArgs(
       "new-session",
       "-d",
@@ -210,13 +219,14 @@ export async function captureSpikePane(): Promise<Uint8Array> {
 export async function captureTmuxPane(
   target: TmuxTerminalTarget,
   historyLines = TERMINAL_CAPTURE_LINES,
+  executable = resolveTmuxExecutable(),
 ): Promise<Uint8Array> {
   const safeHistory = Math.max(
     0,
     Math.min(TERMINAL_CAPTURE_LINES, historyLines),
   );
   const captured = await runCommand(
-    "tmux",
+    executable,
     terminalArgs(
       target.socketName,
       "capture-pane",
@@ -244,13 +254,14 @@ export async function sendSpikeInput(data: string): Promise<void> {
 export async function sendTmuxInput(
   target: TmuxTerminalTarget,
   data: string,
+  executable = resolveTmuxExecutable(),
 ): Promise<void> {
   const chunks = data.split("\r");
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index] ?? "";
     if (chunk) {
       const literal = await runCommand(
-        "tmux",
+        executable,
         terminalArgs(
           target.socketName,
           "send-keys",
@@ -266,7 +277,7 @@ export async function sendTmuxInput(
     }
     if (index < chunks.length - 1) {
       const enter = await runCommand(
-        "tmux",
+        executable,
         terminalArgs(
           target.socketName,
           "send-keys",
@@ -299,11 +310,12 @@ export class TmuxControlBridge {
       socketName: SPIKE_SOCKET,
       session: SPIKE_SESSION,
     },
+    executable = resolveTmuxExecutable(),
   ) {
     this.#onOutput = onOutput;
     this.process = Bun.spawn(
       [
-        "tmux",
+        executable,
         ...terminalArgs(
           target.socketName,
           "-C",
