@@ -19,7 +19,8 @@
       "@daedalus/protocol": ["./packages/protocol/src/index.ts"],
       "@daedalus/test-utils": ["./packages/test-utils/src/index.ts"],
       "electrobun": ["./.hutch/devkit/api/sdks/main/index.ts"],
-      "electrobun/main": ["./.hutch/devkit/api/sdks/main/index.ts"]
+      "electrobun/main": ["./.hutch/devkit/api/sdks/main/index.ts"],
+      "electrobun/browser": ["./.hutch/devkit/api/browser/index.ts"]
     },
     "resolveJsonModule": true,
     "skipLibCheck": true,

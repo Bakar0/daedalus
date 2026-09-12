@@ -15,10 +15,10 @@ tmux control client ─> loopback WebSocket ─> ghostty-web renderer
 
 - `@daedalus/core` owns configuration, domain types, structured errors, application context, events, SQLite repositories, and all workspace/task/agent services.
 - `@daedalus/platform` owns operating-system boundaries: filesystem creation, argv-safe process execution, and tmux control-mode transport.
-- `@daedalus/protocol` owns serializable CLI/desktop DTOs and terminal wire messages.
+- `@daedalus/protocol` owns serializable CLI/desktop DTOs, the typed Electrobun RPC schema, stable result envelopes, and terminal wire messages.
 - `apps/cli` maps arguments, results, errors, and exit codes onto the shared application layer.
 - `apps/desktop/src/bun` starts the same application context and owns native process/terminal resources.
-- `apps/desktop/src/renderer` only renders terminal bytes and sends input/resize events. It does not access files, SQLite, or tmux.
+- `apps/desktop/src/renderer` renders application state, calls typed RPC methods, and renders the retained spike terminal. It does not access files, SQLite, provider processes, or tmux.
 
 ## Persistence
 
@@ -36,4 +36,6 @@ The Phase 0 bridge attaches a tmux control client to a durable, named session. `
 
 A random token protects a WebSocket server bound only to `127.0.0.1`. New renderer clients receive an ANSI-preserving pane capture before live output. Renderer or WebSocket closure only detaches the control client; tmux and the shell continue running.
 
-Typed Electrobun RPC remains the intended transport for bounded request/response and domain messages in later UI phases. Terminal streaming is isolated behind `TmuxControlBridge`, so backpressure can be expanded without affecting core services.
+Typed Electrobun RPC carries bounded desktop snapshots, mutations, and change messages. Desktop mutations publish an immediate message; a Bun-side SQLite fingerprint and agent reconciliation check detects mutations made by other processes, including the CLI, and publishes the same message within roughly 1.2 seconds. The renderer then reloads one consistent snapshot through core services.
+
+Terminal streaming remains isolated behind `TmuxControlBridge` and its authenticated loopback WebSocket. Phase 5 keeps that proven spike separate from agent sessions, so Phase 6 can add switching and bounded backpressure without changing CRUD contracts or core services.

@@ -1,4 +1,4 @@
-import type { TmuxClient } from "@daedalus/platform";
+import { findExecutable, type TmuxClient } from "@daedalus/platform";
 import type { DaedalusConfig } from "../config";
 import type { AgentSession } from "../domain";
 import { DaedalusError } from "../errors";
@@ -15,6 +15,29 @@ export class AgentService {
     private readonly tmux: TmuxClient,
     private readonly config: DaedalusConfig,
   ) {}
+
+  async capabilities(): Promise<{
+    tmuxAvailable: boolean;
+    tmuxVersion?: string;
+    providers: Array<{
+      name: string;
+      executable: string;
+      available: boolean;
+    }>;
+  }> {
+    const tmuxVersion = await this.tmux.probe();
+    return {
+      tmuxAvailable: Boolean(tmuxVersion),
+      tmuxVersion,
+      providers: Object.entries(this.config.agents)
+        .map(([name, definition]) => ({
+          name,
+          executable: definition.executable,
+          available: Boolean(findExecutable(definition.executable)),
+        }))
+        .sort((left, right) => left.name.localeCompare(right.name)),
+    };
+  }
 
   async spawn(input: {
     workspace: string;

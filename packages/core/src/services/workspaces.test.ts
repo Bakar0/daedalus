@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { mkdir, readFile, symlink } from "node:fs/promises";
+import { mkdir, readFile, rm, symlink } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
@@ -108,6 +108,22 @@ describe("WorkspaceService", () => {
       await expect(
         context.workspaces.create({ name: "Link", path: link }),
       ).rejects.toMatchObject({ code: "CONFLICT" });
+      context.close();
+    });
+  });
+
+  test("reports registered workspaces whose authoritative folder is missing", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        reconcile: false,
+      });
+      const workspace = await context.workspaces.create({ name: "Moved" });
+      await rm(workspace.path, { recursive: true });
+      expect(await context.workspaces.list()).toEqual([]);
+      expect(await context.workspaces.listWithHealth()).toEqual([
+        { workspace, available: false },
+      ]);
       context.close();
     });
   });

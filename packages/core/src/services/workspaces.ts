@@ -115,12 +115,20 @@ export class WorkspaceService {
   }
 
   async list(): Promise<Workspace[]> {
-    const result: Workspace[] = [];
-    for (const workspace of this.repositories.listWorkspaces()) {
-      if (await this.isAuthoritativeWorkspace(workspace))
-        result.push(workspace);
-    }
-    return result;
+    return (await this.listWithHealth())
+      .filter((item) => item.available)
+      .map((item) => item.workspace);
+  }
+
+  async listWithHealth(): Promise<
+    Array<{ workspace: Workspace; available: boolean }>
+  > {
+    return Promise.all(
+      this.repositories.listWorkspaces().map(async (workspace) => ({
+        workspace,
+        available: await this.isAuthoritativeWorkspace(workspace),
+      })),
+    );
   }
 
   async get(reference: string): Promise<Workspace> {

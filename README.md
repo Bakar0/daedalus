@@ -1,6 +1,6 @@
 # Daedalus
 
-Daedalus is a macOS-first, local-first control plane for coding agents. Phases 0–4 are implemented: the terminal proof, shared foundation, complete workspace/task CLI, and durable tmux-backed agent CLI. The Electrobun + React + ghostty-web desktop remains the Phase 0 terminal shell; desktop CRUD and terminal productization are intentionally deferred to Phases 5 and 6.
+Daedalus is a macOS-first, local-first control plane for coding agents. Phases 0–5 are implemented: the terminal proof, shared foundation, complete workspace/task CLI, durable tmux-backed agent CLI, and the Electrobun desktop CRUD application. Integrated per-agent terminal productization remains intentionally deferred to Phase 6.
 
 Workspaces are ordinary directories. They are not Git worktrees. SQLite stores searchable metadata, while the filesystem remains authoritative for workspace existence and tmux remains authoritative for live sessions.
 
@@ -24,13 +24,15 @@ bun run build
 bun run daedal --help
 ```
 
-Start the desktop terminal spike with:
+Start the desktop application with:
 
 ```sh
 bun run dev
 ```
 
-It creates or reconnects to the isolated `daedalus_spike` session on the `daedalus-spike` tmux server. Closing and reopening the window or app does not terminate that shell.
+The three-column UI manages workspaces, task cards, and focused task details through typed Electrobun RPC backed by `@daedalus/core`. Agent launch and session state live on each task card instead of in a separate agent screen. The Settings dialog retains the collapsible Phase 0 terminal transport spike, which creates or reconnects to the isolated `daedalus_spike` session. Closing and reopening the app does not terminate that shell or any agent session.
+
+Changes made through `daedal` while the desktop is open are detected and shown promptly. Workspace and task deletion retain the same core safety guards as the CLI; the UI requires explicit confirmation and never deletes workspace files by default.
 
 To keep tests and experiments out of the real home directory:
 
@@ -69,3 +71,4 @@ Every mutation flows through `@daedalus/core`. Workspace removal preserves files
 - [Architecture](docs/architecture.md)
 - [Phase 0 decisions and spike evidence](docs/phase-0.md)
 - [CLI contract](docs/cli.md)
+- [Desktop RPC and UI](docs/desktop.md)
