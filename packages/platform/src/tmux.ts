@@ -358,20 +358,28 @@ export class TmuxControlBridge {
     if (this.#lastSize?.cols === safeCols && this.#lastSize.rows === safeRows)
       return;
     this.#pendingSize = { cols: safeCols, rows: safeRows };
+    if (!this.#lastSize) {
+      this.applyPendingSize();
+      return;
+    }
     if (this.#resizeTimer) clearTimeout(this.#resizeTimer);
     this.#resizeTimer = setTimeout(() => {
       this.#resizeTimer = undefined;
-      const size = this.#pendingSize;
-      this.#pendingSize = undefined;
-      if (!size) return;
-      this.#lastSize = size;
-      this.process.stdin.write(`refresh-client -C ${size.cols},${size.rows}\n`);
-      this.process.stdin.flush();
+      this.applyPendingSize();
     }, 100);
   }
 
   close(): void {
     if (this.#resizeTimer) clearTimeout(this.#resizeTimer);
     this.process.stdin.end();
+  }
+
+  private applyPendingSize(): void {
+    const size = this.#pendingSize;
+    this.#pendingSize = undefined;
+    if (!size) return;
+    this.#lastSize = size;
+    this.process.stdin.write(`refresh-client -C ${size.cols},${size.rows}\n`);
+    this.process.stdin.flush();
   }
 }

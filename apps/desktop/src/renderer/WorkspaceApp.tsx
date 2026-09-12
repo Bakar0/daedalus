@@ -202,6 +202,8 @@ function SessionTerminal({ session }: { session: AgentSessionDto }) {
     let ended = false;
     let frame: number | undefined;
     let layoutFrame: number | undefined;
+    let layoutTimer: ReturnType<typeof setTimeout> | undefined;
+    let resizeObserver: ResizeObserver | undefined;
     const pending: Uint8Array[] = [];
     let pendingBytes = 0;
     const drain = () => {
@@ -244,14 +246,29 @@ function SessionTerminal({ session }: { session: AgentSessionDto }) {
       const fit = new FitAddon();
       terminal.loadAddon(fit);
       terminal.open(container);
-      fit.observeResize();
-      fit.fit();
-      layoutFrame = requestAnimationFrame(() => {
-        layoutFrame = requestAnimationFrame(() => {
-          layoutFrame = undefined;
-          if (!disposed) fit.fit();
-        });
-      });
+      const sendSize = () => {
+        if (socket?.readyState === WebSocket.OPEN)
+          socket.send(
+            JSON.stringify({
+              type: "resize",
+              cols: terminal?.cols ?? 80,
+              rows: terminal?.rows ?? 24,
+            }),
+          );
+      };
+      const fitAndSync = () => {
+        layoutFrame = undefined;
+        if (disposed) return;
+        fit.fit();
+        sendSize();
+      };
+      const scheduleFit = () => {
+        if (layoutFrame === undefined)
+          layoutFrame = requestAnimationFrame(fitAndSync);
+      };
+      resizeObserver = new ResizeObserver(scheduleFit);
+      resizeObserver.observe(container);
+      scheduleFit();
       const endpoint = new URLSearchParams(window.location.search).get(
         "terminal",
       );
@@ -268,13 +285,9 @@ function SessionTerminal({ session }: { session: AgentSessionDto }) {
         socket.onopen = () => {
           reconnectAttempts = 0;
           setConnection("connected");
-          socket?.send(
-            JSON.stringify({
-              type: "resize",
-              cols: terminal?.cols ?? 80,
-              rows: terminal?.rows ?? 24,
-            }),
-          );
+          scheduleFit();
+          if (layoutTimer) clearTimeout(layoutTimer);
+          layoutTimer = setTimeout(scheduleFit, 250);
         };
         socket.onclose = () => {
           if (disposed || ended) return;
@@ -312,7 +325,6 @@ function SessionTerminal({ session }: { session: AgentSessionDto }) {
           }
         };
       };
-      connect();
       terminal.onData((data) => {
         if (socket?.readyState === WebSocket.OPEN)
           socket.send(JSON.stringify({ type: "input", data }));
@@ -321,12 +333,15 @@ function SessionTerminal({ session }: { session: AgentSessionDto }) {
         if (socket?.readyState === WebSocket.OPEN)
           socket.send(JSON.stringify({ type: "resize", cols, rows }));
       });
+      connect();
     })();
     return () => {
       disposed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (frame !== undefined) cancelAnimationFrame(frame);
       if (layoutFrame !== undefined) cancelAnimationFrame(layoutFrame);
+      if (layoutTimer) clearTimeout(layoutTimer);
+      resizeObserver?.disconnect();
       socket?.close();
       terminal?.dispose();
     };
