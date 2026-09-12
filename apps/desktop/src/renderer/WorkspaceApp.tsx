@@ -894,6 +894,7 @@ export function WorkspaceApp({
                   const live =
                     session.status === "running" ||
                     session.status === "starting";
+                  const tool = sessionTool(session);
                   const timestamp = session.endedAt ?? session.startedAt;
                   return (
                     <div
@@ -904,10 +905,8 @@ export function WorkspaceApp({
                         className="session-card-main"
                         onClick={() => setActiveSessionId(session.id)}
                       >
-                        <span className={`session-kind-icon ${session.kind}`}>
-                          {session.kind === "terminal"
-                            ? ">_"
-                            : session.provider.slice(0, 1).toUpperCase()}
+                        <span className={`session-kind-icon tool-${tool}`}>
+                          <ToolIcon tool={tool} />
                         </span>
                         <span>
                           <strong>{sessionName(session)}</strong>

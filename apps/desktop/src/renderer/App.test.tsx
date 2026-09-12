@@ -277,7 +277,7 @@ describe("desktop application shell", () => {
       />,
     );
     expect(html).toContain("Workspace session");
-    expect(html).toContain("session-kind-icon terminal");
+    expect(html).toContain("session-kind-icon tool-terminal");
     expect(html).toContain("Started ·");
     expect(html).toContain("1/1/2026");
     expect(html).toContain('role="radiogroup"');

@@ -1374,23 +1374,28 @@ dd {
 }
 .session-kind-icon {
   align-items: center;
-  background: rgb(69 150 254 / 0.14);
-  border: 1px solid rgb(69 150 254 / 0.2);
-  border-radius: 7px;
-  color: #9bc9ff;
+  color: #eef4ff;
   display: flex;
   flex: 0 0 auto;
-  font-family: "SF Mono", Menlo, monospace;
-  font-size: 10px;
-  height: 25px;
+  height: 28px;
   justify-content: center;
-  width: 25px;
+  width: 28px;
 }
-.session-kind-icon.terminal {
-  background: rgb(60 243 176 / 0.1);
-  border-color: rgb(60 243 176 / 0.18);
-  color: #78e9bf;
-  font-size: 8px;
+.session-kind-icon svg {
+  height: 22px;
+  width: 22px;
+}
+.session-kind-icon.tool-claude {
+  color: #d97757;
+}
+.session-kind-icon.tool-terminal {
+  color: #75dfb5;
+}
+.app[data-theme="light"] .session-kind-icon.tool-codex {
+  color: #172033;
+}
+.app[data-theme="light"] .session-kind-icon.tool-terminal {
+  color: #187a59;
 }
 .session-card-action {
   background: transparent !important;
