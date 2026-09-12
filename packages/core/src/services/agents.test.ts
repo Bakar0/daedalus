@@ -102,4 +102,27 @@ describe("AgentService", () => {
       context.close();
     });
   });
+
+  test("starts a durable free terminal without an agent provider", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Shell" });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        terminal: true,
+      });
+      expect(session).toMatchObject({
+        kind: "terminal",
+        provider: "custom",
+        args: ["-l"],
+        status: "running",
+      });
+      expect(tmux.launches[0]?.executable).toMatch(/^\//);
+      context.close();
+    });
+  });
 });

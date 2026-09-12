@@ -24,7 +24,7 @@ tmux control client ─> loopback WebSocket ─> ghostty-web renderer
 
 `DAEDALUS_HOME` overrides the default `~/.daedalus` root. Configuration resolves all data paths from that root. SQLite starts in WAL mode with a five-second busy timeout. Migrations are sorted SQL files applied transactionally and recorded in `schema_migrations`.
 
-The initial migration defines workspace, task, and agent-session tables. Small repositories share one WAL-mode connection and expose an explicit transaction boundary. Services own every mutation; CLI and desktop startup only construct an application context and call those services.
+The initial migration defines workspace, task, and session tables; the second migration adds a durable `agent` or `terminal` session kind. Small repositories share one WAL-mode connection and expose an explicit transaction boundary. Services own every mutation; CLI and desktop startup only construct an application context and call those services.
 
 Workspace rows are indexes, not proof of existence. Services require a real non-symlink directory with a matching `.daedalus/workspace.json` ID marker before returning or using a workspace. Slugs are mutable aliases; IDs and paths are stable. File deletion additionally rejects root-like targets, symlinks, and invalid markers.
 

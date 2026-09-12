@@ -26,16 +26,18 @@ const base: DesktopSnapshotDto = {
 };
 
 describe("desktop application shell", () => {
-  test("renders the three lifecycle columns and actionable empty states", () => {
+  test("renders the workspace board, session rail, and terminal area", () => {
     const html = renderToStaticMarkup(
       <App injectedClient={client} initialSnapshot={base} />,
     );
     expect(html).toContain("Workspaces");
-    expect(html).toContain("Tasks");
-    expect(html).toContain("Task brief");
+    expect(html).toContain("Board");
+    expect(html).toContain("Activity");
+    expect(html).toContain("Sessions");
+    expect(html).toContain("No session selected");
     expect(html).toContain("No workspaces yet");
     expect(html).toContain('aria-label="Create workspace"');
-    expect(html).toContain('aria-label="Create task"');
+    expect(html).toContain('aria-label="Create session"');
   });
 
   test("renders workspace, task, and session lifecycle state", () => {
@@ -73,6 +75,7 @@ describe("desktop application shell", () => {
           workspaceId: "w1",
           taskId: "t1",
           provider: "codex",
+          kind: "agent",
           tmuxSession: "daedalus_agent",
           command: "codex",
           args: [],
@@ -99,11 +102,9 @@ describe("desktop application shell", () => {
     expect(html).toContain("Demo");
     expect(html).toContain("Ship desktop");
     expect(html).toContain("in progress");
-    expect(html).toContain("running · agent-12");
-    expect(html).toContain("Acceptance criteria");
-    expect(html).toContain("bun test");
-    expect(html).toContain("Edit");
-    expect(html).toContain("Agent sessions");
+    expect(html).toContain("running · agent-");
+    expect(html).toContain("1 live");
+    expect(html).toContain("Sessions");
     expect(html).not.toContain("Priority");
   });
 
@@ -149,12 +150,13 @@ describe("desktop application shell", () => {
     expect(html).toContain("folder missing");
   });
 
-  test("renders an active terminal and switches among task-owned sessions", () => {
+  test("renders an active terminal beside the vertical session cards", () => {
     const running = {
       id: "11111111-1111-4111-8111-111111111111",
       workspaceId: "w1",
       taskId: "t1",
       provider: "codex" as const,
+      kind: "agent" as const,
       tmuxSession: "daedalus_one",
       command: "codex",
       args: [],
@@ -197,6 +199,7 @@ describe("desktop application shell", () => {
           ...running,
           id: "22222222-2222-4222-8222-222222222222",
           provider: "claude",
+          kind: "agent",
           tmuxSession: "daedalus_two",
         },
       ],
@@ -210,9 +213,55 @@ describe("desktop application shell", () => {
         initialSnapshot={snapshot}
       />,
     );
-    expect(html).toContain('aria-label="Active terminal session"');
-    expect(html).toContain("codex · running · 11111111");
-    expect(html).toContain("claude · running · 22222222");
-    expect(html).toContain("Terminal for codex session 11111111");
+    expect(html).toContain("Codex");
+    expect(html).toContain("Claude");
+    expect(html).toContain("running · 111111");
+    expect(html).toContain("running · 222222");
+    expect(html).toContain("Terminal for Codex session 11111111");
+  });
+
+  test("renders workspace activity and identifies free terminals", () => {
+    const snapshot: DesktopSnapshotDto = {
+      ...base,
+      workspaces: [
+        {
+          id: "w1",
+          slug: "demo",
+          name: "Demo",
+          path: "/tmp/demo",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          archivedAt: null,
+          available: true,
+        },
+      ],
+      agents: [
+        {
+          id: "33333333-3333-4333-8333-333333333333",
+          workspaceId: "w1",
+          taskId: null,
+          provider: "custom",
+          kind: "terminal",
+          tmuxSession: "daedalus_terminal",
+          command: "/bin/zsh",
+          args: ["-l"],
+          workingDirectory: "/tmp/demo",
+          status: "running",
+          exitCode: null,
+          startedAt: "2026-01-01T00:00:00.000Z",
+          endedAt: null,
+        },
+      ],
+    };
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialSnapshot={snapshot}
+        initialWorkspaceView="activity"
+      />,
+    );
+    expect(html).toContain("Terminal running");
+    expect(html).toContain("Workspace session");
+    expect(html).toContain("session-kind-icon terminal");
   });
 });

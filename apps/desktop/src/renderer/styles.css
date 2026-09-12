@@ -998,3 +998,273 @@ dd {
     display: none;
   }
 }
+
+/* Workspace board + session rail layout. One session owns the terminal area. */
+.workspace-shell {
+  display: grid;
+  grid-row: 3;
+  grid-template-columns: 210px minmax(330px, 1fr) 220px minmax(360px, 1.15fr);
+  min-height: 0;
+}
+.workspace-main,
+.sessions-column,
+.terminal-column {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 20px 16px 14px;
+}
+.workspace-main {
+  padding-left: 20px;
+  padding-right: 20px;
+}
+.sessions-column {
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  padding-left: 12px;
+  padding-right: 12px;
+  backdrop-filter: blur(18px);
+}
+.terminal-column {
+  background: rgb(4 7 14 / 0.5);
+  padding-left: 14px;
+  padding-right: 14px;
+}
+.workspace-main-header,
+.board-toolbar,
+.terminal-heading,
+.brief-modal-toolbar {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+.workspace-main-header {
+  border-bottom: 1px solid var(--line);
+  gap: 16px;
+  padding-bottom: 14px;
+}
+.workspace-tabs {
+  background: var(--raised);
+  border-radius: 9px;
+  display: flex;
+  padding: 3px;
+}
+.workspace-tabs button {
+  background: transparent !important;
+  color: var(--muted) !important;
+  padding: 6px 12px !important;
+}
+.workspace-tabs button.active {
+  background: var(--elevated) !important;
+  box-shadow: 0 2px 9px rgb(0 0 0 / 0.2);
+  color: var(--text) !important;
+}
+.board-toolbar {
+  min-height: 58px;
+}
+.board-toolbar > div:first-child {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+.board-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(235px, 1fr));
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 3px 16px 1px;
+}
+.task-session-summary {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 10px;
+  gap: 6px;
+  padding-top: 3px;
+}
+.activity-list {
+  display: grid;
+  gap: 7px;
+  min-height: 0;
+  overflow: auto;
+  padding-top: 15px;
+}
+.activity-item {
+  align-items: center;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 11px 12px;
+}
+.activity-item > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.activity-item strong {
+  font-size: 12px;
+}
+.activity-item span,
+.activity-item time {
+  color: var(--muted);
+  font-size: 10px;
+}
+.session-rail {
+  display: grid;
+  gap: 7px;
+  padding: 1px 1px 12px;
+}
+.session-card {
+  align-items: stretch;
+  background: var(--raised);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  display: flex;
+  min-height: 70px;
+  overflow: hidden;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease;
+}
+.session-card:hover {
+  background: var(--raised-hover);
+}
+.session-card.selected {
+  background: var(--accent-wash);
+  border-color: rgb(69 150 254 / 0.45);
+}
+.session-card-main {
+  align-items: flex-start;
+  background: transparent !important;
+  color: var(--text) !important;
+  display: flex;
+  flex: 1;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 5px 9px 9px !important;
+  text-align: left;
+}
+.session-card-main > span:last-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.session-card-main strong,
+.session-card-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-card-main strong {
+  font-size: 11px;
+}
+.session-card-main em {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 9px;
+  font-style: normal;
+  gap: 5px;
+}
+.session-kind-icon {
+  align-items: center;
+  background: rgb(69 150 254 / 0.14);
+  border: 1px solid rgb(69 150 254 / 0.2);
+  border-radius: 7px;
+  color: #9bc9ff;
+  display: flex;
+  flex: 0 0 auto;
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  height: 25px;
+  justify-content: center;
+  width: 25px;
+}
+.session-kind-icon.terminal {
+  background: rgb(60 243 176 / 0.1);
+  border-color: rgb(60 243 176 / 0.18);
+  color: #78e9bf;
+  font-size: 8px;
+}
+.session-card-action {
+  background: transparent !important;
+  border-radius: 0 !important;
+  color: var(--muted) !important;
+  padding: 5px 8px !important;
+}
+.session-card-action:hover {
+  background: rgb(255 137 135 / 0.08) !important;
+  color: var(--danger) !important;
+}
+.new-session-button {
+  background: transparent !important;
+  border: 1px dashed var(--line-strong) !important;
+  color: var(--secondary) !important;
+  margin-top: auto;
+  width: 100%;
+}
+.new-session-button:hover:not(:disabled) {
+  background: var(--raised-hover) !important;
+}
+.terminal-heading {
+  min-height: 56px;
+}
+.terminal-heading > small {
+  text-transform: capitalize;
+}
+.terminal-column .agent-terminal-shell {
+  flex: 1;
+}
+.terminal-empty {
+  align-items: center;
+  border: 1px dashed var(--line-strong);
+  border-radius: 12px;
+  color: var(--muted);
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 6px;
+  justify-content: center;
+  text-align: center;
+}
+.terminal-empty strong {
+  color: var(--secondary);
+}
+.modal-wide {
+  max-height: calc(100% - 64px);
+  max-width: 700px;
+  overflow: auto;
+}
+.brief-modal-toolbar {
+  margin-top: 18px;
+}
+.linked-sessions > .linked-session {
+  border: 0;
+  color: var(--text);
+  text-align: left;
+  width: 100%;
+}
+.linked-sessions > .linked-session > span:last-child {
+  display: grid;
+  gap: 2px;
+}
+
+@media (max-width: 1180px) {
+  .workspace-shell {
+    grid-template-columns: 190px minmax(330px, 1fr) 205px minmax(330px, 1fr);
+  }
+}
+@media (max-width: 980px) {
+  .workspace-shell {
+    grid-template-columns: 180px minmax(300px, 1fr) 210px;
+  }
+  .terminal-column {
+    display: none;
+  }
+}

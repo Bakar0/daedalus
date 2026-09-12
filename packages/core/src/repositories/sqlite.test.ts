@@ -39,6 +39,7 @@ describe("SqliteRepositories", () => {
         workspaceId: "workspace-id",
         taskId: "task-id",
         provider: "custom",
+        kind: "agent",
         tmuxSession: "daedalus_agentid",
         command: "sh",
         args: ["-l"],

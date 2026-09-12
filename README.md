@@ -30,7 +30,7 @@ Start the desktop application with:
 bun run dev
 ```
 
-The three-column UI manages workspaces, task cards, and focused task details through typed Electrobun RPC backed by `@daedalus/core`. Agent launch and session state live on each task card instead of in a separate agent screen. Spawning or opening a session selects the Terminal view in the right-side panel; Task brief remains available beside it. The session control switches among concurrent task sessions. Closing or reopening the app detaches and reconnects the terminal without terminating the tmux-owned agent session.
+The workspace UI keeps the task Board and Activity feed together, with a compact vertical Sessions rail beside them. Use **New session** to start a Codex agent, Claude agent, or free login-shell terminal, optionally linked to a task. Selecting a session card opens it in the single right-side terminal area. Task briefs open from board cards and remain editable as GitHub-flavored Markdown. Closing or reopening the app detaches and reconnects terminals without terminating their tmux-owned sessions. Split-terminal presets are intentionally deferred.
 
 Terminal traffic uses a token-authenticated loopback WebSocket. The app restores up to 10,000 lines or 1 MiB of tmux history, retains 10,000 renderer scrollback lines, and bounds both Bun-side and renderer-side pending output to 1 MiB. When a noisy producer outruns the UI, Daedalus drops old pending bytes, reports the amount, and leaves the durable tmux pane available for a fresh bounded capture. Live, reconnecting, exited, and lost states are shown explicitly. CLI `agent attach` remains compatible with the same session.
 

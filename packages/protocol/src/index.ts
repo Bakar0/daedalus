@@ -6,6 +6,7 @@ export type TaskStatus =
 export type TaskPriority = "low" | "normal" | "high";
 export type AgentProviderName = "claude" | "codex" | "custom";
 export type AgentSessionStatus = "starting" | "running" | "exited" | "lost";
+export type SessionKind = "agent" | "terminal";
 
 export interface WorkspaceDto {
   id: string;
@@ -35,6 +36,7 @@ export interface AgentSessionDto {
   workspaceId: string;
   taskId: string | null;
   provider: AgentProviderName;
+  kind: SessionKind;
   tmuxSession: string;
   command: string;
   args: string[];
@@ -129,6 +131,7 @@ export interface DesktopRpcSchema {
           taskId?: string;
           provider?: "codex" | "claude";
           command?: string;
+          terminal?: boolean;
         },
         AgentSessionDto
       >;

@@ -27,12 +27,14 @@ export interface Task {
 }
 
 export type AgentSessionStatus = "starting" | "running" | "exited" | "lost";
+export type SessionKind = "agent" | "terminal";
 
 export interface AgentSession {
   id: UUID;
   workspaceId: UUID;
   taskId: UUID | null;
   provider: AgentProviderName;
+  kind: SessionKind;
   tmuxSession: string;
   command: string;
   args: string[];

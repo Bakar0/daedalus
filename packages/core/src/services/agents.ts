@@ -44,6 +44,7 @@ export class AgentService {
     taskId?: string;
     provider?: string;
     command?: string;
+    terminal?: boolean;
   }): Promise<AgentSession> {
     const workspace = await this.workspaces.get(input.workspace);
     const task = input.taskId ? this.tasks.get(input.taskId) : undefined;
@@ -54,23 +55,45 @@ export class AgentService {
       );
     if (!(await this.tmux.probe()))
       throw new DaedalusError("DEPENDENCY", "tmux is not available on PATH");
-    const provider = resolveProvider(this.config, input);
-    const availability = await provider.adapter.probe();
-    if (!availability.available)
+    if (input.terminal && (input.provider || input.command))
       throw new DaedalusError(
-        "DEPENDENCY",
-        `Agent executable '${availability.executable}' is not available on PATH`,
+        "VALIDATION",
+        "A terminal session cannot also select an agent provider",
       );
-    const launch = await provider.adapter.buildLaunch({
-      taskId: task?.id,
-      prompt: task ? buildTaskPrompt(task.title, task.description) : undefined,
-    });
+    const shell = input.terminal
+      ? (findExecutable(process.env.SHELL ?? "") ??
+        findExecutable("/bin/zsh") ??
+        findExecutable("/bin/bash") ??
+        findExecutable("/bin/sh"))
+      : undefined;
+    if (input.terminal && !shell)
+      throw new DaedalusError("DEPENDENCY", "No interactive shell was found");
+    const provider = input.terminal
+      ? undefined
+      : resolveProvider(this.config, input);
+    if (provider) {
+      const availability = await provider.adapter.probe();
+      if (!availability.available)
+        throw new DaedalusError(
+          "DEPENDENCY",
+          `Agent executable '${availability.executable}' is not available on PATH`,
+        );
+    }
+    const launch = input.terminal
+      ? { executable: shell!, args: ["-l"], env: {} }
+      : await provider!.adapter.buildLaunch({
+          taskId: task?.id,
+          prompt: task
+            ? buildTaskPrompt(task.title, task.description)
+            : undefined,
+        });
     const id = crypto.randomUUID();
     const session: AgentSession = {
       id,
       workspaceId: workspace.id,
       taskId: task?.id ?? null,
-      provider: provider.name,
+      provider: provider?.name ?? "custom",
+      kind: input.terminal ? "terminal" : "agent",
       tmuxSession: `daedalus_${id.replaceAll("-", "")}`,
       command: launch.executable,
       args: launch.args,

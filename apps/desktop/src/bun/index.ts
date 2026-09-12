@@ -136,7 +136,7 @@ new BrowserWindow({
   title: "Daedalus",
   url: rendererUrl,
   rpc,
-  frame: { width: 1100, height: 760, x: 120, y: 100 },
+  frame: { width: 1380, height: 820, x: 80, y: 80 },
 });
 
 let checkingForExternalChanges = false;
