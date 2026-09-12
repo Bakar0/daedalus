@@ -263,6 +263,7 @@ describe("desktop application shell", () => {
     const html = renderToStaticMarkup(
       <App
         injectedClient={client}
+        initialModal="session"
         initialSnapshot={snapshot}
         initialWorkspaceView="sessions"
       />,
@@ -271,6 +272,12 @@ describe("desktop application shell", () => {
     expect(html).toContain("session-kind-icon terminal");
     expect(html).toContain("Started ·");
     expect(html).toContain("1/1/2026");
+    expect(html).toContain('role="radiogroup"');
+    expect(html).toContain("Codex");
+    expect(html).toContain("Claude");
+    expect(html).toContain("Terminal");
+    expect(html).toContain("Opens in /tmp/demo");
+    expect(html).not.toContain("Linked task");
     expect(html).not.toContain("Activity");
   });
 });

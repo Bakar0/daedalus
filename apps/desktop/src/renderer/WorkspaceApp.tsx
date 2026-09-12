@@ -256,6 +256,7 @@ export function WorkspaceApp({
   initialSelectedTaskId,
   initialActiveAgentId,
   initialWorkspaceView = "board",
+  initialModal,
 }: {
   injectedClient?: DesktopClient;
   initialSnapshot?: DesktopSnapshotDto;
@@ -263,6 +264,7 @@ export function WorkspaceApp({
   initialActiveAgentId?: string;
   initialDetailView?: "brief" | "terminal";
   initialWorkspaceView?: "board" | "sessions";
+  initialModal?: "workspace" | "task" | "session" | "settings";
 } = {}) {
   const clientRef = useRef(injectedClient);
   if (!clientRef.current)
@@ -277,8 +279,8 @@ export function WorkspaceApp({
   const [view, setView] = useState<"board" | "sessions">(initialWorkspaceView);
   const [filter, setFilter] = useState<TaskStatus | "all">("all");
   const [modal, setModal] = useState<
-    "workspace" | "task" | "session" | "settings"
-  >();
+    "workspace" | "task" | "session" | "settings" | undefined
+  >(initialModal);
   const [editingTask, setEditingTask] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -289,7 +291,7 @@ export function WorkspaceApp({
     path: "",
   });
   const [taskForm, setTaskForm] = useState({ title: "", description: "" });
-  const [sessionForm, setSessionForm] = useState({ type: "codex", taskId: "" });
+  const [sessionType, setSessionType] = useState("codex");
 
   const refresh = useCallback(async () => {
     try {
@@ -326,20 +328,17 @@ export function WorkspaceApp({
     if (stored === "dark" || stored === "light") setTheme(stored);
   }, []);
   useEffect(() => {
-    if (!snapshot || sessionForm.type === "terminal") return;
+    if (!snapshot || sessionType === "terminal") return;
     const selected = snapshot.settings.providers.find(
-      (item) => item.name === sessionForm.type,
+      (item) => item.name === sessionType,
     );
     if (!selected?.available) {
       const available = snapshot.settings.providers.find(
         (item) => item.available,
       );
-      setSessionForm((current) => ({
-        ...current,
-        type: available?.name ?? "terminal",
-      }));
+      setSessionType(available?.name ?? "terminal");
     }
-  }, [sessionForm.type, snapshot]);
+  }, [sessionType, snapshot]);
 
   async function perform<T>(operation: Promise<RpcResult<T>>) {
     setBusy(true);
@@ -412,15 +411,12 @@ export function WorkspaceApp({
   async function createSession(event: React.FormEvent) {
     event.preventDefault();
     if (!workspace) return;
-    const isTerminal = sessionForm.type === "terminal";
+    const isTerminal = sessionType === "terminal";
     const created = await perform(
       client.request.agentSpawn({
         workspace: workspace.id,
-        taskId: sessionForm.taskId || undefined,
         terminal: isTerminal || undefined,
-        provider: isTerminal
-          ? undefined
-          : (sessionForm.type as "codex" | "claude"),
+        provider: isTerminal ? undefined : (sessionType as "codex" | "claude"),
       }),
     );
     if (created) {
@@ -988,58 +984,57 @@ export function WorkspaceApp({
       {modal === "session" && workspace && snapshot && (
         <Modal onClose={() => setModal(undefined)} title="Create session">
           <form className="modal-form" onSubmit={createSession}>
-            <label>
-              Session type
-              <select
-                autoFocus
-                value={sessionForm.type}
-                onChange={(event) =>
-                  setSessionForm({ ...sessionForm, type: event.target.value })
-                }
+            <fieldset className="session-tool-picker">
+              <legend>Choose a tool</legend>
+              <div
+                aria-label="Session tool"
+                className="session-tool-row"
+                role="radiogroup"
               >
-                <option
-                  value="codex"
-                  disabled={
-                    !snapshot.settings.providers.find(
-                      (item) => item.name === "codex",
-                    )?.available
-                  }
-                >
-                  Codex agent
-                </option>
-                <option
-                  value="claude"
-                  disabled={
-                    !snapshot.settings.providers.find(
-                      (item) => item.name === "claude",
-                    )?.available
-                  }
-                >
-                  Claude agent
-                </option>
-                <option value="terminal">Free terminal</option>
-              </select>
-            </label>
-            <label>
-              Linked task <small>optional</small>
-              <select
-                value={sessionForm.taskId}
-                onChange={(event) =>
-                  setSessionForm({ ...sessionForm, taskId: event.target.value })
-                }
-              >
-                <option value="">Workspace session</option>
-                {allTasks.map((task) => (
-                  <option key={task.id} value={task.id}>
-                    {task.title}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <p className="hint">
-              A free terminal opens your login shell in the workspace folder.
-              Agent sessions receive the linked task brief.
-            </p>
+                {(
+                  [
+                    { id: "codex", icon: "CX", label: "Codex" },
+                    { id: "claude", icon: "CL", label: "Claude" },
+                    { id: "terminal", icon: ">_", label: "Terminal" },
+                  ] as const
+                ).map((tool) => {
+                  const available =
+                    tool.id === "terminal" ||
+                    Boolean(
+                      snapshot.settings.providers.find(
+                        (item) => item.name === tool.id,
+                      )?.available,
+                    );
+                  return (
+                    <button
+                      aria-checked={sessionType === tool.id}
+                      autoFocus={sessionType === tool.id}
+                      className={`session-tool ${sessionType === tool.id ? "selected" : ""}`}
+                      disabled={!available}
+                      key={tool.id}
+                      onClick={() => setSessionType(tool.id)}
+                      role="radio"
+                      type="button"
+                    >
+                      <span className={`session-tool-icon ${tool.id}`}>
+                        {tool.icon}
+                      </span>
+                      <strong>{tool.label}</strong>
+                      <small>{available ? "Available" : "Unavailable"}</small>
+                    </button>
+                  );
+                })}
+              </div>
+            </fieldset>
+            <div className="session-workspace-note">
+              <span className="workspace-icon">
+                {workspace.name.slice(0, 1).toUpperCase()}
+              </span>
+              <span>
+                <strong>{workspace.name}</strong>
+                <small>Opens in {workspace.path}</small>
+              </span>
+            </div>
             <div className="modal-actions">
               <button
                 className="quiet"
