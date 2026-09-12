@@ -33,6 +33,7 @@ export interface AgentSession {
   id: UUID;
   workspaceId: UUID;
   taskId: UUID | null;
+  name: string;
   provider: AgentProviderName;
   kind: SessionKind;
   tmuxSession: string;

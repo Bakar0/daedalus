@@ -38,6 +38,7 @@ describe("SqliteRepositories", () => {
         id: "agent-id",
         workspaceId: "workspace-id",
         taskId: "task-id",
+        name: "Task",
         provider: "custom",
         kind: "agent",
         tmuxSession: "daedalus_agentid",
@@ -54,6 +55,7 @@ describe("SqliteRepositories", () => {
         id: "task-id",
       });
       expect(repositories.findAgent("agent-id")?.args).toEqual(["-l"]);
+      expect(repositories.findAgent("agent-id")?.name).toBe("Task");
       expect(() =>
         repositories.transaction(() => {
           repositories.deleteTask("task-id");

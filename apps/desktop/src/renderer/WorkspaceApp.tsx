@@ -23,9 +23,10 @@ const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
 const sessionName = (session: AgentSessionDto) =>
-  session.kind === "terminal"
+  session.name ||
+  (session.kind === "terminal"
     ? "Terminal"
-    : session.provider.slice(0, 1).toUpperCase() + session.provider.slice(1);
+    : session.provider.slice(0, 1).toUpperCase() + session.provider.slice(1));
 
 // Codex and Claude paths are bundled from @lobehub/icons-static-svg (MIT).
 function ToolIcon({ tool }: { tool: "codex" | "claude" | "terminal" }) {
@@ -326,6 +327,10 @@ export function WorkspaceApp({
   });
   const [taskForm, setTaskForm] = useState({ title: "", description: "" });
   const [sessionType, setSessionType] = useState("codex");
+  const [sessionForm, setSessionForm] = useState<{
+    name: string;
+    taskId?: string;
+  }>({ name: "" });
 
   const refresh = useCallback(async () => {
     try {
@@ -409,6 +414,16 @@ export function WorkspaceApp({
   );
   const activeSession = sessions.find((item) => item.id === activeSessionId);
 
+  function openSessionModal(task?: TaskDto) {
+    setSessionForm({ name: task?.title ?? "", taskId: task?.id });
+    setModal("session");
+  }
+
+  function closeSessionModal() {
+    setSessionForm({ name: "" });
+    setModal(undefined);
+  }
+
   async function createWorkspace(event: React.FormEvent) {
     event.preventDefault();
     const created = await perform(
@@ -449,6 +464,8 @@ export function WorkspaceApp({
     const created = await perform(
       client.request.agentSpawn({
         workspace: workspace.id,
+        taskId: sessionForm.taskId,
+        name: sessionForm.name,
         terminal: isTerminal || undefined,
         provider: isTerminal ? undefined : (sessionType as "codex" | "claude"),
       }),
@@ -456,7 +473,7 @@ export function WorkspaceApp({
     if (created) {
       setActiveSessionId(created.id);
       setView("sessions");
-      setModal(undefined);
+      closeSessionModal();
     }
   }
 
@@ -777,15 +794,29 @@ export function WorkspaceApp({
                       </div>
                       <strong>{task.title}</strong>
                       <p>{taskExcerpt(task.description) || "No task brief"}</p>
-                      <div className="task-session-summary">
-                        <span
-                          className={`agent-dot ${live.length ? "running" : "exited"}`}
-                        />
-                        {live.length
-                          ? `${live.length} live`
-                          : linked.length
-                            ? `${linked.length} sessions`
-                            : "No sessions"}
+                      <div className="task-card-footer">
+                        <div className="task-session-summary">
+                          <span
+                            className={`agent-dot ${live.length ? "running" : "exited"}`}
+                          />
+                          {live.length
+                            ? `${live.length} live`
+                            : linked.length
+                              ? `${linked.length} sessions`
+                              : "No sessions"}
+                        </div>
+                        <button
+                          aria-label={`Create session for ${task.title}`}
+                          className="task-session-create"
+                          disabled={!snapshot?.settings.tmuxAvailable}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openSessionModal(task);
+                          }}
+                          type="button"
+                        >
+                          + Session
+                        </button>
                       </div>
                     </article>
                   );
@@ -801,7 +832,7 @@ export function WorkspaceApp({
                 </div>
                 <button
                   disabled={!snapshot?.settings.tmuxAvailable}
-                  onClick={() => setModal("session")}
+                  onClick={() => openSessionModal()}
                 >
                   + New session
                 </button>
@@ -1016,8 +1047,21 @@ export function WorkspaceApp({
       )}
 
       {modal === "session" && workspace && snapshot && (
-        <Modal onClose={() => setModal(undefined)} title="Create session">
+        <Modal onClose={closeSessionModal} title="Create session">
           <form className="modal-form" onSubmit={createSession}>
+            <label>
+              Session name
+              <input
+                autoFocus
+                maxLength={240}
+                onChange={(event) =>
+                  setSessionForm({ ...sessionForm, name: event.target.value })
+                }
+                placeholder="What is this session for?"
+                required
+                value={sessionForm.name}
+              />
+            </label>
             <fieldset className="session-tool-picker">
               <legend>Choose a tool</legend>
               <div
@@ -1042,7 +1086,6 @@ export function WorkspaceApp({
                   return (
                     <button
                       aria-checked={sessionType === tool.id}
-                      autoFocus={sessionType === tool.id}
                       className={`session-tool ${sessionType === tool.id ? "selected" : ""}`}
                       disabled={!available}
                       key={tool.id}
@@ -1072,7 +1115,7 @@ export function WorkspaceApp({
             <div className="modal-actions">
               <button
                 className="quiet"
-                onClick={() => setModal(undefined)}
+                onClick={closeSessionModal}
                 type="button"
               >
                 Cancel

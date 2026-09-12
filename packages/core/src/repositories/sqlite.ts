@@ -34,6 +34,7 @@ interface AgentRow {
   id: string;
   workspace_id: string;
   task_id: string | null;
+  name: string;
   provider: "claude" | "codex" | "custom";
   kind: "agent" | "terminal";
   tmux_session: string;
@@ -72,6 +73,7 @@ const agentFromRow = (row: AgentRow): AgentSession => ({
   id: row.id,
   workspaceId: row.workspace_id,
   taskId: row.task_id,
+  name: row.name,
   provider: row.provider,
   kind: row.kind,
   tmuxSession: row.tmux_session,
@@ -234,14 +236,15 @@ export class SqliteRepositories {
     this.database
       .query(
         `INSERT INTO agent_sessions
-         (id, workspace_id, task_id, provider, kind, tmux_session, command, args,
+         (id, workspace_id, task_id, name, provider, kind, tmux_session, command, args,
           working_directory, status, exit_code, started_at, ended_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         agent.id,
         agent.workspaceId,
         agent.taskId,
+        agent.name,
         agent.provider,
         agent.kind,
         agent.tmuxSession,

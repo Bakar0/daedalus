@@ -967,7 +967,8 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
 .session-tool-row {
   display: grid;
   gap: 9px;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(76px, 96px));
+  justify-content: start;
 }
 .session-tool {
   align-items: center;
@@ -979,7 +980,7 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 14px 8px 11px !important;
+  padding: 8px !important;
 }
 .session-tool:hover:not(:disabled) {
   background: var(--raised-hover) !important;
@@ -1206,6 +1207,21 @@ dd {
   font-size: 10px;
   gap: 6px;
   padding-top: 3px;
+}
+.task-card-footer {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+.task-session-create {
+  background: transparent !important;
+  color: var(--muted) !important;
+  font-size: 10px !important;
+  padding: 4px 6px !important;
+}
+.task-session-create:hover:not(:disabled) {
+  background: var(--accent-wash) !important;
+  color: var(--text) !important;
 }
 .sessions-toolbar {
   min-height: 58px;

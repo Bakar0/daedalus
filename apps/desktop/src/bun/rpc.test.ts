@@ -73,6 +73,7 @@ describe("desktop RPC handlers", () => {
           command: "shell",
         });
         expect(agent.ok && agent.data.status).toBe("running");
+        expect(agent.ok && agent.data.name).toBe("Build UI");
         if (!agent.ok) return;
 
         const stopped = await rpc.agentStop({

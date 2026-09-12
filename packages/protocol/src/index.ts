@@ -35,6 +35,7 @@ export interface AgentSessionDto {
   id: string;
   workspaceId: string;
   taskId: string | null;
+  name: string;
   provider: AgentProviderName;
   kind: SessionKind;
   tmuxSession: string;
@@ -129,6 +130,7 @@ export interface DesktopRpcSchema {
         {
           workspace: string;
           taskId?: string;
+          name?: string;
           provider?: "codex" | "claude";
           command?: string;
           terminal?: boolean;

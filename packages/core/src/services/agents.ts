@@ -42,12 +42,19 @@ export class AgentService {
   async spawn(input: {
     workspace: string;
     taskId?: string;
+    name?: string;
     provider?: string;
     command?: string;
     terminal?: boolean;
   }): Promise<AgentSession> {
     const workspace = await this.workspaces.get(input.workspace);
     const task = input.taskId ? this.tasks.get(input.taskId) : undefined;
+    const requestedName = input.name?.trim();
+    if (requestedName && requestedName.length > 240)
+      throw new DaedalusError(
+        "VALIDATION",
+        "Session name must contain at most 240 characters",
+      );
     if (task && task.workspaceId !== workspace.id)
       throw new DaedalusError(
         "VALIDATION",
@@ -88,10 +95,14 @@ export class AgentService {
             : undefined,
         });
     const id = crypto.randomUUID();
+    const defaultName = input.terminal
+      ? "Terminal"
+      : `${provider!.name.slice(0, 1).toUpperCase()}${provider!.name.slice(1)} session`;
     const session: AgentSession = {
       id,
       workspaceId: workspace.id,
       taskId: task?.id ?? null,
+      name: requestedName || task?.title || defaultName,
       provider: provider?.name ?? "custom",
       kind: input.terminal ? "terminal" : "agent",
       tmuxSession: `daedalus_${id.replaceAll("-", "")}`,

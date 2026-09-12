@@ -59,6 +59,7 @@ describe("AgentService", () => {
         taskId: task.id,
         provider: "codex",
       });
+      expect(agent.name).toBe(task.title);
       expect(agent.tmuxSession).toMatch(/^daedalus_[a-f0-9]{32}$/);
       expect(tmux.launches[0]).toMatchObject({
         executable: process.execPath,
@@ -113,9 +114,11 @@ describe("AgentService", () => {
       const workspace = await context.workspaces.create({ name: "Shell" });
       const session = await context.agents.spawn({
         workspace: workspace.id,
+        name: "Release shell",
         terminal: true,
       });
       expect(session).toMatchObject({
+        name: "Release shell",
         kind: "terminal",
         provider: "custom",
         args: ["-l"],

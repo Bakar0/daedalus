@@ -58,7 +58,7 @@ const commandHelp: Record<string, string> = {
   daedal task status <task-id> <status>
   daedal task remove <task-id> --force`,
   agent: `Agent commands:
-  daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <name>) [--task <task-id>]
+  daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-id>] [--name <name>]
   daedal agent list [--workspace <workspace>] [--running]
   daedal agent get <agent-id>
   daedal agent attach <agent-id>
@@ -400,6 +400,7 @@ async function agentCommand(
       "provider",
       "command",
       "task",
+      "name",
     ]);
     expectPositionals(
       parsed.positionals,
@@ -411,10 +412,11 @@ async function agentCommand(
       provider: parsed.values.provider,
       command: parsed.values.command,
       taskId: parsed.values.task,
+      name: parsed.values.name,
     });
     printResult(result, json, () =>
       console.log(
-        `Spawned ${result.provider} agent ${result.id} in ${result.tmuxSession}`,
+        `Spawned ${result.name} (${result.provider}) in ${result.tmuxSession}`,
       ),
     );
     return 0;
@@ -434,7 +436,7 @@ async function agentCommand(
       if (!result.length) console.log("No agent sessions.");
       for (const item of result)
         console.log(
-          `${item.id}\t${item.status}\t${item.provider}\t${item.tmuxSession}`,
+          `${item.id}\t${item.status}\t${item.provider}\t${item.name}\t${item.tmuxSession}`,
         );
     });
     return 0;
@@ -445,7 +447,7 @@ async function agentCommand(
     const result = await context.agents.get(parsed.positionals[0]!);
     printResult(result, json, () =>
       console.log(
-        `${result.id}\t${result.status}\t${result.provider}\t${result.tmuxSession}`,
+        `${result.id}\t${result.status}\t${result.provider}\t${result.name}\t${result.tmuxSession}`,
       ),
     );
     return 0;

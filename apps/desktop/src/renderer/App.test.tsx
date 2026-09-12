@@ -75,6 +75,7 @@ describe("desktop application shell", () => {
           id: "agent-12345678",
           workspaceId: "w1",
           taskId: "t1",
+          name: "Ship desktop",
           provider: "codex",
           kind: "agent",
           tmuxSession: "daedalus_agent",
@@ -104,6 +105,7 @@ describe("desktop application shell", () => {
     expect(html).toContain("Ship desktop");
     expect(html).toContain("in progress");
     expect(html).toContain("1 live");
+    expect(html).toContain("+ Session");
     expect(html).toContain("Sessions");
     expect(html).toContain("Acceptance criteria");
     expect(html).toContain("Edit");
@@ -159,6 +161,7 @@ describe("desktop application shell", () => {
       id: "11111111-1111-4111-8111-111111111111",
       workspaceId: "w1",
       taskId: "t1",
+      name: "Terminal task",
       provider: "codex" as const,
       kind: "agent" as const,
       tmuxSession: "daedalus_one",
@@ -202,6 +205,7 @@ describe("desktop application shell", () => {
         {
           ...running,
           id: "22222222-2222-4222-8222-222222222222",
+          name: "Review terminal task",
           provider: "claude",
           kind: "agent",
           tmuxSession: "daedalus_two",
@@ -218,11 +222,11 @@ describe("desktop application shell", () => {
         initialWorkspaceView="sessions"
       />,
     );
-    expect(html).toContain("Codex");
-    expect(html).toContain("Claude");
+    expect(html).toContain("Terminal task");
+    expect(html).toContain("Review terminal task");
     expect(html).toContain("running · 111111");
     expect(html).toContain("running · 222222");
-    expect(html).toContain("Terminal for Codex session 11111111");
+    expect(html).toContain("Terminal for Terminal task session 11111111");
     expect(html).toContain("session-navigator");
     expect(html).not.toContain("board-detail-column");
   });
@@ -247,6 +251,7 @@ describe("desktop application shell", () => {
           id: "33333333-3333-4333-8333-333333333333",
           workspaceId: "w1",
           taskId: null,
+          name: "Dev shell",
           provider: "custom",
           kind: "terminal",
           tmuxSession: "daedalus_terminal",
@@ -273,6 +278,7 @@ describe("desktop application shell", () => {
     expect(html).toContain("Started ·");
     expect(html).toContain("1/1/2026");
     expect(html).toContain('role="radiogroup"');
+    expect(html).toContain("Session name");
     expect(html).toContain("Codex");
     expect(html).toContain("Claude");
     expect(html).toContain("Terminal");

@@ -31,4 +31,38 @@ describe("runMigrations", () => {
     ).toHaveLength(1);
     database.close();
   });
+
+  test("backfills names for existing task and terminal sessions", async () => {
+    const home = await mkdtemp(join(tmpdir(), "daedalus-session-names-"));
+    cleanup.push(home);
+    const migrations = join(home, "migrations");
+    const source = join(import.meta.dir, "../../../../migrations");
+    await mkdir(migrations);
+    for (const file of ["001_initial.sql", "002_session_kind.sql"])
+      await Bun.write(join(migrations, file), Bun.file(join(source, file)));
+    const databasePath = join(home, "state.db");
+    await runMigrations(databasePath, migrations);
+    const database = new Database(databasePath);
+    database.exec(`
+      INSERT INTO workspaces VALUES ('w1', 'demo', 'Demo', '/tmp/demo', 'now', 'now', NULL);
+      INSERT INTO tasks VALUES ('t1', 'w1', 'Build UI', '', 'todo', 'normal', 'now', 'now', NULL);
+      INSERT INTO agent_sessions VALUES ('a1', 'w1', 't1', 'codex', 'tmux-a1', 'codex', '[]', '/tmp/demo', 'running', NULL, 'now', NULL, 'agent');
+      INSERT INTO agent_sessions VALUES ('a2', 'w1', NULL, 'custom', 'tmux-a2', 'zsh', '[]', '/tmp/demo', 'running', NULL, 'now', NULL, 'terminal');
+    `);
+    database.close();
+    await Bun.write(
+      join(migrations, "003_session_name.sql"),
+      Bun.file(join(source, "003_session_name.sql")),
+    );
+    await runMigrations(databasePath, migrations);
+    const migrated = new Database(databasePath);
+    expect(
+      migrated
+        .query<{ name: string }, []>(
+          "SELECT name FROM agent_sessions ORDER BY id",
+        )
+        .all(),
+    ).toEqual([{ name: "Build UI" }, { name: "Terminal" }]);
+    migrated.close();
+  });
 });
