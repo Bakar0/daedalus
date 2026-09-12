@@ -276,6 +276,9 @@ describe("desktop application shell", () => {
     expect(html).toContain("Codex");
     expect(html).toContain("Claude");
     expect(html).toContain("Terminal");
+    expect(html).toContain('viewBox="0 0 24 24"');
+    expect(html).not.toContain(">CX<");
+    expect(html).not.toContain(">CL<");
     expect(html).toContain("Opens in /tmp/demo");
     expect(html).not.toContain("Linked task");
     expect(html).not.toContain("Activity");
