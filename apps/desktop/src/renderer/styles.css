@@ -1007,7 +1007,7 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   gap: 6px;
   padding: 8px !important;
 }
-.session-tool:hover:not(:disabled) {
+.session-tool:hover:not(:disabled):not(.selected) {
   background: var(--raised-hover) !important;
   border-color: var(--line-strong) !important;
 }
