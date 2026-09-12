@@ -105,12 +105,14 @@ describe("desktop application shell", () => {
     expect(html).toContain("Demo");
     expect(html).toContain("Ship desktop");
     expect(html).toContain("in progress");
-    expect(html).toContain("1 live");
+    expect(html).toContain('aria-label="Open Ship desktop session"');
+    expect(html).toContain("task-session-link tool-codex running");
     expect(html).toContain("Start session…");
     expect(html).toContain("Sessions");
     expect(html).toContain("Acceptance criteria");
     expect(html).toContain("Edit");
     expect(html).toContain("board-detail-column");
+    expect(html).not.toContain("linked-sessions");
     expect(html).not.toContain("terminal-column");
     expect(html).not.toContain("Priority");
   });

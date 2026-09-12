@@ -28,6 +28,13 @@ const sessionName = (session: AgentSessionDto) =>
     ? "Terminal"
     : session.provider.slice(0, 1).toUpperCase() + session.provider.slice(1));
 
+const sessionTool = (
+  session: AgentSessionDto,
+): "codex" | "claude" | "terminal" =>
+  session.kind === "terminal" || session.provider === "custom"
+    ? "terminal"
+    : session.provider;
+
 // Codex and Claude paths are bundled from @lobehub/icons-static-svg (MIT).
 function ToolIcon({ tool }: { tool: "codex" | "claude" | "terminal" }) {
   if (tool === "codex")
@@ -565,7 +572,7 @@ export function WorkspaceApp({
   const taskInspector = !selectedTask ? (
     <div className="empty large">
       <strong>Select a task</strong>
-      <span>Its brief and linked sessions will appear here.</span>
+      <span>Its brief will appear here.</span>
     </div>
   ) : editingTask ? (
     <form className="task-editor brief-editor" onSubmit={updateTask}>
@@ -624,29 +631,6 @@ export function WorkspaceApp({
       </div>
       <h2>{selectedTask.title}</h2>
       <MarkdownPreview source={selectedTask.description} />
-      <section className="linked-sessions">
-        <span className="eyebrow">Sessions</span>
-        {sessions
-          .filter((item) => item.taskId === selectedTask.id)
-          .map((session) => (
-            <button
-              className="linked-session"
-              key={session.id}
-              onClick={() => {
-                setActiveSessionId(session.id);
-                setView("sessions");
-              }}
-            >
-              <span className={`agent-dot ${session.status}`} />
-              <span>
-                <strong>{sessionName(session)}</strong>
-                <small>
-                  {session.status} · {session.id.slice(0, 8)}
-                </small>
-              </span>
-            </button>
-          ))}
-      </section>
       <button
         className="danger-link brief-delete"
         onClick={() =>
@@ -815,10 +799,6 @@ export function WorkspaceApp({
                   const linked = sessions.filter(
                     (item) => item.taskId === task.id,
                   );
-                  const live = linked.filter(
-                    (item) =>
-                      item.status === "running" || item.status === "starting",
-                  );
                   return (
                     <article
                       className={`task-item status-card-${task.status} ${task.id === selectedTaskId ? "selected" : ""}`}
@@ -839,15 +819,34 @@ export function WorkspaceApp({
                       <strong>{task.title}</strong>
                       <p>{taskExcerpt(task.description) || "No task brief"}</p>
                       <div className="task-card-footer">
-                        <div className="task-session-summary">
-                          <span
-                            className={`agent-dot ${live.length ? "running" : "exited"}`}
-                          />
-                          {live.length
-                            ? `${live.length} live`
-                            : linked.length
-                              ? `${linked.length} sessions`
-                              : "No sessions"}
+                        <div
+                          aria-label={`Sessions for ${task.title}`}
+                          className="task-session-links"
+                        >
+                          {linked.length === 0 && (
+                            <span className="task-session-empty">
+                              No sessions
+                            </span>
+                          )}
+                          {linked.map((session) => {
+                            const tool = sessionTool(session);
+                            return (
+                              <button
+                                aria-label={`Open ${sessionName(session)} session`}
+                                className={`task-session-link tool-${tool} ${session.status}`}
+                                key={session.id}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setActiveSessionId(session.id);
+                                  setView("sessions");
+                                }}
+                                title={`${sessionName(session)} · ${session.status}`}
+                                type="button"
+                              >
+                                <ToolIcon tool={tool} />
+                              </button>
+                            );
+                          })}
                         </div>
                         <button
                           aria-label={`Create session for ${task.title}`}

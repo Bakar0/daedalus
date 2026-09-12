@@ -865,29 +865,8 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   gap: 8px;
   justify-content: space-between;
 }
-.linked-sessions {
-  border-top: 1px solid var(--line);
-  margin-top: 8px;
-  padding-top: 18px;
-}
 .brief-delete {
   margin-top: 18px;
-}
-.linked-session {
-  align-items: center;
-  background: var(--raised);
-  border-radius: 9px;
-  display: flex;
-  gap: 9px;
-  margin-top: 7px;
-  padding: 10px;
-}
-.linked-session > div {
-  display: grid;
-  gap: 2px;
-}
-.linked-session-open {
-  margin-left: auto;
 }
 .terminal-detail {
   display: flex;
@@ -1229,13 +1208,68 @@ dd {
   overflow: auto;
   padding: 2px 3px 16px 1px;
 }
-.task-session-summary {
+.task-session-links {
   align-items: center;
-  color: var(--muted);
   display: flex;
+  gap: 5px;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 2px;
+  scrollbar-width: none;
+}
+.task-session-links::-webkit-scrollbar {
+  display: none;
+}
+.task-session-empty {
+  color: var(--muted);
   font-size: 10px;
-  gap: 6px;
-  padding-top: 3px;
+}
+.task-session-link {
+  align-items: center;
+  background: var(--elevated) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 7px !important;
+  color: #e9f1ff !important;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 28px;
+  justify-content: center;
+  padding: 5px !important;
+  position: relative;
+  width: 28px;
+}
+.task-session-link svg {
+  height: 16px;
+  width: 16px;
+}
+.task-session-link.tool-claude {
+  color: #d97757 !important;
+}
+.task-session-link.tool-terminal {
+  color: #75dfb5 !important;
+}
+.app[data-theme="light"] .task-session-link.tool-codex {
+  color: #172033 !important;
+}
+.app[data-theme="light"] .task-session-link.tool-terminal {
+  color: #187a59 !important;
+}
+.task-session-link:hover:not(:disabled) {
+  background: var(--accent-wash) !important;
+  border-color: rgb(69 150 254 / 0.55) !important;
+  transform: translateY(-1px);
+}
+.task-session-link.running::after,
+.task-session-link.starting::after {
+  background: #3cf3b0;
+  border: 2px solid var(--elevated);
+  border-radius: 50%;
+  bottom: -2px;
+  content: "";
+  height: 7px;
+  position: absolute;
+  right: -2px;
+  width: 7px;
 }
 .task-card-footer {
   align-items: center;
@@ -1401,17 +1435,6 @@ dd {
 .brief-modal-toolbar {
   margin-top: 18px;
 }
-.linked-sessions > .linked-session {
-  border: 0;
-  color: var(--text);
-  text-align: left;
-  width: 100%;
-}
-.linked-sessions > .linked-session > span:last-child {
-  display: grid;
-  gap: 2px;
-}
-
 @media (max-width: 1180px) {
   .workspace-shell.mode-board {
     grid-template-columns: 190px minmax(470px, 1.4fr) minmax(290px, 0.72fr);
