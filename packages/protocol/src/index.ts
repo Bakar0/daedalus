@@ -151,7 +151,12 @@ export type TerminalClientMessage =
   | { type: "resize"; cols: number; rows: number };
 
 export type TerminalServerMessage =
-  | { type: "status"; status: "connected" | "reconnected" }
+  | {
+      type: "status";
+      status: "live" | "reconnected" | "exited" | "lost";
+      agentId: string;
+    }
+  | { type: "overflow"; droppedBytes: number }
   | { type: "error"; message: string };
 
 export interface DoctorCheck {

@@ -360,7 +360,7 @@ Use optimistic UI only for low-risk metadata edits. Workspace deletion and proce
 
 **Exit:** every Phase 2–4 operation has a working UI equivalent and changes made through the CLI become visible promptly.
 
-### Phase 6 — integrated terminal
+### Phase 6 — integrated terminal (complete)
 
 - Productize the terminal spike, including input, resize, scrollback, reconnect, and cleanup.
 - Add session switching and clear status indicators.
@@ -368,6 +368,8 @@ Use optimistic UI only for low-risk metadata edits. Workspace deletion and proce
 - Test ANSI behavior, Unicode, large output, and app restart.
 
 **Exit:** Codex and Claude Code are comfortably usable inside the app and remain attachable from the CLI.
+
+Implemented with task-card-owned session actions, Task brief/Terminal inspector views, per-agent session switching, authenticated loopback transport, bounded capture/scrollback/pending queues, high-water backpressure, app-restart reconnect, explicit lifecycle states, and deterministic bridge/UI cleanup. Automated coverage includes transport authentication, ANSI/Unicode, resize, noisy output, switching, reconnect, and cleanup.
 
 ### Phase 7 — hardening and first release
 

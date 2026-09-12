@@ -18,6 +18,11 @@ export interface TmuxClient {
   stop(session: string, force?: boolean): Promise<void>;
 }
 
+export interface TmuxTerminalTarget {
+  socketName: string;
+  session: string;
+}
+
 export class CommandTmuxClient implements TmuxClient {
   constructor(
     readonly socketName = "daedalus",
@@ -135,6 +140,32 @@ export class CommandTmuxClient implements TmuxClient {
 export const SPIKE_SOCKET = "daedalus-spike";
 export const SPIKE_SESSION = "daedalus_spike";
 
+export const TERMINAL_CAPTURE_LINES = 10_000;
+export const TERMINAL_CAPTURE_BYTES = 1024 * 1024;
+
+export function boundTerminalCapture(
+  screen: string,
+  limit = TERMINAL_CAPTURE_BYTES,
+): Uint8Array {
+  const encoded = new TextEncoder().encode(screen.replace(/\r?\n/g, "\r\n"));
+  let body =
+    encoded.byteLength > limit
+      ? encoded.slice(encoded.byteLength - limit)
+      : encoded;
+  while (body.length > 0 && (body[0]! & 0xc0) === 0x80) body = body.slice(1);
+  const reset = new TextEncoder().encode("\u001b[H\u001b[2J");
+  const output = new Uint8Array(reset.byteLength + body.byteLength);
+  output.set(reset);
+  output.set(body, reset.byteLength);
+  return output;
+}
+
+const terminalArgs = (socketName: string, ...args: string[]) => [
+  "-L",
+  socketName,
+  ...args,
+];
+
 const tmuxArgs = (...args: string[]) => ["-L", SPIKE_SOCKET, ...args];
 
 export async function ensureSpikeSession(cwd: string): Promise<boolean> {
@@ -164,24 +195,65 @@ export async function ensureSpikeSession(cwd: string): Promise<boolean> {
 }
 
 export async function captureSpikePane(): Promise<Uint8Array> {
+  return captureTmuxPane({
+    socketName: SPIKE_SOCKET,
+    session: SPIKE_SESSION,
+  });
+}
+
+export async function captureTmuxPane(
+  target: TmuxTerminalTarget,
+  historyLines = TERMINAL_CAPTURE_LINES,
+): Promise<Uint8Array> {
+  const safeHistory = Math.max(
+    0,
+    Math.min(TERMINAL_CAPTURE_LINES, historyLines),
+  );
   const captured = await runCommand(
     "tmux",
-    tmuxArgs("capture-pane", "-p", "-e", "-J", "-S", "-", "-t", SPIKE_SESSION),
+    terminalArgs(
+      target.socketName,
+      "capture-pane",
+      "-p",
+      "-e",
+      "-J",
+      "-S",
+      `-${safeHistory}`,
+      "-t",
+      target.session,
+    ),
   );
   if (captured.exitCode !== 0)
     throw new Error(captured.stderr || "tmux capture failed");
-  const screen = captured.stdout.replace(/\r?\n/g, "\r\n");
-  return new TextEncoder().encode(`\u001b[H\u001b[2J${screen}`);
+  return boundTerminalCapture(captured.stdout);
 }
 
 export async function sendSpikeInput(data: string): Promise<void> {
+  return sendTmuxInput(
+    { socketName: SPIKE_SOCKET, session: SPIKE_SESSION },
+    data,
+  );
+}
+
+export async function sendTmuxInput(
+  target: TmuxTerminalTarget,
+  data: string,
+): Promise<void> {
   const chunks = data.split("\r");
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index] ?? "";
     if (chunk) {
       const literal = await runCommand(
         "tmux",
-        tmuxArgs("send-keys", "-t", SPIKE_SESSION, "-l", "--", chunk),
+        terminalArgs(
+          target.socketName,
+          "send-keys",
+          "-t",
+          target.session,
+          "-l",
+          "--",
+          chunk,
+        ),
       );
       if (literal.exitCode !== 0)
         throw new Error(literal.stderr || "tmux input failed");
@@ -189,7 +261,13 @@ export async function sendSpikeInput(data: string): Promise<void> {
     if (index < chunks.length - 1) {
       const enter = await runCommand(
         "tmux",
-        tmuxArgs("send-keys", "-t", SPIKE_SESSION, "Enter"),
+        terminalArgs(
+          target.socketName,
+          "send-keys",
+          "-t",
+          target.session,
+          "Enter",
+        ),
       );
       if (enter.exitCode !== 0)
         throw new Error(enter.stderr || "tmux Enter input failed");
@@ -209,10 +287,25 @@ export class TmuxControlBridge {
   #onOutput: (output: Uint8Array) => void;
   #buffer = "";
 
-  constructor(onOutput: (output: Uint8Array) => void) {
+  constructor(
+    onOutput: (output: Uint8Array) => void,
+    target: TmuxTerminalTarget = {
+      socketName: SPIKE_SOCKET,
+      session: SPIKE_SESSION,
+    },
+  ) {
     this.#onOutput = onOutput;
     this.process = Bun.spawn(
-      ["tmux", ...tmuxArgs("-C", "attach-session", "-t", SPIKE_SESSION)],
+      [
+        "tmux",
+        ...terminalArgs(
+          target.socketName,
+          "-C",
+          "attach-session",
+          "-t",
+          target.session,
+        ),
+      ],
       { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
     );
   }

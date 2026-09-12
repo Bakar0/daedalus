@@ -1,6 +1,6 @@
 # Daedalus
 
-Daedalus is a macOS-first, local-first control plane for coding agents. Phases 0–5 are implemented: the terminal proof, shared foundation, complete workspace/task CLI, durable tmux-backed agent CLI, and the Electrobun desktop CRUD application. Integrated per-agent terminal productization remains intentionally deferred to Phase 6.
+Daedalus is a macOS-first, local-first control plane for coding agents. Phases 0–6 are implemented: the shared foundation, complete workspace/task CLI, durable tmux-backed agent CLI, Electrobun desktop CRUD application, and integrated per-agent terminals.
 
 Workspaces are ordinary directories. They are not Git worktrees. SQLite stores searchable metadata, while the filesystem remains authoritative for workspace existence and tmux remains authoritative for live sessions.
 
@@ -30,7 +30,9 @@ Start the desktop application with:
 bun run dev
 ```
 
-The three-column UI manages workspaces, task cards, and focused task details through typed Electrobun RPC backed by `@daedalus/core`. Agent launch and session state live on each task card instead of in a separate agent screen. The Settings dialog retains the collapsible Phase 0 terminal transport spike, which creates or reconnects to the isolated `daedalus_spike` session. Closing and reopening the app does not terminate that shell or any agent session.
+The three-column UI manages workspaces, task cards, and focused task details through typed Electrobun RPC backed by `@daedalus/core`. Agent launch and session state live on each task card instead of in a separate agent screen. Spawning or opening a session selects the Terminal view in the right-side panel; Task brief remains available beside it. The session control switches among concurrent task sessions. Closing or reopening the app detaches and reconnects the terminal without terminating the tmux-owned agent session.
+
+Terminal traffic uses a token-authenticated loopback WebSocket. The app restores up to 10,000 lines or 1 MiB of tmux history, retains 10,000 renderer scrollback lines, and bounds both Bun-side and renderer-side pending output to 1 MiB. When a noisy producer outruns the UI, Daedalus drops old pending bytes, reports the amount, and leaves the durable tmux pane available for a fresh bounded capture. Live, reconnecting, exited, and lost states are shown explicitly. CLI `agent attach` remains compatible with the same session.
 
 Changes made through `daedal` while the desktop is open are detected and shown promptly. Workspace and task deletion retain the same core safety guards as the CLI; the UI requires explicit confirmation and never deletes workspace files by default.
 
@@ -48,6 +50,7 @@ The default data directory is `~/.daedalus`, containing `config.json`, `state.db
 - `bun run test:agent-tmux` — isolated production agent/tmux lifecycle verification
 - `bun run test:cli-agent` — full workspace → task → agent → cleanup CLI integration
 - `bun run test:terminal-spike` — real isolated tmux transport verification
+- `bun run test:terminal-agent` — real per-agent terminal, noisy output, reconnect, and cleanup verification
 - `bun run format:check` — formatting validation
 - `bun run typecheck` — strict TypeScript validation
 - `bun run build` — shared packages, CLI, Vite renderer, and packaged Electrobun app

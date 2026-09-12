@@ -23,6 +23,7 @@
     "test:agent-tmux": "bun run scripts/agent-tmux-check.ts",
     "test:cli-agent": "bun run scripts/cli-agent-check.ts",
     "test:terminal-spike": "bun run scripts/terminal-spike-check.ts",
+    "test:terminal-agent": "bun run scripts/terminal-agent-check.ts",
     "typecheck": "tsc --noEmit",
     "verify:versions": "bun run scripts/verify-versions.ts",
     "daedal": "bun run apps/cli/src/index.ts"

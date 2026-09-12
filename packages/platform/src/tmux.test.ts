@@ -1,5 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
-import { CommandTmuxClient, decodeControlOutput } from "./tmux";
+import {
+  boundTerminalCapture,
+  CommandTmuxClient,
+  decodeControlOutput,
+} from "./tmux";
 
 describe("decodeControlOutput", () => {
   test("decodes tmux octal control bytes and keeps Unicode", () => {
@@ -8,6 +12,18 @@ describe("decodeControlOutput", () => {
     );
     expect(decoded).toBe("\u001b[31mשלום \r\n");
   });
+});
+
+test("terminal captures preserve recent complete UTF-8 within a byte bound", () => {
+  const capture = boundTerminalCapture(
+    `old output ${"x".repeat(20)}שלום 😀`,
+    16,
+  );
+  const decoded = new TextDecoder().decode(capture);
+  expect(capture.byteLength).toBeLessThanOrEqual(23);
+  expect(decoded).toMatch(/^\u001b\[H\u001b\[2J/);
+  expect(decoded).toContain("שלום 😀");
+  expect(decoded).not.toContain("�");
 });
 
 describe("CommandTmuxClient", () => {
@@ -52,5 +68,12 @@ describe("CommandTmuxClient", () => {
       "--",
       "hello; exit",
     ]);
+    await tmux.attach("daedalus_123");
+    expect(command).toHaveBeenNthCalledWith(
+      4,
+      "tmux",
+      ["-L", "isolated", "attach-session", "-t", "daedalus_123"],
+      { stdin: "inherit", stdout: "inherit", stderr: "inherit" },
+    );
   });
 });

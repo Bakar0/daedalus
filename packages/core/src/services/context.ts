@@ -16,6 +16,7 @@ export interface ApplicationContext {
   workspaces: WorkspaceService;
   tasks: TaskService;
   agents: AgentService;
+  tmux: TmuxClient;
   close(): void;
 }
 
@@ -61,6 +62,7 @@ export async function createApplicationContext(
     workspaces,
     tasks,
     agents,
+    tmux,
     close: () => repositories.close(),
   };
 }

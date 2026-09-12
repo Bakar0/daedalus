@@ -475,6 +475,7 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   gap: 6px;
   margin-top: 2px;
   padding: 6px;
+  flex-wrap: wrap;
 }
 .app[data-theme="light"] .task-agent-controls {
   background: rgb(75 95 128 / 0.055);
@@ -499,7 +500,13 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
 }
 .session-menu {
   margin-left: auto;
-  position: relative;
+}
+.session-menu[open] {
+  flex-basis: 100%;
+  margin-left: 0;
+}
+.session-menu[open] > summary {
+  justify-content: flex-end;
 }
 .session-menu summary {
   align-items: center;
@@ -518,11 +525,9 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   border-radius: 11px;
   box-shadow: 0 18px 50px rgb(0 0 0 / 0.5);
   min-width: 230px;
+  margin-top: 4px;
   padding: 6px;
-  position: absolute;
-  right: 0;
-  top: 29px;
-  z-index: 4;
+  width: 100%;
 }
 .session-popover > div {
   align-items: center;
@@ -530,6 +535,18 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   gap: 8px;
   justify-content: space-between;
   padding: 7px;
+}
+.session-open {
+  align-items: center;
+  display: flex;
+  flex: 1;
+  gap: 8px;
+  min-width: 0;
+  text-align: left;
+}
+.session-open > span:last-child {
+  display: grid;
+  gap: 2px;
 }
 .session-popover span {
   display: grid;
@@ -557,6 +574,26 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
 .detail-title {
   gap: 10px;
   justify-content: space-between;
+}
+.detail-tabs {
+  align-items: center;
+  background: var(--raised);
+  border-radius: 8px;
+  display: flex;
+  padding: 2px;
+}
+.detail-tabs button {
+  background: transparent !important;
+  border: 0;
+  border-radius: 6px !important;
+  color: var(--muted) !important;
+  font-size: 11px !important;
+  padding: 6px 9px !important;
+}
+.detail-tabs button.active {
+  background: var(--elevated) !important;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.18);
+  color: var(--text) !important;
 }
 .detail-title > div {
   align-items: center;
@@ -797,6 +834,57 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
 .linked-session > div {
   display: grid;
   gap: 2px;
+}
+.linked-session-open {
+  margin-left: auto;
+}
+.terminal-detail {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.session-switcher {
+  color: var(--muted);
+  display: grid;
+  font-size: 10px;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.session-switcher select {
+  font-size: 11px;
+  width: 100%;
+}
+.agent-terminal-shell {
+  background: #060916;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.terminal-status {
+  align-items: center;
+  background: #111728;
+  border-bottom: 1px solid rgb(151 164 190 / 0.15);
+  color: #dce5f2;
+  display: flex;
+  font-size: 11px;
+  gap: 7px;
+  padding: 8px 10px;
+}
+.terminal-status small {
+  color: #8290a9;
+  margin-left: auto;
+}
+.agent-terminal-shell .terminal {
+  border-radius: 0;
+  flex: 1;
+  height: auto;
+  margin: 0;
+  min-height: 240px;
 }
 .empty {
   align-items: center;

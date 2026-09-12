@@ -93,15 +93,49 @@ function Modal({
   );
 }
 
-function SpikeTerminal() {
+function AgentTerminal({ agent }: { agent: AgentSessionDto }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState("connecting");
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    if (agent.status !== "running" && agent.status !== "starting") {
+      setStatus(agent.status);
+      return;
+    }
     let disposed = false;
     let terminal: Terminal | undefined;
     let socket: WebSocket | undefined;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let reconnectAttempts = 0;
+    let terminalEnded = false;
+    let frame: number | undefined;
+    const pending: Uint8Array[] = [];
+    let pendingBytes = 0;
+
+    const drain = () => {
+      frame = undefined;
+      const chunks = pending.splice(0);
+      pendingBytes = 0;
+      for (const chunk of chunks) terminal?.write(chunk);
+    };
+    const enqueue = (chunk: Uint8Array) => {
+      if (chunk.byteLength >= 1024 * 1024) {
+        pending.length = 0;
+        pending.push(chunk.slice(chunk.byteLength - 1024 * 1024));
+        pendingBytes = 1024 * 1024;
+        if (frame === undefined) frame = requestAnimationFrame(drain);
+        return;
+      }
+      pending.push(chunk);
+      pendingBytes += chunk.byteLength;
+      while (pendingBytes > 1024 * 1024 && pending.length > 1) {
+        const dropped = pending.shift();
+        if (dropped) pendingBytes -= dropped.byteLength;
+      }
+      if (frame === undefined) frame = requestAnimationFrame(drain);
+    };
+
     void (async () => {
       await init();
       if (disposed) return;
@@ -129,36 +163,61 @@ function SpikeTerminal() {
         setStatus("available in Electrobun");
         return;
       }
-      socket = new WebSocket(endpoint);
-      socket.binaryType = "arraybuffer";
-      socket.onopen = () => {
-        setStatus("connected");
-        socket?.send(
-          JSON.stringify({
-            type: "resize",
-            cols: terminal?.cols ?? 80,
-            rows: terminal?.rows ?? 24,
-          }),
-        );
-      };
-      socket.onclose = () => setStatus("disconnected");
-      socket.onerror = () => setStatus("connection error");
-      socket.onmessage = (event) => {
-        if (event.data instanceof ArrayBuffer) {
-          terminal?.write(new Uint8Array(event.data));
-          return;
-        }
-        const value = JSON.parse(String(event.data)) as {
-          type: string;
-          status?: string;
-          message?: string;
+      const connect = () => {
+        if (disposed || terminalEnded) return;
+        const url = new URL(endpoint);
+        url.searchParams.set("agent", agent.id);
+        socket = new WebSocket(url);
+        socket.binaryType = "arraybuffer";
+        socket.onopen = () => {
+          reconnectAttempts = 0;
+          setStatus("connected");
+          socket?.send(
+            JSON.stringify({
+              type: "resize",
+              cols: terminal?.cols ?? 80,
+              rows: terminal?.rows ?? 24,
+            }),
+          );
         };
-        if (value.type === "status" && value.status) setStatus(value.status);
-        if (value.type === "error" && value.message) {
-          setStatus("unavailable");
-          terminal?.writeln(`\r\n\u001b[31m${value.message}\u001b[0m`);
-        }
+        socket.onclose = () => {
+          if (disposed || terminalEnded) return;
+          setStatus("reconnecting");
+          reconnectTimer = setTimeout(
+            connect,
+            Math.min(4_000, 250 * 2 ** reconnectAttempts++),
+          );
+        };
+        socket.onerror = () => setStatus("connection error");
+        socket.onmessage = (event) => {
+          if (event.data instanceof ArrayBuffer) {
+            enqueue(new Uint8Array(event.data));
+            return;
+          }
+          const value = JSON.parse(String(event.data)) as {
+            type: string;
+            status?: string;
+            message?: string;
+            droppedBytes?: number;
+          };
+          if (value.type === "status" && value.status) {
+            setStatus(value.status);
+            if (value.status === "exited" || value.status === "lost")
+              terminalEnded = true;
+          }
+          if (value.type === "overflow" && value.droppedBytes) {
+            terminal?.writeln(
+              `\r\n\u001b[33m[Daedalus skipped ${value.droppedBytes.toLocaleString()} buffered bytes; reconnect to recapture scrollback]\u001b[0m`,
+            );
+          }
+          if (value.type === "error" && value.message) {
+            terminalEnded = true;
+            setStatus("unavailable");
+            terminal?.writeln(`\r\n\u001b[31m${value.message}\u001b[0m`);
+          }
+        };
       };
+      connect();
       terminal.onData((data) => {
         if (socket?.readyState === WebSocket.OPEN)
           socket.send(JSON.stringify({ type: "input", data }));
@@ -170,21 +229,27 @@ function SpikeTerminal() {
     })();
     return () => {
       disposed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (frame !== undefined) cancelAnimationFrame(frame);
       socket?.close();
       terminal?.dispose();
     };
-  }, []);
+  }, [agent.id, agent.status]);
   return (
-    <details className="spike settings-spike">
-      <summary>
-        Terminal transport spike <span>{status}</span>
-      </summary>
+    <section className="agent-terminal-shell">
+      <div className="terminal-status">
+        <span className={`agent-dot ${agent.status}`} />
+        <span>{agent.provider}</span>
+        <small>
+          {status} · {agent.id.slice(0, 8)}
+        </small>
+      </div>
       <div
-        aria-label="tmux terminal spike"
+        aria-label={`Terminal for ${agent.provider} session ${agent.id.slice(0, 8)}`}
         className="terminal"
         ref={containerRef}
       />
-    </details>
+    </section>
   );
 }
 
@@ -192,10 +257,14 @@ export function App({
   injectedClient,
   initialSnapshot,
   initialSelectedTaskId,
+  initialActiveAgentId,
+  initialDetailView = "brief",
 }: {
   injectedClient?: DesktopClient;
   initialSnapshot?: DesktopSnapshotDto;
   initialSelectedTaskId?: string;
+  initialActiveAgentId?: string;
+  initialDetailView?: "brief" | "terminal";
 } = {}) {
   const clientRef = useRef<DesktopClient | undefined>(injectedClient);
   if (!clientRef.current)
@@ -221,6 +290,12 @@ export function App({
   });
   const [taskForm, setTaskForm] = useState({ title: "", description: "" });
   const [provider, setProvider] = useState("codex");
+  const [detailView, setDetailView] = useState<"brief" | "terminal">(
+    initialDetailView,
+  );
+  const [activeAgentId, setActiveAgentId] = useState<string | undefined>(
+    initialActiveAgentId,
+  );
 
   const refresh = useCallback(async () => {
     try {
@@ -235,6 +310,11 @@ export function App({
       );
       setSelectedTaskId((current) =>
         response.data.tasks.some((item) => item.id === current)
+          ? current
+          : undefined,
+      );
+      setActiveAgentId((current) =>
+        response.data.agents.some((item) => item.id === current)
           ? current
           : undefined,
       );
@@ -267,6 +347,10 @@ export function App({
     }
   }, [provider, snapshot]);
 
+  useEffect(() => {
+    if (detailView === "terminal" && !activeAgentId) setDetailView("brief");
+  }, [activeAgentId, detailView]);
+
   async function perform<T>(
     operation: Promise<RpcResult<T>>,
   ): Promise<T | undefined> {
@@ -297,6 +381,9 @@ export function App({
   );
   const selectedTask = snapshot?.tasks.find(
     (item) => item.id === selectedTaskId,
+  );
+  const activeAgent = snapshot?.agents.find(
+    (item) => item.id === activeAgentId,
   );
   const taskAgents = (taskId: string) =>
     (snapshot?.agents ?? []).filter((agent) => agent.taskId === taskId);
@@ -351,7 +438,7 @@ export function App({
   async function spawnAgent(task: TaskDto) {
     if (!workspace || !provider) return;
     const builtIn = provider === "codex" || provider === "claude";
-    await perform(
+    const spawned = await perform(
       client.request.agentSpawn({
         workspace: workspace.id,
         taskId: task.id,
@@ -359,6 +446,22 @@ export function App({
         command: builtIn ? undefined : provider,
       }),
     );
+    if (spawned) {
+      setSelectedTaskId(task.id);
+      setActiveAgentId(spawned.id);
+      setDetailView("terminal");
+    }
+  }
+
+  function openAgent(
+    agent: AgentSessionDto,
+    event?: React.MouseEvent<HTMLButtonElement>,
+  ) {
+    event?.currentTarget.closest("details")?.removeAttribute("open");
+    if (agent.taskId) setSelectedTaskId(agent.taskId);
+    setActiveAgentId(agent.id);
+    setDetailView("terminal");
+    setEditingTaskId(undefined);
   }
 
   async function stopAgent(agent: AgentSessionDto) {
@@ -482,6 +585,8 @@ export function App({
                 onClick={() => {
                   setSelectedWorkspaceId(item.id);
                   setSelectedTaskId(undefined);
+                  setActiveAgentId(undefined);
+                  setDetailView("brief");
                 }}
               >
                 <span className="workspace-icon">
@@ -574,6 +679,8 @@ export function App({
                     onClick={() => {
                       setSelectedTaskId(task.id);
                       setEditingTaskId(undefined);
+                      setActiveAgentId(undefined);
+                      setDetailView("brief");
                     }}
                   >
                     <div className="task-card-top">
@@ -620,12 +727,20 @@ export function App({
                           <div className="session-popover">
                             {sessions.map((agent) => (
                               <div key={agent.id}>
-                                <span>
-                                  <strong>{agent.provider}</strong>
-                                  <small>
-                                    {agent.status} · {agent.id.slice(0, 8)}
-                                  </small>
-                                </span>
+                                <button
+                                  className="session-open quiet"
+                                  onClick={(event) => openAgent(agent, event)}
+                                >
+                                  <span
+                                    className={`agent-dot ${agent.status}`}
+                                  />
+                                  <span>
+                                    <strong>{agent.provider}</strong>
+                                    <small>
+                                      {agent.status} · {agent.id.slice(0, 8)}
+                                    </small>
+                                  </span>
+                                </button>
                                 {agent.status === "running" ||
                                 agent.status === "starting" ? (
                                   <button
@@ -659,24 +774,66 @@ export function App({
           <div className="section-heading">
             <div>
               <span className="eyebrow">Inspector</span>
-              <h1>Task brief</h1>
-            </div>
-            {selectedTask && selectedTask.workspaceId === workspace?.id && (
-              <button
-                className="quiet"
-                onClick={() =>
-                  setEditingTaskId(
-                    editingTaskId === selectedTask.id
-                      ? undefined
-                      : selectedTask.id,
-                  )
-                }
+              <div
+                className="detail-tabs"
+                role="tablist"
+                aria-label="Task detail view"
               >
-                {editingTaskId === selectedTask.id ? "Cancel" : "Edit"}
-              </button>
-            )}
+                <button
+                  aria-selected={detailView === "brief"}
+                  className={detailView === "brief" ? "active" : ""}
+                  onClick={() => setDetailView("brief")}
+                  role="tab"
+                >
+                  Task brief
+                </button>
+                <button
+                  aria-selected={detailView === "terminal"}
+                  className={detailView === "terminal" ? "active" : ""}
+                  disabled={!activeAgent}
+                  onClick={() => setDetailView("terminal")}
+                  role="tab"
+                >
+                  Terminal
+                </button>
+              </div>
+            </div>
+            {detailView === "brief" &&
+              selectedTask &&
+              selectedTask.workspaceId === workspace?.id && (
+                <button
+                  className="quiet"
+                  onClick={() =>
+                    setEditingTaskId(
+                      editingTaskId === selectedTask.id
+                        ? undefined
+                        : selectedTask.id,
+                    )
+                  }
+                >
+                  {editingTaskId === selectedTask.id ? "Cancel" : "Edit"}
+                </button>
+              )}
           </div>
-          {!selectedTask || selectedTask.workspaceId !== workspace?.id ? (
+          {detailView === "terminal" && activeAgent ? (
+            <div className="terminal-detail">
+              <label className="session-switcher">
+                <span>Session</span>
+                <select
+                  aria-label="Active terminal session"
+                  value={activeAgent.id}
+                  onChange={(event) => setActiveAgentId(event.target.value)}
+                >
+                  {taskAgents(activeAgent.taskId ?? "").map((agent) => (
+                    <option key={agent.id} value={agent.id}>
+                      {agent.provider} · {agent.status} · {agent.id.slice(0, 8)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <AgentTerminal agent={activeAgent} key={activeAgent.id} />
+            </div>
+          ) : !selectedTask || selectedTask.workspaceId !== workspace?.id ? (
             <div className="empty large">
               <strong>Select a task</strong>
               <span>Its brief will appear here.</span>
@@ -770,6 +927,12 @@ export function App({
                           {agent.status} · {agent.id.slice(0, 8)}
                         </small>
                       </div>
+                      <button
+                        className="quiet linked-session-open"
+                        onClick={() => openAgent(agent)}
+                      >
+                        Open
+                      </button>
                     </div>
                   ))
                 )}
@@ -926,7 +1089,6 @@ export function App({
               </div>
             ))}
           </div>
-          <SpikeTerminal />
         </Modal>
       )}
     </main>

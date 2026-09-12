@@ -1,6 +1,6 @@
 # Desktop RPC and UI
 
-The Phase 5 desktop is a thin adapter over the same `ApplicationContext` used by `daedal`. Its three columns cover workspace selection, task cards, and a focused Markdown task brief. Briefs render as GitHub-flavored Markdown by default and switch to their portable plain-text source for explicit edits; that same source is stored in SQLite and passed directly into agent launch prompts. Compact `+` actions open workspace and task creation dialogs. Each task card owns its default agent-tool selector, spawn action, and compact session indicator; there is no separate agent-management screen. The settings dialog reports the resolved `DAEDALUS_HOME`, workspace root, database, tmux capability, configured provider executables, and a renderer-local theme preference.
+The desktop is a thin adapter over the same `ApplicationContext` used by `daedal`. Its three columns cover workspace selection, task cards, and a focused right-side panel with Task brief and Terminal views. Briefs render as GitHub-flavored Markdown by default and switch to their portable plain-text source for explicit edits; that same source is stored in SQLite and passed directly into agent launch prompts. Compact `+` actions open workspace and task creation dialogs. Each task card owns its default agent-tool selector, spawn action, and compact session indicator; there is no separate agent-management screen. Spawn opens the new session in Terminal, while session rows on the task card and brief reopen or switch the selected terminal. The settings dialog reports the resolved `DAEDALUS_HOME`, workspace root, database, tmux capability, configured provider executables, and a renderer-local theme preference.
 
 ## Contract
 
@@ -23,8 +23,12 @@ Successful desktop mutations emit a typed `dataChanged` message immediately. The
 
 ## Terminal boundary
 
-The collapsible terminal under Settings is the original isolated Phase 0 transport spike, not an agent terminal. Per-agent interaction, terminal selection, reconnect, buffering, and cleanup remain Phase 6 work.
+The renderer receives a token-bearing loopback endpoint at launch and adds only the selected agent UUID. The Bun process resolves the UUID to its recorded tmux session, rejects non-live sessions, captures bounded ANSI history, and then streams live binary output. Input and dimensions flow back as small typed JSON messages. A single selected `ghostty-web` instance provides interactive input, paste, Unicode, ANSI color, resize, and 10,000 lines of scrollback.
+
+The transport caps pending output at 1 MiB on both sides and pauses Bun-side draining while the WebSocket exceeds a 256 KiB high-water mark. Old pending bytes are discarded on overflow with a terminal notice; tmux keeps the authoritative pane and a reconnect performs a new bounded capture. Unexpected socket closure retries with bounded exponential delay. Normal task/session switching and view teardown close the socket, terminal, timers, and tmux control client without killing the agent. Stop and remove remain explicit task-card-owned actions.
+
+The panel distinguishes live, reconnected, reconnecting, exited, and lost states. Desktop startup reconciliation makes existing tmux sessions reconnectable after app restart. CLI attachment remains independent and compatible because the desktop never replaces or proxies session ownership.
 
 ## Testing
 
-`apps/desktop/src/bun/rpc.test.ts` drives the RPC adapter through a real temporary application context, SQLite database, workspace filesystem, and fake tmux boundary. `apps/desktop/src/renderer/App.test.tsx` renders lifecycle and dependency states with an injected typed client. All test homes are isolated and never touch the user's Daedalus data.
+`apps/desktop/src/bun/rpc.test.ts` drives the RPC adapter through a real temporary application context, SQLite database, workspace filesystem, and fake tmux boundary. Terminal tests cover upgrade authentication, bounded noisy-output queues, socket high-water behavior, ANSI/Unicode capture, input, resize, reconnect status, and resource cleanup. `apps/desktop/src/renderer/App.test.tsx` renders lifecycle, dependency, and multi-session terminal selection states with an injected typed client. `bun run test:terminal-agent` exercises the real isolated tmux path. All test homes and tmux sockets are isolated and never touch the user's Daedalus data.

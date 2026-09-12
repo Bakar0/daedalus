@@ -8,92 +8,104 @@ import {
 } from "electrobun/main";
 import { createApplicationContext } from "@daedalus/core";
 import {
-  captureSpikePane,
-  ensureSpikeSession,
-  sendSpikeInput,
+  captureTmuxPane,
+  CommandTmuxClient,
+  sendTmuxInput,
   TmuxControlBridge,
 } from "@daedalus/platform";
 import type {
   DesktopRpcSchema,
-  TerminalClientMessage,
   TerminalServerMessage,
 } from "@daedalus/protocol";
 import { APPLICATION_MENU } from "./menu";
 import { createDesktopRequestHandlers, desktopDataFingerprint } from "./rpc";
+import { authorizeTerminalRequest, TerminalConnection } from "./terminal";
 
 interface SocketData {
-  authenticated: true;
+  agentId: string;
 }
 
 const context = await createApplicationContext(
   resolve(PATHS.RESOURCES_FOLDER, "app/migrations"),
 );
-let spikeError: string | undefined;
-let reconnected = false;
-try {
-  reconnected = !(await ensureSpikeSession(context.config.workspaceRoot));
-} catch (error) {
-  spikeError = error instanceof Error ? error.message : String(error);
-}
-const clients = new Set<Bun.ServerWebSocket<SocketData>>();
-const bridge = spikeError
-  ? undefined
-  : new TmuxControlBridge((output) => {
-      for (const client of clients) client.send(output);
-    });
-if (bridge) void bridge.start();
+const terminalTmux = context.tmux;
+if (!(terminalTmux instanceof CommandTmuxClient))
+  throw new Error("Desktop terminal requires the command tmux adapter");
+const terminalTarget = (session: string) => ({
+  socketName: terminalTmux.socketName,
+  session,
+});
+const preexistingLiveIds = new Set(
+  context.repositories
+    .listAgents()
+    .filter(
+      (agent) => agent.status === "running" || agent.status === "starting",
+    )
+    .map((agent) => agent.id),
+);
+const connections = new Map<
+  Bun.ServerWebSocket<SocketData>,
+  TerminalConnection
+>();
 
 const token = randomBytes(24).toString("hex");
 const server = Bun.serve<SocketData>({
   hostname: "127.0.0.1",
   port: 0,
   fetch(request, server) {
-    const url = new URL(request.url);
-    if (
-      url.pathname !== "/terminal" ||
-      url.searchParams.get("token") !== token
-    ) {
+    const agentId = authorizeTerminalRequest(request, token);
+    if (!agentId) {
       return new Response("Not found", { status: 404 });
     }
-    return server.upgrade(request, { data: { authenticated: true } })
+    return server.upgrade(request, { data: { agentId } })
       ? undefined
       : new Response("WebSocket upgrade failed", { status: 400 });
   },
   websocket: {
     async open(socket) {
-      clients.add(socket);
-      if (spikeError) {
-        const unavailable: TerminalServerMessage = {
-          type: "error",
-          message: spikeError,
-        };
-        socket.send(JSON.stringify(unavailable));
-        return;
-      }
-      const status: TerminalServerMessage = {
-        type: "status",
-        status: reconnected ? "reconnected" : "connected",
-      };
-      socket.send(JSON.stringify(status));
-      socket.send(await captureSpikePane());
-    },
-    close(socket) {
-      clients.delete(socket);
-    },
-    async message(socket, payload) {
       try {
-        if (typeof payload !== "string") return;
-        const message = JSON.parse(payload) as TerminalClientMessage;
-        if (message.type === "input") await sendSpikeInput(message.data);
-        if (message.type === "resize")
-          bridge?.resize(message.cols, message.rows);
+        const agent = await context.agents.get(socket.data.agentId);
+        if (agent.status !== "running" && agent.status !== "starting") {
+          const status: TerminalServerMessage = {
+            type: "status",
+            status: agent.status,
+            agentId: agent.id,
+          };
+          socket.send(JSON.stringify(status));
+          socket.close();
+          return;
+        }
+        const target = terminalTarget(agent.tmuxSession);
+        const connection = new TerminalConnection({
+          agentId: agent.id,
+          socket,
+          status: preexistingLiveIds.has(agent.id) ? "reconnected" : "live",
+          capture: () => captureTmuxPane(target),
+          sendInput: (data) => sendTmuxInput(target, data),
+          createBridge: (onOutput) => new TmuxControlBridge(onOutput, target),
+          onError: (error) =>
+            void context.logger.write("error", "terminal_connection_failed", {
+              agentId: agent.id,
+              message: error instanceof Error ? error.message : String(error),
+            }),
+        });
+        connections.set(socket, connection);
+        await connection.start();
       } catch (error) {
-        const response: TerminalServerMessage = {
+        const unavailable: TerminalServerMessage = {
           type: "error",
           message: error instanceof Error ? error.message : String(error),
         };
-        socket.send(JSON.stringify(response));
+        socket.send(JSON.stringify(unavailable));
+        socket.close();
       }
+    },
+    close(socket) {
+      connections.get(socket)?.close();
+      connections.delete(socket);
+    },
+    message(socket, payload) {
+      void connections.get(socket)?.message(payload);
     },
   },
 });
@@ -135,6 +147,16 @@ setInterval(async () => {
     // Reconciliation updates stale sessions; SQLite fingerprinting also catches
     // mutations performed by another process such as the CLI.
     await context.agents.reconcile();
+    for (const [socket, connection] of connections) {
+      const agent = context.repositories.findAgent(socket.data.agentId);
+      if (
+        !agent ||
+        (agent.status !== "running" && agent.status !== "starting")
+      ) {
+        connection.end(agent?.status === "lost" ? "lost" : "exited");
+        connections.delete(socket);
+      }
+    }
     const next = desktopDataFingerprint(context);
     if (next !== fingerprint) announce("external");
   } catch (error) {
@@ -148,6 +170,5 @@ setInterval(async () => {
 
 await context.logger.write("info", "desktop_started", {
   terminalTransport: "loopback_websocket",
-  tmuxReconnected: reconnected,
-  spikeError,
+  reconnectableSessions: preexistingLiveIds.size,
 });

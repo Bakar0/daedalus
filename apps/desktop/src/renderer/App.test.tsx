@@ -148,4 +148,71 @@ describe("desktop application shell", () => {
     expect(html).toContain("Moved workspace");
     expect(html).toContain("folder missing");
   });
+
+  test("renders an active terminal and switches among task-owned sessions", () => {
+    const running = {
+      id: "11111111-1111-4111-8111-111111111111",
+      workspaceId: "w1",
+      taskId: "t1",
+      provider: "codex" as const,
+      tmuxSession: "daedalus_one",
+      command: "codex",
+      args: [],
+      workingDirectory: "/tmp/demo",
+      status: "running" as const,
+      exitCode: null,
+      startedAt: "now",
+      endedAt: null,
+    };
+    const snapshot: DesktopSnapshotDto = {
+      ...base,
+      workspaces: [
+        {
+          id: "w1",
+          slug: "demo",
+          name: "Demo",
+          path: "/tmp/demo",
+          createdAt: "now",
+          updatedAt: "now",
+          archivedAt: null,
+          available: true,
+        },
+      ],
+      tasks: [
+        {
+          id: "t1",
+          workspaceId: "w1",
+          title: "Terminal task",
+          description: "Use both sessions",
+          status: "in_progress",
+          priority: "normal",
+          createdAt: "now",
+          updatedAt: "now",
+          completedAt: null,
+        },
+      ],
+      agents: [
+        running,
+        {
+          ...running,
+          id: "22222222-2222-4222-8222-222222222222",
+          provider: "claude",
+          tmuxSession: "daedalus_two",
+        },
+      ],
+    };
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialActiveAgentId={running.id}
+        initialDetailView="terminal"
+        initialSelectedTaskId="t1"
+        initialSnapshot={snapshot}
+      />,
+    );
+    expect(html).toContain('aria-label="Active terminal session"');
+    expect(html).toContain("codex · running · 11111111");
+    expect(html).toContain("claude · running · 22222222");
+    expect(html).toContain("Terminal for codex session 11111111");
+  });
 });

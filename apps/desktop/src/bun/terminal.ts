@@ -1,0 +1,207 @@
+import type {
+  TerminalClientMessage,
+  TerminalServerMessage,
+} from "@daedalus/protocol";
+
+export const TERMINAL_BUFFER_LIMIT = 1024 * 1024;
+export const TERMINAL_SOCKET_HIGH_WATER = 256 * 1024;
+export const TERMINAL_INPUT_LIMIT = 64 * 1024;
+
+export interface TerminalSocket {
+  send(data: string | Uint8Array): number | void;
+  getBufferedAmount?(): number;
+  close?(): void;
+}
+
+export interface TerminalBridge {
+  start(): Promise<void>;
+  resize(cols: number, rows: number): void;
+  close(): void;
+}
+
+export class BoundedTerminalBuffer {
+  readonly limit: number;
+  #chunks: Uint8Array[] = [];
+  #bytes = 0;
+  #droppedBytes = 0;
+
+  constructor(limit = TERMINAL_BUFFER_LIMIT) {
+    this.limit = limit;
+  }
+
+  get byteLength(): number {
+    return this.#bytes;
+  }
+
+  push(chunk: Uint8Array): void {
+    if (chunk.byteLength >= this.limit) {
+      this.#droppedBytes += this.#bytes + chunk.byteLength - this.limit;
+      this.#chunks = [chunk.slice(chunk.byteLength - this.limit)];
+      this.#bytes = this.limit;
+      return;
+    }
+    this.#chunks.push(chunk);
+    this.#bytes += chunk.byteLength;
+    while (this.#bytes > this.limit) {
+      const oldest = this.#chunks.shift();
+      if (!oldest) break;
+      this.#bytes -= oldest.byteLength;
+      this.#droppedBytes += oldest.byteLength;
+    }
+  }
+
+  takeDroppedBytes(): number {
+    const value = this.#droppedBytes;
+    this.#droppedBytes = 0;
+    return value;
+  }
+
+  shift(): Uint8Array | undefined {
+    const chunk = this.#chunks.shift();
+    if (chunk) this.#bytes -= chunk.byteLength;
+    return chunk;
+  }
+}
+
+export function authorizeTerminalRequest(
+  request: Request,
+  expectedToken: string,
+): string | undefined {
+  const url = new URL(request.url);
+  const agentId = url.searchParams.get("agent");
+  if (
+    url.pathname !== "/terminal" ||
+    url.searchParams.get("token") !== expectedToken ||
+    !agentId ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      agentId,
+    )
+  )
+    return undefined;
+  return agentId;
+}
+
+export interface TerminalConnectionOptions {
+  agentId: string;
+  socket: TerminalSocket;
+  status: "live" | "reconnected";
+  capture: () => Promise<Uint8Array>;
+  sendInput: (data: string) => Promise<void>;
+  createBridge: (onOutput: (output: Uint8Array) => void) => TerminalBridge;
+  onError?: (error: unknown) => void;
+}
+
+export class TerminalConnection {
+  readonly buffer = new BoundedTerminalBuffer();
+  readonly bridge: TerminalBridge;
+  #closed = false;
+  #initialized = false;
+  #timer: ReturnType<typeof setInterval> | undefined;
+  #inputChain = Promise.resolve();
+
+  constructor(private readonly options: TerminalConnectionOptions) {
+    this.bridge = options.createBridge((output) => {
+      this.buffer.push(output);
+      if (this.#initialized) this.flush();
+    });
+  }
+
+  async start(): Promise<void> {
+    this.#timer = setInterval(() => this.flush(), 16);
+    void this.bridge.start().catch((error) => this.fail(error));
+    try {
+      const capture = await this.options.capture();
+      if (this.#closed) return;
+      this.sendJson({
+        type: "status",
+        status: this.options.status,
+        agentId: this.options.agentId,
+      });
+      this.options.socket.send(capture);
+      this.#initialized = true;
+      this.flush();
+    } catch (error) {
+      this.fail(error);
+    }
+  }
+
+  async message(payload: string | Uint8Array): Promise<void> {
+    if (typeof payload !== "string") return;
+    try {
+      const message = JSON.parse(payload) as TerminalClientMessage;
+      if (message.type === "input") {
+        if (
+          typeof message.data !== "string" ||
+          new TextEncoder().encode(message.data).byteLength >
+            TERMINAL_INPUT_LIMIT
+        )
+          throw new Error("Terminal input frame is too large");
+        const operation = this.#inputChain.then(() =>
+          this.options.sendInput(message.data),
+        );
+        this.#inputChain = operation.catch(() => {});
+        await operation;
+      } else if (message.type === "resize") {
+        if (!Number.isFinite(message.cols) || !Number.isFinite(message.rows))
+          throw new Error("Invalid terminal dimensions");
+        this.bridge.resize(message.cols, message.rows);
+      }
+    } catch (error) {
+      this.fail(error, false);
+    }
+  }
+
+  flush(): void {
+    if (
+      this.#closed ||
+      !this.#initialized ||
+      (this.options.socket.getBufferedAmount?.() ?? 0) >
+        TERMINAL_SOCKET_HIGH_WATER
+    )
+      return;
+    const droppedBytes = this.buffer.takeDroppedBytes();
+    if (droppedBytes) this.sendJson({ type: "overflow", droppedBytes });
+    let sent = 0;
+    while (sent < 64 * 1024) {
+      const chunk = this.buffer.shift();
+      if (!chunk) break;
+      this.options.socket.send(chunk);
+      sent += chunk.byteLength;
+      if (
+        (this.options.socket.getBufferedAmount?.() ?? 0) >
+        TERMINAL_SOCKET_HIGH_WATER
+      )
+        break;
+    }
+  }
+
+  close(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    if (this.#timer) clearInterval(this.#timer);
+    this.bridge.close();
+  }
+
+  end(status: "exited" | "lost"): void {
+    this.sendJson({
+      type: "status",
+      status,
+      agentId: this.options.agentId,
+    });
+    this.close();
+    this.options.socket.close?.();
+  }
+
+  private fail(error: unknown, close = true): void {
+    this.sendJson({
+      type: "error",
+      message: error instanceof Error ? error.message : String(error),
+    });
+    this.options.onError?.(error);
+    if (close) this.close();
+  }
+
+  private sendJson(message: TerminalServerMessage): void {
+    if (!this.#closed) this.options.socket.send(JSON.stringify(message));
+  }
+}
