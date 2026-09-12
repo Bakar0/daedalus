@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
-import { CommandTmuxClient, type TmuxClient } from "@daedalus/platform";
+import {
+  CommandTmuxClient,
+  findExecutable,
+  TMUX_EXECUTABLE_FALLBACKS,
+  type TmuxClient,
+} from "@daedalus/platform";
 import { loadConfig, type DaedalusConfig } from "../config";
 import { JsonLogger } from "../logging";
 import { runMigrations } from "../repositories/migrations";
@@ -43,7 +48,11 @@ export async function createApplicationContext(
     .digest("hex")
     .slice(0, 12);
   const tmux =
-    options.tmux ?? new CommandTmuxClient(`daedalus-${socketSuffix}`);
+    options.tmux ??
+    new CommandTmuxClient(
+      `daedalus-${socketSuffix}`,
+      findExecutable("tmux", TMUX_EXECUTABLE_FALLBACKS) ?? "tmux",
+    );
   let agents!: AgentService;
   const workspaces = new WorkspaceService(
     repositories,

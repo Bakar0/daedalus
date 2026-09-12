@@ -36,8 +36,16 @@ export async function runCommand(
   return { exitCode, stdout, stderr };
 }
 
-export function findExecutable(executable: string): string | undefined {
-  return Bun.which(executable) ?? undefined;
+export function findExecutable(
+  executable: string,
+  fallbacks: string[] = [],
+  which: (candidate: string) => string | null = Bun.which,
+): string | undefined {
+  for (const candidate of [executable, ...fallbacks]) {
+    const resolved = which(candidate);
+    if (resolved) return resolved;
+  }
+  return undefined;
 }
 
 export async function probeVersion(

@@ -1,5 +1,11 @@
 import { runCommand, type CommandOptions, type CommandResult } from "./process";
 
+export const TMUX_EXECUTABLE_FALLBACKS = [
+  "/opt/homebrew/bin/tmux",
+  "/usr/local/bin/tmux",
+  "/usr/bin/tmux",
+];
+
 export interface TmuxLaunch {
   session: string;
   cwd: string;

@@ -28,7 +28,7 @@ The initial migration defines workspace, task, and agent-session tables. Small r
 
 Workspace rows are indexes, not proof of existence. Services require a real non-symlink directory with a matching `.daedalus/workspace.json` ID marker before returning or using a workspace. Slugs are mutable aliases; IDs and paths are stable. File deletion additionally rejects root-like targets, symlinks, and invalid markers.
 
-Agent sessions use names derived only from immutable UUIDs. Provider adapters build executable and argument arrays, and the tmux adapter preserves those argv boundaries. On startup, live SQLite rows are reconciled against the isolated Daedalus tmux server; missing sessions become `lost`, while task status remains untouched.
+Agent sessions use names derived only from immutable UUIDs. Provider adapters build executable and argument arrays, and the tmux adapter preserves those argv boundaries. Because packaged macOS apps do not inherit an interactive shell PATH, tmux discovery also checks the standard Apple Silicon and Intel Homebrew locations before reporting it unavailable. On startup, live SQLite rows are reconciled against the isolated Daedalus tmux server; missing sessions become `lost`, while task status remains untouched.
 
 ## Terminal lifecycle
 
