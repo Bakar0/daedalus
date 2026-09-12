@@ -1,0 +1,12 @@
+node_modules/
+dist/
+apps/desktop/dist/
+build/
+artifacts/
+.DS_Store
+*.log
+.hutch/devkit/
+.hutch/locks/
+.hutch/dependencies.lock
+.hutch/devkit.lock
+.cottontail-tmp/

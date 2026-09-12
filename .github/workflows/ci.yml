@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: brew install tmux
+      - run: bun install --frozen-lockfile
+      - run: bunx electrobun prepare
+      - run: bun run verify:versions
+      - run: bun run format:check
+      - run: bun run typecheck
+      - run: bun test
+      - run: bun run build

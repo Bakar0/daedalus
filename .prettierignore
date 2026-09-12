@@ -1,0 +1,6 @@
+node_modules
+dist
+apps/desktop/dist
+.hutch
+bun.lock
+PLAN.md

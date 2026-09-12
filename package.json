@@ -1,0 +1,44 @@
+{
+  "name": "daedalus",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "bun": ">=1.4.2"
+  },
+  "scripts": {
+    "build": "bun run build:packages && bun run build:cli && bun run build:desktop",
+    "build:packages": "bun build packages/core/src/index.ts packages/platform/src/index.ts packages/protocol/src/index.ts --outdir dist/packages --target bun",
+    "build:cli": "bun build apps/cli/src/index.ts --outdir dist/cli --target bun",
+    "build:desktop": "bunx electrobun prepare && bun run --cwd apps/desktop build && bunx electrobun build --env=stable",
+    "dev": "bunx electrobun prepare && bun run --cwd apps/desktop build && bunx electrobun dev --watch",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "test:terminal-spike": "bun run scripts/terminal-spike-check.ts",
+    "typecheck": "tsc --noEmit",
+    "verify:versions": "bun run scripts/verify-versions.ts",
+    "daedal": "bun run apps/cli/src/index.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "electrobun": "2.0.1",
+    "prettier": "3.9.6",
+    "typescript": "7.0.2",
+    "vite": "8.3.0",
+    "vitest": "5.0.0"
+  },
+  "dependencies": {
+    "ghostty-web": "0.4.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  }
+}

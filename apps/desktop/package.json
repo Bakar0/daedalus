@@ -1,0 +1,17 @@
+{
+  "name": "@daedalus/desktop",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build --config vite.config.ts",
+    "dev": "vite --config vite.config.ts"
+  },
+  "dependencies": {
+    "@daedalus/core": "workspace:*",
+    "@daedalus/platform": "workspace:*",
+    "@daedalus/protocol": "workspace:*",
+    "ghostty-web": "0.4.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  }
+}
