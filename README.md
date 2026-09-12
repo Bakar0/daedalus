@@ -17,7 +17,7 @@ The dependency baseline was verified on 2026-09-12. Exact JavaScript versions ar
 
 ```sh
 bun install --frozen-lockfile
-bunx electrobun prepare
+bun node_modules/electrobun/bin/electrobun.cjs prepare
 bun test
 bun run typecheck
 bun run build

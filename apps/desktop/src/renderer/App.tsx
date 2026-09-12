@@ -21,7 +21,7 @@ export function App() {
       if (disposed) return;
       terminal = new Terminal({
         cursorBlink: true,
-        fontFamily: "SFMono-Regular, Menlo, Monaco, monospace",
+        fontFamily: '"MesloLGS NF", SFMono-Regular, Menlo, Monaco, monospace',
         fontSize: 14,
         scrollback: 10_000,
         theme: {

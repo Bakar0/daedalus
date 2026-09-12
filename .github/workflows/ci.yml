@@ -14,7 +14,7 @@ jobs:
           bun-version: 1.4.2
       - run: brew install tmux
       - run: bun install --frozen-lockfile
-      - run: bunx electrobun prepare
+      - run: bun node_modules/electrobun/bin/electrobun.cjs prepare
       - run: bun run verify:versions
       - run: bun run format:check
       - run: bun run typecheck
