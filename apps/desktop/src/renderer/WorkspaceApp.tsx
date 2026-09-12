@@ -201,6 +201,7 @@ function SessionTerminal({ session }: { session: AgentSessionDto }) {
     let reconnectAttempts = 0;
     let ended = false;
     let frame: number | undefined;
+    let layoutFrame: number | undefined;
     const pending: Uint8Array[] = [];
     let pendingBytes = 0;
     const drain = () => {
@@ -245,6 +246,12 @@ function SessionTerminal({ session }: { session: AgentSessionDto }) {
       terminal.open(container);
       fit.observeResize();
       fit.fit();
+      layoutFrame = requestAnimationFrame(() => {
+        layoutFrame = requestAnimationFrame(() => {
+          layoutFrame = undefined;
+          if (!disposed) fit.fit();
+        });
+      });
       const endpoint = new URLSearchParams(window.location.search).get(
         "terminal",
       );
@@ -319,6 +326,7 @@ function SessionTerminal({ session }: { session: AgentSessionDto }) {
       disposed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (frame !== undefined) cancelAnimationFrame(frame);
+      if (layoutFrame !== undefined) cancelAnimationFrame(layoutFrame);
       socket?.close();
       terminal?.dispose();
     };

@@ -18,16 +18,45 @@ export interface AgentProvider {
   buildLaunch(input: LaunchInput): Promise<ProviderLaunch>;
 }
 
+const CHATGPT_CODEX_EXECUTABLE =
+  "/Applications/ChatGPT.app/Contents/Resources/codex";
+const STANDARD_CODEX_EXECUTABLES = new Set([
+  "codex",
+  "/opt/homebrew/bin/codex",
+  "/usr/local/bin/codex",
+]);
+
+export function resolveAgentExecutable(
+  name: string,
+  executable: string,
+  finder: (value: string) => string | undefined = findExecutable,
+  platform = process.platform,
+): string | undefined {
+  if (
+    platform === "darwin" &&
+    name === "codex" &&
+    STANDARD_CODEX_EXECUTABLES.has(executable)
+  ) {
+    return finder(CHATGPT_CODEX_EXECUTABLE) ?? finder(executable);
+  }
+  return finder(executable);
+}
+
 class ConfiguredProvider implements AgentProvider {
   constructor(
+    private readonly name: string,
     private readonly definition: AgentDefinition,
     private readonly promptArgument: boolean,
   ) {}
 
   async probe(): Promise<{ available: boolean; executable: string }> {
+    const executable = resolveAgentExecutable(
+      this.name,
+      this.definition.executable,
+    );
     return {
-      available: Boolean(findExecutable(this.definition.executable)),
-      executable: this.definition.executable,
+      available: Boolean(executable),
+      executable: executable ?? this.definition.executable,
     };
   }
 
@@ -39,7 +68,13 @@ class ConfiguredProvider implements AgentProvider {
       else env.DAEDALUS_TASK_PROMPT = input.prompt;
     }
     if (input.taskId) env.DAEDALUS_TASK_ID = input.taskId;
-    return { executable: this.definition.executable, args, env };
+    return {
+      executable:
+        resolveAgentExecutable(this.name, this.definition.executable) ??
+        this.definition.executable,
+      args,
+      env,
+    };
   }
 }
 
@@ -77,7 +112,7 @@ export function resolveProvider(
     name: selection.command
       ? "custom"
       : (selection.provider as "claude" | "codex"),
-    adapter: new ConfiguredProvider(definition, !selection.command),
+    adapter: new ConfiguredProvider(key, definition, !selection.command),
   };
 }
 

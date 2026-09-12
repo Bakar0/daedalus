@@ -303,6 +303,9 @@ export class TmuxControlBridge {
   readonly process: Bun.Subprocess<"pipe", "pipe", "pipe">;
   #onOutput: (output: Uint8Array) => void;
   #buffer = "";
+  #resizeTimer: ReturnType<typeof setTimeout> | undefined;
+  #pendingSize: { cols: number; rows: number } | undefined;
+  #lastSize: { cols: number; rows: number } | undefined;
 
   constructor(
     onOutput: (output: Uint8Array) => void,
@@ -352,11 +355,23 @@ export class TmuxControlBridge {
   resize(cols: number, rows: number): void {
     const safeCols = Math.max(20, Math.min(500, Math.floor(cols)));
     const safeRows = Math.max(5, Math.min(300, Math.floor(rows)));
-    this.process.stdin.write(`refresh-client -C ${safeCols},${safeRows}\n`);
-    this.process.stdin.flush();
+    if (this.#lastSize?.cols === safeCols && this.#lastSize.rows === safeRows)
+      return;
+    this.#pendingSize = { cols: safeCols, rows: safeRows };
+    if (this.#resizeTimer) clearTimeout(this.#resizeTimer);
+    this.#resizeTimer = setTimeout(() => {
+      this.#resizeTimer = undefined;
+      const size = this.#pendingSize;
+      this.#pendingSize = undefined;
+      if (!size) return;
+      this.#lastSize = size;
+      this.process.stdin.write(`refresh-client -C ${size.cols},${size.rows}\n`);
+      this.process.stdin.flush();
+    }, 100);
   }
 
   close(): void {
+    if (this.#resizeTimer) clearTimeout(this.#resizeTimer);
     this.process.stdin.end();
   }
 }

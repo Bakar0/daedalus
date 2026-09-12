@@ -3,7 +3,11 @@ import type { DaedalusConfig } from "../config";
 import type { AgentSession } from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
-import { buildTaskPrompt, resolveProvider } from "./providers";
+import {
+  buildTaskPrompt,
+  resolveAgentExecutable,
+  resolveProvider,
+} from "./providers";
 import type { TaskService } from "./tasks";
 import type { WorkspaceService } from "./workspaces";
 
@@ -30,11 +34,17 @@ export class AgentService {
       tmuxAvailable: Boolean(tmuxVersion),
       tmuxVersion,
       providers: Object.entries(this.config.agents)
-        .map(([name, definition]) => ({
-          name,
-          executable: definition.executable,
-          available: Boolean(findExecutable(definition.executable)),
-        }))
+        .map(([name, definition]) => {
+          const executable = resolveAgentExecutable(
+            name,
+            definition.executable,
+          );
+          return {
+            name,
+            executable: executable ?? definition.executable,
+            available: Boolean(executable),
+          };
+        })
         .sort((left, right) => left.name.localeCompare(right.name)),
     };
   }
