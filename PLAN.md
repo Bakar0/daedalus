@@ -58,7 +58,10 @@ Explicitly defer git worktrees, branches, PR review, remote access, scheduling, 
 
 - The filesystem proves whether a workspace exists; SQLite stores searchable metadata and relationships.
 - All mutations go through use-case functions in `packages/core`; neither CLI handlers nor React components write files or SQL directly.
-- IDs are immutable UUIDs. Human-readable workspace slugs are mutable lookup aliases.
+- Workspace IDs are immutable readable slugs. Tasks retain immutable internal
+  IDs but are referenced by per-workspace numbers displayed as `#1`, `#2`, and
+  so on; agent and repository IDs are immutable UUIDs. Human-readable workspace
+  slugs remain mutable lookup aliases.
 - Commands produce stable exit codes and support both human-readable and `--json` output.
 - tmux session names use IDs, not user-provided titles, to avoid quoting and collision problems.
 - Agent commands are argument arrays, never interpolated shell strings.
@@ -211,18 +214,19 @@ Default `remove` unregisters a workspace and preserves its files. `--delete-file
 ```text
 daedal task create --workspace <workspace> --title <title> [--description ...]
 daedal task list [--workspace <workspace>] [--status <status>]
-daedal task get <task-id>
-daedal task update <task-id> [--title ...] [--description ...]
-daedal task status <task-id> <status>
-daedal task remove <task-id> [--force]
+daedal task get <task-ref> [--workspace <workspace>]
+daedal task current
+daedal task update <task-ref> [--workspace <workspace>] [--title ...] [--description ...]
+daedal task status <task-ref> <status> [--workspace <workspace>]
+daedal task remove <task-ref> [--workspace <workspace>] [--force]
 ```
 
 ### Agent commands
 
 ```text
-daedal agent spawn --workspace <workspace> --provider codex [--task <task-id>]
-daedal agent spawn --workspace <workspace> --provider claude [--task <task-id>]
-daedal agent spawn --workspace <workspace> --command <configured-name> [--task <task-id>]
+daedal agent spawn --workspace <workspace> --provider codex [--task <task-ref>]
+daedal agent spawn --workspace <workspace> --provider claude [--task <task-ref>]
+daedal agent spawn --workspace <workspace> --command <configured-name> [--task <task-ref>]
 daedal agent list [--workspace <workspace>] [--running]
 daedal agent get <agent-id>
 daedal agent attach <agent-id>
@@ -231,7 +235,12 @@ daedal agent stop <agent-id> [--force]
 daedal agent remove <agent-id>
 ```
 
-For a task-backed launch, build an initial prompt from the task title and description and pass it using the provider adapter's supported mechanism. For a taskless launch, start the normal interactive provider command. `attach` hands the user's terminal to tmux; `send` uses tmux input for automation.
+For a task-backed launch, tell the agent to execute the task by number and rely on
+the installed Daedalus skill for lookup instructions. Do not duplicate the task
+content or CLI workflow in the launch prompt. For a taskless launch, pass the
+optional launch message or start the normal interactive provider command.
+`attach` hands the user's terminal to tmux; `send` uses tmux input for
+automation.
 
 ### Provider configuration
 

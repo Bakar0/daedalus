@@ -44,6 +44,7 @@ describe("WorkspaceService", () => {
         tmux: new FakeTmux(),
       });
       const workspace = await context.workspaces.create({ name: "My Project" });
+      expect(workspace.id).toBe("my-project");
       expect(workspace.slug).toBe("my-project");
       expect(
         JSON.parse(

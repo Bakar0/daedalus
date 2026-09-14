@@ -11,7 +11,7 @@ import type { AgentSession } from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import {
-  buildTaskPrompt,
+  buildAgentPrompt,
   discoverProviderModels,
   modelArgument,
   resolveAgentExecutable,
@@ -289,9 +289,12 @@ export class AgentService {
   ) {}
 
   private agentEnvironment(
-    sessionId: string,
+    session: AgentSession,
     environment: Record<string, string> = {},
   ): Record<string, string> {
+    const task = session.taskId
+      ? this.repositories.findTask(session.taskId)
+      : undefined;
     const path = [
       join(this.config.home, "bin"),
       environment.PATH,
@@ -303,7 +306,14 @@ export class AgentService {
       ...environment,
       PATH: path,
       DAEDALUS_HOME: this.config.home,
-      DAEDALUS_SESSION_ID: sessionId,
+      DAEDALUS_SESSION_ID: session.id,
+      DAEDALUS_WORKSPACE_ID: session.workspaceId,
+      ...(task
+        ? {
+            DAEDALUS_TASK_ID: task.id,
+            DAEDALUS_TASK_NUMBER: String(task.number),
+          }
+        : {}),
     };
   }
 
@@ -456,6 +466,7 @@ export class AgentService {
     name?: string;
     provider?: string;
     model?: string;
+    message?: string;
     command?: string;
     terminal?: boolean;
   }): Promise<AgentSession> {
@@ -510,16 +521,17 @@ export class AgentService {
           sessionId: id,
         })
       : { workingDirectory: workspace.path, worktrees: [], references: [] };
-    const taskPrompt = task
-      ? buildTaskPrompt(task.title, task.description)
-      : undefined;
+    const launchPrompt = buildAgentPrompt({
+      taskNumber: task?.number,
+      message: input.message,
+    });
     const launch = input.terminal
       ? { executable: shell!, args: ["-l"], env: {} }
       : await provider!.adapter.buildLaunch({
           taskId: task?.id,
           sessionId: id,
           sessionName: name,
-          prompt: taskPrompt,
+          prompt: launchPrompt,
           model: input.model,
           additionalDirectories: prepared.references.map(
             (repository) =>
@@ -554,7 +566,7 @@ export class AgentService {
         args: launch.args,
         env: input.terminal
           ? launch.env
-          : this.agentEnvironment(session.id, launch.env),
+          : this.agentEnvironment(session, launch.env),
       });
       if (!input.terminal)
         await this.confirmOwnedWorkspaceTrust(
@@ -578,10 +590,6 @@ export class AgentService {
             ...runningSession,
             providerSessionId: recoveredId,
           };
-      }
-      for (const input of launch.bootstrapInput ?? []) {
-        await Bun.sleep(300);
-        await this.tmux.send(session.tmuxSession, input);
       }
       const running = { ...runningSession, status: "running" as const };
       this.repositories.updateAgent(running);
@@ -841,7 +849,7 @@ export class AgentService {
         executable,
         args,
         env:
-          agent.kind === "agent" ? this.agentEnvironment(agent.id) : undefined,
+          agent.kind === "agent" ? this.agentEnvironment(restoring) : undefined,
       });
       if (agent.kind === "agent")
         await this.confirmOwnedWorkspaceTrust(

@@ -330,6 +330,7 @@ describe("desktop application shell", () => {
         {
           id: "t1",
           workspaceId: "w1",
+          number: 1,
           title: "Ship desktop",
           description:
             "## Acceptance criteria\n\n- [x] CRUD works\n- [ ] Visual QA\n\nRun `bun test`.",
@@ -395,6 +396,7 @@ describe("desktop application shell", () => {
     );
     expect(html).toContain("Demo");
     expect(html).toContain("Ship desktop");
+    expect(html).toContain("#1");
     expect(html).toContain("in progress");
     expect(html).toContain('aria-label="Open Ship desktop session"');
     expect(html).toContain("task-session-link tool-codex running");
@@ -495,6 +497,7 @@ describe("desktop application shell", () => {
         {
           id: "t1",
           workspaceId: "w1",
+          number: 1,
           title: "Terminal task",
           description: "Use both sessions",
           status: "in_progress",

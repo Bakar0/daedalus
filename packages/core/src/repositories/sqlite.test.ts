@@ -26,6 +26,7 @@ describe("SqliteRepositories", () => {
       repositories.createTask({
         id: "task-id",
         workspaceId: "workspace-id",
+        number: 1,
         title: "Task",
         description: "Description",
         status: "todo",
@@ -68,6 +69,7 @@ describe("SqliteRepositories", () => {
       expect(repositories.findWorkspace("demo")?.id).toBe("workspace-id");
       expect(repositories.listTasks({ status: "todo" })[0]).toMatchObject({
         id: "task-id",
+        number: 1,
       });
       expect(repositories.findAgent("agent-id")?.args).toEqual(["-l"]);
       expect(repositories.findAgent("agent-id")?.name).toBe("Task");

@@ -19,10 +19,11 @@ daedal workspace remove <workspace> [--delete-files] --force
 ```text
 daedal task create --workspace <workspace> --title <title> [--description <text>] [--priority <priority>]
 daedal task list [--workspace <workspace>] [--status <status>]
-daedal task get <task-id>
-daedal task update <task-id> [--title <title>] [--description <text>] [--priority <priority>]
-daedal task status <task-id> <status>
-daedal task remove <task-id> --force
+daedal task get <task-ref> [--workspace <workspace>]
+daedal task current
+daedal task update <task-ref> [--workspace <workspace>] [--title <title>] [--description <text>] [--priority <priority>]
+daedal task status <task-ref> <status> [--workspace <workspace>]
+daedal task remove <task-ref> [--workspace <workspace>] --force
 ```
 
 ## Repository library, attachments, and worktrees
@@ -38,13 +39,18 @@ daedal repo worktree create --session <session-id> --repository <name-or-id>
 ```
 
 `repo detach` refuses when session worktrees depend on the attachment. Library
-entries are shared across workspaces and adding an existing remote refreshes it.
+entries are shared bare clones across workspaces and adding an existing remote
+refreshes it. `repo library add` accepts a full Git URL or absolute local Git
+path and uses Git; unlike the UI's GitHub picker, it does not accept a bare
+`owner/repository` name through authenticated `gh`. Adding to the library does
+not attach to a workspace, so run `repo attach` separately with the returned
+library ID.
 
 ## Agents and sessions
 
 ```text
 daedal agent models <codex|claude>
-daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <configured-name>) [--task <task-id>] [--name <name>] [--model <model>]
+daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <configured-name>) [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>]
 daedal agent list [--workspace <workspace>] [--running|--archived]
 daedal agent get <agent-id>
 daedal agent attach <agent-id>
@@ -54,6 +60,10 @@ daedal agent restore <agent-id>
 daedal agent stop <agent-id> [--force]
 daedal agent remove <agent-id>
 ```
+
+`agent models` does not require a workspace. With `--json`, pass an exact
+`data.models[].id` to `agent spawn --model`; omit `--model` to use
+`data.defaultModel`. Display labels are descriptive and are not model IDs.
 
 ## Diagnostics and exit codes
 

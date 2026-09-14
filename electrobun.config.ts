@@ -1,10 +1,11 @@
 import type { ElectrobunConfig } from "electrobun";
+import packageJson from "./package.json";
 
 export default {
   app: {
     name: "Daedalus",
     identifier: "dev.daedalus.app",
-    version: "0.1.0",
+    version: packageJson.version,
   },
   build: {
     mainProcess: "cottontail",

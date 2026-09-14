@@ -19,16 +19,23 @@ executable consistently for the rest of the request.
 
 1. Inspect only the state needed for the request with `workspace list`, `task
 list`, `repo list`, or `agent list`.
-2. Use a workspace UUID or exact slug. Task and session references are UUIDs.
-3. When `DAEDALUS_SESSION_ID` is set, it identifies the current session. When
-   `DAEDALUS_TASK_ID` is set, it identifies the task that launched it.
-4. Run `daedal <area> help` when the installed CLI may be newer than this skill.
+2. Use a workspace ID or exact slug. Tasks are displayed as `#1`, `#2`, and so
+   on, with numbering scoped to each workspace. Outside a session, use
+   `<workspace>#<number>` or pass the number with `--workspace`.
+3. In an agent session, use `task current` to read its assigned task. The
+   environment exposes `DAEDALUS_SESSION_ID`, `DAEDALUS_WORKSPACE_ID`,
+   `DAEDALUS_TASK_ID`, and `DAEDALUS_TASK_NUMBER` for automation. The internal
+   task ID is not the human-facing task number.
+4. Run `daedal --version --json` and `daedal <area> help` when compatibility is
+   in doubt. Treat the resolved CLI's actual help as authoritative; report a
+   missing command or option specifically rather than guessing that the build
+   is stale.
 
 ## Operate the board
 
 - Create and update workspaces with `daedal workspace ...`.
 - Create tasks with a concrete title and useful description, then use the
-  returned task ID for status changes or session assignment.
+  returned task number for human-facing references.
 - Valid task statuses are `todo`, `in_progress`, `blocked`, `done`, and
   `cancelled`; priorities are `low`, `normal`, and `high`.
 - Agent lifecycle does not update task status. Change task status explicitly
@@ -36,10 +43,19 @@ list`, `repo list`, or `agent list`.
 
 ## Repositories and worktrees
 
-- Add a remote URL or absolute local Git path to the shared library with
-  `daedal repo library add <url-or-path>`.
-- Attach the returned library repository ID with
+- `repo library add <url-or-absolute-path>` creates one shared bare clone under
+  the Daedalus repository library. Adding an existing remote refreshes that
+  clone instead of creating a duplicate. A local source must be an absolute
+  Git path; a remote source must be a complete clone URL understood by Git.
+- The UI's GitHub picker can clone through the authenticated `gh` CLI. The
+  public CLI currently uses Git for URL/path inputs, so do not pass a bare
+  `owner/repository` name or assume GitHub-picker authentication is available.
+- Library membership and workspace attachment are separate. To reproduce the
+  UI's complete add flow, first run `daedal repo library add`, capture the
+  returned library ID, then run
   `daedal repo attach --workspace <workspace> --repository <library-id>`.
+- Attaching creates or refreshes the workspace's read-only planning checkout
+  under `repos/`; it does not create a writable implementation checkout.
 - Treat workspace `repos/` checkouts as read-only planning references.
 - Before editing, create only the needed writable worktree with
   `daedal repo worktree create --session <session-id> --repository <name-or-id>`
@@ -49,8 +65,15 @@ list`, `repo list`, or `agent list`.
 
 - Spawn a session only when the user asks to delegate, compare agents, or start
   another Daedalus session. Do not recursively spawn agents for ordinary coding.
-- Use `--provider codex` or `--provider claude`; include `--task <task-id>` when
-  the session owns a board task.
+- Use `--provider codex` or `--provider claude`; include `--task <number>` when
+  the session owns a board task. Use `--message <text>` for optional additional
+  launch instructions; task-backed sessions are automatically told to execute
+  the task by number.
+- Before filling `--model`, run `daedal agent models <codex|claude> --json`.
+  Use an exact `data.models[].id` value, not its display label or a guessed
+  model name. `data.defaultModel` reports the provider default when available;
+  omit `--model` to use that default. Custom `--command` agents do not have a
+  discoverable model catalog.
 - After successfully spawning a task-backed session, move the task to
   `in_progress` unless the user asked to leave it queued or in another status.
 - Use `agent send` for literal follow-up text. `agent attach` is interactive and

@@ -18,7 +18,6 @@ export interface ProviderLaunch {
   args: string[];
   env: Record<string, string>;
   providerSessionId?: string;
-  bootstrapInput?: string[];
 }
 
 export interface ProviderModelCatalog {
@@ -292,7 +291,6 @@ class ConfiguredProvider implements AgentProvider {
     const args = [...this.definition.args];
     const env: Record<string, string> = {};
     let providerSessionId: string | undefined;
-    let bootstrapInput: string[] | undefined;
     const model = input.model?.trim();
     if (model) {
       if (!isValidModelName(model))
@@ -307,12 +305,7 @@ class ConfiguredProvider implements AgentProvider {
       args.push("--session-id", input.sessionId);
       if (input.sessionName) args.push("--name", input.sessionName);
     }
-    if (this.promptArgument && this.name === "codex" && input.sessionId) {
-      // Codex does not currently accept a caller-provided session UUID. Its
-      // persisted UUID is recovered after startup, so no synthetic /rename
-      // command is left visible in the fresh prompt.
-      bootstrapInput = input.prompt ? [input.prompt] : undefined;
-    } else if (input.prompt) {
+    if (input.prompt) {
       if (this.promptArgument) args.push(input.prompt);
       else env.DAEDALUS_TASK_PROMPT = input.prompt;
     }
@@ -327,7 +320,6 @@ class ConfiguredProvider implements AgentProvider {
       args,
       env,
       providerSessionId,
-      bootstrapInput,
     };
   }
 }
@@ -370,6 +362,13 @@ export function resolveProvider(
   };
 }
 
-export function buildTaskPrompt(title: string, description: string): string {
-  return description.trim() ? `${title}\n\n${description}` : title;
+export function buildAgentPrompt(input: {
+  taskNumber?: number;
+  message?: string;
+}): string | undefined {
+  const taskInstruction = input.taskNumber
+    ? `Execute task #${input.taskNumber}. Do not merely summarize or restate it; complete the task.`
+    : undefined;
+  const message = input.message?.trim() || undefined;
+  return [taskInstruction, message].filter(Boolean).join("\n\n") || undefined;
 }

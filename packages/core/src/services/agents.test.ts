@@ -4,7 +4,7 @@ import { describe, expect, test } from "vitest";
 import type { TmuxClient, TmuxLaunch } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
-  buildTaskPrompt,
+  buildAgentPrompt,
   createApplicationContext,
   hasPersistedCodexSession,
   isMissingCodexConversationError,
@@ -52,6 +52,16 @@ class FakeTmux implements TmuxClient {
 }
 
 describe("AgentService", () => {
+  test("builds launch prompts from task numbers and optional messages", () => {
+    expect(
+      buildAgentPrompt({ message: "  Inspect the failure first.  " }),
+    ).toBe("Inspect the failure first.");
+    expect(buildAgentPrompt({ taskNumber: 123 })).toBe(
+      "Execute task #123. Do not merely summarize or restate it; complete the task.",
+    );
+    expect(buildAgentPrompt({})).toBeUndefined();
+  });
+
   test("recovers Codex's persisted UUID without typing a rename command", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const startedAt = "2026-09-14T08:10:00.000Z";
@@ -158,7 +168,10 @@ describe("AgentService", () => {
       );
       const tmux = new FakeTmux();
       const context = await createApplicationContext({
-        env: { DAEDALUS_HOME: home },
+        env: {
+          DAEDALUS_HOME: home,
+          CODEX_HOME: join(home, "codex"),
+        },
         tmux,
       });
       const workspace = await context.workspaces.create({ name: "Agents" });
@@ -171,12 +184,17 @@ describe("AgentService", () => {
         workspace: workspace.id,
         taskId: task.id,
         provider: "codex",
+        message: "Run the relevant tests before finishing.",
       });
       expect(agent.name).toBe(task.title);
       expect(agent.tmuxSession).toMatch(/^daedalus_[a-f0-9]{32}$/);
+      const launchPrompt = buildAgentPrompt({
+        taskNumber: task.number,
+        message: "Run the relevant tests before finishing.",
+      });
       expect(tmux.launches[0]).toMatchObject({
         executable: process.execPath,
-        args: ["run"],
+        args: ["run", launchPrompt],
         cwd: agent.workingDirectory,
       });
       expect(agent.workingDirectory).toContain(
@@ -185,14 +203,18 @@ describe("AgentService", () => {
       expect(tmux.launches[0]?.env).toMatchObject({
         DAEDALUS_HOME: home,
         DAEDALUS_SESSION_ID: agent.id,
+        DAEDALUS_WORKSPACE_ID: workspace.id,
+        DAEDALUS_TASK_ID: task.id,
+        DAEDALUS_TASK_NUMBER: String(task.number),
       });
       expect(agent.providerSessionId).toBeNull();
-      expect(tmux.sent[0]?.text).toContain(
-        buildTaskPrompt(task.title, task.description),
-      );
-      expect(tmux.sent[0]?.text).not.toContain("BRIEF.md");
+      expect(launchPrompt).toContain(`#${task.number}`);
+      expect(launchPrompt).not.toContain(task.title);
+      expect(launchPrompt).not.toContain(task.description);
+      expect(launchPrompt).not.toContain("BRIEF.md");
+      expect(tmux.sent).toEqual([]);
       await context.agents.send(agent.id, "hello; exit");
-      expect(tmux.sent[1]?.text).toBe("hello; exit");
+      expect(tmux.sent[0]?.text).toBe("hello; exit");
       await expect(
         context.workspaces.remove(workspace.id, { force: true }),
       ).rejects.toMatchObject({ code: "CONFLICT" });

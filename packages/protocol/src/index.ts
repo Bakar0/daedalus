@@ -22,6 +22,7 @@ export interface WorkspaceDto {
 export interface TaskDto {
   id: string;
   workspaceId: string;
+  number: number;
   title: string;
   description: string;
   status: TaskStatus;
@@ -309,6 +310,7 @@ export interface DesktopRpcSchema {
           name?: string;
           provider?: "codex" | "claude";
           model?: string;
+          message?: string;
           command?: string;
           terminal?: boolean;
         },

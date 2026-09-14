@@ -92,7 +92,7 @@ export class WorkspaceService {
 
     const now = new Date().toISOString();
     const workspace: Workspace = {
-      id: crypto.randomUUID(),
+      id: slug,
       slug,
       name,
       path,

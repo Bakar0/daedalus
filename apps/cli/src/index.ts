@@ -7,8 +7,9 @@ import {
 } from "@daedalus/core";
 import { probeVersion } from "@daedalus/platform";
 import type { DoctorCheck } from "@daedalus/protocol";
+import packageJson from "../../../package.json";
 
-const VERSION = "0.1.0";
+const VERSION = packageJson.version;
 const MINIMUM_TMUX = "3.7c";
 const VERIFIED_BUN = "1.4.2";
 
@@ -38,7 +39,7 @@ const help = `daedal ${VERSION} — local-first control plane for coding agents
 Usage:
   daedal doctor [--json]
   daedal workspace <create|list|get|update|archive|restore|remove> ... [--json]
-  daedal task <create|list|get|update|status|remove> ... [--json]
+  daedal task <create|list|get|current|update|status|remove> ... [--json]
   daedal repo <library|list|attach|sync|detach|worktree> ... [--json]
   daedal agent <spawn|list|get|attach|send|archive|restore|stop|remove> ... [--json]
 
@@ -56,10 +57,11 @@ const commandHelp: Record<string, string> = {
   task: `Task commands:
   daedal task create --workspace <workspace> --title <title> [--description <text>] [--priority <priority>]
   daedal task list [--workspace <workspace>] [--status <status>]
-  daedal task get <task-id>
-  daedal task update <task-id> [--title <title>] [--description <text>] [--priority <priority>]
-  daedal task status <task-id> <status>
-  daedal task remove <task-id> --force`,
+  daedal task get <task-ref> [--workspace <workspace>]
+  daedal task current
+  daedal task update <task-ref> [--workspace <workspace>] [--title <title>] [--description <text>] [--priority <priority>]
+  daedal task status <task-ref> <status> [--workspace <workspace>]
+  daedal task remove <task-ref> [--workspace <workspace>] --force`,
   repo: `Repository commands:
   daedal repo library list
   daedal repo library add <url-or-absolute-path> [--name <name>]
@@ -70,7 +72,7 @@ const commandHelp: Record<string, string> = {
   daedal repo worktree create --session <agent-id> --repository <name-or-id>`,
   agent: `Agent commands:
   daedal agent models <codex|claude>
-  daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-id>] [--name <name>] [--model <model>]
+  daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>]
   daedal agent list [--workspace <workspace>] [--running|--archived]
   daedal agent get <agent-id>
   daedal agent attach <agent-id>
@@ -310,6 +312,51 @@ async function workspaceCommand(
   );
 }
 
+async function currentSessionTask(context: ApplicationContext) {
+  const taskId = process.env.DAEDALUS_TASK_ID;
+  if (taskId) return context.tasks.get(taskId);
+  const sessionId = process.env.DAEDALUS_SESSION_ID;
+  if (sessionId) {
+    const session = await context.agents.get(sessionId);
+    if (session.taskId) return context.tasks.get(session.taskId);
+  }
+  throw new DaedalusError(
+    "VALIDATION",
+    "No task is assigned to the current Daedalus session",
+  );
+}
+
+async function resolveTaskReference(
+  context: ApplicationContext,
+  reference: string,
+  workspaceReference?: string,
+) {
+  const exact = context.repositories.findTask(reference);
+  if (exact) return exact;
+
+  const scoped = /^(.+)#([1-9]\d*)$/.exec(reference);
+  const numeric = /^#?([1-9]\d*)$/.exec(reference);
+  if (!scoped && !numeric) return context.tasks.get(reference);
+
+  const number = Number(scoped?.[2] ?? numeric?.[1]);
+  let workspace = scoped?.[1] ?? workspaceReference;
+  if (!workspace) workspace = process.env.DAEDALUS_WORKSPACE_ID;
+  if (!workspace && process.env.DAEDALUS_SESSION_ID) {
+    const session = await context.agents.get(process.env.DAEDALUS_SESSION_ID);
+    workspace = session.workspaceId;
+  }
+  if (!workspace && process.env.DAEDALUS_TASK_ID) {
+    workspace = context.tasks.get(process.env.DAEDALUS_TASK_ID).workspaceId;
+  }
+  if (!workspace)
+    throw new DaedalusError(
+      "VALIDATION",
+      "A numeric task reference requires --workspace outside a Daedalus session",
+    );
+  const resolvedWorkspace = await context.workspaces.get(workspace);
+  return context.tasks.getByNumber(resolvedWorkspace.id, number);
+}
+
 async function taskCommand(
   context: ApplicationContext,
   args: string[],
@@ -339,7 +386,7 @@ async function taskCommand(
       priority: parsed.values.priority,
     });
     printResult(result, json, () =>
-      console.log(`Created task ${result.id}: ${result.title}`),
+      console.log(`Created task #${result.number}: ${result.title}`),
     );
     return 0;
   }
@@ -358,67 +405,105 @@ async function taskCommand(
       if (!result.length) console.log("No tasks.");
       for (const item of result)
         console.log(
-          `${item.id}\t${item.status}\t${item.priority}\t${item.title}`,
+          `#${item.number}\t${item.status}\t${item.priority}\t${item.title}`,
         );
     });
     return 0;
   }
-  if (action === "get") {
+  if (action === "current") {
     const parsed = parseArguments(args, []);
-    expectPositionals(parsed.positionals, 1, "daedal task get <task-id>");
-    const result = context.tasks.get(parsed.positionals[0]!);
+    expectPositionals(parsed.positionals, 0, "daedal task current");
+    const result = await currentSessionTask(context);
     printResult(result, json, () =>
       console.log(
-        `${result.id}\t${result.status}\t${result.priority}\t${result.title}`,
+        `#${result.number}\t${result.status}\t${result.priority}\t${result.title}`,
+      ),
+    );
+    return 0;
+  }
+  if (action === "get") {
+    const parsed = parseArguments(args, ["workspace"]);
+    expectPositionals(
+      parsed.positionals,
+      1,
+      "daedal task get <task-ref> [--workspace <workspace>]",
+    );
+    const result = await resolveTaskReference(
+      context,
+      parsed.positionals[0]!,
+      parsed.values.workspace,
+    );
+    printResult(result, json, () =>
+      console.log(
+        `#${result.number}\t${result.status}\t${result.priority}\t${result.title}`,
       ),
     );
     return 0;
   }
   if (action === "update") {
-    const parsed = parseArguments(args, ["title", "description", "priority"]);
+    const parsed = parseArguments(args, [
+      "workspace",
+      "title",
+      "description",
+      "priority",
+    ]);
     expectPositionals(
       parsed.positionals,
       1,
-      "daedal task update <task-id> [--title <title>] [--description <text>] [--priority <priority>]",
+      "daedal task update <task-ref> [--workspace <workspace>] [--title <title>] [--description <text>] [--priority <priority>]",
     );
-    const result = context.tasks.update(parsed.positionals[0]!, {
+    const task = await resolveTaskReference(
+      context,
+      parsed.positionals[0]!,
+      parsed.values.workspace,
+    );
+    const result = context.tasks.update(task.id, {
       title: parsed.values.title,
       description: parsed.values.description,
       priority: parsed.values.priority,
     });
     printResult(result, json, () =>
-      console.log(`Updated task ${result.id}: ${result.title}`),
+      console.log(`Updated task #${result.number}: ${result.title}`),
     );
     return 0;
   }
   if (action === "status") {
-    const parsed = parseArguments(args, []);
+    const parsed = parseArguments(args, ["workspace"]);
     expectPositionals(
       parsed.positionals,
       2,
-      "daedal task status <task-id> <status>",
+      "daedal task status <task-ref> <status> [--workspace <workspace>]",
     );
-    const result = context.tasks.setStatus(
+    const task = await resolveTaskReference(
+      context,
       parsed.positionals[0]!,
-      parsed.positionals[1]!,
+      parsed.values.workspace,
     );
+    const result = context.tasks.setStatus(task.id, parsed.positionals[1]!);
     printResult(result, json, () =>
-      console.log(`Task ${result.id} is ${result.status}`),
+      console.log(`Task #${result.number} is ${result.status}`),
     );
     return 0;
   }
   if (action === "remove") {
-    const parsed = parseArguments(args, [], ["force"]);
+    const parsed = parseArguments(args, ["workspace"], ["force"]);
     expectPositionals(
       parsed.positionals,
       1,
-      "daedal task remove <task-id> --force",
+      "daedal task remove <task-ref> [--workspace <workspace>] --force",
+    );
+    const task = await resolveTaskReference(
+      context,
+      parsed.positionals[0]!,
+      parsed.values.workspace,
     );
     const result = await context.tasks.remove(
-      parsed.positionals[0]!,
+      task.id,
       parsed.flags.has("force"),
     );
-    printResult(result, json, () => console.log(`Removed task ${result.id}`));
+    printResult(result, json, () =>
+      console.log(`Removed task #${result.number}`),
+    );
     return 0;
   }
   throw new DaedalusError("VALIDATION", `Unknown task command '${action}'`);
@@ -467,19 +552,25 @@ async function agentCommand(
       "task",
       "name",
       "model",
+      "message",
     ]);
     expectPositionals(
       parsed.positionals,
       0,
       "daedal agent spawn --workspace <workspace> (--provider <provider> | --command <name>)",
     );
+    const workspace = required(parsed.values.workspace, "--workspace");
+    const task = parsed.values.task
+      ? await resolveTaskReference(context, parsed.values.task, workspace)
+      : undefined;
     const result = await context.agents.spawn({
-      workspace: required(parsed.values.workspace, "--workspace"),
+      workspace,
       provider: parsed.values.provider,
       command: parsed.values.command,
-      taskId: parsed.values.task,
+      taskId: task?.id,
       name: parsed.values.name,
       model: parsed.values.model,
+      message: parsed.values.message,
     });
     printResult(result, json, () =>
       console.log(
@@ -751,7 +842,9 @@ export async function runCli(
     return 0;
   }
   if (args[0] === "--version" || args[0] === "-v") {
-    console.log(VERSION);
+    if (json)
+      console.log(JSON.stringify({ ok: true, data: { version: VERSION } }));
+    else console.log(VERSION);
     return 0;
   }
   if (args.includes("--help") || args.includes("-h")) {

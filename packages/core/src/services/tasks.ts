@@ -68,8 +68,7 @@ export class TaskService {
   }): Promise<Task> {
     const workspace = await this.workspaces.getActive(input.workspace);
     const now = new Date().toISOString();
-    const task: Task = {
-      id: crypto.randomUUID(),
+    const task = this.repositories.createNumberedTask({
       workspaceId: workspace.id,
       title: title(input.title),
       description: description(input.description ?? ""),
@@ -78,8 +77,7 @@ export class TaskService {
       createdAt: now,
       updatedAt: now,
       completedAt: null,
-    };
-    this.repositories.createTask(task);
+    });
     return task;
   }
 
@@ -100,6 +98,16 @@ export class TaskService {
     const task = this.repositories.findTask(id);
     if (!task)
       throw new DaedalusError("NOT_FOUND", `Task '${id}' was not found`);
+    return task;
+  }
+
+  getByNumber(workspaceId: string, number: number): Task {
+    const task = this.repositories.findTaskByNumber(workspaceId, number);
+    if (!task)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Task '#${number}' was not found in workspace '${workspaceId}'`,
+      );
     return task;
   }
 

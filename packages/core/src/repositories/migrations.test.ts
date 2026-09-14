@@ -143,5 +143,42 @@ describe("runMigrations", () => {
       { name: "reference_path" },
     ]);
     repositoryLibrary.close();
+
+    await Bun.write(
+      join(migrations, "008_readable_task_ids.sql"),
+      Bun.file(join(source, "008_readable_task_ids.sql")),
+    );
+    await runMigrations(databasePath, migrations);
+    const readableTaskIds = new Database(databasePath);
+    expect(
+      readableTaskIds
+        .query<{ task_id_prefix: string; next_task_number: number }, []>(
+          "SELECT task_id_prefix, next_task_number FROM workspaces WHERE id = 'w1'",
+        )
+        .get(),
+    ).toEqual({ task_id_prefix: "demo", next_task_number: 1 });
+    readableTaskIds.close();
+
+    await Bun.write(
+      join(migrations, "009_task_numbers.sql"),
+      Bun.file(join(source, "009_task_numbers.sql")),
+    );
+    await runMigrations(databasePath, migrations);
+    const taskNumbers = new Database(databasePath);
+    expect(
+      taskNumbers
+        .query<{ number: number }, []>(
+          "SELECT number FROM tasks WHERE id = 't1'",
+        )
+        .get(),
+    ).toEqual({ number: 1 });
+    expect(
+      taskNumbers
+        .query<{ next_task_number: number }, []>(
+          "SELECT next_task_number FROM workspaces WHERE id = 'w1'",
+        )
+        .get(),
+    ).toEqual({ next_task_number: 2 });
+    taskNumbers.close();
   });
 });

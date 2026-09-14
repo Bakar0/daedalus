@@ -2123,7 +2123,9 @@ export function WorkspaceApp({
           ))}
         </select>
       </div>
-      <h2>{selectedTask.title}</h2>
+      <h2>
+        #{selectedTask.number} {selectedTask.title}
+      </h2>
       <MarkdownPreview source={selectedTask.description} />
       <button
         className="danger-link brief-delete"
@@ -2846,6 +2848,7 @@ export function WorkspaceApp({
                           {task.status.replace("_", " ")}
                         </span>
                         <small>
+                          #{task.number} ·{" "}
                           {new Date(task.updatedAt).toLocaleDateString()}
                         </small>
                       </div>

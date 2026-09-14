@@ -17,10 +17,12 @@ describe("TaskService", () => {
         priority: "high",
       });
       expect(task).toMatchObject({
+        number: 1,
         title: "Ship it",
         status: "todo",
         priority: "high",
       });
+      expect(context.tasks.getByNumber(workspace.id, 1).id).toBe(task.id);
       expect(await context.tasks.list({ status: "todo" })).toHaveLength(1);
       expect(
         context.tasks.setStatus(task.id, "done").completedAt,
@@ -36,6 +38,35 @@ describe("TaskService", () => {
       });
       await context.tasks.remove(task.id, true);
       expect(() => context.tasks.get(task.id)).toThrow();
+      const nextTask = await context.tasks.create({
+        workspace: workspace.id,
+        title: "Next",
+      });
+      expect(nextTask.number).toBe(2);
+      context.close();
+    });
+  });
+
+  test("starts task numbering at one in each workspace", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        reconcile: false,
+      });
+      const first = await context.workspaces.create({ name: "First Space" });
+      const second = await context.workspaces.create({ name: "Second Space" });
+      const firstTask = await context.tasks.create({
+        workspace: first.id,
+        title: "First task",
+      });
+      const secondTask = await context.tasks.create({
+        workspace: second.id,
+        title: "Second task",
+      });
+      expect(first.id).toBe("first-space");
+      expect(second.id).toBe("second-space");
+      expect(firstTask.number).toBe(1);
+      expect(secondTask.number).toBe(1);
       context.close();
     });
   });

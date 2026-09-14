@@ -17,6 +17,7 @@ export interface Workspace {
 export interface Task {
   id: UUID;
   workspaceId: UUID;
+  number: number;
   title: string;
   description: string;
   status: TaskStatus;

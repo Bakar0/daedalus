@@ -23,9 +23,14 @@ interface WorkspaceRow {
   archived_at: string | null;
 }
 
+interface TaskIdRow {
+  task_number: number;
+}
+
 interface TaskRow {
   id: string;
   workspace_id: string;
+  number: number;
   title: string;
   description: string;
   status: TaskStatus;
@@ -113,6 +118,7 @@ const workspaceFromRow = (row: WorkspaceRow): Workspace => ({
 const taskFromRow = (row: TaskRow): Task => ({
   id: row.id,
   workspaceId: row.workspace_id,
+  number: row.number,
   title: row.title,
   description: row.description,
   status: row.status,
@@ -215,8 +221,9 @@ export class SqliteRepositories {
     this.database
       .query(
         `INSERT INTO workspaces
-         (id, slug, name, path, created_at, updated_at, archived_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         (id, slug, name, path, created_at, updated_at, archived_at,
+          task_id_prefix)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         workspace.id,
@@ -226,6 +233,7 @@ export class SqliteRepositories {
         workspace.createdAt,
         workspace.updatedAt,
         workspace.archivedAt,
+        workspace.slug,
       );
   }
 
@@ -446,12 +454,14 @@ export class SqliteRepositories {
     this.database
       .query(
         `INSERT INTO tasks
-         (id, workspace_id, title, description, status, priority, created_at, updated_at, completed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, workspace_id, number, title, description, status, priority,
+          created_at, updated_at, completed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         task.id,
         task.workspaceId,
+        task.number,
         task.title,
         task.description,
         task.status,
@@ -460,6 +470,30 @@ export class SqliteRepositories {
         task.updatedAt,
         task.completedAt,
       );
+  }
+
+  createNumberedTask(task: Omit<Task, "id" | "number">): Task {
+    return this.transaction(() => {
+      const allocated = this.database
+        .query<TaskIdRow, [string]>(
+          `UPDATE workspaces
+           SET next_task_number = next_task_number + 1
+           WHERE id = ?
+           RETURNING next_task_number - 1 AS task_number`,
+        )
+        .get(task.workspaceId);
+      if (!allocated)
+        throw new Error(
+          `Workspace '${task.workspaceId}' has no task ID sequence`,
+        );
+      const created: Task = {
+        ...task,
+        id: crypto.randomUUID(),
+        number: allocated.task_number,
+      };
+      this.createTask(created);
+      return created;
+    });
   }
 
   listTasks(filters: { workspaceId?: string; status?: TaskStatus }): Task[] {
@@ -486,6 +520,15 @@ export class SqliteRepositories {
     const row = this.database
       .query<TaskRow, [string]>("SELECT * FROM tasks WHERE id = ?")
       .get(id);
+    return row ? taskFromRow(row) : undefined;
+  }
+
+  findTaskByNumber(workspaceId: string, number: number): Task | undefined {
+    const row = this.database
+      .query<TaskRow, [string, number]>(
+        "SELECT * FROM tasks WHERE workspace_id = ? AND number = ?",
+      )
+      .get(workspaceId, number);
     return row ? taskFromRow(row) : undefined;
   }
 

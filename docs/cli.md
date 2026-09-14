@@ -1,6 +1,6 @@
 # CLI contract
 
-`daedal` is the complete Phase 2–4 public interface. Workspace references accept an exact UUID or slug. Task and agent references accept UUIDs.
+`daedal` is the complete Phase 2–4 public interface. New workspace IDs are immutable readable slugs derived from their names, such as `my-project`; the mutable workspace slug is also accepted as an alias. Tasks have workspace-scoped numbers displayed as `#1`, `#2`, and so on, and deleted numbers are never reused. Use `my-project#1` outside a session, or pass `1 --workspace my-project`. Stable internal task IDs and legacy references remain valid for compatibility. Agent references use UUIDs.
 
 ## Output and exit codes
 
@@ -51,10 +51,11 @@ Removal requires `--force`. Without `--delete-files`, it unregisters the workspa
 ```text
 daedal task create --workspace <workspace> --title <title> [--description <text>] [--priority <priority>]
 daedal task list [--workspace <workspace>] [--status <status>]
-daedal task get <task-id>
-daedal task update <task-id> [--title <title>] [--description <text>] [--priority <priority>]
-daedal task status <task-id> <status>
-daedal task remove <task-id> --force
+daedal task get <task-ref> [--workspace <workspace>]
+daedal task current
+daedal task update <task-ref> [--workspace <workspace>] [--title <title>] [--description <text>] [--priority <priority>]
+daedal task status <task-ref> <status> [--workspace <workspace>]
+daedal task remove <task-ref> [--workspace <workspace>] --force
 ```
 
 Statuses are `todo`, `in_progress`, `blocked`, `done`, and `cancelled`. Priorities are `low`, `normal`, and `high`. Entering `done` sets `completedAt`; moving to any other status clears it. Agent lifecycle never changes task status. Task removal requires `--force` and refuses while a live agent references the task.
@@ -63,9 +64,9 @@ Statuses are `todo`, `in_progress`, `blocked`, `done`, and `cancelled`. Prioriti
 
 ```text
 daedal agent models <codex|claude>
-daedal agent spawn --workspace <workspace> --provider codex [--task <task-id>] [--model <model>]
-daedal agent spawn --workspace <workspace> --provider claude [--task <task-id>] [--model <model>]
-daedal agent spawn --workspace <workspace> --command <configured-name> [--task <task-id>]
+daedal agent spawn --workspace <workspace> --provider codex [--task <task-ref>] [--model <model>] [--message <text>]
+daedal agent spawn --workspace <workspace> --provider claude [--task <task-ref>] [--model <model>] [--message <text>]
+daedal agent spawn --workspace <workspace> --command <configured-name> [--task <task-ref>] [--message <text>]
 daedal agent list [--workspace <workspace>] [--running]
 daedal agent get <agent-id>
 daedal agent attach <agent-id>
@@ -76,7 +77,7 @@ daedal agent stop <agent-id> [--force]
 daedal agent remove <agent-id>
 ```
 
-Built-in provider definitions come from `config.json`. Named custom definitions use `--command`. Executables and arguments are always passed as arrays. Task-backed Claude launches receive `title + blank line + description` as one prompt argument. Codex receives the same prompt through tmux after Daedalus assigns its immutable native session name. Custom launches receive the prompt in `DAEDALUS_TASK_PROMPT`; all task-backed launches also receive `DAEDALUS_TASK_ID`.
+Built-in provider definitions come from `config.json`. Named custom definitions use `--command`. Executables and arguments are always passed as arrays. A task-backed launch receives only `Execute task #<number>` plus optional `--message` guidance; the installed skill supplies the workflow, so task content and CLI instructions are not duplicated in the prompt. Claude and Codex receive the prompt through their native initial-prompt argument, while custom launches receive it in `DAEDALUS_TASK_PROMPT`. Daedalus never types the initial prompt into the terminal. Agent processes receive their current session, workspace, internal task ID, and task number through `DAEDALUS_SESSION_ID`, `DAEDALUS_WORKSPACE_ID`, `DAEDALUS_TASK_ID`, and `DAEDALUS_TASK_NUMBER`. These variables are restored when a session resumes.
 
 Each launch gets a durable `daedalus_<uuid>` tmux session on a Daedalus server isolated by `DAEDALUS_HOME`. `attach` hands the terminal to tmux and therefore rejects `--json`; every non-interactive command supports the JSON envelope. `send` sends literal text followed by Enter. `stop` first sends Ctrl-C unless `--force` is used, then closes the session. A running session must be stopped before its history row can be removed.
 
@@ -127,3 +128,7 @@ emitting their result. Daedalus-launched sessions put this directory first on
 `PATH`.
 
 `daedal doctor [--json]` checks the verified Bun version, tmux availability/minimum, resolved home, and migrated database.
+
+`daedal --version --json` reports the version from the same package metadata
+used by the desktop bundle, preventing the CLI and app version strings from
+drifting apart.

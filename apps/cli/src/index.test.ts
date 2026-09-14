@@ -10,12 +10,16 @@ interface CliResult {
   stderr: string;
 }
 
-async function cli(home: string, args: string[]): Promise<CliResult> {
+async function cli(
+  home: string,
+  args: string[],
+  env: Record<string, string> = {},
+): Promise<CliResult> {
   const child = Bun.spawn(
     [process.execPath, "run", join(import.meta.dir, "index.ts"), ...args],
     {
       cwd: join(import.meta.dir, "../../.."),
-      env: { ...process.env, DAEDALUS_HOME: home },
+      env: { ...process.env, DAEDALUS_HOME: home, ...env },
       stdout: "pipe",
       stderr: "pipe",
     },
@@ -55,6 +59,19 @@ async function createRepository(path: string): Promise<void> {
 }
 
 describe("daedal CLI contract", () => {
+  test("reports the package version in text and JSON formats", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      expect(await cli(home, ["--version"])).toMatchObject({
+        exitCode: 0,
+        stdout: "0.2.0\n",
+        stderr: "",
+      });
+      expect(
+        JSON.parse((await cli(home, ["--version", "--json"])).stdout),
+      ).toEqual({ ok: true, data: { version: "0.2.0" } });
+    });
+  });
+
   test("supports workspace and task lifecycle with JSON envelopes", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const created = await cli(home, [
@@ -80,7 +97,31 @@ describe("daedal CLI contract", () => {
         "--json",
       ]);
       expect(taskCreated.exitCode).toBe(0);
-      const task = JSON.parse(taskCreated.stdout).data as { id: string };
+      const task = JSON.parse(taskCreated.stdout).data as {
+        id: string;
+        number: number;
+      };
+      expect(task.number).toBe(1);
+      const byNumber = await cli(home, [
+        "task",
+        "get",
+        "1",
+        "--workspace",
+        workspace.id,
+        "--json",
+      ]);
+      expect(JSON.parse(byNumber.stdout).data.id).toBe(task.id);
+      const byScopedNumber = await cli(home, [
+        "task",
+        "get",
+        `${workspace.slug}#1`,
+        "--json",
+      ]);
+      expect(JSON.parse(byScopedNumber.stdout).data.id).toBe(task.id);
+      const current = await cli(home, ["task", "current", "--json"], {
+        DAEDALUS_TASK_ID: task.id,
+      });
+      expect(JSON.parse(current.stdout).data.number).toBe(1);
       const updated = await cli(home, [
         "task",
         "status",
@@ -169,13 +210,28 @@ describe("daedal CLI contract", () => {
         "--json",
       ]);
       expect(workspace.exitCode).toBe(0);
+      const workspaceId = JSON.parse(workspace.stdout).data.id as string;
+      const task = await cli(home, [
+        "task",
+        "create",
+        "--workspace",
+        workspaceId,
+        "--title",
+        "Dependency task",
+        "--json",
+      ]);
+      expect(task.exitCode).toBe(0);
       const failed = await cli(home, [
         "agent",
         "spawn",
         "--workspace",
-        "agent-dependency",
+        workspaceId,
         "--command",
         "missing",
+        "--task",
+        "1",
+        "--message",
+        "Start with the highest-risk part.",
         "--json",
       ]);
       expect(failed.exitCode).toBe(5);
