@@ -1,8 +1,9 @@
 import {
   captureSpikePane,
   ensureSpikeSession,
-  sendSpikeInput,
-  TmuxControlBridge,
+  SPIKE_SESSION,
+  SPIKE_SOCKET,
+  TmuxPtyBridge,
 } from "@daedalus/platform";
 
 const sleep = (milliseconds: number) =>
@@ -11,13 +12,17 @@ const decoder = new TextDecoder();
 const output: string[] = [];
 
 await ensureSpikeSession(process.cwd());
-const firstBridge = new TmuxControlBridge((bytes) =>
-  output.push(decoder.decode(bytes)),
+const target = { socketName: SPIKE_SOCKET, session: SPIKE_SESSION };
+const firstBridge = new TmuxPtyBridge(
+  (bytes) => output.push(decoder.decode(bytes)),
+  target,
+  { cols: 91, rows: 27 },
 );
 void firstBridge.start();
-firstBridge.resize(91, 27);
 await sleep(150);
-await sendSpikeInput(
+firstBridge.resize(91, 27);
+await sleep(100);
+firstBridge.write(
   "printf '\\033[31mCOLOR\\033[0m Unicode: שלום 世界 😀\\n'; stty size\r",
 );
 await sleep(1_500);
@@ -41,12 +46,13 @@ if (!reconnectCapture.includes("שלום 世界 😀")) {
 }
 
 const secondOutput: string[] = [];
-const secondBridge = new TmuxControlBridge((bytes) =>
-  secondOutput.push(decoder.decode(bytes)),
+const secondBridge = new TmuxPtyBridge(
+  (bytes) => secondOutput.push(decoder.decode(bytes)),
+  target,
 );
 void secondBridge.start();
 await sleep(150);
-await sendSpikeInput("printf 'RECONNECTED\\n'\r");
+secondBridge.write("printf 'RECONNECTED\\n'\r");
 await sleep(1_000);
 secondBridge.close();
 if (!secondOutput.join("").includes("RECONNECTED")) {

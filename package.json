@@ -24,6 +24,7 @@
     "test:cli-agent": "bun run scripts/cli-agent-check.ts",
     "test:terminal-spike": "bun run scripts/terminal-spike-check.ts",
     "test:terminal-agent": "bun run scripts/terminal-agent-check.ts",
+    "test:panels": "bun run scripts/panel-browser-check.ts",
     "typecheck": "tsc --noEmit",
     "verify:versions": "bun run scripts/verify-versions.ts",
     "daedal": "bun run apps/cli/src/index.ts"
@@ -40,7 +41,6 @@
     "vitest": "5.0.0"
   },
   "dependencies": {
-    "ghostty-web": "0.4.0",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   }

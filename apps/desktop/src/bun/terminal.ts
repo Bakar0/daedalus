@@ -15,6 +15,7 @@ export interface TerminalSocket {
 
 export interface TerminalBridge {
   start(): Promise<void>;
+  write(data: string): void;
   resize(cols: number, rows: number): void;
   close(): void;
 }
@@ -111,9 +112,6 @@ export interface TerminalConnectionOptions {
   agentId: string;
   socket: TerminalSocket;
   status: "live" | "reconnected";
-  capture: () => Promise<Uint8Array>;
-  prepareCapture?: () => Promise<void>;
-  sendInput: (data: string) => Promise<void>;
   createBridge: (onOutput: (output: Uint8Array) => void) => TerminalBridge;
   onError?: (error: unknown) => void;
 }
@@ -135,19 +133,15 @@ export class TerminalConnection {
 
   async start(): Promise<void> {
     this.#timer = setInterval(() => this.flush(), 16);
-    void this.bridge.start().catch((error) => this.fail(error));
     try {
-      await this.options.prepareCapture?.();
-      const capture = await this.options.capture();
-      if (this.#closed) return;
       this.sendJson({
         type: "status",
         status: this.options.status,
         agentId: this.options.agentId,
       });
-      this.options.socket.send(capture);
       this.#initialized = true;
       this.flush();
+      void this.bridge.start().catch((error) => this.fail(error));
     } catch (error) {
       this.fail(error);
     }
@@ -164,9 +158,9 @@ export class TerminalConnection {
             TERMINAL_INPUT_LIMIT
         )
           throw new Error("Terminal input frame is too large");
-        const operation = this.#inputChain.then(() =>
-          this.options.sendInput(message.data),
-        );
+        const operation = this.#inputChain.then(() => {
+          this.bridge.write(message.data);
+        });
         this.#inputChain = operation.catch(() => {});
         await operation;
       } else if (message.type === "resize") {

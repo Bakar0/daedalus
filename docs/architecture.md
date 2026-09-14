@@ -8,17 +8,17 @@ daedal CLI ─┐
 desktop RPC ┘          │
                       └─> domain events and structured errors
 
-tmux control client ─> loopback WebSocket ─> ghostty-web renderer
+tmux PTY client ─> loopback WebSocket ─> xterm.js renderer
 ```
 
 ## Package boundaries
 
 - `@daedalus/core` owns configuration, domain types, structured errors, application context, events, SQLite repositories, and all workspace/task/agent services.
-- `@daedalus/platform` owns operating-system boundaries: filesystem creation, argv-safe process execution, and tmux control-mode transport.
+- `@daedalus/platform` owns operating-system boundaries: filesystem creation, argv-safe process execution, and tmux PTY transport.
 - `@daedalus/protocol` owns serializable CLI/desktop DTOs, the typed Electrobun RPC schema, stable result envelopes, and terminal wire messages.
 - `apps/cli` maps arguments, results, errors, and exit codes onto the shared application layer.
 - `apps/desktop/src/bun` starts the same application context and owns native process/terminal resources.
-- `apps/desktop/src/renderer` renders application state, calls typed RPC methods, and hosts selected `ghostty-web` agent and integrated-terminal surfaces. It does not access files, SQLite, provider processes, or tmux.
+- `apps/desktop/src/renderer` renders application state, calls typed RPC methods, and hosts selected xterm.js agent and integrated-terminal surfaces. It does not access files, SQLite, provider processes, or tmux.
 
 ## Persistence
 
@@ -34,18 +34,18 @@ Agent sessions use names derived only from immutable UUIDs. Provider adapters bu
 
 ## Terminal lifecycle
 
-Each renderer connection names a typed agent or integrated-terminal UUID, never a tmux session directly. The Bun process resolves that UUID through core, verifies that its recorded session is live, and attaches a tmux control client to the durable session. `%output` notifications carry the pane's actual terminal byte stream; octal-escaped control bytes are decoded before forwarding. User input is sent with argv-safe `tmux send-keys` calls, and resize uses the attached control client's `refresh-client -C` command. Closing a view detaches only its control client. Stop remains a core agent action and CLI `attach` continues to address the same tmux session.
+Each renderer connection names a typed agent or integrated-terminal UUID, never a tmux session directly. The Bun process resolves that UUID through core, verifies that its recorded session is live, and attaches a tmux client through Bun's native pseudo-terminal. The PTY carries tmux's exact terminal byte stream, including redraw and cursor state. User input is written directly to the PTY and resize uses the PTY's native resize operation, so multi-key terminal shortcuts are interpreted by tmux and the provider TUI rather than reconstructed as `send-keys` commands. Closing a view terminates only its attached client. Stop remains a core agent action and CLI `attach` continues to address the same tmux session.
 
-A random per-process token protects a WebSocket server bound only to `127.0.0.1`; invalid paths, tokens, or agent UUIDs are rejected before upgrade. New renderer clients receive an ANSI-preserving capture bounded to 10,000 tmux history lines or 1 MiB before queued live output. The Bun-side pending queue and renderer pending queue are each capped at 1 MiB, the socket has a 256 KiB high-water mark, and delivery is batched. Overflow discards oldest pending bytes and emits a visible recovery notice instead of allowing unbounded memory growth. `ghostty-web` owns a separate 10,000-line display scrollback.
+A random per-process token protects a WebSocket server bound only to `127.0.0.1`; invalid paths, tokens, or agent UUIDs are rejected before upgrade. tmux redraws its current screen and cursor into each new PTY attachment, avoiding the duplicated and cursorless `capture-pane` plus live-stream reconstruction. The Bun-side pending queue and renderer pending queue are each capped at 1 MiB, the socket has a 256 KiB high-water mark, and delivery is batched. Overflow discards oldest pending bytes and emits a visible recovery notice instead of allowing unbounded memory growth. xterm.js owns a separate 10,000-line display scrollback and procedurally renders block and box-drawing glyphs while the view remains attached.
 
-At desktop startup, core reconciles agent and integrated-terminal SQLite rows against the isolated tmux server. Sessions that still exist reconnect and are labeled accordingly; vanished sessions become `lost`. Explicitly stopped sessions are `exited`. The change poll ends terminal connections whose sessions stop or disappear. Switching sessions or terminal tabs disposes the prior renderer terminal, WebSocket, resize observer, retry timer, and tmux control client while leaving the underlying tmux session untouched.
+At desktop startup, core reconciles agent and integrated-terminal SQLite rows against the isolated tmux server. Sessions that still exist reconnect and are labeled accordingly; vanished sessions become `lost`. Explicitly stopped sessions are `exited`. The change poll ends terminal connections whose sessions stop or disappear. Switching sessions or terminal tabs disposes the prior renderer terminal, WebSocket, resize observer, retry timer, and tmux PTY client while leaving the underlying tmux session untouched.
 
 ## Archive and native resume
 
 Archive state is independent of process state. `archived_at` hides a workspace or session from active lists, while the existing session status continues to describe the most recent tmux runtime. Archiving a live session stops that runtime first. Workspace archive delegates to the agent service and is committed only after all of its sessions have been archived.
 
-Agent sessions persist a provider-owned conversation locator. Claude receives a UUID at initial launch through `--session-id`; Codex receives an immutable Daedalus session name and is archived, unarchived, and resumed through its native CLI. Resume creates a new tmux runtime for the same logical session and increments `resume_count`. If provider restore or tmux launch fails, the Daedalus session remains archived. Terminal sessions have no provider transcript and reopen as a fresh login shell.
+Agent sessions persist a provider-owned conversation locator. Claude receives a UUID at initial launch through `--session-id`; Daedalus recovers Codex's UUID from its uniquely timed writer lock at startup and from rollout metadata for older Codex versions. Persisted conversations are archived, unarchived, and resumed through their native CLIs. Codex sessions archived before their first user event have no persisted conversation yet, so they restore as a fresh empty Codex session. Resume creates a new tmux runtime for the same logical session and increments `resume_count`. If provider restore or tmux launch fails, the Daedalus session remains archived. Terminal sessions have no provider transcript and reopen as a fresh login shell.
 
 Typed Electrobun RPC carries bounded desktop snapshots, mutations, and change messages. Desktop mutations publish an immediate message; a Bun-side SQLite fingerprint and agent reconciliation check detects mutations made by other processes, including the CLI, and publishes the same message within roughly 1.2 seconds. The renderer then reloads one consistent snapshot through core services.
 
-Terminal streaming remains isolated behind `TmuxControlBridge` and its authenticated loopback WebSocket. Domain CRUD stays on typed RPC; sustained terminal bytes do not pass through that request channel.
+Terminal streaming remains isolated behind `TmuxPtyBridge` and its authenticated loopback WebSocket. Domain CRUD stays on typed RPC; sustained terminal bytes do not pass through that request channel.

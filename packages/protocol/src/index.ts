@@ -316,9 +316,24 @@ export interface DesktopRpcSchema {
     requests: Record<never, never>;
     messages: {
       dataChanged: { revision: number; source: "desktop" | "external" };
+      command: { command: DesktopCommand };
+      windowResized: { width: number; height: number };
     };
   };
 }
+
+export const DESKTOP_COMMANDS = [
+  "view-board",
+  "view-sessions",
+  "view-workspace",
+  "toggle-terminal",
+] as const;
+
+export type DesktopCommand = (typeof DESKTOP_COMMANDS)[number];
+
+export const isDesktopCommand = (value: unknown): value is DesktopCommand =>
+  typeof value === "string" &&
+  (DESKTOP_COMMANDS as readonly string[]).includes(value);
 
 export type TerminalClientMessage =
   | { type: "input"; data: string }

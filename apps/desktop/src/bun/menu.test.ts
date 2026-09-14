@@ -24,4 +24,25 @@ describe("desktop application menu", () => {
       ]),
     );
   });
+
+  test("provides native navigation and terminal shortcuts", () => {
+    const viewMenu = APPLICATION_MENU.find(
+      (item) => "label" in item && item.label === "View",
+    );
+    const shortcuts =
+      viewMenu && "submenu" in viewMenu
+        ? viewMenu.submenu?.flatMap((item) =>
+            "action" in item && item.action
+              ? [[item.action, item.accelerator] as const]
+              : [],
+          )
+        : [];
+
+    expect(Object.fromEntries(shortcuts ?? [])).toEqual({
+      "view-board": "Command+1",
+      "view-sessions": "Command+2",
+      "view-workspace": "Command+3",
+      "toggle-terminal": "Control+`",
+    });
+  });
 });

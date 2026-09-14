@@ -2,17 +2,8 @@ import { describe, expect, test, vi } from "vitest";
 import {
   boundTerminalCapture,
   CommandTmuxClient,
-  decodeControlOutput,
+  tmuxPtyEnvironment,
 } from "./tmux";
-
-describe("decodeControlOutput", () => {
-  test("decodes tmux octal control bytes and keeps Unicode", () => {
-    const decoded = new TextDecoder().decode(
-      decodeControlOutput("\u001b[31mשלום \\015\\012"),
-    );
-    expect(decoded).toBe("\u001b[31mשלום \r\n");
-  });
-});
 
 test("terminal captures preserve recent complete UTF-8 within a byte bound", () => {
   const capture = boundTerminalCapture(
@@ -24,6 +15,24 @@ test("terminal captures preserve recent complete UTF-8 within a byte bound", () 
   expect(decoded).toMatch(/^\u001b\[H\u001b\[2J/);
   expect(decoded).toContain("שלום 😀");
   expect(decoded).not.toContain("�");
+});
+
+test("tmux PTYs always use a UTF-8 locale for Unicode cell widths", () => {
+  expect(
+    tmuxPtyEnvironment({
+      PATH: "/usr/bin:/bin",
+      LANG: "C",
+      LC_CTYPE: "C",
+      LC_ALL: "C",
+    }),
+  ).toMatchObject({
+    PATH: "/usr/bin:/bin",
+    LANG: "C.UTF-8",
+    LC_CTYPE: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
+    TERM: "xterm-256color",
+    COLORTERM: "truecolor",
+  });
 });
 
 describe("CommandTmuxClient", () => {

@@ -1,5 +1,6 @@
-import { readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, stat } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { Database } from "bun:sqlite";
 import {
   findExecutable,
   runCommand,
@@ -20,6 +21,12 @@ import type { WorkspaceContentService } from "./workspace-content";
 
 const UUID_FILE =
   /^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.jsonl$/i;
+const CODEX_ROLLOUT_FILE =
+  /([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.jsonl$/i;
+const CODEX_WRITER_LOCK =
+  /^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.lock$/i;
+const UUID_VALUE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SESSION_RECOVERY_WINDOW_MS = 60_000;
 const SESSION_RECOVERY_UNIQUENESS_MS = 2_000;
 const PROVIDER_STARTUP_TIMEOUT_MS = 30_000;
@@ -93,6 +100,180 @@ export async function recoverClaudeSessionId(input: {
   )
     return undefined;
   return closest.id;
+}
+
+export async function recoverCodexSessionId(input: {
+  sessionsDirectory: string;
+  workingDirectory: string;
+  startedAt: string;
+  claimedIds?: Iterable<string>;
+}): Promise<string | undefined> {
+  const startedAt = Date.parse(input.startedAt);
+  if (!Number.isFinite(startedAt)) return undefined;
+  const claimedIds = new Set(input.claimedIds ?? []);
+  const dateDirectories = new Set<string>();
+  for (const offset of [-1, 0, 1]) {
+    const [year, month, day] = new Date(
+      startedAt + offset * 24 * 60 * 60 * 1_000,
+    )
+      .toISOString()
+      .slice(0, 10)
+      .split("-");
+    dateDirectories.add(join(input.sessionsDirectory, year!, month!, day!));
+  }
+  const candidatesById = new Map<string, number>();
+  const addCandidate = (id: string, distance: number) => {
+    const previous = candidatesById.get(id);
+    if (previous === undefined || distance < previous)
+      candidatesById.set(id, distance);
+  };
+  await Promise.all(
+    [...dateDirectories].map(async (directory) => {
+      let entries;
+      try {
+        entries = await readdir(directory, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      await Promise.all(
+        entries.map(async (entry) => {
+          if (!entry.isFile()) return;
+          const id = CODEX_ROLLOUT_FILE.exec(entry.name)?.[1];
+          if (!id || claimedIds.has(id)) return;
+          try {
+            const initialTranscript = await Bun.file(
+              join(directory, entry.name),
+            )
+              .slice(0, 128 * 1024)
+              .text();
+            for (const line of initialTranscript.split("\n").slice(0, 20)) {
+              if (!line) continue;
+              const record = JSON.parse(line) as {
+                type?: string;
+                payload?: { id?: string; cwd?: string; timestamp?: string };
+              };
+              if (record.type !== "session_meta" || record.payload?.id !== id)
+                continue;
+              if (record.payload.cwd !== input.workingDirectory) return;
+              const timestamp = Date.parse(record.payload.timestamp ?? "");
+              const distance = Math.abs(timestamp - startedAt);
+              if (
+                Number.isFinite(distance) &&
+                distance <= SESSION_RECOVERY_WINDOW_MS
+              )
+                addCandidate(id, distance);
+              return;
+            }
+          } catch {
+            // A partial or concurrently-written rollout is not a safe match.
+          }
+        }),
+      );
+    }),
+  );
+  const locksDirectory = join(
+    dirname(input.sessionsDirectory),
+    "thread-writer-locks",
+  );
+  try {
+    const entries = await readdir(locksDirectory, { withFileTypes: true });
+    await Promise.all(
+      entries.map(async (entry) => {
+        if (!entry.isFile()) return;
+        const id = CODEX_WRITER_LOCK.exec(entry.name)?.[1];
+        if (!id || claimedIds.has(id)) return;
+        try {
+          const metadata = await stat(join(locksDirectory, entry.name));
+          const timestamp = metadata.birthtimeMs || metadata.mtimeMs;
+          const distance = Math.abs(timestamp - startedAt);
+          if (
+            Number.isFinite(distance) &&
+            distance <= SESSION_RECOVERY_WINDOW_MS
+          )
+            addCandidate(id, distance);
+        } catch {
+          // The owning Codex process may remove its lock while it exits.
+        }
+      }),
+    );
+  } catch {
+    // Older Codex releases do not have a writer-lock directory.
+  }
+  const candidates = [...candidatesById].map(([id, distance]) => ({
+    id,
+    distance,
+  }));
+  candidates.sort((left, right) => left.distance - right.distance);
+  const closest = candidates[0];
+  if (!closest) return undefined;
+  const runnerUp = candidates[1];
+  if (
+    runnerUp &&
+    runnerUp.distance - closest.distance < SESSION_RECOVERY_UNIQUENESS_MS
+  )
+    return undefined;
+  return closest.id;
+}
+
+export async function hasPersistedCodexSession(input: {
+  sessionsDirectory: string;
+  id: string;
+  startedAt: string;
+}): Promise<boolean> {
+  // Legacy Codex sessions may be addressed by their user-visible name.
+  if (!UUID_VALUE.test(input.id)) return true;
+  const codexHome = dirname(input.sessionsDirectory);
+  try {
+    const entries = await readdir(codexHome, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || !/^state_\d+\.sqlite$/.test(entry.name)) continue;
+      let database: Database | undefined;
+      try {
+        database = new Database(join(codexHome, entry.name), {
+          readonly: true,
+        });
+        const found = database
+          .query<{ found: number }, [string]>(
+            "SELECT 1 AS found FROM threads WHERE id = ? LIMIT 1",
+          )
+          .get(input.id);
+        if (found) return true;
+      } catch {
+        // Fall through to rollout files for older or incompatible schemas.
+      } finally {
+        database?.close();
+      }
+    }
+  } catch {
+    // The Codex home may predate the SQLite state store.
+  }
+
+  const startedAt = Date.parse(input.startedAt);
+  if (Number.isFinite(startedAt)) {
+    for (const offset of [-1, 0, 1]) {
+      const [year, month, day] = new Date(
+        startedAt + offset * 24 * 60 * 60 * 1_000,
+      )
+        .toISOString()
+        .slice(0, 10)
+        .split("-");
+      try {
+        const entries = await readdir(
+          join(input.sessionsDirectory, year!, month!, day!),
+        );
+        if (entries.some((entry) => entry.endsWith(`${input.id}.jsonl`)))
+          return true;
+      } catch {
+        // Missing date directories are expected.
+      }
+    }
+  }
+  try {
+    const entries = await readdir(join(codexHome, "archived_sessions"));
+    return entries.some((entry) => entry.endsWith(`${input.id}.jsonl`));
+  } catch {
+    return false;
+  }
 }
 
 export class AgentService {
@@ -372,11 +553,29 @@ export class AgentService {
           provider!.name,
           session.tmuxSession,
         );
+      let runningSession = session;
+      if (provider?.name === "codex") {
+        const recoveredId = await recoverCodexSessionId({
+          sessionsDirectory: this.config.codexSessionsDirectory,
+          workingDirectory: session.workingDirectory,
+          startedAt: session.startedAt,
+          claimedIds: this.repositories
+            .listAgents()
+            .flatMap((item) =>
+              item.providerSessionId ? [item.providerSessionId] : [],
+            ),
+        });
+        if (recoveredId)
+          runningSession = {
+            ...runningSession,
+            providerSessionId: recoveredId,
+          };
+      }
       for (const input of launch.bootstrapInput ?? []) {
         await Bun.sleep(300);
         await this.tmux.send(session.tmuxSession, input);
       }
-      const running = { ...session, status: "running" as const };
+      const running = { ...runningSession, status: "running" as const };
       this.repositories.updateAgent(running);
       return running;
     } catch (error) {
@@ -496,7 +695,19 @@ export class AgentService {
     agent = await this.prepareArchivable(agent);
     if (agent.status === "running" || agent.status === "starting")
       agent = await this.stop(id, force);
-    if (agent.provider === "codex" && agent.providerSessionId) {
+    const hasNativeCodexConversation =
+      agent.provider === "codex" && agent.providerSessionId
+        ? await hasPersistedCodexSession({
+            sessionsDirectory: this.config.codexSessionsDirectory,
+            id: agent.providerSessionId,
+            startedAt: agent.startedAt,
+          })
+        : false;
+    if (
+      agent.provider === "codex" &&
+      agent.providerSessionId &&
+      hasNativeCodexConversation
+    ) {
       const result = await runCommand(
         agent.command,
         ["archive", agent.providerSessionId],
@@ -532,6 +743,7 @@ export class AgentService {
 
     let executable = agent.command;
     let args = agent.args;
+    let providerSessionId = agent.providerSessionId;
     if (agent.kind === "agent") {
       if (!agent.providerSessionId)
         throw new DaedalusError(
@@ -554,23 +766,37 @@ export class AgentService {
           repository.referencePath ?? repository.canonicalPath,
         ]);
       if (agent.provider === "codex") {
-        const unarchive = await runCommand(
-          executable,
-          ["unarchive", agent.providerSessionId],
-          { cwd: agent.workingDirectory },
-        );
-        if (unarchive.exitCode !== 0)
-          throw new DaedalusError(
-            "CONFLICT",
-            unarchive.stderr.trim() ||
-              "Codex could not restore the conversation",
+        const hasNativeConversation = await hasPersistedCodexSession({
+          sessionsDirectory: this.config.codexSessionsDirectory,
+          id: agent.providerSessionId,
+          startedAt: agent.startedAt,
+        });
+        if (hasNativeConversation) {
+          const unarchive = await runCommand(
+            executable,
+            ["unarchive", agent.providerSessionId],
+            { cwd: agent.workingDirectory },
           );
-        args = [
-          ...definition.args,
-          ...additionalDirectories,
-          "resume",
-          agent.providerSessionId,
-        ];
+          const unarchiveError =
+            unarchive.stderr.trim() || unarchive.stdout.trim();
+          if (unarchive.exitCode !== 0)
+            throw new DaedalusError(
+              "CONFLICT",
+              unarchiveError || "Codex could not restore the conversation",
+            );
+          args = [
+            ...definition.args,
+            ...additionalDirectories,
+            "resume",
+            agent.providerSessionId,
+          ];
+        } else {
+          // Codex allocates a thread UUID before the first user event but does
+          // not persist an empty conversation. Restoring such an archived
+          // session correctly starts a new empty native session.
+          args = [...definition.args, ...additionalDirectories];
+          providerSessionId = null;
+        }
       } else if (agent.provider === "claude") {
         args = [
           ...definition.args,
@@ -590,6 +816,7 @@ export class AgentService {
       ...agent,
       command: executable,
       args,
+      providerSessionId,
       status: "starting",
       startedAt: new Date().toISOString(),
       endedAt: null,
@@ -609,12 +836,26 @@ export class AgentService {
           agent.provider,
           restoring.tmuxSession,
         );
-      const restored: AgentSession = {
+      let restored: AgentSession = {
         ...restoring,
         status: "running",
         archivedAt: null,
         resumeCount: agent.resumeCount + 1,
       };
+      if (agent.provider === "codex" && !restored.providerSessionId) {
+        const recoveredId = await recoverCodexSessionId({
+          sessionsDirectory: this.config.codexSessionsDirectory,
+          workingDirectory: restored.workingDirectory,
+          startedAt: restored.startedAt,
+          claimedIds: this.repositories
+            .listAgents()
+            .flatMap((session) =>
+              session.providerSessionId ? [session.providerSessionId] : [],
+            ),
+        });
+        if (recoveredId)
+          restored = { ...restored, providerSessionId: recoveredId };
+      }
       this.repositories.updateAgent(restored);
       return restored;
     } catch (error) {
@@ -643,6 +884,23 @@ export class AgentService {
         "Custom agent sessions cannot be archived because no native resume capability is configured",
       );
     if (agent.providerSessionId) return agent;
+    if (agent.provider === "codex") {
+      const recoveredId = await recoverCodexSessionId({
+        sessionsDirectory: this.config.codexSessionsDirectory,
+        workingDirectory: agent.workingDirectory,
+        startedAt: agent.startedAt,
+        claimedIds: this.repositories
+          .listAgents()
+          .flatMap((session) =>
+            session.providerSessionId ? [session.providerSessionId] : [],
+          ),
+      });
+      if (recoveredId) {
+        const recovered = { ...agent, providerSessionId: recoveredId };
+        this.repositories.updateAgent(recovered);
+        return recovered;
+      }
+    }
     if (agent.provider === "claude") {
       const recoveredId = await recoverClaudeSessionId({
         projectsDirectory: this.config.claudeProjectsDirectory,

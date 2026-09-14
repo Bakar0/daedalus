@@ -74,10 +74,9 @@ describe("bounded terminal buffering", () => {
 });
 
 describe("terminal connection lifecycle", () => {
-  test("reconnects with ANSI/Unicode capture, forwards input and resize, and cleans up", async () => {
+  test("forwards PTY output, input, and resize and cleans up", async () => {
     const sent: Array<string | Uint8Array> = [];
-    const lifecycle: string[] = [];
-    const input = vi.fn(async () => {});
+    const write = vi.fn();
     const resize = vi.fn();
     const close = vi.fn();
     let output: ((chunk: Uint8Array) => void) | undefined;
@@ -88,15 +87,9 @@ describe("terminal connection lifecycle", () => {
         getBufferedAmount: () => 0,
       },
       status: "reconnected",
-      prepareCapture: async () => void lifecycle.push("resize"),
-      capture: async () => {
-        lifecycle.push("capture");
-        return new TextEncoder().encode("\u001b[31mשלום 世界 😀\u001b[0m");
-      },
-      sendInput: input,
       createBridge: (listener) => {
         output = listener;
-        return { start: async () => {}, resize, close };
+        return { start: async () => {}, write, resize, close };
       },
     });
 
@@ -109,14 +102,10 @@ describe("terminal connection lifecycle", () => {
     connection.close();
 
     expect(String(sent[0])).toContain('"status":"reconnected"');
-    expect(new TextDecoder().decode(sent[1] as Uint8Array)).toContain(
-      "\u001b[31mשלום 世界 😀\u001b[0m",
-    );
-    expect(new TextDecoder().decode(sent[2] as Uint8Array)).toBe("\r\nlive");
-    expect(input).toHaveBeenCalledWith("go\r");
+    expect(new TextDecoder().decode(sent[1] as Uint8Array)).toBe("\r\nlive");
+    expect(write).toHaveBeenCalledWith("go\r");
     expect(resize).toHaveBeenCalledWith(101, 32);
     expect(close).toHaveBeenCalledOnce();
-    expect(lifecycle).toEqual(["resize", "capture"]);
   });
 
   test("pauses delivery above the socket high-water mark and bounds queued output", async () => {
@@ -130,11 +119,14 @@ describe("terminal connection lifecycle", () => {
         getBufferedAmount: () => buffered,
       },
       status: "live",
-      capture: async () => new Uint8Array(),
-      sendInput: async () => {},
       createBridge: (listener) => {
         output = listener;
-        return { start: async () => {}, resize: () => {}, close: () => {} };
+        return {
+          start: async () => {},
+          write: () => {},
+          resize: () => {},
+          close: () => {},
+        };
       },
     });
     await connection.start();
@@ -159,10 +151,9 @@ describe("terminal connection lifecycle", () => {
         close: closeSocket,
       },
       status: "live",
-      capture: async () => new Uint8Array(),
-      sendInput: async () => {},
       createBridge: () => ({
         start: async () => {},
+        write: () => {},
         resize: () => {},
         close: closeBridge,
       }),

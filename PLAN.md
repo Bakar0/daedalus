@@ -50,7 +50,7 @@ Explicitly defer git worktrees, branches, PR review, remote access, scheduling, 
                     +----------+-----------+
                                | typed RPC + terminal stream
                     +----------v-----------+
-                    | React + ghostty-web  |
+                    | React + xterm.js     |
                     +----------------------+
 ```
 
@@ -75,7 +75,7 @@ daedalus/
 │   │   └── src/commands/
 │   └── desktop/
 │       ├── src/bun/                 # Electrobun main process and RPC
-│       └── src/renderer/            # React UI and ghostty-web terminal
+│       └── src/renderer/            # React UI and xterm.js terminal
 ├── packages/
 │   ├── core/
 │   │   ├── src/domain/              # Workspace, Task, AgentSession types
@@ -101,16 +101,16 @@ daedalus/
 └── README.md
 ```
 
-Use a Bun workspace monorepo so the CLI and desktop app import the same packages without publishing them. Start with React, Vite, TypeScript, Vitest, Electrobun, and `ghostty-web`. Use `bun:sqlite` directly with small repository classes and versioned SQL migrations; an ORM is unnecessary for this initial schema.
+Use a Bun workspace monorepo so the CLI and desktop app import the same packages without publishing them. Start with React, Vite, TypeScript, Vitest, Electrobun, and xterm.js. Use `bun:sqlite` directly with small repository classes and versioned SQL migrations; an ORM is unnecessary for this initial schema.
 
 ### Dependency version policy
 
-Use the latest **stable** release available at implementation time for every third-party dependency, especially Bun, Electrobun, `ghostty-web`, and tmux. Do not copy version pins from `dev-3.0`, this plan, tutorials, or generated examples without checking the upstream release source first.
+Use the latest **stable** release available at implementation time for every third-party dependency, especially Bun, Electrobun, xterm.js, and tmux. Do not copy version pins from `dev-3.0`, this plan, tutorials, or generated examples without checking the upstream release source first.
 
 At the start of the scaffold and again before each release:
 
 1. Check the official Bun release page and run the latest stable Bun runtime.
-2. Resolve Electrobun and `ghostty-web` from their current stable package tags rather than `next`, beta, release-candidate, or Git branch builds.
+2. Resolve Electrobun and xterm.js from their current stable package tags rather than `next`, beta, release-candidate, or Git branch builds.
 3. Install or upgrade to the latest stable tmux release supported on the target OS; do not develop against an unreleased tmux `master` build.
 4. Install other direct dependencies from their current stable releases unless a documented compatibility constraint requires otherwise.
 5. Commit `bun.lock` so development, CI, and packaged builds use the exact versions that were verified together.
@@ -270,7 +270,7 @@ The backend owns tmux. The renderer only understands a byte stream plus resize/i
 2. Start the agent via an argv-safe wrapper, recording the pane/session identity.
 3. For CLI attachment, execute `tmux attach-session` normally.
 4. For the desktop terminal, run a Bun-side tmux client/PTY bridge and forward output to the renderer over Electrobun RPC or a dedicated local WebSocket.
-5. Feed `ghostty-web` output with received bytes; forward `onData` and resize events to the Bun bridge.
+5. Feed xterm.js with received bytes; forward `onData` and resize events to the Bun bridge.
 6. On startup, reconcile SQLite sessions with `tmux list-sessions` and label missing sessions `lost` or `exited`.
 
 The desktop proof-of-concept should validate interactive programs, colors, Unicode, resize, scrollback, paste, and reconnect before substantial UI work. Terminal transport is the highest-risk part of the MVP.
@@ -284,7 +284,7 @@ The desktop proof-of-concept should validate interactive programs, colors, Unico
 | Workspaces     | Tasks                                | Agent / terminal     |
 |                |                                      |                      |
 | + New          | status filter          + New task    | session header       |
-| workspace A    | [todo] Add auth                      | live ghostty-web     |
+| workspace A    | [todo] Add auth                      | live xterm.js        |
 | workspace B    | [run ] Build API                     | terminal             |
 |                | [done] Write tests                   |                      |
 +----------------+--------------------------------------+----------------------+
@@ -307,8 +307,8 @@ Use optimistic UI only for low-risk metadata edits. Workspace deletion and proce
 
 - Confirm macOS-first support for the MVP.
 - Confirm that workspaces are plain directories, not git worktrees.
-- Resolve and record the latest stable Bun, Electrobun, `ghostty-web`, and tmux versions from their official upstream sources.
-- Prototype Bun ↔ tmux ↔ `ghostty-web` interactive transport inside a minimal Electrobun window.
+- Resolve and record the latest stable Bun, Electrobun, xterm.js, and tmux versions from their official upstream sources.
+- Prototype Bun ↔ tmux ↔ xterm.js interactive transport inside a minimal Electrobun window.
 - Decide Electrobun RPC versus a loopback WebSocket for sustained terminal bytes based on the spike.
 
 **Exit:** a shell running in tmux can be used interactively in the desktop window, survives window reload, and reconnects.
@@ -424,7 +424,7 @@ This preserves the CLI-first requirement and prevents the UI from becoming the a
 - The same user can perform full task CRUD from either interface.
 - Codex and Claude Code can start with or without a task in that workspace.
 - Each agent runs in an independently addressable tmux session and survives Daedalus closing.
-- The user can attach from a terminal or use the same session through the embedded `ghostty-web` terminal.
+- The user can attach from a terminal or use the same session through the embedded xterm.js terminal.
 - CLI output is automation-safe with documented JSON and exit-code contracts.
 - Files are not deleted without a specific destructive flag and validated target.
 - Clean-install, restart/reconnect, and concurrent-agent end-to-end tests pass.
@@ -436,7 +436,7 @@ Build one vertical slice before filling out all CRUD:
 1. Scaffold the monorepo and minimal Electrobun window.
 2. Add `daedal workspace create demo` and `workspace list`.
 3. Add `daedal agent spawn --workspace demo --command shell`.
-4. Display that tmux session in `ghostty-web`.
+4. Display that tmux session in xterm.js.
 5. Close and reopen the app, then reconnect to the same session.
 
 That slice validates every architectural boundary—CLI, shared core, storage, filesystem, tmux, Electrobun RPC, and terminal rendering—before investing in the full product surface.

@@ -79,11 +79,10 @@ class ConfiguredProvider implements AgentProvider {
       if (input.sessionName) args.push("--name", input.sessionName);
     }
     if (this.promptArgument && this.name === "codex" && input.sessionId) {
-      providerSessionId = `daedalus-${input.sessionId}`;
-      bootstrapInput = [
-        `/rename ${providerSessionId}`,
-        ...(input.prompt ? [input.prompt] : []),
-      ];
+      // Codex does not currently accept a caller-provided session UUID. Its
+      // persisted UUID is recovered after startup, so no synthetic /rename
+      // command is left visible in the fresh prompt.
+      bootstrapInput = input.prompt ? [input.prompt] : undefined;
     } else if (input.prompt) {
       if (this.promptArgument) args.push(input.prompt);
       else env.DAEDALUS_TASK_PROMPT = input.prompt;

@@ -3,6 +3,13 @@ import { describe, expect, test } from "vitest";
 import type { DesktopSnapshotDto } from "@daedalus/protocol";
 import { App, MarkdownPreview } from "./App";
 import type { DesktopClient } from "./client-types";
+import {
+  clampPanelSize,
+  launchMatchesSession,
+  PANEL_RAIL_WIDTH,
+  TERMINAL_FONT_SIZE,
+  TERMINAL_PANEL_MIN_HEIGHT,
+} from "./WorkspaceApp";
 
 const client = {
   request: {},
@@ -30,6 +37,49 @@ const base: DesktopSnapshotDto = {
 };
 
 describe("desktop application shell", () => {
+  test("keeps resized panels as narrow visible rails", () => {
+    expect(clampPanelSize(0, 480)).toBe(PANEL_RAIL_WIDTH);
+    expect(clampPanelSize(214.4, 480)).toBe(214);
+    expect(clampPanelSize(900, 480)).toBe(480);
+    expect(TERMINAL_PANEL_MIN_HEIGHT).toBeGreaterThan(PANEL_RAIL_WIDTH);
+    expect(TERMINAL_FONT_SIZE).toBe(13);
+  });
+
+  test("reconciles a starting card with its server-created session", () => {
+    expect(
+      launchMatchesSession(
+        {
+          key: "optimistic",
+          workspaceId: "w1",
+          taskId: "t1",
+          name: "Ship desktop",
+          tool: "codex",
+          startedAt: "2026-09-14T08:00:00.000Z",
+          status: "starting",
+        },
+        {
+          id: "server-session",
+          workspaceId: "w1",
+          taskId: "t1",
+          name: "Ship desktop",
+          provider: "codex",
+          kind: "agent",
+          tmuxSession: "daedalus_server_session",
+          command: "codex",
+          args: [],
+          workingDirectory: "/tmp/demo",
+          status: "starting",
+          exitCode: null,
+          startedAt: "2026-09-14T08:00:01.000Z",
+          endedAt: null,
+          providerSessionId: null,
+          archivedAt: null,
+          resumeCount: 0,
+        },
+      ),
+    ).toBe(true);
+  });
+
   test("renders Board, Sessions, and Workspace as complete workspace modes", () => {
     const html = renderToStaticMarkup(
       <App injectedClient={client} initialSnapshot={base} />,
@@ -407,6 +457,7 @@ describe("desktop application shell", () => {
     expect(html).toContain("running · 222222");
     expect(html).toContain("Terminal for Terminal task 11111111");
     expect(html).toContain("session-navigator");
+    expect(html).toContain('aria-label="Resize sessions panel"');
     expect(html).not.toContain("board-detail-column");
   });
 
@@ -579,6 +630,8 @@ describe("desktop application shell", () => {
     expect(html).toContain('aria-label="Demo, /tmp/demo"');
     expect(html).toContain("<small>/tmp/demo</small>");
     expect(html).toContain('aria-label="Resize integrated terminal"');
+    expect(html).toContain('aria-label="Resize workspace panel"');
+    expect(html).toContain('aria-label="Resize task inspector panel"');
     expect(html).toContain("Terminal for Demo 55555555");
     expect(html).toContain('aria-label="New terminal in Daedalus home"');
     expect(html).toContain('title="New terminal in /tmp/daedalus-test"');

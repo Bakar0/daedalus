@@ -1,4 +1,4 @@
-import type { DesktopRpcSchema } from "@daedalus/protocol";
+import type { DesktopCommand, DesktopRpcSchema } from "@daedalus/protocol";
 
 type Requests = DesktopRpcSchema["bun"]["requests"];
 
@@ -11,4 +11,6 @@ export type DesktopRequests = {
 export interface DesktopClient {
   request: DesktopRequests;
   subscribe(listener: () => void): () => void;
+  subscribeCommands(listener: (command: DesktopCommand) => void): () => void;
+  subscribeWindowResize(listener: () => void): () => void;
 }

@@ -39,6 +39,20 @@ export interface TmuxTerminalTarget {
   session: string;
 }
 
+export const tmuxPtyEnvironment = (
+  environment: NodeJS.ProcessEnv = process.env,
+) => ({
+  ...environment,
+  // Finder and Spotlight launch GUI apps without locale variables. tmux uses
+  // the client locale when calculating Unicode cell widths, so an unset or
+  // non-UTF-8 locale corrupts wide glyphs and leaves the cursor out of place.
+  LANG: "C.UTF-8",
+  LC_CTYPE: "C.UTF-8",
+  LC_ALL: "C.UTF-8",
+  TERM: "xterm-256color",
+  COLORTERM: "truecolor",
+});
+
 export class CommandTmuxClient implements TmuxClient {
   constructor(
     readonly socketName = "daedalus",
@@ -201,6 +215,7 @@ export function boundTerminalCapture(
 }
 
 const terminalArgs = (socketName: string, ...args: string[]) => [
+  "-u",
   "-L",
   socketName,
   ...args,
@@ -270,167 +285,71 @@ export async function captureTmuxPane(
   return boundTerminalCapture(captured.stdout);
 }
 
-export async function resizeTmuxPane(
-  target: TmuxTerminalTarget,
-  cols: number,
-  rows: number,
-  executable = resolveTmuxExecutable(),
-): Promise<void> {
-  const safeCols = Math.max(20, Math.min(500, Math.floor(cols)));
-  const safeRows = Math.max(5, Math.min(300, Math.floor(rows)));
-  const resized = await runCommand(
-    executable,
-    terminalArgs(
-      target.socketName,
-      "resize-window",
-      "-x",
-      String(safeCols),
-      "-y",
-      String(safeRows),
-      "-t",
-      target.session,
-    ),
-  );
-  if (resized.exitCode !== 0)
-    throw new Error(resized.stderr || "tmux resize failed");
-}
-
-export async function sendSpikeInput(data: string): Promise<void> {
-  return sendTmuxInput(
-    { socketName: SPIKE_SOCKET, session: SPIKE_SESSION },
-    data,
-  );
-}
-
-export async function sendTmuxInput(
-  target: TmuxTerminalTarget,
-  data: string,
-  executable = resolveTmuxExecutable(),
-): Promise<void> {
-  const chunks = data.split("\r");
-  for (let index = 0; index < chunks.length; index += 1) {
-    const chunk = chunks[index] ?? "";
-    if (chunk) {
-      const literal = await runCommand(
-        executable,
-        terminalArgs(
-          target.socketName,
-          "send-keys",
-          "-t",
-          target.session,
-          "-l",
-          "--",
-          chunk,
-        ),
-      );
-      if (literal.exitCode !== 0)
-        throw new Error(literal.stderr || "tmux input failed");
-    }
-    if (index < chunks.length - 1) {
-      const enter = await runCommand(
-        executable,
-        terminalArgs(
-          target.socketName,
-          "send-keys",
-          "-t",
-          target.session,
-          "Enter",
-        ),
-      );
-      if (enter.exitCode !== 0)
-        throw new Error(enter.stderr || "tmux Enter input failed");
-    }
-  }
-}
-
-export function decodeControlOutput(payload: string): Uint8Array {
-  const decoded = payload.replace(/\\([0-7]{3})/g, (_match, octal: string) =>
-    String.fromCharCode(Number.parseInt(octal, 8)),
-  );
-  return new TextEncoder().encode(decoded);
-}
-
-export class TmuxControlBridge {
-  readonly process: Bun.Subprocess<"pipe", "pipe", "pipe">;
-  #onOutput: (output: Uint8Array) => void;
-  #buffer = "";
-  #resizeTimer: ReturnType<typeof setTimeout> | undefined;
-  #pendingSize: { cols: number; rows: number } | undefined;
-  #lastSize: { cols: number; rows: number } | undefined;
+/**
+ * Attaches to a durable tmux session through a real pseudo-terminal.
+ *
+ * tmux then owns terminal emulation, cursor placement, keyboard decoding, and
+ * redraws. This avoids reconstructing a screen from capture-pane and replaying
+ * a second control-mode stream on top of it.
+ */
+export class TmuxPtyBridge {
+  readonly process: Bun.Subprocess;
+  #closed = false;
 
   constructor(
     onOutput: (output: Uint8Array) => void,
-    target: TmuxTerminalTarget = {
-      socketName: SPIKE_SOCKET,
-      session: SPIKE_SESSION,
-    },
+    target: TmuxTerminalTarget,
+    initialSize: { cols: number; rows: number } = { cols: 80, rows: 24 },
     executable = resolveTmuxExecutable(),
   ) {
-    this.#onOutput = onOutput;
+    const cols = Math.max(20, Math.min(500, Math.floor(initialSize.cols)));
+    const rows = Math.max(5, Math.min(300, Math.floor(initialSize.rows)));
     this.process = Bun.spawn(
       [
         executable,
         ...terminalArgs(
           target.socketName,
-          "-C",
+          "set-option",
+          "-t",
+          target.session,
+          "status",
+          "off",
+          ";",
           "attach-session",
           "-t",
           target.session,
         ),
       ],
-      { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
+      {
+        env: tmuxPtyEnvironment(),
+        terminal: {
+          cols,
+          rows,
+          data: (_terminal, data) => onOutput(data),
+        },
+      },
     );
   }
 
   async start(): Promise<void> {
-    const reader = this.process.stdout.getReader();
-    const decoder = new TextDecoder();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      this.#buffer += decoder.decode(value, { stream: true });
-      let newline = this.#buffer.indexOf("\n");
-      while (newline >= 0) {
-        const line = this.#buffer.slice(0, newline).replace(/\r$/, "");
-        this.#buffer = this.#buffer.slice(newline + 1);
-        if (line.startsWith("%output ")) {
-          const separator = line.indexOf(" ", 8);
-          if (separator >= 0)
-            this.#onOutput(decodeControlOutput(line.slice(separator + 1)));
-        }
-        newline = this.#buffer.indexOf("\n");
-      }
-    }
+    await this.process.exited;
+  }
+
+  write(data: string): void {
+    if (!this.#closed) this.process.terminal?.write(data);
   }
 
   resize(cols: number, rows: number): void {
+    if (this.#closed) return;
     const safeCols = Math.max(20, Math.min(500, Math.floor(cols)));
     const safeRows = Math.max(5, Math.min(300, Math.floor(rows)));
-    if (this.#lastSize?.cols === safeCols && this.#lastSize.rows === safeRows)
-      return;
-    this.#pendingSize = { cols: safeCols, rows: safeRows };
-    if (!this.#lastSize) {
-      this.applyPendingSize();
-      return;
-    }
-    if (this.#resizeTimer) clearTimeout(this.#resizeTimer);
-    this.#resizeTimer = setTimeout(() => {
-      this.#resizeTimer = undefined;
-      this.applyPendingSize();
-    }, 100);
+    this.process.terminal?.resize(safeCols, safeRows);
   }
 
   close(): void {
-    if (this.#resizeTimer) clearTimeout(this.#resizeTimer);
-    this.process.stdin.end();
-  }
-
-  private applyPendingSize(): void {
-    const size = this.#pendingSize;
-    this.#pendingSize = undefined;
-    if (!size) return;
-    this.#lastSize = size;
-    this.process.stdin.write(`refresh-client -C ${size.cols},${size.rows}\n`);
-    this.process.stdin.flush();
+    if (this.#closed) return;
+    this.#closed = true;
+    this.process.terminal?.close();
+    this.process.kill();
   }
 }

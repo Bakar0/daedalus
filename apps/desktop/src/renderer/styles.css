@@ -63,7 +63,7 @@ button:disabled {
 .app.terminal-panel-open {
   grid-template-rows:
     58px auto minmax(220px, 1fr)
-    clamp(180px, var(--terminal-panel-height, 38vh), calc(100vh - 280px));
+    clamp(120px, var(--terminal-panel-height, 38vh), calc(100vh - 280px));
 }
 .app[data-theme="light"] {
   --panel: rgb(243 246 252 / 0.9);
@@ -992,7 +992,9 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   width: 100%;
 }
 .agent-terminal-shell {
-  background: #060916;
+  /* Match xterm's theme background so no contrasting square shows through
+     inside the anti-aliased rounded bottom corners. */
+  background: #11151d;
   border: 1px solid var(--line);
   border-radius: 11px;
   display: flex;
@@ -1252,7 +1254,7 @@ dd {
   float: right;
 }
 .terminal {
-  background: #060916;
+  background: #11151d;
   border-radius: 9px;
   height: 210px;
   margin-top: 9px;
@@ -1281,6 +1283,35 @@ dd {
   display: grid;
   grid-row: 3;
   min-height: 0;
+}
+
+.column-resize-handle {
+  cursor: col-resize;
+  min-height: 0;
+  outline: none;
+  position: relative;
+  touch-action: none;
+  z-index: 5;
+}
+.column-resize-handle::after {
+  background: transparent;
+  bottom: 0;
+  content: "";
+  left: 2px;
+  position: absolute;
+  top: 0;
+  transition: background 120ms ease;
+  width: 2px;
+}
+.column-resize-handle:hover::after,
+.column-resize-handle:focus-visible::after,
+.column-resize-handle.dragging::after {
+  background: var(--accent);
+}
+.resizing-column-panel,
+.resizing-column-panel * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 
 .integrated-terminal-panel {
@@ -1464,16 +1495,36 @@ dd {
   margin: 0;
 }
 .workspace-shell.mode-board {
-  grid-template-columns: 210px minmax(540px, 1.55fr) minmax(300px, 0.72fr);
+  grid-template-columns:
+    var(--workspace-panel-width) 6px minmax(320px, 1fr) 6px
+    var(--board-detail-panel-width);
 }
 .workspace-shell.mode-sessions {
-  grid-template-columns: 210px minmax(260px, 0.48fr) minmax(560px, 1.72fr);
+  grid-template-columns:
+    var(--workspace-panel-width) 6px var(--sessions-panel-width) 6px
+    minmax(320px, 1fr);
 }
 .workspace-shell.mode-workspace {
-  grid-template-columns: 210px minmax(0, 1fr);
+  grid-template-columns: var(--workspace-panel-width) 6px minmax(0, 1fr);
+}
+.workspace-column {
+  grid-column: 1;
+}
+.workspace-panel-resize-handle {
+  grid-column: 2;
+}
+.workspace-main {
+  grid-column: 3;
+}
+.secondary-panel-resize-handle {
+  grid-column: 4;
+}
+.board-detail-column,
+.terminal-column {
+  grid-column: 5;
 }
 .workspace-content-column {
-  grid-column: 2 / -1;
+  grid-column: 3 / -1;
 }
 .workspace-main,
 .board-detail-column,
@@ -2601,6 +2652,96 @@ dd {
 .terminal-empty strong {
   color: var(--secondary);
 }
+.panel-heading-actions {
+  align-items: center;
+  display: flex;
+  gap: 5px;
+}
+.panel-collapse-button {
+  align-items: center;
+  display: flex;
+  flex: 0 0 28px;
+  font-size: 18px !important;
+  height: 28px;
+  justify-content: center;
+  padding: 0 !important;
+  width: 28px;
+}
+.workspace-column.panel-compact {
+  padding: 14px 7px 10px;
+}
+.workspace-column.panel-compact .section-heading > div:first-child,
+.workspace-column.panel-compact .create-button,
+.workspace-column.panel-compact .workspace-card-content,
+.workspace-column.panel-compact .workspace-card-actions,
+.workspace-column.panel-compact .workspace-archive-list {
+  display: none;
+}
+.workspace-column.panel-compact .section-heading {
+  justify-content: center;
+  margin-bottom: 10px;
+}
+.workspace-column.panel-compact .workspace-card {
+  min-height: 46px;
+}
+.workspace-column.panel-compact .workspace-item {
+  justify-content: center;
+  padding: 7px !important;
+}
+.workspace-column.panel-compact .workspace-icon {
+  flex: 0 0 auto;
+}
+.session-navigator.panel-compact {
+  padding-left: 7px;
+  padding-right: 7px;
+}
+.session-navigator.panel-compact .workspace-main-header,
+.session-navigator.panel-compact .sessions-toolbar > div:first-child,
+.session-navigator.panel-compact .create-button,
+.session-navigator.panel-compact .session-card-main > span:last-child,
+.session-navigator.panel-compact .session-card-action,
+.session-navigator.panel-compact .session-archive-list {
+  display: none;
+}
+.session-navigator.panel-compact .workspace-main-header,
+.session-navigator.panel-compact .sessions-toolbar {
+  justify-content: center;
+}
+.session-navigator.panel-compact .session-grid {
+  grid-template-columns: 1fr;
+  padding-left: 0;
+  padding-right: 0;
+}
+.session-navigator.panel-compact .session-card-main {
+  justify-content: center;
+  padding: 9px 5px !important;
+}
+.board-detail-column.panel-compact {
+  align-items: center;
+  padding: 18px 7px;
+}
+.board-detail-column.panel-compact > :not(.section-heading) {
+  display: none;
+}
+.board-detail-column.panel-compact .section-heading {
+  justify-content: center;
+  width: 100%;
+}
+.board-detail-column.panel-compact .section-heading > div:first-child,
+.board-detail-column.panel-compact
+  .panel-heading-actions
+  > :not(.panel-collapse-button) {
+  display: none;
+}
+.board-detail-column.panel-compact::before {
+  color: var(--muted);
+  content: "Inspector";
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  writing-mode: vertical-rl;
+}
 .modal-wide {
   max-height: calc(100% - 64px);
   max-width: 700px;
@@ -2609,22 +2750,13 @@ dd {
 .brief-modal-toolbar {
   margin-top: 18px;
 }
-@media (max-width: 1180px) {
-  .workspace-shell.mode-board {
-    grid-template-columns: 190px minmax(470px, 1.4fr) minmax(290px, 0.72fr);
-  }
-  .workspace-shell.mode-sessions {
-    grid-template-columns: 190px minmax(250px, 0.5fr) minmax(500px, 1.6fr);
-  }
-  .workspace-shell.mode-workspace {
-    grid-template-columns: 190px minmax(0, 1fr);
-  }
-}
 @media (max-width: 820px) {
   .workspace-shell.mode-board,
   .workspace-shell.mode-sessions,
   .workspace-shell.mode-workspace {
-    grid-template-columns: 180px minmax(400px, 1fr);
+    grid-template-columns:
+      min(var(--workspace-panel-width), 180px) 6px
+      minmax(400px, 1fr);
   }
   .workspace-content-grid {
     grid-template-columns: 1fr;
@@ -2633,7 +2765,8 @@ dd {
     grid-column: auto;
   }
   .board-detail-column,
-  .terminal-column {
+  .terminal-column,
+  .secondary-panel-resize-handle {
     display: none;
   }
 }

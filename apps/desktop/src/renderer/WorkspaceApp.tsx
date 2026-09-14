@@ -1,4 +1,6 @@
-import { init, Terminal } from "ghostty-web";
+import { FitAddon } from "@xterm/addon-fit";
+import { Terminal } from "@xterm/xterm";
+import "@xterm/xterm/css/xterm.css";
 import { basicSetup, EditorView } from "codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -7,6 +9,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
   AgentSessionDto,
+  DesktopCommand,
   DesktopSnapshotDto,
   IntegratedTerminalDto,
   RepositoryDiscoveryDto,
@@ -29,6 +32,21 @@ const STATUSES: TaskStatus[] = [
   "cancelled",
 ];
 
+export const PANEL_RAIL_WIDTH = 68;
+export const TERMINAL_PANEL_MIN_HEIGHT = 120;
+export const TERMINAL_FONT_SIZE = 13;
+const PANEL_COMPACT_THRESHOLD = 132;
+const PANEL_STEP = 24;
+
+export const clampPanelSize = (size: number, maximum: number) =>
+  Math.min(Math.max(PANEL_RAIL_WIDTH, Math.round(size)), maximum);
+
+const storedPanelSize = (key: string, fallback: number) => {
+  if (typeof window === "undefined") return fallback;
+  const stored = Number(window.localStorage.getItem(key));
+  return Number.isFinite(stored) && stored > 0 ? stored : fallback;
+};
+
 const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
@@ -42,6 +60,20 @@ export interface SessionLaunchState {
   startedAt: string;
   status: "starting" | "error";
   error?: string;
+}
+
+export function launchMatchesSession(
+  launch: SessionLaunchState,
+  session: AgentSessionDto,
+): boolean {
+  if (launch.status !== "starting") return false;
+  if (launch.workspaceId !== session.workspaceId) return false;
+  if (launch.tool !== sessionTool(session)) return false;
+  if ((launch.taskId ?? null) !== session.taskId) return false;
+  if (launch.name.trim() && launch.name.trim() !== sessionName(session))
+    return false;
+  const elapsed = Date.parse(session.startedAt) - Date.parse(launch.startedAt);
+  return Number.isFinite(elapsed) && elapsed >= -2_000 && elapsed <= 120_000;
 }
 
 const repositoryRemoteIdentity = (value: string) =>
@@ -150,6 +182,38 @@ function CreateButton({
         <path d="M8 3v10M3 8h10" />
       </svg>
       <span>New</span>
+    </button>
+  );
+}
+
+function PanelCollapseButton({
+  collapsed,
+  label,
+  onClick,
+  side,
+}: {
+  collapsed: boolean;
+  label: string;
+  onClick: () => void;
+  side: "left" | "right";
+}) {
+  const direction = collapsed
+    ? side === "left"
+      ? "›"
+      : "‹"
+    : side === "left"
+      ? "‹"
+      : "›";
+  const action = collapsed ? "Expand" : "Collapse";
+  return (
+    <button
+      aria-label={`${action} ${label} panel`}
+      className="quiet panel-collapse-button"
+      onClick={onClick}
+      title={`${action} ${label}`}
+      type="button"
+    >
+      {direction}
     </button>
   );
 }
@@ -390,18 +454,22 @@ function Modal({
 }
 
 function TerminalSurface({
+  fitRevision,
   id,
   label,
   status,
   target,
 }: {
+  fitRevision: number;
   id: string;
   label: string;
   status: AgentSessionDto["status"];
   target: "agent" | "integrated";
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const fitRef = useRef<() => void>(() => undefined);
   const [connection, setConnection] = useState("connecting");
+  useEffect(() => fitRef.current(), [fitRevision]);
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -419,6 +487,7 @@ function TerminalSurface({
     let layoutFrame: number | undefined;
     let layoutTimer: ReturnType<typeof setTimeout> | undefined;
     let resizeObserver: ResizeObserver | undefined;
+    let windowResizeListener: (() => void) | undefined;
     let lastSentSize: string | undefined;
     const pending: Uint8Array[] = [];
     let pendingBytes = 0;
@@ -445,12 +514,13 @@ function TerminalSurface({
     };
 
     void (async () => {
-      await init();
       if (disposed) return;
       terminal = new Terminal({
         cursorBlink: true,
-        fontFamily: '"MesloLGS NF", SFMono-Regular, Menlo, monospace',
-        fontSize: 12,
+        // Shell prompts commonly use Nerd Font private-use glyphs. Prefer the
+        // user's installed Nerd Font while retaining native monospace fallbacks.
+        fontFamily: '"MesloLGS NF", "SF Mono", Menlo, monospace',
+        fontSize: TERMINAL_FONT_SIZE,
         scrollback: 10_000,
         theme: {
           background: "#11151d",
@@ -459,6 +529,8 @@ function TerminalSurface({
           selectionBackground: "#38546b",
         },
       });
+      const fitAddon = new FitAddon();
+      terminal.loadAddon(fitAddon);
       terminal.open(container);
       const sendSize = () => {
         const cols = terminal?.cols ?? 0;
@@ -484,44 +556,41 @@ function TerminalSurface({
         layoutFrame = undefined;
         const currentTerminal = terminal;
         if (disposed || !currentTerminal) return;
-        const canvas = container.querySelector("canvas");
-        const canvasBounds = canvas?.getBoundingClientRect();
-        const styles = window.getComputedStyle(container);
-        const cellWidth = canvasBounds?.width
-          ? canvasBounds.width / currentTerminal.cols
-          : 0;
-        const cellHeight = canvasBounds?.height
-          ? canvasBounds.height / currentTerminal.rows
-          : 0;
-        const availableWidth =
-          container.clientWidth -
-          (Number.parseFloat(styles.paddingLeft) || 0) -
-          (Number.parseFloat(styles.paddingRight) || 0);
-        const availableHeight =
-          container.clientHeight -
-          (Number.parseFloat(styles.paddingTop) || 0) -
-          (Number.parseFloat(styles.paddingBottom) || 0);
-        const dimensions =
-          cellWidth > 0 && cellHeight > 0
-            ? {
-                cols: Math.floor(availableWidth / cellWidth),
-                rows: Math.floor(availableHeight / cellHeight),
-              }
-            : undefined;
-        // tmux clamps clients to 20x5. Fitting Ghostty below that while a tab
+        const dimensions = fitAddon.proposeDimensions();
+        // tmux clamps clients to 20x5. Fitting xterm.js below that while a tab
         // is hidden or the window is minimized puts the two terminal grids out
         // of sync and leaves stale glyphs/cursors behind when it is restored.
         if (!dimensions || dimensions.cols < 20 || dimensions.rows < 5) return;
-        currentTerminal.resize(dimensions.cols, dimensions.rows);
+        if (
+          currentTerminal.cols !== dimensions.cols ||
+          currentTerminal.rows !== dimensions.rows
+        ) {
+          // FitAddon clears xterm's render service before resizing. That clear
+          // is important in WKWebView, where the old canvas can otherwise stay
+          // visible until this terminal is unmounted and selected again.
+          fitAddon.fit();
+        }
+        currentTerminal.refresh(0, currentTerminal.rows - 1);
+        container.dataset.terminalCols = String(currentTerminal.cols);
+        container.dataset.terminalRows = String(currentTerminal.rows);
         sendSize();
       };
       const scheduleFit = () => {
         if (layoutFrame === undefined)
           layoutFrame = requestAnimationFrame(fitAndSync);
       };
-      resizeObserver = new ResizeObserver(scheduleFit);
+      const scheduleSettledFit = () => {
+        scheduleFit();
+        if (layoutTimer) clearTimeout(layoutTimer);
+        layoutTimer = setTimeout(scheduleFit, 180);
+      };
+      fitRef.current = scheduleSettledFit;
+      windowResizeListener = scheduleSettledFit;
+      resizeObserver = new ResizeObserver(scheduleSettledFit);
       resizeObserver.observe(container);
-      scheduleFit();
+      window.addEventListener("resize", scheduleSettledFit);
+      window.visualViewport?.addEventListener("resize", scheduleSettledFit);
+      scheduleSettledFit();
       const endpoint = new URLSearchParams(window.location.search).get(
         "terminal",
       );
@@ -544,9 +613,7 @@ function TerminalSurface({
           reconnectAttempts = 0;
           lastSentSize = undefined;
           setConnection("connected");
-          scheduleFit();
-          if (layoutTimer) clearTimeout(layoutTimer);
-          layoutTimer = setTimeout(scheduleFit, 250);
+          scheduleSettledFit();
         };
         socket.onclose = () => {
           if (disposed || ended) return;
@@ -593,11 +660,19 @@ function TerminalSurface({
     })();
     return () => {
       disposed = true;
+      fitRef.current = () => undefined;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (frame !== undefined) cancelAnimationFrame(frame);
       if (layoutFrame !== undefined) cancelAnimationFrame(layoutFrame);
       if (layoutTimer) clearTimeout(layoutTimer);
       resizeObserver?.disconnect();
+      if (windowResizeListener) {
+        window.removeEventListener("resize", windowResizeListener);
+        window.visualViewport?.removeEventListener(
+          "resize",
+          windowResizeListener,
+        );
+      }
       socket?.close();
       terminal?.dispose();
     };
@@ -623,9 +698,13 @@ function TerminalSurface({
 
 function IntegratedTerminalSurface({
   active,
+  fitRevision,
+  mountRevision,
   terminal,
 }: {
   active: boolean;
+  fitRevision: number;
+  mountRevision: number;
   terminal: IntegratedTerminalDto;
 }) {
   const [activated, setActivated] = useState(active);
@@ -641,7 +720,9 @@ function IntegratedTerminalSurface({
     >
       {activated && (
         <TerminalSurface
+          fitRevision={fitRevision}
           id={terminal.id}
+          key={`${terminal.id}:${mountRevision}`}
           label={terminal.name}
           status={terminal.status}
           target="integrated"
@@ -680,6 +761,11 @@ export function WorkspaceApp({
     throw new Error("The desktop RPC client was not provided");
   const client = clientRef.current;
   const [snapshot, setSnapshot] = useState(initialSnapshot);
+  const [terminalFitRevision, setTerminalFitRevision] = useState(0);
+  const [terminalMountRevision, setTerminalMountRevision] = useState(0);
+  const terminalLayoutTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
   const [workspaceId, setWorkspaceId] = useState(
     initialSnapshot?.workspaces.find((item) => !item.archivedAt)?.id,
   );
@@ -798,13 +884,48 @@ export function WorkspaceApp({
   const [terminalPanelHeight, setTerminalPanelHeight] = useState(() =>
     typeof window === "undefined" ? 300 : Math.round(window.innerHeight * 0.38),
   );
+  const [workspacePanelWidth, setWorkspacePanelWidth] = useState(() =>
+    storedPanelSize("daedalus.panel.workspace-width", 210),
+  );
+  const [boardDetailPanelWidth, setBoardDetailPanelWidth] = useState(() =>
+    storedPanelSize("daedalus.panel.board-detail-width", 340),
+  );
+  const [sessionsPanelWidth, setSessionsPanelWidth] = useState(() =>
+    storedPanelSize("daedalus.panel.sessions-width", 320),
+  );
+  const workspaceExpandedWidth = useRef(
+    workspacePanelWidth >= PANEL_COMPACT_THRESHOLD ? workspacePanelWidth : 210,
+  );
+  const boardDetailExpandedWidth = useRef(
+    boardDetailPanelWidth >= PANEL_COMPACT_THRESHOLD
+      ? boardDetailPanelWidth
+      : 340,
+  );
+  const sessionsExpandedWidth = useRef(
+    sessionsPanelWidth >= PANEL_COMPACT_THRESHOLD ? sessionsPanelWidth : 320,
+  );
   const [activeTerminalId, setActiveTerminalId] = useState(
     initialActiveTerminalId,
   );
 
+  const terminalLayoutChanged = useCallback(() => {
+    // Every layout mutation shares the same terminal repair path: update the
+    // live grid immediately, then recreate only xterm after layout settles.
+    setTerminalFitRevision((revision) => revision + 1);
+    if (terminalLayoutTimer.current)
+      clearTimeout(terminalLayoutTimer.current);
+    terminalLayoutTimer.current = setTimeout(
+      () => setTerminalMountRevision((revision) => revision + 1),
+      120,
+    );
+  }, []);
+
   const clampTerminalPanelHeight = useCallback(
     (height: number) =>
-      Math.min(Math.max(180, height), Math.max(180, window.innerHeight - 280)),
+      Math.min(
+        Math.max(TERMINAL_PANEL_MIN_HEIGHT, height),
+        Math.max(TERMINAL_PANEL_MIN_HEIGHT, window.innerHeight - 280),
+      ),
     [],
   );
   const startTerminalPanelResize = useCallback(
@@ -832,6 +953,95 @@ export function WorkspaceApp({
     },
     [clampTerminalPanelHeight],
   );
+
+  const startColumnResize = useCallback(
+    (
+      event: ReactPointerEvent<HTMLDivElement>,
+      panel: "workspace" | "secondary",
+    ) => {
+      event.preventDefault();
+      const shell = event.currentTarget.closest(".workspace-shell");
+      if (!(shell instanceof HTMLElement)) return;
+      const startX = event.clientX;
+      const workspaceWidth =
+        shell.querySelector<HTMLElement>(".workspace-column")?.offsetWidth ??
+        workspacePanelWidth;
+      const secondaryElement =
+        view === "board"
+          ? shell.querySelector<HTMLElement>(".board-detail-column")
+          : shell.querySelector<HTMLElement>(".session-navigator");
+      const secondaryWidth =
+        secondaryElement?.offsetWidth ??
+        (view === "board" ? boardDetailPanelWidth : sessionsPanelWidth);
+      const mainMinimum = 320;
+      const handlesWidth = view === "workspace" ? 6 : 12;
+      const workspaceMaximum = Math.max(
+        PANEL_RAIL_WIDTH,
+        shell.clientWidth -
+          (view === "workspace" ? 0 : secondaryWidth) -
+          mainMinimum -
+          handlesWidth,
+      );
+      const secondaryMaximum = Math.max(
+        PANEL_RAIL_WIDTH,
+        shell.clientWidth - workspaceWidth - mainMinimum - handlesWidth,
+      );
+
+      const handle = event.currentTarget;
+      handle.classList.add("dragging");
+      document.body.classList.add("resizing-column-panel");
+      const move = (moveEvent: PointerEvent) => {
+        const movement = moveEvent.clientX - startX;
+        if (panel === "workspace")
+          setWorkspacePanelWidth(
+            clampPanelSize(workspaceWidth + movement, workspaceMaximum),
+          );
+        else if (view === "board")
+          setBoardDetailPanelWidth(
+            clampPanelSize(secondaryWidth - movement, secondaryMaximum),
+          );
+        else
+          setSessionsPanelWidth(
+            clampPanelSize(secondaryWidth + movement, secondaryMaximum),
+          );
+      };
+      const stop = () => {
+        handle.classList.remove("dragging");
+        document.body.classList.remove("resizing-column-panel");
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", stop);
+        window.removeEventListener("pointercancel", stop);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", stop);
+      window.addEventListener("pointercancel", stop);
+    },
+    [boardDetailPanelWidth, sessionsPanelWidth, view, workspacePanelWidth],
+  );
+
+  const toggleWorkspacePanel = useCallback(() => {
+    setWorkspacePanelWidth((width) => {
+      if (width < PANEL_COMPACT_THRESHOLD)
+        return workspaceExpandedWidth.current;
+      workspaceExpandedWidth.current = width;
+      return PANEL_RAIL_WIDTH;
+    });
+  }, []);
+  const toggleBoardDetailPanel = useCallback(() => {
+    setBoardDetailPanelWidth((width) => {
+      if (width < PANEL_COMPACT_THRESHOLD)
+        return boardDetailExpandedWidth.current;
+      boardDetailExpandedWidth.current = width;
+      return PANEL_RAIL_WIDTH;
+    });
+  }, []);
+  const toggleSessionsPanel = useCallback(() => {
+    setSessionsPanelWidth((width) => {
+      if (width < PANEL_COMPACT_THRESHOLD) return sessionsExpandedWidth.current;
+      sessionsExpandedWidth.current = width;
+      return PANEL_RAIL_WIDTH;
+    });
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -865,6 +1075,41 @@ export function WorkspaceApp({
     void refresh();
     return client.subscribe(() => void refresh());
   }, [client, refresh]);
+  const runDesktopCommand = useCallback(
+    (command: DesktopCommand) => {
+      if (command === "view-board") setView("board");
+      else if (command === "view-sessions" && workspaceId) setView("sessions");
+      else if (command === "view-workspace" && workspaceId)
+        setView("workspace");
+      else if (command === "toggle-terminal")
+        setTerminalPanelOpen((current) => !current);
+    },
+    [workspaceId],
+  );
+  useEffect(
+    () => client.subscribeCommands(runDesktopCommand),
+    [client, runDesktopCommand],
+  );
+  useEffect(() => {
+    const unsubscribe = client.subscribeWindowResize(terminalLayoutChanged);
+    window.addEventListener("resize", terminalLayoutChanged);
+    return () => {
+      unsubscribe();
+      window.removeEventListener("resize", terminalLayoutChanged);
+      if (terminalLayoutTimer.current)
+        clearTimeout(terminalLayoutTimer.current);
+    };
+  }, [client, terminalLayoutChanged]);
+  useEffect(() => {
+    terminalLayoutChanged();
+  }, [
+    boardDetailPanelWidth,
+    sessionsPanelWidth,
+    terminalLayoutChanged,
+    terminalPanelHeight,
+    terminalPanelOpen,
+    workspacePanelWidth,
+  ]);
   useEffect(() => {
     if (view !== "workspace" || !workspaceId) return;
     let cancelled = false;
@@ -897,6 +1142,30 @@ export function WorkspaceApp({
     const stored = window.localStorage.getItem("daedalus.theme");
     if (stored === "dark" || stored === "light") setTheme(stored);
   }, []);
+  useEffect(() => {
+    if (workspacePanelWidth >= PANEL_COMPACT_THRESHOLD)
+      workspaceExpandedWidth.current = workspacePanelWidth;
+    window.localStorage.setItem(
+      "daedalus.panel.workspace-width",
+      String(workspacePanelWidth),
+    );
+  }, [workspacePanelWidth]);
+  useEffect(() => {
+    if (boardDetailPanelWidth >= PANEL_COMPACT_THRESHOLD)
+      boardDetailExpandedWidth.current = boardDetailPanelWidth;
+    window.localStorage.setItem(
+      "daedalus.panel.board-detail-width",
+      String(boardDetailPanelWidth),
+    );
+  }, [boardDetailPanelWidth]);
+  useEffect(() => {
+    if (sessionsPanelWidth >= PANEL_COMPACT_THRESHOLD)
+      sessionsExpandedWidth.current = sessionsPanelWidth;
+    window.localStorage.setItem(
+      "daedalus.panel.sessions-width",
+      String(sessionsPanelWidth),
+    );
+  }, [sessionsPanelWidth]);
   useEffect(() => {
     if (!snapshot || sessionType === "terminal") return;
     const selected = snapshot.settings.providers.find(
@@ -950,8 +1219,11 @@ export function WorkspaceApp({
   );
   const pendingSessionLaunches = workspaceSessionLaunches.filter(
     (launch) =>
-      !launch.sessionId ||
-      !sessions.some((session) => session.id === launch.sessionId),
+      !sessions.some(
+        (session) =>
+          session.id === launch.sessionId ||
+          launchMatchesSession(launch, session),
+      ),
   );
   const sessionStartupErrors = new Map(
     workspaceSessionLaunches.flatMap((launch) =>
@@ -1754,6 +2026,9 @@ export function WorkspaceApp({
       style={
         {
           "--terminal-panel-height": `${terminalPanelHeight}px`,
+          "--workspace-panel-width": `${workspacePanelWidth}px`,
+          "--board-detail-panel-width": `${boardDetailPanelWidth}px`,
+          "--sessions-panel-width": `${sessionsPanelWidth}px`,
         } as CSSProperties
       }
     >
@@ -1817,16 +2092,26 @@ export function WorkspaceApp({
       )}
 
       <div className={`workspace-shell mode-${view}`}>
-        <aside className="workspace-column">
+        <aside
+          className={`workspace-column ${workspacePanelWidth < PANEL_COMPACT_THRESHOLD ? "panel-compact" : ""}`}
+        >
           <div className="section-heading">
             <div>
               <span className="eyebrow">Projects</span>
               <h1>Workspaces</h1>
             </div>
-            <CreateButton
-              label="Create workspace"
-              onClick={() => setModal("workspace")}
-            />
+            <div className="panel-heading-actions">
+              <CreateButton
+                label="Create workspace"
+                onClick={() => setModal("workspace")}
+              />
+              <PanelCollapseButton
+                collapsed={workspacePanelWidth < PANEL_COMPACT_THRESHOLD}
+                label="workspace"
+                onClick={toggleWorkspacePanel}
+                side="left"
+              />
+            </div>
           </div>
           <nav aria-label="Workspaces" className="item-list">
             {!snapshot && !error && (
@@ -1962,8 +2247,31 @@ export function WorkspaceApp({
           )}
         </aside>
 
+        <div
+          aria-label="Resize workspace panel"
+          aria-orientation="vertical"
+          aria-valuemax={480}
+          aria-valuemin={PANEL_RAIL_WIDTH}
+          aria-valuenow={workspacePanelWidth}
+          className="column-resize-handle workspace-panel-resize-handle"
+          onDoubleClick={toggleWorkspacePanel}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            event.preventDefault();
+            setWorkspacePanelWidth((width) =>
+              clampPanelSize(
+                width + (event.key === "ArrowRight" ? PANEL_STEP : -PANEL_STEP),
+                480,
+              ),
+            );
+          }}
+          onPointerDown={(event) => startColumnResize(event, "workspace")}
+          role="separator"
+          tabIndex={0}
+        />
+
         <section
-          className={`workspace-main ${view === "board" ? "board-column" : view === "sessions" ? "session-navigator" : "workspace-content-column"}`}
+          className={`workspace-main ${view === "board" ? "board-column" : view === "sessions" ? `session-navigator ${sessionsPanelWidth < PANEL_COMPACT_THRESHOLD ? "panel-compact" : ""}` : "workspace-content-column"}`}
         >
           <div className="workspace-main-header">
             <div>
@@ -2437,11 +2745,19 @@ export function WorkspaceApp({
                     {sessions.length + pendingSessionLaunches.length}
                   </span>
                 </div>
-                <CreateButton
-                  disabled={!snapshot?.settings.tmuxAvailable}
-                  label="Create session"
-                  onClick={() => openSessionModal()}
-                />
+                <div className="panel-heading-actions">
+                  <CreateButton
+                    disabled={!snapshot?.settings.tmuxAvailable}
+                    label="Create session"
+                    onClick={() => openSessionModal()}
+                  />
+                  <PanelCollapseButton
+                    collapsed={sessionsPanelWidth < PANEL_COMPACT_THRESHOLD}
+                    label="sessions"
+                    onClick={toggleSessionsPanel}
+                    side="left"
+                  />
+                </div>
               </div>
               <div className="session-grid item-list">
                 {sessions.length === 0 &&
@@ -2570,21 +2886,65 @@ export function WorkspaceApp({
           )}
         </section>
 
+        {workspace && (view === "board" || view === "sessions") && (
+          <div
+            aria-label={`Resize ${view === "board" ? "task inspector" : "sessions"} panel`}
+            aria-orientation="vertical"
+            aria-valuemax={720}
+            aria-valuemin={PANEL_RAIL_WIDTH}
+            aria-valuenow={
+              view === "board" ? boardDetailPanelWidth : sessionsPanelWidth
+            }
+            className="column-resize-handle secondary-panel-resize-handle"
+            onDoubleClick={
+              view === "board" ? toggleBoardDetailPanel : toggleSessionsPanel
+            }
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowLeft" && event.key !== "ArrowRight")
+                return;
+              event.preventDefault();
+              const movement =
+                event.key === "ArrowRight" ? PANEL_STEP : -PANEL_STEP;
+              if (view === "board")
+                setBoardDetailPanelWidth((width) =>
+                  clampPanelSize(width - movement, 720),
+                );
+              else
+                setSessionsPanelWidth((width) =>
+                  clampPanelSize(width + movement, 720),
+                );
+            }}
+            onPointerDown={(event) => startColumnResize(event, "secondary")}
+            role="separator"
+            tabIndex={0}
+          />
+        )}
+
         {view === "board" && workspace && (
-          <aside className="board-detail-column">
+          <aside
+            className={`board-detail-column ${boardDetailPanelWidth < PANEL_COMPACT_THRESHOLD ? "panel-compact" : ""}`}
+          >
             <div className="section-heading">
               <div>
                 <span className="eyebrow">Inspector</span>
                 <h1>Task brief</h1>
               </div>
-              {selectedTask && (
-                <button
-                  className="quiet"
-                  onClick={() => setEditingTask((current) => !current)}
-                >
-                  {editingTask ? "Cancel" : "Edit"}
-                </button>
-              )}
+              <div className="panel-heading-actions">
+                {selectedTask && (
+                  <button
+                    className="quiet"
+                    onClick={() => setEditingTask((current) => !current)}
+                  >
+                    {editingTask ? "Cancel" : "Edit"}
+                  </button>
+                )}
+                <PanelCollapseButton
+                  collapsed={boardDetailPanelWidth < PANEL_COMPACT_THRESHOLD}
+                  label="task inspector"
+                  onClick={toggleBoardDetailPanel}
+                  side="right"
+                />
+              </div>
             </div>
             {taskInspector}
           </aside>
@@ -2605,8 +2965,9 @@ export function WorkspaceApp({
             </div>
             {activeSession ? (
               <TerminalSurface
+                fitRevision={terminalFitRevision}
                 id={activeSession.id}
-                key={activeSession.id}
+                key={`${activeSession.id}:${terminalMountRevision}`}
                 label={sessionName(activeSession)}
                 status={activeSession.status}
                 target="agent"
@@ -2634,9 +2995,9 @@ export function WorkspaceApp({
             aria-valuemax={
               typeof window === "undefined"
                 ? 720
-                : Math.max(180, window.innerHeight - 280)
+                : Math.max(TERMINAL_PANEL_MIN_HEIGHT, window.innerHeight - 280)
             }
-            aria-valuemin={180}
+            aria-valuemin={TERMINAL_PANEL_MIN_HEIGHT}
             aria-valuenow={terminalPanelHeight}
             className="integrated-terminal-resize-handle"
             onKeyDown={(event) => {
@@ -2697,7 +3058,9 @@ export function WorkspaceApp({
                       terminalPanelOpen &&
                       terminal.id === activeIntegratedTerminal.id
                     }
+                    fitRevision={terminalFitRevision}
                     key={terminal.id}
+                    mountRevision={terminalMountRevision}
                     terminal={terminal}
                   />
                 ))

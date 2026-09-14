@@ -6,7 +6,9 @@ import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
   buildTaskPrompt,
   createApplicationContext,
+  hasPersistedCodexSession,
   isMissingCodexConversationError,
+  recoverCodexSessionId,
 } from "../index";
 
 class FakeTmux implements TmuxClient {
@@ -50,6 +52,60 @@ class FakeTmux implements TmuxClient {
 }
 
 describe("AgentService", () => {
+  test("recovers Codex's persisted UUID without typing a rename command", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const startedAt = "2026-09-14T08:10:00.000Z";
+      const id = "8ceaa092-b66b-4dc9-8b5d-a2e7cd40ae7b";
+      const cwd = join(home, "worktree");
+      const directory = join(home, "codex", "sessions", "2026", "09", "14");
+      await mkdir(directory, { recursive: true });
+      await Bun.write(
+        join(directory, `rollout-2026-09-14T08-10-01-${id}.jsonl`),
+        `${JSON.stringify({
+          type: "session_meta",
+          payload: {
+            id,
+            timestamp: "2026-09-14T08:10:01.000Z",
+            cwd,
+          },
+        })}\n`,
+      );
+      await expect(
+        recoverCodexSessionId({
+          sessionsDirectory: join(home, "codex", "sessions"),
+          workingDirectory: cwd,
+          startedAt,
+        }),
+      ).resolves.toBe(id);
+    });
+  });
+
+  test("recovers Codex's UUID from its writer lock before the first user event", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const startedAt = new Date().toISOString();
+      const id = "8ceaa092-b66b-4dc9-8b5d-a2e7cd40ae7b";
+      const codexHome = join(home, "codex");
+      const locksDirectory = join(codexHome, "thread-writer-locks");
+      await mkdir(locksDirectory, { recursive: true });
+      await Bun.write(join(locksDirectory, `${id}.lock`), "");
+
+      await expect(
+        recoverCodexSessionId({
+          sessionsDirectory: join(codexHome, "sessions"),
+          workingDirectory: join(home, "worktree"),
+          startedAt,
+        }),
+      ).resolves.toBe(id);
+      await expect(
+        hasPersistedCodexSession({
+          sessionsDirectory: join(codexHome, "sessions"),
+          id,
+          startedAt,
+        }),
+      ).resolves.toBe(false);
+    });
+  });
+
   test("recognizes only Codex's missing-conversation archive result", () => {
     expect(
       isMissingCodexConversationError(
@@ -130,13 +186,13 @@ describe("AgentService", () => {
         DAEDALUS_HOME: home,
         DAEDALUS_SESSION_ID: agent.id,
       });
-      expect(tmux.sent[0]?.text).toBe(`/rename ${agent.providerSessionId}`);
-      expect(tmux.sent[1]?.text).toContain(
+      expect(agent.providerSessionId).toBeNull();
+      expect(tmux.sent[0]?.text).toContain(
         buildTaskPrompt(task.title, task.description),
       );
-      expect(tmux.sent[1]?.text).not.toContain("BRIEF.md");
+      expect(tmux.sent[0]?.text).not.toContain("BRIEF.md");
       await context.agents.send(agent.id, "hello; exit");
-      expect(tmux.sent[2]?.text).toBe("hello; exit");
+      expect(tmux.sent[1]?.text).toBe("hello; exit");
       await expect(
         context.workspaces.remove(workspace.id, { force: true }),
       ).rejects.toMatchObject({ code: "CONFLICT" });
@@ -294,6 +350,44 @@ describe("AgentService", () => {
         recoveredId,
       ]);
       expect(tmux.launches[1]?.args).toHaveLength(3);
+      context.close();
+    });
+  });
+
+  test("archives an empty Codex session and restores it as a fresh session", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const codexHome = join(home, "codex");
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { codex: { executable: process.execPath, args: ["run"] } },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home, CODEX_HOME: codexHome },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Empty" });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      const nativeId = "8ceaa092-b66b-4dc9-8b5d-a2e7cd40ae7b";
+      const locksDirectory = join(codexHome, "thread-writer-locks");
+      await mkdir(locksDirectory, { recursive: true });
+      await Bun.write(join(locksDirectory, `${nativeId}.lock`), "");
+
+      const archived = await context.agents.archive(session.id);
+      expect(archived.providerSessionId).toBe(nativeId);
+      expect(archived.archivedAt).not.toBeNull();
+      const restored = await context.agents.restore(session.id);
+      expect(restored).toMatchObject({
+        providerSessionId: null,
+        status: "running",
+        archivedAt: null,
+      });
+      expect(tmux.launches[1]?.args).toEqual(["run"]);
       context.close();
     });
   });

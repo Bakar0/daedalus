@@ -9,18 +9,17 @@ import {
 } from "electrobun/main";
 import { createApplicationContext } from "@daedalus/core";
 import {
-  captureTmuxPane,
   CommandTmuxClient,
   ensureDirectory,
   pathExists,
-  resizeTmuxPane,
-  sendTmuxInput,
-  TmuxControlBridge,
+  TmuxPtyBridge,
 } from "@daedalus/platform";
 import type {
+  DesktopCommand,
   DesktopRpcSchema,
   TerminalServerMessage,
 } from "@daedalus/protocol";
+import { isDesktopCommand } from "@daedalus/protocol";
 import { APPLICATION_MENU } from "./menu";
 import { createDesktopRequestHandlers, desktopDataFingerprint } from "./rpc";
 import { authorizeTerminalRequest, TerminalConnection } from "./terminal";
@@ -119,23 +118,11 @@ const server = Bun.serve<SocketData>({
           )
             ? "reconnected"
             : "live",
-          capture: () =>
-            captureTmuxPane(tmuxTarget, undefined, terminalTmux.executable),
-          prepareCapture: socket.data.initialSize
-            ? () =>
-                resizeTmuxPane(
-                  tmuxTarget,
-                  socket.data.initialSize!.cols,
-                  socket.data.initialSize!.rows,
-                  terminalTmux.executable,
-                )
-            : undefined,
-          sendInput: (data) =>
-            sendTmuxInput(tmuxTarget, data, terminalTmux.executable),
           createBridge: (onOutput) =>
-            new TmuxControlBridge(
+            new TmuxPtyBridge(
               onOutput,
               tmuxTarget,
+              socket.data.initialSize,
               terminalTmux.executable,
             ),
           onError: (error) =>
@@ -190,11 +177,26 @@ const rpc = BrowserView.defineRPC<DesktopRpcSchema>({
   },
 });
 
-new BrowserWindow({
+ApplicationMenu.on("application-menu-clicked", (rawEvent) => {
+  const event = rawEvent as { data?: { action?: unknown } };
+  const command = event.data?.action;
+  if (isDesktopCommand(command))
+    rpc.send.command({ command: command satisfies DesktopCommand });
+});
+
+const mainWindow = new BrowserWindow({
   title: "Daedalus",
   url: rendererUrl,
   rpc,
   frame: { width: 1380, height: 820, x: 80, y: 80 },
+});
+mainWindow.on("resize", (rawEvent) => {
+  const event = rawEvent as {
+    data?: { width?: unknown; height?: unknown };
+  };
+  const { width, height } = event.data ?? {};
+  if (typeof width === "number" && typeof height === "number")
+    rpc.send.windowResized({ width, height });
 });
 
 let checkingForExternalChanges = false;

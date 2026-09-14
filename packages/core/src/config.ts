@@ -14,6 +14,7 @@ export interface DaedalusConfig {
   databasePath: string;
   logsDirectory: string;
   repositoryRoot: string;
+  codexSessionsDirectory: string;
   claudeProjectsDirectory: string;
   workspaceInstructionFilesEnabled: boolean;
   agents: Record<string, AgentDefinition>;
@@ -60,6 +61,10 @@ export async function loadConfig(
     databasePath: join(home, "state.db"),
     logsDirectory,
     repositoryRoot,
+    codexSessionsDirectory: join(
+      resolve(expandHome(env.CODEX_HOME || join(homedir(), ".codex"))),
+      "sessions",
+    ),
     claudeProjectsDirectory: join(
       resolve(expandHome(env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"))),
       "projects",
