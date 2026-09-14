@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { mkdir, readFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readlink, unlink } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import {
   runCommand,
@@ -129,6 +129,26 @@ describe("WorkspaceContentService", () => {
       expect(
         await readFile(join(workspace.path, "CLAUDE.md"), "utf8"),
       ).toContain("@AGENTS.md");
+      expect(
+        await readFile(
+          join(workspace.path, ".agents/skills/daedalus-control/SKILL.md"),
+          "utf8",
+        ),
+      ).toContain("name: daedalus-control");
+      expect(
+        await readFile(
+          join(workspace.path, ".claude/skills/daedalus-control/SKILL.md"),
+          "utf8",
+        ),
+      ).toContain("daedal repo library add");
+      expect(
+        (
+          await lstat(join(workspace.path, ".agents/skills/daedalus-control"))
+        ).isSymbolicLink(),
+      ).toBe(true);
+      expect(
+        await readlink(join(workspace.path, ".agents/skills/daedalus-control")),
+      ).toBe(join(home, "skills", "daedalus-control"));
       const briefPath = join(workspace.path, "BRIEF.md");
       const simpleBrief = await readFile(briefPath, "utf8");
       await Bun.write(
@@ -224,6 +244,13 @@ Before working in this workspace:
       await context.workspaceContent.get(generated.id);
       expect(await readFile(generatedPath, "utf8")).toBe(generatedContents);
       await Bun.write(join(customized.path, "AGENTS.md"), "# My rules\n");
+      const customizedSkillPath = join(
+        customized.path,
+        ".agents/skills/daedalus-control/SKILL.md",
+      );
+      await unlink(join(customized.path, ".agents/skills/daedalus-control"));
+      await mkdir(join(customized.path, ".agents/skills/daedalus-control"));
+      await Bun.write(customizedSkillPath, "# My custom skill\n");
 
       await context.workspaceContent.setInstructionFilesEnabled(false);
       expect(await Bun.file(join(generated.path, "AGENTS.md")).exists()).toBe(
@@ -238,12 +265,33 @@ Before working in this workspace:
       expect(await Bun.file(join(customized.path, "CLAUDE.md")).exists()).toBe(
         false,
       );
+      expect(
+        await Bun.file(
+          join(generated.path, ".agents/skills/daedalus-control/SKILL.md"),
+        ).exists(),
+      ).toBe(false);
+      expect(
+        await Bun.file(
+          join(generated.path, ".claude/skills/daedalus-control/SKILL.md"),
+        ).exists(),
+      ).toBe(false);
+      expect(await readFile(customizedSkillPath, "utf8")).toBe(
+        "# My custom skill\n",
+      );
 
       const disabledWorkspace = await context.workspaces.create({
         name: "Disabled",
       });
       expect(
         await Bun.file(join(disabledWorkspace.path, "AGENTS.md")).exists(),
+      ).toBe(false);
+      expect(
+        await Bun.file(
+          join(
+            disabledWorkspace.path,
+            ".agents/skills/daedalus-control/SKILL.md",
+          ),
+        ).exists(),
       ).toBe(false);
 
       await context.workspaceContent.setInstructionFilesEnabled(true);
@@ -258,6 +306,19 @@ Before working in this workspace:
       );
       expect(await Bun.file(join(customized.path, "CLAUDE.md")).exists()).toBe(
         false,
+      );
+      expect(
+        await Bun.file(
+          join(generated.path, ".agents/skills/daedalus-control/SKILL.md"),
+        ).exists(),
+      ).toBe(true);
+      expect(
+        await Bun.file(
+          join(generated.path, ".claude/skills/daedalus-control/SKILL.md"),
+        ).exists(),
+      ).toBe(true);
+      expect(await readFile(customizedSkillPath, "utf8")).toBe(
+        "# My custom skill\n",
       );
       context.close();
     });

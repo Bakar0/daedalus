@@ -148,6 +148,37 @@ describe("desktop RPC handlers", () => {
     });
   });
 
+  test("opens only web links through the system handler", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const context = await createApplicationContext({
+        env: { ...process.env, DAEDALUS_HOME: home },
+        tmux: new FakeTmux(),
+      });
+      const opened: string[] = [];
+      const rpc = createDesktopRequestHandlers(context, undefined, (url) => {
+        opened.push(url);
+        return true;
+      });
+      try {
+        expect(
+          await rpc.openExternal({ url: "https://example.com/docs" }),
+        ).toEqual({ ok: true, data: { opened: true } });
+        expect(opened).toEqual(["https://example.com/docs"]);
+        expect(await rpc.openExternal({ url: "file:///tmp/private" })).toEqual({
+          ok: false,
+          error: {
+            code: "VALIDATION",
+            message: "Only HTTP and HTTPS links can be opened",
+            details: undefined,
+          },
+        });
+        expect(opened).toHaveLength(1);
+      } finally {
+        context.close();
+      }
+    });
+  });
+
   test("snapshot reports configuration and dependency availability", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const context = await createApplicationContext({

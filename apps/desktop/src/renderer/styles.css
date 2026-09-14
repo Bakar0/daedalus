@@ -1139,6 +1139,43 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   height: 32px;
   width: 32px;
 }
+.session-model-picker {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  display: grid !important;
+  gap: 8px !important;
+  grid-template-columns: minmax(0, 1fr) minmax(170px, 220px);
+  margin-top: 10px;
+  padding: 9px 10px;
+}
+.session-model-picker > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.session-model-picker strong {
+  color: var(--secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+.session-model-picker select {
+  background: var(--elevated);
+  border-color: var(--line-strong);
+  font-size: 11px;
+  min-width: 0;
+  padding: 6px 28px 6px 8px;
+}
+.session-model-error {
+  color: var(--danger);
+  grid-column: 1 / -1;
+}
+.session-model-description {
+  color: var(--muted);
+  grid-column: 1 / -1;
+  line-height: 1.35;
+}
 .session-tool-icon.tool-claude {
   color: #d97757;
 }
@@ -1359,9 +1396,11 @@ dd {
 }
 .integrated-terminal-header {
   align-items: center;
+  border-top: 1px solid var(--line);
   display: flex;
   flex: 0 0 33px;
   min-width: 0;
+  order: 2;
   padding: 0 8px;
 }
 .integrated-terminal-toggle {
@@ -1459,10 +1498,25 @@ dd {
   min-width: 28px;
   padding: 3px 7px;
 }
+.integrated-terminal-header > .settings-corner-button {
+  align-items: center;
+  border-right: 1px solid var(--line) !important;
+  border-radius: 0 !important;
+  display: flex;
+  height: 24px;
+  justify-content: center;
+  margin-right: 5px;
+  padding: 3px 11px 3px 5px !important;
+}
+.settings-corner-button svg {
+  height: 16px;
+  width: 16px;
+}
 .integrated-terminal-body {
   display: flex;
   flex: 1;
   min-height: 0;
+  order: 1;
   padding: 0 0 8px 8px;
 }
 .integrated-terminal-panel.collapsed .integrated-terminal-body {

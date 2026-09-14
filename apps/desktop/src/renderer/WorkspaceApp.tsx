@@ -1,10 +1,15 @@
 import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { basicSetup, EditorView } from "codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
+import type {
+  CSSProperties,
+  KeyboardEvent as ReactKeyboardEvent,
+  PointerEvent as ReactPointerEvent,
+} from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
@@ -12,6 +17,7 @@ import type {
   DesktopCommand,
   DesktopSnapshotDto,
   IntegratedTerminalDto,
+  ProviderModelCatalogDto,
   RepositoryDiscoveryDto,
   RpcResult,
   TaskDto,
@@ -46,6 +52,41 @@ const storedPanelSize = (key: string, fallback: number) => {
   const stored = Number(window.localStorage.getItem(key));
   return Number.isFinite(stored) && stored > 0 ? stored : fallback;
 };
+
+const lastSessionStorageKey = (workspaceId: string) =>
+  `daedalus.session.last.${workspaceId}`;
+
+export function preferredSessionId(
+  sessions: AgentSessionDto[],
+  currentId?: string,
+  rememberedId?: string | null,
+): string | undefined {
+  if (currentId && sessions.some((session) => session.id === currentId))
+    return currentId;
+  if (rememberedId && sessions.some((session) => session.id === rememberedId))
+    return rememberedId;
+  return sessions[0]?.id;
+}
+
+export function agentMultilineSequence(
+  event: Pick<
+    KeyboardEvent,
+    "altKey" | "code" | "ctrlKey" | "key" | "metaKey" | "shiftKey" | "type"
+  >,
+  target: "agent" | "integrated",
+): string | undefined {
+  return target === "agent" &&
+    event.type === "keydown" &&
+    (event.key === "Enter" ||
+      event.code === "Enter" ||
+      event.code === "NumpadEnter") &&
+    event.shiftKey &&
+    !event.altKey &&
+    !event.ctrlKey &&
+    !event.metaKey
+    ? "\n"
+    : undefined;
+}
 
 const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
@@ -253,6 +294,23 @@ function ArchiveIcon() {
   );
 }
 
+function SettingsIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.7"
+      viewBox="0 0 24 24"
+    >
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.86 2.86-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21H9.55v-.09A1.7 1.7 0 0 0 8.5 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.86-2.86.06-.06A1.7 1.7 0 0 0 4.1 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H2.3V9.55h.1A1.7 1.7 0 0 0 4.1 8.5a1.7 1.7 0 0 0-.34-1.88l-.06-.06L6.56 3.7l.06.06A1.7 1.7 0 0 0 8.5 4.1a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V2.3h4.05v.1A1.7 1.7 0 0 0 15 4.1a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.86 2.86-.06.06A1.7 1.7 0 0 0 19.4 8.5a1.7 1.7 0 0 0 .6 1 1.7 1.7 0 0 0 1.1.4h.1v4.05h-.1A1.7 1.7 0 0 0 19.4 15Z" />
+    </svg>
+  );
+}
+
 // VS Code Codicons repo-pull glyph (MIT).
 function RepositoryPullIcon() {
   return (
@@ -454,22 +512,38 @@ function Modal({
 }
 
 function TerminalSurface({
+  focused,
   fitRevision,
   id,
   label,
+  onOpenLink,
   status,
   target,
 }: {
+  focused: boolean;
   fitRevision: number;
   id: string;
   label: string;
+  onOpenLink: (url: string) => void;
   status: AgentSessionDto["status"];
   target: "agent" | "integrated";
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fitRef = useRef<() => void>(() => undefined);
+  const focusRef = useRef<() => void>(() => undefined);
+  const inputRef = useRef<(data: string) => void>(() => undefined);
   const [connection, setConnection] = useState("connecting");
-  useEffect(() => fitRef.current(), [fitRevision]);
+  const captureAgentShortcut = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const sequence = agentMultilineSequence(event.nativeEvent, target);
+    if (!sequence) return;
+    event.preventDefault();
+    event.stopPropagation();
+    inputRef.current(sequence);
+  };
+  useEffect(() => {
+    fitRef.current();
+    if (focused) requestAnimationFrame(() => focusRef.current());
+  }, [fitRevision, focused]);
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -521,7 +595,10 @@ function TerminalSurface({
         // user's installed Nerd Font while retaining native monospace fallbacks.
         fontFamily: '"MesloLGS NF", "SF Mono", Menlo, monospace',
         fontSize: TERMINAL_FONT_SIZE,
+        fastScrollSensitivity: 5,
         scrollback: 10_000,
+        scrollSensitivity: 2.5,
+        smoothScrollDuration: 90,
         theme: {
           background: "#11151d",
           foreground: "#dce5f2",
@@ -531,7 +608,19 @@ function TerminalSurface({
       });
       const fitAddon = new FitAddon();
       terminal.loadAddon(fitAddon);
+      terminal.loadAddon(
+        new WebLinksAddon((event, url) => {
+          event.preventDefault();
+          onOpenLink(url);
+        }),
+      );
       terminal.open(container);
+      focusRef.current = () => terminal?.focus();
+      inputRef.current = (data) => {
+        if (socket?.readyState === WebSocket.OPEN)
+          socket.send(JSON.stringify({ type: "input", data }));
+      };
+      if (focused) requestAnimationFrame(() => terminal?.focus());
       const sendSize = () => {
         const cols = terminal?.cols ?? 0;
         const rows = terminal?.rows ?? 0;
@@ -661,6 +750,8 @@ function TerminalSurface({
     return () => {
       disposed = true;
       fitRef.current = () => undefined;
+      focusRef.current = () => undefined;
+      inputRef.current = () => undefined;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (frame !== undefined) cancelAnimationFrame(frame);
       if (layoutFrame !== undefined) cancelAnimationFrame(layoutFrame);
@@ -690,6 +781,7 @@ function TerminalSurface({
       <div
         aria-label={`Terminal for ${label} ${id.slice(0, 8)}`}
         className="terminal"
+        onKeyDownCapture={captureAgentShortcut}
         ref={containerRef}
       />
     </section>
@@ -700,11 +792,13 @@ function IntegratedTerminalSurface({
   active,
   fitRevision,
   mountRevision,
+  onOpenLink,
   terminal,
 }: {
   active: boolean;
   fitRevision: number;
   mountRevision: number;
+  onOpenLink: (url: string) => void;
   terminal: IntegratedTerminalDto;
 }) {
   const [activated, setActivated] = useState(active);
@@ -720,10 +814,12 @@ function IntegratedTerminalSurface({
     >
       {activated && (
         <TerminalSurface
+          focused={active}
           fitRevision={fitRevision}
           id={terminal.id}
           key={`${terminal.id}:${mountRevision}`}
           label={terminal.name}
+          onOpenLink={onOpenLink}
           status={terminal.status}
           target="integrated"
         />
@@ -824,6 +920,12 @@ export function WorkspaceApp({
   });
   const [taskForm, setTaskForm] = useState({ title: "", description: "" });
   const [sessionType, setSessionType] = useState("codex");
+  const [sessionModel, setSessionModel] = useState("");
+  const [modelCatalogs, setModelCatalogs] = useState<
+    Partial<Record<"codex" | "claude", ProviderModelCatalogDto>>
+  >({});
+  const [modelCatalogLoading, setModelCatalogLoading] = useState(false);
+  const [modelCatalogError, setModelCatalogError] = useState<string>();
   const [sessionForm, setSessionForm] = useState<{
     name: string;
     taskId?: string;
@@ -912,13 +1014,23 @@ export function WorkspaceApp({
     // Every layout mutation shares the same terminal repair path: update the
     // live grid immediately, then recreate only xterm after layout settles.
     setTerminalFitRevision((revision) => revision + 1);
-    if (terminalLayoutTimer.current)
-      clearTimeout(terminalLayoutTimer.current);
+    if (terminalLayoutTimer.current) clearTimeout(terminalLayoutTimer.current);
     terminalLayoutTimer.current = setTimeout(
       () => setTerminalMountRevision((revision) => revision + 1),
       120,
     );
   }, []);
+
+  const openTerminalLink = useCallback(
+    (url: string) => {
+      void client.request.openExternal({ url }).then((response) => {
+        if (!response.ok) setError(response.error.message);
+        else if (!response.data.opened)
+          setError("The link could not be opened in the default browser");
+      });
+    },
+    [client],
+  );
 
   const clampTerminalPanelHeight = useCallback(
     (height: number) =>
@@ -1178,6 +1290,36 @@ export function WorkspaceApp({
       setSessionType(available?.name ?? "terminal");
     }
   }, [sessionType, snapshot]);
+  useEffect(() => {
+    if (
+      (sessionType !== "codex" && sessionType !== "claude") ||
+      modelCatalogs[sessionType]
+    )
+      return;
+    let cancelled = false;
+    setModelCatalogLoading(true);
+    setModelCatalogError(undefined);
+    void client.request
+      .agentModels({ provider: sessionType })
+      .then((response) => {
+        if (cancelled) return;
+        if (response.ok)
+          setModelCatalogs((current) => ({
+            ...current,
+            [sessionType]: response.data,
+          }));
+        else setModelCatalogError(response.error.message);
+      })
+      .catch((cause) => {
+        if (!cancelled) setModelCatalogError(errorMessage(cause));
+      })
+      .finally(() => {
+        if (!cancelled) setModelCatalogLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, modelCatalogs, sessionType]);
 
   async function perform<T>(operation: Promise<RpcResult<T>>) {
     setBusy(true);
@@ -1237,10 +1379,40 @@ export function WorkspaceApp({
     (item) => item.id === selectedTaskId,
   );
   const activeSession = sessions.find((item) => item.id === activeSessionId);
+  const sessionModelCatalog =
+    sessionType === "codex" || sessionType === "claude"
+      ? modelCatalogs[sessionType]
+      : undefined;
+  const sessionDefaultModel = sessionModelCatalog?.models.find(
+    (model) => model.id === sessionModelCatalog.defaultModel,
+  );
+  const selectedSessionModel = sessionModelCatalog?.models.find(
+    (model) => model.id === sessionModel,
+  );
+  const sessionModelCatalogPending =
+    sessionType !== "terminal" && !sessionModelCatalog && !modelCatalogError;
   const integratedTerminals = snapshot?.terminals ?? [];
   const activeIntegratedTerminal =
     integratedTerminals.find((item) => item.id === activeTerminalId) ??
     integratedTerminals.at(-1);
+
+  useEffect(() => {
+    if (view !== "sessions" || !workspaceId) return;
+    const remembered = window.localStorage.getItem(
+      lastSessionStorageKey(workspaceId),
+    );
+    const preferred = preferredSessionId(sessions, activeSessionId, remembered);
+    if (preferred !== activeSessionId) setActiveSessionId(preferred);
+  }, [activeSessionId, sessions, view, workspaceId]);
+
+  useEffect(() => {
+    if (!workspaceId || !activeSessionId) return;
+    if (!sessions.some((session) => session.id === activeSessionId)) return;
+    window.localStorage.setItem(
+      lastSessionStorageKey(workspaceId),
+      activeSessionId,
+    );
+  }, [activeSessionId, sessions, workspaceId]);
   const attachedLibraryRepositoryIds = new Set(
     (workspaceContent?.repositories ?? [])
       .map((item) => item.libraryRepositoryId)
@@ -1368,6 +1540,8 @@ export function WorkspaceApp({
 
   function openSessionModal(task?: TaskDto) {
     setSessionForm({ name: task?.title ?? "", taskId: task?.id });
+    setSessionModel("");
+    setModelCatalogError(undefined);
     setModal("session");
   }
 
@@ -1389,6 +1563,7 @@ export function WorkspaceApp({
 
   function closeSessionModal() {
     setSessionForm({ name: "" });
+    setSessionModel("");
     setModal(undefined);
   }
 
@@ -1449,6 +1624,7 @@ export function WorkspaceApp({
         name: launch.name,
         terminal: isTerminal || undefined,
         provider: isTerminal ? undefined : (sessionType as "codex" | "claude"),
+        model: isTerminal || !sessionModel ? undefined : sessionModel,
       });
       if (response.ok) {
         setSessionLaunches((current) =>
@@ -2070,18 +2246,6 @@ export function WorkspaceApp({
         </nav>
         <div className="top-actions">
           {busy && <span className="syncing">Working…</span>}
-          <button className="quiet" onClick={() => void refresh()}>
-            Refresh
-          </button>
-          <button
-            className="quiet"
-            onClick={() => setTerminalPanelOpen((current) => !current)}
-          >
-            Terminal
-          </button>
-          <button className="quiet" onClick={() => setModal("settings")}>
-            Settings
-          </button>
         </div>
       </header>
       {error && (
@@ -2965,10 +3129,12 @@ export function WorkspaceApp({
             </div>
             {activeSession ? (
               <TerminalSurface
+                focused
                 fitRevision={terminalFitRevision}
                 id={activeSession.id}
                 key={`${activeSession.id}:${terminalMountRevision}`}
                 label={sessionName(activeSession)}
+                onOpenLink={openTerminalLink}
                 status={activeSession.status}
                 target="agent"
               />
@@ -3016,6 +3182,15 @@ export function WorkspaceApp({
         )}
         <div className="integrated-terminal-header">
           <button
+            aria-label="Open settings"
+            className="quiet settings-corner-button"
+            onClick={() => setModal("settings")}
+            title="Settings"
+            type="button"
+          >
+            <SettingsIcon />
+          </button>
+          <button
             aria-expanded={terminalPanelOpen}
             className="integrated-terminal-toggle"
             onClick={() => setTerminalPanelOpen((current) => !current)}
@@ -3061,6 +3236,7 @@ export function WorkspaceApp({
                     fitRevision={terminalFitRevision}
                     key={terminal.id}
                     mountRevision={terminalMountRevision}
+                    onOpenLink={openTerminalLink}
                     terminal={terminal}
                   />
                 ))
@@ -3604,7 +3780,11 @@ export function WorkspaceApp({
                       className={`session-tool ${sessionType === tool.id ? "selected" : ""}`}
                       disabled={!available}
                       key={tool.id}
-                      onClick={() => setSessionType(tool.id)}
+                      onClick={() => {
+                        setSessionType(tool.id);
+                        setSessionModel("");
+                        setModelCatalogError(undefined);
+                      }}
                       role="radio"
                       type="button"
                     >
@@ -3618,6 +3798,57 @@ export function WorkspaceApp({
                 })}
               </div>
             </fieldset>
+            {sessionType !== "terminal" && (
+              <label className="session-model-picker">
+                <span>
+                  <strong>Model</strong>
+                  <small>
+                    {sessionModelCatalogPending || modelCatalogLoading
+                      ? `Loading ${sessionType === "claude" ? "Claude" : "Codex"} models…`
+                      : sessionType === "codex"
+                        ? "Available to your Codex account"
+                        : "Available to your Claude account"}
+                  </small>
+                </span>
+                <select
+                  disabled={sessionModelCatalogPending || modelCatalogLoading}
+                  onChange={(event) => setSessionModel(event.target.value)}
+                  value={sessionModel}
+                >
+                  {sessionModelCatalogPending || modelCatalogLoading ? (
+                    <option value="">Loading models…</option>
+                  ) : (
+                    <option value="">
+                      Provider default
+                      {sessionModelCatalog?.defaultModel
+                        ? ` · ${sessionDefaultModel?.label ?? sessionModelCatalog.defaultModel}`
+                        : " · Automatic"}
+                    </option>
+                  )}
+                  {sessionModelCatalog?.models.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.label}
+                      {model.resolvedModel ? ` · ${model.resolvedModel}` : ""}
+                    </option>
+                  ))}
+                </select>
+                <small className="session-model-description">
+                  {sessionModelCatalogPending || modelCatalogLoading
+                    ? "Reading the models available to your account"
+                    : (selectedSessionModel?.description ??
+                      (sessionModel
+                        ? `Use ${sessionModel} for this session`
+                        : sessionModelCatalog?.defaultModel
+                          ? "Follows your provider configuration"
+                          : "The provider chooses its current default"))}
+                </small>
+                {modelCatalogError && (
+                  <small className="session-model-error">
+                    Model list unavailable: {modelCatalogError}
+                  </small>
+                )}
+              </label>
+            )}
             <div className="session-workspace-note">
               <span className="workspace-icon">
                 {workspace.name.slice(0, 1).toUpperCase()}
@@ -3685,10 +3916,10 @@ export function WorkspaceApp({
                   type="checkbox"
                 />
                 <span>
-                  <strong>Create workspace instruction files</strong>
+                  <strong>Create workspace agent guidance</strong>
                   <small>
-                    Keep Daedalus-managed AGENTS.md and CLAUDE.md files in
-                    workspace roots.
+                    Keep Daedalus-managed AGENTS.md, CLAUDE.md, and the
+                    daedalus-control skill links in workspace roots.
                   </small>
                 </span>
               </label>

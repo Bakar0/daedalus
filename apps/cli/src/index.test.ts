@@ -1,5 +1,7 @@
 import { join } from "node:path";
+import { mkdir } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
+import { runCommand } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 
 interface CliResult {
@@ -24,6 +26,32 @@ async function cli(home: string, args: string[]): Promise<CliResult> {
     child.exited,
   ]);
   return { exitCode, stdout, stderr };
+}
+
+async function createRepository(path: string): Promise<void> {
+  await mkdir(path, { recursive: true });
+  expect(
+    (await runCommand("git", ["init", "-q", "-b", "main", path])).exitCode,
+  ).toBe(0);
+  await Bun.write(join(path, "README.md"), "# Source\n");
+  expect(
+    (await runCommand("git", ["-C", path, "add", "README.md"])).exitCode,
+  ).toBe(0);
+  expect(
+    (
+      await runCommand("git", [
+        "-C",
+        path,
+        "-c",
+        "user.name=Daedalus Test",
+        "-c",
+        "user.email=test@daedalus.local",
+        "commit",
+        "-qm",
+        "initial",
+      ])
+    ).exitCode,
+  ).toBe(0);
 }
 
 describe("daedal CLI contract", () => {
@@ -152,6 +180,61 @@ describe("daedal CLI contract", () => {
       ]);
       expect(failed.exitCode).toBe(5);
       expect(JSON.parse(failed.stderr).error.code).toBe("DEPENDENCY");
+    });
+  });
+
+  test("adds, attaches, syncs, and detaches repository library entries", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const source = join(home, "source");
+      await createRepository(source);
+      const workspace = JSON.parse(
+        (await cli(home, ["workspace", "create", "Repo CLI", "--json"])).stdout,
+      ).data as { id: string };
+      const added = await cli(home, [
+        "repo",
+        "library",
+        "add",
+        source,
+        "--json",
+      ]);
+      expect(added).toMatchObject({ exitCode: 0, stderr: "" });
+      const libraryRepository = JSON.parse(added.stdout).data as {
+        id: string;
+        name: string;
+      };
+      expect(libraryRepository.name).toBe("source");
+
+      const attached = await cli(home, [
+        "repo",
+        "attach",
+        "--workspace",
+        workspace.id,
+        "--repository",
+        libraryRepository.id,
+        "--json",
+      ]);
+      expect(attached.exitCode).toBe(0);
+      const attachment = JSON.parse(attached.stdout).data as { id: string };
+      expect(
+        JSON.parse(
+          (
+            await cli(home, [
+              "repo",
+              "list",
+              "--workspace",
+              workspace.id,
+              "--json",
+            ])
+          ).stdout,
+        ).data,
+      ).toHaveLength(1);
+
+      expect(
+        (await cli(home, ["repo", "sync", attachment.id, "--json"])).exitCode,
+      ).toBe(0);
+      expect(
+        (await cli(home, ["repo", "detach", attachment.id, "--json"])).exitCode,
+      ).toBe(0);
     });
   });
 });

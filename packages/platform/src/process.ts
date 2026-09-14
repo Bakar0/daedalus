@@ -10,7 +10,7 @@ export interface CommandResult {
 export interface CommandOptions {
   cwd?: string;
   env?: Record<string, string | undefined>;
-  stdin?: "ignore" | "inherit";
+  stdin?: "ignore" | "inherit" | string;
   stdout?: "pipe" | "inherit";
   stderr?: "pipe" | "inherit";
 }
@@ -23,10 +23,19 @@ export async function runCommand(
   const process = Bun.spawn([executable, ...args], {
     cwd: options.cwd,
     env: options.env ? { ...Bun.env, ...options.env } : undefined,
-    stdin: options.stdin ?? "ignore",
+    stdin:
+      typeof options.stdin === "string" ? "pipe" : (options.stdin ?? "ignore"),
     stdout: options.stdout ?? "pipe",
     stderr: options.stderr ?? "pipe",
   });
+  if (
+    typeof options.stdin === "string" &&
+    process.stdin !== undefined &&
+    typeof process.stdin !== "number"
+  ) {
+    process.stdin.write(options.stdin);
+    process.stdin.end();
+  }
   const [stdout, stderr, exitCode] = await Promise.all([
     process.stdout === undefined || typeof process.stdout === "number"
       ? ""

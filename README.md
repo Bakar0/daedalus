@@ -79,3 +79,4 @@ Every mutation flows through `@daedalus/core`. Workspace removal preserves files
 - [Phase 0 decisions and spike evidence](docs/phase-0.md)
 - [CLI contract](docs/cli.md)
 - [Desktop RPC and UI](docs/desktop.md)
+- [Agent skills and installation](docs/skills.md)

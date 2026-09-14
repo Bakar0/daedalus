@@ -65,6 +65,7 @@ export class WorkspaceService {
     private readonly workspaceRoot: string,
     private readonly hasLiveAgents: (workspaceId: string) => Promise<boolean>,
     private readonly archiveAgents: (workspaceId: string) => Promise<void>,
+    private readonly daedalusHome: string,
     private readonly instructionFilesEnabled: () => boolean = () => true,
   ) {}
 
@@ -109,7 +110,11 @@ export class WorkspaceService {
         join(path, MARKER_DIRECTORY, MARKER_FILE),
         `${JSON.stringify({ id: workspace.id }, null, 2)}\n`,
       );
-      await ensureWorkspaceContentFiles(path, this.instructionFilesEnabled());
+      await ensureWorkspaceContentFiles(
+        path,
+        this.daedalusHome,
+        this.instructionFilesEnabled(),
+      );
       this.repositories.createWorkspace(workspace);
       return workspace;
     } catch (error) {
@@ -150,6 +155,7 @@ export class WorkspaceService {
       );
     await ensureWorkspaceContentFiles(
       workspace.path,
+      this.daedalusHome,
       this.instructionFilesEnabled(),
     );
     return workspace;

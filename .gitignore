@@ -10,3 +10,4 @@ artifacts/
 .hutch/dependencies.lock
 .hutch/devkit.lock
 .cottontail-tmp/
+.tmp-install/

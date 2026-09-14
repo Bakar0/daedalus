@@ -62,8 +62,9 @@ Statuses are `todo`, `in_progress`, `blocked`, `done`, and `cancelled`. Prioriti
 ## Agent
 
 ```text
-daedal agent spawn --workspace <workspace> --provider codex [--task <task-id>]
-daedal agent spawn --workspace <workspace> --provider claude [--task <task-id>]
+daedal agent models <codex|claude>
+daedal agent spawn --workspace <workspace> --provider codex [--task <task-id>] [--model <model>]
+daedal agent spawn --workspace <workspace> --provider claude [--task <task-id>] [--model <model>]
 daedal agent spawn --workspace <workspace> --command <configured-name> [--task <task-id>]
 daedal agent list [--workspace <workspace>] [--running]
 daedal agent get <agent-id>
@@ -86,9 +87,21 @@ Startup reconciliation compares SQLite with tmux. Missing live sessions become `
 ## Repository worktrees
 
 ```text
+daedal repo library list
+daedal repo library add <url-or-absolute-path> [--name <name>]
 daedal repo list --workspace <workspace>
+daedal repo attach --workspace <workspace> --repository <library-id>
+daedal repo sync <attachment-id>
+daedal repo detach <attachment-id>
 daedal repo worktree create --session <agent-id> --repository <name-or-id>
 ```
+
+Library entries are bare clones shared across workspaces. `library add` accepts
+a remote URL or full local path and refreshes an existing entry with the same
+remote. `attach` fetches the library entry and creates a read-only planning
+checkout under the workspace's `repos/` directory. `sync` refreshes that
+checkout when it can advance safely. `detach` refuses while session worktrees
+depend on the attachment.
 
 Agent sessions receive `DAEDALUS_SESSION_ID`, `DAEDALUS_HOME`, and a PATH containing Daedalus's bundled CLI. They start in an isolated session folder without eagerly creating a worktree for every attached repository. The worktree command creates the selected repository's writable worktree from the attachment's pinned base commit and prints its path; repeating it returns the existing worktree.
 
@@ -106,5 +119,11 @@ Agent sessions receive `DAEDALUS_SESSION_ID`, `DAEDALUS_HOME`, and a PATH contai
 ```
 
 Set `DAEDALUS_HOME` to relocate the configuration, SQLite database, logs, workspace root, and tmux server identity. Automated tests always use temporary homes and isolated tmux servers.
+
+The desktop app installs a `daedal` shim at `$DAEDALUS_HOME/bin/daedal`. The
+shim runs the packaged CLI with the resolved Bun executable rather than the
+desktop Cottontail runtime, so non-interactive commands terminate after
+emitting their result. Daedalus-launched sessions put this directory first on
+`PATH`.
 
 `daedal doctor [--json]` checks the verified Bun version, tmux availability/minimum, resolved home, and migrated database.

@@ -1,12 +1,14 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
-import type { DesktopSnapshotDto } from "@daedalus/protocol";
+import type { AgentSessionDto, DesktopSnapshotDto } from "@daedalus/protocol";
 import { App, MarkdownPreview } from "./App";
 import type { DesktopClient } from "./client-types";
 import {
+  agentMultilineSequence,
   clampPanelSize,
   launchMatchesSession,
   PANEL_RAIL_WIDTH,
+  preferredSessionId,
   TERMINAL_FONT_SIZE,
   TERMINAL_PANEL_MIN_HEIGHT,
 } from "./WorkspaceApp";
@@ -37,6 +39,26 @@ const base: DesktopSnapshotDto = {
 };
 
 describe("desktop application shell", () => {
+  test("maps Shift+Enter to the portable agent multiline sequence", () => {
+    const shiftEnter = {
+      altKey: false,
+      code: "Enter",
+      ctrlKey: false,
+      key: "Enter",
+      metaKey: false,
+      shiftKey: true,
+      type: "keydown",
+    };
+    expect(agentMultilineSequence(shiftEnter, "agent")).toBe("\n");
+    expect(agentMultilineSequence(shiftEnter, "integrated")).toBeUndefined();
+    expect(
+      agentMultilineSequence({ ...shiftEnter, shiftKey: false }, "agent"),
+    ).toBeUndefined();
+    expect(
+      agentMultilineSequence({ ...shiftEnter, type: "keyup" }, "agent"),
+    ).toBeUndefined();
+  });
+
   test("keeps resized panels as narrow visible rails", () => {
     expect(clampPanelSize(0, 480)).toBe(PANEL_RAIL_WIDTH);
     expect(clampPanelSize(214.4, 480)).toBe(214);
@@ -80,6 +102,21 @@ describe("desktop application shell", () => {
     ).toBe(true);
   });
 
+  test("selects the current, remembered, or first session in that order", () => {
+    const sessions = [
+      { id: "newest" },
+      { id: "remembered" },
+    ] as AgentSessionDto[];
+    expect(preferredSessionId(sessions, "newest", "remembered")).toBe("newest");
+    expect(preferredSessionId(sessions, "missing", "remembered")).toBe(
+      "remembered",
+    );
+    expect(preferredSessionId(sessions, "missing", "also-missing")).toBe(
+      "newest",
+    );
+    expect(preferredSessionId([])).toBeUndefined();
+  });
+
   test("renders Board, Sessions, and Workspace as complete workspace modes", () => {
     const html = renderToStaticMarkup(
       <App injectedClient={client} initialSnapshot={base} />,
@@ -95,6 +132,8 @@ describe("desktop application shell", () => {
     expect(html).toContain("No workspaces yet");
     expect(html).toContain('aria-label="Create workspace"');
     expect(html).toContain('class="create-button"');
+    expect(html).toContain('aria-label="Open settings"');
+    expect(html).not.toContain(">Refresh</button>");
   });
 
   test("shows the workspace instruction files preference in Settings", () => {
@@ -105,9 +144,45 @@ describe("desktop application shell", () => {
         initialSnapshot={base}
       />,
     );
-    expect(html).toContain("Create workspace instruction files");
-    expect(html).toContain("AGENTS.md and CLAUDE.md");
+    expect(html).toContain("Create workspace agent guidance");
+    expect(html).toContain("daedalus-control skill");
     expect(html).toContain('type="checkbox" checked=""');
+  });
+
+  test("keeps provider default selected in the session model picker", () => {
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialModal="session"
+        initialSnapshot={{
+          ...base,
+          workspaces: [
+            {
+              id: "w1",
+              slug: "demo",
+              name: "Demo",
+              path: "/tmp/demo",
+              createdAt: "now",
+              updatedAt: "now",
+              archivedAt: null,
+              available: true,
+            },
+          ],
+          settings: {
+            ...base.settings,
+            providers: [
+              { name: "codex", executable: "codex", available: true },
+              { name: "claude", executable: "claude", available: true },
+            ],
+          },
+        }}
+      />,
+    );
+    expect(html).toContain('class="session-model-picker"');
+    expect(html).toContain("Loading Codex models");
+    expect(html).toContain("Loading models");
+    expect(html).toContain("Reading the models available to your account");
+    expect(html).not.toContain("Provider default · Automatic");
   });
 
   test("renders the unified repository finder and clone action", () => {

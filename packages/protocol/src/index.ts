@@ -141,6 +141,20 @@ export interface ProviderAvailabilityDto {
   available: boolean;
 }
 
+export interface ProviderModelDto {
+  id: string;
+  label: string;
+  resolvedModel?: string;
+  description?: string;
+}
+
+export interface ProviderModelCatalogDto {
+  provider: "codex" | "claude";
+  defaultModel?: string;
+  models: ProviderModelDto[];
+  source: "provider" | "aliases";
+}
+
 export interface DesktopSettingsDto {
   home: string;
   workspaceRoot: string;
@@ -294,10 +308,15 @@ export interface DesktopRpcSchema {
           taskId?: string;
           name?: string;
           provider?: "codex" | "claude";
+          model?: string;
           command?: string;
           terminal?: boolean;
         },
         AgentSessionDto
+      >;
+      agentModels: Request<
+        { provider: "codex" | "claude" },
+        ProviderModelCatalogDto
       >;
       agentSend: Request<{ id: string; text: string }, AgentSessionDto>;
       agentStop: Request<{ id: string; force: boolean }, AgentSessionDto>;
@@ -309,6 +328,7 @@ export interface DesktopRpcSchema {
         IntegratedTerminalDto
       >;
       terminalClose: Request<{ id: string }, IntegratedTerminalDto>;
+      openExternal: Request<{ url: string }, { opened: boolean }>;
     };
     messages: Record<never, never>;
   };

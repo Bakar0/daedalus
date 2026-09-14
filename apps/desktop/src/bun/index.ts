@@ -1,16 +1,16 @@
 import { randomBytes } from "node:crypto";
-import { chmod, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   ApplicationMenu,
   BrowserView,
   BrowserWindow,
   PATHS,
+  Utils,
 } from "electrobun/main";
 import { createApplicationContext } from "@daedalus/core";
 import {
   CommandTmuxClient,
-  ensureDirectory,
+  findExecutable,
   pathExists,
   TmuxPtyBridge,
 } from "@daedalus/platform";
@@ -21,6 +21,7 @@ import type {
 } from "@daedalus/protocol";
 import { isDesktopCommand } from "@daedalus/protocol";
 import { APPLICATION_MENU } from "./menu";
+import { installCliShim } from "./cli-shim";
 import { createDesktopRequestHandlers, desktopDataFingerprint } from "./rpc";
 import { authorizeTerminalRequest, TerminalConnection } from "./terminal";
 
@@ -34,18 +35,16 @@ const context = await createApplicationContext(
   resolve(PATHS.RESOURCES_FOLDER, "app/migrations"),
 );
 const cliEntrypoint = resolve(PATHS.RESOURCES_FOLDER, "app/cli/daedal.js");
-if (await pathExists(cliEntrypoint)) {
-  const binDirectory = join(context.config.home, "bin");
-  const cliShim = join(binDirectory, "daedal");
-  const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
-  await ensureDirectory(binDirectory);
-  await writeFile(
-    cliShim,
-    `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(cliEntrypoint)} "$@"\n`,
-    "utf8",
-  );
-  await chmod(cliShim, 0o755);
-}
+const bunExecutable = findExecutable("bun", [
+  "/opt/homebrew/bin/bun",
+  "/usr/local/bin/bun",
+]);
+if ((await pathExists(cliEntrypoint)) && bunExecutable)
+  await installCliShim({
+    path: join(context.config.home, "bin", "daedal"),
+    bunExecutable,
+    cliEntrypoint,
+  });
 const terminalTmux = context.tmux;
 if (!(terminalTmux instanceof CommandTmuxClient))
   throw new Error("Desktop terminal requires the command tmux adapter");
@@ -173,7 +172,11 @@ const rpc = BrowserView.defineRPC<DesktopRpcSchema>({
   // minutes for large histories or slower remotes.
   maxRequestTime: 10 * 60_000,
   handlers: {
-    requests: createDesktopRequestHandlers(context, () => announce("desktop")),
+    requests: createDesktopRequestHandlers(
+      context,
+      () => announce("desktop"),
+      Utils.openExternal,
+    ),
   },
 });
 

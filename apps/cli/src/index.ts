@@ -39,7 +39,7 @@ Usage:
   daedal doctor [--json]
   daedal workspace <create|list|get|update|archive|restore|remove> ... [--json]
   daedal task <create|list|get|update|status|remove> ... [--json]
-  daedal repo <list|worktree> ... [--json]
+  daedal repo <library|list|attach|sync|detach|worktree> ... [--json]
   daedal agent <spawn|list|get|attach|send|archive|restore|stop|remove> ... [--json]
 
 Run 'daedal <command> --help' for command details.`;
@@ -61,10 +61,16 @@ const commandHelp: Record<string, string> = {
   daedal task status <task-id> <status>
   daedal task remove <task-id> --force`,
   repo: `Repository commands:
+  daedal repo library list
+  daedal repo library add <url-or-absolute-path> [--name <name>]
   daedal repo list --workspace <workspace>
+  daedal repo attach --workspace <workspace> --repository <library-id>
+  daedal repo sync <attachment-id>
+  daedal repo detach <attachment-id>
   daedal repo worktree create --session <agent-id> --repository <name-or-id>`,
   agent: `Agent commands:
-  daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-id>] [--name <name>]
+  daedal agent models <codex|claude>
+  daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-id>] [--name <name>] [--model <model>]
   daedal agent list [--workspace <workspace>] [--running|--archived]
   daedal agent get <agent-id>
   daedal agent attach <agent-id>
@@ -428,6 +434,31 @@ async function agentCommand(
     console.log(commandHelp.agent);
     return 0;
   }
+  if (action === "models") {
+    const parsed = parseArguments(args, []);
+    expectPositionals(
+      parsed.positionals,
+      1,
+      "daedal agent models <codex|claude>",
+    );
+    const provider = parsed.positionals[0];
+    if (provider !== "codex" && provider !== "claude")
+      throw new DaedalusError(
+        "VALIDATION",
+        "Provider must be 'codex' or 'claude'",
+      );
+    const result = await context.agents.models(provider);
+    printResult(result, json, () => {
+      console.log(
+        `Provider default${result.defaultModel ? `: ${result.defaultModel}` : ""}`,
+      );
+      for (const model of result.models)
+        console.log(
+          `${model.id}\t${model.label}${model.resolvedModel ? `\t${model.resolvedModel}` : ""}`,
+        );
+    });
+    return 0;
+  }
   if (action === "spawn") {
     const parsed = parseArguments(args, [
       "workspace",
@@ -435,6 +466,7 @@ async function agentCommand(
       "command",
       "task",
       "name",
+      "model",
     ]);
     expectPositionals(
       parsed.positionals,
@@ -447,6 +479,7 @@ async function agentCommand(
       command: parsed.values.command,
       taskId: parsed.values.task,
       name: parsed.values.name,
+      model: parsed.values.model,
     });
     printResult(result, json, () =>
       console.log(
@@ -573,6 +606,44 @@ async function repositoryCommand(
     console.log(commandHelp.repo);
     return 0;
   }
+  if (action === "library") {
+    const libraryAction = args.shift();
+    if (libraryAction === "list") {
+      const parsed = parseArguments(args, []);
+      expectPositionals(parsed.positionals, 0, "daedal repo library list");
+      const result = context.workspaceContent.listRepositoryLibrary();
+      printResult(result, json, () => {
+        if (!result.length) console.log("No repositories in the library.");
+        for (const repository of result)
+          console.log(
+            `${repository.id}\t${repository.name}\t${repository.defaultBranch}\t${repository.remoteUrl}`,
+          );
+      });
+      return 0;
+    }
+    if (libraryAction === "add") {
+      const parsed = parseArguments(args, ["name"]);
+      expectPositionals(
+        parsed.positionals,
+        1,
+        "daedal repo library add <url-or-absolute-path> [--name <name>]",
+      );
+      const result = await context.workspaceContent.addRepositoryToLibrary({
+        remoteUrl: parsed.positionals[0]!,
+        name: parsed.values.name,
+      });
+      printResult(result, json, () =>
+        console.log(
+          `Added repository ${result.name} (${result.id}) on ${result.defaultBranch}`,
+        ),
+      );
+      return 0;
+    }
+    throw new DaedalusError(
+      "VALIDATION",
+      "Usage: daedal repo library <list|add> ...",
+    );
+  }
   if (action === "list") {
     const parsed = parseArguments(args, ["workspace"]);
     expectPositionals(
@@ -591,6 +662,56 @@ async function repositoryCommand(
           `${repository.name}\t${repository.access}\t${repository.referencePath ?? repository.canonicalPath}`,
         );
     });
+    return 0;
+  }
+  if (action === "attach") {
+    const parsed = parseArguments(args, ["workspace", "repository"]);
+    expectPositionals(
+      parsed.positionals,
+      0,
+      "daedal repo attach --workspace <workspace> --repository <library-id>",
+    );
+    const result = await context.workspaceContent.attachRepository({
+      workspace: required(parsed.values.workspace, "--workspace"),
+      libraryRepositoryId: required(parsed.values.repository, "--repository"),
+    });
+    printResult(result, json, () =>
+      console.log(
+        `Attached repository ${result.name} (${result.id}) at ${result.referencePath}`,
+      ),
+    );
+    return 0;
+  }
+  if (action === "sync") {
+    const parsed = parseArguments(args, []);
+    expectPositionals(
+      parsed.positionals,
+      1,
+      "daedal repo sync <attachment-id>",
+    );
+    const result = await context.workspaceContent.syncRepository(
+      parsed.positionals[0]!,
+    );
+    printResult(result, json, () =>
+      console.log(
+        `Synchronized repository ${result.name} at ${result.baseCommit}`,
+      ),
+    );
+    return 0;
+  }
+  if (action === "detach") {
+    const parsed = parseArguments(args, []);
+    expectPositionals(
+      parsed.positionals,
+      1,
+      "daedal repo detach <attachment-id>",
+    );
+    const result = context.workspaceContent.detachRepository(
+      parsed.positionals[0]!,
+    );
+    printResult(result, json, () =>
+      console.log(`Detached repository ${result.name} (${result.id})`),
+    );
     return 0;
   }
   if (action === "worktree") {

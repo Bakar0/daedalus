@@ -12,6 +12,8 @@ import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import {
   buildTaskPrompt,
+  discoverProviderModels,
+  modelArgument,
   resolveAgentExecutable,
   resolveProvider,
 } from "./providers";
@@ -444,11 +446,16 @@ export class AgentService {
     };
   }
 
+  async models(provider: "codex" | "claude") {
+    return discoverProviderModels(this.config, provider);
+  }
+
   async spawn(input: {
     workspace: string;
     taskId?: string;
     name?: string;
     provider?: string;
+    model?: string;
     command?: string;
     terminal?: boolean;
   }): Promise<AgentSession> {
@@ -513,6 +520,7 @@ export class AgentService {
           sessionId: id,
           sessionName: name,
           prompt: taskPrompt,
+          model: input.model,
           additionalDirectories: prepared.references.map(
             (repository) =>
               repository.referencePath ?? repository.canonicalPath,
@@ -765,6 +773,8 @@ export class AgentService {
           "--add-dir",
           repository.referencePath ?? repository.canonicalPath,
         ]);
+      const selectedModel = modelArgument(agent.args);
+      const modelArgs = selectedModel ? ["--model", selectedModel] : [];
       if (agent.provider === "codex") {
         const hasNativeConversation = await hasPersistedCodexSession({
           sessionsDirectory: this.config.codexSessionsDirectory,
@@ -786,6 +796,7 @@ export class AgentService {
             );
           args = [
             ...definition.args,
+            ...modelArgs,
             ...additionalDirectories,
             "resume",
             agent.providerSessionId,
@@ -794,12 +805,13 @@ export class AgentService {
           // Codex allocates a thread UUID before the first user event but does
           // not persist an empty conversation. Restoring such an archived
           // session correctly starts a new empty native session.
-          args = [...definition.args, ...additionalDirectories];
+          args = [...definition.args, ...modelArgs, ...additionalDirectories];
           providerSessionId = null;
         }
       } else if (agent.provider === "claude") {
         args = [
           ...definition.args,
+          ...modelArgs,
           ...additionalDirectories,
           "--resume",
           agent.providerSessionId,

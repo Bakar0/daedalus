@@ -270,17 +270,19 @@ describe("AgentService", () => {
       const session = await context.agents.spawn({
         workspace: workspace.id,
         provider: "claude",
+        model: "claude-fable-5-1[1m]",
         name: "Persistent context",
       });
       expect(session.providerSessionId).toBe(session.id);
-      expect(tmux.launches[0]?.args.slice(0, 5)).toEqual([
+      expect(tmux.launches[0]?.args).toEqual([
         "run",
+        "--model",
+        "claude-fable-5-1[1m]",
         "--session-id",
         session.id,
         "--name",
         "Persistent context",
       ]);
-      expect(tmux.launches[0]?.args).toHaveLength(5);
       const archived = await context.agents.archive(session.id);
       expect(archived.archivedAt).not.toBeNull();
       expect(archived.status).toBe("exited");
@@ -290,12 +292,13 @@ describe("AgentService", () => {
         status: "running",
         resumeCount: 1,
       });
-      expect(tmux.launches[1]?.args.slice(0, 3)).toEqual([
+      expect(tmux.launches[1]?.args).toEqual([
         "run",
+        "--model",
+        "claude-fable-5-1[1m]",
         "--resume",
         session.id,
       ]);
-      expect(tmux.launches[1]?.args).toHaveLength(3);
       context.close();
     });
   });

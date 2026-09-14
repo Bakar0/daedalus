@@ -1,4 +1,5 @@
 import {
+  DaedalusError,
   normalizeError,
   type ApplicationContext,
   type AgentSession,
@@ -139,6 +140,7 @@ export function desktopDataFingerprint(context: ApplicationContext): string {
 export function createDesktopRequestHandlers(
   context: ApplicationContext,
   onMutation: () => void = () => {},
+  openExternal: (url: string) => boolean = () => false,
 ): DesktopRequestHandlers {
   const mutate = async <T>(operation: () => T | Promise<T>) => {
     const response = await result(operation);
@@ -148,6 +150,16 @@ export function createDesktopRequestHandlers(
 
   return {
     snapshot: () => result(() => desktopSnapshot(context)),
+    openExternal: ({ url }) =>
+      result(() => {
+        const parsed = new URL(url);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+          throw new DaedalusError(
+            "VALIDATION",
+            "Only HTTP and HTTPS links can be opened",
+          );
+        return { opened: openExternal(parsed.href) };
+      }),
     workspaceCreate: (params) =>
       mutate(async () => workspaceDto(await context.workspaces.create(params))),
     workspaceGet: (params) =>
@@ -246,6 +258,8 @@ export function createDesktopRequestHandlers(
       mutate(async () => taskDto(await context.tasks.remove(id, force))),
     agentGet: ({ id }) =>
       result(async () => agentDto(await context.agents.get(id))),
+    agentModels: ({ provider }) =>
+      result(() => context.agents.models(provider)),
     agentSpawn: (params) =>
       mutate(async () => agentDto(await context.agents.spawn(params))),
     agentSend: ({ id, text }) =>
