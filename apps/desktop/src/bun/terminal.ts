@@ -63,22 +63,48 @@ export class BoundedTerminalBuffer {
   }
 }
 
+export interface AuthorizedTerminalTarget {
+  kind: "agent" | "integrated";
+  id: string;
+  initialSize?: { cols: number; rows: number };
+}
+
 export function authorizeTerminalRequest(
   request: Request,
   expectedToken: string,
-): string | undefined {
+): AuthorizedTerminalTarget | undefined {
   const url = new URL(request.url);
   const agentId = url.searchParams.get("agent");
+  const integratedId = url.searchParams.get("integrated");
+  const id = agentId ?? integratedId;
   if (
     url.pathname !== "/terminal" ||
     url.searchParams.get("token") !== expectedToken ||
-    !agentId ||
+    !id ||
+    Boolean(agentId) === Boolean(integratedId) ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      agentId,
+      id,
     )
   )
     return undefined;
-  return agentId;
+  const cols = Number(url.searchParams.get("cols"));
+  const rows = Number(url.searchParams.get("rows"));
+  const hasSize = url.searchParams.has("cols") || url.searchParams.has("rows");
+  if (
+    hasSize &&
+    (!Number.isInteger(cols) ||
+      !Number.isInteger(rows) ||
+      cols < 20 ||
+      cols > 500 ||
+      rows < 5 ||
+      rows > 300)
+  )
+    return undefined;
+  return {
+    kind: agentId ? "agent" : "integrated",
+    id,
+    ...(hasSize ? { initialSize: { cols, rows } } : {}),
+  };
 }
 
 export interface TerminalConnectionOptions {
@@ -86,6 +112,7 @@ export interface TerminalConnectionOptions {
   socket: TerminalSocket;
   status: "live" | "reconnected";
   capture: () => Promise<Uint8Array>;
+  prepareCapture?: () => Promise<void>;
   sendInput: (data: string) => Promise<void>;
   createBridge: (onOutput: (output: Uint8Array) => void) => TerminalBridge;
   onError?: (error: unknown) => void;
@@ -110,6 +137,7 @@ export class TerminalConnection {
     this.#timer = setInterval(() => this.flush(), 16);
     void this.bridge.start().catch((error) => this.fail(error));
     try {
+      await this.options.prepareCapture?.();
       const capture = await this.options.capture();
       if (this.#closed) return;
       this.sendJson({

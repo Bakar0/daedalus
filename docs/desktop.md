@@ -1,20 +1,23 @@
 # Desktop RPC and UI
 
-The desktop is a thin adapter over the same `ApplicationContext` used by `daedal`. Workspace selection stays in the left sidebar and a centered app-header control switches the complete workspace composition. Board mode gives most width to the task canvas and keeps a narrower persistent brief inspector. Sessions mode replaces both with a compact vertical session navigator and a terminal-dominant work area. There is no separate Activity view or permanent session rail. Session cards list task-linked and workspace-level sessions and show their durable lifecycle timestamps. Briefs render as GitHub-flavored Markdown and switch to their portable plain-text source for edits; that same source is stored in SQLite and passed into linked agent launches.
+The desktop is a thin adapter over the same `ApplicationContext` used by `daedal`. Workspace selection stays in the left sidebar and a centered app-header control switches the complete workspace composition. Board mode gives most width to the task canvas and keeps a narrower persistent brief inspector. Sessions mode replaces both with a compact vertical session navigator and a terminal-dominant work area. Workspace mode uses a compact, lazily expanded filesystem explorer beside a CodeMirror editor with Markdown preview. Root `BRIEF.md` and `JOURNAL.md` open like normal workspace files; freshly fetched repository references under `repos/` and session-owned worktrees appear in the explorer. The repository add button opens a fuzzy finder over the global repository library and also supports cloning a remote. There is no separate Activity view or permanent session rail. Session cards list task-linked and workspace-level sessions and show their durable lifecycle timestamps. Task briefs render as GitHub-flavored Markdown and switch to their portable plain-text source for edits.
 
-**New session** presents Codex, Claude, and Terminal as a direct row of tool choices instead of a dropdown. There is no workspace or task selector in this dialog: every session opens in the currently selected workspace, and free terminals start its login shell there. Sessions persist their explicit `agent` or `terminal` kind and use the same durable tmux ownership, reconnect, stop, and remove lifecycle. Multiple terminal split layouts are not exposed yet; selecting a session card switches the one terminal surface. The settings dialog reports the resolved `DAEDALUS_HOME`, workspace root, database, tmux capability, configured provider executables, and renderer-local theme preference.
+**New session** presents Codex, Claude, and Terminal as a direct row of tool choices instead of a dropdown. There is no workspace or task selector in this dialog: every session opens in the currently selected workspace, and free terminals start its login shell there. Sessions persist their explicit `agent` or `terminal` kind and use the same durable tmux ownership, reconnect, stop, and remove lifecycle. Selecting a session card switches the agent terminal surface. The settings dialog reports the resolved `DAEDALUS_HOME`, workspace root, database, tmux capability, configured provider executables, and renderer-local theme preference.
+
+The bottom integrated-terminal panel is a separate utility surface available in Board, Sessions, and Workspace modes. Its **+** action creates a persisted login shell in the configured Daedalus home. Each active workspace card has an **Open in integrated terminal** action that creates a named tab in the workspace's validated registered path. Tabs show live state, can be selected or closed, and survive panel collapse and app restart through SQLite metadata plus tmux ownership. They never appear in the agent Sessions list.
 
 ## Contract
 
-`@daedalus/protocol` defines serializable workspace, task, agent, settings, and snapshot DTOs plus `DesktopRpcSchema`. Every request returns `RpcResult<T>` so validation, not-found, conflict, dependency, and internal failures retain stable codes across the process boundary.
+`@daedalus/protocol` defines serializable workspace, task, agent, integrated-terminal, settings, and snapshot DTOs plus `DesktopRpcSchema`. Every request returns `RpcResult<T>` so validation, not-found, conflict, dependency, and internal failures retain stable codes across the process boundary.
 
-The Bun handlers only convert DTOs, normalize errors, and call `context.workspaces`, `context.tasks`, or `context.agents`. Filesystem identity checks, SQLite operations, task validation, provider launches, and tmux lifecycle behavior remain in shared packages.
+The Bun handlers only convert DTOs, normalize errors, and call `context.workspaces`, `context.tasks`, `context.agents`, or `context.terminals`. Filesystem identity checks, SQLite operations, task validation, provider launches, and tmux lifecycle behavior remain in shared packages.
 
 Available calls cover:
 
 - workspace snapshot/create/get/update/remove;
 - task create/get/update/status/remove;
-- agent get/spawn/send/stop/remove;
+- agent get/spawn/send/stop/remove/archive/restore;
+- integrated terminal create/close;
 - settings and executable capability discovery through the snapshot.
 
 Workspace removal always supplies the core `force` guard after UI confirmation. The UI first asks whether files should be deleted and then requires a second confirmation describing the exact action. Task deletion, agent stop, and session-history removal also require confirmation. Live agents continue to block task and workspace removal in core.
@@ -25,11 +28,17 @@ Successful desktop mutations emit a typed `dataChanged` message immediately. The
 
 ## Terminal boundary
 
-The renderer receives a token-bearing loopback endpoint at launch and adds only the selected agent UUID. The Bun process resolves the UUID to its recorded tmux session, rejects non-live sessions, captures bounded ANSI history, and then streams live binary output. Input and dimensions flow back as small typed JSON messages. A single selected `ghostty-web` instance provides interactive input, paste, Unicode, ANSI color, resize, and 10,000 lines of scrollback.
+The renderer receives a token-bearing loopback endpoint at launch and adds either the selected agent UUID or integrated-terminal UUID. The Bun process resolves the typed target to its recorded tmux session, rejects non-live sessions, captures bounded ANSI history, and then streams live binary output. Input and dimensions flow back as small typed JSON messages. A selected `ghostty-web` instance provides interactive input, paste, Unicode, ANSI color, resize, and 10,000 lines of scrollback.
 
 The transport caps pending output at 1 MiB on both sides and pauses Bun-side draining while the WebSocket exceeds a 256 KiB high-water mark. Old pending bytes are discarded on overflow with a terminal notice; tmux keeps the authoritative pane and a reconnect performs a new bounded capture. Unexpected socket closure retries with bounded exponential delay. Normal session switching and view teardown close the socket, terminal, timers, and tmux control client without killing the underlying session. Stop and remove remain explicit actions on each session card.
 
 The panel distinguishes live, reconnected, reconnecting, exited, and lost states. Desktop startup reconciliation makes existing tmux sessions reconnectable after app restart. CLI attachment remains independent and compatible because the desktop never replaces or proxies session ownership.
+
+## Archives
+
+The primary session lifecycle action is Archive. It stops a live process and moves the logical session into a collapsed **Archived sessions** section at the bottom of the selected workspace's session navigator. **Restore & resume** uses the persisted provider conversation locator and exposes the session only after a new tmux runtime starts successfully.
+
+Archived workspaces appear in a collapsed section at the bottom of the workspace sidebar. Archiving a workspace also archives all sessions inside it. Restoring the workspace makes its tasks visible again but intentionally leaves its sessions in the archive for individual restoration.
 
 ## Testing
 

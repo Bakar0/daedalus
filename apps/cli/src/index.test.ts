@@ -69,6 +69,30 @@ describe("daedal CLI contract", () => {
         "--json",
       ]);
       expect(JSON.parse(listed.stdout).data).toHaveLength(1);
+      const archived = await cli(home, [
+        "workspace",
+        "archive",
+        workspace.id,
+        "--json",
+      ]);
+      expect(JSON.parse(archived.stdout).data.archivedAt).not.toBeNull();
+      expect(
+        JSON.parse((await cli(home, ["workspace", "list", "--json"])).stdout)
+          .data,
+      ).toEqual([]);
+      expect(
+        JSON.parse(
+          (await cli(home, ["workspace", "list", "--archived", "--json"]))
+            .stdout,
+        ).data,
+      ).toHaveLength(1);
+      const restored = await cli(home, [
+        "workspace",
+        "restore",
+        workspace.id,
+        "--json",
+      ]);
+      expect(JSON.parse(restored.stdout).data.archivedAt).toBeNull();
     });
   });
 

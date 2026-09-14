@@ -3,7 +3,10 @@ import type { DesktopRpcSchema } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 
 function defineRendererRpc() {
-  return Electroview.defineRPC<DesktopRpcSchema>({ handlers: {} });
+  return Electroview.defineRPC<DesktopRpcSchema>({
+    handlers: {},
+    maxRequestTime: 120_000,
+  });
 }
 
 export function createElectrobunClient(): DesktopClient {

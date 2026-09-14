@@ -46,6 +46,93 @@ export interface AgentSessionDto {
   exitCode: number | null;
   startedAt: string;
   endedAt: string | null;
+  providerSessionId: string | null;
+  archivedAt: string | null;
+  resumeCount: number;
+}
+
+export interface IntegratedTerminalDto {
+  id: string;
+  name: string;
+  tmuxSession: string;
+  workingDirectory: string;
+  status: AgentSessionStatus;
+  startedAt: string;
+  endedAt: string | null;
+}
+
+export type WorkspaceRepositoryAccess = "write" | "reference";
+
+export interface RepositoryLibraryDto {
+  id: string;
+  name: string;
+  remoteUrl: string;
+  defaultBranch: string;
+  lastFetchedAt: string;
+}
+
+export interface GitHubRepositoryDto {
+  name: string;
+  nameWithOwner: string;
+  remoteUrl: string;
+}
+
+export interface RepositoryDiscoveryDto {
+  githubCliAvailable: boolean;
+  authenticated: boolean;
+  repositories: GitHubRepositoryDto[];
+  error?: string;
+}
+
+export interface WorkspaceRepositoryDto {
+  id: string;
+  workspaceId: string;
+  name: string;
+  canonicalPath: string;
+  access: WorkspaceRepositoryAccess;
+  libraryRepositoryId: string | null;
+  referencePath: string | null;
+  baseBranch: string | null;
+  baseCommit: string | null;
+  fetchedAt: string | null;
+  createdAt: string;
+  gitStatus?: {
+    state:
+      "clean" | "modified" | "ahead" | "behind" | "diverged" | "unavailable";
+    changedFiles: number;
+    ahead: number;
+    behind: number;
+  };
+}
+
+export interface SessionWorktreeDto {
+  sessionId: string;
+  repositoryId: string;
+  path: string;
+  branchName: string;
+  createdAt: string;
+}
+
+export interface WorkspaceContentDto {
+  workspaceId: string;
+  brief: string;
+  journal: string;
+  files: WorkspaceFileEntryDto[];
+  repositories: WorkspaceRepositoryDto[];
+  worktrees: SessionWorktreeDto[];
+}
+
+export interface WorkspaceFileEntryDto {
+  name: string;
+  path: string;
+  kind: "file" | "directory" | "symlink";
+}
+
+export interface WorkspaceFileDto {
+  name: string;
+  path: string;
+  content: string;
+  format: "markdown" | "text";
 }
 
 export interface ProviderAvailabilityDto {
@@ -58,8 +145,10 @@ export interface DesktopSettingsDto {
   home: string;
   workspaceRoot: string;
   databasePath: string;
+  repositoryRoot: string;
   tmuxAvailable: boolean;
   tmuxVersion?: string;
+  workspaceInstructionFilesEnabled: boolean;
   providers: ProviderAvailabilityDto[];
 }
 
@@ -67,6 +156,8 @@ export interface DesktopSnapshotDto {
   workspaces: WorkspaceDto[];
   tasks: TaskDto[];
   agents: AgentSessionDto[];
+  terminals: IntegratedTerminalDto[];
+  repositories: RepositoryLibraryDto[];
   settings: DesktopSettingsDto;
 }
 
@@ -104,6 +195,77 @@ export interface DesktopRpcSchema {
         { reference: string; deleteFiles: boolean; force: true },
         { workspace: WorkspaceDto; filesDeleted: boolean }
       >;
+      workspaceArchive: Request<{ reference: string }, WorkspaceDto>;
+      workspaceRestore: Request<{ reference: string }, WorkspaceDto>;
+      workspaceContentGet: Request<{ workspace: string }, WorkspaceContentDto>;
+      workspaceDirectoryList: Request<
+        { workspace: string; path?: string },
+        WorkspaceFileEntryDto[]
+      >;
+      workspaceFileRead: Request<
+        { workspace: string; path: string },
+        WorkspaceFileDto
+      >;
+      workspaceFileWrite: Request<
+        {
+          workspace: string;
+          path: string;
+          content: string;
+          expectedContent: string;
+        },
+        WorkspaceFileDto
+      >;
+      workspaceEntryCreate: Request<
+        {
+          workspace: string;
+          parentPath?: string;
+          name: string;
+          kind: "file" | "directory";
+        },
+        WorkspaceFileEntryDto
+      >;
+      workspaceInstructionFilesSet: Request<
+        { enabled: boolean },
+        { enabled: boolean }
+      >;
+      workspaceRepositoryAttach: Request<
+        {
+          workspace: string;
+          libraryRepositoryId: string;
+        },
+        WorkspaceRepositoryDto
+      >;
+      workspaceRepositorySync: Request<{ id: string }, WorkspaceRepositoryDto>;
+      repositoryLibraryAdd: Request<
+        {
+          remoteUrl: string;
+          name?: string;
+          githubNameWithOwner?: string;
+        },
+        RepositoryLibraryDto
+      >;
+      repositoryDiscovery: Request<
+        Record<string, never>,
+        RepositoryDiscoveryDto
+      >;
+      workspaceRepositoryDetach: Request<
+        { id: string },
+        WorkspaceRepositoryDto
+      >;
+      workspaceJournalAppend: Request<
+        {
+          workspace: string;
+          kind:
+            | "decision"
+            | "progress"
+            | "blocker"
+            | "question"
+            | "handoff"
+            | "completed";
+          summary: string;
+        },
+        WorkspaceContentDto
+      >;
       taskCreate: Request<
         {
           workspace: string;
@@ -140,6 +302,13 @@ export interface DesktopRpcSchema {
       agentSend: Request<{ id: string; text: string }, AgentSessionDto>;
       agentStop: Request<{ id: string; force: boolean }, AgentSessionDto>;
       agentRemove: Request<{ id: string }, AgentSessionDto>;
+      agentArchive: Request<{ id: string; force?: boolean }, AgentSessionDto>;
+      agentRestore: Request<{ id: string }, AgentSessionDto>;
+      terminalCreate: Request<
+        { workspace?: string; name?: string },
+        IntegratedTerminalDto
+      >;
+      terminalClose: Request<{ id: string }, IntegratedTerminalDto>;
     };
     messages: Record<never, never>;
   };

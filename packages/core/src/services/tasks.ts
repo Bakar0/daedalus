@@ -66,7 +66,7 @@ export class TaskService {
     description?: string;
     priority?: string;
   }): Promise<Task> {
-    const workspace = await this.workspaces.get(input.workspace);
+    const workspace = await this.workspaces.getActive(input.workspace);
     const now = new Date().toISOString();
     const task: Task = {
       id: crypto.randomUUID(),

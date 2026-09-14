@@ -23,6 +23,10 @@ class FakeTmux implements TmuxClient {
   async attach() {
     return 0;
   }
+  async capture() {
+    return "";
+  }
+  async sendKeys() {}
   async send() {}
   async stop(session: string) {
     this.sessions.delete(session);
@@ -67,6 +71,18 @@ describe("desktop RPC handlers", () => {
         });
         expect(progressed.ok && progressed.data.status).toBe("in_progress");
 
+        const homeTerminal = await rpc.terminalCreate({});
+        expect(homeTerminal.ok && homeTerminal.data.workingDirectory).toBe(
+          home,
+        );
+        const workspaceTerminal = await rpc.terminalCreate({
+          workspace: workspace.data.id,
+        });
+        expect(
+          workspaceTerminal.ok && workspaceTerminal.data.workingDirectory,
+        ).toBe(workspace.data.path);
+        if (!homeTerminal.ok || !workspaceTerminal.ok) return;
+
         const agent = await rpc.agentSpawn({
           workspace: workspace.data.id,
           taskId: task.data.id,
@@ -82,6 +98,12 @@ describe("desktop RPC handlers", () => {
         });
         expect(stopped.ok && stopped.data.status).toBe("exited");
         expect((await rpc.agentRemove({ id: agent.data.id })).ok).toBe(true);
+        expect((await rpc.terminalClose({ id: homeTerminal.data.id })).ok).toBe(
+          true,
+        );
+        expect(
+          (await rpc.terminalClose({ id: workspaceTerminal.data.id })).ok,
+        ).toBe(true);
         expect(
           (await rpc.taskRemove({ id: task.data.id, force: true })).ok,
         ).toBe(true);
@@ -94,7 +116,7 @@ describe("desktop RPC handlers", () => {
             })
           ).ok,
         ).toBe(true);
-        expect(mutations).toBe(8);
+        expect(mutations).toBe(12);
       } finally {
         context.close();
       }
@@ -133,15 +155,78 @@ describe("desktop RPC handlers", () => {
         tmux: new FakeTmux(),
       });
       try {
-        const response = await createDesktopRequestHandlers(context).snapshot(
-          {},
-        );
+        const rpc = createDesktopRequestHandlers(context);
+        const response = await rpc.snapshot({});
         expect(response.ok).toBe(true);
         if (response.ok) {
           expect(response.data.settings.home).toBe(home);
           expect(response.data.settings.tmuxAvailable).toBe(true);
+          expect(response.data.settings.workspaceInstructionFilesEnabled).toBe(
+            true,
+          );
           expect(response.data.workspaces).toEqual([]);
         }
+        expect(
+          (await rpc.workspaceInstructionFilesSet({ enabled: false })).ok,
+        ).toBe(true);
+        const updated = await rpc.snapshot({});
+        expect(
+          updated.ok && updated.data.settings.workspaceInstructionFilesEnabled,
+        ).toBe(false);
+      } finally {
+        context.close();
+      }
+    });
+  });
+
+  test("reads workspace content and appends a typed journal entry", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const context = await createApplicationContext({
+        env: { ...process.env, DAEDALUS_HOME: home },
+        tmux: new FakeTmux(),
+      });
+      const rpc = createDesktopRequestHandlers(context);
+      try {
+        const created = await rpc.workspaceCreate({ name: "Content" });
+        expect(created.ok).toBe(true);
+        if (!created.ok) return;
+        const content = await rpc.workspaceContentGet({
+          workspace: created.data.id,
+        });
+        expect(content.ok && content.data.brief).toContain("# Brief");
+        const root = await rpc.workspaceDirectoryList({
+          workspace: created.data.id,
+        });
+        expect(
+          root.ok && root.data.some((item) => item.path === "BRIEF.md"),
+        ).toBe(true);
+        const brief = await rpc.workspaceFileRead({
+          workspace: created.data.id,
+          path: "BRIEF.md",
+        });
+        expect(brief.ok && brief.data.format).toBe("markdown");
+        const createdFile = await rpc.workspaceEntryCreate({
+          workspace: created.data.id,
+          name: "NOTES.md",
+          kind: "file",
+        });
+        expect(createdFile.ok && createdFile.data.path).toBe("NOTES.md");
+        const savedFile = await rpc.workspaceFileWrite({
+          workspace: created.data.id,
+          path: "NOTES.md",
+          content: "# Notes\n",
+          expectedContent: "",
+        });
+        expect(savedFile.ok && savedFile.data.content).toBe("# Notes\n");
+        const journal = await rpc.workspaceJournalAppend({
+          workspace: created.data.id,
+          kind: "blocker",
+          summary: "Developer input is required.",
+        });
+        expect(journal.ok && journal.data.journal).toContain("· blocker");
+        expect(journal.ok && journal.data.journal).toContain(
+          "Developer input is required.",
+        );
       } finally {
         context.close();
       }

@@ -1,15 +1,25 @@
-import { FitAddon, init, Terminal } from "ghostty-web";
+import { init, Terminal } from "ghostty-web";
+import { basicSetup, EditorView } from "codemirror";
+import { markdown } from "@codemirror/lang-markdown";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
   AgentSessionDto,
   DesktopSnapshotDto,
+  IntegratedTerminalDto,
+  RepositoryDiscoveryDto,
   RpcResult,
   TaskDto,
   TaskStatus,
+  WorkspaceContentDto,
+  WorkspaceFileDto,
+  WorkspaceFileEntryDto,
+  WorkspaceDto,
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
+import { repositoryFuzzyScore } from "./repository-search";
 
 const STATUSES: TaskStatus[] = [
   "todo",
@@ -22,11 +32,53 @@ const STATUSES: TaskStatus[] = [
 const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
+export interface SessionLaunchState {
+  key: string;
+  sessionId?: string;
+  workspaceId: string;
+  taskId?: string;
+  name: string;
+  tool: "codex" | "claude" | "terminal";
+  startedAt: string;
+  status: "starting" | "error";
+  error?: string;
+}
+
+const repositoryRemoteIdentity = (value: string) =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/^git@github\.com:/, "github.com/")
+    .replace(/^https?:\/\/(www\.)?github\.com\//, "github.com/")
+    .replace(/\.git$/, "")
+    .replace(/\/$/, "");
+
+const looksLikeRepositorySource = (value: string) => {
+  const source = value.trim();
+  return (
+    source.startsWith("/") ||
+    /^[A-Za-z]:[\\/]/.test(source) ||
+    source.startsWith("git@") ||
+    /^[a-z][a-z0-9+.-]*:\/\//i.test(source)
+  );
+};
+
 const sessionName = (session: AgentSessionDto) =>
   session.name ||
   (session.kind === "terminal"
     ? "Terminal"
     : session.provider.slice(0, 1).toUpperCase() + session.provider.slice(1));
+
+const terminalPathHint = (path: string, home?: string) => {
+  if (home && path === home) return "Daedalus home";
+  const parts = path.split("/").filter(Boolean);
+  return parts.length > 2 ? `…/${parts.slice(-2).join("/")}` : path;
+};
+
+const workspaceParentPath = (path: string) => {
+  const separator = path.lastIndexOf("/");
+  return separator < 0 ? "" : path.slice(0, separator);
+};
 
 const sessionTool = (
   session: AgentSessionDto,
@@ -119,6 +171,58 @@ function SessionLaunchIcon() {
   );
 }
 
+function ArchiveIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="archive-icon"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <rect height="5" rx="1.5" width="20" x="2" y="3" />
+      <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M10 12h4" />
+    </svg>
+  );
+}
+
+// VS Code Codicons repo-pull glyph (MIT).
+function RepositoryPullIcon() {
+  return (
+    <svg aria-hidden="true" fill="currentColor" viewBox="0 0 16 16">
+      <path d="M4.85 6.15A.49.49 0 0 0 4.5 6a.49.49 0 0 0-.35.15.49.49 0 0 0-.15.35c0 .127.05.255.15.35l3 3c.095.1.222.15.35.15a.49.49 0 0 0 .35-.15l3-3a.49.49 0 0 0 .15-.35.49.49 0 0 0-.15-.35.49.49 0 0 0-.35-.15.49.49 0 0 0-.35.15L8 8.29V1.5a.5.5 0 0 0-1 0v6.79L4.85 6.15Z" />
+      <path
+        clipRule="evenodd"
+        d="M9.95 13h2.55a.5.5 0 0 1 0 1H9.95A2.5 2.5 0 0 1 5.05 14H2.5a.5.5 0 0 1 0-1h2.55a2.5 2.5 0 0 1 4.9 0ZM6.09 14A1.5 1.5 0 0 0 9 13.5 1.5 1.5 0 0 0 6 13.5c0 .18.03.34.09.5Z"
+        fillRule="evenodd"
+      />
+    </svg>
+  );
+}
+
+function repositoryStatusText(
+  status: WorkspaceContentDto["repositories"][number]["gitStatus"],
+) {
+  if (!status || status.state === "unavailable") return "Status unavailable";
+  if (status.state === "modified")
+    return `${status.changedFiles} ${status.changedFiles === 1 ? "change" : "changes"}`;
+  if (status.state === "diverged") return `↑${status.ahead} ↓${status.behind}`;
+  if (status.state === "ahead") return `↑${status.ahead} ahead`;
+  if (status.state === "behind") return `↓${status.behind} behind`;
+  return "Clean";
+}
+
+const sessionIsLive = (session: AgentSessionDto) =>
+  session.status === "running" || session.status === "starting";
+
+// Lost sessions are today's attention signal. This predicate is the extension
+// point for richer provider/developer attention states later.
+const sessionNeedsAttention = (session: AgentSessionDto) =>
+  session.status === "lost";
+
 const taskExcerpt = (markdown: string) =>
   markdown
     .replace(/```[\s\S]*?```/g, "Code example")
@@ -144,13 +248,114 @@ export function MarkdownPreview({ source }: { source: string }) {
   );
 }
 
+function WorkspaceFileEditor({
+  file,
+  onChange,
+  onSave,
+  readOnly,
+  theme,
+}: {
+  file: WorkspaceFileDto;
+  onChange: (value: string) => void;
+  onSave: () => void;
+  readOnly: boolean;
+  theme: "dark" | "light";
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<EditorView | undefined>(undefined);
+  const changeRef = useRef(onChange);
+  const saveRef = useRef(onSave);
+  changeRef.current = onChange;
+  saveRef.current = onSave;
+
+  useEffect(() => {
+    const parent = containerRef.current;
+    if (!parent) return;
+    const editor = new EditorView({
+      doc: file.content,
+      parent,
+      extensions: [
+        basicSetup,
+        EditorView.editable.of(!readOnly),
+        EditorView.lineWrapping,
+        ...(file.format === "markdown" ? [markdown()] : []),
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) changeRef.current(update.state.doc.toString());
+        }),
+        EditorView.theme(
+          {
+            "&": {
+              backgroundColor: "transparent",
+              color: theme === "dark" ? "#dce5f5" : "#1d2738",
+              height: "100%",
+            },
+            ".cm-content": {
+              caretColor: theme === "dark" ? "#9fc5ff" : "#2563a9",
+              fontFamily: '"SFMono-Regular", Menlo, monospace',
+              fontSize: "12px",
+              lineHeight: "1.6",
+              padding: "12px 0 28px",
+            },
+            ".cm-cursor, .cm-dropCursor": {
+              borderLeftColor: theme === "dark" ? "#9fc5ff" : "#2563a9",
+            },
+            ".cm-gutters": {
+              backgroundColor: "transparent",
+              border: "none",
+              color: theme === "dark" ? "#56657d" : "#8b98aa",
+            },
+            ".cm-activeLine, .cm-activeLineGutter": {
+              backgroundColor: theme === "dark" ? "#ffffff08" : "#315d9510",
+            },
+            ".cm-scroller": { overflow: "auto" },
+            "&.cm-focused": { outline: "none" },
+          },
+          { dark: theme === "dark" },
+        ),
+      ],
+    });
+    editorRef.current = editor;
+    editor.focus();
+    return () => {
+      editorRef.current = undefined;
+      editor.destroy();
+    };
+  }, [file.format, file.path, readOnly, theme]);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || editor.state.doc.toString() === file.content) return;
+    editor.dispatch({
+      changes: { from: 0, to: editor.state.doc.length, insert: file.content },
+    });
+  }, [file.content]);
+
+  return (
+    <div
+      className="workspace-code-editor"
+      onKeyDown={(event) => {
+        if (
+          (event.metaKey || event.ctrlKey) &&
+          event.key.toLowerCase() === "s"
+        ) {
+          event.preventDefault();
+          saveRef.current();
+        }
+      }}
+      ref={containerRef}
+    />
+  );
+}
+
 function Modal({
   title,
   onClose,
   wide = false,
+  dismissible = true,
   children,
 }: {
   children: React.ReactNode;
+  dismissible?: boolean;
   onClose: () => void;
   title: string;
   wide?: boolean;
@@ -160,7 +365,7 @@ function Modal({
       className="modal-backdrop"
       role="presentation"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (dismissible && event.target === event.currentTarget) onClose();
       }}
     >
       <section
@@ -174,7 +379,7 @@ function Modal({
             <span className="eyebrow">Daedalus</span>
             <h2>{title}</h2>
           </div>
-          <button className="quiet" onClick={onClose}>
+          <button className="quiet" disabled={!dismissible} onClick={onClose}>
             Close
           </button>
         </div>
@@ -184,14 +389,24 @@ function Modal({
   );
 }
 
-function SessionTerminal({ session }: { session: AgentSessionDto }) {
+function TerminalSurface({
+  id,
+  label,
+  status,
+  target,
+}: {
+  id: string;
+  label: string;
+  status: AgentSessionDto["status"];
+  target: "agent" | "integrated";
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [connection, setConnection] = useState("connecting");
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    if (session.status !== "running" && session.status !== "starting") {
-      setConnection(session.status);
+    if (status !== "running" && status !== "starting") {
+      setConnection(status);
       return;
     }
     let disposed = false;
@@ -204,6 +419,7 @@ function SessionTerminal({ session }: { session: AgentSessionDto }) {
     let layoutFrame: number | undefined;
     let layoutTimer: ReturnType<typeof setTimeout> | undefined;
     let resizeObserver: ResizeObserver | undefined;
+    let lastSentSize: string | undefined;
     const pending: Uint8Array[] = [];
     let pendingBytes = 0;
     const drain = () => {
@@ -243,23 +459,60 @@ function SessionTerminal({ session }: { session: AgentSessionDto }) {
           selectionBackground: "#38546b",
         },
       });
-      const fit = new FitAddon();
-      terminal.loadAddon(fit);
       terminal.open(container);
       const sendSize = () => {
-        if (socket?.readyState === WebSocket.OPEN)
+        const cols = terminal?.cols ?? 0;
+        const rows = terminal?.rows ?? 0;
+        const size = `${cols}x${rows}`;
+        if (
+          cols >= 20 &&
+          rows >= 5 &&
+          size !== lastSentSize &&
+          socket?.readyState === WebSocket.OPEN
+        ) {
           socket.send(
             JSON.stringify({
               type: "resize",
-              cols: terminal?.cols ?? 80,
-              rows: terminal?.rows ?? 24,
+              cols,
+              rows,
             }),
           );
+          lastSentSize = size;
+        }
       };
       const fitAndSync = () => {
         layoutFrame = undefined;
-        if (disposed) return;
-        fit.fit();
+        const currentTerminal = terminal;
+        if (disposed || !currentTerminal) return;
+        const canvas = container.querySelector("canvas");
+        const canvasBounds = canvas?.getBoundingClientRect();
+        const styles = window.getComputedStyle(container);
+        const cellWidth = canvasBounds?.width
+          ? canvasBounds.width / currentTerminal.cols
+          : 0;
+        const cellHeight = canvasBounds?.height
+          ? canvasBounds.height / currentTerminal.rows
+          : 0;
+        const availableWidth =
+          container.clientWidth -
+          (Number.parseFloat(styles.paddingLeft) || 0) -
+          (Number.parseFloat(styles.paddingRight) || 0);
+        const availableHeight =
+          container.clientHeight -
+          (Number.parseFloat(styles.paddingTop) || 0) -
+          (Number.parseFloat(styles.paddingBottom) || 0);
+        const dimensions =
+          cellWidth > 0 && cellHeight > 0
+            ? {
+                cols: Math.floor(availableWidth / cellWidth),
+                rows: Math.floor(availableHeight / cellHeight),
+              }
+            : undefined;
+        // tmux clamps clients to 20x5. Fitting Ghostty below that while a tab
+        // is hidden or the window is minimized puts the two terminal grids out
+        // of sync and leaves stale glyphs/cursors behind when it is restored.
+        if (!dimensions || dimensions.cols < 20 || dimensions.rows < 5) return;
+        currentTerminal.resize(dimensions.cols, dimensions.rows);
         sendSize();
       };
       const scheduleFit = () => {
@@ -278,12 +531,18 @@ function SessionTerminal({ session }: { session: AgentSessionDto }) {
       }
       const connect = () => {
         if (disposed || ended) return;
+        fitAndSync();
         const url = new URL(endpoint);
-        url.searchParams.set("agent", session.id);
+        url.searchParams.set(target, id);
+        if ((terminal?.cols ?? 0) >= 20 && (terminal?.rows ?? 0) >= 5) {
+          url.searchParams.set("cols", String(terminal?.cols));
+          url.searchParams.set("rows", String(terminal?.rows));
+        }
         socket = new WebSocket(url);
         socket.binaryType = "arraybuffer";
         socket.onopen = () => {
           reconnectAttempts = 0;
+          lastSentSize = undefined;
           setConnection("connected");
           scheduleFit();
           if (layoutTimer) clearTimeout(layoutTimer);
@@ -329,10 +588,7 @@ function SessionTerminal({ session }: { session: AgentSessionDto }) {
         if (socket?.readyState === WebSocket.OPEN)
           socket.send(JSON.stringify({ type: "input", data }));
       });
-      terminal.onResize(({ cols, rows }) => {
-        if (socket?.readyState === WebSocket.OPEN)
-          socket.send(JSON.stringify({ type: "resize", cols, rows }));
-      });
+      terminal.onResize(sendSize);
       connect();
     })();
     return () => {
@@ -345,23 +601,53 @@ function SessionTerminal({ session }: { session: AgentSessionDto }) {
       socket?.close();
       terminal?.dispose();
     };
-  }, [session.id, session.status]);
+  }, [id, status, target]);
 
   return (
     <section className="agent-terminal-shell">
       <div className="terminal-status">
-        <span className={`agent-dot ${session.status}`} />
-        <span>{sessionName(session)}</span>
+        <span className={`agent-dot ${status}`} />
+        <span>{label}</span>
         <small>
-          {connection} · {session.id.slice(0, 8)}
+          {connection} · {id.slice(0, 8)}
         </small>
       </div>
       <div
-        aria-label={`Terminal for ${sessionName(session)} session ${session.id.slice(0, 8)}`}
+        aria-label={`Terminal for ${label} ${id.slice(0, 8)}`}
         className="terminal"
         ref={containerRef}
       />
     </section>
+  );
+}
+
+function IntegratedTerminalSurface({
+  active,
+  terminal,
+}: {
+  active: boolean;
+  terminal: IntegratedTerminalDto;
+}) {
+  const [activated, setActivated] = useState(active);
+
+  useEffect(() => {
+    if (active) setActivated(true);
+  }, [active]);
+
+  return (
+    <div
+      aria-hidden={!active}
+      className={`integrated-terminal-surface ${active ? "active" : "hidden"}`}
+    >
+      {activated && (
+        <TerminalSurface
+          id={terminal.id}
+          label={terminal.name}
+          status={terminal.status}
+          target="integrated"
+        />
+      )}
+    </div>
   );
 }
 
@@ -370,16 +656,24 @@ export function WorkspaceApp({
   initialSnapshot,
   initialSelectedTaskId,
   initialActiveAgentId,
+  initialActiveTerminalId,
+  initialTerminalPanelOpen = false,
   initialWorkspaceView = "board",
+  initialWorkspaceContent,
   initialModal,
+  initialSessionLaunches = [],
 }: {
   injectedClient?: DesktopClient;
   initialSnapshot?: DesktopSnapshotDto;
   initialSelectedTaskId?: string;
   initialActiveAgentId?: string;
+  initialActiveTerminalId?: string;
+  initialTerminalPanelOpen?: boolean;
   initialDetailView?: "brief" | "terminal";
-  initialWorkspaceView?: "board" | "sessions";
-  initialModal?: "workspace" | "task" | "session" | "settings";
+  initialWorkspaceView?: "board" | "sessions" | "workspace";
+  initialWorkspaceContent?: WorkspaceContentDto;
+  initialModal?: "workspace" | "task" | "session" | "repository" | "settings";
+  initialSessionLaunches?: SessionLaunchState[];
 } = {}) {
   const clientRef = useRef(injectedClient);
   if (!clientRef.current)
@@ -387,14 +681,51 @@ export function WorkspaceApp({
   const client = clientRef.current;
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [workspaceId, setWorkspaceId] = useState(
-    initialSnapshot?.workspaces[0]?.id,
+    initialSnapshot?.workspaces.find((item) => !item.archivedAt)?.id,
   );
   const [selectedTaskId, setSelectedTaskId] = useState(initialSelectedTaskId);
   const [activeSessionId, setActiveSessionId] = useState(initialActiveAgentId);
-  const [view, setView] = useState<"board" | "sessions">(initialWorkspaceView);
+  const [view, setView] = useState<"board" | "sessions" | "workspace">(
+    initialWorkspaceView,
+  );
+  const [workspaceContent, setWorkspaceContent] = useState(
+    initialWorkspaceContent,
+  );
+  const [workspaceDirectories, setWorkspaceDirectories] = useState<
+    Record<string, WorkspaceFileEntryDto[]>
+  >(() =>
+    initialWorkspaceContent
+      ? { "": initialWorkspaceContent.files }
+      : ({} as Record<string, WorkspaceFileEntryDto[]>),
+  );
+  const [expandedWorkspaceDirectories, setExpandedWorkspaceDirectories] =
+    useState<ReadonlySet<string>>(() => new Set());
+  const [selectedWorkspaceFile, setSelectedWorkspaceFile] =
+    useState<WorkspaceFileDto | null>(() =>
+      initialWorkspaceContent
+        ? {
+            name: "BRIEF.md",
+            path: "BRIEF.md",
+            content: initialWorkspaceContent.brief,
+            format: "markdown",
+          }
+        : null,
+    );
+  const [workspaceDraft, setWorkspaceDraft] = useState(
+    initialWorkspaceContent?.brief ?? "",
+  );
+  const [workspaceFileMode, setWorkspaceFileMode] = useState<
+    "edit" | "preview"
+  >("edit");
+  const [selectedWorkspaceDirectory, setSelectedWorkspaceDirectory] =
+    useState("");
+  const [newWorkspaceEntry, setNewWorkspaceEntry] = useState<{
+    kind: "file" | "directory";
+    name: string;
+  }>();
   const [filter, setFilter] = useState<TaskStatus | "all">("all");
   const [modal, setModal] = useState<
-    "workspace" | "task" | "session" | "settings" | undefined
+    "workspace" | "task" | "session" | "repository" | "settings" | undefined
   >(initialModal);
   const [editingTask, setEditingTask] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -411,10 +742,96 @@ export function WorkspaceApp({
     name: string;
     taskId?: string;
   }>({ name: "" });
+  const [sessionLaunches, setSessionLaunches] = useState<SessionLaunchState[]>(
+    initialSessionLaunches,
+  );
+  const [repositoryForm, setRepositoryForm] = useState<{
+    remoteUrl: string;
+    search: string;
+  }>({ remoteUrl: "", search: "" });
+  const [selectedRepositoryIds, setSelectedRepositoryIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const [selectedGitHubRepositories, setSelectedGitHubRepositories] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const [repositoryDiscovery, setRepositoryDiscovery] =
+    useState<RepositoryDiscoveryDto>();
+  const [repositoryDiscoveryLoading, setRepositoryDiscoveryLoading] =
+    useState(false);
+  const [activeRepositoryResult, setActiveRepositoryResult] = useState(0);
+  const [repositoryOperations, setRepositoryOperations] = useState<
+    Array<{
+      key: string;
+      name: string;
+      detail: string;
+      status: "queued" | "cloning" | "attaching" | "done" | "error";
+      error?: string;
+    }>
+  >([]);
+  const [syncingRepositoryIds, setSyncingRepositoryIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const [journalForm, setJournalForm] = useState<{
+    kind:
+      | "decision"
+      | "progress"
+      | "blocker"
+      | "question"
+      | "handoff"
+      | "completed";
+    summary: string;
+  }>({
+    kind: "progress",
+    summary: "",
+  });
   const [sessionAction, setSessionAction] = useState<{
-    action: "stop" | "remove";
     session: AgentSessionDto;
   }>();
+  const [workspaceAction, setWorkspaceAction] = useState<WorkspaceDto>();
+  const [archivingWorkspaceIds, setArchivingWorkspaceIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const [terminalPanelOpen, setTerminalPanelOpen] = useState(
+    initialTerminalPanelOpen,
+  );
+  const [terminalPanelHeight, setTerminalPanelHeight] = useState(() =>
+    typeof window === "undefined" ? 300 : Math.round(window.innerHeight * 0.38),
+  );
+  const [activeTerminalId, setActiveTerminalId] = useState(
+    initialActiveTerminalId,
+  );
+
+  const clampTerminalPanelHeight = useCallback(
+    (height: number) =>
+      Math.min(Math.max(180, height), Math.max(180, window.innerHeight - 280)),
+    [],
+  );
+  const startTerminalPanelResize = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      const startY = event.clientY;
+      const panel = event.currentTarget.closest(".integrated-terminal-panel");
+      const startHeight = panel?.getBoundingClientRect().height ?? 300;
+      document.body.classList.add("resizing-terminal-panel");
+
+      const move = (moveEvent: PointerEvent) => {
+        setTerminalPanelHeight(
+          clampTerminalPanelHeight(startHeight + startY - moveEvent.clientY),
+        );
+      };
+      const stop = () => {
+        document.body.classList.remove("resizing-terminal-panel");
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", stop);
+        window.removeEventListener("pointercancel", stop);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", stop);
+      window.addEventListener("pointercancel", stop);
+    },
+    [clampTerminalPanelHeight],
+  );
 
   const refresh = useCallback(async () => {
     try {
@@ -423,9 +840,11 @@ export function WorkspaceApp({
       setSnapshot(response.data);
       setError(undefined);
       setWorkspaceId((current) =>
-        response.data.workspaces.some((item) => item.id === current)
+        response.data.workspaces.some(
+          (item) => item.id === current && !item.archivedAt,
+        )
           ? current
-          : response.data.workspaces[0]?.id,
+          : response.data.workspaces.find((item) => !item.archivedAt)?.id,
       );
       setSelectedTaskId((current) =>
         response.data.tasks.some((item) => item.id === current)
@@ -446,6 +865,34 @@ export function WorkspaceApp({
     void refresh();
     return client.subscribe(() => void refresh());
   }, [client, refresh]);
+  useEffect(() => {
+    if (view !== "workspace" || !workspaceId) return;
+    let cancelled = false;
+    void client.request
+      .workspaceContentGet({ workspace: workspaceId })
+      .then((response) => {
+        if (cancelled) return;
+        if (response.ok) {
+          setWorkspaceContent(response.data);
+          setWorkspaceDirectories({ "": response.data.files });
+          setExpandedWorkspaceDirectories(new Set());
+          setSelectedWorkspaceFile({
+            name: "BRIEF.md",
+            path: "BRIEF.md",
+            content: response.data.brief,
+            format: "markdown",
+          });
+          setWorkspaceDraft(response.data.brief);
+          setWorkspaceFileMode("edit");
+          setSelectedWorkspaceDirectory("");
+          setNewWorkspaceEntry(undefined);
+          setError(undefined);
+        } else setError(response.error.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, view, workspaceId]);
   useEffect(() => {
     const stored = window.localStorage.getItem("daedalus.theme");
     if (stored === "dark" || stored === "light") setTheme(stored);
@@ -481,26 +928,191 @@ export function WorkspaceApp({
     }
   }
 
-  const workspace = snapshot?.workspaces.find(
-    (item) => item.id === workspaceId,
+  const activeWorkspaces = (snapshot?.workspaces ?? []).filter(
+    (item) => !item.archivedAt && !archivingWorkspaceIds.has(item.id),
   );
+  const archivedWorkspaces = (snapshot?.workspaces ?? []).filter(
+    (item) => item.archivedAt,
+  );
+  const workspace = activeWorkspaces.find((item) => item.id === workspaceId);
   const allTasks = (snapshot?.tasks ?? []).filter(
     (item) => item.workspaceId === workspaceId,
   );
   const tasks = allTasks.filter(
     (item) => filter === "all" || item.status === filter,
   );
-  const sessions = (snapshot?.agents ?? [])
+  const workspaceSessions = (snapshot?.agents ?? [])
     .filter((item) => item.workspaceId === workspaceId)
     .sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+  const sessions = workspaceSessions.filter((item) => !item.archivedAt);
+  const workspaceSessionLaunches = sessionLaunches.filter(
+    (item) => item.workspaceId === workspaceId,
+  );
+  const pendingSessionLaunches = workspaceSessionLaunches.filter(
+    (launch) =>
+      !launch.sessionId ||
+      !sessions.some((session) => session.id === launch.sessionId),
+  );
+  const sessionStartupErrors = new Map(
+    workspaceSessionLaunches.flatMap((launch) =>
+      launch.sessionId && launch.error
+        ? [[launch.sessionId, launch.error] as const]
+        : [],
+    ),
+  );
+  const archivedSessions = workspaceSessions.filter((item) => item.archivedAt);
   const selectedTask = snapshot?.tasks.find(
     (item) => item.id === selectedTaskId,
   );
   const activeSession = sessions.find((item) => item.id === activeSessionId);
+  const integratedTerminals = snapshot?.terminals ?? [];
+  const activeIntegratedTerminal =
+    integratedTerminals.find((item) => item.id === activeTerminalId) ??
+    integratedTerminals.at(-1);
+  const attachedLibraryRepositoryIds = new Set(
+    (workspaceContent?.repositories ?? [])
+      .map((item) => item.libraryRepositoryId)
+      .filter((item): item is string => Boolean(item)),
+  );
+  const repositorySearch = repositoryForm.search.trim();
+  const libraryRemoteIdentities = new Set(
+    (snapshot?.repositories ?? []).map((item) =>
+      repositoryRemoteIdentity(item.remoteUrl),
+    ),
+  );
+  const repositoryCandidates = [
+    ...(snapshot?.repositories ?? []).flatMap((repository, order) => {
+      const score = repositoryFuzzyScore(
+        repositorySearch,
+        repository.name,
+        repository.remoteUrl,
+      );
+      return score === undefined
+        ? []
+        : [{ kind: "library" as const, repository, score, order }];
+    }),
+    ...(repositoryDiscovery?.repositories ?? []).flatMap(
+      (repository, order) => {
+        if (
+          libraryRemoteIdentities.has(
+            repositoryRemoteIdentity(repository.remoteUrl),
+          )
+        )
+          return [];
+        const score = repositoryFuzzyScore(
+          repositorySearch,
+          repository.name,
+          `${repository.nameWithOwner} ${repository.remoteUrl}`,
+        );
+        return score === undefined
+          ? []
+          : [{ kind: "github" as const, repository, score, order }];
+      },
+    ),
+  ].sort((left, right) => {
+    if (repositorySearch) {
+      const scoreDifference = right.score - left.score;
+      if (scoreDifference) return scoreDifference;
+    }
+    if (left.kind !== right.kind) return left.kind === "library" ? -1 : 1;
+    return left.order - right.order;
+  });
+  const workspaceSelectionReadOnly =
+    selectedWorkspaceDirectory === "repos" ||
+    selectedWorkspaceDirectory.startsWith("repos/");
+  const selectedWorkspaceFileReadOnly =
+    selectedWorkspaceFile?.path.startsWith("repos/") ?? false;
+  const selectedRepositoryCount =
+    [...selectedRepositoryIds].filter(
+      (id) => !attachedLibraryRepositoryIds.has(id),
+    ).length + selectedGitHubRepositories.size;
+  const completedRepositoryOperations = repositoryOperations.filter(
+    (operation) => operation.status === "done",
+  ).length;
+  const failedRepositoryOperations = repositoryOperations.filter(
+    (operation) => operation.status === "error",
+  ).length;
+  const repositoryOperationFinished =
+    repositoryOperations.length > 0 &&
+    repositoryOperations.every(
+      (operation) =>
+        operation.status === "done" || operation.status === "error",
+    );
+  const activeRepositoryOperation = repositoryOperations.find(
+    (operation) =>
+      operation.status === "cloning" || operation.status === "attaching",
+  );
+
+  useEffect(() => {
+    setActiveRepositoryResult(0);
+  }, [repositorySearch, repositoryDiscoveryLoading]);
+
+  function toggleRepositoryCandidate(index: number) {
+    const candidate = repositoryCandidates[index];
+    if (!candidate) return;
+    if (candidate.kind === "library") {
+      if (attachedLibraryRepositoryIds.has(candidate.repository.id)) return;
+      setSelectedRepositoryIds((current) => {
+        const next = new Set(current);
+        if (next.has(candidate.repository.id))
+          next.delete(candidate.repository.id);
+        else next.add(candidate.repository.id);
+        return next;
+      });
+      return;
+    }
+    setSelectedGitHubRepositories((current) => {
+      const next = new Set(current);
+      if (next.has(candidate.repository.nameWithOwner))
+        next.delete(candidate.repository.nameWithOwner);
+      else next.add(candidate.repository.nameWithOwner);
+      return next;
+    });
+  }
+
+  async function loadRepositoryDiscovery() {
+    setRepositoryDiscoveryLoading(true);
+    try {
+      const response = await client.request.repositoryDiscovery({});
+      if (response.ok) setRepositoryDiscovery(response.data);
+      else
+        setRepositoryDiscovery({
+          githubCliAvailable: true,
+          authenticated: false,
+          repositories: [],
+          error: response.error.message,
+        });
+    } catch (cause) {
+      setRepositoryDiscovery({
+        githubCliAvailable: true,
+        authenticated: false,
+        repositories: [],
+        error: `GitHub discovery failed: ${errorMessage(cause)}`,
+      });
+    } finally {
+      setRepositoryDiscoveryLoading(false);
+    }
+  }
 
   function openSessionModal(task?: TaskDto) {
     setSessionForm({ name: task?.title ?? "", taskId: task?.id });
     setModal("session");
+  }
+
+  function openRepositoryModal() {
+    setSelectedRepositoryIds(new Set());
+    setSelectedGitHubRepositories(new Set());
+    setRepositoryDiscovery(undefined);
+    setRepositoryOperations([]);
+    setRepositoryForm({ remoteUrl: "", search: "" });
+    setModal("repository");
+    void loadRepositoryDiscovery();
+  }
+
+  function closeRepositoryModal() {
+    if (busy) return;
+    setRepositoryOperations([]);
+    setModal(undefined);
   }
 
   function closeSessionModal() {
@@ -545,20 +1157,371 @@ export function WorkspaceApp({
     event.preventDefault();
     if (!workspace) return;
     const isTerminal = sessionType === "terminal";
-    const created = await perform(
-      client.request.agentSpawn({
+    const launch: SessionLaunchState = {
+      key: crypto.randomUUID(),
+      workspaceId: workspace.id,
+      taskId: sessionForm.taskId,
+      name: sessionForm.name,
+      tool: isTerminal ? "terminal" : (sessionType as "codex" | "claude"),
+      startedAt: new Date().toISOString(),
+      status: "starting",
+    };
+    setSessionLaunches((current) => [launch, ...current]);
+    setSessionForm({ name: "" });
+    setModal(undefined);
+    setView("sessions");
+    try {
+      const response = await client.request.agentSpawn({
         workspace: workspace.id,
-        taskId: sessionForm.taskId,
-        name: sessionForm.name,
+        taskId: launch.taskId,
+        name: launch.name,
         terminal: isTerminal || undefined,
         provider: isTerminal ? undefined : (sessionType as "codex" | "claude"),
+      });
+      if (response.ok) {
+        setSessionLaunches((current) =>
+          current.filter((item) => item.key !== launch.key),
+        );
+        await refresh();
+        setActiveSessionId(response.data.id);
+        return;
+      }
+      const sessionId =
+        typeof response.error.details?.sessionId === "string"
+          ? response.error.details.sessionId
+          : undefined;
+      setSessionLaunches((current) =>
+        current.map((item) =>
+          item.key === launch.key
+            ? {
+                ...item,
+                sessionId,
+                status: "error",
+                error: response.error.message,
+              }
+            : item,
+        ),
+      );
+      await refresh();
+      if (sessionId) setActiveSessionId(sessionId);
+    } catch (cause) {
+      setSessionLaunches((current) =>
+        current.map((item) =>
+          item.key === launch.key
+            ? { ...item, status: "error", error: errorMessage(cause) }
+            : item,
+        ),
+      );
+    }
+  }
+
+  async function attachSelectedRepositories() {
+    if (!workspace) return;
+    const pending = [...selectedRepositoryIds].filter(
+      (id) => !attachedLibraryRepositoryIds.has(id),
+    );
+    const pendingGitHub = (repositoryDiscovery?.repositories ?? []).filter(
+      (item) => selectedGitHubRepositories.has(item.nameWithOwner),
+    );
+    if (pending.length === 0 && pendingGitHub.length === 0) return;
+    const localById = new Map(
+      (snapshot?.repositories ?? []).map((repository) => [
+        repository.id,
+        repository,
+      ]),
+    );
+    setRepositoryOperations([
+      ...pendingGitHub.map((repository) => ({
+        key: `github:${repository.nameWithOwner}`,
+        name: repository.name,
+        detail: repository.nameWithOwner,
+        status: "queued" as const,
+      })),
+      ...pending.map((id) => ({
+        key: `library:${id}`,
+        name: localById.get(id)?.name ?? "Repository",
+        detail: "Daedalus library",
+        status: "queued" as const,
+      })),
+    ]);
+    setBusy(true);
+    setError(undefined);
+    const updateOperation = (
+      key: string,
+      update: {
+        status: "cloning" | "attaching" | "done" | "error";
+        error?: string;
+      },
+    ) =>
+      setRepositoryOperations((current) =>
+        current.map((operation) =>
+          operation.key === key ? { ...operation, ...update } : operation,
+        ),
+      );
+    try {
+      for (const repository of pendingGitHub) {
+        const key = `github:${repository.nameWithOwner}`;
+        try {
+          updateOperation(key, { status: "cloning" });
+          const response = await client.request.repositoryLibraryAdd({
+            remoteUrl: repository.remoteUrl,
+            githubNameWithOwner: repository.nameWithOwner,
+          });
+          if (!response.ok) throw new Error(response.error.message);
+          updateOperation(key, { status: "attaching" });
+          const attached = await client.request.workspaceRepositoryAttach({
+            workspace: workspace.id,
+            libraryRepositoryId: response.data.id,
+          });
+          if (!attached.ok) throw new Error(attached.error.message);
+          updateOperation(key, { status: "done" });
+          setSelectedGitHubRepositories((current) => {
+            const next = new Set(current);
+            next.delete(repository.nameWithOwner);
+            return next;
+          });
+        } catch (cause) {
+          updateOperation(key, {
+            status: "error",
+            error: errorMessage(cause),
+          });
+        }
+      }
+      for (const libraryRepositoryId of pending) {
+        const key = `library:${libraryRepositoryId}`;
+        try {
+          updateOperation(key, { status: "attaching" });
+          const response = await client.request.workspaceRepositoryAttach({
+            workspace: workspace.id,
+            libraryRepositoryId,
+          });
+          if (!response.ok) throw new Error(response.error.message);
+          updateOperation(key, { status: "done" });
+          setSelectedRepositoryIds((current) => {
+            const next = new Set(current);
+            next.delete(libraryRepositoryId);
+            return next;
+          });
+        } catch (cause) {
+          updateOperation(key, {
+            status: "error",
+            error: errorMessage(cause),
+          });
+        }
+      }
+      await refresh();
+      const content = await client.request.workspaceContentGet({
+        workspace: workspace.id,
+      });
+      if (content.ok) {
+        setWorkspaceContent(content.data);
+        setWorkspaceDirectories((current) => ({
+          ...current,
+          "": content.data.files,
+        }));
+      } else throw new Error(content.error.message);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function syncWorkspaceRepository(repositoryId: string) {
+    if (!workspace) return;
+    setSyncingRepositoryIds((current) => new Set(current).add(repositoryId));
+    setError(undefined);
+    try {
+      const response = await client.request.workspaceRepositorySync({
+        id: repositoryId,
+      });
+      if (!response.ok) throw new Error(response.error.message);
+      const content = await client.request.workspaceContentGet({
+        workspace: workspace.id,
+      });
+      if (!content.ok) throw new Error(content.error.message);
+      setWorkspaceContent(content.data);
+      setWorkspaceDirectories((current) => ({
+        ...current,
+        "": content.data.files,
+      }));
+      await refresh();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setSyncingRepositoryIds((current) => {
+        const next = new Set(current);
+        next.delete(repositoryId);
+        return next;
+      });
+    }
+  }
+
+  async function addRemoteRepository(event: React.FormEvent) {
+    event.preventDefault();
+    if (!looksLikeRepositorySource(repositoryForm.search)) return;
+    const repository = await perform(
+      client.request.repositoryLibraryAdd({
+        remoteUrl: repositoryForm.search,
       }),
     );
-    if (created) {
-      setActiveSessionId(created.id);
-      setView("sessions");
-      closeSessionModal();
+    if (repository) {
+      setSelectedRepositoryIds((current) =>
+        new Set(current).add(repository.id),
+      );
+      setRepositoryForm({ remoteUrl: "", search: "" });
     }
+  }
+
+  async function appendJournal(event: React.FormEvent) {
+    event.preventDefault();
+    if (!workspace) return;
+    const content = await perform(
+      client.request.workspaceJournalAppend({
+        workspace: workspace.id,
+        kind: journalForm.kind,
+        summary: journalForm.summary,
+      }),
+    );
+    if (content) {
+      setWorkspaceContent(content);
+      setWorkspaceDirectories((current) => ({ ...current, "": content.files }));
+      if (selectedWorkspaceFile?.path === "JOURNAL.md")
+        setSelectedWorkspaceFile({
+          name: "JOURNAL.md",
+          path: "JOURNAL.md",
+          content: content.journal,
+          format: "markdown",
+        });
+      if (selectedWorkspaceFile?.path === "JOURNAL.md")
+        setWorkspaceDraft(content.journal);
+      setJournalForm({ kind: "progress", summary: "" });
+    }
+  }
+
+  async function openWorkspaceFile(path: string) {
+    if (!workspace) return;
+    if (
+      selectedWorkspaceFile &&
+      workspaceDraft !== selectedWorkspaceFile.content &&
+      !window.confirm("Discard the unsaved changes in the current file?")
+    )
+      return;
+    const response = await client.request.workspaceFileRead({
+      workspace: workspace.id,
+      path,
+    });
+    if (response.ok) {
+      setSelectedWorkspaceFile(response.data);
+      setWorkspaceDraft(response.data.content);
+      setWorkspaceFileMode("edit");
+      setSelectedWorkspaceDirectory(workspaceParentPath(response.data.path));
+      setError(undefined);
+    } else setError(response.error.message);
+  }
+
+  async function saveWorkspaceFile() {
+    if (
+      !workspace ||
+      !selectedWorkspaceFile ||
+      workspaceDraft === selectedWorkspaceFile.content
+    )
+      return;
+    const saved = await perform(
+      client.request.workspaceFileWrite({
+        workspace: workspace.id,
+        path: selectedWorkspaceFile.path,
+        content: workspaceDraft,
+        expectedContent: selectedWorkspaceFile.content,
+      }),
+    );
+    if (!saved) return;
+    setSelectedWorkspaceFile(saved);
+    setWorkspaceDraft(saved.content);
+    if (saved.path === "BRIEF.md")
+      setWorkspaceContent((current) =>
+        current ? { ...current, brief: saved.content } : current,
+      );
+    if (saved.path === "JOURNAL.md")
+      setWorkspaceContent((current) =>
+        current ? { ...current, journal: saved.content } : current,
+      );
+  }
+
+  async function createWorkspaceEntry(event: React.FormEvent) {
+    event.preventDefault();
+    if (!workspace || !newWorkspaceEntry) return;
+    if (
+      selectedWorkspaceFile &&
+      workspaceDraft !== selectedWorkspaceFile.content &&
+      !window.confirm("Discard the unsaved changes in the current file?")
+    )
+      return;
+    const created = await perform(
+      client.request.workspaceEntryCreate({
+        workspace: workspace.id,
+        parentPath: selectedWorkspaceDirectory || undefined,
+        name: newWorkspaceEntry.name,
+        kind: newWorkspaceEntry.kind,
+      }),
+    );
+    if (!created) return;
+    const listing = await client.request.workspaceDirectoryList({
+      workspace: workspace.id,
+      path: selectedWorkspaceDirectory || undefined,
+    });
+    if (listing.ok)
+      setWorkspaceDirectories((current) => ({
+        ...current,
+        [selectedWorkspaceDirectory]: listing.data,
+        ...(created.kind === "directory" ? { [created.path]: [] } : {}),
+      }));
+    setNewWorkspaceEntry(undefined);
+    if (created.kind === "directory") {
+      setSelectedWorkspaceDirectory(created.path);
+      setExpandedWorkspaceDirectories((current) =>
+        new Set(current).add(selectedWorkspaceDirectory).add(created.path),
+      );
+    } else {
+      const opened = await client.request.workspaceFileRead({
+        workspace: workspace.id,
+        path: created.path,
+      });
+      if (opened.ok) {
+        setSelectedWorkspaceFile(opened.data);
+        setWorkspaceDraft(opened.data.content);
+        setWorkspaceFileMode("edit");
+        setSelectedWorkspaceDirectory(workspaceParentPath(opened.data.path));
+      } else setError(opened.error.message);
+    }
+  }
+
+  async function toggleWorkspaceDirectory(path: string) {
+    if (!workspace) return;
+    const isExpanded = expandedWorkspaceDirectories.has(path);
+    if (isExpanded) {
+      setExpandedWorkspaceDirectories((current) => {
+        const next = new Set(current);
+        next.delete(path);
+        return next;
+      });
+      return;
+    }
+    if (!workspaceDirectories[path]) {
+      const response = await client.request.workspaceDirectoryList({
+        workspace: workspace.id,
+        path,
+      });
+      if (!response.ok) {
+        setError(response.error.message);
+        return;
+      }
+      setWorkspaceDirectories((current) => ({
+        ...current,
+        [path]: response.data,
+      }));
+    }
+    setExpandedWorkspaceDirectories((current) => new Set(current).add(path));
   }
 
   async function updateTask(event: React.FormEvent<HTMLFormElement>) {
@@ -575,18 +1538,74 @@ export function WorkspaceApp({
     if (updated) setEditingTask(false);
   }
 
-  async function stopSession(session: AgentSessionDto) {
-    const stopped = await perform(
-      client.request.agentStop({ id: session.id, force: false }),
+  async function archiveSession(session: AgentSessionDto) {
+    const archived = await perform(
+      client.request.agentArchive({ id: session.id, force: false }),
     );
-    if (stopped) setSessionAction(undefined);
+    if (archived) {
+      if (activeSessionId === session.id) setActiveSessionId(undefined);
+      setSessionAction(undefined);
+    }
   }
 
-  async function removeSession(session: AgentSessionDto) {
-    const removed = await perform(
-      client.request.agentRemove({ id: session.id }),
+  async function restoreSession(session: AgentSessionDto) {
+    const restored = await perform(
+      client.request.agentRestore({ id: session.id }),
     );
-    if (removed) setSessionAction(undefined);
+    if (restored) setActiveSessionId(restored.id);
+  }
+
+  async function archiveWorkspace(item: WorkspaceDto) {
+    const wasSelected = workspaceId === item.id;
+    setWorkspaceAction(undefined);
+    setArchivingWorkspaceIds((current) => new Set(current).add(item.id));
+    if (wasSelected) {
+      setWorkspaceId(
+        activeWorkspaces.find((workspace) => workspace.id !== item.id)?.id,
+      );
+      setSelectedTaskId(undefined);
+      setActiveSessionId(undefined);
+    }
+    const archived = await perform(
+      client.request.workspaceArchive({ reference: item.id }),
+    );
+    setArchivingWorkspaceIds((current) => {
+      const next = new Set(current);
+      next.delete(item.id);
+      return next;
+    });
+    if (!archived && wasSelected) setWorkspaceId(item.id);
+  }
+
+  async function restoreWorkspace(item: WorkspaceDto) {
+    const restored = await perform(
+      client.request.workspaceRestore({ reference: item.id }),
+    );
+    if (restored) setWorkspaceId(restored.id);
+  }
+
+  async function createIntegratedTerminal(workspace?: WorkspaceDto) {
+    setTerminalPanelOpen(true);
+    const created = await perform(
+      client.request.terminalCreate({
+        workspace: workspace?.id,
+        name: workspace?.name,
+      }),
+    );
+    if (created) setActiveTerminalId(created.id);
+  }
+
+  async function closeIntegratedTerminal(terminal: IntegratedTerminalDto) {
+    const index = integratedTerminals.findIndex(
+      (item) => item.id === terminal.id,
+    );
+    const next =
+      integratedTerminals[index + 1] ?? integratedTerminals[index - 1];
+    const closed = await perform(
+      client.request.terminalClose({ id: terminal.id }),
+    );
+    if (closed && activeIntegratedTerminal?.id === terminal.id)
+      setActiveTerminalId(next?.id);
   }
 
   function selectWorkspace(id: string) {
@@ -680,8 +1699,64 @@ export function WorkspaceApp({
     </div>
   );
 
+  const renderWorkspaceDirectory = (
+    directory = "",
+    depth = 0,
+  ): React.ReactNode =>
+    (workspaceDirectories[directory] ?? []).map((entry) => {
+      const expanded = expandedWorkspaceDirectories.has(entry.path);
+      const selected =
+        entry.kind === "directory"
+          ? selectedWorkspaceDirectory === entry.path
+          : selectedWorkspaceFile?.path === entry.path;
+      return (
+        <div className="workspace-tree-entry" key={entry.path}>
+          <button
+            aria-expanded={entry.kind === "directory" ? expanded : undefined}
+            className={selected ? "selected" : ""}
+            disabled={entry.kind === "symlink"}
+            onClick={() => {
+              if (entry.kind === "directory") {
+                setSelectedWorkspaceDirectory(entry.path);
+                void toggleWorkspaceDirectory(entry.path);
+              } else if (entry.kind === "file")
+                void openWorkspaceFile(entry.path);
+            }}
+            style={{ paddingLeft: `${8 + depth * 14}px` }}
+            title={entry.path}
+            type="button"
+          >
+            <span
+              className={`workspace-tree-icon ${entry.kind}`}
+              aria-hidden="true"
+            >
+              {entry.kind === "directory"
+                ? expanded
+                  ? "⌄"
+                  : "›"
+                : entry.kind === "symlink"
+                  ? "↗"
+                  : ""}
+            </span>
+            <span>{entry.name}</span>
+          </button>
+          {entry.kind === "directory" && expanded && (
+            <div>{renderWorkspaceDirectory(entry.path, depth + 1)}</div>
+          )}
+        </div>
+      );
+    });
+
   return (
-    <main className="app" data-theme={theme}>
+    <main
+      className={`app ${terminalPanelOpen ? "terminal-panel-open" : ""}`}
+      data-theme={theme}
+      style={
+        {
+          "--terminal-panel-height": `${terminalPanelHeight}px`,
+        } as CSSProperties
+      }
+    >
       <header className="topbar">
         <div className="brand">
           <span aria-hidden="true" className="brand-mark">
@@ -709,11 +1784,25 @@ export function WorkspaceApp({
           >
             Sessions
           </button>
+          <button
+            aria-current={view === "workspace" ? "page" : undefined}
+            className={view === "workspace" ? "active" : ""}
+            disabled={!workspace}
+            onClick={() => setView("workspace")}
+          >
+            Workspace
+          </button>
         </nav>
         <div className="top-actions">
           {busy && <span className="syncing">Working…</span>}
           <button className="quiet" onClick={() => void refresh()}>
             Refresh
+          </button>
+          <button
+            className="quiet"
+            onClick={() => setTerminalPanelOpen((current) => !current)}
+          >
+            Terminal
           </button>
           <button className="quiet" onClick={() => setModal("settings")}>
             Settings
@@ -743,36 +1832,138 @@ export function WorkspaceApp({
             {!snapshot && !error && (
               <div className="empty">Loading workspaces…</div>
             )}
-            {snapshot?.workspaces.length === 0 && (
-              <div className="empty large">
-                <strong>No workspaces yet</strong>
-                <span>Use New to create one.</span>
-              </div>
-            )}
-            {snapshot?.workspaces.map((item) => (
-              <button
-                className={`workspace-item ${item.id === workspaceId ? "selected" : ""}`}
-                key={item.id}
-                onClick={() => selectWorkspace(item.id)}
-              >
-                <span className="workspace-icon">
-                  {item.name.slice(0, 1).toUpperCase()}
-                </span>
-                <span>
-                  <strong>{item.name}</strong>
-                  <small>
-                    {item.available
-                      ? item.slug
-                      : `${item.slug} · folder missing`}
-                  </small>
-                </span>
-              </button>
-            ))}
+            {activeWorkspaces.length === 0 &&
+              archivedWorkspaces.length === 0 && (
+                <div className="empty large">
+                  <strong>No workspaces yet</strong>
+                  <span>Use New to create one.</span>
+                </div>
+              )}
+            {activeWorkspaces.map((item) => {
+              const itemSessions = (snapshot?.agents ?? []).filter(
+                (session) =>
+                  session.workspaceId === item.id && !session.archivedAt,
+              );
+              const liveCount = itemSessions.filter(sessionIsLive).length;
+              const attentionCount = itemSessions.filter(
+                sessionNeedsAttention,
+              ).length;
+              const sessionLabel = `${itemSessions.length} ${itemSessions.length === 1 ? "session" : "sessions"}`;
+              const insightLabel = `${sessionLabel} in ${item.name}: ${liveCount} live, ${attentionCount} need attention`;
+
+              return (
+                <div
+                  className={`workspace-card ${item.id === workspaceId ? "selected" : ""}`}
+                  key={item.id}
+                >
+                  <button
+                    className="workspace-item"
+                    onClick={() => selectWorkspace(item.id)}
+                  >
+                    <span className="workspace-icon">
+                      {item.name.slice(0, 1).toUpperCase()}
+                    </span>
+                    <span className="workspace-card-content">
+                      <strong>{item.name}</strong>
+                      <small>
+                        {item.available
+                          ? item.slug
+                          : `${item.slug} · folder missing`}
+                      </small>
+                      <span
+                        aria-label={insightLabel}
+                        className="workspace-session-insights"
+                      >
+                        <span className="workspace-session-icons">
+                          {itemSessions.slice(0, 5).map((session) => {
+                            const tool = sessionTool(session);
+                            return (
+                              <span
+                                className={`workspace-session-indicator tool-${tool}`}
+                                data-attention={
+                                  sessionNeedsAttention(session)
+                                    ? "true"
+                                    : undefined
+                                }
+                                key={session.id}
+                                title={`${sessionName(session)} · ${session.status}`}
+                              >
+                                <ToolIcon tool={tool} />
+                                <span
+                                  className={`agent-dot ${session.status}`}
+                                />
+                              </span>
+                            );
+                          })}
+                          {itemSessions.length > 5 && (
+                            <small>+{itemSessions.length - 5}</small>
+                          )}
+                        </span>
+                        <small
+                          className={
+                            attentionCount > 0
+                              ? "workspace-insight-copy needs-attention"
+                              : "workspace-insight-copy"
+                          }
+                        >
+                          {attentionCount > 0
+                            ? `${attentionCount} need attention`
+                            : itemSessions.length > 0
+                              ? `${liveCount} live · ${sessionLabel}`
+                              : "No sessions"}
+                        </small>
+                      </span>
+                    </span>
+                  </button>
+                  <span className="workspace-card-actions">
+                    <button
+                      aria-label={`Open ${item.name} in integrated terminal`}
+                      className="session-card-action workspace-terminal-action"
+                      disabled={!item.available || busy}
+                      onClick={() => void createIntegratedTerminal(item)}
+                      title="Open in integrated terminal"
+                      type="button"
+                    >
+                      <SessionLaunchIcon />
+                    </button>
+                    <button
+                      aria-label={`Archive ${item.name} workspace`}
+                      className="session-card-action workspace-card-archive"
+                      onClick={() => setWorkspaceAction(item)}
+                      title="Archive workspace"
+                      type="button"
+                    >
+                      <ArchiveIcon />
+                    </button>
+                  </span>
+                </div>
+              );
+            })}
           </nav>
+          {archivedWorkspaces.length > 0 && (
+            <details className="archive-list workspace-archive-list">
+              <summary>
+                Archived workspaces ({archivedWorkspaces.length})
+              </summary>
+              <div className="item-list">
+                {archivedWorkspaces.map((item) => (
+                  <div className="archived-item" key={item.id}>
+                    <span>
+                      <strong>{item.name}</strong>
+                      <small>{item.slug}</small>
+                    </span>
+                    <button onClick={() => void restoreWorkspace(item)}>
+                      Restore
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
         </aside>
 
         <section
-          className={`workspace-main ${view === "board" ? "board-column" : "session-navigator"}`}
+          className={`workspace-main ${view === "board" ? "board-column" : view === "sessions" ? "session-navigator" : "workspace-content-column"}`}
         >
           <div className="workspace-main-header">
             <div>
@@ -785,8 +1976,351 @@ export function WorkspaceApp({
           {!workspace ? (
             <div className="empty large">
               <strong>Choose a workspace</strong>
-              <span>Its board and sessions will appear here.</span>
+              <span>Its board, sessions, and files will appear here.</span>
             </div>
+          ) : view === "workspace" ? (
+            <>
+              <div className="workspace-content-toolbar">
+                <div>
+                  <strong>Workspace files</strong>
+                  <small>{workspace.path}</small>
+                </div>
+              </div>
+              {!workspaceContent ||
+              workspaceContent.workspaceId !== workspace.id ? (
+                <div className="empty large">Loading workspace content…</div>
+              ) : (
+                <div className="workspace-browser">
+                  <aside className="workspace-explorer">
+                    <div className="workspace-explorer-heading">
+                      <div>
+                        <span>Explorer</span>
+                        <small>{workspace.name}</small>
+                      </div>
+                      <div className="workspace-explorer-actions">
+                        <button
+                          aria-label="New file"
+                          disabled={workspaceSelectionReadOnly}
+                          onClick={() =>
+                            setNewWorkspaceEntry({ kind: "file", name: "" })
+                          }
+                          title="New file"
+                          type="button"
+                        >
+                          <svg
+                            aria-hidden="true"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 16 16"
+                          >
+                            <path d="M3 1.5h6l4 4v9H3zM9 1.5v4h4M8 8v4M6 10h4" />
+                          </svg>
+                        </button>
+                        <button
+                          aria-label="New folder"
+                          disabled={workspaceSelectionReadOnly}
+                          onClick={() =>
+                            setNewWorkspaceEntry({
+                              kind: "directory",
+                              name: "",
+                            })
+                          }
+                          title="New folder"
+                          type="button"
+                        >
+                          <svg
+                            aria-hidden="true"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 16 16"
+                          >
+                            <path d="M1.5 3h5l1.5 2h6.5v8.5h-13zM9 7.5v4M7 9.5h4" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+                    {newWorkspaceEntry && (
+                      <form
+                        className="workspace-new-entry"
+                        onSubmit={createWorkspaceEntry}
+                      >
+                        <small title={selectedWorkspaceDirectory || "/"}>
+                          {selectedWorkspaceDirectory || "/"}
+                        </small>
+                        <input
+                          aria-label={`New ${newWorkspaceEntry.kind} name`}
+                          autoFocus
+                          onBlur={() => {
+                            if (!newWorkspaceEntry.name)
+                              setNewWorkspaceEntry(undefined);
+                          }}
+                          onChange={(event) =>
+                            setNewWorkspaceEntry({
+                              ...newWorkspaceEntry,
+                              name: event.target.value,
+                            })
+                          }
+                          onKeyDown={(event) => {
+                            if (event.key === "Escape")
+                              setNewWorkspaceEntry(undefined);
+                          }}
+                          placeholder={
+                            newWorkspaceEntry.kind === "file"
+                              ? "filename.md"
+                              : "folder name"
+                          }
+                          required
+                          value={newWorkspaceEntry.name}
+                        />
+                      </form>
+                    )}
+                    <nav
+                      aria-label="Workspace files"
+                      className="workspace-tree"
+                    >
+                      {renderWorkspaceDirectory()}
+                    </nav>
+                    <div className="workspace-explorer-secondary">
+                      <details>
+                        <summary>
+                          <span>Repositories</span>
+                          <small>{workspaceContent.repositories.length}</small>
+                          <button
+                            aria-label="Add repository"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              openRepositoryModal();
+                            }}
+                            title="Add repository"
+                            type="button"
+                          >
+                            +
+                          </button>
+                        </summary>
+                        <div className="workspace-resource-list">
+                          {workspaceContent.repositories.length === 0 && (
+                            <div className="empty">
+                              No attached repositories
+                            </div>
+                          )}
+                          {workspaceContent.repositories.map((repository) => (
+                            <div
+                              className={`workspace-resource-row repository-status-${repository.gitStatus?.state ?? "unavailable"}`}
+                              key={repository.id}
+                            >
+                              <span>
+                                <strong>{repository.name}</strong>
+                                <small
+                                  title={
+                                    repository.referencePath ??
+                                    repository.canonicalPath
+                                  }
+                                >
+                                  {repository.baseBranch ?? "Local"}
+                                  {" · "}
+                                  <span className="repository-git-status">
+                                    <i aria-hidden="true" />
+                                    {repositoryStatusText(repository.gitStatus)}
+                                  </span>
+                                </small>
+                              </span>
+                              <button
+                                aria-label={`Fetch and update ${repository.name}`}
+                                className={`quiet workspace-repository-sync ${syncingRepositoryIds.has(repository.id) ? "syncing" : ""}`}
+                                disabled={syncingRepositoryIds.has(
+                                  repository.id,
+                                )}
+                                onClick={() =>
+                                  void syncWorkspaceRepository(repository.id)
+                                }
+                                title={`Fetch and fast-forward from ${repository.baseBranch ?? "the remote default branch"}`}
+                                type="button"
+                              >
+                                <RepositoryPullIcon />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                      <details>
+                        <summary>
+                          <span>Working trees</span>
+                          <small>{workspaceContent.worktrees.length}</small>
+                        </summary>
+                        <div className="workspace-resource-list">
+                          {workspaceContent.worktrees.length === 0 && (
+                            <div className="empty">No session worktrees</div>
+                          )}
+                          {workspaceContent.worktrees.map((worktree) => {
+                            const repository =
+                              workspaceContent.repositories.find(
+                                (item) => item.id === worktree.repositoryId,
+                              );
+                            const session = workspaceSessions.find(
+                              (item) => item.id === worktree.sessionId,
+                            );
+                            return (
+                              <div
+                                className="workspace-resource-row"
+                                key={`${worktree.sessionId}-${worktree.repositoryId}`}
+                              >
+                                <span>
+                                  <strong>
+                                    {repository?.name ?? "Repository"}
+                                  </strong>
+                                  <small title={worktree.path}>
+                                    {session?.name ??
+                                      worktree.sessionId.slice(0, 8)}
+                                  </small>
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </details>
+                    </div>
+                  </aside>
+
+                  <section className="workspace-viewer">
+                    <div className="workspace-viewer-tabbar">
+                      {selectedWorkspaceFile ? (
+                        <span className="workspace-viewer-tab">
+                          <span aria-hidden="true">
+                            {selectedWorkspaceFile.format === "markdown"
+                              ? "M↓"
+                              : "≡"}
+                          </span>
+                          <strong>{selectedWorkspaceFile.name}</strong>
+                        </span>
+                      ) : (
+                        <span className="workspace-viewer-tab muted">
+                          No file selected
+                        </span>
+                      )}
+                      {selectedWorkspaceFile && (
+                        <div className="workspace-viewer-actions">
+                          {selectedWorkspaceFileReadOnly && (
+                            <span>Reference checkout · read-only</span>
+                          )}
+                          {workspaceDraft !== selectedWorkspaceFile.content && (
+                            <span>Unsaved</span>
+                          )}
+                          {selectedWorkspaceFile.format === "markdown" && (
+                            <button
+                              aria-pressed={workspaceFileMode === "preview"}
+                              className={
+                                workspaceFileMode === "preview" ? "active" : ""
+                              }
+                              onClick={() =>
+                                setWorkspaceFileMode((current) =>
+                                  current === "edit" ? "preview" : "edit",
+                                )
+                              }
+                              type="button"
+                            >
+                              {workspaceFileMode === "edit"
+                                ? "Preview"
+                                : "Edit"}
+                            </button>
+                          )}
+                          <button
+                            disabled={
+                              busy ||
+                              selectedWorkspaceFileReadOnly ||
+                              workspaceDraft === selectedWorkspaceFile.content
+                            }
+                            onClick={() => void saveWorkspaceFile()}
+                            title="Save (⌘S)"
+                            type="button"
+                          >
+                            Save
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    {selectedWorkspaceFile ? (
+                      <>
+                        <div className="workspace-viewer-breadcrumb">
+                          {selectedWorkspaceFile.path.split("/").join("  ›  ")}
+                        </div>
+                        {selectedWorkspaceFile.format === "markdown" &&
+                        workspaceFileMode === "preview" ? (
+                          <div className="workspace-viewer-content markdown">
+                            <MarkdownPreview source={workspaceDraft} />
+                          </div>
+                        ) : (
+                          <WorkspaceFileEditor
+                            file={{
+                              ...selectedWorkspaceFile,
+                              content: workspaceDraft,
+                            }}
+                            onChange={setWorkspaceDraft}
+                            onSave={() => void saveWorkspaceFile()}
+                            readOnly={selectedWorkspaceFileReadOnly}
+                            theme={theme}
+                          />
+                        )}
+                        {selectedWorkspaceFile.path === "JOURNAL.md" &&
+                          workspaceDraft === selectedWorkspaceFile.content && (
+                            <form
+                              className="journal-entry-form"
+                              onSubmit={appendJournal}
+                            >
+                              <select
+                                aria-label="Journal entry type"
+                                value={journalForm.kind}
+                                onChange={(event) =>
+                                  setJournalForm({
+                                    ...journalForm,
+                                    kind: event.target
+                                      .value as typeof journalForm.kind,
+                                  })
+                                }
+                              >
+                                {[
+                                  "decision",
+                                  "progress",
+                                  "blocker",
+                                  "question",
+                                  "handoff",
+                                  "completed",
+                                ].map((kind) => (
+                                  <option key={kind} value={kind}>
+                                    {kind}
+                                  </option>
+                                ))}
+                              </select>
+                              <input
+                                aria-label="Journal entry"
+                                placeholder="Record a meaningful update…"
+                                required
+                                value={journalForm.summary}
+                                onChange={(event) =>
+                                  setJournalForm({
+                                    ...journalForm,
+                                    summary: event.target.value,
+                                  })
+                                }
+                              />
+                              <button disabled={busy} type="submit">
+                                Add
+                              </button>
+                            </form>
+                          )}
+                      </>
+                    ) : (
+                      <div className="workspace-viewer-empty">
+                        <strong>Select a file</strong>
+                        <span>
+                          Choose a text or Markdown file from the explorer.
+                        </span>
+                      </div>
+                    )}
+                  </section>
+                </div>
+              )}
+            </>
           ) : view === "board" ? (
             <>
               <div className="board-toolbar">
@@ -899,7 +2433,9 @@ export function WorkspaceApp({
               <div className="sessions-toolbar">
                 <div>
                   <strong>Sessions</strong>
-                  <span className="count-badge">{sessions.length}</span>
+                  <span className="count-badge">
+                    {sessions.length + pendingSessionLaunches.length}
+                  </span>
                 </div>
                 <CreateButton
                   disabled={!snapshot?.settings.tmuxAvailable}
@@ -908,21 +2444,57 @@ export function WorkspaceApp({
                 />
               </div>
               <div className="session-grid item-list">
-                {sessions.length === 0 && (
-                  <div className="empty large">
-                    <strong>No sessions yet</strong>
-                    <span>Create an agent or free terminal.</span>
+                {sessions.length === 0 &&
+                  pendingSessionLaunches.length === 0 && (
+                    <div className="empty large">
+                      <strong>No sessions yet</strong>
+                      <span>Create an agent or free terminal.</span>
+                    </div>
+                  )}
+                {pendingSessionLaunches.map((launch) => (
+                  <div
+                    aria-busy={launch.status === "starting"}
+                    className={`session-card session-card-${launch.status}`}
+                    key={launch.key}
+                  >
+                    <div className="session-card-main">
+                      <span className={`session-kind-icon tool-${launch.tool}`}>
+                        {launch.status === "starting" ? (
+                          <span
+                            aria-hidden="true"
+                            className="session-launch-spinner"
+                          />
+                        ) : (
+                          <ToolIcon tool={launch.tool} />
+                        )}
+                      </span>
+                      <span>
+                        <strong>{launch.name}</strong>
+                        <small>
+                          {launch.status === "starting"
+                            ? `Starting ${launch.tool}…`
+                            : "Failed to start"}
+                        </small>
+                        {launch.error && (
+                          <em className="session-startup-error" role="alert">
+                            {launch.error}
+                          </em>
+                        )}
+                        <time dateTime={launch.startedAt}>
+                          Requested ·{" "}
+                          {new Date(launch.startedAt).toLocaleString()}
+                        </time>
+                      </span>
+                    </div>
                   </div>
-                )}
+                ))}
                 {sessions.map((session) => {
                   const task = allTasks.find(
                     (item) => item.id === session.taskId,
                   );
-                  const live =
-                    session.status === "running" ||
-                    session.status === "starting";
                   const tool = sessionTool(session);
                   const timestamp = session.endedAt ?? session.startedAt;
+                  const startupError = sessionStartupErrors.get(session.id);
                   return (
                     <div
                       className={`session-card ${session.id === activeSessionId ? "selected" : ""}`}
@@ -940,8 +2512,16 @@ export function WorkspaceApp({
                           <small>{task?.title ?? "Workspace session"}</small>
                           <em>
                             <span className={`agent-dot ${session.status}`} />
-                            {session.status} · {session.id.slice(0, 6)}
+                            {startupError
+                              ? "failed to start"
+                              : session.status}{" "}
+                            · {session.id.slice(0, 6)}
                           </em>
+                          {startupError && (
+                            <em className="session-startup-error" role="alert">
+                              {startupError}
+                            </em>
+                          )}
                           <time dateTime={timestamp}>
                             {session.endedAt ? "Ended" : "Started"} ·{" "}
                             {new Date(timestamp).toLocaleString()}
@@ -949,21 +2529,43 @@ export function WorkspaceApp({
                         </span>
                       </button>
                       <button
-                        aria-label={`${live ? "Stop" : "Remove"} ${sessionName(session)} session`}
+                        aria-label={`Archive ${sessionName(session)} session`}
                         className="session-card-action"
-                        onClick={() =>
-                          setSessionAction({
-                            action: live ? "stop" : "remove",
-                            session,
-                          })
-                        }
+                        onClick={() => setSessionAction({ session })}
+                        title="Archive session"
                       >
-                        {live ? "■" : "×"}
+                        <ArchiveIcon />
                       </button>
                     </div>
                   );
                 })}
               </div>
+              {archivedSessions.length > 0 && (
+                <details className="archive-list session-archive-list">
+                  <summary>
+                    Archived sessions ({archivedSessions.length})
+                  </summary>
+                  <div className="item-list">
+                    {archivedSessions.map((session) => (
+                      <div className="archived-item" key={session.id}>
+                        <span>
+                          <strong>{sessionName(session)}</strong>
+                          <small>
+                            {session.provider} · archived{" "}
+                            {new Date(session.archivedAt!).toLocaleDateString()}
+                          </small>
+                        </span>
+                        <button
+                          disabled={busy}
+                          onClick={() => void restoreSession(session)}
+                        >
+                          Restore &amp; resume
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
             </>
           )}
         </section>
@@ -1002,7 +2604,13 @@ export function WorkspaceApp({
               {activeSession && <small>{activeSession.status}</small>}
             </div>
             {activeSession ? (
-              <SessionTerminal key={activeSession.id} session={activeSession} />
+              <TerminalSurface
+                id={activeSession.id}
+                key={activeSession.id}
+                label={sessionName(activeSession)}
+                status={activeSession.status}
+                target="agent"
+              />
             ) : (
               <div className="terminal-empty">
                 <strong>Select a session</strong>
@@ -1014,6 +2622,140 @@ export function WorkspaceApp({
           </section>
         )}
       </div>
+
+      <section
+        aria-label="Integrated terminal"
+        className={`integrated-terminal-panel ${terminalPanelOpen ? "open" : "collapsed"}`}
+      >
+        {terminalPanelOpen && (
+          <div
+            aria-label="Resize integrated terminal"
+            aria-orientation="horizontal"
+            aria-valuemax={
+              typeof window === "undefined"
+                ? 720
+                : Math.max(180, window.innerHeight - 280)
+            }
+            aria-valuemin={180}
+            aria-valuenow={terminalPanelHeight}
+            className="integrated-terminal-resize-handle"
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+              event.preventDefault();
+              setTerminalPanelHeight((height) =>
+                clampTerminalPanelHeight(
+                  height + (event.key === "ArrowUp" ? 24 : -24),
+                ),
+              );
+            }}
+            onPointerDown={startTerminalPanelResize}
+            role="separator"
+            tabIndex={0}
+          />
+        )}
+        <div className="integrated-terminal-header">
+          <button
+            aria-expanded={terminalPanelOpen}
+            className="integrated-terminal-toggle"
+            onClick={() => setTerminalPanelOpen((current) => !current)}
+            type="button"
+          >
+            <SessionLaunchIcon />
+            <strong>Terminal</strong>
+            <span className="count-badge">{integratedTerminals.length}</span>
+          </button>
+          <div className="integrated-terminal-actions">
+            <button
+              aria-label="New terminal in Daedalus home"
+              className="quiet"
+              disabled={busy || !snapshot?.settings.tmuxAvailable}
+              onClick={() => void createIntegratedTerminal()}
+              title={`New terminal in ${snapshot?.settings.home ?? "Daedalus home"}`}
+              type="button"
+            >
+              +
+            </button>
+            {terminalPanelOpen && (
+              <button
+                aria-label="Collapse integrated terminal"
+                className="quiet"
+                onClick={() => setTerminalPanelOpen(false)}
+                title="Collapse terminal"
+                type="button"
+              >
+                ⌄
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="integrated-terminal-body">
+          <div className="integrated-terminal-stage">
+            {activeIntegratedTerminal
+              ? integratedTerminals.map((terminal) => (
+                  <IntegratedTerminalSurface
+                    active={
+                      terminalPanelOpen &&
+                      terminal.id === activeIntegratedTerminal.id
+                    }
+                    key={terminal.id}
+                    terminal={terminal}
+                  />
+                ))
+              : terminalPanelOpen && (
+                  <div className="terminal-empty integrated-terminal-empty">
+                    <strong>No terminals open</strong>
+                    <span>
+                      Create one in the Daedalus home or from a workspace card.
+                    </span>
+                  </div>
+                )}
+          </div>
+          {terminalPanelOpen && integratedTerminals.length > 0 && (
+            <div
+              aria-label="Terminal tabs"
+              className="integrated-terminal-tabs"
+              role="tablist"
+            >
+              {integratedTerminals.map((terminal) => (
+                <div
+                  className={`integrated-terminal-tab ${terminal.id === activeIntegratedTerminal?.id ? "active" : ""}`}
+                  key={terminal.id}
+                >
+                  <button
+                    aria-label={`${terminal.name}, ${terminal.workingDirectory}`}
+                    aria-selected={terminal.id === activeIntegratedTerminal?.id}
+                    onClick={() => setActiveTerminalId(terminal.id)}
+                    role="tab"
+                    title={terminal.workingDirectory}
+                    type="button"
+                  >
+                    <span className={`agent-dot ${terminal.status}`} />
+                    <span className="integrated-terminal-tab-copy">
+                      <strong>{terminal.name}</strong>
+                      <small>
+                        {terminalPathHint(
+                          terminal.workingDirectory,
+                          snapshot?.settings.home,
+                        )}
+                      </small>
+                    </span>
+                  </button>
+                  <button
+                    aria-label={`Close ${terminal.name} terminal`}
+                    className="integrated-terminal-close"
+                    disabled={busy}
+                    onClick={() => void closeIntegratedTerminal(terminal)}
+                    title="Close terminal"
+                    type="button"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
 
       {modal === "workspace" && (
         <Modal onClose={() => setModal(undefined)} title="Create workspace">
@@ -1116,8 +2858,348 @@ export function WorkspaceApp({
         </Modal>
       )}
 
+      {modal === "repository" && workspace && (
+        <Modal
+          dismissible={!busy}
+          onClose={closeRepositoryModal}
+          title={
+            repositoryOperations.length
+              ? "Adding repositories"
+              : "Add repositories"
+          }
+          wide
+        >
+          <form className="repository-picker" onSubmit={addRemoteRepository}>
+            {repositoryOperations.length ? (
+              <section
+                aria-busy={busy}
+                className="repository-add-progress"
+                aria-label="Repository progress"
+              >
+                <div className="repository-progress-summary" role="status">
+                  <strong>
+                    {repositoryOperationFinished
+                      ? failedRepositoryOperations
+                        ? `${completedRepositoryOperations} added, ${failedRepositoryOperations} failed`
+                        : `${completedRepositoryOperations} ${completedRepositoryOperations === 1 ? "repository" : "repositories"} added`
+                      : activeRepositoryOperation
+                        ? `${activeRepositoryOperation.status === "cloning" ? "Cloning" : "Adding"} ${activeRepositoryOperation.name}`
+                        : "Preparing repositories…"}
+                  </strong>
+                  <span>
+                    {repositoryOperationFinished
+                      ? failedRepositoryOperations
+                        ? "Review the errors below, then retry the failed repositories."
+                        : "Everything is ready in this workspace."
+                      : `${completedRepositoryOperations + failedRepositoryOperations} of ${repositoryOperations.length} complete`}
+                  </span>
+                </div>
+                <div
+                  aria-label={`${completedRepositoryOperations + failedRepositoryOperations} of ${repositoryOperations.length} repositories complete`}
+                  aria-valuemax={repositoryOperations.length}
+                  aria-valuemin={0}
+                  aria-valuenow={
+                    completedRepositoryOperations + failedRepositoryOperations
+                  }
+                  className="repository-progress-track"
+                  role="progressbar"
+                >
+                  <span
+                    style={{
+                      width: `${((completedRepositoryOperations + failedRepositoryOperations) / repositoryOperations.length) * 100}%`,
+                    }}
+                  />
+                </div>
+                <div className="repository-operation-list">
+                  {repositoryOperations.map((operation) => (
+                    <div
+                      className={`repository-operation ${operation.status}`}
+                      key={operation.key}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="repository-operation-indicator"
+                      >
+                        {operation.status === "done"
+                          ? "✓"
+                          : operation.status === "error"
+                            ? "!"
+                            : operation.status === "queued"
+                              ? "·"
+                              : ""}
+                      </span>
+                      <span>
+                        <strong>{operation.name}</strong>
+                        <small>{operation.error ?? operation.detail}</small>
+                      </span>
+                      <small className="repository-operation-status">
+                        {operation.status === "cloning"
+                          ? "Cloning…"
+                          : operation.status === "attaching"
+                            ? "Adding…"
+                            : operation.status === "done"
+                              ? "Added"
+                              : operation.status === "error"
+                                ? "Failed"
+                                : "Waiting"}
+                      </small>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ) : (
+              <>
+                <p className="repository-picker-intro">
+                  Select repositories already in Daedalus, discover them through
+                  GitHub, or clone from a URL or full local path.
+                </p>
+                <label className="repository-unified-search">
+                  Repository
+                  <div className="repository-clone-row">
+                    <input
+                      autoFocus
+                      aria-label="Search repositories or enter a Git URL or absolute local repository path"
+                      placeholder="Search repositories, paste a Git URL, or enter /full/path"
+                      value={repositoryForm.search}
+                      onChange={(event) =>
+                        setRepositoryForm({
+                          remoteUrl: event.target.value,
+                          search: event.target.value,
+                        })
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key === "ArrowDown") {
+                          event.preventDefault();
+                          setActiveRepositoryResult((current) =>
+                            Math.min(
+                              current + 1,
+                              repositoryCandidates.length - 1,
+                            ),
+                          );
+                        } else if (event.key === "ArrowUp") {
+                          event.preventDefault();
+                          setActiveRepositoryResult((current) =>
+                            Math.max(current - 1, 0),
+                          );
+                        } else if (
+                          event.key === "Enter" &&
+                          !looksLikeRepositorySource(repositoryForm.search)
+                        ) {
+                          event.preventDefault();
+                          toggleRepositoryCandidate(activeRepositoryResult);
+                        }
+                      }}
+                    />
+                    <button
+                      className="quiet"
+                      disabled={
+                        busy ||
+                        !looksLikeRepositorySource(repositoryForm.search)
+                      }
+                      type="submit"
+                    >
+                      Clone URL/path
+                    </button>
+                  </div>
+                </label>
+
+                <div className="repository-picker-results repository-unified-results">
+                  <div className="repository-result-summary">
+                    <span>
+                      {repositorySearch ? "Best matches" : "All repositories"}
+                    </span>
+                    <small>
+                      {repositoryCandidates.length}
+                      {repositoryDiscoveryLoading
+                        ? " + discovering GitHub…"
+                        : ""}
+                    </small>
+                  </div>
+                  {repositoryCandidates.map((candidate, index) => {
+                    if (candidate.kind === "library") {
+                      const repository = candidate.repository;
+                      return (
+                        <button
+                          aria-checked={
+                            attachedLibraryRepositoryIds.has(repository.id) ||
+                            selectedRepositoryIds.has(repository.id)
+                          }
+                          className={`${selectedRepositoryIds.has(repository.id) ? "selected" : ""} ${attachedLibraryRepositoryIds.has(repository.id) ? "attached" : ""} ${activeRepositoryResult === index ? "active" : ""}`}
+                          disabled={
+                            busy ||
+                            attachedLibraryRepositoryIds.has(repository.id)
+                          }
+                          key={repository.id}
+                          onClick={() => toggleRepositoryCandidate(index)}
+                          onMouseEnter={() => setActiveRepositoryResult(index)}
+                          role="checkbox"
+                          type="button"
+                        >
+                          <span
+                            aria-hidden="true"
+                            className="repository-picker-check"
+                          >
+                            {attachedLibraryRepositoryIds.has(repository.id) ||
+                            selectedRepositoryIds.has(repository.id)
+                              ? "✓"
+                              : ""}
+                          </span>
+                          <span>
+                            <strong>{repository.name}</strong>
+                            <small>{repository.remoteUrl}</small>
+                          </span>
+                          <span>
+                            <strong>
+                              {attachedLibraryRepositoryIds.has(repository.id)
+                                ? "Added"
+                                : repository.defaultBranch}
+                            </strong>
+                            <small>Local</small>
+                          </span>
+                        </button>
+                      );
+                    }
+                    const repository = candidate.repository;
+                    return (
+                      <button
+                        aria-checked={selectedGitHubRepositories.has(
+                          repository.nameWithOwner,
+                        )}
+                        className={`${selectedGitHubRepositories.has(repository.nameWithOwner) ? "selected" : ""} ${activeRepositoryResult === index ? "active" : ""}`}
+                        disabled={busy}
+                        key={`github:${repository.nameWithOwner}`}
+                        onClick={() => toggleRepositoryCandidate(index)}
+                        onMouseEnter={() => setActiveRepositoryResult(index)}
+                        role="checkbox"
+                        type="button"
+                      >
+                        <span
+                          aria-hidden="true"
+                          className="repository-picker-check"
+                        >
+                          {selectedGitHubRepositories.has(
+                            repository.nameWithOwner,
+                          )
+                            ? "✓"
+                            : ""}
+                        </span>
+                        <span>
+                          <strong>{repository.name}</strong>
+                          <small>{repository.nameWithOwner}</small>
+                        </span>
+                        <span>
+                          <strong>GitHub</strong>
+                          <small>Will clone</small>
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {repositoryDiscoveryLoading ? (
+                    <div className="empty">Discovering repositories…</div>
+                  ) : repositoryDiscovery?.authenticated &&
+                    !repositoryDiscovery.error ? (
+                    repositoryCandidates.length === 0 ? (
+                      <div className="empty">
+                        {repositorySearch
+                          ? "No matching repositories"
+                          : "No repositories available"}
+                      </div>
+                    ) : null
+                  ) : (
+                    <div className="repository-discovery-message">
+                      {repositoryDiscovery?.error &&
+                      repositoryDiscovery.authenticated ? (
+                        <>
+                          <strong>GitHub discovery unavailable</strong>
+                          <span>{repositoryDiscovery.error}</span>
+                        </>
+                      ) : !repositoryDiscovery?.githubCliAvailable ? (
+                        <>
+                          <strong>GitHub CLI not found</strong>
+                          <span>
+                            Install `gh` to discover repositories you can access
+                            automatically.
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <strong>GitHub sign-in required</strong>
+                          <span>
+                            Run `gh auth login`, then reopen this picker.
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <small className="repository-clone-destination">
+                  New clones are stored once in{" "}
+                  {snapshot?.settings.repositoryRoot}.
+                </small>
+              </>
+            )}
+            <div className="modal-actions">
+              {repositoryOperations.length ? (
+                <span className="repository-selection-count">
+                  {busy
+                    ? "Keep this window open while repositories are prepared."
+                    : failedRepositoryOperations
+                      ? "Completed repositories will not be repeated."
+                      : "Repository setup complete."}
+                </span>
+              ) : (
+                <span className="repository-selection-count">
+                  {selectedRepositoryCount
+                    ? `${selectedRepositoryCount} selected`
+                    : "Select one or more repositories"}
+                </span>
+              )}
+              {(!repositoryOperations.length ||
+                (repositoryOperationFinished &&
+                  failedRepositoryOperations > 0)) && (
+                <button
+                  className="quiet"
+                  onClick={closeRepositoryModal}
+                  type="button"
+                >
+                  {repositoryOperations.length ? "Close" : "Cancel"}
+                </button>
+              )}
+              {repositoryOperations.length ? (
+                failedRepositoryOperations > 0 && !busy ? (
+                  <button
+                    disabled={selectedRepositoryCount === 0}
+                    onClick={() => void attachSelectedRepositories()}
+                    type="button"
+                  >
+                    Retry failed
+                  </button>
+                ) : repositoryOperationFinished ? (
+                  <button onClick={closeRepositoryModal} type="button">
+                    Done
+                  </button>
+                ) : null
+              ) : (
+                <button
+                  disabled={busy || selectedRepositoryCount === 0}
+                  onClick={() => void attachSelectedRepositories()}
+                  type="button"
+                >
+                  {selectedRepositoryCount === 1
+                    ? "Add repository"
+                    : selectedRepositoryCount > 1
+                      ? `Add ${selectedRepositoryCount} repositories`
+                      : "Add selected"}
+                </button>
+              )}
+            </div>
+          </form>
+        </Modal>
+      )}
+
       {modal === "session" && workspace && snapshot && (
-        <Modal onClose={closeSessionModal} title="Create session">
+        <Modal dismissible onClose={closeSessionModal} title="Create session">
           <form className="modal-form" onSubmit={createSession}>
             <label>
               Session name
@@ -1224,6 +3306,30 @@ export function WorkspaceApp({
                 <option value="light">Light</option>
               </select>
             </dd>
+            <dt>Agent context</dt>
+            <dd>
+              <label className="settings-toggle">
+                <input
+                  checked={snapshot.settings.workspaceInstructionFilesEnabled}
+                  disabled={busy}
+                  onChange={(event) =>
+                    void perform(
+                      client.request.workspaceInstructionFilesSet({
+                        enabled: event.target.checked,
+                      }),
+                    )
+                  }
+                  type="checkbox"
+                />
+                <span>
+                  <strong>Create workspace instruction files</strong>
+                  <small>
+                    Keep Daedalus-managed AGENTS.md and CLAUDE.md files in
+                    workspace roots.
+                  </small>
+                </span>
+              </label>
+            </dd>
           </dl>
           <h3>Agent executables</h3>
           <div className="provider-grid">
@@ -1246,23 +3352,13 @@ export function WorkspaceApp({
       {sessionAction && (
         <Modal
           onClose={() => setSessionAction(undefined)}
-          title={
-            sessionAction.action === "stop" ? "Stop session" : "Remove session"
-          }
+          title="Archive session"
         >
           <div className="confirmation-content">
             <p>
-              {sessionAction.action === "stop" ? (
-                <>
-                  Stop <strong>{sessionName(sessionAction.session)}</strong> and
-                  close its running process? Its history will remain available.
-                </>
-              ) : (
-                <>
-                  Remove <strong>{sessionName(sessionAction.session)}</strong>{" "}
-                  from session history? Workspace files won’t be deleted.
-                </>
-              )}
+              Archive <strong>{sessionName(sessionAction.session)}</strong>?
+              Running work will stop, but its conversation can be restored and
+              resumed later.
             </p>
             <div className="modal-actions">
               <button
@@ -1276,19 +3372,51 @@ export function WorkspaceApp({
                 autoFocus
                 className="danger-action"
                 disabled={busy}
-                onClick={() =>
-                  void (sessionAction.action === "stop"
-                    ? stopSession(sessionAction.session)
-                    : removeSession(sessionAction.session))
-                }
+                onClick={() => void archiveSession(sessionAction.session)}
                 type="button"
               >
-                {sessionAction.action === "stop"
-                  ? "Stop session"
-                  : "Remove session"}
+                Archive session
               </button>
             </div>
           </div>
+        </Modal>
+      )}
+
+      {workspaceAction && (
+        <Modal
+          onClose={() => setWorkspaceAction(undefined)}
+          title="Archive workspace"
+        >
+          <form
+            className="confirmation-content"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void archiveWorkspace(workspaceAction);
+            }}
+          >
+            <p>
+              Archive <strong>{workspaceAction.name}</strong>? All sessions in
+              this workspace will stop and move to their archived list. You can
+              restore the workspace and resume its sessions later.
+            </p>
+            <div className="modal-actions">
+              <button
+                className="quiet"
+                onClick={() => setWorkspaceAction(undefined)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                autoFocus
+                className="danger-action"
+                disabled={busy}
+                type="submit"
+              >
+                Archive workspace
+              </button>
+            </div>
+          </form>
         </Modal>
       )}
     </main>

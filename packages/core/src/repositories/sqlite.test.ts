@@ -49,6 +49,21 @@ describe("SqliteRepositories", () => {
         exitCode: null,
         startedAt: now,
         endedAt: null,
+        providerSessionId: null,
+        archivedAt: null,
+        resumeCount: 0,
+      });
+      repositories.createIntegratedTerminal({
+        id: "terminal-id",
+        name: "Demo terminal",
+        tmuxSession: "daedalus_terminalid",
+        command: "sh",
+        args: ["-l"],
+        workingDirectory: join(home, "demo"),
+        status: "running",
+        exitCode: null,
+        startedAt: now,
+        endedAt: null,
       });
       expect(repositories.findWorkspace("demo")?.id).toBe("workspace-id");
       expect(repositories.listTasks({ status: "todo" })[0]).toMatchObject({
@@ -56,6 +71,10 @@ describe("SqliteRepositories", () => {
       });
       expect(repositories.findAgent("agent-id")?.args).toEqual(["-l"]);
       expect(repositories.findAgent("agent-id")?.name).toBe("Task");
+      expect(repositories.findIntegratedTerminal("terminal-id")).toMatchObject({
+        name: "Demo terminal",
+        args: ["-l"],
+      });
       expect(() =>
         repositories.transaction(() => {
           repositories.deleteTask("task-id");

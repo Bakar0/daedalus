@@ -14,6 +14,7 @@ import {
 import type { Workspace } from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
+import { ensureWorkspaceContentFiles } from "./workspace-content";
 
 const MARKER_DIRECTORY = ".daedalus";
 const MARKER_FILE = "workspace.json";
@@ -63,6 +64,8 @@ export class WorkspaceService {
     private readonly repositories: SqliteRepositories,
     private readonly workspaceRoot: string,
     private readonly hasLiveAgents: (workspaceId: string) => Promise<boolean>,
+    private readonly archiveAgents: (workspaceId: string) => Promise<void>,
+    private readonly instructionFilesEnabled: () => boolean = () => true,
   ) {}
 
   async create(input: {
@@ -106,6 +109,7 @@ export class WorkspaceService {
         join(path, MARKER_DIRECTORY, MARKER_FILE),
         `${JSON.stringify({ id: workspace.id }, null, 2)}\n`,
       );
+      await ensureWorkspaceContentFiles(path, this.instructionFilesEnabled());
       this.repositories.createWorkspace(workspace);
       return workspace;
     } catch (error) {
@@ -116,7 +120,7 @@ export class WorkspaceService {
 
   async list(): Promise<Workspace[]> {
     return (await this.listWithHealth())
-      .filter((item) => item.available)
+      .filter((item) => item.available && !item.workspace.archivedAt)
       .map((item) => item.workspace);
   }
 
@@ -143,6 +147,20 @@ export class WorkspaceService {
         "NOT_FOUND",
         `Workspace folder '${workspace.path}' or its identity marker is missing`,
         { workspaceId: workspace.id },
+      );
+    await ensureWorkspaceContentFiles(
+      workspace.path,
+      this.instructionFilesEnabled(),
+    );
+    return workspace;
+  }
+
+  async getActive(reference: string): Promise<Workspace> {
+    const workspace = await this.get(reference);
+    if (workspace.archivedAt)
+      throw new DaedalusError(
+        "CONFLICT",
+        `Workspace '${workspace.slug}' is archived`,
       );
     return workspace;
   }
@@ -194,12 +212,46 @@ export class WorkspaceService {
         "CONFLICT",
         "Workspace has live agent sessions; stop them before removal",
       );
+    if (
+      this.repositories.listSessionWorktrees({ workspaceId: workspace.id })
+        .length > 0
+    )
+      throw new DaedalusError(
+        "CONFLICT",
+        "Workspace has repository worktrees; preserve or clean them up before removal",
+      );
     if (options.deleteFiles) await this.verifyDeletionTarget(workspace);
     if (options.deleteFiles) await removeDirectory(workspace.path);
     this.repositories.transaction(() =>
       this.repositories.deleteWorkspace(workspace.id),
     );
     return { workspace, filesDeleted: Boolean(options.deleteFiles) };
+  }
+
+  async archive(reference: string): Promise<Workspace> {
+    const workspace = await this.get(reference);
+    if (workspace.archivedAt) return workspace;
+    await this.archiveAgents(workspace.id);
+    const archived = {
+      ...workspace,
+      archivedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    this.repositories.updateWorkspace(archived);
+    return archived;
+  }
+
+  async restore(reference: string): Promise<Workspace> {
+    const workspace = await this.get(reference);
+    if (!workspace.archivedAt)
+      throw new DaedalusError("CONFLICT", "Workspace is not archived");
+    const restored = {
+      ...workspace,
+      archivedAt: null,
+      updatedAt: new Date().toISOString(),
+    };
+    this.repositories.updateWorkspace(restored);
+    return restored;
   }
 
   private async verifyDeletionTarget(workspace: Workspace): Promise<void> {

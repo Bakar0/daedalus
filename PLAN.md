@@ -373,6 +373,10 @@ Implemented with task-card-owned session actions, Task brief/Terminal inspector 
 
 ### Phase 7 — hardening and first release
 
+Before Phase 7, the archive lifecycle was added as a final product capability: sessions can be stopped and archived into a collapsed list, then restored through Codex or Claude's native conversation resume support. Workspaces can be archived with all contained sessions and restored without automatically restoring those sessions. Archive state is persisted independently from runtime status and is available through core, CLI, desktop RPC, and UI.
+
+The desktop also exposes persisted utility terminals separately from agent sessions. A bottom panel provides multiple selectable tabs, a default shell rooted at `DAEDALUS_HOME`, workspace-card launch actions, collapse without process loss, and explicit tab close through the existing tmux transport.
+
 - Implement `daedal doctor` for Bun, tmux, provider, directory, database, and session checks.
 - Add recovery for missing folders, corrupt markers, stale sessions, and interrupted migrations.
 - Package the desktop app and standalone CLI; document installation and shell PATH setup.

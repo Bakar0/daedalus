@@ -52,6 +52,8 @@ describe("CommandTmuxClient", () => {
       "/tmp/work space",
       "-e",
       "TASK=one two",
+      "-e",
+      "PWD=/tmp/work space",
       "--",
       "agent",
       "literal; touch /tmp/nope",

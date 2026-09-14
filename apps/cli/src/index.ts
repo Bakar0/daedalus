@@ -37,18 +37,21 @@ const help = `daedal ${VERSION} — local-first control plane for coding agents
 
 Usage:
   daedal doctor [--json]
-  daedal workspace <create|list|get|update|remove> ... [--json]
+  daedal workspace <create|list|get|update|archive|restore|remove> ... [--json]
   daedal task <create|list|get|update|status|remove> ... [--json]
-  daedal agent <spawn|list|get|attach|send|stop|remove> ... [--json]
+  daedal repo <list|worktree> ... [--json]
+  daedal agent <spawn|list|get|attach|send|archive|restore|stop|remove> ... [--json]
 
 Run 'daedal <command> --help' for command details.`;
 
 const commandHelp: Record<string, string> = {
   workspace: `Workspace commands:
   daedal workspace create <name> [--slug <slug>] [--path <path>]
-  daedal workspace list
+  daedal workspace list [--archived]
   daedal workspace get <workspace>
   daedal workspace update <workspace> [--name <name>] [--slug <slug>]
+  daedal workspace archive <workspace>
+  daedal workspace restore <workspace>
   daedal workspace remove <workspace> [--delete-files] --force`,
   task: `Task commands:
   daedal task create --workspace <workspace> --title <title> [--description <text>] [--priority <priority>]
@@ -57,12 +60,17 @@ const commandHelp: Record<string, string> = {
   daedal task update <task-id> [--title <title>] [--description <text>] [--priority <priority>]
   daedal task status <task-id> <status>
   daedal task remove <task-id> --force`,
+  repo: `Repository commands:
+  daedal repo list --workspace <workspace>
+  daedal repo worktree create --session <agent-id> --repository <name-or-id>`,
   agent: `Agent commands:
   daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-id>] [--name <name>]
-  daedal agent list [--workspace <workspace>] [--running]
+  daedal agent list [--workspace <workspace>] [--running|--archived]
   daedal agent get <agent-id>
   daedal agent attach <agent-id>
   daedal agent send <agent-id> <text>
+  daedal agent archive <agent-id> [--force]
+  daedal agent restore <agent-id>
   daedal agent stop <agent-id> [--force]
   daedal agent remove <agent-id>`,
 };
@@ -131,8 +139,11 @@ function printResult(data: unknown, json: boolean, human: () => void): void {
   else human();
 }
 
-async function doctor(json: boolean): Promise<number> {
-  const context = await createApplicationContext();
+async function doctor(
+  json: boolean,
+  migrationsDirectory?: string,
+): Promise<number> {
+  const context = await createApplicationContext({ migrationsDirectory });
   try {
     const bunVersion = Bun.version;
     const tmuxVersion = await probeVersion("tmux", ["-V"]);
@@ -205,9 +216,17 @@ async function workspaceCommand(
     return 0;
   }
   if (action === "list") {
-    const parsed = parseArguments(args, []);
-    expectPositionals(parsed.positionals, 0, "daedal workspace list");
-    const result = await context.workspaces.list();
+    const parsed = parseArguments(args, [], ["archived"]);
+    expectPositionals(
+      parsed.positionals,
+      0,
+      "daedal workspace list [--archived]",
+    );
+    const result = parsed.flags.has("archived")
+      ? (await context.workspaces.listWithHealth())
+          .filter((item) => item.workspace.archivedAt)
+          .map((item) => item.workspace)
+      : await context.workspaces.list();
     printResult(result, json, () => {
       if (!result.length) console.log("No workspaces.");
       for (const item of result)
@@ -243,6 +262,21 @@ async function workspaceCommand(
     });
     printResult(result, json, () =>
       console.log(`Updated workspace ${result.slug} (${result.id})`),
+    );
+    return 0;
+  }
+  if (action === "archive" || action === "restore") {
+    const parsed = parseArguments(args, []);
+    expectPositionals(
+      parsed.positionals,
+      1,
+      `daedal workspace ${action} <workspace>`,
+    );
+    const result = await context.workspaces[action](parsed.positionals[0]!);
+    printResult(result, json, () =>
+      console.log(
+        `${action === "archive" ? "Archived" : "Restored"} workspace ${result.slug}`,
+      ),
     );
     return 0;
   }
@@ -422,15 +456,21 @@ async function agentCommand(
     return 0;
   }
   if (action === "list") {
-    const parsed = parseArguments(args, ["workspace"], ["running"]);
+    const parsed = parseArguments(args, ["workspace"], ["running", "archived"]);
+    if (parsed.flags.has("running") && parsed.flags.has("archived"))
+      throw new DaedalusError(
+        "VALIDATION",
+        "Choose either --running or --archived, not both",
+      );
     expectPositionals(
       parsed.positionals,
       0,
-      "daedal agent list [--workspace <workspace>] [--running]",
+      "daedal agent list [--workspace <workspace>] [--running|--archived]",
     );
     const result = await context.agents.list({
       workspace: parsed.values.workspace,
       running: parsed.flags.has("running"),
+      archived: parsed.flags.has("archived"),
     });
     printResult(result, json, () => {
       if (!result.length) console.log("No agent sessions.");
@@ -441,7 +481,11 @@ async function agentCommand(
     });
     return 0;
   }
-  const parsed = parseArguments(args, [], action === "stop" ? ["force"] : []);
+  const parsed = parseArguments(
+    args,
+    [],
+    action === "stop" || action === "archive" ? ["force"] : [],
+  );
   if (action === "get") {
     expectPositionals(parsed.positionals, 1, "daedal agent get <agent-id>");
     const result = await context.agents.get(parsed.positionals[0]!);
@@ -489,6 +533,27 @@ async function agentCommand(
     printResult(result, json, () => console.log(`Stopped agent ${result.id}`));
     return 0;
   }
+  if (action === "archive") {
+    expectPositionals(
+      parsed.positionals,
+      1,
+      "daedal agent archive <agent-id> [--force]",
+    );
+    const result = await context.agents.archive(
+      parsed.positionals[0]!,
+      parsed.flags.has("force"),
+    );
+    printResult(result, json, () => console.log(`Archived agent ${result.id}`));
+    return 0;
+  }
+  if (action === "restore") {
+    expectPositionals(parsed.positionals, 1, "daedal agent restore <agent-id>");
+    const result = await context.agents.restore(parsed.positionals[0]!);
+    printResult(result, json, () =>
+      console.log(`Restored and resumed agent ${result.id}`),
+    );
+    return 0;
+  }
   if (action === "remove") {
     expectPositionals(parsed.positionals, 1, "daedal agent remove <agent-id>");
     const result = await context.agents.remove(parsed.positionals[0]!);
@@ -498,7 +563,66 @@ async function agentCommand(
   throw new DaedalusError("VALIDATION", `Unknown agent command '${action}'`);
 }
 
-export async function runCli(inputArgs: string[]): Promise<number> {
+async function repositoryCommand(
+  context: ApplicationContext,
+  args: string[],
+  json: boolean,
+): Promise<number> {
+  const action = args.shift();
+  if (!action || action === "help") {
+    console.log(commandHelp.repo);
+    return 0;
+  }
+  if (action === "list") {
+    const parsed = parseArguments(args, ["workspace"]);
+    expectPositionals(
+      parsed.positionals,
+      0,
+      "daedal repo list --workspace <workspace>",
+    );
+    const workspace = await context.workspaces.get(
+      required(parsed.values.workspace, "--workspace"),
+    );
+    const result = context.repositories.listWorkspaceRepositories(workspace.id);
+    printResult(result, json, () => {
+      if (!result.length) console.log("No attached repositories.");
+      for (const repository of result)
+        console.log(
+          `${repository.name}\t${repository.access}\t${repository.referencePath ?? repository.canonicalPath}`,
+        );
+    });
+    return 0;
+  }
+  if (action === "worktree") {
+    const worktreeAction = args.shift();
+    if (worktreeAction !== "create")
+      throw new DaedalusError(
+        "VALIDATION",
+        "Usage: daedal repo worktree create --session <agent-id> --repository <name-or-id>",
+      );
+    const parsed = parseArguments(args, ["session", "repository"]);
+    expectPositionals(
+      parsed.positionals,
+      0,
+      "daedal repo worktree create --session <agent-id> --repository <name-or-id>",
+    );
+    const result = await context.workspaceContent.createSessionWorktree({
+      session: required(parsed.values.session, "--session"),
+      repository: required(parsed.values.repository, "--repository"),
+    });
+    printResult(result, json, () => console.log(result.path));
+    return 0;
+  }
+  throw new DaedalusError(
+    "VALIDATION",
+    `Unknown repository command '${action}'`,
+  );
+}
+
+export async function runCli(
+  inputArgs: string[],
+  options: { migrationsDirectory?: string } = {},
+): Promise<number> {
   const json = inputArgs.includes("--json");
   const args = inputArgs.filter((argument) => argument !== "--json");
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
@@ -517,16 +641,20 @@ export async function runCli(inputArgs: string[]): Promise<number> {
   if (args[0] === "doctor") {
     if (args.length !== 1)
       throw new DaedalusError("VALIDATION", "Usage: daedal doctor [--json]");
-    return doctor(json);
+    return doctor(json, options.migrationsDirectory);
   }
-  if (!["workspace", "task", "agent"].includes(args[0]!))
+  if (!["workspace", "task", "repo", "agent"].includes(args[0]!))
     throw new DaedalusError("VALIDATION", `Unknown command '${args[0]}'`);
-  const context = await createApplicationContext();
+  const context = await createApplicationContext({
+    migrationsDirectory: options.migrationsDirectory,
+  });
   try {
     if (args[0] === "workspace")
       return await workspaceCommand(context, args.slice(1), json);
     if (args[0] === "task")
       return await taskCommand(context, args.slice(1), json);
+    if (args[0] === "repo")
+      return await repositoryCommand(context, args.slice(1), json);
     return await agentCommand(context, args.slice(1), json);
   } finally {
     context.close();

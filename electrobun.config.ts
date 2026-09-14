@@ -14,6 +14,7 @@ export default {
     copy: {
       "apps/desktop/dist/index.html": "views/mainview/index.html",
       "apps/desktop/dist/assets": "views/mainview/assets",
+      "apps/desktop/dist/cli.js": "cli/daedal.js",
       migrations: "migrations",
     },
     watchIgnore: ["apps/desktop/dist/**"],

@@ -2,16 +2,24 @@ import {
   normalizeError,
   type ApplicationContext,
   type AgentSession,
+  type IntegratedTerminal,
+  type RepositoryLibraryEntry,
   type Task,
   type Workspace,
+  type WorkspaceContent,
+  type WorkspaceRepository,
 } from "@daedalus/core";
 import type {
   AgentSessionDto,
   DesktopRpcSchema,
   DesktopSnapshotDto,
+  IntegratedTerminalDto,
+  RepositoryLibraryDto,
   RpcResult,
   TaskDto,
+  WorkspaceContentDto,
   WorkspaceDto,
+  WorkspaceRepositoryDto,
 } from "@daedalus/protocol";
 
 type Requests = DesktopRpcSchema["bun"]["requests"];
@@ -51,26 +59,66 @@ const agentDto = (agent: AgentSession): AgentSessionDto => ({
   ...agent,
   args: [...agent.args],
 });
+const integratedTerminalDto = (
+  terminal: IntegratedTerminal,
+): IntegratedTerminalDto => ({
+  id: terminal.id,
+  name: terminal.name,
+  tmuxSession: terminal.tmuxSession,
+  workingDirectory: terminal.workingDirectory,
+  status: terminal.status,
+  startedAt: terminal.startedAt,
+  endedAt: terminal.endedAt,
+});
+const workspaceRepositoryDto = (
+  repository: WorkspaceRepository,
+): WorkspaceRepositoryDto => ({ ...repository });
+const repositoryLibraryDto = (
+  repository: RepositoryLibraryEntry,
+): RepositoryLibraryDto => ({
+  id: repository.id,
+  name: repository.name,
+  remoteUrl: repository.remoteUrl,
+  defaultBranch: repository.defaultBranch,
+  lastFetchedAt: repository.lastFetchedAt,
+});
+const workspaceContentDto = (
+  content: WorkspaceContent,
+): WorkspaceContentDto => ({
+  ...content,
+  files: content.files.map((item) => ({ ...item })),
+  repositories: content.repositories.map(workspaceRepositoryDto),
+  worktrees: content.worktrees.map((item) => ({ ...item })),
+});
 
 export async function desktopSnapshot(
   context: ApplicationContext,
 ): Promise<DesktopSnapshotDto> {
-  const [workspaces, tasks, agents, capabilities] = await Promise.all([
-    context.workspaces.listWithHealth(),
-    context.tasks.list({}),
-    context.agents.list({}),
-    context.agents.capabilities(),
-  ]);
+  const [workspaces, tasks, agents, terminals, capabilities] =
+    await Promise.all([
+      context.workspaces.listWithHealth(),
+      context.tasks.list({}),
+      context.agents.list({ includeArchived: true }),
+      context.terminals.list(),
+      context.agents.capabilities(),
+    ]);
   return {
     workspaces: workspaces.map(({ workspace, available }) =>
       workspaceDto(workspace, available),
     ),
     tasks: tasks.map(taskDto),
     agents: agents.map(agentDto),
+    terminals: terminals.map(integratedTerminalDto),
+    repositories: context.workspaceContent
+      .listRepositoryLibrary()
+      .map(repositoryLibraryDto),
     settings: {
       home: context.config.home,
       workspaceRoot: context.config.workspaceRoot,
       databasePath: context.config.databasePath,
+      repositoryRoot: context.config.repositoryRoot,
+      workspaceInstructionFilesEnabled:
+        context.config.workspaceInstructionFilesEnabled,
       ...capabilities,
     },
   };
@@ -81,6 +129,10 @@ export function desktopDataFingerprint(context: ApplicationContext): string {
     workspaces: context.repositories.listWorkspaces(),
     tasks: context.repositories.listTasks({}),
     agents: context.repositories.listAgents(),
+    terminals: context.repositories.listIntegratedTerminals(),
+    workspaceRepositories: context.repositories.listWorkspaceRepositories(),
+    sessionWorktrees: context.repositories.listSessionWorktrees(),
+    repositoryLibrary: context.repositories.listRepositoryLibrary(),
   });
 }
 
@@ -117,6 +169,72 @@ export function createDesktopRequestHandlers(
           filesDeleted: removed.filesDeleted,
         };
       }),
+    workspaceArchive: ({ reference }) =>
+      mutate(async () =>
+        workspaceDto(await context.workspaces.archive(reference)),
+      ),
+    workspaceRestore: ({ reference }) =>
+      mutate(async () =>
+        workspaceDto(await context.workspaces.restore(reference)),
+      ),
+    workspaceContentGet: ({ workspace }) =>
+      result(async () =>
+        workspaceContentDto(await context.workspaceContent.get(workspace)),
+      ),
+    workspaceDirectoryList: ({ workspace, path }) =>
+      result(async () =>
+        (await context.workspaceContent.listDirectory(workspace, path)).map(
+          (item) => ({ ...item }),
+        ),
+      ),
+    workspaceFileRead: ({ workspace, path }) =>
+      result(async () => ({
+        ...(await context.workspaceContent.readFile(workspace, path)),
+      })),
+    workspaceFileWrite: (params) =>
+      mutate(async () => ({
+        ...(await context.workspaceContent.writeFile(params)),
+      })),
+    workspaceEntryCreate: (params) =>
+      mutate(async () => ({
+        ...(await context.workspaceContent.createEntry(params)),
+      })),
+    workspaceInstructionFilesSet: ({ enabled }) =>
+      mutate(async () => {
+        await context.workspaceContent.setInstructionFilesEnabled(enabled);
+        return { enabled };
+      }),
+    workspaceRepositoryAttach: (params) =>
+      mutate(async () =>
+        workspaceRepositoryDto(
+          await context.workspaceContent.attachRepository(params),
+        ),
+      ),
+    workspaceRepositorySync: ({ id }) =>
+      mutate(async () =>
+        workspaceRepositoryDto(
+          await context.workspaceContent.syncRepository(id),
+        ),
+      ),
+    repositoryLibraryAdd: (params) =>
+      mutate(async () =>
+        repositoryLibraryDto(
+          await context.workspaceContent.addRepositoryToLibrary(params),
+        ),
+      ),
+    repositoryDiscovery: () =>
+      result(() => context.workspaceContent.discoverGitHubRepositories()),
+    workspaceRepositoryDetach: ({ id }) =>
+      mutate(() =>
+        workspaceRepositoryDto(context.workspaceContent.detachRepository(id)),
+      ),
+    workspaceJournalAppend: (params) =>
+      mutate(async () => {
+        await context.workspaceContent.appendJournal(params);
+        return workspaceContentDto(
+          await context.workspaceContent.get(params.workspace),
+        );
+      }),
     taskCreate: (params) =>
       mutate(async () => taskDto(await context.tasks.create(params))),
     taskGet: ({ id }) => result(() => taskDto(context.tasks.get(id))),
@@ -136,5 +254,17 @@ export function createDesktopRequestHandlers(
       mutate(async () => agentDto(await context.agents.stop(id, force))),
     agentRemove: ({ id }) =>
       mutate(async () => agentDto(await context.agents.remove(id))),
+    agentArchive: ({ id, force }) =>
+      mutate(async () => agentDto(await context.agents.archive(id, force))),
+    agentRestore: ({ id }) =>
+      mutate(async () => agentDto(await context.agents.restore(id))),
+    terminalCreate: (params) =>
+      mutate(async () =>
+        integratedTerminalDto(await context.terminals.create(params)),
+      ),
+    terminalClose: ({ id }) =>
+      mutate(async () =>
+        integratedTerminalDto(await context.terminals.close(id)),
+      ),
   };
 }

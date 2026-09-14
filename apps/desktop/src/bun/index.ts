@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { resolve } from "node:path";
+import { chmod, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import {
   ApplicationMenu,
   BrowserView,
@@ -10,6 +11,9 @@ import { createApplicationContext } from "@daedalus/core";
 import {
   captureTmuxPane,
   CommandTmuxClient,
+  ensureDirectory,
+  pathExists,
+  resizeTmuxPane,
   sendTmuxInput,
   TmuxControlBridge,
 } from "@daedalus/platform";
@@ -22,12 +26,27 @@ import { createDesktopRequestHandlers, desktopDataFingerprint } from "./rpc";
 import { authorizeTerminalRequest, TerminalConnection } from "./terminal";
 
 interface SocketData {
-  agentId: string;
+  initialSize?: { cols: number; rows: number };
+  targetId: string;
+  targetKind: "agent" | "integrated";
 }
 
 const context = await createApplicationContext(
   resolve(PATHS.RESOURCES_FOLDER, "app/migrations"),
 );
+const cliEntrypoint = resolve(PATHS.RESOURCES_FOLDER, "app/cli/daedal.js");
+if (await pathExists(cliEntrypoint)) {
+  const binDirectory = join(context.config.home, "bin");
+  const cliShim = join(binDirectory, "daedal");
+  const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
+  await ensureDirectory(binDirectory);
+  await writeFile(
+    cliShim,
+    `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(cliEntrypoint)} "$@"\n`,
+    "utf8",
+  );
+  await chmod(cliShim, 0o755);
+}
 const terminalTmux = context.tmux;
 if (!(terminalTmux instanceof CommandTmuxClient))
   throw new Error("Desktop terminal requires the command tmux adapter");
@@ -35,14 +54,21 @@ const terminalTarget = (session: string) => ({
   socketName: terminalTmux.socketName,
   session,
 });
-const preexistingLiveIds = new Set(
-  context.repositories
+const preexistingLiveIds = new Set([
+  ...context.repositories
     .listAgents()
     .filter(
       (agent) => agent.status === "running" || agent.status === "starting",
     )
-    .map((agent) => agent.id),
-);
+    .map((agent) => `agent:${agent.id}`),
+  ...context.repositories
+    .listIntegratedTerminals()
+    .filter(
+      (terminal) =>
+        terminal.status === "running" || terminal.status === "starting",
+    )
+    .map((terminal) => `integrated:${terminal.id}`),
+]);
 const connections = new Map<
   Bun.ServerWebSocket<SocketData>,
   TerminalConnection
@@ -53,42 +79,69 @@ const server = Bun.serve<SocketData>({
   hostname: "127.0.0.1",
   port: 0,
   fetch(request, server) {
-    const agentId = authorizeTerminalRequest(request, token);
-    if (!agentId) {
+    const target = authorizeTerminalRequest(request, token);
+    if (!target) {
       return new Response("Not found", { status: 404 });
     }
-    return server.upgrade(request, { data: { agentId } })
+    return server.upgrade(request, {
+      data: {
+        initialSize: target.initialSize,
+        targetId: target.id,
+        targetKind: target.kind,
+      },
+    })
       ? undefined
       : new Response("WebSocket upgrade failed", { status: 400 });
   },
   websocket: {
     async open(socket) {
       try {
-        const agent = await context.agents.get(socket.data.agentId);
-        if (agent.status !== "running" && agent.status !== "starting") {
+        const target =
+          socket.data.targetKind === "agent"
+            ? await context.agents.get(socket.data.targetId)
+            : await context.terminals.get(socket.data.targetId);
+        if (target.status !== "running" && target.status !== "starting") {
           const status: TerminalServerMessage = {
             type: "status",
-            status: agent.status,
-            agentId: agent.id,
+            status: target.status,
+            agentId: target.id,
           };
           socket.send(JSON.stringify(status));
           socket.close();
           return;
         }
-        const target = terminalTarget(agent.tmuxSession);
+        const tmuxTarget = terminalTarget(target.tmuxSession);
         const connection = new TerminalConnection({
-          agentId: agent.id,
+          agentId: target.id,
           socket,
-          status: preexistingLiveIds.has(agent.id) ? "reconnected" : "live",
+          status: preexistingLiveIds.has(
+            `${socket.data.targetKind}:${target.id}`,
+          )
+            ? "reconnected"
+            : "live",
           capture: () =>
-            captureTmuxPane(target, undefined, terminalTmux.executable),
+            captureTmuxPane(tmuxTarget, undefined, terminalTmux.executable),
+          prepareCapture: socket.data.initialSize
+            ? () =>
+                resizeTmuxPane(
+                  tmuxTarget,
+                  socket.data.initialSize!.cols,
+                  socket.data.initialSize!.rows,
+                  terminalTmux.executable,
+                )
+            : undefined,
           sendInput: (data) =>
-            sendTmuxInput(target, data, terminalTmux.executable),
+            sendTmuxInput(tmuxTarget, data, terminalTmux.executable),
           createBridge: (onOutput) =>
-            new TmuxControlBridge(onOutput, target, terminalTmux.executable),
+            new TmuxControlBridge(
+              onOutput,
+              tmuxTarget,
+              terminalTmux.executable,
+            ),
           onError: (error) =>
             void context.logger.write("error", "terminal_connection_failed", {
-              agentId: agent.id,
+              targetId: target.id,
+              targetKind: socket.data.targetKind,
               message: error instanceof Error ? error.message : String(error),
             }),
         });
@@ -129,7 +182,9 @@ function announce(source: "desktop" | "external"): void {
 }
 
 const rpc = BrowserView.defineRPC<DesktopRpcSchema>({
-  maxRequestTime: 30_000,
+  // Initial repository clones and fetches can legitimately take several
+  // minutes for large histories or slower remotes.
+  maxRequestTime: 10 * 60_000,
   handlers: {
     requests: createDesktopRequestHandlers(context, () => announce("desktop")),
   },
@@ -149,14 +204,20 @@ setInterval(async () => {
   try {
     // Reconciliation updates stale sessions; SQLite fingerprinting also catches
     // mutations performed by another process such as the CLI.
-    await context.agents.reconcile();
+    await Promise.all([
+      context.agents.reconcile(),
+      context.terminals.reconcile(),
+    ]);
     for (const [socket, connection] of connections) {
-      const agent = context.repositories.findAgent(socket.data.agentId);
+      const target =
+        socket.data.targetKind === "agent"
+          ? context.repositories.findAgent(socket.data.targetId)
+          : context.repositories.findIntegratedTerminal(socket.data.targetId);
       if (
-        !agent ||
-        (agent.status !== "running" && agent.status !== "starting")
+        !target ||
+        (target.status !== "running" && target.status !== "starting")
       ) {
-        connection.end(agent?.status === "lost" ? "lost" : "exited");
+        connection.end(target?.status === "lost" ? "lost" : "exited");
         connections.delete(socket);
       }
     }

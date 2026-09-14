@@ -64,5 +64,84 @@ describe("runMigrations", () => {
         .all(),
     ).toEqual([{ name: "Build UI" }, { name: "Terminal" }]);
     migrated.close();
+
+    await Bun.write(
+      join(migrations, "004_archives.sql"),
+      Bun.file(join(source, "004_archives.sql")),
+    );
+    await runMigrations(databasePath, migrations);
+    const archived = new Database(databasePath);
+    expect(
+      archived
+        .query<{ archived_at: string | null; resume_count: number }, []>(
+          "SELECT archived_at, resume_count FROM agent_sessions ORDER BY id",
+        )
+        .all(),
+    ).toEqual([
+      { archived_at: null, resume_count: 0 },
+      { archived_at: null, resume_count: 0 },
+    ]);
+    archived.close();
+
+    await Bun.write(
+      join(migrations, "005_integrated_terminals.sql"),
+      Bun.file(join(source, "005_integrated_terminals.sql")),
+    );
+    await runMigrations(databasePath, migrations);
+    const integrated = new Database(databasePath);
+    expect(
+      integrated
+        .query<{ name: string }, []>(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'integrated_terminals'",
+        )
+        .get(),
+    ).toEqual({ name: "integrated_terminals" });
+    integrated.close();
+
+    await Bun.write(
+      join(migrations, "006_workspace_content.sql"),
+      Bun.file(join(source, "006_workspace_content.sql")),
+    );
+    await runMigrations(databasePath, migrations);
+    const workspaceContent = new Database(databasePath);
+    expect(
+      workspaceContent
+        .query<{ name: string }, []>(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('workspace_repositories', 'session_worktrees') ORDER BY name",
+        )
+        .all(),
+    ).toEqual([
+      { name: "session_worktrees" },
+      { name: "workspace_repositories" },
+    ]);
+    workspaceContent.close();
+
+    await Bun.write(
+      join(migrations, "007_repository_library.sql"),
+      Bun.file(join(source, "007_repository_library.sql")),
+    );
+    await runMigrations(databasePath, migrations);
+    const repositoryLibrary = new Database(databasePath);
+    expect(
+      repositoryLibrary
+        .query<{ name: string }, []>(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'repository_library'",
+        )
+        .get(),
+    ).toEqual({ name: "repository_library" });
+    expect(
+      repositoryLibrary
+        .query<{ name: string }, []>(
+          "SELECT name FROM pragma_table_info('workspace_repositories') WHERE name IN ('library_repository_id', 'reference_path', 'base_branch', 'base_commit', 'fetched_at') ORDER BY name",
+        )
+        .all(),
+    ).toEqual([
+      { name: "base_branch" },
+      { name: "base_commit" },
+      { name: "fetched_at" },
+      { name: "library_repository_id" },
+      { name: "reference_path" },
+    ]);
+    repositoryLibrary.close();
   });
 });

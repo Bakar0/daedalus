@@ -28,6 +28,8 @@ export interface TmuxClient {
   hasSession(session: string): Promise<boolean>;
   listSessions(): Promise<string[]>;
   attach(session: string): Promise<number>;
+  capture(session: string): Promise<string>;
+  sendKeys(session: string, keys: string[]): Promise<void>;
   send(session: string, text: string): Promise<void>;
   stop(session: string, force?: boolean): Promise<void>;
 }
@@ -46,6 +48,7 @@ export class CommandTmuxClient implements TmuxClient {
       args: string[],
       options?: CommandOptions,
     ) => Promise<CommandResult> = runCommand,
+    private readonly serverWorkingDirectory?: string,
   ) {}
 
   private args(...args: string[]): string[] {
@@ -64,24 +67,27 @@ export class CommandTmuxClient implements TmuxClient {
   }
 
   async createSession(launch: TmuxLaunch): Promise<void> {
-    const environment = Object.entries(launch.env ?? {}).flatMap(
-      ([key, value]) => ["-e", `${key}=${value}`],
+    const environment = Object.entries({
+      ...launch.env,
+      PWD: launch.cwd,
+    }).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
+    const args = this.args(
+      "new-session",
+      "-d",
+      "-s",
+      launch.session,
+      "-c",
+      launch.cwd,
+      ...environment,
+      "--",
+      launch.executable,
+      ...launch.args,
     );
-    const result = await this.command(
-      this.executable,
-      this.args(
-        "new-session",
-        "-d",
-        "-s",
-        launch.session,
-        "-c",
-        launch.cwd,
-        ...environment,
-        "--",
-        launch.executable,
-        ...launch.args,
-      ),
-    );
+    const result = this.serverWorkingDirectory
+      ? await this.command(this.executable, args, {
+          cwd: this.serverWorkingDirectory,
+        })
+      : await this.command(this.executable, args);
     if (result.exitCode !== 0)
       throw new Error(result.stderr.trim() || "tmux session creation failed");
   }
@@ -113,6 +119,26 @@ export class CommandTmuxClient implements TmuxClient {
       { stdin: "inherit", stdout: "inherit", stderr: "inherit" },
     );
     return result.exitCode;
+  }
+
+  async capture(session: string): Promise<string> {
+    const result = await this.command(
+      this.executable,
+      this.args("capture-pane", "-p", "-J", "-t", session),
+    );
+    if (result.exitCode !== 0)
+      throw new Error(result.stderr.trim() || "tmux capture failed");
+    return result.stdout;
+  }
+
+  async sendKeys(session: string, keys: string[]): Promise<void> {
+    if (keys.length === 0) return;
+    const result = await this.command(
+      this.executable,
+      this.args("send-keys", "-t", session, ...keys),
+    );
+    if (result.exitCode !== 0)
+      throw new Error(result.stderr.trim() || "tmux key input failed");
   }
 
   async send(session: string, text: string): Promise<void> {
@@ -242,6 +268,31 @@ export async function captureTmuxPane(
   if (captured.exitCode !== 0)
     throw new Error(captured.stderr || "tmux capture failed");
   return boundTerminalCapture(captured.stdout);
+}
+
+export async function resizeTmuxPane(
+  target: TmuxTerminalTarget,
+  cols: number,
+  rows: number,
+  executable = resolveTmuxExecutable(),
+): Promise<void> {
+  const safeCols = Math.max(20, Math.min(500, Math.floor(cols)));
+  const safeRows = Math.max(5, Math.min(300, Math.floor(rows)));
+  const resized = await runCommand(
+    executable,
+    terminalArgs(
+      target.socketName,
+      "resize-window",
+      "-x",
+      String(safeCols),
+      "-y",
+      String(safeRows),
+      "-t",
+      target.session,
+    ),
+  );
+  if (resized.exitCode !== 0)
+    throw new Error(resized.stderr || "tmux resize failed");
 }
 
 export async function sendSpikeInput(data: string): Promise<void> {

@@ -13,11 +13,15 @@ const base: DesktopSnapshotDto = {
   workspaces: [],
   tasks: [],
   agents: [],
+  terminals: [],
+  repositories: [],
   settings: {
     home: "/tmp/daedalus-test",
     workspaceRoot: "/tmp/daedalus-test/workspaces",
     databasePath: "/tmp/daedalus-test/state.db",
+    repositoryRoot: "/tmp/daedalus-test/repos",
     tmuxAvailable: false,
+    workspaceInstructionFilesEnabled: true,
     providers: [
       { name: "codex", executable: "codex", available: false },
       { name: "claude", executable: "claude", available: true },
@@ -26,13 +30,14 @@ const base: DesktopSnapshotDto = {
 };
 
 describe("desktop application shell", () => {
-  test("renders Board and Sessions as complete workspace modes", () => {
+  test("renders Board, Sessions, and Workspace as complete workspace modes", () => {
     const html = renderToStaticMarkup(
       <App injectedClient={client} initialSnapshot={base} />,
     );
     expect(html).toContain("Workspaces");
     expect(html).toContain("Board");
     expect(html).toContain("Sessions");
+    expect(html).toContain("Workspace");
     expect(html).not.toContain("Activity");
     expect(html).toContain('aria-label="Workspace mode"');
     expect(html).toContain("mode-board");
@@ -40,6 +45,145 @@ describe("desktop application shell", () => {
     expect(html).toContain("No workspaces yet");
     expect(html).toContain('aria-label="Create workspace"');
     expect(html).toContain('class="create-button"');
+  });
+
+  test("shows the workspace instruction files preference in Settings", () => {
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialModal="settings"
+        initialSnapshot={base}
+      />,
+    );
+    expect(html).toContain("Create workspace instruction files");
+    expect(html).toContain("AGENTS.md and CLAUDE.md");
+    expect(html).toContain('type="checkbox" checked=""');
+  });
+
+  test("renders the unified repository finder and clone action", () => {
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialModal="repository"
+        initialSnapshot={{
+          ...base,
+          workspaces: [
+            {
+              id: "w1",
+              slug: "demo",
+              name: "Demo",
+              path: "/tmp/demo",
+              createdAt: "now",
+              updatedAt: "now",
+              archivedAt: null,
+              available: true,
+            },
+          ],
+          repositories: [
+            {
+              id: "library-r1",
+              name: "daedalus",
+              remoteUrl: "git@github.com:example/daedalus.git",
+              defaultBranch: "main",
+              lastFetchedAt: "2026-09-13T12:00:00.000Z",
+            },
+          ],
+        }}
+      />,
+    );
+    expect(html).toContain("Add repositories");
+    expect(html).toContain("All repositories");
+    expect(html).toContain("Local");
+    expect(html).toContain("git@github.com:example/daedalus.git");
+    expect(html).toContain('role="checkbox"');
+    expect(html).toContain(
+      'aria-label="Search repositories or enter a Git URL or absolute local repository path"',
+    );
+    expect(html).toContain("Clone URL/path");
+    expect(html).toContain("Add selected");
+    expect(html).not.toContain("Planning + work");
+    expect(html).not.toContain("Planning only");
+  });
+
+  test("renders workspace files, context, repositories, and worktrees", () => {
+    const snapshot: DesktopSnapshotDto = {
+      ...base,
+      workspaces: [
+        {
+          id: "w1",
+          slug: "demo",
+          name: "Demo",
+          path: "/tmp/demo",
+          createdAt: "now",
+          updatedAt: "now",
+          archivedAt: null,
+          available: true,
+        },
+      ],
+    };
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialSnapshot={snapshot}
+        initialWorkspaceView="workspace"
+        initialWorkspaceContent={{
+          workspaceId: "w1",
+          brief: "# Objective\n\nBuild the workspace view.",
+          journal: "# Journal\n\n## progress\n\nStarted.",
+          files: [
+            { name: "worktrees", path: "worktrees", kind: "directory" },
+            { name: "BRIEF.md", path: "BRIEF.md", kind: "file" },
+            { name: "JOURNAL.md", path: "JOURNAL.md", kind: "file" },
+          ],
+          repositories: [
+            {
+              id: "r1",
+              workspaceId: "w1",
+              name: "daedalus",
+              canonicalPath: "/code/daedalus",
+              access: "write",
+              libraryRepositoryId: "library-r1",
+              referencePath: "/tmp/demo/repos/daedalus",
+              baseBranch: "main",
+              baseCommit: "1234567890abcdef1234567890abcdef12345678",
+              fetchedAt: "now",
+              createdAt: "now",
+              gitStatus: {
+                state: "behind",
+                changedFiles: 0,
+                ahead: 0,
+                behind: 2,
+              },
+            },
+          ],
+          worktrees: [
+            {
+              sessionId: "session-12345678",
+              repositoryId: "r1",
+              path: "/tmp/demo/worktrees/task/session/daedalus",
+              branchName: "daedalus/demo/task/session",
+              createdAt: "now",
+            },
+          ],
+        }}
+      />,
+    );
+    expect(html).toContain("mode-workspace");
+    expect(html).toContain("Explorer");
+    expect(html).toContain("workspace-viewer");
+    expect(html).toContain("BRIEF.md");
+    expect(html).toContain("JOURNAL.md");
+    expect(html).toContain("workspace-code-editor");
+    expect(html).toContain("Preview");
+    expect(html).toContain('aria-label="New file"');
+    expect(html).toContain('aria-label="New folder"');
+    expect(html).toContain("Repositories");
+    expect(html).toContain("main ·");
+    expect(html).toContain("↓2 behind");
+    expect(html).toContain('aria-label="Fetch and update daedalus"');
+    expect(html).toContain("Working trees");
+    expect(html).toContain("session-");
+    expect(html).toContain('aria-label="Add repository"');
   });
 
   test("renders workspace, task, and session lifecycle state", () => {
@@ -87,6 +231,28 @@ describe("desktop application shell", () => {
           exitCode: null,
           startedAt: "now",
           endedAt: null,
+          providerSessionId: "daedalus-agent-12345678",
+          archivedAt: null,
+          resumeCount: 0,
+        },
+        {
+          id: "agent-needs-attention",
+          workspaceId: "w1",
+          taskId: null,
+          name: "Needs developer input",
+          provider: "claude",
+          kind: "agent",
+          tmuxSession: "daedalus_attention",
+          command: "claude",
+          args: [],
+          workingDirectory: "/tmp/demo",
+          status: "lost",
+          exitCode: null,
+          startedAt: "now",
+          endedAt: null,
+          providerSessionId: "agent-needs-attention",
+          archivedAt: null,
+          resumeCount: 0,
         },
       ],
       settings: {
@@ -107,6 +273,13 @@ describe("desktop application shell", () => {
     expect(html).toContain("in progress");
     expect(html).toContain('aria-label="Open Ship desktop session"');
     expect(html).toContain("task-session-link tool-codex running");
+    expect(html).toContain(
+      'aria-label="2 sessions in Demo: 1 live, 1 need attention"',
+    );
+    expect(html).toContain('data-attention="true"');
+    expect(html).toContain("1 need attention");
+    expect(html).toContain('aria-label="Archive Demo workspace"');
+    expect(html).toContain('class="archive-icon"');
     expect(html).toContain("Start session…");
     expect(html).toContain("Sessions");
     expect(html).toContain("Acceptance criteria");
@@ -175,6 +348,9 @@ describe("desktop application shell", () => {
       exitCode: null,
       startedAt: "now",
       endedAt: null,
+      providerSessionId: "11111111-1111-4111-8111-111111111111",
+      archivedAt: null,
+      resumeCount: 0,
     };
     const snapshot: DesktopSnapshotDto = {
       ...base,
@@ -229,7 +405,7 @@ describe("desktop application shell", () => {
     expect(html).toContain("Review terminal task");
     expect(html).toContain("running · 111111");
     expect(html).toContain("running · 222222");
-    expect(html).toContain("Terminal for Terminal task session 11111111");
+    expect(html).toContain("Terminal for Terminal task 11111111");
     expect(html).toContain("session-navigator");
     expect(html).not.toContain("board-detail-column");
   });
@@ -265,6 +441,9 @@ describe("desktop application shell", () => {
           exitCode: null,
           startedAt: "2026-01-01T00:00:00.000Z",
           endedAt: null,
+          providerSessionId: null,
+          archivedAt: null,
+          resumeCount: 0,
         },
       ],
     };
@@ -292,5 +471,168 @@ describe("desktop application shell", () => {
     expect(html).toContain("Opens in /tmp/demo");
     expect(html).not.toContain("Linked task");
     expect(html).not.toContain("Activity");
+  });
+
+  test("renders collapsed workspace and session archives with restore actions", () => {
+    const archivedAt = "2026-02-02T00:00:00.000Z";
+    const snapshot: DesktopSnapshotDto = {
+      ...base,
+      workspaces: [
+        {
+          id: "w1",
+          slug: "active",
+          name: "Active",
+          path: "/tmp/active",
+          createdAt: "now",
+          updatedAt: "now",
+          archivedAt: null,
+          available: true,
+        },
+        {
+          id: "w2",
+          slug: "archived",
+          name: "Archived project",
+          path: "/tmp/archived",
+          createdAt: "now",
+          updatedAt: archivedAt,
+          archivedAt,
+          available: true,
+        },
+      ],
+      agents: [
+        {
+          id: "44444444-4444-4444-8444-444444444444",
+          workspaceId: "w1",
+          taskId: null,
+          name: "Archived conversation",
+          provider: "claude",
+          kind: "agent",
+          tmuxSession: "daedalus_archived",
+          command: "claude",
+          args: [],
+          workingDirectory: "/tmp/active",
+          status: "exited",
+          exitCode: null,
+          startedAt: "now",
+          endedAt: archivedAt,
+          providerSessionId: "44444444-4444-4444-8444-444444444444",
+          archivedAt,
+          resumeCount: 0,
+        },
+      ],
+    };
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialSnapshot={snapshot}
+        initialWorkspaceView="sessions"
+      />,
+    );
+    expect(html).toContain("Archived workspaces (1)");
+    expect(html).toContain("Archived project");
+    expect(html).toContain("Archived sessions (1)");
+    expect(html).toContain("Archived conversation");
+    expect(html).toContain("Restore &amp; resume");
+    expect(html).toContain('aria-label="Archive Active workspace"');
+  });
+
+  test("renders persistent integrated terminal tabs separately from sessions", () => {
+    const terminalId = "55555555-5555-4555-8555-555555555555";
+    const snapshot: DesktopSnapshotDto = {
+      ...base,
+      workspaces: [
+        {
+          id: "w1",
+          slug: "demo",
+          name: "Demo",
+          path: "/tmp/demo",
+          createdAt: "now",
+          updatedAt: "now",
+          archivedAt: null,
+          available: true,
+        },
+      ],
+      terminals: [
+        {
+          id: terminalId,
+          name: "Demo",
+          tmuxSession: "daedalus_terminal_demo",
+          workingDirectory: "/tmp/demo",
+          status: "running",
+          startedAt: "now",
+          endedAt: null,
+        },
+      ],
+    };
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialActiveTerminalId={terminalId}
+        initialSnapshot={snapshot}
+        initialTerminalPanelOpen
+      />,
+    );
+    expect(html).toContain('aria-label="Integrated terminal"');
+    expect(html).toContain('aria-label="Terminal tabs"');
+    expect(html).toContain('role="tab"');
+    expect(html).toContain('title="/tmp/demo"');
+    expect(html).toContain('aria-label="Demo, /tmp/demo"');
+    expect(html).toContain("<small>/tmp/demo</small>");
+    expect(html).toContain('aria-label="Resize integrated terminal"');
+    expect(html).toContain("Terminal for Demo 55555555");
+    expect(html).toContain('aria-label="New terminal in Daedalus home"');
+    expect(html).toContain('title="New terminal in /tmp/daedalus-test"');
+    expect(html).toContain('aria-label="Open Demo in integrated terminal"');
+    expect(html).not.toContain("Demo · archived");
+  });
+
+  test("renders session startup progress and failures on session cards", () => {
+    const workspace = {
+      id: "w-start",
+      slug: "start",
+      name: "Start",
+      path: "/tmp/start",
+      createdAt: "2026-09-14T00:00:00.000Z",
+      updatedAt: "2026-09-14T00:00:00.000Z",
+      archivedAt: null,
+      available: true,
+    };
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialSessionLaunches={[
+          {
+            key: "pending",
+            workspaceId: workspace.id,
+            name: "Launching Claude",
+            tool: "claude",
+            startedAt: "2026-09-14T00:00:00.000Z",
+            status: "starting",
+          },
+          {
+            key: "failed",
+            workspaceId: workspace.id,
+            name: "Broken Codex",
+            tool: "codex",
+            startedAt: "2026-09-14T00:00:01.000Z",
+            status: "error",
+            error: "The current working directory was deleted",
+          },
+        ]}
+        initialSnapshot={{
+          ...base,
+          workspaces: [workspace],
+          settings: { ...base.settings, tmuxAvailable: true },
+        }}
+        initialWorkspaceView="sessions"
+      />,
+    );
+    expect(html).toContain("session-card-starting");
+    expect(html).toContain('aria-busy="true"');
+    expect(html).toContain("Starting claude…");
+    expect(html).toContain("session-card-error");
+    expect(html).toContain("Failed to start");
+    expect(html).toContain("The current working directory was deleted");
+    expect(html).not.toContain("session-launch-progress");
   });
 });

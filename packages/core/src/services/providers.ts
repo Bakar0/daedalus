@@ -5,12 +5,17 @@ import { DaedalusError } from "../errors";
 export interface LaunchInput {
   prompt?: string;
   taskId?: string;
+  sessionId?: string;
+  sessionName?: string;
+  additionalDirectories?: string[];
 }
 
 export interface ProviderLaunch {
   executable: string;
   args: string[];
   env: Record<string, string>;
+  providerSessionId?: string;
+  bootstrapInput?: string[];
 }
 
 export interface AgentProvider {
@@ -63,17 +68,38 @@ class ConfiguredProvider implements AgentProvider {
   async buildLaunch(input: LaunchInput): Promise<ProviderLaunch> {
     const args = [...this.definition.args];
     const env: Record<string, string> = {};
-    if (input.prompt) {
+    let providerSessionId: string | undefined;
+    let bootstrapInput: string[] | undefined;
+    if (this.promptArgument)
+      for (const directory of input.additionalDirectories ?? [])
+        args.push("--add-dir", directory);
+    if (this.promptArgument && this.name === "claude" && input.sessionId) {
+      providerSessionId = input.sessionId;
+      args.push("--session-id", input.sessionId);
+      if (input.sessionName) args.push("--name", input.sessionName);
+    }
+    if (this.promptArgument && this.name === "codex" && input.sessionId) {
+      providerSessionId = `daedalus-${input.sessionId}`;
+      bootstrapInput = [
+        `/rename ${providerSessionId}`,
+        ...(input.prompt ? [input.prompt] : []),
+      ];
+    } else if (input.prompt) {
       if (this.promptArgument) args.push(input.prompt);
       else env.DAEDALUS_TASK_PROMPT = input.prompt;
     }
     if (input.taskId) env.DAEDALUS_TASK_ID = input.taskId;
+    if (input.additionalDirectories?.length)
+      env.DAEDALUS_ADDITIONAL_DIRECTORIES =
+        input.additionalDirectories.join(":");
     return {
       executable:
         resolveAgentExecutable(this.name, this.definition.executable) ??
         this.definition.executable,
       args,
       env,
+      providerSessionId,
+      bootstrapInput,
     };
   }
 }

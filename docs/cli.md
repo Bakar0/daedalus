@@ -37,6 +37,8 @@ daedal workspace create <name> [--slug <slug>] [--path <path>]
 daedal workspace list [--json]
 daedal workspace get <workspace> [--json]
 daedal workspace update <workspace> [--name <name>] [--slug <slug>]
+daedal workspace archive <workspace>
+daedal workspace restore <workspace>
 daedal workspace remove <workspace> [--delete-files] --force
 ```
 
@@ -67,15 +69,28 @@ daedal agent list [--workspace <workspace>] [--running]
 daedal agent get <agent-id>
 daedal agent attach <agent-id>
 daedal agent send <agent-id> <text>
+daedal agent archive <agent-id> [--force]
+daedal agent restore <agent-id>
 daedal agent stop <agent-id> [--force]
 daedal agent remove <agent-id>
 ```
 
-Built-in provider definitions come from `config.json`. Named custom definitions use `--command`. Executables and arguments are always passed as arrays. Task-backed Codex and Claude launches receive `title + blank line + description` as one prompt argument. Custom launches receive the same prompt in `DAEDALUS_TASK_PROMPT`; all task-backed launches also receive `DAEDALUS_TASK_ID`.
+Built-in provider definitions come from `config.json`. Named custom definitions use `--command`. Executables and arguments are always passed as arrays. Task-backed Claude launches receive `title + blank line + description` as one prompt argument. Codex receives the same prompt through tmux after Daedalus assigns its immutable native session name. Custom launches receive the prompt in `DAEDALUS_TASK_PROMPT`; all task-backed launches also receive `DAEDALUS_TASK_ID`.
 
 Each launch gets a durable `daedalus_<uuid>` tmux session on a Daedalus server isolated by `DAEDALUS_HOME`. `attach` hands the terminal to tmux and therefore rejects `--json`; every non-interactive command supports the JSON envelope. `send` sends literal text followed by Enter. `stop` first sends Ctrl-C unless `--force` is used, then closes the session. A running session must be stopped before its history row can be removed.
 
+`archive` is the preferred lifecycle action. It stops a live session and preserves its provider conversation locator. `restore` starts a new tmux runtime using Codex or Claude's native resume command; terminal sessions reopen as fresh login shells. `workspace archive` cascades to all sessions in that workspace, while `workspace restore` does not automatically restore them. Add `--archived` to workspace or agent lists to inspect archived records.
+
 Startup reconciliation compares SQLite with tmux. Missing live sessions become `lost`; existing starting sessions become `running`. If tmux itself is unavailable, reconciliation leaves persisted state unchanged and agent lifecycle commands report exit code 5 where applicable.
+
+## Repository worktrees
+
+```text
+daedal repo list --workspace <workspace>
+daedal repo worktree create --session <agent-id> --repository <name-or-id>
+```
+
+Agent sessions receive `DAEDALUS_SESSION_ID`, `DAEDALUS_HOME`, and a PATH containing Daedalus's bundled CLI. They start in an isolated session folder without eagerly creating a worktree for every attached repository. The worktree command creates the selected repository's writable worktree from the attachment's pinned base commit and prints its path; repeating it returns the existing worktree.
 
 ## Configuration and isolation
 

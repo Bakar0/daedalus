@@ -2,18 +2,46 @@ import { join } from "node:path";
 import { mkdir, readFile, rm, symlink } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
+import type { TmuxClient, TmuxLaunch } from "@daedalus/platform";
 import {
   createApplicationContext,
   DaedalusError,
   workspaceSlug,
 } from "../index";
 
+class FakeTmux implements TmuxClient {
+  readonly sessions = new Set<string>();
+  async probe() {
+    return "tmux 3.7c";
+  }
+  async createSession(launch: TmuxLaunch) {
+    this.sessions.add(launch.session);
+  }
+  async hasSession(session: string) {
+    return this.sessions.has(session);
+  }
+  async listSessions() {
+    return [...this.sessions];
+  }
+  async attach() {
+    return 0;
+  }
+  async capture() {
+    return "";
+  }
+  async sendKeys() {}
+  async send() {}
+  async stop(session: string) {
+    this.sessions.delete(session);
+  }
+}
+
 describe("WorkspaceService", () => {
   test("creates, updates, unregisters, and preserves workspace files", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const context = await createApplicationContext({
         env: { DAEDALUS_HOME: home },
-        reconcile: false,
+        tmux: new FakeTmux(),
       });
       const workspace = await context.workspaces.create({ name: "My Project" });
       expect(workspace.slug).toBe("my-project");
@@ -25,6 +53,12 @@ describe("WorkspaceService", () => {
           ),
         ),
       ).toEqual({ id: workspace.id });
+      expect(await Bun.file(join(workspace.path, "BRIEF.md")).exists()).toBe(
+        true,
+      );
+      expect(await Bun.file(join(workspace.path, "JOURNAL.md")).exists()).toBe(
+        true,
+      );
       const updated = await context.workspaces.update(workspace.id, {
         slug: "renamed",
       });
@@ -131,5 +165,27 @@ describe("WorkspaceService", () => {
   test("normalizes safe slugs and rejects traversal", () => {
     expect(workspaceSlug("  Nice Project  ")).toBe("nice-project");
     expect(() => workspaceSlug("../")).toThrow(DaedalusError);
+  });
+
+  test("archives sessions with a workspace and restores only the workspace", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux: new FakeTmux(),
+      });
+      const workspace = await context.workspaces.create({ name: "Archive" });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        terminal: true,
+      });
+      const archived = await context.workspaces.archive(workspace.id);
+      expect(archived.archivedAt).not.toBeNull();
+      expect((await context.agents.get(session.id)).archivedAt).not.toBeNull();
+      expect(await context.workspaces.list()).toEqual([]);
+      const restored = await context.workspaces.restore(workspace.id);
+      expect(restored.archivedAt).toBeNull();
+      expect((await context.agents.get(session.id)).archivedAt).not.toBeNull();
+      context.close();
+    });
   });
 });

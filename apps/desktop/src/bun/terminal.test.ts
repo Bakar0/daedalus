@@ -14,7 +14,19 @@ describe("terminal transport authentication", () => {
         new Request(`http://127.0.0.1/terminal?token=secret&agent=${AGENT_ID}`),
         "secret",
       ),
-    ).toBe(AGENT_ID);
+    ).toEqual({ kind: "agent", id: AGENT_ID });
+    expect(
+      authorizeTerminalRequest(
+        new Request(
+          `http://127.0.0.1/terminal?token=secret&integrated=${AGENT_ID}&cols=120&rows=32`,
+        ),
+        "secret",
+      ),
+    ).toEqual({
+      kind: "integrated",
+      id: AGENT_ID,
+      initialSize: { cols: 120, rows: 32 },
+    });
     expect(
       authorizeTerminalRequest(
         new Request(`http://127.0.0.1/terminal?agent=${AGENT_ID}`),
@@ -23,7 +35,23 @@ describe("terminal transport authentication", () => {
     ).toBeUndefined();
     expect(
       authorizeTerminalRequest(
+        new Request(
+          `http://127.0.0.1/terminal?token=secret&agent=${AGENT_ID}&integrated=${AGENT_ID}`,
+        ),
+        "secret",
+      ),
+    ).toBeUndefined();
+    expect(
+      authorizeTerminalRequest(
         new Request("http://127.0.0.1/terminal?token=secret&agent=not-an-id"),
+        "secret",
+      ),
+    ).toBeUndefined();
+    expect(
+      authorizeTerminalRequest(
+        new Request(
+          `http://127.0.0.1/terminal?token=secret&agent=${AGENT_ID}&cols=1&rows=1`,
+        ),
         "secret",
       ),
     ).toBeUndefined();
@@ -48,6 +76,7 @@ describe("bounded terminal buffering", () => {
 describe("terminal connection lifecycle", () => {
   test("reconnects with ANSI/Unicode capture, forwards input and resize, and cleans up", async () => {
     const sent: Array<string | Uint8Array> = [];
+    const lifecycle: string[] = [];
     const input = vi.fn(async () => {});
     const resize = vi.fn();
     const close = vi.fn();
@@ -59,8 +88,11 @@ describe("terminal connection lifecycle", () => {
         getBufferedAmount: () => 0,
       },
       status: "reconnected",
-      capture: async () =>
-        new TextEncoder().encode("\u001b[31mשלום 世界 😀\u001b[0m"),
+      prepareCapture: async () => void lifecycle.push("resize"),
+      capture: async () => {
+        lifecycle.push("capture");
+        return new TextEncoder().encode("\u001b[31mשלום 世界 😀\u001b[0m");
+      },
       sendInput: input,
       createBridge: (listener) => {
         output = listener;
@@ -84,6 +116,7 @@ describe("terminal connection lifecycle", () => {
     expect(input).toHaveBeenCalledWith("go\r");
     expect(resize).toHaveBeenCalledWith(101, 32);
     expect(close).toHaveBeenCalledOnce();
+    expect(lifecycle).toEqual(["resize", "capture"]);
   });
 
   test("pauses delivery above the socket high-water mark and bounds queued output", async () => {

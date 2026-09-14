@@ -6,6 +6,8 @@ export * from "./logging";
 export * from "./repositories";
 export * from "./services/context";
 export * from "./services/agents";
+export * from "./services/integrated-terminals";
 export * from "./services/providers";
 export * from "./services/tasks";
 export * from "./services/workspaces";
+export * from "./services/workspace-content";

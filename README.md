@@ -2,7 +2,7 @@
 
 Daedalus is a macOS-first, local-first control plane for coding agents. Phases 0–6 are implemented: the shared foundation, complete workspace/task CLI, durable tmux-backed agent CLI, Electrobun desktop CRUD application, and integrated per-agent terminals.
 
-Workspaces are ordinary directories. They are not Git worktrees. SQLite stores searchable metadata, while the filesystem remains authoritative for workspace existence and tmux remains authoritative for live sessions.
+Workspaces are ordinary work-package directories rather than repositories themselves. Daedalus stores one bare clone per remote in its global repository library and creates freshly fetched, read-only planning checkouts under each workspace's `repos/` directory. Agent sessions start in isolated folders and create independent linked Git worktrees only for repositories they actually need. SQLite stores searchable metadata, while the filesystem remains authoritative for workspace existence and tmux remains authoritative for live sessions.
 
 ## Requirements
 
@@ -30,11 +30,15 @@ Start the desktop application with:
 bun run dev
 ```
 
-The centered workspace control switches between two complete layouts: **Board** uses a wide task canvas with a narrower brief inspector, while **Sessions** uses a compact vertical session navigator with a terminal-dominant work area. **New session** presents Codex, Claude, and Terminal as direct tool choices; every new session opens in the currently selected workspace. Session cards include lifecycle status and start/end time. Task briefs remain editable as GitHub-flavored Markdown. Closing or reopening the app detaches and reconnects terminals without terminating their tmux-owned sessions. Split-terminal presets are intentionally deferred.
+The centered workspace control switches between three complete layouts: **Board** uses a wide task canvas with a narrower brief inspector, **Sessions** uses a compact vertical session navigator with a terminal-dominant work area, and **Workspace** shows `BRIEF.md`, `JOURNAL.md`, physical files, repository attachments, and materialized session worktrees. **New session** presents Codex, Claude, and Terminal as direct tool choices. Session cards include lifecycle status and start/end time. Task briefs remain editable as GitHub-flavored Markdown. Closing or reopening the app detaches and reconnects terminals without terminating their tmux-owned sessions.
+
+A separate VS Code-style integrated terminal lives at the bottom of both workspace modes. Its tabs are persisted independently from agent conversations: **+** opens a shell in `DAEDALUS_HOME`, while the terminal action on a workspace card opens one in that workspace path. Collapsing the panel or restarting the app leaves its tmux sessions available; closing a tab terminates and removes only that utility terminal.
 
 Terminal traffic uses a token-authenticated loopback WebSocket. The app restores up to 10,000 lines or 1 MiB of tmux history, retains 10,000 renderer scrollback lines, and bounds both Bun-side and renderer-side pending output to 1 MiB. When a noisy producer outruns the UI, Daedalus drops old pending bytes, reports the amount, and leaves the durable tmux pane available for a fresh bounded capture. Live, reconnecting, exited, and lost states are shown explicitly. CLI `agent attach` remains compatible with the same session.
 
 Changes made through `daedal` while the desktop is open are detected and shown promptly. Workspace and task deletion retain the same core safety guards as the CLI; the UI requires explicit confirmation and never deletes workspace files by default.
+
+Sessions and workspaces use an archive-first lifecycle. Archiving a session stops its tmux process and moves it to the collapsed archive while preserving its provider conversation. Restoring a Codex or Claude session launches a fresh tmux runtime through the provider's native resume command. Archiving a workspace archives all of its sessions; restoring the workspace leaves those sessions archived until they are restored individually. Free terminals reopen as fresh shells in the same workspace.
 
 To keep tests and experiments out of the real home directory:
 
