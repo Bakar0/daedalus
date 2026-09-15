@@ -1273,6 +1273,41 @@ export class WorkspaceContentService {
     };
   }
 
+  // A session worktree starts from the newest commit on the repository's base
+  // branch, not from `baseCommit`. `baseCommit` is pinned when the repository
+  // is attached and only moves on an explicit sync, so branching from it puts
+  // every new session behind by whatever has landed since the attachment —
+  // and the gap only grows, which is what makes parallel agents collide.
+  //
+  // Freshness is best effort, never a precondition: a repository with no
+  // reachable remote — local-only, or simply offline — still has to produce a
+  // worktree, so resolution degrades to the pinned commit and finally to HEAD.
+  private async latestWorktreeBase(
+    git: string,
+    sourceArguments: readonly string[],
+    repository: WorkspaceRepository,
+  ): Promise<string> {
+    const pinned = repository.baseCommit ?? "HEAD";
+    if (!repository.baseBranch) return pinned;
+    const fetched = await runCommand(git, [
+      ...sourceArguments,
+      "fetch",
+      "--prune",
+      "origin",
+    ]);
+    if (fetched.exitCode !== 0) return pinned;
+    const resolved = await runCommand(git, [
+      ...sourceArguments,
+      "rev-parse",
+      "--verify",
+      `refs/remotes/origin/${repository.baseBranch}`,
+    ]);
+    const commit = resolved.stdout.trim();
+    return resolved.exitCode === 0 && /^[0-9a-f]{40,64}$/i.test(commit)
+      ? commit
+      : pinned;
+  }
+
   async createSessionWorktree(input: {
     session: string;
     repository: string;
@@ -1331,7 +1366,7 @@ export class WorkspaceContentService {
       "-b",
       branchName,
       path,
-      repository.baseCommit ?? "HEAD",
+      await this.latestWorktreeBase(git, sourceArguments, repository),
     ]);
     if (result.exitCode !== 0)
       throw new DaedalusError(

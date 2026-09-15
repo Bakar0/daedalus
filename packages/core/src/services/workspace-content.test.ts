@@ -573,4 +573,86 @@ Before working in this workspace:
       context.close();
     });
   });
+
+  test("branches a session worktree from the latest base-branch commit", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const source = join(home, "repositories", "app");
+      await createRepository(source);
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { shell: { executable: "/bin/sh", args: ["-l"] } },
+        }),
+      );
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux: new FakeTmux(),
+      });
+      const workspace = await context.workspaces.create({ name: "Parallel" });
+      const libraryRepository =
+        await context.workspaceContent.addRepositoryToLibrary({
+          remoteUrl: source,
+        });
+      const repository = await context.workspaceContent.attachRepository({
+        workspace: workspace.id,
+        libraryRepositoryId: libraryRepository.id,
+      });
+      const attachedCommit = repository.baseCommit;
+
+      // Something lands on the base branch after this workspace attached the
+      // repository — another agent merging, or an ordinary push.
+      await Bun.write(join(source, "SHIPPED.md"), "# Landed later\n");
+      expect(
+        (await runCommand("git", ["-C", source, "add", "SHIPPED.md"])).exitCode,
+      ).toBe(0);
+      expect(
+        (
+          await runCommand("git", [
+            "-C",
+            source,
+            "-c",
+            "user.name=Daedalus Test",
+            "-c",
+            "user.email=test@daedalus.local",
+            "commit",
+            "-qm",
+            "landed after attachment",
+          ])
+        ).exitCode,
+      ).toBe(0);
+      const landedCommit = (
+        await runCommand("git", ["-C", source, "rev-parse", "HEAD"])
+      ).stdout.trim();
+      expect(landedCommit).not.toBe(attachedCommit);
+
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        command: "shell",
+      });
+      const worktree = await context.workspaceContent.createSessionWorktree({
+        session: session.id,
+        repository: "app",
+      });
+
+      // The session starts from what is on the base branch now, so the later
+      // commit is already in its history and needs no rebase.
+      expect(await readFile(join(worktree.path, "SHIPPED.md"), "utf8")).toBe(
+        "# Landed later\n",
+      );
+      expect(
+        (
+          await runCommand("git", ["-C", worktree.path, "rev-parse", "HEAD"])
+        ).stdout.trim(),
+      ).toBe(landedCommit);
+
+      // The attachment pin is untouched: the read-only planning checkout under
+      // repos/ still sits where the workspace put it.
+      expect(
+        (await context.workspaceContent.get(workspace.id)).repositories.find(
+          (item) => item.name === "app",
+        )?.baseCommit,
+      ).toBe(attachedCommit);
+      context.close();
+    });
+  });
 });
