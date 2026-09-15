@@ -8,7 +8,9 @@ import {
   clampPanelSize,
   launchMatchesSession,
   PANEL_RAIL_WIDTH,
+  pendingSessionLaunches,
   preferredSessionId,
+  type SessionLaunchState,
   shouldFocusSession,
   TERMINAL_FONT_SIZE,
   TERMINAL_PANEL_MIN_HEIGHT,
@@ -118,6 +120,38 @@ describe("desktop application shell", () => {
       "newest",
     );
     expect(preferredSessionId([])).toBeUndefined();
+  });
+
+  test("retires a launch card once its session exists, archived or not", () => {
+    const launch = {
+      key: "launch-1",
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+      name: "Testdfdf",
+      tool: "codex",
+      startedAt: "2026-09-15T22:34:55.000Z",
+      status: "error",
+      error: "codex exited before finishing startup",
+    } as SessionLaunchState;
+    const session = {
+      id: "session-1",
+      workspaceId: "workspace-1",
+    } as AgentSessionDto;
+
+    // While the failed session is listed, its own card carries the error.
+    expect(pendingSessionLaunches([launch], [session])).toEqual([]);
+    // Archiving that session is how the user clears it — the launch card must
+    // not come back to take its place.
+    expect(
+      pendingSessionLaunches([launch], [
+        { ...session, archivedAt: "2026-09-15T22:40:00.000Z" },
+      ] as AgentSessionDto[]),
+    ).toEqual([]);
+    // A launch that never produced a session row has nothing to stand in for
+    // it, so it stays until dismissed.
+    expect(
+      pendingSessionLaunches([{ ...launch, sessionId: undefined }], []),
+    ).toHaveLength(1);
   });
 
   test("focuses only the session the user opened in this window", () => {

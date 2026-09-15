@@ -134,6 +134,26 @@ export function launchMatchesSession(
   return Number.isFinite(elapsed) && elapsed >= -2_000 && elapsed <= 120_000;
 }
 
+// A launch card stands in for a session that does not exist yet. Once the
+// launch has produced a session row it is that row's job to represent it —
+// including after the row is archived, which is how a user clears a session
+// that failed to start. Matching only live sessions resurrected the launch
+// card the moment its session was archived, leaving a "Failed to start" card
+// that nothing in the UI could remove.
+export function pendingSessionLaunches(
+  launches: SessionLaunchState[],
+  workspaceSessions: AgentSessionDto[],
+): SessionLaunchState[] {
+  const liveSessions = workspaceSessions.filter(
+    (session) => !session.archivedAt,
+  );
+  return launches.filter(
+    (launch) =>
+      !workspaceSessions.some((session) => session.id === launch.sessionId) &&
+      !liveSessions.some((session) => launchMatchesSession(launch, session)),
+  );
+}
+
 const repositoryRemoteIdentity = (value: string) =>
   value
     .trim()
@@ -339,6 +359,23 @@ function ArchiveIcon() {
     >
       <rect height="5" rx="1.5" width="20" x="2" y="3" />
       <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M10 12h4" />
+    </svg>
+  );
+}
+
+function DismissIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="dismiss-icon"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <path d="M6 6l12 12M18 6L6 18" />
     </svg>
   );
 }
@@ -1020,6 +1057,16 @@ export function WorkspaceApp({
     () => setFocusedSessionId(undefined),
     [],
   );
+  // A launch that failed never became a session, so there is nothing to
+  // archive and nothing on the server to clean up — dismissing it is purely
+  // local, and without it the card has no way off the list.
+  const dismissSessionLaunch = useCallback(
+    (key: string) =>
+      setSessionLaunches((current) =>
+        current.filter((launch) => launch.key !== key),
+      ),
+    [],
+  );
   const [view, setView] = useState<"board" | "sessions" | "workspace">(
     initialWorkspaceView,
   );
@@ -1512,13 +1559,9 @@ export function WorkspaceApp({
   const workspaceSessionLaunches = sessionLaunches.filter(
     (item) => item.workspaceId === workspaceId,
   );
-  const pendingSessionLaunches = workspaceSessionLaunches.filter(
-    (launch) =>
-      !sessions.some(
-        (session) =>
-          session.id === launch.sessionId ||
-          launchMatchesSession(launch, session),
-      ),
+  const visibleSessionLaunches = pendingSessionLaunches(
+    workspaceSessionLaunches,
+    workspaceSessions,
   );
   const sessionStartupErrors = new Map(
     workspaceSessionLaunches.flatMap((launch) =>
@@ -3073,7 +3116,7 @@ export function WorkspaceApp({
                 <div>
                   <strong>Sessions</strong>
                   <span className="count-badge">
-                    {sessions.length + pendingSessionLaunches.length}
+                    {sessions.length + visibleSessionLaunches.length}
                   </span>
                 </div>
                 <div className="panel-heading-actions">
@@ -3092,13 +3135,13 @@ export function WorkspaceApp({
               </div>
               <div className="session-grid item-list">
                 {sessions.length === 0 &&
-                  pendingSessionLaunches.length === 0 && (
+                  visibleSessionLaunches.length === 0 && (
                     <div className="empty large">
                       <strong>No sessions yet</strong>
                       <span>Create an agent or free terminal.</span>
                     </div>
                   )}
-                {pendingSessionLaunches.map((launch) => (
+                {visibleSessionLaunches.map((launch) => (
                   <div
                     aria-busy={launch.status === "starting"}
                     className={`session-card session-card-${launch.status}`}
@@ -3133,6 +3176,17 @@ export function WorkspaceApp({
                         </time>
                       </span>
                     </div>
+                    {launch.status === "error" && (
+                      <button
+                        aria-label={`Dismiss failed ${launch.name} session`}
+                        className="session-card-action"
+                        onClick={() => dismissSessionLaunch(launch.key)}
+                        title="Dismiss"
+                        type="button"
+                      >
+                        <DismissIcon />
+                      </button>
+                    )}
                   </div>
                 ))}
                 {sessions.map((session) => {

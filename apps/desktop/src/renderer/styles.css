@@ -2790,7 +2790,8 @@ dd {
   background: var(--accent-wash) !important;
   color: var(--secondary) !important;
 }
-.session-card-action .archive-icon {
+.session-card-action .archive-icon,
+.session-card-action .dismiss-icon {
   display: block;
   height: 16px;
   width: 16px;
