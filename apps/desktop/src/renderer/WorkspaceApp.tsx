@@ -70,6 +70,21 @@ export function preferredSessionId(
   return sessions[0]?.id;
 }
 
+// Selecting a session and focusing its terminal are different things. A
+// session becomes active for many reasons Daedalus decides on its own —
+// startup restore, `preferredSessionId`, a session spawned from the CLI, a
+// remount after a panel resize — and none of those may take the keyboard away
+// from what the user is doing. Focus is granted only to the session the user
+// just opened in this window, and only until the caret lands there.
+export function shouldFocusSession(
+  focusRequestId: string | undefined,
+  activeSessionId: string | undefined,
+): boolean {
+  return Boolean(
+    focusRequestId && activeSessionId && focusRequestId === activeSessionId,
+  );
+}
+
 export function agentMultilineSequence(
   event: Pick<
     KeyboardEvent,
@@ -551,6 +566,7 @@ function TerminalSurface({
   id,
   label,
   locationLabel,
+  onFocused,
   onOpenLink,
   status,
   session,
@@ -563,6 +579,7 @@ function TerminalSurface({
   id: string;
   label: string;
   locationLabel?: string;
+  onFocused?: () => void;
   onOpenLink: (url: string) => void;
   status: AgentSessionDto["status"];
   session?: AgentSessionDto;
@@ -591,9 +608,15 @@ function TerminalSurface({
     event.stopPropagation();
     inputRef.current(sequence);
   };
+  const focusDeliveredRef = useRef(onFocused);
+  focusDeliveredRef.current = onFocused;
   useEffect(() => {
     fitRef.current();
-    if (focused) requestAnimationFrame(() => focusRef.current());
+    if (!focused) return;
+    requestAnimationFrame(() => {
+      focusRef.current();
+      focusDeliveredRef.current?.();
+    });
   }, [fitRevision, focused]);
   useEffect(() => {
     const container = containerRef.current;
@@ -675,7 +698,11 @@ function TerminalSurface({
         if (socket?.readyState === WebSocket.OPEN)
           socket.send(JSON.stringify({ type: "input", data }));
       };
-      if (focused) requestAnimationFrame(() => terminal?.focus());
+      if (focused)
+        requestAnimationFrame(() => {
+          terminal?.focus();
+          focusDeliveredRef.current?.();
+        });
       const sendSize = () => {
         const cols = terminal?.cols ?? 0;
         const rows = terminal?.rows ?? 0;
@@ -977,6 +1004,22 @@ export function WorkspaceApp({
   );
   const [selectedTaskId, setSelectedTaskId] = useState(initialSelectedTaskId);
   const [activeSessionId, setActiveSessionId] = useState(initialActiveAgentId);
+  // Keyboard focus follows explicit intent, never mere selection. Only a
+  // session the user opened from this window claims the caret; sessions that
+  // become active on their own — restored from storage at startup, picked by
+  // `preferredSessionId`, or created from the CLI — leave focus alone, as does
+  // a remount caused by a layout change.
+  const [focusedSessionId, setFocusedSessionId] = useState<string>();
+  const openSession = useCallback((id: string) => {
+    setActiveSessionId(id);
+    setFocusedSessionId(id);
+  }, []);
+  // The request is consumed once the caret actually lands, so a later remount
+  // from a panel resize does not silently take focus back.
+  const clearSessionFocusRequest = useCallback(
+    () => setFocusedSessionId(undefined),
+    [],
+  );
   const [view, setView] = useState<"board" | "sessions" | "workspace">(
     initialWorkspaceView,
   );
@@ -1752,7 +1795,7 @@ export function WorkspaceApp({
           current.filter((item) => item.key !== launch.key),
         );
         await refresh();
-        setActiveSessionId(response.data.id);
+        openSession(response.data.id);
         return;
       }
       const sessionId =
@@ -2121,7 +2164,7 @@ export function WorkspaceApp({
     const restored = await perform(
       client.request.agentRestore({ id: session.id }),
     );
-    if (restored) setActiveSessionId(restored.id);
+    if (restored) openSession(restored.id);
   }
 
   async function archiveWorkspace(item: WorkspaceDto) {
@@ -2994,7 +3037,7 @@ export function WorkspaceApp({
                                 key={session.id}
                                 onClick={(event) => {
                                   event.stopPropagation();
-                                  setActiveSessionId(session.id);
+                                  openSession(session.id);
                                   setView("sessions");
                                 }}
                                 title={`${sessionName(session)} · ${session.status}`}
@@ -3108,7 +3151,7 @@ export function WorkspaceApp({
                         className="session-card-main"
                         data-provider={session.provider}
                         data-session-id={session.id}
-                        onClick={() => setActiveSessionId(session.id)}
+                        onClick={() => openSession(session.id)}
                       >
                         <span className={`session-kind-icon tool-${tool}`}>
                           <ToolIcon tool={tool} />
@@ -3264,12 +3307,13 @@ export function WorkspaceApp({
             </div>
             {activeSession ? (
               <TerminalSurface
-                focused
+                focused={shouldFocusSession(focusedSessionId, activeSession.id)}
                 fitRevision={terminalFitRevision}
                 id={activeSession.id}
                 key={`${activeSession.id}:${terminalMountRevision}`}
                 label={sessionName(activeSession)}
                 locationLabel={activeSessionRepository?.name ?? workspace.name}
+                onFocused={clearSessionFocusRequest}
                 onOpenLink={openTerminalLink}
                 session={activeSession}
                 status={activeSession.status}

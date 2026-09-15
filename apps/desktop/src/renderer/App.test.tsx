@@ -9,6 +9,7 @@ import {
   launchMatchesSession,
   PANEL_RAIL_WIDTH,
   preferredSessionId,
+  shouldFocusSession,
   TERMINAL_FONT_SIZE,
   TERMINAL_PANEL_MIN_HEIGHT,
 } from "./WorkspaceApp";
@@ -117,6 +118,17 @@ describe("desktop application shell", () => {
       "newest",
     );
     expect(preferredSessionId([])).toBeUndefined();
+  });
+
+  test("focuses only the session the user opened in this window", () => {
+    // Opening a session from the UI claims the caret.
+    expect(shouldFocusSession("opened", "opened")).toBe(true);
+    // A session that became active on its own — restored at startup, chosen by
+    // preferredSessionId, or spawned from the CLI — must not steal focus.
+    expect(shouldFocusSession(undefined, "auto-selected")).toBe(false);
+    // Nor may a stale request follow the user to a different session.
+    expect(shouldFocusSession("opened", "another")).toBe(false);
+    expect(shouldFocusSession(undefined, undefined)).toBe(false);
   });
 
   test("renders Board, Sessions, and Workspace as complete workspace modes", () => {

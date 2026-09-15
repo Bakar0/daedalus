@@ -35,6 +35,10 @@ const SESSION_RECOVERY_WINDOW_MS = 60_000;
 const SESSION_RECOVERY_UNIQUENESS_MS = 2_000;
 const PROVIDER_STARTUP_TIMEOUT_MS = 30_000;
 const PROVIDER_STARTUP_POLL_MS = 150;
+// Upper bound on synthetic Enter presses per startup prompt. Daedalus answers
+// the trust prompts for directories it created itself; it must never keep
+// typing into a session the user has taken over.
+const MAX_PROMPT_CONFIRMATIONS = 3;
 
 export function isMissingCodexConversationError(message: string): boolean {
   return /(?:^|\b)No active session found matching\s+['"][^'"]+['"]\.?/i.test(
@@ -327,12 +331,21 @@ export class AgentService {
     const deadline = Date.now() + PROVIDER_STARTUP_TIMEOUT_MS;
     const promptAttempts = new Map<
       string,
-      { navigationCount: number; navigatedAt: number; confirmedAt?: number }
+      {
+        navigationCount: number;
+        navigatedAt: number;
+        confirmCount: number;
+        confirmedAt?: number;
+      }
     >();
     let lastScreen = "";
 
     const confirmDefaultPrompt = async (key: string) => {
       const previous = promptAttempts.get(key);
+      // Answered prompts stay in the scrollback, so the capture keeps matching
+      // them long after the provider moved on. Without a hard cap Daedalus
+      // would keep pressing Enter into the session the user is now typing in.
+      if (previous && previous.confirmCount >= MAX_PROMPT_CONFIRMATIONS) return;
       if (previous?.confirmedAt && Date.now() - previous.confirmedAt < 1_000)
         return;
       if (!previous) await Bun.sleep(500);
@@ -340,6 +353,7 @@ export class AgentService {
       promptAttempts.set(key, {
         navigationCount: 0,
         navigatedAt: previous?.navigatedAt ?? 0,
+        confirmCount: (previous?.confirmCount ?? 0) + 1,
         confirmedAt: Date.now(),
       });
     };
@@ -355,12 +369,15 @@ export class AgentService {
         "\\$&",
       );
       if (new RegExp(`❯\\s*${escapedLabel}`).test(screen)) {
+        if (previous && previous.confirmCount >= MAX_PROMPT_CONFIRMATIONS)
+          return;
         if (previous?.confirmedAt && Date.now() - previous.confirmedAt < 1_000)
           return;
         await this.tmux.sendKeys(tmuxSession, ["Enter"]);
         promptAttempts.set(key, {
           navigationCount: previous?.navigationCount ?? 0,
           navigatedAt: previous?.navigatedAt ?? 0,
+          confirmCount: (previous?.confirmCount ?? 0) + 1,
           confirmedAt: Date.now(),
         });
         return;
@@ -376,6 +393,7 @@ export class AgentService {
       promptAttempts.set(key, {
         navigationCount: (previous?.navigationCount ?? 0) + 1,
         navigatedAt: Date.now(),
+        confirmCount: previous?.confirmCount ?? 0,
       });
     };
 
@@ -391,7 +409,15 @@ export class AgentService {
       const screen = await this.tmux.capture(tmuxSession);
       lastScreen = screen;
 
+      // Readiness is checked first: the answered prompt stays in the
+      // scrollback, so matching it ahead of the ready marker would keep
+      // driving keys into a session that already belongs to the user.
       if (
+        (provider === "codex" && screen.includes("Ask Codex to do anything")) ||
+        (provider === "claude" && screen.includes("shift+tab to cycle"))
+      ) {
+        return;
+      } else if (
         provider === "codex" &&
         screen.includes("Do you trust the contents of this directory?")
       ) {
@@ -414,11 +440,6 @@ export class AgentService {
           screen,
           "Yes, allow external imports",
         );
-      } else if (
-        (provider === "codex" && screen.includes("Ask Codex to do anything")) ||
-        (provider === "claude" && screen.includes("shift+tab to cycle"))
-      ) {
-        return;
       }
 
       await Bun.sleep(PROVIDER_STARTUP_POLL_MS);
@@ -685,7 +706,14 @@ export class AgentService {
   }
 
   async stop(id: string, force = false): Promise<AgentSession> {
-    const agent = await this.requireRunning(id);
+    const agent = await this.get(id);
+    // A session that never finished starting is still a live tmux session, so
+    // stopping it must work exactly like stopping a running one.
+    if (agent.status !== "running" && agent.status !== "starting")
+      throw new DaedalusError(
+        "CONFLICT",
+        `Agent session '${id}' is not running`,
+      );
     await this.tmux.stop(agent.tmuxSession, force);
     const stopped: AgentSession = {
       ...agent,
@@ -710,6 +738,8 @@ export class AgentService {
   async archive(id: string, force = false): Promise<AgentSession> {
     let agent = await this.get(id);
     if (agent.archivedAt) return agent;
+    // Archivability is settled before anything is stopped, so a session that
+    // cannot be archived safely keeps running instead of being destroyed.
     agent = await this.prepareArchivable(agent);
     if (agent.status === "running" || agent.status === "starting")
       agent = await this.stop(id, force);
@@ -937,8 +967,11 @@ export class AgentService {
         this.repositories.updateAgent(recovered);
         return recovered;
       }
-      if (agent.status !== "running" && agent.status !== "starting")
-        return agent;
+      // Codex allocates a thread UUID before the first user event but never
+      // persists an empty conversation, and a session that failed during
+      // startup has nothing to persist either. `restore` already covers this
+      // by starting a fresh native session, so archiving loses nothing.
+      return agent;
     }
     if (agent.provider === "claude") {
       const recoveredId = await recoverClaudeSessionId({

@@ -474,6 +474,95 @@ describe("AgentService", () => {
     });
   });
 
+  test("archives a Codex session that never persisted a conversation", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { codex: { executable: process.execPath, args: [] } },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home, CODEX_HOME: join(home, "empty-codex") },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Failing" });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      // A Codex session that failed on startup never wrote a rollout, so there
+      // is nothing to recover. `restore` handles that by starting a fresh
+      // native session, so archiving must not be refused.
+      expect(session.providerSessionId).toBeNull();
+      const archived = await context.agents.archive(session.id);
+      expect(archived.archivedAt).toBeTruthy();
+      expect(tmux.sessions.has(session.tmuxSession)).toBe(false);
+      context.close();
+    });
+  });
+
+  test("stops answering startup prompts once the provider is ready", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { codex: { executable: process.execPath, args: [] } },
+        }),
+      );
+      const tmux = new FakeTmux();
+      // The answered trust prompt stays in the scrollback beside the ready
+      // marker. Matching it again would keep pressing Enter in a session the
+      // user has already taken over.
+      tmux.screens = [
+        "Do you trust the contents of this directory?\n❯ 1. Yes, proceed",
+        "Do you trust the contents of this directory?\nAsk Codex to do anything",
+      ];
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home, CODEX_HOME: join(home, "empty-codex") },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Trust" });
+      await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      expect(tmux.keys).toEqual([["Enter"]]);
+      context.close();
+    });
+  });
+
+  test("gives the session working directory its own workspace instructions", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { codex: { executable: process.execPath, args: [] } },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home, CODEX_HOME: join(home, "empty-codex") },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Context" });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      // The session starts in an empty directory that is neither a repository
+      // nor the workspace root, so a provider that only reads its working
+      // directory would otherwise open with no workspace context at all.
+      const instructions = await Bun.file(
+        join(session.workingDirectory, "AGENTS.md"),
+      ).text();
+      expect(instructions).toContain(join(workspace.path, "BRIEF.md"));
+      expect(instructions).toContain(join(workspace.path, "JOURNAL.md"));
+      context.close();
+    });
+  });
+
   test("does not stop existing conversations with an ambiguous match", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       await Bun.write(
