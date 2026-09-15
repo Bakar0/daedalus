@@ -58,6 +58,24 @@ const storedPanelSize = (key: string, fallback: number) => {
 const lastSessionStorageKey = (workspaceId: string) =>
   `daedalus.session.last.${workspaceId}`;
 
+const lastViewStorageKey = (workspaceId: string) =>
+  `daedalus.view.last.${workspaceId}`;
+
+export type WorkspaceView = "board" | "sessions" | "workspace";
+
+export function preferredWorkspaceView(
+  rememberedView?: string | null,
+): WorkspaceView {
+  return rememberedView === "sessions" || rememberedView === "workspace"
+    ? rememberedView
+    : "board";
+}
+
+const rememberedWorkspaceView = (workspaceId?: string) => {
+  if (!workspaceId || typeof window === "undefined") return undefined;
+  return window.localStorage.getItem(lastViewStorageKey(workspaceId));
+};
+
 export function preferredSessionId(
   sessions: AgentSessionDto[],
   currentId?: string,
@@ -1009,7 +1027,7 @@ export function WorkspaceApp({
   initialActiveAgentId,
   initialActiveTerminalId,
   initialTerminalPanelOpen = false,
-  initialWorkspaceView = "board",
+  initialWorkspaceView,
   initialWorkspaceContent,
   initialModal,
   initialSessionLaunches = [],
@@ -1021,7 +1039,7 @@ export function WorkspaceApp({
   initialActiveTerminalId?: string;
   initialTerminalPanelOpen?: boolean;
   initialDetailView?: "brief" | "terminal";
-  initialWorkspaceView?: "board" | "sessions" | "workspace";
+  initialWorkspaceView?: WorkspaceView;
   initialWorkspaceContent?: WorkspaceContentDto;
   initialModal?: "workspace" | "task" | "session" | "repository" | "settings";
   initialSessionLaunches?: SessionLaunchState[];
@@ -1067,9 +1085,12 @@ export function WorkspaceApp({
       ),
     [],
   );
-  const [view, setView] = useState<"board" | "sessions" | "workspace">(
-    initialWorkspaceView,
+  const [view, setView] = useState<WorkspaceView>(
+    () =>
+      initialWorkspaceView ??
+      preferredWorkspaceView(rememberedWorkspaceView(workspaceId)),
   );
+  const viewWorkspaceId = useRef(workspaceId);
   const [workspaceContent, setWorkspaceContent] = useState(
     initialWorkspaceContent,
   );
@@ -1602,6 +1623,16 @@ export function WorkspaceApp({
   const activeIntegratedTerminal =
     integratedTerminals.find((item) => item.id === activeTerminalId) ??
     integratedTerminals.at(-1);
+
+  useEffect(() => {
+    if (viewWorkspaceId.current !== workspaceId) {
+      viewWorkspaceId.current = workspaceId;
+      setView(preferredWorkspaceView(rememberedWorkspaceView(workspaceId)));
+      return;
+    }
+    if (workspaceId)
+      window.localStorage.setItem(lastViewStorageKey(workspaceId), view);
+  }, [view, workspaceId]);
 
   useEffect(() => {
     if (view !== "sessions" || !workspaceId) return;
@@ -2267,7 +2298,12 @@ export function WorkspaceApp({
     setWorkspaceId(id);
     setSelectedTaskId(undefined);
     setActiveSessionId(undefined);
-    setView("board");
+    // Restoring the Sessions mode re-arms `preferredSessionId`, so a focus
+    // request left over from this workspace's previous visit could be
+    // satisfied by a session the user never opened. Switching workspaces is
+    // not an intent to type into whatever is restored.
+    clearSessionFocusRequest();
+    setView(preferredWorkspaceView(rememberedWorkspaceView(id)));
   }
 
   const taskInspector = !selectedTask ? (

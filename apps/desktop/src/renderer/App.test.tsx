@@ -10,6 +10,7 @@ import {
   PANEL_RAIL_WIDTH,
   pendingSessionLaunches,
   preferredSessionId,
+  preferredWorkspaceView,
   type SessionLaunchState,
   shouldFocusSession,
   TERMINAL_FONT_SIZE,
@@ -163,6 +164,15 @@ describe("desktop application shell", () => {
     // Nor may a stale request follow the user to a different session.
     expect(shouldFocusSession("opened", "another")).toBe(false);
     expect(shouldFocusSession(undefined, undefined)).toBe(false);
+  });
+
+  test("restores a remembered workspace mode and ignores unusable values", () => {
+    expect(preferredWorkspaceView("sessions")).toBe("sessions");
+    expect(preferredWorkspaceView("workspace")).toBe("workspace");
+    expect(preferredWorkspaceView("board")).toBe("board");
+    expect(preferredWorkspaceView("retired-mode")).toBe("board");
+    expect(preferredWorkspaceView(null)).toBe("board");
+    expect(preferredWorkspaceView()).toBe("board");
   });
 
   test("renders Board, Sessions, and Workspace as complete workspace modes", () => {
