@@ -167,12 +167,37 @@ export interface DesktopSettingsDto {
   providers: ProviderAvailabilityDto[];
 }
 
+export interface UsageWindowDto {
+  label: string;
+  usedPercent: number;
+  resetsAt?: string;
+}
+
+export interface ProviderUsageDto {
+  provider: "codex" | "claude";
+  windows: UsageWindowDto[];
+  observedAt: string;
+}
+
+export interface SessionTelemetryDto {
+  sessionId: string;
+  model?: string;
+  context?: {
+    usedTokens: number;
+    totalTokens?: number;
+    usedPercent?: number;
+  };
+  observedAt: string;
+}
+
 export interface DesktopSnapshotDto {
   workspaces: WorkspaceDto[];
   tasks: TaskDto[];
   agents: AgentSessionDto[];
   terminals: IntegratedTerminalDto[];
   repositories: RepositoryLibraryDto[];
+  providerUsage: ProviderUsageDto[];
+  sessionTelemetry: SessionTelemetryDto[];
   settings: DesktopSettingsDto;
 }
 
@@ -335,7 +360,13 @@ export interface DesktopRpcSchema {
     messages: Record<never, never>;
   };
   webview: {
-    requests: Record<never, never>;
+    requests: {
+      /** Electrobun's built-in renderer evaluator, used by packaged UI probes. */
+      evaluateJavascriptWithResponse: {
+        params: { script: string };
+        response: unknown;
+      };
+    };
     messages: {
       dataChanged: { revision: number; source: "desktop" | "external" };
       command: { command: DesktopCommand };

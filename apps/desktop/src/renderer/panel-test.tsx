@@ -42,6 +42,36 @@ const snapshot: DesktopSnapshotDto = {
   ],
   terminals: [],
   repositories: [],
+  providerUsage: [
+    {
+      provider: "codex",
+      windows: [
+        { label: "5h", usedPercent: 28 },
+        { label: "7d", usedPercent: 61 },
+      ],
+      observedAt: "2026-09-14T00:00:00.000Z",
+    },
+    {
+      provider: "claude",
+      windows: [
+        { label: "5h", usedPercent: 34 },
+        { label: "7d", usedPercent: 47 },
+      ],
+      observedAt: "2026-09-14T00:00:00.000Z",
+    },
+  ],
+  sessionTelemetry: [
+    {
+      sessionId: "panel-test-agent",
+      model: "claude-fable-5-1[1m]",
+      context: {
+        usedTokens: 61_036,
+        totalTokens: 1_000_000,
+        usedPercent: 6.1036,
+      },
+      observedAt: "2026-09-14T00:00:00.000Z",
+    },
+  ],
   settings: {
     home: "/tmp/daedalus-panel-test",
     workspaceRoot: "/tmp/daedalus-panel-test/workspaces",
@@ -56,6 +86,10 @@ const snapshot: DesktopSnapshotDto = {
 const client = {
   request: {
     snapshot: async () => ({ ok: true, data: snapshot }),
+    agentModels: async ({ provider }: { provider: "codex" | "claude" }) => ({
+      ok: true,
+      data: { provider, models: [], source: "aliases" },
+    }),
   },
   subscribe: () => () => undefined,
   subscribeCommands: () => () => undefined,

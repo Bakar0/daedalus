@@ -1,5 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 const projectRoot = resolve(import.meta.dir, "..");
@@ -9,7 +8,9 @@ const pageUrl = `http://127.0.0.1:${port}/panel-test.html`;
 const chromePath =
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const screenshotPath = join(projectRoot, "artifacts/panel-browser-check.png");
-const profile = await mkdtemp(join(tmpdir(), "daedalus-panel-check-"));
+const artifactsDirectory = join(projectRoot, "artifacts");
+await mkdir(artifactsDirectory, { recursive: true });
+const profile = await mkdtemp(join(artifactsDirectory, ".panel-check-profile-"));
 
 const vite = Bun.spawn(
   [
@@ -247,6 +248,37 @@ try {
     "document.querySelector('.app-mode-switcher button:nth-child(2)').click()",
   );
   await Bun.sleep(250);
+  const statusTelemetry = await evaluate<{
+    heading: string;
+    status: string;
+    context: string;
+    usage: string;
+  }>(`(() => ({
+    heading: document.querySelector('.terminal-heading h1')?.textContent?.replace(/\\s+/g, ' ').trim() ?? '',
+    status: document.querySelector('.agent-session-status-primary')?.textContent?.replace(/\\s+/g, ' ').trim() ?? '',
+    context: document.querySelector('.agent-session-context')?.textContent?.replace(/\\s+/g, ' ').trim() ?? '',
+    usage: document.querySelector('.provider-usage')?.textContent?.replace(/\\s+/g, ' ').trim() ?? '',
+  }))()`);
+  if (!statusTelemetry.heading.includes("claude-fable-5-1[1m]"))
+    throw new Error(
+      `Session heading is missing the model: ${statusTelemetry.heading}`,
+    );
+  if (!statusTelemetry.status.includes("claude-fable-5-1[1m]"))
+    throw new Error(
+      `Status line is missing the model: ${statusTelemetry.status}`,
+    );
+  if (!statusTelemetry.context.includes("Context 61k/1000k"))
+    throw new Error(
+      `Claude context is missing or malformed: ${statusTelemetry.context}`,
+    );
+  for (const expected of [
+    "Codex 5h 28% · 7d 61%",
+    "Claude 5h 34% · 7d 47%",
+  ])
+    if (!statusTelemetry.usage.includes(expected))
+      throw new Error(
+        `Provider usage is missing ${expected}: ${statusTelemetry.usage}`,
+      );
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (
       await evaluate(
@@ -350,6 +382,9 @@ try {
   );
   console.log(
     `Terminal panel-collapse checks passed: sessions ${sessionsCollapse.beforeCols} -> ${sessionsCollapse.afterCols} cols; workspace ${workspaceCollapse.beforeCols} -> ${workspaceCollapse.afterCols} cols`,
+  );
+  console.log(
+    `Status telemetry check passed: ${statusTelemetry.status}; ${statusTelemetry.context}; ${statusTelemetry.usage}`,
   );
   console.log(`Screenshot: ${screenshotPath}`);
   socket.close();

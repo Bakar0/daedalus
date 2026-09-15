@@ -38,6 +38,26 @@ export const CODEX_DAEDALUS_TUI_ARGS = [
   "tui.disable_mouse_capture=true",
 ] as const;
 
+export const CLAUDE_DAEDALUS_STATUS_ARGS = [
+  "--settings",
+  JSON.stringify({
+    statusLine: {
+      type: "command",
+      command: "daedal agent telemetry",
+      padding: 0,
+    },
+  }),
+] as const;
+
+export function claudeDaedalusStatusArgs(existingArgs: string[]): string[] {
+  return existingArgs.some(
+    (argument) =>
+      argument === "--settings" || argument.startsWith("--settings="),
+  )
+    ? []
+    : [...CLAUDE_DAEDALUS_STATUS_ARGS];
+}
+
 interface ClaudeModelInfo {
   value?: unknown;
   resolvedModel?: unknown;
@@ -308,6 +328,8 @@ class ConfiguredProvider implements AgentProvider {
         args.push("--add-dir", directory);
     if (this.promptArgument && this.name === "codex")
       args.push(...CODEX_DAEDALUS_TUI_ARGS);
+    if (this.promptArgument && this.name === "claude")
+      args.push(...claudeDaedalusStatusArgs(args));
     if (this.promptArgument && this.name === "claude" && input.sessionId) {
       providerSessionId = input.sessionId;
       args.push("--session-id", input.sessionId);

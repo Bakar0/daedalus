@@ -1013,6 +1013,92 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   gap: 7px;
   padding: 8px 10px;
 }
+.agent-session-status {
+  background: #111728;
+  border-top: 1px solid rgb(151 164 190 / 0.15);
+  color: #aebbd0;
+  display: grid;
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 1;
+  min-width: 0;
+  padding: 7px 10px;
+}
+.agent-session-status-primary,
+.agent-session-context {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+.agent-session-status-primary strong,
+.agent-session-context strong {
+  color: #dce5f2;
+  font-weight: 620;
+}
+.agent-session-status-model {
+  color: #8290a9;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.agent-session-status-primary small {
+  color: #8290a9;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.agent-session-status-path {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-session-status-branch {
+  background: rgb(142 214 195 / 0.08);
+  border: 1px solid rgb(142 214 195 / 0.16);
+  border-radius: 999px;
+  color: #8ed6c3;
+  max-width: 190px;
+  overflow: hidden;
+  padding: 3px 6px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-session-context {
+  border-top: 1px solid rgb(151 164 190 / 0.1);
+  margin-top: 6px;
+  padding-top: 6px;
+}
+.agent-session-context-track {
+  background: rgb(151 164 190 / 0.14);
+  border-radius: 999px;
+  display: block;
+  height: 4px;
+  max-width: 110px;
+  min-width: 54px;
+  overflow: hidden;
+  width: 12%;
+}
+.agent-session-context-track > span {
+  background: #8ed6c3;
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+}
+.terminal-heading h1 {
+  align-items: baseline;
+  display: flex;
+  gap: 9px;
+  min-width: 0;
+}
+.terminal-heading-model {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .terminal-status small {
   color: #8290a9;
   margin-left: auto;
@@ -1402,6 +1488,34 @@ dd {
   min-width: 0;
   order: 2;
   padding: 0 8px;
+}
+.provider-usage {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 10px;
+  gap: 8px;
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.provider-usage-item {
+  align-items: center;
+  display: flex;
+  gap: 5px;
+  white-space: nowrap;
+}
+.provider-usage-item + .provider-usage-item {
+  border-left: 1px solid var(--line);
+  padding-left: 8px;
+}
+.provider-usage-item strong {
+  color: var(--secondary);
+  font-weight: 620;
+}
+.provider-usage-dot {
+  color: var(--faint);
+  margin-right: 5px;
 }
 .integrated-terminal-toggle {
   align-items: center;

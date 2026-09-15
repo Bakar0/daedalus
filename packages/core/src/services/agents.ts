@@ -12,6 +12,7 @@ import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import {
   buildAgentPrompt,
+  claudeDaedalusStatusArgs,
   CODEX_DAEDALUS_TUI_ARGS,
   discoverProviderModels,
   modelArgument,
@@ -834,6 +835,7 @@ export class AgentService {
           );
         args = [
           ...definition.args,
+          ...claudeDaedalusStatusArgs(definition.args),
           ...modelArgs,
           ...additionalDirectories,
           "--resume",

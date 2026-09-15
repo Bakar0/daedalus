@@ -18,6 +18,8 @@ import type {
   DesktopSnapshotDto,
   IntegratedTerminalDto,
   ProviderModelCatalogDto,
+  SessionTelemetryDto,
+  SessionWorktreeDto,
   RepositoryDiscoveryDto,
   RpcResult,
   TaskDto,
@@ -146,6 +148,38 @@ const terminalPathHint = (path: string, home?: string) => {
   if (home && path === home) return "Daedalus home";
   const parts = path.split("/").filter(Boolean);
   return parts.length > 2 ? `…/${parts.slice(-2).join("/")}` : path;
+};
+
+const elapsedLabel = (
+  startedAt: string,
+  endedAt: string | null,
+  now: number,
+) => {
+  const elapsed = Math.max(
+    0,
+    (endedAt ? Date.parse(endedAt) : now) - Date.parse(startedAt),
+  );
+  const minutes = Math.floor(elapsed / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
+};
+
+const providerLabel = (provider: string) =>
+  provider.slice(0, 1).toUpperCase() + provider.slice(1);
+
+const compactTokenLabel = (tokens: number) =>
+  tokens >= 1_000 ? `${Math.round(tokens / 1_000)}k` : String(tokens);
+
+const sessionConfiguredModel = (session?: AgentSessionDto) => {
+  if (!session) return undefined;
+  for (let index = session.args.length - 1; index >= 0; index -= 1) {
+    const argument = session.args[index]!;
+    if (argument.startsWith("--model=")) return argument.slice(8);
+    if (argument === "--model") return session.args[index + 1];
+  }
+  return undefined;
 };
 
 const workspaceParentPath = (path: string) => {
@@ -516,23 +550,40 @@ function TerminalSurface({
   fitRevision,
   id,
   label,
+  locationLabel,
   onOpenLink,
   status,
+  session,
+  telemetry,
   target,
+  worktree,
 }: {
   focused: boolean;
   fitRevision: number;
   id: string;
   label: string;
+  locationLabel?: string;
   onOpenLink: (url: string) => void;
   status: AgentSessionDto["status"];
+  session?: AgentSessionDto;
+  telemetry?: SessionTelemetryDto;
   target: "agent" | "integrated";
+  worktree?: SessionWorktreeDto;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fitRef = useRef<() => void>(() => undefined);
   const focusRef = useRef<() => void>(() => undefined);
   const inputRef = useRef<(data: string) => void>(() => undefined);
   const [connection, setConnection] = useState("connecting");
+  const [now, setNow] = useState(Date.now());
+  const connectionIssue = ["connected", "reconnected"].includes(connection)
+    ? undefined
+    : connection;
+  useEffect(() => {
+    if (!session || session.endedAt) return;
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, [session]);
   const captureAgentShortcut = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const sequence = agentMultilineSequence(event.nativeEvent, target);
     if (!sequence) return;
@@ -775,19 +826,74 @@ function TerminalSurface({
 
   return (
     <section className="agent-terminal-shell">
-      <div className="terminal-status">
-        <span className={`agent-dot ${status}`} />
-        <span>{label}</span>
-        <small>
-          {connection} · {id.slice(0, 8)}
-        </small>
-      </div>
+      {target === "integrated" && (
+        <div className="terminal-status">
+          <span className={`agent-dot ${status}`} />
+          <span>{label}</span>
+          <small>
+            {connection} · {id.slice(0, 8)}
+          </small>
+        </div>
+      )}
       <div
         aria-label={`Terminal for ${label} ${id.slice(0, 8)}`}
         className="terminal"
         onKeyDownCapture={captureAgentShortcut}
         ref={containerRef}
       />
+      {target === "agent" && session && (
+        <div className="agent-session-status" aria-label="Session status">
+          <div className="agent-session-status-primary">
+            <span className={`agent-dot ${status}`} />
+            <strong>{providerLabel(session.provider)}</strong>
+            {telemetry?.model && (
+              <span className="agent-session-status-model">
+                {telemetry.model}
+              </span>
+            )}
+            {locationLabel && (
+              <span
+                className="agent-session-status-path"
+                title={session.workingDirectory}
+              >
+                {locationLabel}
+              </span>
+            )}
+            {worktree?.branchName && (
+              <span className="agent-session-status-branch">
+                {worktree.branchName}
+              </span>
+            )}
+            <span>{elapsedLabel(session.startedAt, session.endedAt, now)}</span>
+            {connectionIssue && <small>{connectionIssue}</small>}
+          </div>
+          {telemetry?.context && (
+            <div className="agent-session-context">
+              <span>
+                Context {compactTokenLabel(telemetry.context.usedTokens)}
+                {telemetry.context.totalTokens
+                  ? `/${compactTokenLabel(telemetry.context.totalTokens)}`
+                  : ""}
+              </span>
+              {telemetry.context.usedPercent !== undefined && (
+                <>
+                  <span
+                    className="agent-session-context-track"
+                    aria-hidden="true"
+                  >
+                    <span
+                      style={{
+                        width: `${Math.min(100, Math.max(0, telemetry.context.usedPercent))}%`,
+                      }}
+                    />
+                  </span>
+                  <strong>{Math.round(telemetry.context.usedPercent)}%</strong>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }
@@ -1383,6 +1489,17 @@ export function WorkspaceApp({
     (item) => item.id === selectedTaskId,
   );
   const activeSession = sessions.find((item) => item.id === activeSessionId);
+  const activeSessionTelemetry = snapshot?.sessionTelemetry.find(
+    (item) => item.sessionId === activeSession?.id,
+  );
+  const activeSessionWorktree = workspaceContent?.worktrees.find(
+    (item) => item.sessionId === activeSession?.id,
+  );
+  const activeSessionRepository = workspaceContent?.repositories.find(
+    (item) => item.id === activeSessionWorktree?.repositoryId,
+  );
+  const activeSessionModel =
+    activeSessionTelemetry?.model ?? sessionConfiguredModel(activeSession);
   const sessionModelCatalog =
     sessionType === "codex" || sessionType === "claude"
       ? modelCatalogs[sessionType]
@@ -2989,6 +3106,8 @@ export function WorkspaceApp({
                     >
                       <button
                         className="session-card-main"
+                        data-provider={session.provider}
+                        data-session-id={session.id}
                         onClick={() => setActiveSessionId(session.id)}
                       >
                         <span className={`session-kind-icon tool-${tool}`}>
@@ -3127,9 +3246,18 @@ export function WorkspaceApp({
               <div>
                 <span className="eyebrow">Terminal</span>
                 <h1>
-                  {activeSession
-                    ? sessionName(activeSession)
-                    : "No session selected"}
+                  {activeSession ? (
+                    <>
+                      {sessionName(activeSession)}
+                      {activeSessionModel && (
+                        <small className="terminal-heading-model">
+                          {activeSessionModel}
+                        </small>
+                      )}
+                    </>
+                  ) : (
+                    "No session selected"
+                  )}
                 </h1>
               </div>
               {activeSession && <small>{activeSession.status}</small>}
@@ -3141,9 +3269,13 @@ export function WorkspaceApp({
                 id={activeSession.id}
                 key={`${activeSession.id}:${terminalMountRevision}`}
                 label={sessionName(activeSession)}
+                locationLabel={activeSessionRepository?.name ?? workspace.name}
                 onOpenLink={openTerminalLink}
+                session={activeSession}
                 status={activeSession.status}
                 target="agent"
+                telemetry={activeSessionTelemetry}
+                worktree={activeSessionWorktree}
               />
             ) : (
               <div className="terminal-empty">
@@ -3207,6 +3339,27 @@ export function WorkspaceApp({
             <strong>Terminal</strong>
             <span className="count-badge">{integratedTerminals.length}</span>
           </button>
+          {(snapshot?.providerUsage.length ?? 0) > 0 && (
+            <div className="provider-usage" aria-label="Provider usage">
+              {snapshot!.providerUsage.map((usage) => (
+                <span
+                  className="provider-usage-item"
+                  data-provider={usage.provider}
+                  key={usage.provider}
+                >
+                  <strong>{providerLabel(usage.provider)}</strong>
+                  {usage.windows.map((window, index) => (
+                    <span key={window.label}>
+                      {index > 0 && (
+                        <span className="provider-usage-dot">·</span>
+                      )}
+                      {window.label} {Math.round(window.usedPercent)}%
+                    </span>
+                  ))}
+                </span>
+              ))}
+            </div>
+          )}
           <div className="integrated-terminal-actions">
             <button
               aria-label="New terminal in Daedalus home"

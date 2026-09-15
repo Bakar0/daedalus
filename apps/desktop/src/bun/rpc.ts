@@ -95,13 +95,14 @@ const workspaceContentDto = (
 export async function desktopSnapshot(
   context: ApplicationContext,
 ): Promise<DesktopSnapshotDto> {
-  const [workspaces, tasks, agents, terminals, capabilities] =
+  const [workspaces, tasks, agents, terminals, capabilities, telemetry] =
     await Promise.all([
       context.workspaces.listWithHealth(),
       context.tasks.list({}),
       context.agents.list({ includeArchived: true }),
       context.terminals.list(),
       context.agents.capabilities(),
+      context.telemetry.read(),
     ]);
   return {
     workspaces: workspaces.map(({ workspace, available }) =>
@@ -113,6 +114,7 @@ export async function desktopSnapshot(
     repositories: context.workspaceContent
       .listRepositoryLibrary()
       .map(repositoryLibraryDto),
+    ...telemetry,
     settings: {
       home: context.config.home,
       workspaceRoot: context.config.workspaceRoot,

@@ -1,10 +1,22 @@
 import { describe, expect, test, vi } from "vitest";
 import {
+  claudeDaedalusStatusArgs,
   isValidModelName,
   modelArgument,
   parseClaudeModelCatalog,
   resolveAgentExecutable,
 } from "./providers";
+
+describe("claudeDaedalusStatusArgs", () => {
+  test("adds Daedalus telemetry without replacing explicit user settings", () => {
+    expect(claudeDaedalusStatusArgs([])).toEqual([
+      "--settings",
+      expect.stringContaining("daedal agent telemetry"),
+    ]);
+    expect(claudeDaedalusStatusArgs(["--settings", "custom.json"])).toEqual([]);
+    expect(claudeDaedalusStatusArgs(["--settings=custom.json"])).toEqual([]);
+  });
+});
 
 describe("isValidModelName", () => {
   test("accepts Claude context suffixes without accepting arbitrary brackets", () => {

@@ -6,12 +6,56 @@ import {
   type ApplicationContext,
 } from "@daedalus/core";
 import { probeVersion } from "@daedalus/platform";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { DoctorCheck } from "@daedalus/protocol";
 import packageJson from "../../../package.json";
 
 const VERSION = packageJson.version;
 const MINIMUM_TMUX = "3.7c";
 const VERIFIED_BUN = "1.4.2";
+const SESSION_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+async function captureClaudeTelemetry(): Promise<number> {
+  try {
+    const sessionId = process.env.DAEDALUS_SESSION_ID;
+    const home = process.env.DAEDALUS_HOME;
+    if (!sessionId || !SESSION_ID.test(sessionId) || !home) return 0;
+    const input = await Bun.stdin.text();
+    if (input.length > 1024 * 1024) return 0;
+    const payload = JSON.parse(input) as {
+      model?: unknown;
+      context_window?: unknown;
+      rate_limits?: unknown;
+    };
+    const directory = join(home, "telemetry");
+    await mkdir(directory, { recursive: true });
+    const destination = join(directory, `${sessionId}.json`);
+    const temporary = join(
+      directory,
+      `${sessionId}.${crypto.randomUUID()}.tmp`,
+    );
+    try {
+      await writeFile(
+        temporary,
+        JSON.stringify({
+          observedAt: new Date().toISOString(),
+          model: payload.model,
+          context_window: payload.context_window,
+          rate_limits: payload.rate_limits,
+        }),
+        { flag: "wx", mode: 0o600 },
+      );
+      await rename(temporary, destination);
+    } finally {
+      await rm(temporary, { force: true });
+    }
+  } catch {
+    // A status-line hook must never interfere with the provider session.
+  }
+  return 0;
+}
 
 function versionAtLeast(actual: string, minimum: string): boolean {
   const parse = (version: string) => {
@@ -837,6 +881,8 @@ export async function runCli(
 ): Promise<number> {
   const json = inputArgs.includes("--json");
   const args = inputArgs.filter((argument) => argument !== "--json");
+  if (args[0] === "agent" && args[1] === "telemetry")
+    return captureClaudeTelemetry();
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
     console.log(help);
     return 0;

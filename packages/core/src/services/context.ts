@@ -14,6 +14,7 @@ import { SqliteRepositories } from "../repositories/sqlite";
 import { AgentService } from "./agents";
 import { IntegratedTerminalService } from "./integrated-terminals";
 import { TaskService } from "./tasks";
+import { TelemetryService } from "./telemetry";
 import { WorkspaceService } from "./workspaces";
 import { WorkspaceContentService } from "./workspace-content";
 
@@ -26,6 +27,7 @@ export interface ApplicationContext {
   tasks: TaskService;
   agents: AgentService;
   terminals: IntegratedTerminalService;
+  telemetry: TelemetryService;
   tmux: TmuxClient;
   close(): void;
 }
@@ -91,6 +93,7 @@ export async function createApplicationContext(
     tmux,
     config,
   );
+  const telemetry = new TelemetryService(repositories, config);
   if (options.reconcile !== false)
     await Promise.all([agents.reconcile(), terminals.reconcile()]);
   return {
@@ -102,6 +105,7 @@ export async function createApplicationContext(
     tasks,
     agents,
     terminals,
+    telemetry,
     tmux,
     close: () => repositories.close(),
   };

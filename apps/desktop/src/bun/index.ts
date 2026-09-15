@@ -153,7 +153,8 @@ const server = Bun.serve<SocketData>({
 });
 
 const terminalEndpoint = `ws://127.0.0.1:${server.port}/terminal?token=${token}`;
-const rendererUrl = `views://mainview/index.html?terminal=${encodeURIComponent(terminalEndpoint)}`;
+const nativeStatusProbePath = process.env.DAEDALUS_STATUS_PROBE_PATH;
+const rendererUrl = `views://mainview/index.html?build=${Date.now()}&terminal=${encodeURIComponent(terminalEndpoint)}`;
 
 // WebKit text controls use the native responder chain for standard editing
 // commands on macOS. Defining these roles restores Cmd+C/V/X/A/Z everywhere.
@@ -161,6 +162,7 @@ ApplicationMenu.setApplicationMenu(APPLICATION_MENU);
 
 let revision = 0;
 let fingerprint = desktopDataFingerprint(context);
+let telemetryFingerprint = "";
 
 function announce(source: "desktop" | "external"): void {
   fingerprint = desktopDataFingerprint(context);
@@ -192,7 +194,76 @@ const mainWindow = new BrowserWindow({
   url: rendererUrl,
   rpc,
   frame: { width: 1380, height: 820, x: 80, y: 80 },
+  hidden: Boolean(nativeStatusProbePath),
+  activate: !nativeStatusProbePath,
 });
+
+if (nativeStatusProbePath) {
+  let probeStarted = false;
+  mainWindow.webview.on("dom-ready", () => {
+    if (probeStarted) return;
+    probeStarted = true;
+    void (async () => {
+      try {
+        const script = `return (async () => {
+            const waitFor = async (read, attempts = 200) => {
+              for (let attempt = 0; attempt < attempts; attempt += 1) {
+                const value = read();
+                if (value) return value;
+                await new Promise((resolve) => setTimeout(resolve, 50));
+              }
+            };
+            const text = (selector) => document.querySelector(selector)?.textContent?.replace(/\\s+/g, " ").trim() ?? "";
+            const sessionsButton = await waitFor(() => document.querySelector(".app-mode-switcher button:nth-child(2)"));
+            sessionsButton?.click();
+            const claudeSession = await waitFor(() => document.querySelector('.session-card-main[data-provider="claude"]'));
+            claudeSession?.click();
+            await waitFor(() => text(".agent-session-context"));
+            return {
+              url: location.href,
+              selectedSessionId: claudeSession?.dataset.sessionId ?? null,
+              heading: text(".terminal-heading h1"),
+              headingModel: text(".terminal-heading-model"),
+              status: text(".agent-session-status-primary"),
+              statusModel: text(".agent-session-status-model"),
+              context: text(".agent-session-context"),
+              usage: text(".provider-usage"),
+              codexUsage: text('.provider-usage-item[data-provider="codex"]'),
+              claudeUsage: text('.provider-usage-item[data-provider="claude"]'),
+            };
+          })()`;
+        let result: unknown;
+        let lastError: unknown;
+        for (let attempt = 0; attempt < 12; attempt += 1) {
+          try {
+            result = await rpc.request.evaluateJavascriptWithResponse(
+              { script },
+              { maxRequestTime: 2_000 },
+            );
+            lastError = undefined;
+            break;
+          } catch (error) {
+            lastError = error;
+            await Bun.sleep(250);
+          }
+        }
+        if (lastError) throw lastError;
+        await Bun.write(nativeStatusProbePath, JSON.stringify(result, null, 2));
+      } catch (error) {
+        await Bun.write(
+          nativeStatusProbePath,
+          JSON.stringify(
+            { error: error instanceof Error ? error.message : String(error) },
+            null,
+            2,
+          ),
+        );
+      } finally {
+        Utils.quit();
+      }
+    })();
+  });
+}
 mainWindow.on("resize", (rawEvent) => {
   const event = rawEvent as {
     data?: { width?: unknown; height?: unknown };
@@ -227,7 +298,16 @@ setInterval(async () => {
       }
     }
     const next = desktopDataFingerprint(context);
-    if (next !== fingerprint) announce("external");
+    const nextTelemetryFingerprint = JSON.stringify(
+      await context.telemetry.read(),
+    );
+    if (
+      next !== fingerprint ||
+      nextTelemetryFingerprint !== telemetryFingerprint
+    ) {
+      telemetryFingerprint = nextTelemetryFingerprint;
+      announce("external");
+    }
   } catch (error) {
     await context.logger.write("error", "desktop_change_check_failed", {
       message: error instanceof Error ? error.message : String(error),

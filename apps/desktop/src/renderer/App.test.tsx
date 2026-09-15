@@ -24,6 +24,8 @@ const base: DesktopSnapshotDto = {
   agents: [],
   terminals: [],
   repositories: [],
+  providerUsage: [],
+  sessionTelemetry: [],
   settings: {
     home: "/tmp/daedalus-test",
     workspaceRoot: "/tmp/daedalus-test/workspaces",
@@ -134,6 +136,39 @@ describe("desktop application shell", () => {
     expect(html).toContain('class="create-button"');
     expect(html).toContain('aria-label="Open settings"');
     expect(html).not.toContain(">Refresh</button>");
+  });
+
+  test("labels every provider in the app-wide usage footer", () => {
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialSnapshot={{
+          ...base,
+          providerUsage: [
+            {
+              provider: "codex",
+              windows: [
+                { label: "5h", usedPercent: 28 },
+                { label: "7d", usedPercent: 61 },
+              ],
+              observedAt: "2026-09-15T08:00:00.000Z",
+            },
+            {
+              provider: "claude",
+              windows: [
+                { label: "5h", usedPercent: 14 },
+                { label: "7d", usedPercent: 33 },
+              ],
+              observedAt: "2026-09-15T08:00:00.000Z",
+            },
+          ],
+        }}
+      />,
+    );
+    expect(html).toContain("Codex</strong><span>5h 28%");
+    expect(html).toContain("Claude</strong><span>5h 14%");
+    expect(html).toContain("7d 61%");
+    expect(html).toContain("7d 33%");
   });
 
   test("shows the workspace instruction files preference in Settings", () => {
