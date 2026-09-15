@@ -12,6 +12,7 @@ import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import {
   buildAgentPrompt,
+  CODEX_DAEDALUS_TUI_ARGS,
   discoverProviderModels,
   modelArgument,
   resolveAgentExecutable,
@@ -761,7 +762,8 @@ export class AgentService {
     let args = agent.args;
     let providerSessionId = agent.providerSessionId;
     if (agent.kind === "agent") {
-      if (!agent.providerSessionId)
+      const nativeSessionId = agent.providerSessionId;
+      if (!nativeSessionId && agent.provider !== "codex")
         throw new DaedalusError(
           "CONFLICT",
           "This session predates native resume support and cannot be resumed safely",
@@ -784,15 +786,17 @@ export class AgentService {
       const selectedModel = modelArgument(agent.args);
       const modelArgs = selectedModel ? ["--model", selectedModel] : [];
       if (agent.provider === "codex") {
-        const hasNativeConversation = await hasPersistedCodexSession({
-          sessionsDirectory: this.config.codexSessionsDirectory,
-          id: agent.providerSessionId,
-          startedAt: agent.startedAt,
-        });
-        if (hasNativeConversation) {
+        const hasNativeConversation = nativeSessionId
+          ? await hasPersistedCodexSession({
+              sessionsDirectory: this.config.codexSessionsDirectory,
+              id: nativeSessionId,
+              startedAt: agent.startedAt,
+            })
+          : false;
+        if (hasNativeConversation && nativeSessionId) {
           const unarchive = await runCommand(
             executable,
-            ["unarchive", agent.providerSessionId],
+            ["unarchive", nativeSessionId],
             { cwd: agent.workingDirectory },
           );
           const unarchiveError =
@@ -804,25 +808,36 @@ export class AgentService {
             );
           args = [
             ...definition.args,
+            ...CODEX_DAEDALUS_TUI_ARGS,
             ...modelArgs,
             ...additionalDirectories,
             "resume",
-            agent.providerSessionId,
+            nativeSessionId,
           ];
         } else {
           // Codex allocates a thread UUID before the first user event but does
           // not persist an empty conversation. Restoring such an archived
           // session correctly starts a new empty native session.
-          args = [...definition.args, ...modelArgs, ...additionalDirectories];
+          args = [
+            ...definition.args,
+            ...CODEX_DAEDALUS_TUI_ARGS,
+            ...modelArgs,
+            ...additionalDirectories,
+          ];
           providerSessionId = null;
         }
       } else if (agent.provider === "claude") {
+        if (!nativeSessionId)
+          throw new DaedalusError(
+            "CONFLICT",
+            "This session predates native resume support and cannot be resumed safely",
+          );
         args = [
           ...definition.args,
           ...modelArgs,
           ...additionalDirectories,
           "--resume",
-          agent.providerSessionId,
+          nativeSessionId,
         ];
       } else {
         throw new DaedalusError(
@@ -920,6 +935,8 @@ export class AgentService {
         this.repositories.updateAgent(recovered);
         return recovered;
       }
+      if (agent.status !== "running" && agent.status !== "starting")
+        return agent;
     }
     if (agent.provider === "claude") {
       const recoveredId = await recoverClaudeSessionId({

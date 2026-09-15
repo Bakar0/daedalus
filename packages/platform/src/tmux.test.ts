@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
   boundTerminalCapture,
   CommandTmuxClient,
+  tmuxPtyArguments,
   tmuxPtyEnvironment,
 } from "./tmux";
 
@@ -33,6 +34,31 @@ test("tmux PTYs always use a UTF-8 locale for Unicode cell widths", () => {
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
   });
+});
+
+test("tmux PTYs use native mouse scrolling", () => {
+  expect(
+    tmuxPtyArguments({ socketName: "isolated", session: "daedalus_123" }),
+  ).toEqual([
+    "-u",
+    "-L",
+    "isolated",
+    "set-option",
+    "-t",
+    "daedalus_123",
+    "status",
+    "off",
+    ";",
+    "set-option",
+    "-t",
+    "daedalus_123",
+    "mouse",
+    "on",
+    ";",
+    "attach-session",
+    "-t",
+    "daedalus_123",
+  ]);
 });
 
 describe("CommandTmuxClient", () => {

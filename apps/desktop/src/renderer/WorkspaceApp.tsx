@@ -591,6 +591,10 @@ function TerminalSurface({
       if (disposed) return;
       terminal = new Terminal({
         cursorBlink: true,
+        // Keep ordinary drag selection available while tmux owns mouse mode.
+        // Holding Alt passes clicks and drags through to the terminal app;
+        // wheel events continue to use tmux's native scrolling behavior.
+        mouseEventsRequireAlt: true,
         // Shell prompts commonly use Nerd Font private-use glyphs. Prefer the
         // user's installed Nerd Font while retaining native monospace fallbacks.
         fontFamily: '"MesloLGS NF", "SF Mono", Menlo, monospace',

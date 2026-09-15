@@ -39,6 +39,26 @@ export interface TmuxTerminalTarget {
   session: string;
 }
 
+export const tmuxPtyArguments = (target: TmuxTerminalTarget): string[] =>
+  terminalArgs(
+    target.socketName,
+    "set-option",
+    "-t",
+    target.session,
+    "status",
+    "off",
+    ";",
+    "set-option",
+    "-t",
+    target.session,
+    "mouse",
+    "on",
+    ";",
+    "attach-session",
+    "-t",
+    target.session,
+  );
+
 export const tmuxPtyEnvironment = (
   environment: NodeJS.ProcessEnv = process.env,
 ) => ({
@@ -304,31 +324,14 @@ export class TmuxPtyBridge {
   ) {
     const cols = Math.max(20, Math.min(500, Math.floor(initialSize.cols)));
     const rows = Math.max(5, Math.min(300, Math.floor(initialSize.rows)));
-    this.process = Bun.spawn(
-      [
-        executable,
-        ...terminalArgs(
-          target.socketName,
-          "set-option",
-          "-t",
-          target.session,
-          "status",
-          "off",
-          ";",
-          "attach-session",
-          "-t",
-          target.session,
-        ),
-      ],
-      {
-        env: tmuxPtyEnvironment(),
-        terminal: {
-          cols,
-          rows,
-          data: (_terminal, data) => onOutput(data),
-        },
+    this.process = Bun.spawn([executable, ...tmuxPtyArguments(target)], {
+      env: tmuxPtyEnvironment(),
+      terminal: {
+        cols,
+        rows,
+        data: (_terminal, data) => onOutput(data),
       },
-    );
+    });
   }
 
   async start(): Promise<void> {

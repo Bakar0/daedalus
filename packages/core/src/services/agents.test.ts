@@ -194,7 +194,13 @@ describe("AgentService", () => {
       });
       expect(tmux.launches[0]).toMatchObject({
         executable: process.execPath,
-        args: ["run", launchPrompt],
+        args: [
+          "run",
+          "--no-alt-screen",
+          "-c",
+          "tui.disable_mouse_capture=true",
+          launchPrompt,
+        ],
         cwd: agent.workingDirectory,
       });
       expect(agent.workingDirectory).toContain(
@@ -412,7 +418,58 @@ describe("AgentService", () => {
         status: "running",
         archivedAt: null,
       });
-      expect(tmux.launches[1]?.args).toEqual(["run"]);
+      expect(tmux.launches[1]?.args).toEqual([
+        "run",
+        "--no-alt-screen",
+        "-c",
+        "tui.disable_mouse_capture=true",
+      ]);
+      context.close();
+    });
+  });
+
+  test("archives a lost Codex startup without a native conversation", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { codex: { executable: process.execPath, args: ["run"] } },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: {
+          DAEDALUS_HOME: home,
+          CODEX_HOME: join(home, "codex"),
+        },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Lost" });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      tmux.sessions.delete(session.tmuxSession);
+
+      const archived = await context.agents.archive(session.id);
+      expect(archived).toMatchObject({
+        providerSessionId: null,
+        status: "lost",
+      });
+      expect(archived.archivedAt).not.toBeNull();
+
+      const restored = await context.agents.restore(session.id);
+      expect(restored).toMatchObject({
+        providerSessionId: null,
+        status: "running",
+        archivedAt: null,
+      });
+      expect(tmux.launches[1]?.args).toEqual([
+        "run",
+        "--no-alt-screen",
+        "-c",
+        "tui.disable_mouse_capture=true",
+      ]);
       context.close();
     });
   });

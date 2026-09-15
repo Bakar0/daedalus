@@ -32,6 +32,12 @@ export interface ProviderModelCatalog {
   source: "provider" | "aliases";
 }
 
+export const CODEX_DAEDALUS_TUI_ARGS = [
+  "--no-alt-screen",
+  "-c",
+  "tui.disable_mouse_capture=true",
+] as const;
+
 interface ClaudeModelInfo {
   value?: unknown;
   resolvedModel?: unknown;
@@ -300,6 +306,8 @@ class ConfiguredProvider implements AgentProvider {
     if (this.promptArgument)
       for (const directory of input.additionalDirectories ?? [])
         args.push("--add-dir", directory);
+    if (this.promptArgument && this.name === "codex")
+      args.push(...CODEX_DAEDALUS_TUI_ARGS);
     if (this.promptArgument && this.name === "claude" && input.sessionId) {
       providerSessionId = input.sessionId;
       args.push("--session-id", input.sessionId);
