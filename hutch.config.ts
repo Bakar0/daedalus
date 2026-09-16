@@ -1,3 +1,4 @@
+// @hutch cli=0.24.3
 export default {
   scripts: {
     install: ["hutch", "install", "--frozen-lockfile"],
