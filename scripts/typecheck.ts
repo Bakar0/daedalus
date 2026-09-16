@@ -24,7 +24,7 @@ const [stdout, stderr, exitCode] = await Promise.all([
   tsc.exited,
 ]);
 
-const DIAGNOSTIC = /^(?<file>\S.*?)\((?<line>\d+),\d+\): (?:error|warning) TS/;
+const DIAGNOSTIC = /^(?<file>\S.*?)\(\d+,\d+\): (?:error|warning) TS/;
 
 // A diagnostic is one unindented header line followed by its indented detail
 // lines, so groups are formed by header and carried along with their detail.
