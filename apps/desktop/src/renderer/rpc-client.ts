@@ -31,5 +31,11 @@ export function createElectrobunClient(): DesktopClient {
       rpc.addMessageListener("windowResized", listener);
       return () => rpc.removeMessageListener("windowResized", listener);
     },
+    subscribeFocusSession(listener) {
+      const receive = ({ sessionId }: { sessionId: string }) =>
+        listener(sessionId);
+      rpc.addMessageListener("focusSession", receive);
+      return () => rpc.removeMessageListener("focusSession", receive);
+    },
   };
 }

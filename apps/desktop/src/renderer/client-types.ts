@@ -13,4 +13,5 @@ export interface DesktopClient {
   subscribe(listener: () => void): () => void;
   subscribeCommands(listener: (command: DesktopCommand) => void): () => void;
   subscribeWindowResize(listener: () => void): () => void;
+  subscribeFocusSession(listener: (sessionId: string) => void): () => void;
 }

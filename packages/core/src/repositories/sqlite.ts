@@ -1,10 +1,17 @@
 import { Database } from "bun:sqlite";
 import type {
+  AgentActivity,
+  AgentActivitySource,
   AgentSession,
   AgentSessionStatus,
+  AttentionReason,
   IntegratedTerminal,
+  NotificationLevel,
+  PendingNotification,
   RepositoryLibraryEntry,
+  SessionAttention,
   SessionWorktree,
+  StoredAgentActivity,
   Task,
   TaskPriority,
   TaskStatus,
@@ -196,6 +203,70 @@ const sessionWorktreeFromRow = (row: SessionWorktreeRow): SessionWorktree => ({
   repositoryId: row.repository_id,
   path: row.path,
   branchName: row.branch_name,
+  createdAt: row.created_at,
+});
+
+interface AgentActivityRow {
+  session_id: string;
+  activity: AgentActivity;
+  detail: string | null;
+  since: string;
+  observed_at: string;
+  source: AgentActivitySource;
+  notified_activity: AgentActivity | null;
+  notified_at: string | null;
+}
+
+interface SessionAttentionRow {
+  session_id: string;
+  workspace_id: string;
+  reasons: string;
+  raised_at: string;
+  updated_at: string;
+}
+
+interface PendingNotificationRow {
+  id: string;
+  session_id: string | null;
+  workspace_id: string | null;
+  channel: "toast" | "desktop";
+  level: NotificationLevel;
+  title: string;
+  body: string;
+  created_at: string;
+}
+
+const agentActivityFromRow = (row: AgentActivityRow): StoredAgentActivity => ({
+  sessionId: row.session_id,
+  activity: row.activity,
+  detail: row.detail,
+  since: row.since,
+  observedAt: row.observed_at,
+  source: row.source,
+  notifiedActivity: row.notified_activity,
+  notifiedAt: row.notified_at,
+});
+
+const sessionAttentionFromRow = (
+  row: SessionAttentionRow,
+): SessionAttention => ({
+  sessionId: row.session_id,
+  workspaceId: row.workspace_id,
+  reasons: JSON.parse(row.reasons) as AttentionReason[],
+  raisedAt: row.raised_at,
+  updatedAt: row.updated_at,
+});
+
+const pendingNotificationFromRow = (
+  row: PendingNotificationRow,
+): PendingNotification => ({
+  id: row.id,
+  sessionId: row.session_id,
+  workspaceId: row.workspace_id,
+  channel: row.channel,
+  level: row.level,
+  title: row.title,
+  body: row.body,
   createdAt: row.created_at,
 });
 
@@ -703,5 +774,145 @@ export class SqliteRepositories {
     this.database
       .query("DELETE FROM integrated_terminals WHERE id = ?")
       .run(id);
+  }
+
+  listAgentActivity(): StoredAgentActivity[] {
+    return this.database
+      .query<AgentActivityRow, []>("SELECT * FROM agent_activity")
+      .all()
+      .map(agentActivityFromRow);
+  }
+
+  findAgentActivity(sessionId: string): StoredAgentActivity | undefined {
+    const row = this.database
+      .query<AgentActivityRow, [string]>(
+        "SELECT * FROM agent_activity WHERE session_id = ?",
+      )
+      .get(sessionId);
+    return row ? agentActivityFromRow(row) : undefined;
+  }
+
+  saveAgentActivity(state: StoredAgentActivity): void {
+    this.database
+      .query(
+        `INSERT INTO agent_activity
+         (session_id, activity, detail, since, observed_at, source,
+          notified_activity, notified_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(session_id) DO UPDATE SET
+           activity = excluded.activity, detail = excluded.detail,
+           since = excluded.since, observed_at = excluded.observed_at,
+           source = excluded.source,
+           notified_activity = excluded.notified_activity,
+           notified_at = excluded.notified_at`,
+      )
+      .run(
+        state.sessionId,
+        state.activity,
+        state.detail,
+        state.since,
+        state.observedAt,
+        state.source,
+        state.notifiedActivity,
+        state.notifiedAt,
+      );
+  }
+
+  deleteAgentActivity(sessionId: string): void {
+    this.database
+      .query("DELETE FROM agent_activity WHERE session_id = ?")
+      .run(sessionId);
+  }
+
+  listSessionAttention(workspaceId?: string): SessionAttention[] {
+    const where = workspaceId ? " WHERE workspace_id = ?" : "";
+    return this.database
+      .query<SessionAttentionRow, string[]>(
+        `SELECT * FROM session_attention${where} ORDER BY raised_at`,
+      )
+      .all(...(workspaceId ? [workspaceId] : []))
+      .map(sessionAttentionFromRow);
+  }
+
+  findSessionAttention(sessionId: string): SessionAttention | undefined {
+    const row = this.database
+      .query<SessionAttentionRow, [string]>(
+        "SELECT * FROM session_attention WHERE session_id = ?",
+      )
+      .get(sessionId);
+    return row ? sessionAttentionFromRow(row) : undefined;
+  }
+
+  saveSessionAttention(attention: SessionAttention): void {
+    this.database
+      .query(
+        `INSERT INTO session_attention
+         (session_id, workspace_id, reasons, raised_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(session_id) DO UPDATE SET
+           workspace_id = excluded.workspace_id, reasons = excluded.reasons,
+           raised_at = excluded.raised_at, updated_at = excluded.updated_at`,
+      )
+      .run(
+        attention.sessionId,
+        attention.workspaceId,
+        JSON.stringify(attention.reasons),
+        attention.raisedAt,
+        attention.updatedAt,
+      );
+  }
+
+  deleteSessionAttention(sessionId: string): void {
+    this.database
+      .query("DELETE FROM session_attention WHERE session_id = ?")
+      .run(sessionId);
+  }
+
+  createPendingNotification(notification: PendingNotification): void {
+    this.database
+      .query(
+        `INSERT INTO pending_notifications
+         (id, session_id, workspace_id, channel, level, title, body, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        notification.id,
+        notification.sessionId,
+        notification.workspaceId,
+        notification.channel,
+        notification.level,
+        notification.title,
+        notification.body,
+        notification.createdAt,
+      );
+  }
+
+  listPendingNotifications(
+    channel?: "toast" | "desktop",
+  ): PendingNotification[] {
+    const where = channel ? " WHERE channel = ?" : "";
+    return this.database
+      .query<PendingNotificationRow, string[]>(
+        `SELECT * FROM pending_notifications${where} ORDER BY created_at, id`,
+      )
+      .all(...(channel ? [channel] : []))
+      .map(pendingNotificationFromRow);
+  }
+
+  deletePendingNotifications(ids: string[]): void {
+    if (ids.length === 0) return;
+    this.database
+      .query(
+        `DELETE FROM pending_notifications WHERE id IN (${ids
+          .map(() => "?")
+          .join(", ")})`,
+      )
+      .run(...ids);
+  }
+
+  deletePendingNotificationsForSession(sessionId: string): void {
+    this.database
+      .query("DELETE FROM pending_notifications WHERE session_id = ?")
+      .run(sessionId);
   }
 }

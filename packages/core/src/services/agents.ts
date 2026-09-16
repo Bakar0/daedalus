@@ -292,6 +292,11 @@ export class AgentService {
     private readonly tasks: TaskService,
     private readonly tmux: TmuxClient,
     private readonly config: DaedalusConfig,
+    /**
+     * Called when a session stops being live. An attention badge on a session
+     * that is over is the purest form of a badge outliving its cause.
+     */
+    private readonly onSessionEnded: (sessionId: string) => void = () => {},
   ) {}
 
   private agentEnvironment(
@@ -640,6 +645,7 @@ export class AgentService {
     if (!(await this.tmux.probe())) return;
     const live = new Set(await this.tmux.listSessions());
     const now = new Date().toISOString();
+    const lost: string[] = [];
     this.repositories.transaction(() => {
       for (const agent of this.repositories.listAgents()) {
         if (
@@ -651,11 +657,13 @@ export class AgentService {
             status: "lost",
             endedAt: now,
           });
+          lost.push(agent.id);
         } else if (agent.status === "starting" && live.has(agent.tmuxSession)) {
           this.repositories.updateAgent({ ...agent, status: "running" });
         }
       }
     });
+    for (const sessionId of lost) this.onSessionEnded(sessionId);
   }
 
   async list(filters: {
@@ -721,6 +729,7 @@ export class AgentService {
       endedAt: new Date().toISOString(),
     };
     this.repositories.updateAgent(stopped);
+    this.onSessionEnded(id);
     return stopped;
   }
 
@@ -773,6 +782,7 @@ export class AgentService {
     }
     const archived = { ...agent, archivedAt: new Date().toISOString() };
     this.repositories.updateAgent(archived);
+    this.onSessionEnded(id);
     return archived;
   }
 

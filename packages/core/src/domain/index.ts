@@ -125,3 +125,106 @@ export interface WorkspaceContent {
   repositories: WorkspaceRepository[];
   worktrees: SessionWorktree[];
 }
+
+/**
+ * What an agent is doing right now, as opposed to whether its process is
+ * alive. `AgentSessionStatus` answers "is the session running"; this answers
+ * "does it need me". The two attention states are the only ones that change
+ * what the user does next, so every surface treats them as a separate tier.
+ */
+export type AgentActivity =
+  | "unknown"
+  | "working"
+  | "needs_permission"
+  | "needs_input"
+  | "idle"
+  | "done"
+  | "error";
+
+/**
+ * Where an observation came from, ordered by how much it can be trusted.
+ * `agent` is the agent reporting on itself through `daedal attention`, `hook`
+ * is a provider lifecycle hook, and `pane` is a guess derived from terminal
+ * output. Surfaces must render a `pane` reading as lower confidence rather
+ * than as a fact.
+ */
+export type AgentActivitySource = "agent" | "hook" | "transcript" | "pane";
+
+export const ATTENTION_ACTIVITIES: readonly AgentActivity[] = [
+  "needs_permission",
+  "needs_input",
+];
+
+export const isAttentionActivity = (activity: AgentActivity): boolean =>
+  ATTENTION_ACTIVITIES.includes(activity);
+
+export interface AgentActivityState {
+  sessionId: UUID;
+  activity: AgentActivity;
+  /** Free text describing the activity: "Bash(git push)", "Editing agents.ts". */
+  detail: string | null;
+  /** When this activity began; unchanged while the activity repeats. */
+  since: string;
+  /** When the activity was last observed. */
+  observedAt: string;
+  source: AgentActivitySource;
+}
+
+/**
+ * The persisted shape, which carries the debounce bookkeeping the DTO has no
+ * business exposing: what was last alerted for this session, and when.
+ */
+export interface StoredAgentActivity extends AgentActivityState {
+  notifiedActivity: AgentActivity | null;
+  notifiedAt: string | null;
+}
+
+export interface AttentionReason {
+  id: UUID;
+  text: string;
+  raisedAt: string;
+  source: AgentActivitySource;
+}
+
+/**
+ * One badge per session holding a *set of open reasons*, never a counter of
+ * events. A badge that outlives its cause trains people to ignore badges, so
+ * clearing is all-or-nothing and happens on the transition out of attention
+ * whether or not the user ever looked.
+ */
+export interface SessionAttention {
+  sessionId: UUID;
+  workspaceId: UUID;
+  reasons: AttentionReason[];
+  /** When the badge was first raised, for "waiting 4m". */
+  raisedAt: string;
+  updatedAt: string;
+}
+
+export type NotificationLevel = "info" | "success" | "error";
+export type NotificationChannel = "badge" | "toast" | "desktop";
+
+export interface PendingNotification {
+  id: UUID;
+  sessionId: UUID | null;
+  workspaceId: UUID | null;
+  channel: "toast" | "desktop";
+  level: NotificationLevel;
+  title: string;
+  body: string;
+  createdAt: string;
+}
+
+/**
+ * Where the user actually is, sampled by the desktop app. Notifications route
+ * on presence rather than merely being suppressed on focus, because a toast
+ * sent to a backgrounded app is a dropped alert, not a quiet one.
+ */
+export interface PresenceState {
+  appRunning: boolean;
+  appForeground: boolean;
+  workspaceId: string | null;
+  sessionId: string | null;
+  userIdleSeconds: number;
+  observedAt: string;
+}

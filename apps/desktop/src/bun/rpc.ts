@@ -1,23 +1,31 @@
 import {
   DaedalusError,
   normalizeError,
-  type ApplicationContext,
+  type AgentActivityState,
   type AgentSession,
+  type ApplicationContext,
   type IntegratedTerminal,
+  type PendingNotification,
+  type PresenceState,
   type RepositoryLibraryEntry,
+  type SessionAttention,
   type Task,
   type Workspace,
   type WorkspaceContent,
   type WorkspaceRepository,
 } from "@daedalus/core";
 import type {
+  AgentActivityDto,
   AgentSessionDto,
   DesktopRpcSchema,
   DesktopSnapshotDto,
   IntegratedTerminalDto,
+  PresenceStateDto,
   RepositoryLibraryDto,
   RpcResult,
+  SessionAttentionDto,
   TaskDto,
+  ToastDto,
   WorkspaceContentDto,
   WorkspaceDto,
   WorkspaceRepositoryDto,
@@ -83,6 +91,28 @@ const repositoryLibraryDto = (
   defaultBranch: repository.defaultBranch,
   lastFetchedAt: repository.lastFetchedAt,
 });
+const agentActivityDto = (state: AgentActivityState): AgentActivityDto => ({
+  ...state,
+});
+const sessionAttentionDto = (
+  attention: SessionAttention,
+): SessionAttentionDto => ({
+  ...attention,
+  reasons: attention.reasons.map((reason) => ({ ...reason })),
+});
+const toastDto = (notification: PendingNotification): ToastDto => ({
+  id: notification.id,
+  sessionId: notification.sessionId,
+  workspaceId: notification.workspaceId,
+  level: notification.level,
+  title: notification.title,
+  body: notification.body,
+  createdAt: notification.createdAt,
+});
+const presenceDto = (
+  presence: PresenceState,
+  focusMode: boolean,
+): PresenceStateDto => ({ ...presence, focusMode });
 const workspaceContentDto = (
   content: WorkspaceContent,
 ): WorkspaceContentDto => ({
@@ -115,6 +145,9 @@ export async function desktopSnapshot(
       .listRepositoryLibrary()
       .map(repositoryLibraryDto),
     ...telemetry,
+    sessionActivity: context.activity.list().map(agentActivityDto),
+    attention: context.activity.listAttention().map(sessionAttentionDto),
+    toasts: context.notifications.pending("toast").map(toastDto),
     settings: {
       home: context.config.home,
       workspaceRoot: context.config.workspaceRoot,
@@ -122,6 +155,7 @@ export async function desktopSnapshot(
       repositoryRoot: context.config.repositoryRoot,
       workspaceInstructionFilesEnabled:
         context.config.workspaceInstructionFilesEnabled,
+      focusMode: context.config.focusMode,
       ...capabilities,
     },
   };
@@ -136,6 +170,12 @@ export function desktopDataFingerprint(context: ApplicationContext): string {
     workspaceRepositories: context.repositories.listWorkspaceRepositories(),
     sessionWorktrees: context.repositories.listSessionWorktrees(),
     repositoryLibrary: context.repositories.listRepositoryLibrary(),
+    // Activity and attention are the point of the indicators: a session that
+    // starts waiting on the user has to reach the window on the next tick,
+    // exactly like a session that starts or stops.
+    activity: context.repositories.listAgentActivity(),
+    attention: context.repositories.listSessionAttention(),
+    notifications: context.repositories.listPendingNotifications(),
   });
 }
 
@@ -219,6 +259,33 @@ export function createDesktopRequestHandlers(
       mutate(async () => {
         await context.workspaceContent.setInstructionFilesEnabled(enabled);
         return { enabled };
+      }),
+    focusModeSet: ({ enabled }) =>
+      mutate(async () => ({
+        enabled: await context.presence.setFocusMode(enabled),
+      })),
+    // Presence is a heartbeat, not a data change: announcing it would make the
+    // window refresh itself every time the user moved.
+    presencePublish: (report) =>
+      result(async () =>
+        presenceDto(
+          await context.presence.publish(report),
+          context.config.focusMode,
+        ),
+      ),
+    attentionRaise: ({ sessionId, reason }) =>
+      mutate(async () => {
+        const outcome = await context.activity.raise({ sessionId, reason });
+        return outcome.attention
+          ? sessionAttentionDto(outcome.attention)
+          : null;
+      }),
+    attentionClear: ({ sessionId }) =>
+      mutate(() => context.activity.clear(sessionId)),
+    toastsAcknowledge: ({ ids }) =>
+      mutate(() => {
+        context.notifications.acknowledge(ids);
+        return { acknowledged: ids.length };
       }),
     workspaceRepositoryAttach: (params) =>
       mutate(async () =>

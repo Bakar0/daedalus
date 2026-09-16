@@ -90,6 +90,10 @@ Usage:
   daedal task <create|list|get|current|update|status|remove> ... [--json]
   daedal repo <library|list|attach|sync|detach|worktree> ... [--json]
   daedal agent <spawn|list|get|attach|send|archive|restore|stop|remove> ... [--json]
+  daedal attention "<reason>" [--session <agent-id>] [--clear] [--json]
+  daedal notify "<message>" [--level info|success|error] [--desktop] [--json]
+  daedal ui state [--json]
+  daedal focus <agent-id> [--json]
 
 Run 'daedal <command> --help' for command details.`;
 
@@ -129,6 +133,37 @@ const commandHelp: Record<string, string> = {
   daedal agent restore <agent-id>
   daedal agent stop <agent-id> [--force]
   daedal agent remove <agent-id>`,
+  attention: `Attention commands — the agent reporting on itself:
+  daedal attention "<reason>" [--session <agent-id>]
+  daedal attention --clear [--session <agent-id>]
+
+Raise a badge on this session with a human-readable reason. Reasons accumulate
+on one badge (newest five, deduplicated) rather than stacking alerts, so it is
+safe to call repeatedly. --clear drops every reason at once; a clear is never
+queued and never silenced, not even while Focus mode is on.
+
+MUST call when blocked on the user, or when something important finished or
+broke. Never call for per-step progress, routine tool calls, or anything
+already on screen.`,
+  notify: `Notification command:
+  daedal notify "<message>" [--level info|success|error] [--desktop] [--session <agent-id>]
+
+Sends one ephemeral alert, routed by where the user actually is: nothing when
+they are already looking at this session, a toast when the app is open
+elsewhere, a desktop notification when it is backgrounded or they are idle.
+--desktop forces the desktop channel. Use 'daedal attention' instead when the
+session is blocked and the alert has to persist.`,
+  focus: `Focus command:
+  daedal focus <agent-id>
+
+Raises the Daedalus window and selects that session. This is what a clicked
+notification runs, and it works whether or not the app is already open.`,
+  ui: `Presence command:
+  daedal ui state [--json]
+
+Reports where the user is — app running, foreground, which workspace and
+session, seconds idle, and whether Focus mode is on — so an agent can choose
+its own channel before pinging.`,
 };
 
 interface ParsedArguments {
@@ -740,6 +775,177 @@ async function agentCommand(
   throw new DaedalusError("VALIDATION", `Unknown agent command '${action}'`);
 }
 
+/**
+ * Resolves the session the caller is speaking for. An agent almost never
+ * passes `--session`: it is running inside one, and `DAEDALUS_SESSION_ID` is
+ * the whole point of the environment contract.
+ */
+async function currentSessionId(
+  context: ApplicationContext,
+  explicit?: string,
+): Promise<string> {
+  const reference = explicit ?? process.env.DAEDALUS_SESSION_ID;
+  if (!reference)
+    throw new DaedalusError(
+      "VALIDATION",
+      "No Daedalus session; pass --session <agent-id>",
+    );
+  return (await context.agents.get(reference)).id;
+}
+
+async function attentionCommand(
+  context: ApplicationContext,
+  args: string[],
+  json: boolean,
+): Promise<number> {
+  if (args[0] === "help") {
+    console.log(commandHelp.attention);
+    return 0;
+  }
+  const parsed = parseArguments(args, ["session"], ["clear"]);
+  const sessionId = await currentSessionId(context, parsed.values.session);
+  if (parsed.flags.has("clear")) {
+    expectPositionals(
+      parsed.positionals,
+      0,
+      "daedal attention --clear [--session <agent-id>]",
+    );
+    const result = context.activity.clear(sessionId);
+    printResult({ sessionId, ...result }, json, () =>
+      console.log(
+        result.cleared
+          ? `Cleared ${result.cleared} attention ${result.cleared === 1 ? "reason" : "reasons"}`
+          : "No attention was raised",
+      ),
+    );
+    return 0;
+  }
+  expectPositionals(
+    parsed.positionals,
+    1,
+    'daedal attention "<reason>" [--session <agent-id>]',
+  );
+  const outcome = await context.activity.raise({
+    sessionId,
+    reason: parsed.positionals[0]!,
+  });
+  const reasons = outcome.attention?.reasons ?? [];
+  printResult(
+    {
+      sessionId,
+      reasons,
+      notification: outcome.notification ?? null,
+    },
+    json,
+    () => {
+      console.log(
+        `Attention raised (${reasons.length} open ${reasons.length === 1 ? "reason" : "reasons"})`,
+      );
+      // Suppression is reported rather than swallowed, so a caller can always
+      // tell "the user chose not to be interrupted" from "this did not work".
+      if (outcome.notification) console.log(`  ${outcome.notification.reason}`);
+    },
+  );
+  return 0;
+}
+
+async function notifyCommand(
+  context: ApplicationContext,
+  args: string[],
+  json: boolean,
+): Promise<number> {
+  if (args[0] === "help") {
+    console.log(commandHelp.notify);
+    return 0;
+  }
+  const parsed = parseArguments(args, ["level", "session"], ["desktop"]);
+  expectPositionals(
+    parsed.positionals,
+    1,
+    'daedal notify "<message>" [--level info|success|error] [--desktop]',
+  );
+  const level = parsed.values.level ?? "info";
+  if (level !== "info" && level !== "success" && level !== "error")
+    throw new DaedalusError(
+      "VALIDATION",
+      "Level must be one of info, success, error",
+    );
+  const sessionReference =
+    parsed.values.session ?? process.env.DAEDALUS_SESSION_ID;
+  const session = sessionReference
+    ? await context.agents.get(sessionReference)
+    : undefined;
+  const workspace = session
+    ? await context.workspaces.get(session.workspaceId)
+    : undefined;
+  const decision = await context.notifications.notify({
+    sessionId: session?.id ?? null,
+    workspaceId: session?.workspaceId ?? null,
+    level,
+    title: [workspace?.name ?? "Daedalus", session?.name]
+      .filter(Boolean)
+      .join(" · "),
+    body: parsed.positionals[0]!,
+    desktop: parsed.flags.has("desktop"),
+  });
+  printResult(decision, json, () =>
+    console.log(
+      decision.delivered.length
+        ? `Notified via ${decision.delivered.join(", ")} — ${decision.reason}`
+        : `Not delivered — ${decision.reason}`,
+    ),
+  );
+  return 0;
+}
+
+async function focusCommand(
+  context: ApplicationContext,
+  args: string[],
+  json: boolean,
+): Promise<number> {
+  const parsed = parseArguments(args, []);
+  expectPositionals(parsed.positionals, 1, "daedal focus <agent-id>");
+  const session = await context.agents.get(parsed.positionals[0]!);
+  const result = await context.presence.requestFocus(session.id);
+  printResult({ sessionId: session.id, ...result }, json, () =>
+    console.log(
+      result.raised
+        ? `Focused session ${session.id}`
+        : `Requested focus for session ${session.id}; could not raise the app`,
+    ),
+  );
+  return 0;
+}
+
+async function uiCommand(
+  context: ApplicationContext,
+  args: string[],
+  json: boolean,
+): Promise<number> {
+  const action = args.shift();
+  if (!action || action === "help") {
+    console.log(commandHelp.ui);
+    return 0;
+  }
+  if (action !== "state")
+    throw new DaedalusError("VALIDATION", `Unknown ui command '${action}'`);
+  const parsed = parseArguments(args, []);
+  expectPositionals(parsed.positionals, 0, "daedal ui state [--json]");
+  const presence = await context.presence.read();
+  const state = { ...presence, focusMode: context.presence.focusMode };
+  printResult(state, json, () => {
+    console.log(
+      state.appRunning
+        ? `app ${state.appForeground ? "foreground" : "background"} · idle ${state.userIdleSeconds}s`
+        : "app not running",
+    );
+    console.log(
+      `workspace ${state.workspaceId ?? "—"} · session ${state.sessionId ?? "—"} · focus mode ${state.focusMode ? "on" : "off"}`,
+    );
+  });
+  return 0;
+}
+
 async function repositoryCommand(
   context: ApplicationContext,
   args: string[],
@@ -912,7 +1118,18 @@ export async function runCli(
       throw new DaedalusError("VALIDATION", "Usage: daedal doctor [--json]");
     return doctor(json, options.migrationsDirectory);
   }
-  if (!["workspace", "task", "repo", "agent"].includes(args[0]!))
+  if (
+    ![
+      "workspace",
+      "task",
+      "repo",
+      "agent",
+      "attention",
+      "notify",
+      "ui",
+      "focus",
+    ].includes(args[0]!)
+  )
     throw new DaedalusError("VALIDATION", `Unknown command '${args[0]}'`);
   const context = await createApplicationContext({
     migrationsDirectory: options.migrationsDirectory,
@@ -924,6 +1141,13 @@ export async function runCli(
       return await taskCommand(context, args.slice(1), json);
     if (args[0] === "repo")
       return await repositoryCommand(context, args.slice(1), json);
+    if (args[0] === "attention")
+      return await attentionCommand(context, args.slice(1), json);
+    if (args[0] === "notify")
+      return await notifyCommand(context, args.slice(1), json);
+    if (args[0] === "ui") return await uiCommand(context, args.slice(1), json);
+    if (args[0] === "focus")
+      return await focusCommand(context, args.slice(1), json);
     return await agentCommand(context, args.slice(1), json);
   } finally {
     context.close();

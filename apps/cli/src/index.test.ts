@@ -256,6 +256,65 @@ describe("daedal CLI contract", () => {
     });
   });
 
+  test("reports presence so an agent can pick its own channel", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const result = await cli(home, ["ui", "state", "--json"]);
+      expect(result.exitCode).toBe(0);
+      const state = JSON.parse(result.stdout) as {
+        ok: boolean;
+        data: { appRunning: boolean; focusMode: boolean };
+      };
+      expect(state.ok).toBe(true);
+      expect(state.data.appRunning).toBe(false);
+      expect(state.data.focusMode).toBe(false);
+    });
+  });
+
+  test("attention outside a session is a usage error, not a silent no-op", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      // Explicitly outside a session: the test process is itself running
+      // inside one, and its environment would otherwise leak in.
+      const result = await cli(home, ["attention", "Need a decision"], {
+        DAEDALUS_SESSION_ID: "",
+      });
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("pass --session");
+    });
+  });
+
+  test("a suppressed notification says so instead of looking like a failure", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      // Focus mode also keeps this test away from the real Notification
+      // Center: with it on, nothing is ever handed to a native notifier.
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({ focusMode: true }),
+      );
+      const result = await cli(
+        home,
+        ["notify", "Finished the migration", "--level", "success", "--json"],
+        { DAEDALUS_SESSION_ID: "" },
+      );
+      expect(result.exitCode).toBe(0);
+      const decision = JSON.parse(result.stdout) as {
+        data: { delivered: string[]; suppressed: string; reason: string };
+      };
+      expect(decision.data.delivered).toEqual([]);
+      expect(decision.data.suppressed).toBe("focus_mode");
+      expect(decision.data.reason).toBe("focus mode is on");
+    });
+  });
+
+  test("rejects an unknown notification level", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const result = await cli(home, ["notify", "hi", "--level", "shout"], {
+        DAEDALUS_SESSION_ID: "",
+      });
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("info, success, error");
+    });
+  });
+
   test("adds, attaches, syncs, and detaches repository library entries", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const source = join(home, "source");
