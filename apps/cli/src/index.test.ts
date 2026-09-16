@@ -72,6 +72,23 @@ describe("daedal CLI contract", () => {
     });
   });
 
+  test("resolves tmux identically with and without Homebrew on PATH", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const tmuxCheck = async (env: Record<string, string> = {}) => {
+        const { stdout } = await cli(home, ["doctor", "--json"], env);
+        const envelope = JSON.parse(stdout) as {
+          data: { checks: Array<{ name: string; version?: string }> };
+        };
+        return envelope.data.checks.find((check) => check.name === "tmux");
+      };
+      // The PATH a packaged app inherits from Launch Services: no Homebrew.
+      const bundled = await tmuxCheck({
+        PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+      });
+      expect(bundled).toEqual(await tmuxCheck());
+    });
+  });
+
   test("supports workspace and task lifecycle with JSON envelopes", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const created = await cli(home, [

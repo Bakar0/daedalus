@@ -28,6 +28,7 @@ import {
   readTextFile,
   removeDirectory,
   runCommand,
+  standardExecutableFallbacks,
   writeTextFile,
 } from "@daedalus/platform";
 import type {
@@ -166,7 +167,7 @@ export const DAEDALUS_CONTROL_OPENAI_METADATA = daedalusControlOpenAiMetadata;
 
 const SAFE_SEGMENT = /[^a-z0-9]+/g;
 const MAX_VIEWABLE_FILE_BYTES = 1024 * 1024;
-const GH_EXECUTABLE_FALLBACKS = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh"];
+const GH_EXECUTABLE_FALLBACKS = standardExecutableFallbacks("gh");
 
 type GitHubRepositoryResponse = {
   name?: string;
