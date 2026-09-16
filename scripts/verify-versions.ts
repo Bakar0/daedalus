@@ -1,7 +1,7 @@
 import packageJson from "../package.json";
 
 const expected = {
-  electrobun: "2.0.1",
+  electrobun: "1.18.1",
   "ghostty-web": "0.4.0",
   react: "19.3.0",
   "react-dom": "19.3.0",

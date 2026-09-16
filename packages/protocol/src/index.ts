@@ -222,6 +222,13 @@ export interface DesktopRpcSchema {
   bun: {
     requests: {
       snapshot: Request<Record<string, never>, DesktopSnapshotDto>;
+      /**
+       * The loopback WebSocket the renderer attaches terminals to. It carries
+       * a per-launch token, and the `views://` handler resolves a URL as a
+       * resource path — a query string or fragment makes the page itself fail
+       * to load — so it is fetched over RPC rather than passed in the URL.
+       */
+      terminalEndpoint: Request<Record<string, never>, { endpoint: string }>;
       workspaceCreate: Request<
         { name: string; slug?: string; path?: string },
         WorkspaceDto

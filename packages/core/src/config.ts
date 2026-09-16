@@ -28,6 +28,23 @@ function expandHome(path: string): string {
       : path;
 }
 
+// A non-stable build must not share the stable app's home. They are separate
+// applications with one SQLite database between them, and the loser of that
+// race corrupts or locks the other.
+//
+// The suffix is applied to whatever home was resolved, including one that came
+// from `DAEDALUS_HOME`, rather than only to the default. Daedalus exports
+// `DAEDALUS_HOME` into every agent session it starts, so an agent that builds a
+// dev app and opens it passes the *stable* home straight into it — the one
+// arrangement this is meant to prevent, arriving by inheritance rather than by
+// anyone choosing it. Re-suffixing is idempotent, so pointing `DAEDALUS_HOME`
+// at an already-channelled home still names that same home.
+export function channelHome(channel: string | undefined, home: string): string {
+  if (!channel || channel === "stable") return home;
+  const suffix = `-${channel}`;
+  return home.endsWith(suffix) ? home : `${home}${suffix}`;
+}
+
 export async function loadConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<DaedalusConfig> {
