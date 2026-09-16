@@ -1,4 +1,4 @@
-import type { ApplicationMenuItemConfig } from "electrobun/main";
+import type { ApplicationMenuItemConfig } from "electrobun/bun";
 
 export const APPLICATION_MENU: ApplicationMenuItemConfig[] = [
   {

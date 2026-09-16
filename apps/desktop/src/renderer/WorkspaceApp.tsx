@@ -619,6 +619,7 @@ function TerminalSurface({
   focused,
   fitRevision,
   id,
+  terminalEndpoint,
   label,
   locationLabel,
   onFocused,
@@ -632,6 +633,7 @@ function TerminalSurface({
   focused: boolean;
   fitRevision: number;
   id: string;
+  terminalEndpoint?: string;
   label: string;
   locationLabel?: string;
   onFocused?: () => void;
@@ -817,9 +819,7 @@ function TerminalSurface({
       window.addEventListener("resize", scheduleSettledFit);
       window.visualViewport?.addEventListener("resize", scheduleSettledFit);
       scheduleSettledFit();
-      const endpoint = new URLSearchParams(window.location.search).get(
-        "terminal",
-      );
+      const endpoint = terminalEndpoint;
       if (!endpoint) {
         setConnection("available in Electrobun");
         return;
@@ -904,7 +904,7 @@ function TerminalSurface({
       socket?.close();
       terminal?.dispose();
     };
-  }, [id, status, target]);
+  }, [id, status, target, terminalEndpoint]);
 
   return (
     <section className="agent-terminal-shell">
@@ -986,12 +986,14 @@ function IntegratedTerminalSurface({
   mountRevision,
   onOpenLink,
   terminal,
+  terminalEndpoint,
 }: {
   active: boolean;
   fitRevision: number;
   mountRevision: number;
   onOpenLink: (url: string) => void;
   terminal: IntegratedTerminalDto;
+  terminalEndpoint?: string;
 }) {
   const [activated, setActivated] = useState(active);
 
@@ -1006,6 +1008,7 @@ function IntegratedTerminalSurface({
     >
       {activated && (
         <TerminalSurface
+          terminalEndpoint={terminalEndpoint}
           focused={active}
           fitRevision={fitRevision}
           id={terminal.id}
@@ -1049,6 +1052,10 @@ export function WorkspaceApp({
     throw new Error("The desktop RPC client was not provided");
   const client = clientRef.current;
   const [snapshot, setSnapshot] = useState(initialSnapshot);
+  // The terminal socket carries a per-launch token and the `views://`
+  // handler cannot accept URL parameters, so the endpoint is fetched once
+  // over RPC instead of being read off `window.location`.
+  const [terminalEndpoint, setTerminalEndpoint] = useState<string>();
   const [terminalFitRevision, setTerminalFitRevision] = useState(0);
   const [terminalMountRevision, setTerminalMountRevision] = useState(0);
   const terminalLayoutTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
@@ -1375,6 +1382,17 @@ export function WorkspaceApp({
       return PANEL_RAIL_WIDTH;
     });
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void client.request.terminalEndpoint({}).then((response) => {
+      if (!cancelled && response.ok)
+        setTerminalEndpoint(response.data.endpoint);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
 
   const refresh = useCallback(async () => {
     try {
@@ -3397,6 +3415,7 @@ export function WorkspaceApp({
             </div>
             {activeSession ? (
               <TerminalSurface
+                terminalEndpoint={terminalEndpoint}
                 focused={shouldFocusSession(focusedSessionId, activeSession.id)}
                 fitRevision={terminalFitRevision}
                 id={activeSession.id}
@@ -3523,6 +3542,7 @@ export function WorkspaceApp({
             {activeIntegratedTerminal
               ? integratedTerminals.map((terminal) => (
                   <IntegratedTerminalSurface
+                    terminalEndpoint={terminalEndpoint}
                     active={
                       terminalPanelOpen &&
                       terminal.id === activeIntegratedTerminal.id

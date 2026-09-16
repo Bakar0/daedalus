@@ -1,6 +1,10 @@
 import { describe, expect, test } from "vitest";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
-import { loadConfig, saveWorkspaceInstructionFilesEnabled } from "./config";
+import {
+  channelHome,
+  loadConfig,
+  saveWorkspaceInstructionFilesEnabled,
+} from "./config";
 
 describe("loadConfig", () => {
   test("uses DAEDALUS_HOME without touching the real home", async () => {
@@ -33,4 +37,33 @@ describe("loadConfig", () => {
       ).toBe(false);
     });
   });
+});
+
+test("keeps non-stable channels out of the stable home", () => {
+  // Same home would mean two apps on one SQLite file.
+  expect(channelHome("dev", "/Users/x/.daedalus")).toBe(
+    "/Users/x/.daedalus-dev",
+  );
+  expect(channelHome("canary", "/Users/x/.daedalus")).toBe(
+    "/Users/x/.daedalus-canary",
+  );
+  // Stable is the home everything already points at, and an unpackaged run
+  // (no version.json, so no channel) must not be relocated either.
+  expect(channelHome("stable", "/Users/x/.daedalus")).toBe(
+    "/Users/x/.daedalus",
+  );
+  expect(channelHome(undefined, "/Users/x/.daedalus")).toBe(
+    "/Users/x/.daedalus",
+  );
+  // Daedalus exports DAEDALUS_HOME into every agent session it starts, so an
+  // agent that builds a dev app and opens it hands the *stable* home straight
+  // to it. An inherited home must still be pushed onto the channel's own home
+  // rather than honoured as though someone had chosen it.
+  expect(channelHome("dev", "/Users/x/.daedalus")).toBe(
+    "/Users/x/.daedalus-dev",
+  );
+  // Re-applying the suffix must not stack it.
+  expect(channelHome("dev", "/Users/x/.daedalus-dev")).toBe(
+    "/Users/x/.daedalus-dev",
+  );
 });

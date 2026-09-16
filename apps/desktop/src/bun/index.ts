@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   ApplicationMenu,
@@ -6,8 +7,8 @@ import {
   BrowserWindow,
   PATHS,
   Utils,
-} from "electrobun/main";
-import { createApplicationContext } from "@daedalus/core";
+} from "electrobun/bun";
+import { channelHome, createApplicationContext } from "@daedalus/core";
 import {
   CommandTmuxClient,
   findExecutable,
@@ -30,6 +31,22 @@ interface SocketData {
   targetId: string;
   targetKind: "agent" | "integrated";
 }
+
+// A dev or canary build points at its own home so it cannot touch the stable
+// app's database. Electrobun writes the channel into version.json for those
+// builds and omits the file entirely for stable, and an unpackaged run has no
+// bundle at all — both of those read as "no channel", which `channelHome`
+// resolves to the stable home. Setting the variable rather than passing a path
+// keeps every other consumer — the bundled CLI, spawned agents — on that same
+// home.
+const versionFile = Bun.file(resolve(PATHS.RESOURCES_FOLDER, "version.json"));
+const appChannel = (await versionFile.exists())
+  ? ((await versionFile.json()) as { channel?: string }).channel
+  : undefined;
+process.env.DAEDALUS_HOME = channelHome(
+  appChannel,
+  process.env.DAEDALUS_HOME ?? join(homedir(), ".daedalus"),
+);
 
 const context = await createApplicationContext(
   resolve(PATHS.RESOURCES_FOLDER, "app/migrations"),
@@ -154,7 +171,10 @@ const server = Bun.serve<SocketData>({
 
 const terminalEndpoint = `ws://127.0.0.1:${server.port}/terminal?token=${token}`;
 const nativeStatusProbePath = process.env.DAEDALUS_STATUS_PROBE_PATH;
-const rendererUrl = `views://mainview/index.html?build=${Date.now()}&terminal=${encodeURIComponent(terminalEndpoint)}`;
+// The `views://` handler resolves the whole URL as a resource path, so a
+// query string or fragment makes it look for a file that does not exist and
+// the view loads empty. Renderer parameters therefore travel over RPC.
+const rendererUrl = `views://mainview/index.html`;
 
 // WebKit text controls use the native responder chain for standard editing
 // commands on macOS. Defining these roles restores Cmd+C/V/X/A/Z everywhere.
@@ -178,6 +198,7 @@ const rpc = BrowserView.defineRPC<DesktopRpcSchema>({
       context,
       () => announce("desktop"),
       Utils.openExternal,
+      terminalEndpoint,
     ),
   },
 });
@@ -236,10 +257,13 @@ if (nativeStatusProbePath) {
         let lastError: unknown;
         for (let attempt = 0; attempt < 12; attempt += 1) {
           try {
-            result = await rpc.request.evaluateJavascriptWithResponse(
-              { script },
-              { maxRequestTime: 2_000 },
-            );
+            // `maxRequestTime` is an RPC-instance option here, not a
+            // per-request one, so the deadline comes from the transport's
+            // 1s default. The retry loop around this call is what bounds
+            // the wait, so the shorter per-attempt deadline costs nothing.
+            result = await rpc.request.evaluateJavascriptWithResponse({
+              script,
+            });
             lastError = undefined;
             break;
           } catch (error) {

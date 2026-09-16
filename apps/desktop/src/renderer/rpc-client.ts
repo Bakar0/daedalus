@@ -1,4 +1,4 @@
-import { Electroview } from "electrobun/browser";
+import { Electroview } from "electrobun/view";
 import type { DesktopRpcSchema } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 

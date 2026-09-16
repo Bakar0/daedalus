@@ -143,6 +143,7 @@ export function createDesktopRequestHandlers(
   context: ApplicationContext,
   onMutation: () => void = () => {},
   openExternal: (url: string) => boolean = () => false,
+  terminalEndpoint = "",
 ): DesktopRequestHandlers {
   const mutate = async <T>(operation: () => T | Promise<T>) => {
     const response = await result(operation);
@@ -152,6 +153,7 @@ export function createDesktopRequestHandlers(
 
   return {
     snapshot: () => result(() => desktopSnapshot(context)),
+    terminalEndpoint: () => result(() => ({ endpoint: terminalEndpoint })),
     openExternal: ({ url }) =>
       result(() => {
         const parsed = new URL(url);
