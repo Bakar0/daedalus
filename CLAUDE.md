@@ -73,6 +73,3 @@ RPC instead (see `terminalEndpoint`).
 - Prettier is authoritative; run `bunx prettier --write` on files you touch.
 - `bun test` is the suite. `bun run test` is wired to vitest, which cannot
   resolve the `@daedalus/*` path aliases and collects only part of the suite.
-- Two tests in `packages/core/src/services/agents.test.ts` fail on `main`
-  (stale Claude `--settings` expectations). They are pre-existing; do not
-  report them as your regression.

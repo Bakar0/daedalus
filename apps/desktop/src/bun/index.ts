@@ -13,6 +13,7 @@ import {
   CommandTmuxClient,
   findExecutable,
   pathExists,
+  standardExecutableFallbacks,
   TmuxPtyBridge,
 } from "@daedalus/platform";
 import type {
@@ -52,10 +53,7 @@ const context = await createApplicationContext(
   resolve(PATHS.RESOURCES_FOLDER, "app/migrations"),
 );
 const cliEntrypoint = resolve(PATHS.RESOURCES_FOLDER, "app/cli/daedal.js");
-const bunExecutable = findExecutable("bun", [
-  "/opt/homebrew/bin/bun",
-  "/usr/local/bin/bun",
-]);
+const bunExecutable = findExecutable("bun", standardExecutableFallbacks("bun"));
 if ((await pathExists(cliEntrypoint)) && bunExecutable)
   await installCliShim({
     path: join(context.config.home, "bin", "daedal"),

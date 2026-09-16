@@ -5,7 +5,11 @@ import {
   normalizeError,
   type ApplicationContext,
 } from "@daedalus/core";
-import { probeVersion } from "@daedalus/platform";
+import {
+  findExecutable,
+  probeVersion,
+  TMUX_EXECUTABLE_FALLBACKS,
+} from "@daedalus/platform";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { DoctorCheck } from "@daedalus/protocol";
@@ -198,7 +202,12 @@ async function doctor(
   const context = await createApplicationContext({ migrationsDirectory });
   try {
     const bunVersion = Bun.version;
-    const tmuxVersion = await probeVersion("tmux", ["-V"]);
+    // A packaged app inherits no shell PATH, so resolve tmux the same way the
+    // tmux client itself does rather than trusting a bare name to be found.
+    const tmuxExecutable = findExecutable("tmux", TMUX_EXECUTABLE_FALLBACKS);
+    const tmuxVersion = tmuxExecutable
+      ? await probeVersion(tmuxExecutable, ["-V"])
+      : undefined;
     const tmuxCompatible = Boolean(
       tmuxVersion && versionAtLeast(tmuxVersion, MINIMUM_TMUX),
     );
@@ -217,8 +226,8 @@ async function doctor(
         ok: tmuxCompatible,
         version: tmuxVersion,
         detail: tmuxVersion
-          ? `verified minimum ${MINIMUM_TMUX}`
-          : "tmux is not available on PATH",
+          ? `${tmuxExecutable} (verified minimum ${MINIMUM_TMUX})`
+          : "tmux was not found on PATH or at the standard install locations",
       },
       { name: "home", ok: true, detail: context.config.home },
       { name: "database", ok: true, detail: context.config.databasePath },

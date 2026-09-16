@@ -153,10 +153,7 @@ export function parseCodexTokenUsage(
         };
       };
       const payload = event.payload;
-      if (
-        event.type === "turn_context" &&
-        typeof payload?.model === "string"
-      )
+      if (event.type === "turn_context" && typeof payload?.model === "string")
         model ??= payload.model;
       if (payload?.type !== "token_count") continue;
       const info = payload.info;

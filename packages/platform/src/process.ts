@@ -1,5 +1,5 @@
 import { accessSync, constants } from "node:fs";
-import { isAbsolute } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 export interface CommandResult {
   exitCode: number;
@@ -46,6 +46,23 @@ export async function runCommand(
     process.exited,
   ]);
   return { exitCode, stdout, stderr };
+}
+
+// A packaged macOS app is launched by Launch Services, not by a login shell, so
+// it inherits `/usr/bin:/bin:/usr/sbin:/sbin` and nothing a package manager
+// installed. Probing the standard install directories by absolute path is what
+// keeps Homebrew-provided executables visible inside the bundle.
+const STANDARD_EXECUTABLE_DIRECTORIES = [
+  "/opt/homebrew/bin",
+  "/usr/local/bin",
+  "/usr/bin",
+  "/bin",
+];
+
+export function standardExecutableFallbacks(name: string): string[] {
+  return STANDARD_EXECUTABLE_DIRECTORIES.map((directory) =>
+    join(directory, name),
+  );
 }
 
 export function findExecutable(

@@ -10,7 +10,9 @@ const chromePath =
 const screenshotPath = join(projectRoot, "artifacts/panel-browser-check.png");
 const artifactsDirectory = join(projectRoot, "artifacts");
 await mkdir(artifactsDirectory, { recursive: true });
-const profile = await mkdtemp(join(artifactsDirectory, ".panel-check-profile-"));
+const profile = await mkdtemp(
+  join(artifactsDirectory, ".panel-check-profile-"),
+);
 
 const vite = Bun.spawn(
   [
@@ -271,10 +273,7 @@ try {
     throw new Error(
       `Claude context is missing or malformed: ${statusTelemetry.context}`,
     );
-  for (const expected of [
-    "Codex 5h 28% · 7d 61%",
-    "Claude 5h 34% · 7d 47%",
-  ])
+  for (const expected of ["Codex 5h 28% · 7d 61%", "Claude 5h 34% · 7d 47%"])
     if (!statusTelemetry.usage.includes(expected))
       throw new Error(
         `Provider usage is missing ${expected}: ${statusTelemetry.usage}`,

@@ -5,6 +5,7 @@ import type { TmuxClient, TmuxLaunch } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
   buildAgentPrompt,
+  CLAUDE_DAEDALUS_STATUS_ARGS,
   createApplicationContext,
   hasPersistedCodexSession,
   isMissingCodexConversationError,
@@ -306,6 +307,7 @@ describe("AgentService", () => {
         "run",
         "--model",
         "claude-fable-5-1[1m]",
+        ...CLAUDE_DAEDALUS_STATUS_ARGS,
         "--session-id",
         session.id,
         "--name",
@@ -322,6 +324,7 @@ describe("AgentService", () => {
       });
       expect(tmux.launches[1]?.args).toEqual([
         "run",
+        ...CLAUDE_DAEDALUS_STATUS_ARGS,
         "--model",
         "claude-fable-5-1[1m]",
         "--resume",
@@ -375,12 +378,12 @@ describe("AgentService", () => {
       expect(tmux.sessions.has(session.tmuxSession)).toBe(false);
       const restored = await context.agents.restore(session.id);
       expect(restored.providerSessionId).toBe(recoveredId);
-      expect(tmux.launches[1]?.args.slice(0, 3)).toEqual([
+      expect(tmux.launches[1]?.args).toEqual([
         "run",
+        ...CLAUDE_DAEDALUS_STATUS_ARGS,
         "--resume",
         recoveredId,
       ]);
-      expect(tmux.launches[1]?.args).toHaveLength(3);
       context.close();
     });
   });

@@ -1,15 +1,12 @@
 import {
   findExecutable,
   runCommand,
+  standardExecutableFallbacks,
   type CommandOptions,
   type CommandResult,
 } from "./process";
 
-export const TMUX_EXECUTABLE_FALLBACKS = [
-  "/opt/homebrew/bin/tmux",
-  "/usr/local/bin/tmux",
-  "/usr/bin/tmux",
-];
+export const TMUX_EXECUTABLE_FALLBACKS = standardExecutableFallbacks("tmux");
 
 export const resolveTmuxExecutable = () =>
   findExecutable("tmux", TMUX_EXECUTABLE_FALLBACKS) ?? "tmux";

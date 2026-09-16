@@ -1,5 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
-import { findExecutable, runCommand } from "./process";
+import {
+  findExecutable,
+  runCommand,
+  standardExecutableFallbacks,
+} from "./process";
 
 describe("findExecutable", () => {
   test("uses an absolute fallback when a GUI process has no shell PATH", () => {
@@ -18,6 +22,32 @@ describe("findExecutable", () => {
     expect(which).toHaveBeenCalledWith("tmux");
     expect(isExecutable).toHaveBeenCalledWith("/opt/homebrew/bin/tmux");
     expect(which).not.toHaveBeenCalledWith("/opt/homebrew/bin/tmux");
+  });
+});
+
+describe("standardExecutableFallbacks", () => {
+  test("offers Homebrew locations ahead of the paths a bundle already inherits", () => {
+    expect(standardExecutableFallbacks("tmux")).toEqual([
+      "/opt/homebrew/bin/tmux",
+      "/usr/local/bin/tmux",
+      "/usr/bin/tmux",
+      "/bin/tmux",
+    ]);
+  });
+
+  test("resolves a Homebrew executable for a caller with no shell PATH", () => {
+    const which = vi.fn(() => null);
+    const isExecutable = vi.fn(
+      (candidate: string) => candidate === "/opt/homebrew/bin/gh",
+    );
+    expect(
+      findExecutable(
+        "gh",
+        standardExecutableFallbacks("gh"),
+        which,
+        isExecutable,
+      ),
+    ).toBe("/opt/homebrew/bin/gh");
   });
 });
 
