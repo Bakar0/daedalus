@@ -14,6 +14,7 @@ import {
 import type { Workspace } from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
+import { applyManualOrder } from "./ordering";
 import { ensureWorkspaceContentFiles } from "./workspace-content";
 
 const MARKER_DIRECTORY = ".daedalus";
@@ -99,6 +100,9 @@ export class WorkspaceService {
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
+      // Top of the list. The thing you just made is the thing you are looking
+      // for, and a manual order the user has set is never disturbed to do it.
+      position: this.repositories.nextWorkspacePosition(),
     };
     let created = false;
     try {
@@ -127,6 +131,32 @@ export class WorkspaceService {
     return (await this.listWithHealth())
       .filter((item) => item.available && !item.workspace.archivedAt)
       .map((item) => item.workspace);
+  }
+
+  /**
+   * Puts the named workspaces in the order given. References may be slugs or
+   * ids, and naming a subset rearranges only that subset — see
+   * `applyManualOrder`.
+   */
+  async reorder(references: string[]): Promise<Workspace[]> {
+    const current = this.repositories.listWorkspaces();
+    const resolved = references.map((reference) => {
+      const workspace = this.repositories.findWorkspace(reference);
+      if (!workspace)
+        throw new DaedalusError(
+          "NOT_FOUND",
+          `Workspace '${reference}' was not found`,
+        );
+      return workspace.id;
+    });
+    this.repositories.reorderWorkspaces(
+      applyManualOrder(
+        current.map((item) => item.id),
+        resolved,
+        "Workspace",
+      ),
+    );
+    return this.repositories.listWorkspaces();
   }
 
   async listWithHealth(): Promise<

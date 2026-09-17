@@ -212,6 +212,7 @@ const commandHelp: Record<string, string> = {
   workspace: `Workspace commands:
   daedal workspace create <name> [--slug <slug>] [--path <path>]
   daedal workspace list [--archived]
+  daedal workspace reorder <workspace> [<workspace>...]
   daedal workspace get <workspace>
   daedal workspace update <workspace> [--name <name>] [--slug <slug>]
   daedal workspace archive <workspace>
@@ -237,6 +238,7 @@ const commandHelp: Record<string, string> = {
   daedal agent models <codex|claude>
   daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>]
   daedal agent list [--workspace <workspace>] [--running|--archived]
+  daedal agent reorder --workspace <workspace> <agent-id> [<agent-id>...]
   daedal agent get <agent-id>
   daedal agent wait [--session <agent-id>] [--workspace <workspace>] [--for attention|idle] [--timeout <seconds>]
   daedal agent attach <agent-id>
@@ -528,6 +530,22 @@ async function workspaceCommand(
     printResult(result, json, () =>
       console.log(`Updated workspace ${result.slug} (${result.id})`),
     );
+    return 0;
+  }
+  if (action === "reorder") {
+    const parsed = parseArguments(args, []);
+    // Variable arity: the caller lists as many workspaces as it is moving, and
+    // the ones it leaves out keep their places.
+    if (parsed.positionals.length === 0)
+      throw new DaedalusError(
+        "VALIDATION",
+        "Usage: daedal workspace reorder <workspace> [<workspace>...]",
+      );
+    const result = await context.workspaces.reorder(parsed.positionals);
+    printResult(result, json, () => {
+      for (const item of result)
+        console.log(`${item.position}\t${item.slug}\t${item.name}`);
+    });
     return 0;
   }
   if (action === "archive" || action === "restore") {
@@ -874,6 +892,25 @@ async function agentCommand(
         }
       },
     );
+    return 0;
+  }
+  if (action === "reorder") {
+    // Parsed here rather than below because this is the one agent command that
+    // takes an option and a variable number of positionals.
+    const reordered = parseArguments(args, ["workspace"]);
+    if (reordered.positionals.length === 0)
+      throw new DaedalusError(
+        "VALIDATION",
+        "Usage: daedal agent reorder --workspace <workspace> <agent-id> [<agent-id>...]",
+      );
+    const result = await context.agents.reorder(
+      required(reordered.values.workspace, "--workspace"),
+      reordered.positionals,
+    );
+    printResult(result, json, () => {
+      for (const item of result)
+        console.log(`${item.position}\t${item.id}\t${item.name}`);
+    });
     return 0;
   }
   if (action === "wait") return agentWaitCommand(context, args, json);

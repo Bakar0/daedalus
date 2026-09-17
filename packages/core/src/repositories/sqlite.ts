@@ -28,6 +28,7 @@ interface WorkspaceRow {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
+  position: number;
 }
 
 interface TaskIdRow {
@@ -65,6 +66,7 @@ interface AgentRow {
   provider_session_id: string | null;
   archived_at: string | null;
   resume_count: number;
+  position: number;
 }
 
 interface IntegratedTerminalRow {
@@ -120,6 +122,7 @@ const workspaceFromRow = (row: WorkspaceRow): Workspace => ({
   createdAt: row.created_at,
   updatedAt: row.updated_at,
   archivedAt: row.archived_at,
+  position: row.position,
 });
 
 const taskFromRow = (row: TaskRow): Task => ({
@@ -153,6 +156,7 @@ const agentFromRow = (row: AgentRow): AgentSession => ({
   providerSessionId: row.provider_session_id,
   archivedAt: row.archived_at,
   resumeCount: row.resume_count,
+  position: row.position,
 });
 
 const integratedTerminalFromRow = (
@@ -293,8 +297,8 @@ export class SqliteRepositories {
       .query(
         `INSERT INTO workspaces
          (id, slug, name, path, created_at, updated_at, archived_at,
-          task_id_prefix)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          task_id_prefix, position)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         workspace.id,
@@ -305,16 +309,39 @@ export class SqliteRepositories {
         workspace.updatedAt,
         workspace.archivedAt,
         workspace.slug,
+        workspace.position,
       );
   }
 
   listWorkspaces(): Workspace[] {
     return this.database
-      .query<WorkspaceRow, []>(
-        "SELECT * FROM workspaces ORDER BY created_at, id",
-      )
+      .query<WorkspaceRow, []>("SELECT * FROM workspaces ORDER BY position, id")
       .all()
       .map(workspaceFromRow);
+  }
+
+  /**
+   * The slot a newly created workspace takes: above everything, without
+   * renumbering it. Two creates racing to the same integer is harmless — the
+   * order is a user preference, and `ORDER BY position, id` is still total.
+   */
+  nextWorkspacePosition(): number {
+    const row = this.database
+      .query<{ next: number }, []>(
+        "SELECT COALESCE(MIN(position), 1) - 1 AS next FROM workspaces",
+      )
+      .get();
+    return row?.next ?? 0;
+  }
+
+  /** Rewrites the list densely, in the order given, as one transaction. */
+  reorderWorkspaces(orderedIds: string[]): void {
+    const update = this.database.query(
+      "UPDATE workspaces SET position = ? WHERE id = ?",
+    );
+    this.database.transaction(() => {
+      orderedIds.forEach((id, index) => update.run(index + 1, id));
+    })();
   }
 
   findWorkspace(reference: string): Workspace | undefined {
@@ -630,8 +657,8 @@ export class SqliteRepositories {
         `INSERT INTO agent_sessions
          (id, workspace_id, task_id, name, provider, kind, tmux_session, command, args,
           working_directory, status, exit_code, started_at, ended_at,
-          provider_session_id, archived_at, resume_count)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          provider_session_id, archived_at, resume_count, position)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         agent.id,
@@ -651,7 +678,29 @@ export class SqliteRepositories {
         agent.providerSessionId,
         agent.archivedAt,
         agent.resumeCount,
+        agent.position,
       );
+  }
+
+  /** The slot a newly started session takes. See `nextWorkspacePosition`. */
+  nextAgentPosition(workspaceId: string): number {
+    const row = this.database
+      .query<{ next: number }, [string]>(
+        `SELECT COALESCE(MIN(position), 1) - 1 AS next
+         FROM agent_sessions WHERE workspace_id = ?`,
+      )
+      .get(workspaceId);
+    return row?.next ?? 0;
+  }
+
+  /** Session order is per workspace, so the rewrite is scoped to one. */
+  reorderAgents(workspaceId: string, orderedIds: string[]): void {
+    const update = this.database.query(
+      "UPDATE agent_sessions SET position = ? WHERE id = ? AND workspace_id = ?",
+    );
+    this.database.transaction(() => {
+      orderedIds.forEach((id, index) => update.run(index + 1, id, workspaceId));
+    })();
   }
 
   listAgents(
@@ -670,7 +719,7 @@ export class SqliteRepositories {
     const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
     return this.database
       .query<AgentRow, string[]>(
-        `SELECT * FROM agent_sessions${where} ORDER BY started_at, id`,
+        `SELECT * FROM agent_sessions${where} ORDER BY position, id`,
       )
       .all(...values)
       .map(agentFromRow);

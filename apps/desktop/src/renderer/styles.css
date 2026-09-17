@@ -386,7 +386,11 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   overflow: hidden;
   transition:
     background 140ms ease,
-    box-shadow 140ms ease;
+    box-shadow 140ms ease,
+    /* Only the pick-up scale animates. A card's position changes by reflow
+       when the list reorders, which no transform transition touches, so this
+       cannot smear the reorder itself. */
+    transform 120ms ease;
 }
 .workspace-card:hover {
   background: var(--raised-hover);
@@ -3062,7 +3066,8 @@ dd {
   overflow: hidden;
   transition:
     background 140ms ease,
-    border-color 140ms ease;
+    border-color 140ms ease,
+    transform 120ms ease;
 }
 .session-card:hover {
   background: var(--raised-hover);
@@ -3070,6 +3075,52 @@ dd {
 .session-card.selected {
   background: var(--accent-wash);
   border-color: rgb(69 150 254 / 0.45);
+}
+
+/* Manual reordering.
+   No grip and no grab cursor: the cards carry no drag affordance at all, by
+   request. Dragging still works from anywhere on a card. */
+.workspace-card,
+.session-card {
+  /* Cards are drag targets, so a stray pointer must never start selecting the
+     session name instead of moving the card. */
+  user-select: none;
+}
+
+/* While a card is in hand the list stops responding to the pointer.
+   This is load-bearing rather than defensive: the drag deliberately takes no
+   pointer capture (see use-list-reorder.ts), so without it `:hover` would
+   follow the pointer onto every card it crossed and a second highlight would
+   slide down the column. The drag listens on the window and measures rects,
+   so it needs no hit-testing here. */
+.item-list[data-reordering="true"] .workspace-card,
+.session-grid[data-reordering="true"] .session-card {
+  pointer-events: none;
+}
+/* Stated outright rather than inherited from :hover. The held card's
+   appearance must not depend on hit-testing, which reordering interrupts: the
+   card that moves in the DOM loses :hover mid-gesture, and React moves the
+   dragged node when it travels down the list but not when it travels up.
+   Leaving this to :hover is what made the highlight vanish in one direction
+   only. A selected card keeps its own background — being picked up must not
+   cost it the accent that says it is the one you are looking at. */
+.workspace-card[data-dragging="true"]:not(.selected),
+.session-card[data-dragging="true"]:not(.selected) {
+  background: var(--raised-hover);
+}
+.workspace-card[data-dragging="true"],
+.session-card[data-dragging="true"] {
+  /* Full opacity. Fading the card reads as disabled rather than picked up,
+     which is the opposite of what a card under the pointer should look like.
+     The lift is carried by a shadow and a slight scale instead, and a neutral
+     hairline rather than the accent one, which means "selected" here. */
+  box-shadow:
+    0 0 0 1px var(--line-strong),
+    0 14px 30px rgb(0 0 0 / 0.5);
+  position: relative;
+  transform: scale(1.02);
+  /* Above its neighbours, so the shadow falls on them rather than under. */
+  z-index: 3;
 }
 .session-card-starting {
   border-color: rgb(69 150 254 / 0.28);

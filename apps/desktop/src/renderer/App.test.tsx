@@ -115,6 +115,7 @@ describe("desktop application shell", () => {
           providerSessionId: null,
           archivedAt: null,
           resumeCount: 0,
+          position: 1,
         },
       ),
     ).toBe(true);
@@ -269,6 +270,7 @@ describe("desktop application shell", () => {
               updatedAt: "now",
               archivedAt: null,
               available: true,
+              position: 1,
             },
           ],
           settings: {
@@ -305,6 +307,7 @@ describe("desktop application shell", () => {
               updatedAt: "now",
               archivedAt: null,
               available: true,
+              position: 1,
             },
           ],
           repositories: [
@@ -346,6 +349,7 @@ describe("desktop application shell", () => {
           updatedAt: "now",
           archivedAt: null,
           available: true,
+          position: 1,
         },
       ],
     };
@@ -427,6 +431,7 @@ describe("desktop application shell", () => {
           updatedAt: "now",
           archivedAt: null,
           available: true,
+          position: 1,
         },
       ],
       tasks: [
@@ -463,6 +468,7 @@ describe("desktop application shell", () => {
           providerSessionId: "daedalus-agent-12345678",
           archivedAt: null,
           resumeCount: 0,
+          position: 1,
         },
         {
           id: "agent-needs-attention",
@@ -482,6 +488,7 @@ describe("desktop application shell", () => {
           providerSessionId: "agent-needs-attention",
           archivedAt: null,
           resumeCount: 0,
+          position: 1,
         },
       ],
       settings: {
@@ -552,6 +559,7 @@ describe("desktop application shell", () => {
           updatedAt: "now",
           archivedAt: null,
           available: false,
+          position: 1,
         },
       ],
     };
@@ -581,6 +589,7 @@ describe("desktop application shell", () => {
       providerSessionId: "11111111-1111-4111-8111-111111111111",
       archivedAt: null,
       resumeCount: 0,
+      position: 1,
     };
     const snapshot: DesktopSnapshotDto = {
       ...base,
@@ -594,6 +603,7 @@ describe("desktop application shell", () => {
           updatedAt: "now",
           archivedAt: null,
           available: true,
+          position: 1,
         },
       ],
       tasks: [
@@ -655,6 +665,7 @@ describe("desktop application shell", () => {
           updatedAt: "2026-01-01T00:00:00.000Z",
           archivedAt: null,
           available: true,
+          position: 1,
         },
       ],
       agents: [
@@ -676,6 +687,7 @@ describe("desktop application shell", () => {
           providerSessionId: null,
           archivedAt: null,
           resumeCount: 0,
+          position: 1,
         },
       ],
     };
@@ -705,6 +717,95 @@ describe("desktop application shell", () => {
     expect(html).not.toContain("Activity");
   });
 
+  test("gives cards no drag affordance and no extra tab stops", () => {
+    const snapshot: DesktopSnapshotDto = {
+      ...base,
+      workspaces: [
+        {
+          id: "w1",
+          slug: "demo",
+          name: "Demo",
+          path: "/tmp/demo",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          archivedAt: null,
+          available: true,
+          position: 1,
+        },
+      ],
+      agents: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          workspaceId: "w1",
+          taskId: null,
+          name: "Session",
+          provider: "claude",
+          kind: "agent",
+          tmuxSession: "daedalus_one",
+          command: "claude",
+          args: [],
+          workingDirectory: "/tmp/demo",
+          status: "running",
+          exitCode: null,
+          startedAt: "2026-01-02T00:00:00.000Z",
+          endedAt: null,
+          providerSessionId: null,
+          archivedAt: null,
+          resumeCount: 0,
+          position: 1,
+        },
+      ],
+      settings: { ...base.settings, tmuxAvailable: true },
+    };
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialSnapshot={snapshot}
+        initialWorkspaceView="sessions"
+      />,
+    );
+    // Cards carry no drag affordance at all — no grip, no grab cursor — by
+    // request. Dragging still works from anywhere on a card.
+    expect(html).not.toContain("list-drag-grip");
+    // The card's own buttons opt out of starting a drag.
+    expect(html).toContain("data-no-drag");
+    // And nothing extra joined the tab order to make dragging reachable: the
+    // keyboard route is ⌥↑/⌥↓ on the card itself.
+    expect(html).not.toContain('tabindex="0" class="workspace-card');
+  });
+
+  test("renders lists in the order the snapshot supplies, without re-sorting", () => {
+    const workspace = (id: string, name: string, position: number) => ({
+      id,
+      slug: id,
+      name,
+      path: `/tmp/${id}`,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      archivedAt: null,
+      available: true,
+      position,
+    });
+    // Deliberately not alphabetical, not by creation, and not by position
+    // value either: the array order is what the service already applied, and
+    // the renderer's job is to leave it alone.
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialSnapshot={{
+          ...base,
+          workspaces: [
+            workspace("zulu", "Zulu", 1),
+            workspace("alpha", "Alpha", 2),
+            workspace("mike", "Mike", 3),
+          ],
+        }}
+      />,
+    );
+    expect(html.indexOf("Zulu")).toBeLessThan(html.indexOf("Alpha"));
+    expect(html.indexOf("Alpha")).toBeLessThan(html.indexOf("Mike"));
+  });
+
   test("renders collapsed workspace and session archives with restore actions", () => {
     const archivedAt = "2026-02-02T00:00:00.000Z";
     const snapshot: DesktopSnapshotDto = {
@@ -719,6 +820,7 @@ describe("desktop application shell", () => {
           updatedAt: "now",
           archivedAt: null,
           available: true,
+          position: 1,
         },
         {
           id: "w2",
@@ -729,6 +831,7 @@ describe("desktop application shell", () => {
           updatedAt: archivedAt,
           archivedAt,
           available: true,
+          position: 1,
         },
       ],
       agents: [
@@ -750,6 +853,7 @@ describe("desktop application shell", () => {
           providerSessionId: "44444444-4444-4444-8444-444444444444",
           archivedAt,
           resumeCount: 0,
+          position: 1,
         },
       ],
     };
@@ -782,6 +886,7 @@ describe("desktop application shell", () => {
           updatedAt: "now",
           archivedAt: null,
           available: true,
+          position: 1,
         },
       ],
       terminals: [
@@ -830,6 +935,7 @@ describe("desktop application shell", () => {
       updatedAt: "2026-09-14T00:00:00.000Z",
       archivedAt: null,
       available: true,
+      position: 1,
     };
     const html = renderToStaticMarkup(
       <App
@@ -889,6 +995,7 @@ const liveSession: AgentSessionDto = {
   providerSessionId: null,
   archivedAt: null,
   resumeCount: 0,
+  position: 1,
 };
 
 const at = (iso: string) => Date.parse(iso);
@@ -1019,6 +1126,7 @@ describe("session status indicators", () => {
       updatedAt: "now",
       archivedAt: null,
       available: true,
+      position: 1,
     };
     const blocked: AgentSessionDto = {
       ...liveSession,
@@ -1076,12 +1184,16 @@ describe("session status indicators", () => {
     // background workspace is discoverable without clicking in.
     expect(html).toContain("1 needs you");
     expect(html).toContain("workspace-attention-badge");
-    // The row itself is the loud one, and it floats above the working session.
+    // The row itself is the loud one.
     expect(html).toContain("agent-dot tone-attention");
     expect(html).toContain("needs permission");
     expect(html).toContain("Bash(git push)");
-    expect(html.indexOf(`data-session-id="${blocked.id}"`)).toBeLessThan(
-      html.indexOf(`data-session-id="${liveSession.id}"`),
+    // It no longer floats above the working session. The list order became the
+    // user's when it became draggable, and moving a card out from under them
+    // to make a point they can already see — tone, badge, roll-up, filter — is
+    // the behaviour a manual order exists to stop.
+    expect(html.indexOf(`data-session-id="${liveSession.id}"`)).toBeLessThan(
+      html.indexOf(`data-session-id="${blocked.id}"`),
     );
     expect(html).toContain("session-filter-toggle");
   });

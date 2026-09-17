@@ -43,10 +43,13 @@ colour.
 
 - **Session rows** show the dot, the activity label, `waiting 4m` for attention
   states, and the newest reason or activity detail as a truncated second line.
-- **The sessions toolbar** carries a **Needs me** filter, and blocked sessions
-  float to the top of the list whether or not it is on.
+- **The sessions toolbar** carries a **Needs me** filter. Blocked sessions used
+  to float to the top of the list as well; they no longer do, because the list
+  order is now the user's — see _Manual order_ below. A blocked session stays
+  where it was put and is found by its tone, its badge and the filter.
 - **The collapsed workspace indicator** sorts blocked sessions first, so the
-  five-icon truncation can never be the reason one goes unnoticed.
+  five-icon truncation can never be the reason one goes unnoticed. This one is
+  not a list the user arranges, so nothing is being overridden.
 - **The workspace card** carries a `2 need you` roll-up, so a blocked session in
   a workspace nobody is looking at is discoverable without clicking in.
 - **The session detail header** puts the activity beside the model and context
@@ -197,6 +200,50 @@ The transport caps pending output at 1 MiB on both sides and pauses Bun-side dra
 
 The panel distinguishes live, reconnected, reconnecting, exited, and lost states. Desktop startup reconciliation makes existing tmux sessions reconnectable after app restart. CLI attachment remains independent and compatible because the desktop never replaces or proxies session ownership.
 
+## Manual order
+
+Both navigator lists — workspaces and the sessions inside one — are arranged by
+hand. Order lives in a `position` column, not in browser storage, because it is
+durable user data rather than a view preference: it survives a reinstall, and
+`daedal workspace reorder` / `daedal agent reorder` can set it without the app
+running. The renderer never sorts either list; it renders what the snapshot
+gives it, which is what the service already ordered.
+
+A newly created workspace or session takes the top slot, leaving the order
+below it untouched.
+
+**Dragging.** A card is picked up anywhere on it, after the pointer travels
+`DRAG_THRESHOLD_PX` (5px). These cards are buttons first — a click selects the
+workspace or session — and a movement threshold is what lets one gesture serve
+both without a press-and-hold delay. The click that ends a real drag is
+swallowed so a drop never also selects. The card's own action buttons
+(archive, open terminal) are marked `data-no-drag` and start nothing.
+
+**No affordance.** There is no grip and no grab cursor, by request: the cards
+look exactly as they did, and dragging is something you find rather than
+something the list advertises.
+
+**The card in hand** keeps full opacity — fading it reads as disabled rather
+than picked up — and is lifted with a shadow, a slight scale, and a neutral
+hairline rather than the accent colour, which means "selected" everywhere else.
+Its background is stated outright rather than inherited from `:hover`, and the
+drag takes **no pointer capture**. Both are the same lesson: capture is released
+the moment its element moves in the DOM, and React moves the minimum number of
+nodes — the dragged node when a card travels _down_ the list, its neighbours
+when it travels _up_. Deriving the held card's look from `:hover` therefore made
+the highlight vanish in one direction only. The drag listens on the window and
+measures rects, so capture bought nothing anyway; with it gone,
+`pointer-events: none` on the list mid-drag becomes load-bearing, since it is
+what keeps `:hover` off the cards the pointer merely crosses.
+
+**Keyboard.** ⌥↑ and ⌥↓ move the focused card one place, clamped at the ends
+rather than wrapping.
+
+**Filtered lists.** A reorder names only the cards the user can see, and the
+service deals them back into the slots those cards occupied. Dragging inside
+the **Needs me** filter therefore cannot disturb the sessions it is hiding, and
+dragging an active workspace cannot move an archived one.
+
 ## Archives
 
 The primary session lifecycle action is Archive. It stops a live process and moves the logical session into a collapsed **Archived sessions** section at the bottom of the selected workspace's session navigator. **Restore & resume** uses the persisted provider conversation locator and exposes the session only after a new tmux runtime starts successfully.
@@ -205,4 +252,4 @@ Archived workspaces appear in a collapsed section at the bottom of the workspace
 
 ## Testing
 
-`apps/desktop/src/bun/rpc.test.ts` drives the RPC adapter through a real temporary application context, SQLite database, workspace filesystem, and fake tmux boundary. Terminal tests cover upgrade authentication, bounded noisy-output queues, socket high-water behavior, ANSI/Unicode capture, input, resize, reconnect status, and resource cleanup. `apps/desktop/src/renderer/App.test.tsx` renders lifecycle, dependency, and multi-session terminal selection states with an injected typed client, and covers the indicator vocabulary, the attention roll-up, attention-first ordering, and the toast cap. `packages/core/src/services/activity.test.ts` covers badge accumulation, privileged clearing, and alert debouncing against a real temporary context with the native notifier injected — no test ever reaches the real Notification Center. `bun run test:terminal-agent` exercises the real isolated tmux path. All test homes and tmux sockets are isolated and never touch the user's Daedalus data.
+`apps/desktop/src/bun/rpc.test.ts` drives the RPC adapter through a real temporary application context, SQLite database, workspace filesystem, and fake tmux boundary. Terminal tests cover upgrade authentication, bounded noisy-output queues, socket high-water behavior, ANSI/Unicode capture, input, resize, reconnect status, and resource cleanup. `apps/desktop/src/renderer/App.test.tsx` renders lifecycle, dependency, and multi-session terminal selection states with an injected typed client, and covers the indicator vocabulary, the attention roll-up, snapshot-order rendering, and the toast cap. `apps/desktop/src/renderer/list-reorder.test.ts` covers the drag arithmetic — click-versus-drag, the drop slot, and keyboard moves — without a DOM, and `packages/core/src/services/ordering.test.ts` covers the subset-reorder rule. `bun run test:reorder-ui` drives a real drag in headless Chrome and samples the DOM across it, in both directions and on an unselected card — the only way either of the two interaction bugs this feature shipped with was reachable, since both were invisible in a single rendered frame. `packages/core/src/services/activity.test.ts` covers badge accumulation, privileged clearing, and alert debouncing against a real temporary context with the native notifier injected — no test ever reaches the real Notification Center. `bun run test:terminal-agent` exercises the real isolated tmux path. All test homes and tmux sockets are isolated and never touch the user's Daedalus data.

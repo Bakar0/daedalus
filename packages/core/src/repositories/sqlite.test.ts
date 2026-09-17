@@ -22,6 +22,7 @@ describe("SqliteRepositories", () => {
         createdAt: now,
         updatedAt: now,
         archivedAt: null,
+        position: 1,
       });
       repositories.createTask({
         id: "task-id",
@@ -53,6 +54,7 @@ describe("SqliteRepositories", () => {
         providerSessionId: null,
         archivedAt: null,
         resumeCount: 0,
+        position: 1,
       });
       repositories.createIntegratedTerminal({
         id: "terminal-id",

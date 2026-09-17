@@ -1,6 +1,6 @@
 {
   "name": "daedalus",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -27,6 +27,7 @@
     "test:terminal-spike": "bun run scripts/terminal-spike-check.ts",
     "test:terminal-agent": "bun run scripts/terminal-agent-check.ts",
     "test:panels": "bun run scripts/panel-browser-check.ts",
+    "test:reorder-ui": "bun run scripts/reorder-ui-check.ts",
     "test:status-ui": "bun run scripts/status-ui-check.ts",
     "test:status-native": "bun run scripts/status-native-check.ts",
     "typecheck": "bun run scripts/typecheck.ts",
