@@ -2,7 +2,11 @@ import { findExecutable } from "@daedalus/platform";
 import { runCommand } from "@daedalus/platform";
 import { rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { AgentDefinition, DaedalusConfig } from "../config";
+import {
+  channelName,
+  type AgentDefinition,
+  type DaedalusConfig,
+} from "../config";
 import { DaedalusError } from "../errors";
 import {
   codexSupportsHooks,
@@ -154,9 +158,13 @@ export async function ensureCodexHooks(
   try {
     const file = Bun.file(configPath);
     const existing = (await file.exists()) ? await file.text() : "";
+    // Named after this channel, so a machine with both builds installed keeps
+    // one block per app instead of them overwriting each other's.
+    const channel = channelName(config.home);
     const merged = mergeCodexConfigToml(
       existing,
-      renderCodexHookBlock(daedalExecutable(config)),
+      renderCodexHookBlock(daedalExecutable(config), channel),
+      channel,
     );
     if (merged !== existing) {
       const backup = `${configPath}.daedalus-backup`;

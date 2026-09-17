@@ -117,6 +117,20 @@ describe("mergeCodexConfigToml", () => {
     );
   });
 
+  test("a relaunch keeps our block where it sits, not at the end", () => {
+    // Codex keys an approval to a hook group's index, so moving this block
+    // past another tool's would invalidate an approval that never changed.
+    const once = mergeCodexConfigToml(THEIR_HOOKS, block);
+    const trailing = `${once}\n[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "later-tool"\n`;
+    const again = mergeCodexConfigToml(trailing, block);
+    const parsed = Bun.TOML.parse(again) as {
+      hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>>;
+    };
+    expect(parsed.hooks.Stop!).toHaveLength(3);
+    expect(parsed.hooks.Stop![0]!.hooks[0]!.command).toBe("their-hook");
+    expect(parsed.hooks.Stop![2]!.hooks[0]!.command).toBe("later-tool");
+  });
+
   test("a relaunch replaces our block rather than accumulating copies", () => {
     const once = mergeCodexConfigToml(THEIR_HOOKS, block);
     const twice = mergeCodexConfigToml(once, block);
@@ -124,7 +138,7 @@ describe("mergeCodexConfigToml", () => {
       hooks: Record<string, unknown[]>;
     };
     expect(parsed.hooks.SessionStart!).toHaveLength(2);
-    expect(twice.match(/daedalus activity hooks \(generated/g)).toHaveLength(1);
+    expect(twice.match(/>>> daedalus activity hooks/g)).toHaveLength(1);
   });
 
   test("an unchanged config is returned untouched, so no approval is lost", () => {
@@ -149,6 +163,36 @@ describe("mergeCodexConfigToml", () => {
     expect(moved).not.toBe(once);
     expect(moved).toContain("/other/daedal");
     expect(moved).not.toContain("/home/.daedalus/bin/daedal");
+  });
+});
+
+describe("two installed channels", () => {
+  test("each owns its own block instead of overwriting the other", () => {
+    // A machine with both builds shares one ~/.codex/config.toml. A single
+    // block would be rewritten to whichever shim launched last, and because
+    // Codex hashes a hook to approve it, every switch would re-prompt.
+    const stable = mergeCodexConfigToml(
+      THEIR_HOOKS,
+      renderCodexHookBlock("/u/.daedalus/bin/daedal", "stable"),
+      "stable",
+    );
+    const both = mergeCodexConfigToml(
+      stable,
+      renderCodexHookBlock("/u/.daedalus-dev/bin/daedal", "dev"),
+      "dev",
+    );
+    expect(both).toContain("/u/.daedalus/bin/daedal");
+    expect(both).toContain("/u/.daedalus-dev/bin/daedal");
+    expect(both).toContain("their-hook");
+    expect(Bun.TOML.parse(both)).toBeTruthy();
+
+    // And relaunching one leaves the other untouched.
+    const again = mergeCodexConfigToml(
+      both,
+      renderCodexHookBlock("/u/.daedalus/bin/daedal", "stable"),
+      "stable",
+    );
+    expect(again).toBe(both);
   });
 });
 

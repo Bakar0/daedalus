@@ -202,9 +202,18 @@ export const CODEX_HOOK_EVENTS: ReadonlyArray<{
  *   key, so injecting that way would silently disable the hooks any other
  *   installed tool had registered for the same event.
  */
-export const CODEX_BLOCK_BEGIN =
-  "# >>> daedalus activity hooks (generated — do not edit) >>>";
-export const CODEX_BLOCK_END = "# <<< daedalus activity hooks <<<";
+/**
+ * The fence is named after the channel that owns it, because a machine can
+ * have both builds installed and they are two applications sharing one Codex
+ * configuration. A single shared block would be rewritten to whichever shim
+ * launched last, and since Codex keys a hook's approval to a hash of its
+ * definition, every switch between channels would invalidate the trust and
+ * ask the user to review the hooks again.
+ */
+export const codexBlockMarkers = (channel: string) => ({
+  begin: `# >>> daedalus activity hooks · ${channel} (generated — do not edit) >>>`,
+  end: `# <<< daedalus activity hooks · ${channel} <<<`,
+});
 
 const tomlString = (value: string): string =>
   `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
@@ -219,11 +228,15 @@ const tomlString = (value: string): string =>
  * vector — verified against the binary, which rejects an array — so the
  * executable path is single-quoted.
  */
-export function renderCodexHookBlock(daedalExecutable: string): string {
+export function renderCodexHookBlock(
+  daedalExecutable: string,
+  channel = "stable",
+): string {
+  const markers = codexBlockMarkers(channel);
   const quoted = `'${daedalExecutable.replace(/'/g, `'\\''`)}'`;
   const lines: string[] = [
-    CODEX_BLOCK_BEGIN,
-    "# Delete this block to turn off Daedalus agent activity for Codex.",
+    markers.begin,
+    `# Delete this block to turn off Daedalus agent activity for Codex (${channel}).`,
   ];
   for (const { event, matcher } of CODEX_HOOK_EVENTS) {
     lines.push("", `[[hooks.${event}]]`);
@@ -237,7 +250,7 @@ export function renderCodexHookBlock(daedalExecutable: string): string {
       "async = true",
     );
   }
-  lines.push("", CODEX_BLOCK_END);
+  lines.push("", markers.end);
   return lines.join("\n");
 }
 
@@ -248,15 +261,26 @@ export function renderCodexHookBlock(daedalExecutable: string): string {
  * of a hook definition invalidates its trust record and makes Codex ask the
  * user to approve it again.
  */
-export function mergeCodexConfigToml(existing: string, block: string): string {
-  const begin = existing.indexOf(CODEX_BLOCK_BEGIN);
-  const end = existing.indexOf(CODEX_BLOCK_END);
-  const stripped =
+export function mergeCodexConfigToml(
+  existing: string,
+  block: string,
+  channel = "stable",
+): string {
+  const markers = codexBlockMarkers(channel);
+  const begin = existing.indexOf(markers.begin);
+  const end = existing.indexOf(markers.end);
+  // Replaced where it already sits, never lifted to the end. Codex keys a
+  // hook's approval to its *position* among the groups for that event, so
+  // moving this block past somebody else's would silently invalidate their
+  // approval — the other channel's, or another tool's — and make Codex ask
+  // about hooks that had not changed at all.
+  const merged =
     begin !== -1 && end > begin
-      ? `${existing.slice(0, begin)}${existing.slice(end + CODEX_BLOCK_END.length)}`
-      : existing;
-  const body = stripped.replace(/\s+$/, "");
-  const merged = body ? `${body}\n\n${block}\n` : `${block}\n`;
+      ? `${existing.slice(0, begin)}${block}${existing.slice(end + markers.end.length)}`
+      : (() => {
+          const body = existing.replace(/\s+$/, "");
+          return body ? `${body}\n\n${block}\n` : `${block}\n`;
+        })();
   return merged === existing ? existing : merged;
 }
 
@@ -312,12 +336,16 @@ export function codexTrustedHookKeys(configToml: string): Set<string> {
  * decides whether anything is installed. `[hooks.state]` is Codex's own trust
  * bookkeeping, not a hook.
  */
-export function codexConfiguredHookEvents(configToml: string): string[] {
+export function codexConfiguredHookEvents(
+  configToml: string,
+  channel = "stable",
+): string[] {
+  const markers = codexBlockMarkers(channel);
   const withoutOurs = (() => {
-    const begin = configToml.indexOf(CODEX_BLOCK_BEGIN);
-    const end = configToml.indexOf(CODEX_BLOCK_END);
+    const begin = configToml.indexOf(markers.begin);
+    const end = configToml.indexOf(markers.end);
     return begin !== -1 && end > begin
-      ? `${configToml.slice(0, begin)}${configToml.slice(end + CODEX_BLOCK_END.length)}`
+      ? `${configToml.slice(0, begin)}${configToml.slice(end + markers.end.length)}`
       : configToml;
   })();
   let parsed: { hooks?: Record<string, unknown> };
@@ -374,6 +402,7 @@ export function codexActivityTier(input: {
   version?: string;
   configToml?: string;
   configPath?: string;
+  channel?: string;
 }): CodexActivityTier {
   if (!input.version || !codexSupportsHooks(input.version))
     return {
@@ -384,7 +413,8 @@ export function codexActivityTier(input: {
         "Codex is older than 0.145, which ignores hooks silently; activity falls back to the rollout",
     };
   const configToml = input.configToml ?? "";
-  const installed = configToml.includes(CODEX_BLOCK_BEGIN);
+  const channel = input.channel ?? "stable";
+  const installed = configToml.includes(codexBlockMarkers(channel).begin);
   if (!installed)
     return {
       tier: "transcript",
@@ -397,7 +427,7 @@ export function codexActivityTier(input: {
   const approved = codexTrustedHookKeys(configToml);
   const trusted =
     expected.length > 0 && expected.every((key) => approved.has(key));
-  const alongside = codexConfiguredHookEvents(configToml).length > 0;
+  const alongside = codexConfiguredHookEvents(configToml, channel).length > 0;
   const coexist = alongside
     ? " They are installed alongside another tool's hooks; both run."
     : "";

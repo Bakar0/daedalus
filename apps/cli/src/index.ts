@@ -3,6 +3,7 @@ import {
   createApplicationContext,
   DaedalusError,
   normalizeError,
+  channelName,
   codexActivityTier,
   codexConfigPath,
   observeClaudeHook,
@@ -387,6 +388,7 @@ async function codexActivityCheck(
     ...(version ? { version } : {}),
     configToml,
     configPath,
+    channel: channelName(context.config.home),
   });
   return {
     name: "codex activity",

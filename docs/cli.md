@@ -197,10 +197,10 @@ For **Codex** there is no per-session equivalent, so they are installed into
 `~/.codex/config.toml` inside a fenced block:
 
 ```toml
-# >>> daedalus activity hooks (generated — do not edit) >>>
-# Delete this block to turn off Daedalus agent activity for Codex.
+# >>> daedalus activity hooks · stable (generated — do not edit) >>>
+# Delete this block to turn off Daedalus agent activity for Codex (stable).
 ...
-# <<< daedalus activity hooks <<<
+# <<< daedalus activity hooks · stable <<<
 ```
 
 This is the only global change Daedalus makes, and it is designed to share the
@@ -213,9 +213,16 @@ file rather than own it:
   other. A `-c` override could not do this, because it replaces the whole
   `hooks.<Event>` key and would silently disable whatever else was registered
   there.
-- **Relaunching updates the block rather than accumulating copies**, and
-  nothing is rewritten unless the content actually changes — every change to a
-  hook definition invalidates its approval and makes Codex ask again.
+- **Relaunching updates the block where it sits**, never lifting it to the end,
+  and nothing is rewritten unless the content actually changes. Both matter for
+  the same reason: Codex keys an approval to a hook group's _position_, so
+  moving or rewriting this block would invalidate approvals that never changed
+  — another tool's, or the other channel's.
+- **The fence is named after the channel.** A machine with both the stable and
+  dev builds installed has two applications sharing one Codex configuration; a
+  single shared block would be rewritten to whichever shim launched last and
+  re-prompt for review on every switch. Each channel owns its own block and its
+  own approval.
 - Everything outside the fence survives byte for byte, the first write leaves a
   `config.toml.daedalus-backup`, and the write is atomic because Codex writes
   to this file too.
