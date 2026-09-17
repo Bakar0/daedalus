@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, test } from "vitest";
@@ -180,5 +180,67 @@ describe("runMigrations", () => {
         .get(),
     ).toEqual({ next_task_number: 2 });
     taskNumbers.close();
+  });
+
+  test("backfills manual order newest first for existing rows", async () => {
+    const home = await mkdtemp(join(tmpdir(), "daedalus-manual-order-"));
+    cleanup.push(home);
+    const migrations = join(home, "migrations");
+    const source = join(import.meta.dir, "../../../../migrations");
+    await mkdir(migrations);
+    // Everything up to, but not including, the migration under test — so the
+    // rows below are exactly what an existing install would be carrying.
+    const earlier = (await readdir(source))
+      .filter((file) => file.endsWith(".sql") && !file.startsWith("011_"))
+      .sort();
+    for (const file of earlier)
+      await Bun.write(join(migrations, file), Bun.file(join(source, file)));
+    const databasePath = join(home, "state.db");
+    await runMigrations(databasePath, migrations);
+
+    const database = new Database(databasePath);
+    database.exec(`
+      INSERT INTO workspaces (id, slug, name, path, created_at, updated_at, task_id_prefix)
+      VALUES ('w-old', 'old', 'Old', '/tmp/old', '2026-01-01T00:00:00.000Z', 'now', 'old'),
+             ('w-new', 'new', 'New', '/tmp/new', '2026-03-01T00:00:00.000Z', 'now', 'new');
+      INSERT INTO agent_sessions (id, workspace_id, task_id, name, provider, kind, tmux_session, command, args, working_directory, status, started_at)
+      VALUES ('s-old', 'w-old', NULL, 'Older', 'claude', 'agent', 'tmux-old', 'claude', '[]', '/tmp/old', 'running', '2026-02-01T00:00:00.000Z'),
+             ('s-new', 'w-old', NULL, 'Newer', 'claude', 'agent', 'tmux-new', 'claude', '[]', '/tmp/old', 'running', '2026-02-02T00:00:00.000Z'),
+             ('s-other', 'w-new', NULL, 'Elsewhere', 'claude', 'agent', 'tmux-other', 'claude', '[]', '/tmp/new', 'running', '2026-02-03T00:00:00.000Z');
+    `);
+    database.close();
+
+    await Bun.write(
+      join(migrations, "011_manual_order.sql"),
+      Bun.file(join(source, "011_manual_order.sql")),
+    );
+    await runMigrations(databasePath, migrations);
+
+    const ordered = new Database(databasePath);
+    // The newest workspace leads, which inverts how the list used to read.
+    expect(
+      ordered
+        .query<{ id: string }, []>(
+          "SELECT id FROM workspaces ORDER BY position, id",
+        )
+        .all(),
+    ).toEqual([{ id: "w-new" }, { id: "w-old" }]);
+    expect(
+      ordered
+        .query<{ id: string }, []>(
+          "SELECT id FROM agent_sessions WHERE workspace_id = 'w-old' ORDER BY position, id",
+        )
+        .all(),
+    ).toEqual([{ id: "s-new" }, { id: "s-old" }]);
+    // Session order is per workspace, so the only session in the other
+    // workspace is first there rather than third overall.
+    expect(
+      ordered
+        .query<{ position: number }, []>(
+          "SELECT position FROM agent_sessions WHERE id = 's-other'",
+        )
+        .get(),
+    ).toEqual({ position: 1 });
+    ordered.close();
   });
 });

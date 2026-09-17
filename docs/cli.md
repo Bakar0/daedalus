@@ -37,6 +37,7 @@ daedal workspace create <name> [--slug <slug>] [--path <path>]
 daedal workspace list [--json]
 daedal workspace get <workspace> [--json]
 daedal workspace update <workspace> [--name <name>] [--slug <slug>]
+daedal workspace reorder <workspace> [<workspace>...]
 daedal workspace archive <workspace>
 daedal workspace restore <workspace>
 daedal workspace remove <workspace> [--delete-files] --force
@@ -45,6 +46,8 @@ daedal workspace remove <workspace> [--delete-files] --force
 Create makes a real directory and identity marker before committing metadata. Slugs contain lowercase ASCII letters, digits, and hyphens. Updating a slug changes the lookup alias, not the directory path.
 
 Removal requires `--force`. Without `--delete-files`, it unregisters the workspace and preserves every file. With `--delete-files`, it only removes a canonical, non-root, non-symlink directory carrying the exact registered workspace ID marker. Live agents block removal.
+
+Both workspaces and sessions carry a manual `position`, which is the order `list` returns and the desktop app draws. A new workspace or session takes the top slot, so the thing you just made is the thing you are looking for, and the order below it is left alone. `reorder` takes the workspaces in the order you want them and may name a subset — the ones you leave out keep their exact places, which is what lets the app reorder a filtered list without disturbing what it is hiding. Naming an unknown workspace, or the same one twice, is an error rather than a silent partial reorder.
 
 ## Task
 
@@ -68,6 +71,7 @@ daedal agent spawn --workspace <workspace> --provider codex [--task <task-ref>] 
 daedal agent spawn --workspace <workspace> --provider claude [--task <task-ref>] [--model <model>] [--message <text>]
 daedal agent spawn --workspace <workspace> --command <configured-name> [--task <task-ref>] [--message <text>]
 daedal agent list [--workspace <workspace>] [--running]
+daedal agent reorder --workspace <workspace> <agent-id> [<agent-id>...]
 daedal agent get <agent-id>
 daedal agent wait [--session <agent-id>] [--workspace <workspace>] [--for attention|idle] [--timeout <seconds>]
 daedal agent attach <agent-id>
@@ -81,6 +85,8 @@ daedal agent remove <agent-id>
 Built-in provider definitions come from `config.json`. Named custom definitions use `--command`. Executables and arguments are always passed as arrays. A task-backed launch receives only `Execute task #<number>` plus optional `--message` guidance; the installed skill supplies the workflow, so task content and CLI instructions are not duplicated in the prompt. Claude and Codex receive the prompt through their native initial-prompt argument, while custom launches receive it in `DAEDALUS_TASK_PROMPT`. Daedalus never types the initial prompt into the terminal. Agent processes receive their current session, workspace, internal task ID, and task number through `DAEDALUS_SESSION_ID`, `DAEDALUS_WORKSPACE_ID`, `DAEDALUS_TASK_ID`, and `DAEDALUS_TASK_NUMBER`. These variables are restored when a session resumes.
 
 Each launch gets a durable `daedalus_<uuid>` tmux session on a Daedalus server isolated by `DAEDALUS_HOME`. `attach` hands the terminal to tmux and therefore rejects `--json`; every non-interactive command supports the JSON envelope. `send` sends literal text followed by Enter. `stop` first sends Ctrl-C unless `--force` is used, then closes the session. A running session must be stopped before its history row can be removed.
+
+`reorder` is scoped to one workspace: session order is per workspace, and a session id belonging to another one is refused rather than ignored. It follows the same subset rule as `workspace reorder`.
 
 `archive` is the preferred lifecycle action. It stops a live session and preserves its provider conversation locator. `restore` starts a new tmux runtime using Codex or Claude's native resume command; terminal sessions reopen as fresh login shells. `workspace archive` cascades to all sessions in that workspace, while `workspace restore` does not automatically restore them. Add `--archived` to workspace or agent lists to inspect archived records.
 

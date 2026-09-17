@@ -42,6 +42,7 @@ import type {
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { repositoryFuzzyScore } from "./repository-search";
+import { useListReorder } from "./use-list-reorder";
 
 const STATUSES: TaskStatus[] = [
   "todo",
@@ -354,6 +355,35 @@ function PanelCollapseButton({
     >
       {direction}
     </button>
+  );
+}
+
+/**
+ * The signifier for dragging, not the only way to do it — the whole card is
+ * the target. It exists because `cursor: grab` only pays off once the pointer
+ * is already over the card, which means the feature stays invisible to anyone
+ * who never happens to hover.
+ *
+ * Deliberately `aria-hidden` and not focusable: making it a control would take
+ * the workspace list from two tab stops per card to three, for a gesture the
+ * keyboard reaches through ⌥↑/⌥↓ on the card itself.
+ */
+function DragGrip() {
+  return (
+    <span aria-hidden="true" className="list-drag-grip">
+      <svg
+        fill="currentColor"
+        viewBox="0 0 8 16"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <circle cx="2.5" cy="4" r="1" />
+        <circle cx="5.5" cy="4" r="1" />
+        <circle cx="2.5" cy="8" r="1" />
+        <circle cx="5.5" cy="8" r="1" />
+        <circle cx="2.5" cy="12" r="1" />
+        <circle cx="5.5" cy="12" r="1" />
+      </svg>
+    </span>
   );
 }
 
@@ -2117,32 +2147,57 @@ export function WorkspaceApp({
     (item) => item.archivedAt,
   );
   const workspace = activeWorkspaces.find((item) => item.id === workspaceId);
+  const workspaceReorder = useListReorder({
+    disabled: busy,
+    ids: activeWorkspaces.map((item) => item.id),
+    onCommit: (references) =>
+      void perform(client.request.workspaceReorder({ references })),
+  });
+  const orderedWorkspaces = workspaceReorder.order.flatMap(
+    (id) => activeWorkspaces.find((item) => item.id === id) ?? [],
+  );
   const allTasks = (snapshot?.tasks ?? []).filter(
     (item) => item.workspaceId === workspaceId,
   );
   const tasks = allTasks.filter(
     (item) => filter === "all" || item.status === filter,
   );
-  const workspaceSessions = (snapshot?.agents ?? [])
-    .filter((item) => item.workspaceId === workspaceId)
-    .sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+  // Order is the user's, kept in the database and applied by the query that
+  // built this snapshot. The renderer filters it but never re-sorts it: a list
+  // the user arranged by hand is the one thing an adapter has no business
+  // second-guessing.
+  const workspaceSessions = (snapshot?.agents ?? []).filter(
+    (item) => item.workspaceId === workspaceId,
+  );
   const activeSessions = workspaceSessions.filter((item) => !item.archivedAt);
   const attentionSessionIds = new Set(
     activeSessions
       .filter((item) => statusViewFor(item).attention)
       .map((item) => item.id),
   );
-  const sessions = activeSessions
-    .filter(
-      (item) => sessionFilter === "all" || attentionSessionIds.has(item.id),
-    )
-    // Blocked sessions float to the top; within each group the existing
-    // newest-first order is left alone.
-    .sort(
-      (left, right) =>
-        Number(attentionSessionIds.has(right.id)) -
-        Number(attentionSessionIds.has(left.id)),
-    );
+  // Blocked sessions used to float to the top here. They no longer do: once
+  // the order is something the user placed, moving a card out from under them
+  // is the bug, not the feature. The "Needs me" filter, the card tone and the
+  // workspace roll-up count all still surface a blocked session in place.
+  const sessions = activeSessions.filter(
+    (item) => sessionFilter === "all" || attentionSessionIds.has(item.id),
+  );
+  const sessionReorder = useListReorder({
+    disabled: busy,
+    ids: sessions.map((item) => item.id),
+    // Only the visible sessions are named, so a drag inside the "Needs me"
+    // filter leaves the sessions it is hiding exactly where they were.
+    onCommit: (sessionIds) =>
+      void perform(
+        client.request.agentReorder({
+          sessionIds,
+          workspace: workspaceId!,
+        }),
+      ),
+  });
+  const orderedSessions = sessionReorder.order.flatMap(
+    (id) => sessions.find((item) => item.id === id) ?? [],
+  );
   const workspaceSessionLaunches = sessionLaunches.filter(
     (item) => item.workspaceId === workspaceId,
   );
@@ -3115,7 +3170,7 @@ export function WorkspaceApp({
                   <span>Use New to create one.</span>
                 </div>
               )}
-            {activeWorkspaces.map((item) => {
+            {orderedWorkspaces.map((item) => {
               const itemSessions = (snapshot?.agents ?? []).filter(
                 (session) =>
                   session.workspaceId === item.id && !session.archivedAt,
@@ -3138,11 +3193,36 @@ export function WorkspaceApp({
               return (
                 <div
                   className={`workspace-card ${item.id === workspaceId ? "selected" : ""}`}
+                  data-dragging={
+                    workspaceReorder.draggingId === item.id ? "true" : undefined
+                  }
                   key={item.id}
+                  onPointerDown={workspaceReorder.onPointerDown(item.id)}
+                  ref={workspaceReorder.registerCard(item.id)}
                 >
+                  <DragGrip />
                   <button
                     className="workspace-item"
-                    onClick={() => selectWorkspace(item.id)}
+                    onClick={() => {
+                      // The drag and the click are one gesture; only the click
+                      // that ended a real drag is discarded.
+                      if (workspaceReorder.consumeDragClick()) return;
+                      selectWorkspace(item.id);
+                    }}
+                    onKeyDown={(event) => {
+                      if (!event.altKey) return;
+                      const direction =
+                        event.key === "ArrowUp"
+                          ? "up"
+                          : event.key === "ArrowDown"
+                            ? "down"
+                            : undefined;
+                      if (
+                        direction &&
+                        workspaceReorder.moveByKeyboard(item.id, direction)
+                      )
+                        event.preventDefault();
+                    }}
                   >
                     <span className="workspace-icon">
                       {item.name.slice(0, 1).toUpperCase()}
@@ -3213,7 +3293,7 @@ export function WorkspaceApp({
                       </span>
                     </span>
                   </button>
-                  <span className="workspace-card-actions">
+                  <span className="workspace-card-actions" data-no-drag>
                     <button
                       aria-label={`Open ${item.name} in integrated terminal`}
                       className="session-card-action workspace-terminal-action"
@@ -3856,7 +3936,7 @@ export function WorkspaceApp({
                     )}
                   </div>
                 ))}
-                {sessions.map((session) => {
+                {orderedSessions.map((session) => {
                   const task = allTasks.find(
                     (item) => item.id === session.taskId,
                   );
@@ -3868,13 +3948,38 @@ export function WorkspaceApp({
                     <div
                       className={`session-card tone-${view.tone} ${session.id === activeSessionId ? "selected" : ""}`}
                       data-attention={view.attention ? "true" : undefined}
+                      data-dragging={
+                        sessionReorder.draggingId === session.id
+                          ? "true"
+                          : undefined
+                      }
                       key={session.id}
+                      onPointerDown={sessionReorder.onPointerDown(session.id)}
+                      ref={sessionReorder.registerCard(session.id)}
                     >
+                      <DragGrip />
                       <button
                         className="session-card-main"
                         data-provider={session.provider}
                         data-session-id={session.id}
-                        onClick={() => openSession(session.id)}
+                        onClick={() => {
+                          if (sessionReorder.consumeDragClick()) return;
+                          openSession(session.id);
+                        }}
+                        onKeyDown={(event) => {
+                          if (!event.altKey) return;
+                          const direction =
+                            event.key === "ArrowUp"
+                              ? "up"
+                              : event.key === "ArrowDown"
+                                ? "down"
+                                : undefined;
+                          if (
+                            direction &&
+                            sessionReorder.moveByKeyboard(session.id, direction)
+                          )
+                            event.preventDefault();
+                        }}
                       >
                         <span className={`session-kind-icon tool-${tool}`}>
                           <ToolIcon tool={tool} />
@@ -3923,6 +4028,7 @@ export function WorkspaceApp({
                       <button
                         aria-label={`Archive ${sessionName(session)} session`}
                         className="session-card-action"
+                        data-no-drag
                         onClick={() => setSessionAction({ session })}
                         title="Archive session"
                       >

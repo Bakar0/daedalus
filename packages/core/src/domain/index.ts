@@ -12,6 +12,12 @@ export interface Workspace {
   createdAt: string;
   updatedAt: string;
   archivedAt: string | null;
+  /**
+   * Where the user put this workspace in the list, ascending. Sparse: a new
+   * workspace takes `MIN(position) - 1` so it lands on top without renumbering
+   * its neighbours. Ties fall back to id, so the order is always total.
+   */
+  position: number;
 }
 
 export interface Task {
@@ -48,6 +54,8 @@ export interface AgentSession {
   providerSessionId: string | null;
   archivedAt: string | null;
   resumeCount: number;
+  /** Where the user put this session within its workspace. See `Workspace`. */
+  position: number;
 }
 
 export interface IntegratedTerminal {

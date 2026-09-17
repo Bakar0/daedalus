@@ -13,6 +13,7 @@ export * from "./services/hook-install";
 export * from "./services/agents";
 export * from "./services/integrated-terminals";
 export * from "./services/notifications";
+export * from "./services/ordering";
 export * from "./services/presence";
 export * from "./services/providers";
 export * from "./services/tasks";

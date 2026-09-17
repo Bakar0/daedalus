@@ -17,6 +17,8 @@ export interface WorkspaceDto {
   updatedAt: string;
   archivedAt: string | null;
   available: boolean;
+  /** Manual list order, ascending. Lists arrive already sorted by it. */
+  position: number;
 }
 
 export interface TaskDto {
@@ -50,6 +52,8 @@ export interface AgentSessionDto {
   providerSessionId: string | null;
   archivedAt: string | null;
   resumeCount: number;
+  /** Manual list order within the workspace, ascending. */
+  position: number;
 }
 
 export interface IntegratedTerminalDto {
@@ -315,6 +319,12 @@ export interface DesktopRpcSchema {
         { reference: string; deleteFiles: boolean; force: true },
         { workspace: WorkspaceDto; filesDeleted: boolean }
       >;
+      /**
+       * The new order of the workspaces named, which may be a subset — the
+       * ones left out keep their places. Returns the whole list as it now
+       * stands.
+       */
+      workspaceReorder: Request<{ references: string[] }, WorkspaceDto[]>;
       workspaceArchive: Request<{ reference: string }, WorkspaceDto>;
       workspaceRestore: Request<{ reference: string }, WorkspaceDto>;
       workspaceContentGet: Request<{ workspace: string }, WorkspaceContentDto>;
@@ -449,6 +459,11 @@ export interface DesktopRpcSchema {
       agentSend: Request<{ id: string; text: string }, AgentSessionDto>;
       agentStop: Request<{ id: string; force: boolean }, AgentSessionDto>;
       agentRemove: Request<{ id: string }, AgentSessionDto>;
+      /** As `workspaceReorder`, scoped to one workspace's sessions. */
+      agentReorder: Request<
+        { workspace: string; sessionIds: string[] },
+        AgentSessionDto[]
+      >;
       agentArchive: Request<{ id: string; force?: boolean }, AgentSessionDto>;
       agentRestore: Request<{ id: string }, AgentSessionDto>;
       terminalCreate: Request<

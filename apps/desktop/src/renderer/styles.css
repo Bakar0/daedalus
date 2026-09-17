@@ -3071,6 +3071,56 @@ dd {
   background: var(--accent-wash);
   border-color: rgb(69 150 254 / 0.45);
 }
+
+/* Manual reordering.
+   The grip is the signifier; the whole card is the target. It reserves its
+   width at rest rather than fading in on hover, because a grip that appears
+   and pushes the name sideways makes the whole column twitch as the pointer
+   runs down it. The card body keeps `cursor: pointer` — it is still a button
+   first, and dragging from it is a convenience the grip already advertised. */
+.list-drag-grip {
+  align-items: center;
+  color: var(--muted);
+  cursor: grab;
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: center;
+  opacity: 0.3;
+  transition: opacity 140ms ease;
+  width: 14px;
+}
+.list-drag-grip svg {
+  height: 16px;
+  width: 8px;
+}
+.workspace-card:hover .list-drag-grip,
+.session-card:hover .list-drag-grip {
+  opacity: 0.8;
+}
+/* Cards are drag targets, so a stray pointer must never start selecting the
+   session name instead of moving the card. */
+.workspace-card,
+.session-card {
+  user-select: none;
+}
+.workspace-card[data-dragging="true"],
+.session-card[data-dragging="true"] {
+  cursor: grabbing;
+  opacity: 0.75;
+  /* Lifted rather than outlined: the card is passing over its neighbours, and
+     a border would read as the selected state it is not. */
+  box-shadow: 0 8px 20px rgb(0 0 0 / 0.35);
+}
+.workspace-card[data-dragging="true"] .list-drag-grip,
+.session-card[data-dragging="true"] .list-drag-grip {
+  cursor: grabbing;
+  opacity: 1;
+}
+/* Nothing to reorder in a rail that shows only icons. */
+.workspace-column.panel-compact .list-drag-grip,
+.session-navigator.panel-compact .list-drag-grip {
+  display: none;
+}
 .session-card-starting {
   border-color: rgb(69 150 254 / 0.28);
 }

@@ -20,6 +20,7 @@ import {
   resolveAgentExecutable,
   resolveProvider,
 } from "./providers";
+import { applyManualOrder } from "./ordering";
 import type { TaskService } from "./tasks";
 import type { WorkspaceService } from "./workspaces";
 import type { WorkspaceContentService } from "./workspace-content";
@@ -604,6 +605,8 @@ export class AgentService {
       providerSessionId: launch.providerSessionId ?? null,
       archivedAt: null,
       resumeCount: 0,
+      // Top of its workspace's list, leaving any manual order below it intact.
+      position: this.repositories.nextAgentPosition(workspace.id),
     };
     this.repositories.createAgent(session);
     try {
@@ -704,6 +707,33 @@ export class AgentService {
     return sessions.filter((session) =>
       filters.archived ? Boolean(session.archivedAt) : !session.archivedAt,
     );
+  }
+
+  /**
+   * Puts the named sessions in the order given, within one workspace. Naming a
+   * subset rearranges only that subset, so a drag in a filtered list leaves
+   * the hidden sessions where they are.
+   */
+  async reorder(
+    workspaceReference: string,
+    sessionIds: string[],
+  ): Promise<AgentSession[]> {
+    const workspace = await this.workspaces.get(workspaceReference);
+    const current = this.repositories.listAgents({
+      workspaceId: workspace.id,
+    });
+    // Scoped to the workspace on purpose: a session id from somewhere else is
+    // not a session this list can place, and silently ignoring it would leave
+    // the caller believing an order that never happened.
+    this.repositories.reorderAgents(
+      workspace.id,
+      applyManualOrder(
+        current.map((item) => item.id),
+        sessionIds,
+        "Agent session",
+      ),
+    );
+    return this.repositories.listAgents({ workspaceId: workspace.id });
   }
 
   async get(id: string): Promise<AgentSession> {

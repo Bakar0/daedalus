@@ -16,6 +16,7 @@ const snapshot: DesktopSnapshotDto = {
       updatedAt: "2026-09-14T00:00:00.000Z",
       archivedAt: null,
       available: true,
+      position: 1,
     },
   ],
   tasks: [],
@@ -38,6 +39,7 @@ const snapshot: DesktopSnapshotDto = {
       providerSessionId: null,
       archivedAt: null,
       resumeCount: 0,
+      position: 1,
     },
     {
       id: "panel-test-blocked",
@@ -57,6 +59,7 @@ const snapshot: DesktopSnapshotDto = {
       providerSessionId: null,
       archivedAt: null,
       resumeCount: 0,
+      position: 1,
     },
   ],
   terminals: [],
