@@ -4,6 +4,7 @@ import { describe, expect, test } from "vitest";
 import { createApplicationContext } from "@daedalus/core";
 import type { TmuxClient, TmuxLaunch } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
+import packageJson from "../../../../package.json";
 import { createDesktopRequestHandlers, desktopDataFingerprint } from "./rpc";
 
 class FakeTmux implements TmuxClient {
@@ -190,6 +191,10 @@ describe("desktop RPC handlers", () => {
         const response = await rpc.snapshot({});
         expect(response.ok).toBe(true);
         if (response.ok) {
+          // "Which build am I running" has to be answerable from inside the
+          // app, or verifying an update means grepping the bundle.
+          expect(response.data.settings.version).toBe(packageJson.version);
+          expect(response.data.settings.channel).toBe("stable");
           expect(response.data.settings.home).toBe(home);
           expect(response.data.settings.tmuxAvailable).toBe(true);
           expect(response.data.settings.workspaceInstructionFilesEnabled).toBe(

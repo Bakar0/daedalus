@@ -4831,6 +4831,15 @@ export function WorkspaceApp({
       {modal === "settings" && snapshot && (
         <Modal onClose={() => setModal(undefined)} title="Settings">
           <dl className="settings-list">
+            {/* First, and deliberately: the question this dialog gets opened
+                for most often is "which build am I actually running". */}
+            <dt>Version</dt>
+            <dd>
+              {snapshot.settings.version}
+              {snapshot.settings.channel === "stable"
+                ? ""
+                : ` · ${snapshot.settings.channel}`}
+            </dd>
             <dt>Daedalus home</dt>
             <dd>{snapshot.settings.home}</dd>
             <dt>Workspace root</dt>

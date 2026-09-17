@@ -1,4 +1,6 @@
+import packageJson from "../../../../package.json";
 import {
+  channelName,
   DaedalusError,
   normalizeError,
   type AgentActivityState,
@@ -149,6 +151,8 @@ export async function desktopSnapshot(
     attention: context.activity.listAttention().map(sessionAttentionDto),
     toasts: context.notifications.pending("toast").map(toastDto),
     settings: {
+      version: packageJson.version,
+      channel: channelName(context.config.home),
       home: context.config.home,
       workspaceRoot: context.config.workspaceRoot,
       databasePath: context.config.databasePath,

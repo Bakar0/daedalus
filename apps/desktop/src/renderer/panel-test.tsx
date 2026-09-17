@@ -133,6 +133,8 @@ const snapshot: DesktopSnapshotDto = {
   ],
   toasts: [],
   settings: {
+    version: "0.3.0",
+    channel: "stable",
     home: "/tmp/daedalus-panel-test",
     workspaceRoot: "/tmp/daedalus-panel-test/workspaces",
     databasePath: "/tmp/daedalus-panel-test/state.db",

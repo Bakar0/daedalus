@@ -157,6 +157,10 @@ export interface ProviderModelCatalogDto {
 }
 
 export interface DesktopSettingsDto {
+  /** The running build, so "did my update install?" is answerable in the app. */
+  version: string;
+  /** `stable`, or the suffix of a channelled home such as `dev`. */
+  channel: string;
   home: string;
   workspaceRoot: string;
   databasePath: string;
