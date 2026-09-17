@@ -78,9 +78,32 @@ A low-confidence `pane` reading may raise a badge but never retracts one.
 Three distinct channels, never two at once for the same event:
 
 - **Badge** — persistent, described above.
-- **Toast** — ephemeral, six seconds, clickable, with an `info`/`success`/`error`
-  level. At most five are on screen; the rest stay queued and appear as the
-  stack drains.
+- **Toast** — ephemeral, five seconds, clickable, with an
+  `info`/`success`/`error` level. At most three are on screen; the rest stay
+  queued and appear as the stack drains. Three is where both Sonner's default
+  and the usability literature land: past that a stack stops being read and
+  starts being dismissed unread.
+
+  They are drawn as a **deck, not a list**. Stacked down a corner, three cards
+  wall off whatever is underneath them, which is how a notification turns into
+  an obstacle. Collapsed, the deck costs the height of one card plus a 14px
+  sliver per toast behind it, each one scaled down 5% and with its contents
+  hidden so it reads as an edge rather than showing through as a smudge; all
+  cards take the front card's height so none juts out. Pointing at the deck —
+  or tabbing into it — fans it out to full height and **pauses every
+  countdown**, and leaving resumes them with the time that was left rather than
+  from the top. Each card carries the gap below it as a hover target, so moving
+  between fanned cards does not collapse the deck mid-read, and the container
+  itself is `pointer-events: none` so it never swallows a click meant for the
+  app beneath.
+
+  Level is a dot in the same vocabulary as the session indicators, not a
+  coloured bar down the edge. Every toast has its own labelled dismiss, shown
+  on hover and always reachable by keyboard, because an auto-dismissing alert
+  still needs a way to be closed now; a deck of more than one adds a single
+  **Clear all**. Each toast owns its own countdown, so one arriving late does
+  not cut short the one already on screen.
+
 - **Native OS notification** — for when the app is backgrounded.
 
 The channel is chosen by **presence**, not by suppressing on focus. The window
