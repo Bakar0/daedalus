@@ -1,15 +1,16 @@
 import { findExecutable } from "@daedalus/platform";
 import { runCommand } from "@daedalus/platform";
+import { rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { AgentDefinition, DaedalusConfig } from "../config";
 import { DaedalusError } from "../errors";
 import {
-  codexConfiguredHookEvents,
-  codexDaedalusHookArgs,
   codexSupportsHooks,
   daedalusClaudeSettings,
   mergeClaudeSettings,
+  mergeCodexConfigToml,
   parseClaudeSettingsArgument,
+  renderCodexHookBlock,
 } from "./hook-install";
 
 export interface LaunchInput {
@@ -115,13 +116,29 @@ export async function claudeDaedalusSettingsArgs(
   ];
 }
 
+export const codexConfigPath = (config: DaedalusConfig): string =>
+  join(dirname(config.codexSessionsDirectory), "config.toml");
+
 /**
- * Codex's activity hooks, supplied as `-c` overrides so nothing is written to
- * the user's `~/.codex/config.toml`. Returns nothing on builds older than
- * 0.145, which ignore hooks silently — with no error and no log line, so the
- * version has to be asked for rather than assumed.
+ * Installs Daedalus's activity hooks into the user's Codex configuration and
+ * returns the launch arguments that go with them.
+ *
+ * Codex has no per-session way to add hooks without taking over the key, so
+ * this writes to `~/.codex/config.toml` — the only global mutation Daedalus
+ * makes, and the reason it is careful:
+ *
+ * - Nothing is written unless the rendered block actually differs, because
+ *   every change to a hook definition invalidates its trust record and makes
+ *   Codex ask the user to approve it again.
+ * - The block is appended, so hooks belonging to other tools keep their group
+ *   indices and therefore their existing approvals.
+ * - The first write leaves a one-time `config.toml.daedalus-backup` beside it.
+ * - The write is atomic, because Codex writes to this file too.
+ *
+ * Builds older than 0.145 ignore hooks silently, so nothing is installed for
+ * them and activity falls back to the rollout tail.
  */
-export async function codexDaedalusHookConfigArgs(
+export async function ensureCodexHooks(
   config: DaedalusConfig,
   executable: string,
   run: typeof runCommand = runCommand,
@@ -133,18 +150,34 @@ export async function codexDaedalusHookConfigArgs(
   } catch {
     return [];
   }
-  let configured: string[] = [];
+  const configPath = codexConfigPath(config);
   try {
-    const file = Bun.file(
-      join(dirname(config.codexSessionsDirectory), "config.toml"),
+    const file = Bun.file(configPath);
+    const existing = (await file.exists()) ? await file.text() : "";
+    const merged = mergeCodexConfigToml(
+      existing,
+      renderCodexHookBlock(daedalExecutable(config)),
     );
-    if (await file.exists())
-      configured = codexConfiguredHookEvents(await file.text());
+    if (merged !== existing) {
+      const backup = `${configPath}.daedalus-backup`;
+      if (existing && !(await Bun.file(backup).exists()))
+        await writeFile(backup, existing, { mode: 0o600 });
+      const temporary = `${configPath}.${crypto.randomUUID()}.tmp`;
+      try {
+        await writeFile(temporary, merged, { flag: "wx", mode: 0o600 });
+        await rename(temporary, configPath);
+      } finally {
+        await rm(temporary, { force: true });
+      }
+    }
   } catch {
-    // An unreadable config is treated as "no hooks of their own"; the worst
-    // case is a -c override Codex then ignores.
+    // A configuration Daedalus cannot read or write is the user's to own.
+    // Activity degrades to the rollout tail rather than the launch failing.
+    return [];
   }
-  return codexDaedalusHookArgs(daedalExecutable(config), configured);
+  // Stable and on by default from 0.154, but not on every build in the
+  // supported range, and a per-session flag costs nothing.
+  return ["-c", "features.hooks=true"];
 }
 
 interface ClaudeModelInfo {
@@ -420,7 +453,7 @@ class ConfiguredProvider implements AgentProvider {
       args.push(...CODEX_DAEDALUS_TUI_ARGS);
       if (this.config)
         args.push(
-          ...(await codexDaedalusHookConfigArgs(
+          ...(await ensureCodexHooks(
             this.config,
             resolveAgentExecutable(this.name, this.definition.executable) ??
               this.definition.executable,

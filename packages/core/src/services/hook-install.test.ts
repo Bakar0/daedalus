@@ -3,11 +3,13 @@ import {
   codexActivityTier,
   CODEX_HOOK_EVENTS,
   codexConfiguredHookEvents,
-  codexDaedalusHookArgs,
+  codexHookTrustKeys,
   codexSupportsHooks,
   daedalusClaudeSettings,
   isDaedalusHookEntry,
   mergeClaudeSettings,
+  mergeCodexConfigToml,
+  renderCodexHookBlock,
 } from "./hook-install";
 
 describe("codexSupportsHooks", () => {
@@ -28,56 +30,156 @@ describe("codexSupportsHooks", () => {
   });
 });
 
-describe("codexDaedalusHookArgs", () => {
-  const args = codexDaedalusHookArgs("/home/.daedalus/bin/daedal");
+/**
+ * Another tool's hooks, in the shape dev-3.0 actually installs them. Daedalus
+ * has to land beside these without disturbing them, because a shipped build
+ * lands on machines that already have other coding tools configured.
+ */
+const THEIR_HOOKS = `[features]
+hooks = true
 
-  test("supplies every event as a -c override rather than a config write", () => {
-    expect(args.filter((value) => value === "-c")).toHaveLength(8);
-    expect(args.join(" ")).toContain("hooks.PermissionRequest=");
-  });
+# >>> other tool status hooks (generated — do not edit) >>>
 
-  test("keeps request_user_input in the tool matcher", () => {
+[[hooks.SessionStart]]
+matcher = "startup|resume"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "their-hook"
+timeout = 5
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "their-hook"
+timeout = 5
+# <<< other tool status hooks <<<
+`;
+
+describe("renderCodexHookBlock", () => {
+  const block = renderCodexHookBlock("/home/.daedalus/bin/daedal");
+
+  test("covers every event and keeps request_user_input in the matcher", () => {
+    for (const { event } of CODEX_HOOK_EVENTS)
+      expect(block).toContain(`[[hooks.${event}]]`);
     // Without it there is no way to tell a question from a permission wait.
-    expect(args.join(" ")).toContain("request_user_input");
+    expect(block).toContain("request_user_input");
   });
 
-  test("every command is offline tolerant and every hook has a timeout", () => {
-    const commands = args.filter((value) => value.startsWith("hooks."));
-    expect(commands).toHaveLength(8);
-    for (const command of commands) {
-      expect(command).toContain("|| true");
-      expect(command).toMatch(/timeout_sec=[35]/);
-    }
-    // Teardown gets the shorter leash.
-    expect(args.join(" ")).toContain(
-      'agent event SessionEnd || true",timeout_sec=3',
-    );
-  });
-
-  test("leaves an event the user has already hooked entirely alone", () => {
-    const merged = codexDaedalusHookArgs("/bin/daedal", ["Stop"]);
-    expect(merged.join(" ")).not.toContain("hooks.Stop=");
-    expect(merged.join(" ")).toContain("hooks.PreToolUse=");
+  test("every hook is async, offline tolerant, and has a timeout", () => {
+    const commands = block
+      .split("\n")
+      .filter((line) => line.startsWith("command ="));
+    expect(commands).toHaveLength(CODEX_HOOK_EVENTS.length);
+    for (const command of commands) expect(command).toContain("|| true");
+    expect(block.match(/async = true/g)).toHaveLength(CODEX_HOOK_EVENTS.length);
+    // The handler field is 'timeout'; 'timeout_sec' belongs to other configs
+    // and is silently ignored here.
+    expect(block).not.toContain("timeout_sec");
+    expect(block).toContain("timeout = 3");
+    expect(block).toContain("timeout = 5");
   });
 
   test("quotes an executable path that would otherwise break the command", () => {
-    const quoted = codexDaedalusHookArgs("/Applications/My App/daedal");
-    expect(quoted.join(" ")).toContain("'/Applications/My App/daedal'");
+    expect(renderCodexHookBlock("/Applications/My App/daedal")).toContain(
+      "'/Applications/My App/daedal'",
+    );
+  });
+});
+
+describe("mergeCodexConfigToml", () => {
+  const block = renderCodexHookBlock("/home/.daedalus/bin/daedal");
+
+  test("both tools' hooks survive, and ours are appended after theirs", () => {
+    const merged = mergeCodexConfigToml(THEIR_HOOKS, block);
+    const parsed = Bun.TOML.parse(merged) as {
+      hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>>;
+    };
+    // The event they hooked now has two groups: theirs, then ours.
+    expect(parsed.hooks.SessionStart!).toHaveLength(2);
+    expect(parsed.hooks.SessionStart![0]!.hooks[0]!.command).toBe("their-hook");
+    expect(parsed.hooks.SessionStart![1]!.hooks[0]!.command).toContain(
+      "agent event SessionStart",
+    );
+    // Appending is what preserves their trust records, which Codex keys to the
+    // group index.
+    expect(parsed.hooks.Stop![0]!.hooks[0]!.command).toBe("their-hook");
+    // An event only we hook still works.
+    expect(parsed.hooks.PermissionRequest!).toHaveLength(1);
+  });
+
+  test("everything outside our fence survives byte for byte", () => {
+    const merged = mergeCodexConfigToml(THEIR_HOOKS, block);
+    expect(merged).toContain("# >>> other tool status hooks");
+    expect(merged.slice(0, THEIR_HOOKS.trimEnd().length)).toBe(
+      THEIR_HOOKS.trimEnd(),
+    );
+  });
+
+  test("a relaunch replaces our block rather than accumulating copies", () => {
+    const once = mergeCodexConfigToml(THEIR_HOOKS, block);
+    const twice = mergeCodexConfigToml(once, block);
+    const parsed = Bun.TOML.parse(twice) as {
+      hooks: Record<string, unknown[]>;
+    };
+    expect(parsed.hooks.SessionStart!).toHaveLength(2);
+    expect(twice.match(/daedalus activity hooks \(generated/g)).toHaveLength(1);
+  });
+
+  test("an unchanged config is returned untouched, so no approval is lost", () => {
+    // Rewriting a hook definition invalidates its trust record, so a no-op
+    // launch must be a genuine no-op.
+    const once = mergeCodexConfigToml(THEIR_HOOKS, block);
+    expect(mergeCodexConfigToml(once, block)).toBe(once);
+  });
+
+  test("an empty config gets just our block", () => {
+    const merged = mergeCodexConfigToml("", block);
+    expect(Bun.TOML.parse(merged)).toMatchObject({ hooks: {} });
+    expect(merged.startsWith("# >>> daedalus")).toBe(true);
+  });
+
+  test("a changed executable path rewrites the block", () => {
+    const once = mergeCodexConfigToml(THEIR_HOOKS, block);
+    const moved = mergeCodexConfigToml(
+      once,
+      renderCodexHookBlock("/other/daedal"),
+    );
+    expect(moved).not.toBe(once);
+    expect(moved).toContain("/other/daedal");
+    expect(moved).not.toContain("/home/.daedalus/bin/daedal");
+  });
+});
+
+describe("codexHookTrustKeys", () => {
+  test("names our group, counted past whatever else is installed", () => {
+    const merged = mergeCodexConfigToml(
+      THEIR_HOOKS,
+      renderCodexHookBlock("/bin/daedal"),
+    );
+    const keys = codexHookTrustKeys(merged, "/u/.codex/config.toml");
+    // Theirs is group 0 on SessionStart, so ours is group 1.
+    expect(keys).toContain("/u/.codex/config.toml:session_start:1:0");
+    // Nobody else hooks PermissionRequest, so ours is group 0.
+    expect(keys).toContain("/u/.codex/config.toml:permission_request:0:0");
+    // They also hook Stop, so ours is group 1 there too.
+    expect(keys).toContain("/u/.codex/config.toml:stop:1:0");
+    // They hook neither of these, so ours is group 0.
+    expect(keys).toContain("/u/.codex/config.toml:user_prompt_submit:0:0");
   });
 });
 
 describe("codexConfiguredHookEvents", () => {
-  test("reads the user's own events and ignores Codex's trust bookkeeping", () => {
-    const toml = `
-[[hooks.Stop]]
-[[hooks.Stop.hooks]]
-type = "command"
-command = "their-hook"
-
-[hooks.state."/<session-flags>/config.toml:stop:0:0"]
-trusted_hash = "sha256:abc"
-`;
-    expect(codexConfiguredHookEvents(toml)).toEqual(["Stop"]);
+  test("reports other tools' events and ignores our own block", () => {
+    const merged = mergeCodexConfigToml(
+      THEIR_HOOKS,
+      renderCodexHookBlock("/bin/daedal"),
+    );
+    expect(codexConfiguredHookEvents(merged).sort()).toEqual([
+      "SessionStart",
+      "Stop",
+    ]);
   });
 
   test("an unparseable config is treated as no hooks rather than throwing", () => {
@@ -127,40 +229,61 @@ describe("Claude settings merging", () => {
 });
 
 describe("codexActivityTier", () => {
+  const configPath = "/u/.codex/config.toml";
+  const installed = mergeCodexConfigToml(
+    THEIR_HOOKS,
+    renderCodexHookBlock("/bin/daedal"),
+  );
+
   test("an old build is on the rollout tier, and says so", () => {
     expect(codexActivityTier({ version: "codex-cli 0.144.0" })).toMatchObject({
       tier: "transcript",
+      installed: false,
     });
     expect(codexActivityTier({})).toMatchObject({ tier: "transcript" });
   });
 
-  test("a machine where another tool owns every hook event keeps its hooks", () => {
-    // dev-3.0 installs exactly this set globally, so it is the common case
-    // rather than a hypothetical one.
-    const toml = CODEX_HOOK_EVENTS.map(
-      ({ event }) =>
-        `[[hooks.${event}]]\n[[hooks.${event}.hooks]]\ntype = "command"\ncommand = "theirs"\n`,
-    ).join("\n");
+  test("installed but unapproved is still the rollout tier", () => {
     const tier = codexActivityTier({
       version: "codex-cli 0.154.0",
-      configToml: toml,
+      configToml: installed,
+      configPath,
     });
-    expect(tier.tier).toBe("transcript");
-    expect(tier.detail).toContain("will not override your hooks");
-  });
-
-  test("a clean machine is on the hook tier, pending the trust prompt", () => {
-    const tier = codexActivityTier({ version: "codex-cli 0.154.0" });
-    expect(tier.tier).toBe("hook");
+    expect(tier).toMatchObject({
+      tier: "transcript",
+      installed: true,
+      trusted: false,
+    });
     expect(tier.detail).toContain("Hooks need review");
+    // The user should be told their other tool is unaffected.
+    expect(tier.detail).toContain("both run");
   });
 
-  test("a partial overlap reports how much is Daedalus's", () => {
-    const tier = codexActivityTier({
-      version: "codex-cli 0.154.0",
-      configToml: `[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "theirs"\n`,
-    });
-    expect(tier.tier).toBe("hook");
-    expect(tier.detail).toContain("7 of 8");
+  test("approving every entry promotes the machine to the hook tier", () => {
+    const approved =
+      installed +
+      codexHookTrustKeys(installed, configPath)
+        .map((key) => `\n[hooks.state."${key}"]\ntrusted_hash = "sha256:abc"\n`)
+        .join("");
+    expect(
+      codexActivityTier({
+        version: "codex-cli 0.154.0",
+        configToml: approved,
+        configPath,
+      }),
+    ).toMatchObject({ tier: "hook", installed: true, trusted: true });
+  });
+
+  test("a partial approval does not claim the hook tier", () => {
+    const partial =
+      installed +
+      `\n[hooks.state."${codexHookTrustKeys(installed, configPath)[0]}"]\ntrusted_hash = "sha256:abc"\n`;
+    expect(
+      codexActivityTier({
+        version: "codex-cli 0.154.0",
+        configToml: partial,
+        configPath,
+      }),
+    ).toMatchObject({ tier: "transcript", trusted: false });
   });
 });

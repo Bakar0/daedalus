@@ -140,7 +140,7 @@ for a `custom` session.
 | Provider                             | `working` | `idle` | `needs_permission` | `needs_input` | `done` | `error` | Source       |
 | ------------------------------------ | --------- | ------ | ------------------ | ------------- | ------ | ------- | ------------ |
 | Claude, hooks                        | yes       | yes    | yes                | yes           | yes    | yes     | `hook`       |
-| Codex 0.145+, hooks trusted          | yes       | yes    | yes                | yes           | no     | no      | `hook`       |
+| Codex 0.145+, hooks approved         | yes       | yes    | yes                | yes           | no     | no      | `hook`       |
 | Codex, rollout fallback              | yes       | yes    | **no**             | **no**        | no     | no      | `transcript` |
 | `custom`                             | no        | no     | no                 | no            | no     | no      | —            |
 | Any provider, via `daedal attention` | no        | no     | no                 | yes           | no     | no      | `agent`      |
@@ -158,12 +158,23 @@ Measured on codex-cli 0.154.0, a session writes `task_started` and
 stops: later turns go to `~/.codex/thread_history_1.sqlite` instead, which has
 no documented schema and is not read here. So on 0.154 the fallback reports the
 opening turn and afterwards goes quiet, and Codex activity depends on hooks in
-practice. `daedal doctor` reports which tier a machine is actually on:
+practice — which is why the hooks are installed rather than skipped whenever
+another tool is present.
+
+`daedal doctor` reports which tier a machine is actually on, and what to do
+about it:
+
+```text
+✓ codex activity: hook
+  hooks are installed and approved. They are installed alongside another
+  tool's hooks; both run.
+```
 
 ```text
 ✓ codex activity: transcript
-  every hook event is already configured in ~/.codex/config.toml, and Daedalus
-  will not override your hooks; activity falls back to the rollout
+  hooks are installed but not yet approved — choose "Trust all and continue"
+  at Codex's one-time "Hooks need review" prompt to enable them. Until then
+  activity falls back to the rollout.
 ```
 
 That check is never a failure — the fallback is a working tier, not a broken
@@ -182,21 +193,45 @@ entries are stripped on relaunch. A `--settings` value that is neither readable
 JSON nor a readable file is left exactly as written, and activity degrades to
 `unknown`.
 
-For **Codex** they are supplied as `-c` overrides, so nothing is written to
-your `~/.codex/config.toml`. An event you have already hooked yourself is left
-alone rather than overridden. Builds older than 0.145 ignore hooks silently —
-no error, no log line — so the version is probed rather than assumed, and those
-builds fall back to the rollout tier.
+For **Codex** there is no per-session equivalent, so they are installed into
+`~/.codex/config.toml` inside a fenced block:
+
+```toml
+# >>> daedalus activity hooks (generated — do not edit) >>>
+# Delete this block to turn off Daedalus agent activity for Codex.
+...
+# <<< daedalus activity hooks <<<
+```
+
+This is the only global change Daedalus makes, and it is designed to share the
+file rather than own it:
+
+- **Other tools keep working.** The block is _appended_, so hook groups
+  belonging to anything else you have installed keep their position — and
+  Codex keys a hook's approval to its position, so their existing approvals
+  survive untouched. Both tools' hooks run on every event; neither replaces the
+  other. A `-c` override could not do this, because it replaces the whole
+  `hooks.<Event>` key and would silently disable whatever else was registered
+  there.
+- **Relaunching updates the block rather than accumulating copies**, and
+  nothing is rewritten unless the content actually changes — every change to a
+  hook definition invalidates its approval and makes Codex ask again.
+- Everything outside the fence survives byte for byte, the first write leaves a
+  `config.toml.daedalus-backup`, and the write is atomic because Codex writes
+  to this file too.
+- Deleting the block turns Codex activity off.
+
+Builds older than 0.145 ignore hooks silently — no error, no log line — so the
+version is probed rather than assumed, and nothing is installed for them.
 
 Codex then gates hooks behind a one-time **"Hooks need review"** prompt, because
 a trusted hook runs outside its sandbox. **Daedalus deliberately does not answer
 that prompt.** Trusting code to run outside a sandbox is your decision, and
 clicking through a security control on your behalf is not something a status
 indicator has earned. Startup treats the prompt as finished rather than blocking
-on it, so the session is live and usable either way; until you choose "Trust
-all", Codex activity runs on the rollout tier. The approval is keyed to the hook
-definition and a source label that is constant across sessions, so answering it
-once covers every later Daedalus session.
+on it, so the session is live and usable either way; until you choose **"Trust
+all and continue"**, Codex activity runs on the rollout tier. The approval
+persists, so it is a once-per-machine step rather than a per-session one.
 
 Every hook is asynchronous, carries an explicit timeout (5s, 3s for teardown),
 swallows every error, and exits 0 even when the Daedalus app is not running. A

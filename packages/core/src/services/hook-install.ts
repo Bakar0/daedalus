@@ -184,57 +184,145 @@ export const CODEX_HOOK_EVENTS: ReadonlyArray<{
   { event: "SessionEnd" },
 ];
 
+/**
+ * Codex takes its hooks from configuration rather than from a flag, so unlike
+ * Claude there is nowhere to put them except the user's own
+ * `~/.codex/config.toml`. They go in a fenced block, the same shape other
+ * tools use, for three reasons that all matter on a machine Daedalus does not
+ * have to itself:
+ *
+ * - **Appending is what makes coexistence work.** Codex keys a hook's trust
+ *   record to `<source>:<event>:<group index>:<hook index>`, so appending our
+ *   matcher group *after* everyone else's leaves their indices — and therefore
+ *   their existing approvals — untouched. Only our entries are ever new.
+ * - **The fence is how we find our own entries again.** Rewriting it in place
+ *   means a relaunch updates rather than accumulates, and everything outside it
+ *   survives byte for byte, including other tools' blocks and comments.
+ * - **A `-c` override cannot do this.** It replaces the whole `hooks.<Event>`
+ *   key, so injecting that way would silently disable the hooks any other
+ *   installed tool had registered for the same event.
+ */
+export const CODEX_BLOCK_BEGIN =
+  "# >>> daedalus activity hooks (generated — do not edit) >>>";
+export const CODEX_BLOCK_END = "# <<< daedalus activity hooks <<<";
+
 const tomlString = (value: string): string =>
   `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 
 /**
- * Codex takes its hooks from configuration rather than from a flag, but `-c`
- * overrides are a configuration source, so the whole set can be supplied per
- * session without ever writing to the user's `~/.codex/config.toml`.
+ * The block Daedalus owns.
  *
- * That matters more than convenience. Codex gates hooks behind a one-time
- * "Hooks need review" trust prompt keyed by a hash of the hook definition and
- * a source label that, for `-c` overrides, is the constant
- * `/<session-flags>/config.toml` — so the user's single approval carries to
- * every later Daedalus session, and declining leaves their own configuration
- * exactly as it was.
- *
- * Codex's command handler takes a shell string rather than an argument vector,
- * so the executable path is quoted, and the whole command is made
- * offline-tolerant with a trailing `|| true`: when the control plane is down
- * the hook must still exit 0.
+ * Every hook is `async` and carries an explicit timeout, so activity reporting
+ * can never block or slow a turn, and every command ends in `|| true` so that
+ * a hook still exits 0 when the Daedalus CLI is missing or the control plane is
+ * down. Codex's command handler takes a shell string rather than an argument
+ * vector — verified against the binary, which rejects an array — so the
+ * executable path is single-quoted.
  */
-export function codexDaedalusHookArgs(
-  daedalExecutable: string,
-  userConfiguredEvents: readonly string[] = [],
-): string[] {
+export function renderCodexHookBlock(daedalExecutable: string): string {
   const quoted = `'${daedalExecutable.replace(/'/g, `'\\''`)}'`;
-  const args: string[] = [];
+  const lines: string[] = [
+    CODEX_BLOCK_BEGIN,
+    "# Delete this block to turn off Daedalus agent activity for Codex.",
+  ];
   for (const { event, matcher } of CODEX_HOOK_EVENTS) {
-    // A `-c` override replaces the key rather than extending it, so an event
-    // the user has already hooked is left entirely alone. Stomping their hook
-    // to gain a status indicator is not a trade Daedalus gets to make.
-    if (userConfiguredEvents.includes(event)) continue;
-    const command = `${quoted} agent event ${event} || true`;
-    const group = [
-      matcher ? `matcher=${tomlString(matcher)}` : undefined,
-      `hooks=[{type="command",command=${tomlString(command)},timeout_sec=${timeoutFor(event)}}]`,
-    ]
-      .filter(Boolean)
-      .join(",");
-    args.push("-c", `hooks.${event}=[{${group}}]`);
+    lines.push("", `[[hooks.${event}]]`);
+    if (matcher) lines.push(`matcher = ${tomlString(matcher)}`);
+    lines.push(
+      "",
+      `[[hooks.${event}.hooks]]`,
+      'type = "command"',
+      `command = ${tomlString(`${quoted} agent event ${event} || true`)}`,
+      `timeout = ${timeoutFor(event)}`,
+      "async = true",
+    );
   }
-  return args;
+  lines.push("", CODEX_BLOCK_END);
+  return lines.join("\n");
 }
 
 /**
- * Which hook events the user configured themselves, so Daedalus can stay out
- * of their way. `[hooks.state]` is Codex's own trust bookkeeping, not a hook.
+ * Splices the Daedalus block into a config, replacing any previous one.
+ *
+ * Returns the input unchanged when nothing would differ, because every rewrite
+ * of a hook definition invalidates its trust record and makes Codex ask the
+ * user to approve it again.
  */
-export function codexConfiguredHookEvents(configToml: string): string[] {
+export function mergeCodexConfigToml(existing: string, block: string): string {
+  const begin = existing.indexOf(CODEX_BLOCK_BEGIN);
+  const end = existing.indexOf(CODEX_BLOCK_END);
+  const stripped =
+    begin !== -1 && end > begin
+      ? `${existing.slice(0, begin)}${existing.slice(end + CODEX_BLOCK_END.length)}`
+      : existing;
+  const body = stripped.replace(/\s+$/, "");
+  const merged = body ? `${body}\n\n${block}\n` : `${block}\n`;
+  return merged === existing ? existing : merged;
+}
+
+const snakeEvent = (event: string): string =>
+  event.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+
+/**
+ * The `[hooks.state]` keys Codex will use for Daedalus's own entries, so the
+ * CLI can tell "installed and approved" from "installed, waiting for you".
+ *
+ * The group index is counted from the merged config rather than assumed,
+ * because it depends on how many groups other tools registered first.
+ */
+export function codexHookTrustKeys(
+  configToml: string,
+  configPath: string,
+): string[] {
   let parsed: { hooks?: Record<string, unknown> };
   try {
     parsed = Bun.TOML.parse(configToml) as { hooks?: Record<string, unknown> };
+  } catch {
+    return [];
+  }
+  const keys: string[] = [];
+  for (const { event } of CODEX_HOOK_EVENTS) {
+    const groups = parsed.hooks?.[event];
+    if (!Array.isArray(groups) || groups.length === 0) continue;
+    // Daedalus always appends, so its group is the last one for that event.
+    keys.push(`${configPath}:${snakeEvent(event)}:${groups.length - 1}:0`);
+  }
+  return keys;
+}
+
+/** Which of those keys Codex has recorded an approval for. */
+export function codexTrustedHookKeys(configToml: string): Set<string> {
+  try {
+    const parsed = Bun.TOML.parse(configToml) as {
+      hooks?: { state?: Record<string, { trusted_hash?: unknown }> };
+    };
+    return new Set(
+      Object.entries(parsed.hooks?.state ?? {})
+        .filter(([, value]) => typeof value?.trusted_hash === "string")
+        .map(([key]) => key),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Which hook events other tools have registered. Used for reporting only —
+ * Daedalus coexists with them rather than standing aside, so this no longer
+ * decides whether anything is installed. `[hooks.state]` is Codex's own trust
+ * bookkeeping, not a hook.
+ */
+export function codexConfiguredHookEvents(configToml: string): string[] {
+  const withoutOurs = (() => {
+    const begin = configToml.indexOf(CODEX_BLOCK_BEGIN);
+    const end = configToml.indexOf(CODEX_BLOCK_END);
+    return begin !== -1 && end > begin
+      ? `${configToml.slice(0, begin)}${configToml.slice(end + CODEX_BLOCK_END.length)}`
+      : configToml;
+  })();
+  let parsed: { hooks?: Record<string, unknown> };
+  try {
+    parsed = Bun.TOML.parse(withoutOurs) as { hooks?: Record<string, unknown> };
   } catch {
     return [];
   }
@@ -252,7 +340,7 @@ export const CODEX_HOOKS_MINIMUM = [0, 145, 0] as const;
  *
  * The output must actually look like Codex's. Anything else is some other
  * program answering `--version`, and reading its number as a Codex version
- * would inject hooks that can never fire while reporting that they can.
+ * would install hooks that can never fire while reporting that they can.
  */
 export function codexSupportsHooks(version: string): boolean {
   const match = /codex[\w-]*\s+v?(\d+)\.(\d+)\.(\d+)/i.exec(version);
@@ -267,46 +355,58 @@ export function codexSupportsHooks(version: string): boolean {
 }
 
 export interface CodexActivityTier {
-  /** `hook` once trusted, `transcript` while it is not, `none` when unusable. */
+  /** `hook` once trusted, `transcript` until then, `none` when unusable. */
   tier: "hook" | "transcript" | "none";
+  installed: boolean;
+  trusted: boolean;
   detail: string;
 }
 
 /**
  * Which Codex activity tier this machine is actually on, and why.
  *
- * Worth reporting rather than inferring from a blank indicator, because every
- * way of losing the hook tier is invisible from the outside: an old build
- * ignores hooks silently, an untrusted hook set never runs, and a hook event
- * another tool already owns is one Daedalus deliberately declines to take.
+ * Worth reporting rather than leaving the user to infer from a blank
+ * indicator, because every way of losing the hook tier is invisible from the
+ * outside: an old build ignores hooks silently, and an approved-but-not-yet
+ * hook set never runs.
  */
 export function codexActivityTier(input: {
   version?: string;
   configToml?: string;
+  configPath?: string;
 }): CodexActivityTier {
   if (!input.version || !codexSupportsHooks(input.version))
     return {
       tier: "transcript",
+      installed: false,
+      trusted: false,
       detail:
         "Codex is older than 0.145, which ignores hooks silently; activity falls back to the rollout",
     };
-  const taken = codexConfiguredHookEvents(input.configToml ?? "");
-  const ours = CODEX_HOOK_EVENTS.map((entry) => entry.event);
-  const available = ours.filter((event) => !taken.includes(event));
-  if (available.length === 0)
+  const configToml = input.configToml ?? "";
+  const installed = configToml.includes(CODEX_BLOCK_BEGIN);
+  if (!installed)
     return {
       tier: "transcript",
+      installed: false,
+      trusted: false,
       detail:
-        "every hook event is already configured in ~/.codex/config.toml, and Daedalus will not override your hooks; activity falls back to the rollout",
+        "hooks are installed into ~/.codex/config.toml the next time a Codex session starts",
     };
-  if (available.length < ours.length)
-    return {
-      tier: "hook",
-      detail: `${available.length} of ${ours.length} hook events are Daedalus's; the rest are already yours and were left alone`,
-    };
+  const expected = codexHookTrustKeys(configToml, input.configPath ?? "");
+  const approved = codexTrustedHookKeys(configToml);
+  const trusted =
+    expected.length > 0 && expected.every((key) => approved.has(key));
+  const alongside = codexConfiguredHookEvents(configToml).length > 0;
+  const coexist = alongside
+    ? " They are installed alongside another tool's hooks; both run."
+    : "";
   return {
-    tier: "hook",
-    detail:
-      "hooks are injected per session; approve Codex's one-time 'Hooks need review' prompt to enable them",
+    tier: trusted ? "hook" : "transcript",
+    installed: true,
+    trusted,
+    detail: trusted
+      ? `hooks are installed and approved.${coexist}`
+      : `hooks are installed but not yet approved — choose "Trust all and continue" at Codex's one-time "Hooks need review" prompt to enable them. Until then activity falls back to the rollout.${coexist}`,
   };
 }

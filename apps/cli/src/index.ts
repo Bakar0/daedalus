@@ -4,6 +4,7 @@ import {
   DaedalusError,
   normalizeError,
   codexActivityTier,
+  codexConfigPath,
   observeClaudeHook,
   observeCodexHook,
   resolveAgentExecutable,
@@ -19,7 +20,7 @@ import {
   TMUX_EXECUTABLE_FALLBACKS,
 } from "@daedalus/platform";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type { DoctorCheck } from "@daedalus/protocol";
 import packageJson from "../../../package.json";
 
@@ -374,18 +375,18 @@ async function codexActivityCheck(
   } catch {
     version = undefined;
   }
+  const configPath = codexConfigPath(context.config);
   let configToml = "";
   try {
-    const file = Bun.file(
-      join(dirname(context.config.codexSessionsDirectory), "config.toml"),
-    );
+    const file = Bun.file(configPath);
     if (await file.exists()) configToml = await file.text();
   } catch {
-    // An unreadable config reads as "no hooks of your own".
+    // An unreadable configuration is the user's to own; report the floor.
   }
   const tier = codexActivityTier({
     ...(version ? { version } : {}),
     configToml,
+    configPath,
   });
   return {
     name: "codex activity",

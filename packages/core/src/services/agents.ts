@@ -13,7 +13,7 @@ import type { SqliteRepositories } from "../repositories";
 import {
   buildAgentPrompt,
   claudeDaedalusSettingsArgs,
-  codexDaedalusHookConfigArgs,
+  ensureCodexHooks,
   CODEX_DAEDALUS_TUI_ARGS,
   discoverProviderModels,
   modelArgument,
@@ -870,7 +870,7 @@ export class AgentService {
           args = [
             ...definition.args,
             ...CODEX_DAEDALUS_TUI_ARGS,
-            ...(await codexDaedalusHookConfigArgs(this.config, executable)),
+            ...(await ensureCodexHooks(this.config, executable)),
             ...modelArgs,
             ...additionalDirectories,
             "resume",
@@ -883,7 +883,7 @@ export class AgentService {
           args = [
             ...definition.args,
             ...CODEX_DAEDALUS_TUI_ARGS,
-            ...(await codexDaedalusHookConfigArgs(this.config, executable)),
+            ...(await ensureCodexHooks(this.config, executable)),
             ...modelArgs,
             ...additionalDirectories,
           ];
