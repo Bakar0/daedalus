@@ -167,6 +167,13 @@ export function observeClaudeHook(
       const message = text(payload.message);
       switch (text(payload.notification_type)) {
         case "permission_prompt":
+          // `Notification` is the dialog going up, not what put it there: it
+          // carries no tool name, so it cannot tell a question apart from a
+          // command needing approval. `PermissionRequest` can, and fires for
+          // the same wait. So this never downgrades a question that the
+          // specific hook already identified — otherwise asking something
+          // reads as "needs permission" purely because the vaguer hook
+          // happened to arrive second.
           return asking
             ? {
                 activity: "needs_input",
@@ -177,6 +184,7 @@ export function observeClaudeHook(
                 activity: "needs_permission",
                 source,
                 detail: shorten(message ?? tool ?? "Waiting for permission"),
+                ifNotActivity: ["needs_input"],
               };
         case "idle_prompt":
         case "agent_needs_input":

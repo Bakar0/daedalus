@@ -398,3 +398,96 @@ describe("restore rebuilds what the user has to act on", () => {
     });
   });
 });
+
+describe("one block is one reason", () => {
+  /** Replays a hook the way the sink does, through the real mapping. */
+  const fireHook =
+    (context: ApplicationContext, sessionId: string) =>
+    async (event: string, extra: Record<string, unknown> = {}) => {
+      const observation = observeClaudeHook(event, {
+        hook_event_name: event,
+        ...extra,
+      });
+      if (observation)
+        await context.activity.observe({ sessionId, observation });
+    };
+
+  test("several hooks describing one wait do not stack up a count", async () => {
+    await withSession(async ({ context, sessionId }) => {
+      const fire = fireHook(context, sessionId);
+      const input = {
+        questions: [{ question: "What should we work on in this session?" }],
+      };
+      await fire("UserPromptSubmit");
+      await fire("PreToolUse", {
+        tool_name: "AskUserQuestion",
+        tool_input: input,
+      });
+      await fire("PermissionRequest", {
+        tool_name: "AskUserQuestion",
+        tool_input: input,
+      });
+      // The dialog going up, reported a second time and less specifically.
+      await fire("Notification", {
+        notification_type: "permission_prompt",
+        message: "Claude needs your permission to use AskUserQuestion",
+      });
+
+      // A question, not a permission: the vaguer hook arriving last must not
+      // downgrade what the specific one already established.
+      expect(context.activity.get(sessionId)?.activity).toBe("needs_input");
+      const reasons = context.activity.attentionFor(sessionId)?.reasons ?? [];
+      expect(reasons).toHaveLength(1);
+      expect(reasons[0]?.text).toBe(
+        "Claude is asking a question: What should we work on in this session?",
+      );
+    });
+  });
+
+  test("what the agent says itself still accumulates", async () => {
+    await withSession(async ({ context, sessionId }) => {
+      await context.activity.raise({ sessionId, reason: "Which branch?" });
+      await context.activity.raise({ sessionId, reason: "And which remote?" });
+      expect(context.activity.attentionFor(sessionId)?.reasons).toHaveLength(2);
+    });
+  });
+
+  test("an inferred reason replaces an inferred one but spares the agent's", async () => {
+    await withSession(async ({ context, sessionId }) => {
+      await context.activity.raise({ sessionId, reason: "Which branch?" });
+      await context.activity.record({
+        sessionId,
+        activity: "needs_permission",
+        detail: "Bash(git push)",
+        source: "hook",
+      });
+      await context.activity.record({
+        sessionId,
+        activity: "needs_input",
+        detail: "Which remote?",
+        source: "hook",
+      });
+      const reasons = context.activity.attentionFor(sessionId)?.reasons ?? [];
+      // The agent's own words, plus exactly one inferred line.
+      expect(reasons.map((reason) => reason.text)).toEqual([
+        "Which branch?",
+        "Claude is asking a question: Which remote?",
+      ]);
+    });
+  });
+
+  test("the badge does not say the provider's name twice", async () => {
+    await withSession(async ({ context, sessionId }) => {
+      await context.activity.record({
+        sessionId,
+        activity: "needs_permission",
+        // Some provider details are already a whole sentence about themselves.
+        detail: "Claude needs your permission to use Bash",
+        source: "hook",
+      });
+      expect(context.activity.attentionFor(sessionId)?.reasons[0]?.text).toBe(
+        "Claude needs your permission to use Bash",
+      );
+    });
+  });
+});

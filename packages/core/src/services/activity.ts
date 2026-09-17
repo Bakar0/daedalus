@@ -99,16 +99,26 @@ const publicState = (stored: StoredAgentActivity): AgentActivityState => ({
  * Applies one raise to a reason list. Identical text collapses onto the
  * existing entry and is promoted to newest rather than piling up, and the cap
  * evicts the *oldest* so the freshest context always survives.
+ *
+ * An inferred reason additionally evicts the previous inferred one. One block
+ * is seen by several hooks — Claude reports a wait through `PermissionRequest`
+ * and again through the `Notification` that raises the dialog — and each is a
+ * description of the same thing, not a second thing to do. Without this the
+ * badge counts events rather than reasons, which is the one shape it is never
+ * supposed to take. What the agent wrote itself still accumulates: those are
+ * genuinely separate statements.
  */
 export function accumulateReasons(
   reasons: readonly AttentionReason[],
   incoming: AttentionReason,
   limit = MAX_ATTENTION_REASONS,
 ): AttentionReason[] {
-  const withoutDuplicate = reasons.filter(
-    (reason) => reason.text !== incoming.text,
+  const kept = reasons.filter(
+    (reason) =>
+      reason.text !== incoming.text &&
+      !(incoming.generated && reason.generated),
   );
-  return [...withoutDuplicate, incoming].slice(-limit);
+  return [...kept, incoming].slice(-limit);
 }
 
 const ACTIVITY_HEADLINE: Record<AgentActivity, string | null> = {
@@ -283,6 +293,7 @@ export class ActivityService {
           this.reasonText(session, input.activity, detail),
           input.source,
           now,
+          true,
         );
     } else if (attention && this.canAutoClear(attention, input.source)) {
       // A badge that outlives its cause trains people to ignore badges, so the
@@ -431,6 +442,7 @@ export class ActivityService {
           this.reasonText(session, record.activity, record.detail),
           record.source,
           record.observedAt,
+          true,
         );
       restored += 1;
     }
@@ -470,9 +482,13 @@ export class ActivityService {
     const provider =
       session.provider.slice(0, 1).toUpperCase() + session.provider.slice(1);
     const headline = ACTIVITY_HEADLINE[activity] ?? "needs you";
-    return detail
-      ? `${provider} ${headline}: ${detail}`
-      : `${provider} ${headline}`;
+    if (!detail) return `${provider} ${headline}`;
+    // Some details are already a whole sentence the provider wrote about
+    // itself. Wrapping one produces "Claude needs permission: Claude needs your
+    // permission to use …", which is the badge talking over itself.
+    return detail.toLowerCase().startsWith(provider.toLowerCase())
+      ? detail
+      : `${provider} ${headline}: ${detail}`;
   }
 
   private raiseReason(
@@ -480,6 +496,7 @@ export class ActivityService {
     text: string,
     source: AgentActivitySource,
     now: string,
+    generated = false,
   ): SessionAttention {
     const existing = this.repositories.findSessionAttention(session.id);
     const reason: AttentionReason = {
@@ -487,6 +504,7 @@ export class ActivityService {
       text: truncate(text, MAX_REASON_LENGTH),
       raisedAt: now,
       source,
+      ...(generated ? { generated: true } : {}),
     };
     const attention: SessionAttention = {
       sessionId: session.id,
