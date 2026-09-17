@@ -2148,10 +2148,11 @@ export function WorkspaceApp({
   );
   const workspace = activeWorkspaces.find((item) => item.id === workspaceId);
   const workspaceReorder = useListReorder({
-    disabled: busy,
     ids: activeWorkspaces.map((item) => item.id),
+    // The promise is returned, not discarded: it is what holds the dropped
+    // card in place until the refreshed snapshot agrees with it.
     onCommit: (references) =>
-      void perform(client.request.workspaceReorder({ references })),
+      perform(client.request.workspaceReorder({ references })),
   });
   const orderedWorkspaces = workspaceReorder.order.flatMap(
     (id) => activeWorkspaces.find((item) => item.id === id) ?? [],
@@ -2183,12 +2184,11 @@ export function WorkspaceApp({
     (item) => sessionFilter === "all" || attentionSessionIds.has(item.id),
   );
   const sessionReorder = useListReorder({
-    disabled: busy,
     ids: sessions.map((item) => item.id),
     // Only the visible sessions are named, so a drag inside the "Needs me"
     // filter leaves the sessions it is hiding exactly where they were.
     onCommit: (sessionIds) =>
-      void perform(
+      perform(
         client.request.agentReorder({
           sessionIds,
           workspace: workspaceId!,
@@ -3159,7 +3159,11 @@ export function WorkspaceApp({
               />
             </div>
           </div>
-          <nav aria-label="Workspaces" className="item-list">
+          <nav
+            aria-label="Workspaces"
+            className="item-list"
+            data-reordering={workspaceReorder.draggingId ? "true" : undefined}
+          >
             {!snapshot && !error && (
               <div className="empty">Loading workspaces…</div>
             )}
@@ -3203,12 +3207,7 @@ export function WorkspaceApp({
                   <DragGrip />
                   <button
                     className="workspace-item"
-                    onClick={() => {
-                      // The drag and the click are one gesture; only the click
-                      // that ended a real drag is discarded.
-                      if (workspaceReorder.consumeDragClick()) return;
-                      selectWorkspace(item.id);
-                    }}
+                    onClick={() => selectWorkspace(item.id)}
                     onKeyDown={(event) => {
                       if (!event.altKey) return;
                       const direction =
@@ -3874,7 +3873,10 @@ export function WorkspaceApp({
                   />
                 </div>
               </div>
-              <div className="session-grid item-list">
+              <div
+                className="session-grid item-list"
+                data-reordering={sessionReorder.draggingId ? "true" : undefined}
+              >
                 {sessions.length === 0 &&
                   visibleSessionLaunches.length === 0 &&
                   (sessionFilter === "needs-me" ? (
@@ -3962,10 +3964,7 @@ export function WorkspaceApp({
                         className="session-card-main"
                         data-provider={session.provider}
                         data-session-id={session.id}
-                        onClick={() => {
-                          if (sessionReorder.consumeDragClick()) return;
-                          openSession(session.id);
-                        }}
+                        onClick={() => openSession(session.id)}
                         onKeyDown={(event) => {
                           if (!event.altKey) return;
                           const direction =

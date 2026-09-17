@@ -61,6 +61,28 @@ const snapshot: DesktopSnapshotDto = {
       resumeCount: 0,
       position: 1,
     },
+    // A third card, so a drag has somewhere to travel and the reorder check
+    // can move one past two others rather than just swapping a pair.
+    {
+      id: "panel-test-third",
+      workspaceId: "panel-test-workspace",
+      taskId: null,
+      name: "Third agent",
+      provider: "claude",
+      kind: "agent",
+      tmuxSession: "panel_test_third",
+      command: "claude",
+      args: [],
+      workingDirectory: "/tmp/panel-test",
+      status: "running",
+      exitCode: null,
+      startedAt: "2026-09-14T00:00:00.000Z",
+      endedAt: null,
+      providerSessionId: null,
+      archivedAt: null,
+      resumeCount: 0,
+      position: 3,
+    },
   ],
   terminals: [],
   repositories: [],
@@ -149,12 +171,51 @@ const snapshot: DesktopSnapshotDto = {
   },
 };
 
+// Reordering is the one interaction here that writes and reads back, so the
+// page has to behave like the real adapter: the snapshot is mutable, and the
+// write takes long enough for a round trip to be observable. A reorder that
+// resolved instantly would hide exactly the flicker this page exists to catch.
+let current = snapshot;
+const REORDER_LATENCY_MS = 120;
+
+const reordered = <T extends { id: string }>(items: T[], ids: string[]) => {
+  const named = new Set(ids);
+  const queue = [...ids];
+  return items.map((item) => {
+    if (!named.has(item.id)) return item;
+    // Shifted once per named slot. Calling it inside the `find` predicate
+    // instead would consume the queue on every comparison.
+    const next = queue.shift();
+    return items.find((candidate) => candidate.id === next) ?? item;
+  });
+};
+
 const client = {
   request: {
-    snapshot: async () => ({ ok: true, data: snapshot }),
+    snapshot: async () => ({ ok: true, data: current }),
+    workspaceReorder: async ({ references }: { references: string[] }) => {
+      await new Promise((settle) => setTimeout(settle, REORDER_LATENCY_MS));
+      current = {
+        ...current,
+        workspaces: reordered(current.workspaces, references),
+      };
+      return { ok: true, data: current.workspaces };
+    },
+    agentReorder: async ({ sessionIds }: { sessionIds: string[] }) => {
+      await new Promise((settle) => setTimeout(settle, REORDER_LATENCY_MS));
+      current = { ...current, agents: reordered(current.agents, sessionIds) };
+      return { ok: true, data: current.agents };
+    },
     agentModels: async ({ provider }: { provider: "codex" | "claude" }) => ({
       ok: true,
       data: { provider, models: [], source: "aliases" },
+    }),
+    // Stubbed because the renderer asks for it on mount: without it the
+    // request throws inside a passive effect and React tears the whole tree
+    // down, leaving the page blank for anything driving it.
+    terminalEndpoint: async () => ({
+      ok: true,
+      data: { endpoint: "ws://127.0.0.1:1/panel-test" },
     }),
     presencePublish: async () => ({ ok: true, data: {} }),
     toastsAcknowledge: async () => ({ ok: true, data: { acknowledged: 0 } }),

@@ -11,8 +11,12 @@ import {
 interface ReorderableList {
   /** Current order, as rendered. */
   readonly ids: readonly string[];
-  /** Called once, on drop, with the new order. Only when it actually changed. */
-  readonly onCommit: (ids: string[]) => void;
+  /**
+   * Called once, on drop, with the new order — only when it actually changed.
+   * Returning the write's promise is what lets the preview survive until the
+   * server's order arrives; see `commit`.
+   */
+  readonly onCommit: (ids: string[]) => void | Promise<unknown>;
   /** Disables dragging — while a mutation is in flight, or in a rail. */
   readonly disabled?: boolean;
 }
@@ -26,11 +30,6 @@ export interface ReorderHandles {
   readonly onPointerDown: (
     id: string,
   ) => (event: ReactPointerEvent<HTMLElement>) => void;
-  /**
-   * True when the gesture that just ended was a drag, so the click it also
-   * produced should not be treated as a selection.
-   */
-  readonly consumeDragClick: () => boolean;
   /** ⌥↑/⌥↓ handler for a focused card. Returns true when it handled the key. */
   readonly moveByKeyboard: (id: string, direction: "up" | "down") => boolean;
 }
@@ -38,10 +37,11 @@ export interface ReorderHandles {
 /**
  * Pointer-driven reordering for a list of cards.
  *
- * The whole card is the drag target rather than a grip, because these cards
- * are already buttons the user clicks constantly and a 16px strip would be the
+ * The whole card is the drag target, not just the grip: these cards are
+ * already buttons the user clicks constantly, and a 16px strip would be the
  * harder thing to hit. The grip drawn on each card is the signifier for this
- * gesture, not its only entry point — see `.list-drag-grip` in the stylesheet.
+ * gesture rather than its only entry point — see `.list-drag-grip` in the
+ * stylesheet.
  */
 export function useListReorder({
   ids,
@@ -56,13 +56,42 @@ export function useListReorder({
         id: string;
         start: { x: number; y: number };
         dragging: boolean;
+        /** The order this gesture began from, for deciding if anything moved. */
+        from: string[];
+        /** The live order, rewritten as the pointer moves. */
         order: string[];
       }
     | undefined
   >(undefined);
-  // Read and cleared by the click handler the same gesture produces. A ref, not
-  // state, because the click arrives before React would re-render.
-  const draggedClick = useRef(false);
+  /**
+   * Eats the click that a drag also produces, so a drop never selects.
+   *
+   * Done by intercepting the one click at the window in the capture phase
+   * rather than by leaving a flag for the card's own handler to consume: while
+   * a drag is in progress the list has `pointer-events: none`, so a click may
+   * never reach a card at all — and a flag nobody consumed would go on to
+   * swallow the user's next real click instead.
+   */
+  const swallowNextClick = useCallback(() => {
+    const swallow = (event: MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    window.addEventListener("click", swallow, { capture: true, once: true });
+    // If no click follows — the pointer was released outside anything
+    // clickable — the listener must not lie in wait for the next one.
+    setTimeout(
+      () => window.removeEventListener("click", swallow, { capture: true }),
+      0,
+    );
+  }, []);
+
+  /**
+   * What is on screen, which is not always what the server last said. A drag
+   * that starts while a previous one is still being written must build on the
+   * order the user can see — starting from `ids` would silently undo it.
+   */
+  const rendered = preview ?? ids;
 
   const registerCard = useCallback(
     (id: string) => (node: HTMLElement | null) => {
@@ -72,15 +101,45 @@ export function useListReorder({
     [],
   );
 
+  /**
+   * Sends the new order and keeps showing it until the snapshot catches up.
+   *
+   * Clearing the preview on drop instead would put the pre-drag order back on
+   * screen for the length of one round trip, so the card visibly springs home
+   * and then re-lands — which reads as the app undoing the drag and redoing
+   * it. Holding the preview means the card simply stays where it was put.
+   */
+  const commit = useCallback(
+    (order: string[]) => {
+      setPreview(order);
+      Promise.resolve(onCommit(order)).finally(() =>
+        // Identity, not equality: if another drag started while this write was
+        // in flight, that newer preview is the one on screen and must stand.
+        setPreview((current) => (current === order ? undefined : current)),
+      );
+    },
+    [onCommit],
+  );
+
   const finish = useCallback(() => {
     const active = gesture.current;
     gesture.current = undefined;
-    setPreview(undefined);
     setDraggingId(undefined);
-    if (!active?.dragging) return;
-    draggedClick.current = true;
-    if (orderChanged(ids, active.order)) onCommit(active.order);
-  }, [ids, onCommit]);
+    if (!active?.dragging) {
+      setPreview(undefined);
+      return;
+    }
+    swallowNextClick();
+    if (!orderChanged(active.from, active.order)) {
+      // Dragged, but back to where it started. Restore whatever was on screen
+      // before rather than clearing to `ids`, which may still be catching up.
+      setPreview((current) =>
+        current === undefined ? undefined : [...active.from],
+      );
+      return;
+    }
+    commit([...active.order]);
+  }, [commit, swallowNextClick]);
 
   const onPointerDown = useCallback(
     (id: string) => (event: ReactPointerEvent<HTMLElement>) => {
@@ -94,8 +153,9 @@ export function useListReorder({
         return;
       gesture.current = {
         dragging: false,
+        from: [...rendered],
         id,
-        order: [...ids],
+        order: [...rendered],
         start: { x: event.clientX, y: event.clientY },
       };
 
@@ -139,35 +199,30 @@ export function useListReorder({
       window.addEventListener("pointerup", handleUp);
       window.addEventListener("pointercancel", handleUp);
     },
-    [disabled, finish, ids],
+    [disabled, finish, rendered],
   );
-
-  const consumeDragClick = useCallback(() => {
-    const dragged = draggedClick.current;
-    draggedClick.current = false;
-    return dragged;
-  }, []);
 
   const moveByKeyboard = useCallback(
     (id: string, direction: "up" | "down") => {
       if (disabled) return false;
-      const from = ids.indexOf(id);
-      const to = keyboardMoveTarget(from, direction, ids.length);
+      const from = rendered.indexOf(id);
+      const to = keyboardMoveTarget(from, direction, rendered.length);
       if (to === undefined) return false;
-      onCommit(moveItem([...ids], from, to));
+      // Through `commit` for the same reason a drop is: holding a key down
+      // would otherwise make the card flicker back a slot between presses.
+      commit(moveItem([...rendered], from, to));
       return true;
     },
-    [disabled, ids, onCommit],
+    [commit, disabled, rendered],
   );
 
   return {
-    consumeDragClick,
     draggingId,
     moveByKeyboard,
     onPointerDown,
-    // The preview is dropped as soon as the gesture ends, so the next render
-    // shows whatever the server confirmed rather than a local guess.
-    order: preview ?? ids,
+    // The preview outlives the gesture by one round trip, then gives way to
+    // whatever the server confirmed.
+    order: rendered,
     registerCard,
   };
 }
