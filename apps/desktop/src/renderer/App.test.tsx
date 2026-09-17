@@ -40,6 +40,8 @@ const base: DesktopSnapshotDto = {
   attention: [],
   toasts: [],
   settings: {
+    version: "0.3.0",
+    channel: "stable",
     home: "/tmp/daedalus-test",
     workspaceRoot: "/tmp/daedalus-test/workspaces",
     databasePath: "/tmp/daedalus-test/state.db",

@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import { runCommand } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
+import packageJson from "../../../package.json";
 
 interface CliResult {
   exitCode: number;
@@ -63,12 +64,12 @@ describe("daedal CLI contract", () => {
     await withTemporaryDaedalusHome(async (home) => {
       expect(await cli(home, ["--version"])).toMatchObject({
         exitCode: 0,
-        stdout: "0.2.0\n",
+        stdout: `${packageJson.version}\n`,
         stderr: "",
       });
       expect(
         JSON.parse((await cli(home, ["--version", "--json"])).stdout),
-      ).toEqual({ ok: true, data: { version: "0.2.0" } });
+      ).toEqual({ ok: true, data: { version: packageJson.version } });
     });
   });
 
