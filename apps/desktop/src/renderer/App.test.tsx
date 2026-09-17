@@ -6,6 +6,10 @@ import type { DesktopClient } from "./client-types";
 import {
   agentMultilineSequence,
   clampPanelSize,
+  lifecycleTone,
+  sessionStatusView,
+  statusAriaLabel,
+  waitingLabel,
   launchMatchesSession,
   PANEL_RAIL_WIDTH,
   pendingSessionLaunches,
@@ -30,6 +34,9 @@ const base: DesktopSnapshotDto = {
   repositories: [],
   providerUsage: [],
   sessionTelemetry: [],
+  sessionActivity: [],
+  attention: [],
+  toasts: [],
   settings: {
     home: "/tmp/daedalus-test",
     workspaceRoot: "/tmp/daedalus-test/workspaces",
@@ -37,6 +44,7 @@ const base: DesktopSnapshotDto = {
     repositoryRoot: "/tmp/daedalus-test/repos",
     tmuxAvailable: false,
     workspaceInstructionFilesEnabled: true,
+    focusMode: false,
     providers: [
       { name: "codex", executable: "codex", available: false },
       { name: "claude", executable: "claude", available: true },
@@ -492,10 +500,10 @@ describe("desktop application shell", () => {
     expect(html).toContain('aria-label="Open Ship desktop session"');
     expect(html).toContain("task-session-link tool-codex running");
     expect(html).toContain(
-      'aria-label="2 sessions in Demo: 1 live, 1 need attention"',
+      'aria-label="2 sessions in Demo: 1 live, 1 need you"',
     );
     expect(html).toContain('data-attention="true"');
-    expect(html).toContain("1 need attention");
+    expect(html).toContain("1 needs you");
     expect(html).toContain('aria-label="Archive Demo workspace"');
     expect(html).toContain('class="archive-icon"');
     expect(html).toContain("Start session…");
@@ -856,5 +864,244 @@ describe("desktop application shell", () => {
     expect(html).toContain("Failed to start");
     expect(html).toContain("The current working directory was deleted");
     expect(html).not.toContain("session-launch-progress");
+  });
+});
+
+const liveSession: AgentSessionDto = {
+  id: "11111111-1111-4111-8111-111111111111",
+  workspaceId: "w1",
+  taskId: null,
+  name: "Claude",
+  provider: "claude",
+  kind: "agent",
+  tmuxSession: "daedalus_live",
+  command: "claude",
+  args: [],
+  workingDirectory: "/tmp/demo",
+  status: "running",
+  exitCode: null,
+  startedAt: "2026-09-16T09:00:00.000Z",
+  endedAt: null,
+  providerSessionId: null,
+  archivedAt: null,
+  resumeCount: 0,
+};
+
+const at = (iso: string) => Date.parse(iso);
+
+describe("session status indicators", () => {
+  test("attention outranks everything else on screen", () => {
+    const view = sessionStatusView(
+      liveSession,
+      {
+        sessionId: liveSession.id,
+        activity: "needs_permission",
+        detail: "Bash(git push)",
+        since: "2026-09-16T09:05:00.000Z",
+        observedAt: "2026-09-16T09:05:00.000Z",
+        source: "hook",
+      },
+      {
+        sessionId: liveSession.id,
+        workspaceId: "w1",
+        reasons: [
+          {
+            id: "r1",
+            text: "Claude needs permission: Bash(git push)",
+            raisedAt: "2026-09-16T09:05:00.000Z",
+            source: "hook",
+          },
+        ],
+        raisedAt: "2026-09-16T09:05:00.000Z",
+        updatedAt: "2026-09-16T09:05:00.000Z",
+      },
+    );
+    expect(view.tone).toBe("attention");
+    expect(view.label).toBe("needs permission");
+    expect(view.detail).toBe("Claude needs permission: Bash(git push)");
+    // The badge's age, not the activity's: that is what "waiting 4m" measures.
+    expect(view.since).toBe("2026-09-16T09:05:00.000Z");
+  });
+
+  test("a pane reading is marked unconfirmed rather than stated as fact", () => {
+    const view = sessionStatusView(liveSession, {
+      sessionId: liveSession.id,
+      activity: "working",
+      detail: "Editing agents.ts",
+      since: "2026-09-16T09:01:00.000Z",
+      observedAt: "2026-09-16T09:02:00.000Z",
+      source: "pane",
+    });
+    expect(view.tone).toBe("working");
+    expect(view.unconfirmed).toBe(true);
+    expect(
+      sessionStatusView(liveSession, {
+        sessionId: liveSession.id,
+        activity: "working",
+        detail: null,
+        since: "2026-09-16T09:01:00.000Z",
+        observedAt: "2026-09-16T09:02:00.000Z",
+        source: "hook",
+      }).unconfirmed,
+    ).toBe(false);
+  });
+
+  test("falls back to lifecycle status when no activity has been observed", () => {
+    expect(sessionStatusView(liveSession).tone).toBe("idle");
+    expect(sessionStatusView({ ...liveSession, status: "lost" })).toMatchObject(
+      {
+        tone: "lost",
+        attention: true,
+      },
+    );
+    expect(
+      sessionStatusView({ ...liveSession, status: "exited" }).attention,
+    ).toBe(false);
+    expect(lifecycleTone("starting")).toBe("working");
+  });
+
+  test("elapsed time reads as a wait, not as a zero", () => {
+    expect(
+      waitingLabel("2026-09-16T09:00:00.000Z", at("2026-09-16T09:00:20.000Z")),
+    ).toBe("just now");
+    expect(
+      waitingLabel("2026-09-16T09:00:00.000Z", at("2026-09-16T09:04:00.000Z")),
+    ).toBe("4m");
+    expect(
+      waitingLabel("2026-09-16T09:00:00.000Z", at("2026-09-16T11:30:00.000Z")),
+    ).toBe("2h 30m");
+    expect(waitingLabel(null, Date.now())).toBe("");
+  });
+
+  test("the accessible name states the activity, never the colour", () => {
+    const view = sessionStatusView(liveSession, undefined, {
+      sessionId: liveSession.id,
+      workspaceId: "w1",
+      reasons: [
+        {
+          id: "r1",
+          text: "Need a decision on the schema",
+          raisedAt: "2026-09-16T09:00:00.000Z",
+          source: "agent",
+        },
+        {
+          id: "r2",
+          text: "Which branch should this land on?",
+          raisedAt: "2026-09-16T09:01:00.000Z",
+          source: "agent",
+        },
+      ],
+      raisedAt: "2026-09-16T09:00:00.000Z",
+      updatedAt: "2026-09-16T09:01:00.000Z",
+    });
+    const label = statusAriaLabel(
+      liveSession,
+      view,
+      at("2026-09-16T09:04:00.000Z"),
+    );
+    expect(label).toBe(
+      "Claude: needs input, waiting 4m, 2 reasons, Which branch should this land on?",
+    );
+    expect(label).not.toMatch(/red|green|colour|color/i);
+  });
+
+  test("a blocked session is identifiable from the lists without opening it", () => {
+    const workspace: DesktopSnapshotDto["workspaces"][number] = {
+      id: "w1",
+      slug: "demo",
+      name: "Demo",
+      path: "/tmp/demo",
+      createdAt: "now",
+      updatedAt: "now",
+      archivedAt: null,
+      available: true,
+    };
+    const blocked: AgentSessionDto = {
+      ...liveSession,
+      id: "22222222-2222-4222-8222-222222222222",
+      name: "Blocked",
+      tmuxSession: "daedalus_blocked",
+    };
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialSnapshot={{
+          ...base,
+          workspaces: [workspace],
+          agents: [liveSession, blocked],
+          sessionActivity: [
+            {
+              sessionId: liveSession.id,
+              activity: "working",
+              detail: "Editing agents.ts",
+              since: "2026-09-16T09:00:00.000Z",
+              observedAt: "2026-09-16T09:02:00.000Z",
+              source: "hook",
+            },
+            {
+              sessionId: blocked.id,
+              activity: "needs_permission",
+              detail: "Bash(git push)",
+              since: "2026-09-16T09:01:00.000Z",
+              observedAt: "2026-09-16T09:02:00.000Z",
+              source: "hook",
+            },
+          ],
+          attention: [
+            {
+              sessionId: blocked.id,
+              workspaceId: "w1",
+              reasons: [
+                {
+                  id: "r1",
+                  text: "Claude needs permission: Bash(git push)",
+                  raisedAt: "2026-09-16T09:01:00.000Z",
+                  source: "hook",
+                },
+              ],
+              raisedAt: "2026-09-16T09:01:00.000Z",
+              updatedAt: "2026-09-16T09:01:00.000Z",
+            },
+          ],
+          settings: { ...base.settings, tmuxAvailable: true },
+        }}
+        initialWorkspaceView="sessions"
+      />,
+    );
+    // The workspace list carries the roll-up, so a blocked session in a
+    // background workspace is discoverable without clicking in.
+    expect(html).toContain("1 needs you");
+    expect(html).toContain("workspace-attention-badge");
+    // The row itself is the loud one, and it floats above the working session.
+    expect(html).toContain("agent-dot tone-attention");
+    expect(html).toContain("needs permission");
+    expect(html).toContain("Bash(git push)");
+    expect(html.indexOf(`data-session-id="${blocked.id}"`)).toBeLessThan(
+      html.indexOf(`data-session-id="${liveSession.id}"`),
+    );
+    expect(html).toContain("session-filter-toggle");
+  });
+
+  test("renders queued toasts and never more than the cap", () => {
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialSnapshot={{
+          ...base,
+          toasts: Array.from({ length: 7 }, (_unused, index) => ({
+            id: `toast-${index}`,
+            sessionId: null,
+            workspaceId: null,
+            level: "info" as const,
+            title: `Alert ${index}`,
+            body: "Something happened",
+            createdAt: "2026-09-16T09:00:00.000Z",
+          })),
+        }}
+      />,
+    );
+    expect(html).toContain("toast-stack");
+    expect(html).toContain("Alert 4");
+    expect(html).not.toContain("Alert 5");
   });
 });

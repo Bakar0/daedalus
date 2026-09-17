@@ -17,8 +17,23 @@ export interface DaedalusConfig {
   codexSessionsDirectory: string;
   claudeProjectsDirectory: string;
   workspaceInstructionFilesEnabled: boolean;
+  /**
+   * Suppresses toasts and desktop notifications without touching activity
+   * tracking, so the board stays live while the interruptions stop.
+   */
+  focusMode: boolean;
   agents: Record<string, AgentDefinition>;
 }
+
+type StoredConfig = Partial<
+  Pick<
+    DaedalusConfig,
+    | "workspaceRoot"
+    | "workspaceInstructionFilesEnabled"
+    | "focusMode"
+    | "agents"
+  >
+>;
 
 function expandHome(path: string): string {
   return path === "~"
@@ -45,6 +60,22 @@ export function channelHome(channel: string | undefined, home: string): string {
   return home.endsWith(suffix) ? home : `${home}${suffix}`;
 }
 
+export const STABLE_APP_IDENTIFIER = "dev.daedalus.app";
+
+/**
+ * The inverse of `channelHome`: which app owns this home. macOS keys Launch
+ * Services and notification attribution off the identifier, so raising "the
+ * app" from a dev home has to raise the *dev* app — otherwise a dev build's
+ * notification opens the stable one, which is exactly the two-apps-as-one
+ * confusion the channels exist to prevent.
+ */
+export function channelIdentifier(home: string): string {
+  const match = /[/\\]\.daedalus-([a-z0-9]+)$/i.exec(home);
+  return match
+    ? `${STABLE_APP_IDENTIFIER}.${match[1]!.toLowerCase()}`
+    : STABLE_APP_IDENTIFIER;
+}
+
 export async function loadConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<DaedalusConfig> {
@@ -54,12 +85,7 @@ export async function loadConfig(
   const configPath = join(home, "config.json");
   const file = Bun.file(configPath);
   const stored = (await file.exists())
-    ? ((await file.json()) as Partial<
-        Pick<
-          DaedalusConfig,
-          "workspaceRoot" | "workspaceInstructionFilesEnabled" | "agents"
-        >
-      >)
+    ? ((await file.json()) as StoredConfig)
     : {};
   const workspaceRoot = resolve(
     expandHome(stored.workspaceRoot || join(home, "workspaces")),
@@ -88,6 +114,7 @@ export async function loadConfig(
     ),
     workspaceInstructionFilesEnabled:
       stored.workspaceInstructionFilesEnabled !== false,
+    focusMode: stored.focusMode === true,
     agents: stored.agents || {
       codex: { executable: "codex", args: [] },
       claude: { executable: "claude", args: [] },
@@ -95,9 +122,13 @@ export async function loadConfig(
   };
 }
 
-export async function saveWorkspaceInstructionFilesEnabled(
+/**
+ * Merges a patch into the stored settings and republishes it atomically, so a
+ * crash mid-write can never leave a truncated config behind.
+ */
+async function saveSetting(
   config: DaedalusConfig,
-  enabled: boolean,
+  patch: Record<string, unknown>,
 ): Promise<void> {
   const configPath = join(config.home, "config.json");
   const file = Bun.file(configPath);
@@ -108,16 +139,27 @@ export async function saveWorkspaceInstructionFilesEnabled(
   try {
     await writeFile(
       temporaryPath,
-      `${JSON.stringify(
-        { ...stored, workspaceInstructionFilesEnabled: enabled },
-        null,
-        2,
-      )}\n`,
+      `${JSON.stringify({ ...stored, ...patch }, null, 2)}\n`,
       { flag: "wx" },
     );
     await rename(temporaryPath, configPath);
-    config.workspaceInstructionFilesEnabled = enabled;
   } finally {
     await rm(temporaryPath, { force: true });
   }
+}
+
+export async function saveWorkspaceInstructionFilesEnabled(
+  config: DaedalusConfig,
+  enabled: boolean,
+): Promise<void> {
+  await saveSetting(config, { workspaceInstructionFilesEnabled: enabled });
+  config.workspaceInstructionFilesEnabled = enabled;
+}
+
+export async function saveFocusMode(
+  config: DaedalusConfig,
+  enabled: boolean,
+): Promise<void> {
+  await saveSetting(config, { focusMode: enabled });
+  config.focusMode = enabled;
 }

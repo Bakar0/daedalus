@@ -507,6 +507,16 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   right: -2px;
   width: 6px;
 }
+.workspace-session-indicator .agent-dot.tone-attention {
+  height: 7px;
+  outline-offset: 1px;
+  outline-width: 1.5px;
+  width: 7px;
+}
+/* The count belongs on the session row, not on an 18px tile. */
+.workspace-session-indicator .agent-dot-count {
+  display: none;
+}
 .workspace-session-indicator[data-attention="true"] {
   border-color: rgb(255 130 130 / 0.55);
   box-shadow: 0 0 0 2px rgb(255 130 130 / 0.08);
@@ -709,23 +719,269 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   display: grid;
   gap: 2px;
 }
+/* Indicator vocabulary. Colour is never the only carrier: `attention` also
+   grows a solid ring and a count, `working` pulses, and the rest are plain
+   dots, so the tiers survive colour-blindness and a glance at a dense list. */
 .agent-dot {
+  align-items: center;
   background: #66758f;
   border-radius: 50%;
-  display: inline-block;
+  display: inline-flex;
   flex: 0 0 auto;
   height: 7px;
+  justify-content: center;
+  position: relative;
   width: 7px;
 }
-.agent-dot.running {
+.agent-dot.tone-idle {
   background: #3fdf7e;
   box-shadow: 0 0 0 3px rgb(63 223 126 / 0.1);
 }
-.agent-dot.starting {
+.agent-dot.tone-working {
   background: #afbaff;
 }
-.agent-dot.lost {
+/* The halo, not the colour, is what reads as "busy" at a glance. */
+.agent-dot.tone-working::after {
+  animation: agent-dot-pulse 1.6s ease-out infinite;
+  border: 1px solid #afbaff;
+  border-radius: 50%;
+  content: "";
+  inset: -3px;
+  position: absolute;
+}
+.agent-dot.tone-done {
+  background: #58c79a;
+}
+.agent-dot.tone-error {
+  background: #ffb454;
+}
+.agent-dot.tone-lost,
+.agent-dot.tone-attention {
   background: #ff8282;
+}
+.agent-dot.tone-ended {
+  background: #66758f;
+}
+/* Attention is the loudest thing on screen and the only tone with a ring
+   that stays put rather than fading in and out. */
+.agent-dot.tone-attention {
+  height: 9px;
+  outline: 2px solid #ff8282;
+  outline-offset: 2px;
+  width: 9px;
+}
+.agent-dot.tone-lost {
+  outline: 1px solid rgb(255 130 130 / 0.5);
+  outline-offset: 2px;
+}
+.agent-dot.unconfirmed {
+  opacity: 0.55;
+  /* A guess reads as a guess: the ring is dashed rather than solid. */
+  outline-style: dashed;
+}
+.agent-dot-count {
+  background: #ff8282;
+  border-radius: 999px;
+  color: #1b0b0b;
+  font-size: 9px;
+  font-weight: 700;
+  left: 50%;
+  line-height: 12px;
+  min-width: 13px;
+  padding: 0 3px;
+  position: absolute;
+  text-align: center;
+  top: -9px;
+  transform: translateX(-50%);
+}
+@keyframes agent-dot-pulse {
+  from {
+    opacity: 0.85;
+    transform: scale(0.75);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-dot.tone-working::after {
+    animation: none;
+    opacity: 0.5;
+  }
+}
+
+.workspace-attention-badge {
+  background: rgb(255 130 130 / 0.16);
+  border: 1px solid rgb(255 130 130 / 0.45);
+  border-radius: 999px;
+  color: #ff8987;
+  font-size: 10px;
+  font-weight: 650;
+  margin-left: 6px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
+.session-card[data-attention="true"] {
+  border-color: rgb(255 130 130 / 0.5);
+  box-shadow: 0 0 0 1px rgb(255 130 130 / 0.16);
+}
+.session-status-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.session-status-detail {
+  color: var(--muted);
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-status-unconfirmed {
+  border: 1px dashed var(--line-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 9px;
+  margin-left: 6px;
+  padding: 0 5px;
+}
+/* Sits beside the session count in a panel that can be 250px wide, so it
+   never wraps and never competes with New for room. */
+.session-filter-toggle {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--secondary);
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 3px 7px;
+  white-space: nowrap;
+}
+.session-filter-toggle.active {
+  background: rgb(255 130 130 / 0.14);
+  border-color: rgb(255 130 130 / 0.45);
+  color: #ff8987;
+}
+.session-filter-count {
+  background: rgb(255 130 130 / 0.22);
+  border-radius: 999px;
+  margin-left: 5px;
+  padding: 0 5px;
+}
+
+.agent-session-attention {
+  align-items: flex-start;
+  background: rgb(255 130 130 / 0.1);
+  border: 1px solid rgb(255 130 130 / 0.38);
+  border-radius: 7px;
+  display: grid;
+  gap: 4px;
+  margin-bottom: 6px;
+  padding: 6px 8px;
+}
+.agent-session-attention-headline {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+.agent-session-attention-headline strong {
+  color: #ffc4c4;
+}
+.agent-session-attention-clear {
+  background: transparent;
+  border: 1px solid rgb(255 130 130 / 0.4);
+  border-radius: 6px;
+  color: #ff8987;
+  font-size: 10px;
+  margin-left: auto;
+  padding: 2px 7px;
+}
+.agent-session-attention-reasons {
+  color: #f0d4d4;
+  display: grid;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.agent-session-attention-reasons li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-session-activity {
+  color: var(--secondary);
+  white-space: nowrap;
+}
+.agent-session-activity-detail {
+  color: #8290a9;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Toasts sit above everything and steal no focus: they are for things worth
+   seeing, not worth chasing. */
+.toast-stack {
+  display: grid;
+  gap: 8px;
+  max-width: 340px;
+  position: fixed;
+  right: 16px;
+  top: 68px;
+  z-index: 60;
+}
+.toast {
+  align-items: flex-start;
+  background: var(--overlay);
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--accent);
+  border-radius: 9px;
+  box-shadow: 0 12px 28px rgb(0 0 0 / 0.38);
+  display: flex;
+  gap: 6px;
+  padding: 9px 10px;
+}
+.toast.level-success {
+  border-left-color: var(--success);
+}
+.toast.level-error {
+  border-left-color: var(--danger);
+}
+.toast-body {
+  background: transparent;
+  border: 0;
+  display: grid;
+  gap: 3px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+}
+.toast-body strong {
+  font-size: 12px;
+}
+.toast-body span {
+  color: var(--secondary);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.toast-dismiss {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  flex: 0 0 auto;
+  line-height: 0;
+  padding: 2px;
+}
+.toast-dismiss svg {
+  height: 12px;
+  width: 12px;
 }
 
 .detail-title {
@@ -2515,6 +2771,7 @@ dd {
   align-items: center;
   display: flex;
   gap: 8px;
+  min-width: 0;
 }
 .board-grid {
   display: grid;
@@ -2613,6 +2870,7 @@ dd {
   color: var(--text) !important;
 }
 .sessions-toolbar {
+  gap: 10px;
   min-height: 58px;
 }
 .session-grid {

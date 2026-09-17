@@ -65,6 +65,23 @@ daedal agent remove <agent-id>
 `data.models[].id` to `agent spawn --model`; omit `--model` to use
 `data.defaultModel`. Display labels are descriptive and are not model IDs.
 
+## Attention and notifications
+
+```text
+daedal attention "<reason>" [--session <agent-id>]
+daedal attention --clear [--session <agent-id>]
+daedal notify "<message>" [--level info|success|error] [--desktop] [--session <agent-id>]
+daedal ui state [--json]
+daedal focus <agent-id>
+```
+
+`--session` defaults to `DAEDALUS_SESSION_ID`. Raising attention accumulates
+reasons on one badge — identical text collapses, the newest five are kept — so
+repeated calls never produce repeated alerts. `--clear` drops all reasons at
+once and is never suppressed. `notify` picks its channel from `ui state`;
+its JSON result reports `delivered`, `suppressed`, and a human-readable
+`reason`, so a suppressed alert is distinguishable from a failed one.
+
 ## Diagnostics and exit codes
 
 ```text

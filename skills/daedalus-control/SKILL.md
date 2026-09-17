@@ -81,6 +81,30 @@ list`, `repo list`, or `agent list`.
 - Prefer `agent archive` over `stop` plus `remove` when preserving the provider
   conversation is useful. Restore archived conversations with `agent restore`.
 
+## Reporting on yourself
+
+Daedalus can see that a session exists; it cannot see why one is stuck. Tell it.
+
+- **MUST** run `daedal attention "<reason>"` when you are blocked on the user —
+  a decision you cannot make, a question you need answered, an approval you are
+  waiting on. Write the reason as the thing the user has to resolve
+  ("Need a decision on the schema"), not as a status ("waiting").
+- Reasons accumulate on one badge and identical text collapses, so calling it
+  again with more context is safe and is the intended use. Repeated calls never
+  produce repeated alerts.
+- **MUST** run `daedal attention --clear` as soon as the block is resolved, even
+  if the user never came to look. A badge that outlives its cause teaches people
+  to ignore badges. A clear is never suppressed, so it always goes through.
+- Use `daedal notify "<message>" [--level info|success|error]` for something
+  worth seeing but not worth chasing — a long build finished, a turn failed.
+- **Never** ping for per-step progress, routine tool calls, or anything already
+  visible on screen. The value of these signals is entirely in their rarity.
+- Run `daedal ui state --json` first when you want to choose a channel
+  yourself: it reports whether the app is running and in the foreground, which
+  session it is showing, how long the user has been idle, and whether Focus mode
+  is on. A suppressed alert reports itself as suppressed rather than failing,
+  so treat `suppressed: "focus_mode"` as success.
+
 ## Safety and completion
 
 - Never use `workspace remove`, `task remove`, `agent remove`, `--force`, or

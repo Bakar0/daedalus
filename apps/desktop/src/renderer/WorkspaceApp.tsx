@@ -13,7 +13,10 @@ import type {
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
+  AgentActivity,
+  AgentActivityDto,
   AgentSessionDto,
+  AttentionReasonDto,
   DesktopCommand,
   DesktopSnapshotDto,
   IntegratedTerminalDto,
@@ -22,12 +25,14 @@ import type {
   SessionWorktreeDto,
   RepositoryDiscoveryDto,
   RpcResult,
+  SessionAttentionDto,
   TaskDto,
   TaskStatus,
   WorkspaceContentDto,
   WorkspaceFileDto,
   WorkspaceFileEntryDto,
   WorkspaceDto,
+  ToastDto,
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { repositoryFuzzyScore } from "./repository-search";
@@ -444,10 +449,249 @@ function repositoryStatusText(
 const sessionIsLive = (session: AgentSessionDto) =>
   session.status === "running" || session.status === "starting";
 
-// Lost sessions are today's attention signal. This predicate is the extension
-// point for richer provider/developer attention states later.
-const sessionNeedsAttention = (session: AgentSessionDto) =>
-  session.status === "lost";
+/**
+ * The visual tier a session sits in. `attention` is deliberately the only tier
+ * that is loud: a grid where the one session blocked on you is instantly
+ * obvious is the entire point, and everything else is ambient by comparison.
+ */
+export type SessionTone =
+  "attention" | "working" | "idle" | "done" | "error" | "lost" | "ended";
+
+export interface SessionStatusView {
+  tone: SessionTone;
+  /** Short label naming the activity, never the colour. */
+  label: string;
+  /** Secondary line: "Editing agents.ts", "Bash(git push)", the question. */
+  detail: string | null;
+  /** Start of the current state, for "waiting 4m". */
+  since: string | null;
+  /** True while the user is the thing standing in the way. */
+  attention: boolean;
+  /** Open reasons on the badge, newest last, capped at five upstream. */
+  reasons: AttentionReasonDto[];
+  /**
+   * A pane-derived guess. Rendered muted and hedged, because presenting a
+   * heuristic as a fact is how a status display loses its credibility.
+   */
+  unconfirmed: boolean;
+}
+
+const ACTIVITY_LABEL: Record<AgentActivity, string> = {
+  unknown: "no signal",
+  working: "working",
+  needs_permission: "needs permission",
+  needs_input: "needs input",
+  idle: "idle",
+  done: "done",
+  error: "error",
+};
+
+/** For surfaces with no activity to show: integrated terminals, workspaces. */
+export const lifecycleTone = (
+  status: AgentSessionDto["status"],
+): SessionTone =>
+  status === "running"
+    ? "idle"
+    : status === "starting"
+      ? "working"
+      : status === "lost"
+        ? "lost"
+        : "ended";
+
+const LIFECYCLE_LABEL: Record<AgentSessionDto["status"], string> = {
+  starting: "starting",
+  running: "running",
+  exited: "exited",
+  lost: "lost",
+};
+
+/**
+ * Folds the three inputs the renderer is given — lifecycle status, observed
+ * activity, and the attention badge — into one thing to draw. This is the only
+ * place the precedence lives, and it is an adapter: no inference, no
+ * heuristics, no timers deciding state.
+ */
+export function sessionStatusView(
+  session: AgentSessionDto,
+  activity?: AgentActivityDto,
+  attention?: SessionAttentionDto,
+): SessionStatusView {
+  const reasons = attention?.reasons ?? [];
+  const newest = reasons.at(-1);
+  if (attention && reasons.length > 0) {
+    const blocked =
+      activity &&
+      (activity.activity === "needs_permission" ||
+        activity.activity === "needs_input")
+        ? activity.activity
+        : "needs_input";
+    return {
+      tone: "attention",
+      label: ACTIVITY_LABEL[blocked],
+      detail: newest?.text ?? activity?.detail ?? null,
+      since: attention.raisedAt,
+      attention: true,
+      reasons,
+      // A badge the agent raised about itself is a report, not a reading.
+      unconfirmed: reasons.every((reason) => reason.source === "pane"),
+    };
+  }
+  if (!sessionIsLive(session))
+    return {
+      tone: session.status === "lost" ? "lost" : "ended",
+      label: LIFECYCLE_LABEL[session.status],
+      detail: null,
+      since: session.endedAt,
+      // A vanished session is today's attention signal and stays one.
+      attention: session.status === "lost",
+      reasons: [],
+      unconfirmed: false,
+    };
+  if (!activity || activity.activity === "unknown")
+    return {
+      tone: session.status === "starting" ? "working" : "idle",
+      label: LIFECYCLE_LABEL[session.status],
+      detail: null,
+      since: session.startedAt,
+      attention: false,
+      reasons: [],
+      unconfirmed: false,
+    };
+  return {
+    tone:
+      activity.activity === "error"
+        ? "error"
+        : activity.activity === "done"
+          ? "done"
+          : activity.activity === "idle"
+            ? "idle"
+            : "working",
+    label: ACTIVITY_LABEL[activity.activity],
+    detail: activity.detail,
+    since: activity.since,
+    attention: false,
+    reasons: [],
+    unconfirmed: activity.source === "pane",
+  };
+}
+
+/**
+ * "waiting 4m" is what makes a stalled session visible; the bare word
+ * "waiting" is not. Sub-minute waits read as "just now" rather than "0m".
+ */
+export function waitingLabel(since: string | null, now: number): string {
+  if (!since) return "";
+  const elapsed = now - Date.parse(since);
+  if (!Number.isFinite(elapsed) || elapsed < 60_000) return "just now";
+  const minutes = Math.floor(elapsed / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
+}
+
+/** Screen readers get the activity and the wait, never the colour. */
+export function statusAriaLabel(
+  session: AgentSessionDto,
+  view: SessionStatusView,
+  now: number,
+): string {
+  const parts = [`${sessionName(session)}: ${view.label}`];
+  if (view.attention && view.since)
+    parts.push(`waiting ${waitingLabel(view.since, now)}`);
+  if (view.reasons.length > 1) parts.push(`${view.reasons.length} reasons`);
+  if (view.detail) parts.push(view.detail);
+  if (view.unconfirmed) parts.push("unconfirmed reading");
+  return parts.join(", ");
+}
+
+/**
+ * Colour is never the only carrier: attention draws a solid outer ring and a
+ * count, working pulses, and everything else is a plain dot. That survives
+ * colour-blindness and a glance at a dense list.
+ */
+function AgentStatusDot({
+  count,
+  label,
+  view,
+}: {
+  count?: number;
+  label?: string;
+  view: SessionStatusView;
+}) {
+  return (
+    <span
+      aria-hidden={label ? undefined : "true"}
+      aria-label={label}
+      className={`agent-dot tone-${view.tone}${view.unconfirmed ? " unconfirmed" : ""}`}
+      role={label ? "img" : undefined}
+    >
+      {view.attention && count !== undefined && count > 1 && (
+        <span className="agent-dot-count">{count}</span>
+      )}
+    </span>
+  );
+}
+
+const sessionNeedsAttention = (view: SessionStatusView) => view.attention;
+
+/** Five is the cap dev-3.0 settled on; beyond that a stack stops being read. */
+export const MAX_VISIBLE_TOASTS = 5;
+
+/**
+ * Ephemeral by contract: a toast is for something worth seeing but not worth
+ * chasing. Anything the user must come back to is a badge, so a toast that
+ * times out has lost nothing.
+ */
+function ToastStack({
+  onDismiss,
+  onOpen,
+  toasts,
+}: {
+  onDismiss: (ids: string[]) => void;
+  onOpen: (toast: ToastDto) => void;
+  toasts: ToastDto[];
+}) {
+  const visible = toasts.slice(0, MAX_VISIBLE_TOASTS);
+  useEffect(() => {
+    if (visible.length === 0) return;
+    const timer = setTimeout(
+      () => onDismiss(visible.map((toast) => toast.id)),
+      6_000,
+    );
+    return () => clearTimeout(timer);
+    // Dismissal is keyed on the exact set on screen, so a toast that arrives
+    // mid-countdown gets its own full showing rather than the remainder.
+  }, [onDismiss, visible.map((toast) => toast.id).join(",")]);
+  if (visible.length === 0) return null;
+  return (
+    <div aria-live="polite" className="toast-stack">
+      {visible.map((toast) => (
+        <div className={`toast level-${toast.level}`} key={toast.id}>
+          <button
+            className="quiet toast-body"
+            onClick={() => {
+              onOpen(toast);
+              onDismiss([toast.id]);
+            }}
+            type="button"
+          >
+            <strong>{toast.title}</strong>
+            <span>{toast.body}</span>
+          </button>
+          <button
+            aria-label="Dismiss notification"
+            className="quiet toast-dismiss"
+            onClick={() => onDismiss([toast.id])}
+            type="button"
+          >
+            <DismissIcon />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 const taskExcerpt = (markdown: string) =>
   markdown
@@ -616,12 +860,15 @@ function Modal({
 }
 
 function TerminalSurface({
+  activity,
+  attention,
   focused,
   fitRevision,
   id,
   terminalEndpoint,
   label,
   locationLabel,
+  onClearAttention,
   onFocused,
   onOpenLink,
   status,
@@ -630,12 +877,15 @@ function TerminalSurface({
   target,
   worktree,
 }: {
+  activity?: AgentActivityDto;
+  attention?: SessionAttentionDto;
   focused: boolean;
   fitRevision: number;
   id: string;
   terminalEndpoint?: string;
   label: string;
   locationLabel?: string;
+  onClearAttention?: () => void;
   onFocused?: () => void;
   onOpenLink: (url: string) => void;
   status: AgentSessionDto["status"];
@@ -653,6 +903,9 @@ function TerminalSurface({
   const connectionIssue = ["connected", "reconnected"].includes(connection)
     ? undefined
     : connection;
+  const view = session
+    ? sessionStatusView(session, activity, attention)
+    : undefined;
   useEffect(() => {
     if (!session || session.endedAt) return;
     const timer = setInterval(() => setNow(Date.now()), 30_000);
@@ -910,7 +1163,7 @@ function TerminalSurface({
     <section className="agent-terminal-shell">
       {target === "integrated" && (
         <div className="terminal-status">
-          <span className={`agent-dot ${status}`} />
+          <span className={`agent-dot tone-${lifecycleTone(status)}`} />
           <span>{label}</span>
           <small>
             {connection} · {id.slice(0, 8)}
@@ -923,11 +1176,58 @@ function TerminalSurface({
         onKeyDownCapture={captureAgentShortcut}
         ref={containerRef}
       />
-      {target === "agent" && session && (
+      {target === "agent" && session && view && (
         <div className="agent-session-status" aria-label="Session status">
+          {view.attention && (
+            // The loudest thing on screen, next to the readout the user is
+            // already looking at, with the reasons in reach rather than in a
+            // native tooltip that cannot be styled.
+            <div className="agent-session-attention" role="status">
+              <span className="agent-session-attention-headline">
+                <AgentStatusDot
+                  count={view.reasons.length}
+                  label={statusAriaLabel(session, view, now)}
+                  view={view}
+                />
+                <strong>{view.label}</strong>
+                {view.since && (
+                  <span>waiting {waitingLabel(view.since, now)}</span>
+                )}
+                {onClearAttention && (
+                  <button
+                    className="quiet agent-session-attention-clear"
+                    onClick={onClearAttention}
+                    type="button"
+                  >
+                    Clear
+                  </button>
+                )}
+              </span>
+              <ul className="agent-session-attention-reasons">
+                {[...view.reasons].reverse().map((reason) => (
+                  <li key={reason.id}>{reason.text}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div className="agent-session-status-primary">
-            <span className={`agent-dot ${status}`} />
+            <AgentStatusDot
+              label={statusAriaLabel(session, view, now)}
+              view={view}
+            />
             <strong>{providerLabel(session.provider)}</strong>
+            <span className="agent-session-activity">
+              {view.label}
+              {view.unconfirmed ? " (unconfirmed)" : ""}
+            </span>
+            {view.detail && !view.attention && (
+              <span
+                className="agent-session-activity-detail"
+                title={view.detail}
+              >
+                {view.detail}
+              </span>
+            )}
             {telemetry?.model && (
               <span className="agent-session-status-model">
                 {telemetry.model}
@@ -1056,6 +1356,16 @@ export function WorkspaceApp({
   // handler cannot accept URL parameters, so the endpoint is fetched once
   // over RPC instead of being read off `window.location`.
   const [terminalEndpoint, setTerminalEndpoint] = useState<string>();
+  // Elapsed labels are formatting, not state: the clock ticks here so a
+  // session that has been waiting four minutes says so, and nothing in the
+  // renderer ever decides what state a session is in.
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 15_000);
+    return () => clearInterval(timer);
+  }, []);
+  const snapshotRef = useRef(snapshot);
+  snapshotRef.current = snapshot;
   const [terminalFitRevision, setTerminalFitRevision] = useState(0);
   const [terminalMountRevision, setTerminalMountRevision] = useState(0);
   const terminalLayoutTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
@@ -1134,6 +1444,7 @@ export function WorkspaceApp({
     name: string;
   }>();
   const [filter, setFilter] = useState<TaskStatus | "all">("all");
+  const [sessionFilter, setSessionFilter] = useState<"all" | "needs-me">("all");
   const [modal, setModal] = useState<
     "workspace" | "task" | "session" | "repository" | "settings" | undefined
   >(initialModal);
@@ -1426,6 +1737,68 @@ export function WorkspaceApp({
     void refresh();
     return client.subscribe(() => void refresh());
   }, [client, refresh]);
+
+  const clearAttention = useCallback(
+    async (sessionId: string) => {
+      const response = await client.request.attentionClear({ sessionId });
+      if (!response.ok) setError(response.error.message);
+      await refresh();
+    },
+    [client, refresh],
+  );
+
+  const setFocusMode = useCallback(
+    async (enabled: boolean) => {
+      const response = await client.request.focusModeSet({ enabled });
+      if (!response.ok) setError(response.error.message);
+      await refresh();
+    },
+    [client, refresh],
+  );
+
+  const dismissToasts = useCallback(
+    async (ids: string[]) => {
+      if (ids.length === 0) return;
+      await client.request.toastsAcknowledge({ ids });
+      await refresh();
+    },
+    [client, refresh],
+  );
+
+  // Presence is published, not inferred at the far end: whoever decides which
+  // channel an alert takes needs to know where the user is, and only the
+  // window knows that. The heartbeat is short enough that a closed window
+  // stops absorbing alerts within a few seconds.
+  useEffect(() => {
+    let cancelled = false;
+    const publish = () => {
+      if (cancelled) return;
+      // A heartbeat is never worth breaking the window over, and harnesses
+      // inject partial clients.
+      try {
+        void client.request.presencePublish?.({
+          appForeground:
+            document.visibilityState === "visible" && document.hasFocus(),
+          workspaceId: workspaceId ?? null,
+          sessionId: activeSessionId ?? null,
+        });
+      } catch {
+        // Presence is advisory; routing degrades to "no app", never to a crash.
+      }
+    };
+    publish();
+    const timer = setInterval(publish, 3_000);
+    window.addEventListener("focus", publish);
+    window.addEventListener("blur", publish);
+    document.addEventListener("visibilitychange", publish);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      window.removeEventListener("focus", publish);
+      window.removeEventListener("blur", publish);
+      document.removeEventListener("visibilitychange", publish);
+    };
+  }, [activeSessionId, client, workspaceId]);
   const runDesktopCommand = useCallback(
     (command: DesktopCommand) => {
       if (command === "view-board") setView("board");
@@ -1440,6 +1813,22 @@ export function WorkspaceApp({
   useEffect(
     () => client.subscribeCommands(runDesktopCommand),
     [client, runDesktopCommand],
+  );
+  // A clicked notification runs `daedal focus`, which raises the app and lands
+  // here. Selecting the session is the whole point: an alert that only brings
+  // the window forward still leaves the user hunting.
+  useEffect(
+    () =>
+      client.subscribeFocusSession((sessionId) => {
+        const session = snapshotRef.current?.agents.find(
+          (item) => item.id === sessionId,
+        );
+        if (!session) return;
+        setWorkspaceId(session.workspaceId);
+        openSession(sessionId);
+        setView("sessions");
+      }),
+    [client, openSession],
   );
   useEffect(() => {
     const unsubscribe = client.subscribeWindowResize(terminalLayoutChanged);
@@ -1578,6 +1967,21 @@ export function WorkspaceApp({
     }
   }
 
+  // Activity and attention arrive as flat arrays on the snapshot, exactly like
+  // telemetry. Indexing them once keeps every surface reading the same DTO.
+  const activityById = new Map(
+    (snapshot?.sessionActivity ?? []).map((item) => [item.sessionId, item]),
+  );
+  const attentionById = new Map(
+    (snapshot?.attention ?? []).map((item) => [item.sessionId, item]),
+  );
+  const statusViewFor = (session: AgentSessionDto) =>
+    sessionStatusView(
+      session,
+      activityById.get(session.id),
+      attentionById.get(session.id),
+    );
+
   const activeWorkspaces = (snapshot?.workspaces ?? []).filter(
     (item) => !item.archivedAt && !archivingWorkspaceIds.has(item.id),
   );
@@ -1594,7 +1998,23 @@ export function WorkspaceApp({
   const workspaceSessions = (snapshot?.agents ?? [])
     .filter((item) => item.workspaceId === workspaceId)
     .sort((left, right) => right.startedAt.localeCompare(left.startedAt));
-  const sessions = workspaceSessions.filter((item) => !item.archivedAt);
+  const activeSessions = workspaceSessions.filter((item) => !item.archivedAt);
+  const attentionSessionIds = new Set(
+    activeSessions
+      .filter((item) => statusViewFor(item).attention)
+      .map((item) => item.id),
+  );
+  const sessions = activeSessions
+    .filter(
+      (item) => sessionFilter === "all" || attentionSessionIds.has(item.id),
+    )
+    // Blocked sessions float to the top; within each group the existing
+    // newest-first order is left alone.
+    .sort(
+      (left, right) =>
+        Number(attentionSessionIds.has(right.id)) -
+        Number(attentionSessionIds.has(left.id)),
+    );
   const workspaceSessionLaunches = sessionLaunches.filter(
     (item) => item.workspaceId === workspaceId,
   );
@@ -1613,7 +2033,11 @@ export function WorkspaceApp({
   const selectedTask = snapshot?.tasks.find(
     (item) => item.id === selectedTaskId,
   );
-  const activeSession = sessions.find((item) => item.id === activeSessionId);
+  // Deliberately not the filtered list: hiding a session from the list must
+  // not tear down the terminal the user is sitting in.
+  const activeSession = activeSessions.find(
+    (item) => item.id === activeSessionId,
+  );
   const activeSessionTelemetry = snapshot?.sessionTelemetry.find(
     (item) => item.sessionId === activeSession?.id,
   );
@@ -2471,6 +2895,18 @@ export function WorkspaceApp({
         } as CSSProperties
       }
     >
+      <ToastStack
+        onDismiss={(ids) => void dismissToasts(ids)}
+        onOpen={(toast) => {
+          // Without the deep link people learn to ignore these.
+          if (toast.workspaceId) selectWorkspace(toast.workspaceId);
+          if (toast.sessionId) {
+            openSession(toast.sessionId);
+            setView("sessions");
+          }
+        }}
+        toasts={snapshot?.toasts ?? []}
+      />
       <header className="topbar">
         <div className="brand">
           <span aria-hidden="true" className="brand-mark">
@@ -2557,11 +2993,19 @@ export function WorkspaceApp({
                   session.workspaceId === item.id && !session.archivedAt,
               );
               const liveCount = itemSessions.filter(sessionIsLive).length;
-              const attentionCount = itemSessions.filter(
-                sessionNeedsAttention,
+              // Blocked sessions come first so the five-icon truncation can
+              // never be the reason a blocked session goes unnoticed.
+              const itemViews = itemSessions
+                .map((session) => ({ session, view: statusViewFor(session) }))
+                .sort(
+                  (left, right) =>
+                    Number(right.view.attention) - Number(left.view.attention),
+                );
+              const attentionCount = itemViews.filter((item) =>
+                sessionNeedsAttention(item.view),
               ).length;
               const sessionLabel = `${itemSessions.length} ${itemSessions.length === 1 ? "session" : "sessions"}`;
-              const insightLabel = `${sessionLabel} in ${item.name}: ${liveCount} live, ${attentionCount} need attention`;
+              const insightLabel = `${sessionLabel} in ${item.name}: ${liveCount} live, ${attentionCount} need you`;
 
               return (
                 <div
@@ -2576,7 +3020,22 @@ export function WorkspaceApp({
                       {item.name.slice(0, 1).toUpperCase()}
                     </span>
                     <span className="workspace-card-content">
-                      <strong>{item.name}</strong>
+                      <strong className="workspace-card-name">
+                        <span>{item.name}</span>
+                        {/* A session blocked in a workspace nobody is looking
+                            at has to be discoverable without clicking in. The
+                            badge is a bare count so it survives a 210px
+                            column; the line below spells it out. */}
+                        {attentionCount > 0 && (
+                          <span
+                            aria-label={`${attentionCount} ${attentionCount === 1 ? "session needs" : "sessions need"} you in ${item.name}`}
+                            className="workspace-attention-badge"
+                            title={`${attentionCount} ${attentionCount === 1 ? "session needs" : "sessions need"} you`}
+                          >
+                            {attentionCount}
+                          </span>
+                        )}
+                      </strong>
                       <small>
                         {item.available
                           ? item.slug
@@ -2587,22 +3046,21 @@ export function WorkspaceApp({
                         className="workspace-session-insights"
                       >
                         <span className="workspace-session-icons">
-                          {itemSessions.slice(0, 5).map((session) => {
+                          {itemViews.slice(0, 5).map(({ session, view }) => {
                             const tool = sessionTool(session);
                             return (
                               <span
                                 className={`workspace-session-indicator tool-${tool}`}
                                 data-attention={
-                                  sessionNeedsAttention(session)
-                                    ? "true"
-                                    : undefined
+                                  view.attention ? "true" : undefined
                                 }
                                 key={session.id}
-                                title={`${sessionName(session)} · ${session.status}`}
+                                title={statusAriaLabel(session, view, now)}
                               >
                                 <ToolIcon tool={tool} />
-                                <span
-                                  className={`agent-dot ${session.status}`}
+                                <AgentStatusDot
+                                  count={view.reasons.length}
+                                  view={view}
                                 />
                               </span>
                             );
@@ -2619,7 +3077,7 @@ export function WorkspaceApp({
                           }
                         >
                           {attentionCount > 0
-                            ? `${attentionCount} need attention`
+                            ? `${attentionCount} need${attentionCount === 1 ? "s" : ""} you`
                             : itemSessions.length > 0
                               ? `${liveCount} live · ${sessionLabel}`
                               : "No sessions"}
@@ -3172,6 +3630,27 @@ export function WorkspaceApp({
                   <span className="count-badge">
                     {sessions.length + visibleSessionLaunches.length}
                   </span>
+                  <button
+                    aria-pressed={sessionFilter === "needs-me"}
+                    className={`quiet session-filter-toggle${sessionFilter === "needs-me" ? " active" : ""}`}
+                    disabled={
+                      attentionSessionIds.size === 0 && sessionFilter === "all"
+                    }
+                    onClick={() =>
+                      setSessionFilter((current) =>
+                        current === "needs-me" ? "all" : "needs-me",
+                      )
+                    }
+                    title="Show only sessions waiting on you"
+                    type="button"
+                  >
+                    Needs me
+                    {attentionSessionIds.size > 0 && (
+                      <span className="session-filter-count">
+                        {attentionSessionIds.size}
+                      </span>
+                    )}
+                  </button>
                 </div>
                 <div className="panel-heading-actions">
                   <CreateButton
@@ -3189,12 +3668,18 @@ export function WorkspaceApp({
               </div>
               <div className="session-grid item-list">
                 {sessions.length === 0 &&
-                  visibleSessionLaunches.length === 0 && (
+                  visibleSessionLaunches.length === 0 &&
+                  (sessionFilter === "needs-me" ? (
+                    <div className="empty large">
+                      <strong>Nothing is waiting on you</strong>
+                      <span>Every session is working or finished.</span>
+                    </div>
+                  ) : (
                     <div className="empty large">
                       <strong>No sessions yet</strong>
                       <span>Create an agent or free terminal.</span>
                     </div>
-                  )}
+                  ))}
                 {visibleSessionLaunches.map((launch) => (
                   <div
                     aria-busy={launch.status === "starting"}
@@ -3250,9 +3735,11 @@ export function WorkspaceApp({
                   const tool = sessionTool(session);
                   const timestamp = session.endedAt ?? session.startedAt;
                   const startupError = sessionStartupErrors.get(session.id);
+                  const view = statusViewFor(session);
                   return (
                     <div
-                      className={`session-card ${session.id === activeSessionId ? "selected" : ""}`}
+                      className={`session-card tone-${view.tone} ${session.id === activeSessionId ? "selected" : ""}`}
+                      data-attention={view.attention ? "true" : undefined}
                       key={session.id}
                     >
                       <button
@@ -3268,12 +3755,32 @@ export function WorkspaceApp({
                           <strong>{sessionName(session)}</strong>
                           <small>{task?.title ?? "Workspace session"}</small>
                           <em>
-                            <span className={`agent-dot ${session.status}`} />
-                            {startupError
-                              ? "failed to start"
-                              : session.status}{" "}
-                            · {session.id.slice(0, 6)}
+                            <AgentStatusDot
+                              count={view.reasons.length}
+                              label={statusAriaLabel(session, view, now)}
+                              view={view}
+                            />
+                            <span className="session-status-label">
+                              {startupError ? "failed to start" : view.label}
+                              {view.attention && view.since
+                                ? ` · waiting ${waitingLabel(view.since, now)}`
+                                : ""}{" "}
+                              · {session.id.slice(0, 6)}
+                            </span>
+                            {view.unconfirmed && (
+                              <span
+                                className="session-status-unconfirmed"
+                                title="Read from the terminal pane, not reported by the agent"
+                              >
+                                unconfirmed
+                              </span>
+                            )}
                           </em>
+                          {view.detail && (
+                            <em className="session-status-detail">
+                              {view.detail}
+                            </em>
+                          )}
                           {startupError && (
                             <em className="session-startup-error" role="alert">
                               {startupError}
@@ -3415,6 +3922,8 @@ export function WorkspaceApp({
             </div>
             {activeSession ? (
               <TerminalSurface
+                activity={activityById.get(activeSession.id)}
+                attention={attentionById.get(activeSession.id)}
                 terminalEndpoint={terminalEndpoint}
                 focused={shouldFocusSession(focusedSessionId, activeSession.id)}
                 fitRevision={terminalFitRevision}
@@ -3422,6 +3931,7 @@ export function WorkspaceApp({
                 key={`${activeSession.id}:${terminalMountRevision}`}
                 label={sessionName(activeSession)}
                 locationLabel={activeSessionRepository?.name ?? workspace.name}
+                onClearAttention={() => void clearAttention(activeSession.id)}
                 onFocused={clearSessionFocusRequest}
                 onOpenLink={openTerminalLink}
                 session={activeSession}
@@ -3582,7 +4092,9 @@ export function WorkspaceApp({
                     title={terminal.workingDirectory}
                     type="button"
                   >
-                    <span className={`agent-dot ${terminal.status}`} />
+                    <span
+                      className={`agent-dot tone-${lifecycleTone(terminal.status)}`}
+                    />
                     <span className="integrated-terminal-tab-copy">
                       <strong>{terminal.name}</strong>
                       <small>
@@ -4238,13 +4750,32 @@ export function WorkspaceApp({
                 </span>
               </label>
             </dd>
+            <dt>Notifications</dt>
+            <dd>
+              <label className="settings-toggle">
+                <input
+                  checked={snapshot.settings.focusMode}
+                  disabled={busy}
+                  onChange={(event) => void setFocusMode(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>
+                  <strong>Focus mode</strong>
+                  <small>
+                    Stop toasts and desktop notifications. Indicators and
+                    attention badges keep updating, and a badge being cleared
+                    always goes through.
+                  </small>
+                </span>
+              </label>
+            </dd>
           </dl>
           <h3>Agent executables</h3>
           <div className="provider-grid">
             {snapshot.settings.providers.map((item) => (
               <div key={item.name}>
                 <span
-                  className={`agent-dot ${item.available ? "running" : "lost"}`}
+                  className={`agent-dot tone-${item.available ? "idle" : "lost"}`}
                 />
                 <strong>{item.name}</strong>
                 <code>{item.executable}</code>

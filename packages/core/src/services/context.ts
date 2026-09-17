@@ -1,18 +1,23 @@
 import { createHash } from "node:crypto";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import {
   CommandTmuxClient,
   findExecutable,
   runCommand,
   TMUX_EXECUTABLE_FALLBACKS,
+  type NativeNotification,
+  type NativeNotifierResult,
   type TmuxClient,
 } from "@daedalus/platform";
-import { loadConfig, type DaedalusConfig } from "../config";
+import { channelIdentifier, loadConfig, type DaedalusConfig } from "../config";
 import { JsonLogger } from "../logging";
 import { runMigrations } from "../repositories/migrations";
 import { SqliteRepositories } from "../repositories/sqlite";
+import { ActivityService } from "./activity";
 import { AgentService } from "./agents";
 import { IntegratedTerminalService } from "./integrated-terminals";
+import { NotificationService } from "./notifications";
+import { PresenceService } from "./presence";
 import { TaskService } from "./tasks";
 import { TelemetryService } from "./telemetry";
 import { WorkspaceService } from "./workspaces";
@@ -28,6 +33,9 @@ export interface ApplicationContext {
   agents: AgentService;
   terminals: IntegratedTerminalService;
   telemetry: TelemetryService;
+  presence: PresenceService;
+  notifications: NotificationService;
+  activity: ActivityService;
   tmux: TmuxClient;
   close(): void;
 }
@@ -37,6 +45,20 @@ export interface ApplicationContextOptions {
   env?: NodeJS.ProcessEnv;
   tmux?: TmuxClient;
   reconcile?: boolean;
+  /**
+   * Set by the desktop host, which is the only adapter with a window to draw a
+   * toast in. Everywhere else a toast has to wait in the queue.
+   */
+  canDrawToasts?: () => boolean;
+  /** Injected so tests never reach the real Notification Center. */
+  sendNativeNotification?: (
+    notification: NativeNotification,
+  ) => Promise<NativeNotifierResult>;
+  /**
+   * The host app's own notifier. Correctly attributed to Daedalus and needs
+   * nothing installed, so it outranks AppleScript when the app is the caller.
+   */
+  showNotificationInApp?: (notification: NativeNotification) => void;
 }
 
 export async function createApplicationContext(
@@ -63,6 +85,7 @@ export async function createApplicationContext(
       config.home,
     );
   let agents!: AgentService;
+  let activity!: ActivityService;
   const workspaces = new WorkspaceService(
     repositories,
     config.workspaceRoot,
@@ -86,6 +109,7 @@ export async function createApplicationContext(
     tasks,
     tmux,
     config,
+    (sessionId) => activity.forget(sessionId),
   );
   const terminals = new IntegratedTerminalService(
     repositories,
@@ -94,6 +118,19 @@ export async function createApplicationContext(
     config,
   );
   const telemetry = new TelemetryService(repositories, config);
+  const presence = new PresenceService(config);
+  const notifications = new NotificationService(repositories, presence, {
+    ...(options.sendNativeNotification
+      ? { sendNative: options.sendNativeNotification }
+      : {}),
+    ...(options.canDrawToasts ? { canDrawToasts: options.canDrawToasts } : {}),
+    cliExecutable: join(config.home, "bin", "daedal"),
+    bundleId: channelIdentifier(config.home),
+    ...(options.showNotificationInApp
+      ? { showInApp: options.showNotificationInApp }
+      : {}),
+  });
+  activity = new ActivityService(repositories, notifications);
   if (options.reconcile !== false)
     await Promise.all([agents.reconcile(), terminals.reconcile()]);
   return {
@@ -106,6 +143,9 @@ export async function createApplicationContext(
     agents,
     terminals,
     telemetry,
+    presence,
+    notifications,
+    activity,
     tmux,
     close: () => repositories.close(),
   };

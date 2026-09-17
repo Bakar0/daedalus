@@ -85,6 +85,48 @@ Each launch gets a durable `daedalus_<uuid>` tmux session on a Daedalus server i
 
 Startup reconciliation compares SQLite with tmux. Missing live sessions become `lost`; existing starting sessions become `running`. If tmux itself is unavailable, reconciliation leaves persisted state unchanged and agent lifecycle commands report exit code 5 where applicable.
 
+## Attention, notifications, and presence
+
+```text
+daedal attention "<reason>" [--session <agent-id>]
+daedal attention --clear [--session <agent-id>]
+daedal notify "<message>" [--level info|success|error] [--desktop] [--session <agent-id>]
+daedal ui state [--json]
+daedal focus <agent-id>
+```
+
+These are how an agent reports on itself. Inference from hooks can tell you a
+session is blocked; only the agent can tell you why, and this is the only path
+that works for `custom` sessions and for providers with no hook support at all.
+`--session` defaults to `DAEDALUS_SESSION_ID`, so inside a Daedalus session
+these commands take no arguments beyond their text.
+
+`attention` raises a badge with a human-readable reason. Reasons accumulate on
+one badge rather than stacking alerts: identical text collapses, the newest five
+are kept, and the sixth evicts the oldest. It is therefore safe to call
+repeatedly — six raises leave one badge with five reasons and one alert, not six
+alerts. `--clear` drops every reason at once; a clear is never queued and never
+silenced, so it goes through while Focus mode is on and purges anything already
+queued for that session.
+
+`notify` sends one ephemeral alert, routed by where the user actually is:
+nothing when they are already looking at that session, a toast when the app is
+open elsewhere, a native notification when it is backgrounded, closed, or the
+user has been idle for five minutes. `--desktop` forces the native channel.
+A suppressed alert is reported (`suppressed`, and a `reason` such as
+`focus mode is on`) rather than silently dropped, so a caller can always tell
+suppression from failure.
+
+`ui state` reports whether the app is running and in the foreground, which
+workspace and session it is showing, how many seconds the user has been idle,
+and whether Focus mode is on — enough for an agent to choose its own channel
+before pinging. `focus` raises the app and selects a session; it is what a
+clicked notification runs.
+
+Discipline, and it matters more than the mechanism: ping when blocked, or when
+something important finished or broke. Never ping for per-step progress,
+routine tool calls, or anything already on screen.
+
 ## Repository worktrees
 
 ```text

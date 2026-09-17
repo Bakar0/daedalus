@@ -164,6 +164,7 @@ export interface DesktopSettingsDto {
   tmuxAvailable: boolean;
   tmuxVersion?: string;
   workspaceInstructionFilesEnabled: boolean;
+  focusMode: boolean;
   providers: ProviderAvailabilityDto[];
 }
 
@@ -177,6 +178,70 @@ export interface ProviderUsageDto {
   provider: "codex" | "claude";
   windows: UsageWindowDto[];
   observedAt: string;
+}
+
+/**
+ * What an agent is doing, as opposed to whether its process is alive. The two
+ * attention activities are the only ones that change what the user does next,
+ * so every surface renders them as their own tier.
+ */
+export type AgentActivity =
+  | "unknown"
+  | "working"
+  | "needs_permission"
+  | "needs_input"
+  | "idle"
+  | "done"
+  | "error";
+
+/** `pane` is a guess from terminal output and must render as lower confidence. */
+export type AgentActivitySource = "agent" | "hook" | "transcript" | "pane";
+
+export interface AgentActivityDto {
+  sessionId: string;
+  activity: AgentActivity;
+  detail: string | null;
+  since: string;
+  observedAt: string;
+  source: AgentActivitySource;
+}
+
+export interface AttentionReasonDto {
+  id: string;
+  text: string;
+  raisedAt: string;
+  source: AgentActivitySource;
+}
+
+/** One badge per session holding a set of open reasons, capped at five. */
+export interface SessionAttentionDto {
+  sessionId: string;
+  workspaceId: string;
+  reasons: AttentionReasonDto[];
+  raisedAt: string;
+  updatedAt: string;
+}
+
+export type NotificationLevel = "info" | "success" | "error";
+
+export interface ToastDto {
+  id: string;
+  sessionId: string | null;
+  workspaceId: string | null;
+  level: NotificationLevel;
+  title: string;
+  body: string;
+  createdAt: string;
+}
+
+export interface PresenceStateDto {
+  appRunning: boolean;
+  appForeground: boolean;
+  workspaceId: string | null;
+  sessionId: string | null;
+  userIdleSeconds: number;
+  observedAt: string;
+  focusMode: boolean;
 }
 
 export interface SessionTelemetryDto {
@@ -198,6 +263,9 @@ export interface DesktopSnapshotDto {
   repositories: RepositoryLibraryDto[];
   providerUsage: ProviderUsageDto[];
   sessionTelemetry: SessionTelemetryDto[];
+  sessionActivity: AgentActivityDto[];
+  attention: SessionAttentionDto[];
+  toasts: ToastDto[];
   settings: DesktopSettingsDto;
 }
 
@@ -275,6 +343,27 @@ export interface DesktopRpcSchema {
         { enabled: boolean },
         { enabled: boolean }
       >;
+      focusModeSet: Request<{ enabled: boolean }, { enabled: boolean }>;
+      /**
+       * Published by the renderer whenever the user moves, so notifications
+       * can route on where the user actually is rather than merely being
+       * suppressed when the window has focus.
+       */
+      presencePublish: Request<
+        {
+          appForeground: boolean;
+          workspaceId: string | null;
+          sessionId: string | null;
+        },
+        PresenceStateDto
+      >;
+      attentionRaise: Request<
+        { sessionId: string; reason: string },
+        SessionAttentionDto | null
+      >;
+      /** All-or-nothing, and never suppressed: see `SessionAttentionDto`. */
+      attentionClear: Request<{ sessionId: string }, { cleared: number }>;
+      toastsAcknowledge: Request<{ ids: string[] }, { acknowledged: number }>;
       workspaceRepositoryAttach: Request<
         {
           workspace: string;
@@ -378,6 +467,11 @@ export interface DesktopRpcSchema {
       dataChanged: { revision: number; source: "desktop" | "external" };
       command: { command: DesktopCommand };
       windowResized: { width: number; height: number };
+      /**
+       * Raised by `daedal focus`, which is what a clicked notification runs.
+       * Without the deep link people learn to ignore notifications.
+       */
+      focusSession: { sessionId: string };
     };
   };
 }

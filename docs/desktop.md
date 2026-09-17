@@ -6,6 +6,136 @@ The desktop is a thin adapter over the same `ApplicationContext` used by `daedal
 
 The bottom integrated-terminal panel is a separate utility surface available in Board, Sessions, and Workspace modes. Its **+** action creates a persisted login shell in the configured Daedalus home. Each active workspace card has an **Open in integrated terminal** action that creates a named tab in the workspace's validated registered path. Tabs show live state, can be selected or closed, and survive panel collapse and app restart through SQLite metadata plus tmux ownership. They never appear in the agent Sessions list.
 
+## Agent status and attention
+
+Lifecycle status answers "is this session running". Activity answers "does it
+need me", and only the second one changes what the user does next, so the two
+attention activities are the only loud tier in the UI. Everything else is
+ambient.
+
+`AgentActivityDto` (`{ sessionId, activity, detail, since, observedAt, source }`)
+and `SessionAttentionDto` ride on the snapshot beside session telemetry. The
+renderer is an adapter over them: `sessionStatusView` folds lifecycle status,
+activity, and the attention badge into one thing to draw, and the only
+computation the renderer does on its own is formatting elapsed time.
+
+### Indicator vocabulary
+
+| Tone        | Colour     | Shape                                                                   | Meaning                                                               |
+| ----------- | ---------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `attention` | red        | larger dot, **solid outer ring**, count badge when more than one reason | `needs_permission` or `needs_input`; the user is the thing in the way |
+| `working`   | periwinkle | **pulsing halo**                                                        | the agent is doing something, or the session is still starting        |
+| `idle`      | green      | plain dot                                                               | running, nothing observed                                             |
+| `done`      | green      | plain dot                                                               | the turn finished                                                     |
+| `error`     | amber      | plain dot                                                               | the turn failed                                                       |
+| `lost`      | red        | thin ring                                                               | the tmux session vanished                                             |
+| `ended`     | grey       | plain dot                                                               | exited                                                                |
+
+Colour is never the only carrier: shape and motion distinguish every tier on
+their own, so the vocabulary survives colour-blindness and a glance at a dense
+list. Motion respects `prefers-reduced-motion`. An observation whose `source`
+is `pane` renders with a dashed ring, reduced opacity, and an "unconfirmed"
+chip — a heuristic presented as a fact is how a status display loses its
+credibility. `aria-label` always names the activity and the wait, never the
+colour.
+
+### Surfaces
+
+- **Session rows** show the dot, the activity label, `waiting 4m` for attention
+  states, and the newest reason or activity detail as a truncated second line.
+- **The sessions toolbar** carries a **Needs me** filter, and blocked sessions
+  float to the top of the list whether or not it is on.
+- **The collapsed workspace indicator** sorts blocked sessions first, so the
+  five-icon truncation can never be the reason one goes unnoticed.
+- **The workspace card** carries a `2 need you` roll-up, so a blocked session in
+  a workspace nobody is looking at is discoverable without clicking in.
+- **The session detail header** puts the activity beside the model and context
+  readout, and raises a panel listing the open reasons with a **Clear** action
+  when the session is blocked.
+
+### The badge
+
+One badge per session holding a _set of open reasons_, never a counter of
+events. Repeated raises accumulate onto the same badge: identical text collapses
+rather than piling up, the newest five are kept, and the sixth evicts the
+oldest so the freshest context survives. The count lives on the indicator and
+the reason text lives in the session detail, deliberately not in a native
+tooltip that cannot be styled.
+
+Clearing is all-or-nothing — there is no per-reason resolution — and it is
+privileged in two ways that are easy to miss. It happens on the transition out
+of the attention state whether or not the user ever came, because a badge that
+outlives its cause trains people to ignore badges. And it is never queued and
+never silenced, not even in Focus mode: suppressing an alert is a preference,
+suppressing the retraction of an alert is a bug. Clearing also purges anything
+queued for that session, or the badge would come back to life the moment the
+queue flushed.
+
+A low-confidence `pane` reading may raise a badge but never retracts one.
+
+## Notifications
+
+Three distinct channels, never two at once for the same event:
+
+- **Badge** — persistent, described above.
+- **Toast** — ephemeral, six seconds, clickable, with an `info`/`success`/`error`
+  level. At most five are on screen; the rest stay queued and appear as the
+  stack drains.
+- **Native OS notification** — for when the app is backgrounded.
+
+The channel is chosen by **presence**, not by suppressing on focus. The window
+publishes `{ appForeground, workspaceId, sessionId }` every three seconds and
+the host samples system idle time alongside it, into `presence.json` under
+`DAEDALUS_HOME`. A heartbeat older than eight seconds reads as "no app", so a
+closed window stops absorbing alerts within a few seconds rather than
+swallowing them indefinitely. Routing:
+
+| Where the user is                        | Channel                                     |
+| ---------------------------------------- | ------------------------------------------- |
+| Focused on this very session             | nothing ephemeral; badge only               |
+| App open, looking at something else      | toast (+ badge when blocking)               |
+| App backgrounded, closed, or idle ≥ 300s | native notification (+ badge when blocking) |
+
+Alerts fire on transitions, never on a level, and are debounced per session:
+a turn that bounces `working → needs_permission → working` three times is one
+alert. The title carries the workspace, the session name, and the task number
+when task-backed.
+
+Native alerts go down a three-tier ladder, and `degraded` reports which tier
+the caller actually got:
+
+1. **`terminal-notifier`**, when it is on `PATH` — the only widely available way
+   to attach a _click action_. It runs `daedal focus <session-id>`, which parks
+   a request under `DAEDALUS_HOME` and raises the app; the host picks the
+   request up on its next tick and the window selects that session.
+2. **Electrobun's `Utils.showNotification`**, when the app itself is the caller
+   — correctly attributed to this bundle and needs nothing installed, but
+   clicking it can only raise the app, not choose a session.
+3. **`osascript`** — always available, attributed to Script Editor, no click
+   target at all.
+
+The app that gets raised follows the home's channel: a `~/.daedalus-dev` home
+raises `dev.daedalus.app.dev`, never the stable app. They are separate
+applications and macOS keys activation off the identifier.
+
+Electrobun 1.18.1 exposes `setDockIconVisible` but no dock _badge_, so the
+attention count has nowhere native to go; the host logs `attention_count_changed`
+and the in-app workspace roll-up is what the user reads.
+
+**Focus mode** is a global setting in the settings dialog. It stops toasts and
+desktop notifications while activity transitions keep flowing normally, so the
+board stays live and only the interruptions stop. A suppressed alert is
+reported as `suppressed: "focus_mode"` with the reason `focus mode is on`,
+never silently dropped, so a caller can always tell suppression from failure.
+
+## Giving the agent a voice
+
+Inference can tell you a session is blocked; only the agent can tell you why.
+`daedal attention "<reason>"`, `daedal attention --clear`, `daedal notify`, and
+`daedal ui state` let a session report on itself and pick its own channel. This
+is also the only path that works for `custom` provider sessions and for any
+agent with no hook support at all.
+
 ## Contract
 
 `@daedalus/protocol` defines serializable workspace, task, agent, integrated-terminal, settings, and snapshot DTOs plus `DesktopRpcSchema`. Every request returns `RpcResult<T>` so validation, not-found, conflict, dependency, and internal failures retain stable codes across the process boundary.
@@ -17,6 +147,8 @@ Available calls cover:
 - workspace snapshot/create/get/update/remove;
 - task create/get/update/status/remove;
 - agent get/spawn/send/stop/remove/archive/restore;
+- attention raise/clear, toast acknowledgement, presence publication, and the
+  Focus mode setting;
 - integrated terminal create/close;
 - settings and executable capability discovery through the snapshot.
 
@@ -42,4 +174,4 @@ Archived workspaces appear in a collapsed section at the bottom of the workspace
 
 ## Testing
 
-`apps/desktop/src/bun/rpc.test.ts` drives the RPC adapter through a real temporary application context, SQLite database, workspace filesystem, and fake tmux boundary. Terminal tests cover upgrade authentication, bounded noisy-output queues, socket high-water behavior, ANSI/Unicode capture, input, resize, reconnect status, and resource cleanup. `apps/desktop/src/renderer/App.test.tsx` renders lifecycle, dependency, and multi-session terminal selection states with an injected typed client. `bun run test:terminal-agent` exercises the real isolated tmux path. All test homes and tmux sockets are isolated and never touch the user's Daedalus data.
+`apps/desktop/src/bun/rpc.test.ts` drives the RPC adapter through a real temporary application context, SQLite database, workspace filesystem, and fake tmux boundary. Terminal tests cover upgrade authentication, bounded noisy-output queues, socket high-water behavior, ANSI/Unicode capture, input, resize, reconnect status, and resource cleanup. `apps/desktop/src/renderer/App.test.tsx` renders lifecycle, dependency, and multi-session terminal selection states with an injected typed client, and covers the indicator vocabulary, the attention roll-up, attention-first ordering, and the toast cap. `packages/core/src/services/activity.test.ts` covers badge accumulation, privileged clearing, and alert debouncing against a real temporary context with the native notifier injected — no test ever reaches the real Notification Center. `bun run test:terminal-agent` exercises the real isolated tmux path. All test homes and tmux sockets are isolated and never touch the user's Daedalus data.

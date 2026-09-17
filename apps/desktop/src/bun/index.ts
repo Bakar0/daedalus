@@ -49,9 +49,21 @@ process.env.DAEDALUS_HOME = channelHome(
   process.env.DAEDALUS_HOME ?? join(homedir(), ".daedalus"),
 );
 
-const context = await createApplicationContext(
-  resolve(PATHS.RESOURCES_FOLDER, "app/migrations"),
-);
+// The window is the only surface that can draw a toast, so the host is the
+// only adapter that may claim it; everywhere else a toast waits in the queue.
+let windowReady = false;
+const context = await createApplicationContext({
+  migrationsDirectory: resolve(PATHS.RESOURCES_FOLDER, "app/migrations"),
+  canDrawToasts: () => windowReady,
+  // Electrobun's own notifier is attributed to this bundle and needs nothing
+  // installed, so it beats the AppleScript fallback whenever the app is up.
+  showNotificationInApp: ({ title, subtitle, body }) =>
+    Utils.showNotification({
+      title,
+      ...(subtitle ? { subtitle } : {}),
+      body,
+    }),
+});
 const cliEntrypoint = resolve(PATHS.RESOURCES_FOLDER, "app/cli/daedal.js");
 const bunExecutable = findExecutable("bun", standardExecutableFallbacks("bun"));
 if ((await pathExists(cliEntrypoint)) && bunExecutable)
@@ -181,6 +193,19 @@ ApplicationMenu.setApplicationMenu(APPLICATION_MENU);
 let revision = 0;
 let fingerprint = desktopDataFingerprint(context);
 let telemetryFingerprint = "";
+let dockBadgeCount = 0;
+
+/**
+ * Electrobun 1.18.1 exposes `setDockIconVisible` but no dock *badge*, so there
+ * is no API to call and the count has nowhere native to go. It is logged when
+ * it changes so the signal exists, and the in-app workspace roll-up is what
+ * the user actually reads. Revisit if Electrobun grows a badge surface.
+ */
+async function recordAttentionCount(count: number): Promise<void> {
+  if (count === dockBadgeCount) return;
+  dockBadgeCount = count;
+  await context.logger.write("info", "attention_count_changed", { count });
+}
 
 function announce(source: "desktop" | "external"): void {
   fingerprint = desktopDataFingerprint(context);
@@ -216,6 +241,10 @@ const mainWindow = new BrowserWindow({
   hidden: Boolean(nativeStatusProbePath),
   activate: !nativeStatusProbePath,
 });
+
+// The hidden probe window is not a place a toast could be seen, so it never
+// claims the channel.
+windowReady = !nativeStatusProbePath;
 
 if (nativeStatusProbePath) {
   let probeStarted = false;
@@ -319,6 +348,18 @@ setInterval(async () => {
         connections.delete(socket);
       }
     }
+    // `daedal focus` parks a request and raises the app; the window learns
+    // which session to select here.
+    const focusRequest = await context.presence.takeFocusRequest();
+    if (focusRequest)
+      rpc.send.focusSession({ sessionId: focusRequest.sessionId });
+    // Alerts a CLI handed over are delivered as Daedalus, not Script Editor.
+    // Only fresh ones: an alert parked while the app was down is already late,
+    // and a queue that shouts a week of history is worse than a dropped ping.
+    await context.notifications.flushDesktop(5, 60_000);
+    await recordAttentionCount(
+      context.repositories.listSessionAttention().length,
+    );
     const next = desktopDataFingerprint(context);
     const nextTelemetryFingerprint = JSON.stringify(
       await context.telemetry.read(),
@@ -338,6 +379,18 @@ setInterval(async () => {
     checkingForExternalChanges = false;
   }
 }, 1_200);
+
+// A heartbeat that outlives the app would absorb every alert into a window
+// that is not there, so it is retired on the way out.
+for (const signal of ["SIGINT", "SIGTERM"] as const)
+  process.on(signal, () => {
+    windowReady = false;
+    void context.presence.retire().finally(() => process.exit(0));
+  });
+
+// Anything parked while the app was down is dropped rather than delivered:
+// it is already stale, and the badge that outlived it is the durable signal.
+context.notifications.discardPending("desktop");
 
 await context.logger.write("info", "desktop_started", {
   terminalTransport: "loopback_websocket",
