@@ -4,7 +4,13 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { basicSetup, EditorView } from "codemirror";
 import { markdown } from "@codemirror/lang-markdown";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
@@ -635,13 +641,33 @@ function AgentStatusDot({
 
 const sessionNeedsAttention = (view: SessionStatusView) => view.attention;
 
-/** Five is the cap dev-3.0 settled on; beyond that a stack stops being read. */
-export const MAX_VISIBLE_TOASTS = 5;
+/**
+ * Three, not five. Both Sonner's default and the UX literature land on the
+ * same number: past three, a stack stops being read and starts being
+ * dismissed unread.
+ */
+export const MAX_VISIBLE_TOASTS = 3;
+
+/** Long enough to read a title and a line; Sonner uses four. */
+const TOAST_DURATION_MS = 5_000;
+
+/** How far each receding layer drops, and how much it shrinks. */
+export const TOAST_LIFT = 14;
+const TOAST_SCALE_STEP = 0.05;
+
+/** Space between toasts once the deck is fanned out. */
+const TOAST_GAP = 10;
 
 /**
  * Ephemeral by contract: a toast is for something worth seeing but not worth
  * chasing. Anything the user must come back to is a badge, so a toast that
  * times out has lost nothing.
+ *
+ * They are drawn as a *deck* rather than a list. Three separate cards stacked
+ * down the corner cover the thing the user is trying to read, which is how a
+ * notification turns into an obstacle; collapsed, the whole stack costs the
+ * height of one card plus a sliver per toast behind it. Pointing at it fans
+ * the deck out and pauses every countdown, so reading them is never a race.
  */
 function ToastStack({
   onDismiss,
@@ -653,21 +679,116 @@ function ToastStack({
   toasts: ToastDto[];
 }) {
   const visible = toasts.slice(0, MAX_VISIBLE_TOASTS);
+  const key = visible.map((toast) => toast.id).join(",");
+  const [expanded, setExpanded] = useState(false);
+  const [heights, setHeights] = useState<Record<string, number>>({});
+  const nodes = useRef(new Map<string, HTMLDivElement>());
+  const deadlines = useRef(new Map<string, number>());
+  const pausedAt = useRef<number | null>(null);
+
+  // Measured rather than assumed: a wrapped title makes one card taller than
+  // its neighbours, and the fanned-out offsets have to account for it.
+  useLayoutEffect(() => {
+    const measured: Record<string, number> = {};
+    for (const [id, node] of nodes.current)
+      if (node.isConnected) measured[id] = node.offsetHeight;
+    setHeights((previous) => {
+      const ids = Object.keys(measured);
+      const same =
+        ids.length === Object.keys(previous).length &&
+        ids.every((id) => previous[id] === measured[id]);
+      return same ? previous : measured;
+    });
+  }, [key, expanded]);
+
+  // A countdown belongs to its own toast. Dismissing the whole set on one
+  // timer cuts short whichever toast happened to arrive last.
   useEffect(() => {
-    if (visible.length === 0) return;
-    const timer = setTimeout(
-      () => onDismiss(visible.map((toast) => toast.id)),
-      6_000,
+    const now = Date.now();
+    for (const toast of visible)
+      if (!deadlines.current.has(toast.id))
+        deadlines.current.set(toast.id, now + TOAST_DURATION_MS);
+    for (const id of [...deadlines.current.keys()])
+      if (!visible.some((toast) => toast.id === id))
+        deadlines.current.delete(id);
+  }, [key]);
+
+  useEffect(() => {
+    if (expanded) return;
+    const timers = visible.map((toast) =>
+      setTimeout(
+        () => onDismiss([toast.id]),
+        Math.max(0, (deadlines.current.get(toast.id) ?? 0) - Date.now()),
+      ),
     );
-    return () => clearTimeout(timer);
-    // Dismissal is keyed on the exact set on screen, so a toast that arrives
-    // mid-countdown gets its own full showing rather than the remainder.
-  }, [onDismiss, visible.map((toast) => toast.id).join(",")]);
+    return () => {
+      for (const timer of timers) clearTimeout(timer);
+    };
+  }, [expanded, key, onDismiss]);
+
+  const pause = () => {
+    if (pausedAt.current === null) pausedAt.current = Date.now();
+    setExpanded(true);
+  };
+  const resume = () => {
+    // Countdowns resume with the time that was left, not from the top.
+    const elapsed = Date.now() - (pausedAt.current ?? Date.now());
+    for (const [id, at] of deadlines.current)
+      deadlines.current.set(id, at + elapsed);
+    pausedAt.current = null;
+    setExpanded(false);
+  };
+
   if (visible.length === 0) return null;
+
+  const offsetFor = (index: number) => {
+    if (!expanded) return index * TOAST_LIFT;
+    let offset = 0;
+    for (let before = 0; before < index; before += 1)
+      offset += (heights[visible[before]!.id] ?? 0) + TOAST_GAP;
+    return offset;
+  };
+  const deckHeight = expanded
+    ? offsetFor(visible.length - 1) +
+      (heights[visible[visible.length - 1]!.id] ?? 0)
+    : (heights[visible[0]!.id] ?? 0) + (visible.length - 1) * TOAST_LIFT;
+
   return (
-    <div aria-live="polite" className="toast-stack">
-      {visible.map((toast) => (
-        <div className={`toast level-${toast.level}`} key={toast.id}>
+    <div
+      aria-live="polite"
+      className="toast-stack"
+      data-expanded={expanded}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node))
+          resume();
+      }}
+      onFocus={pause}
+      onMouseEnter={pause}
+      onMouseLeave={resume}
+      style={{ height: deckHeight }}
+    >
+      {visible.map((toast, index) => (
+        <div
+          className={`toast level-${toast.level}`}
+          key={toast.id}
+          ref={(node) => {
+            if (node) nodes.current.set(toast.id, node);
+            else nodes.current.delete(toast.id);
+          }}
+          style={
+            {
+              "--toast-offset": `${offsetFor(index)}px`,
+              "--toast-scale": expanded ? 1 : 1 - index * TOAST_SCALE_STEP,
+              // Collapsed, every card takes the front card's height. A taller
+              // one behind would jut out and break the stack into a ledge.
+              ...(expanded || index === 0
+                ? {}
+                : { height: heights[visible[0]!.id] }),
+              zIndex: visible.length - index,
+            } as CSSProperties
+          }
+        >
+          <span aria-hidden="true" className="toast-level" />
           <button
             className="quiet toast-body"
             onClick={() => {
@@ -680,7 +801,7 @@ function ToastStack({
             <span>{toast.body}</span>
           </button>
           <button
-            aria-label="Dismiss notification"
+            aria-label={`Dismiss notification: ${toast.title}`}
             className="quiet toast-dismiss"
             onClick={() => onDismiss([toast.id])}
             type="button"
@@ -689,6 +810,18 @@ function ToastStack({
           </button>
         </div>
       ))}
+      {visible.length > 1 && (
+        <button
+          className="quiet toast-clear-all"
+          onClick={() => onDismiss(visible.map((toast) => toast.id))}
+          style={
+            { "--toast-offset": `${deckHeight + TOAST_GAP}px` } as CSSProperties
+          }
+          type="button"
+        >
+          Clear all {visible.length}
+        </button>
+      )}
     </div>
   );
 }
@@ -1178,40 +1311,21 @@ function TerminalSurface({
       />
       {target === "agent" && session && view && (
         <div className="agent-session-status" aria-label="Session status">
-          {view.attention && (
-            // The loudest thing on screen, next to the readout the user is
-            // already looking at, with the reasons in reach rather than in a
-            // native tooltip that cannot be styled.
-            <div className="agent-session-attention" role="status">
-              <span className="agent-session-attention-headline">
-                <AgentStatusDot
-                  count={view.reasons.length}
-                  label={statusAriaLabel(session, view, now)}
-                  view={view}
-                />
-                <strong>{view.label}</strong>
-                {view.since && (
-                  <span>waiting {waitingLabel(view.since, now)}</span>
-                )}
-                {onClearAttention && (
-                  <button
-                    className="quiet agent-session-attention-clear"
-                    onClick={onClearAttention}
-                    type="button"
-                  >
-                    Clear
-                  </button>
-                )}
-              </span>
-              <ul className="agent-session-attention-reasons">
-                {[...view.reasons].reverse().map((reason) => (
-                  <li key={reason.id}>{reason.text}</li>
-                ))}
-              </ul>
-            </div>
-          )}
+          {/*
+            There is deliberately no reason panel here. This surface only ever
+            renders for the session the user is currently watching, so a panel
+            restating why it is blocked can never tell them anything the
+            terminal above it has not already said — it just costs rows and
+            repeats the agent back to itself. The badge still exists for every
+            surface where the session is *not* on screen: the session list, the
+            workspace roll-up, and the notification.
+
+            What does not survive being scrolled past is the wait and the way
+            out, so those fold into the status line instead.
+          */}
           <div className="agent-session-status-primary">
             <AgentStatusDot
+              count={view.reasons.length}
               label={statusAriaLabel(session, view, now)}
               view={view}
             />
@@ -1220,13 +1334,27 @@ function TerminalSurface({
               {view.label}
               {view.unconfirmed ? " (unconfirmed)" : ""}
             </span>
-            {view.detail && !view.attention && (
+            {view.attention && view.since && (
+              <span className="agent-session-activity-waiting">
+                waiting {waitingLabel(view.since, now)}
+              </span>
+            )}
+            {view.detail && (
               <span
                 className="agent-session-activity-detail"
                 title={view.detail}
               >
                 {view.detail}
               </span>
+            )}
+            {view.attention && onClearAttention && (
+              <button
+                className="quiet agent-session-attention-clear"
+                onClick={onClearAttention}
+                type="button"
+              >
+                Clear
+              </button>
             )}
             {telemetry?.model && (
               <span className="agent-session-status-model">

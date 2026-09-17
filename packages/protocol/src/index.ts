@@ -210,7 +210,8 @@ export interface AttentionReasonDto {
   id: string;
   text: string;
   raisedAt: string;
-  source: AgentActivitySource;
+  source: AgentActivitySource; /** True when Daedalus inferred this text rather than the agent writing it. */
+  generated?: boolean;
 }
 
 /** One badge per session holding a set of open reasons, capped at five. */

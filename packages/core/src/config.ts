@@ -63,6 +63,17 @@ export function channelHome(channel: string | undefined, home: string): string {
 export const STABLE_APP_IDENTIFIER = "dev.daedalus.app";
 
 /**
+ * Which channel owns this home: `stable`, or the suffix of a channelled one.
+ * Anything a channel writes outside its own home has to be named with this, or
+ * two installed builds end up fighting over one record.
+ */
+export function channelName(home: string): string {
+  return (
+    /[/\\]\.daedalus-([a-z0-9]+)$/i.exec(home)?.[1]?.toLowerCase() ?? "stable"
+  );
+}
+
+/**
  * The inverse of `channelHome`: which app owns this home. macOS keys Launch
  * Services and notification attribution off the identifier, so raising "the
  * app" from a dev home has to raise the *dev* app — otherwise a dev build's

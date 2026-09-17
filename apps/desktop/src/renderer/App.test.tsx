@@ -7,6 +7,7 @@ import {
   agentMultilineSequence,
   clampPanelSize,
   lifecycleTone,
+  MAX_VISIBLE_TOASTS,
   sessionStatusView,
   statusAriaLabel,
   waitingLabel,
@@ -18,6 +19,7 @@ import {
   type SessionLaunchState,
   shouldFocusSession,
   TERMINAL_FONT_SIZE,
+  TOAST_LIFT,
   TERMINAL_PANEL_MIN_HEIGHT,
 } from "./WorkspaceApp";
 
@@ -1101,7 +1103,89 @@ describe("session status indicators", () => {
       />,
     );
     expect(html).toContain("toast-stack");
-    expect(html).toContain("Alert 4");
-    expect(html).not.toContain("Alert 5");
+    // Three, not five: past that a stack stops being read and starts being
+    // dismissed unread.
+    expect(MAX_VISIBLE_TOASTS).toBe(3);
+    expect(html).toContain(`Alert ${MAX_VISIBLE_TOASTS - 1}`);
+    expect(html).not.toContain(`Alert ${MAX_VISIBLE_TOASTS}`);
+  });
+
+  test("the deck is collapsed by default so it cannot wall off the page", () => {
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialSnapshot={{
+          ...base,
+          toasts: Array.from({ length: 3 }, (_unused, index) => ({
+            id: `toast-${index}`,
+            sessionId: null,
+            workspaceId: null,
+            level: "info" as const,
+            title: `Alert ${index}`,
+            body: "Something happened",
+            createdAt: "2026-09-16T09:00:00.000Z",
+          })),
+        }}
+      />,
+    );
+    expect(html).toContain('data-expanded="false"');
+    // Each card behind the front one is a sliver lower and a little smaller,
+    // so three toasts cost one card's height plus two slivers.
+    expect(html).toContain("--toast-offset:0px");
+    expect(html).toContain(`--toast-offset:${TOAST_LIFT}px`);
+    expect(html).toContain(`--toast-offset:${TOAST_LIFT * 2}px`);
+    expect(html).toContain("--toast-scale:0.95");
+    expect(html).toContain("--toast-scale:0.9");
+  });
+
+  test("a stack of more than one offers a single way to clear it", () => {
+    const toast = (index: number) => ({
+      id: `toast-${index}`,
+      sessionId: null,
+      workspaceId: null,
+      level: "info" as const,
+      title: `Alert ${index}`,
+      body: "Something happened",
+      createdAt: "2026-09-16T09:00:00.000Z",
+    });
+    const render = (count: number) =>
+      renderToStaticMarkup(
+        <App
+          injectedClient={client}
+          initialSnapshot={{
+            ...base,
+            toasts: Array.from({ length: count }, (_u, index) => toast(index)),
+          }}
+        />,
+      );
+    expect(render(2)).toContain("toast-clear-all");
+    // One toast already has its own dismiss; a "clear all" would be noise.
+    expect(render(1)).not.toContain("toast-clear-all");
+  });
+
+  test("every toast carries a labelled dismiss, not only a timeout", () => {
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialSnapshot={{
+          ...base,
+          toasts: [
+            {
+              id: "toast-0",
+              sessionId: null,
+              workspaceId: null,
+              level: "error" as const,
+              title: "Build failed",
+              body: "Something happened",
+              createdAt: "2026-09-16T09:00:00.000Z",
+            },
+          ],
+        }}
+      />,
+    );
+    expect(html).toContain("Dismiss notification: Build failed");
+    // The level reads as a dot in the indicator vocabulary, not a stripe.
+    expect(html).toContain("toast-level");
+    expect(html).toContain("level-error");
   });
 });

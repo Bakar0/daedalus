@@ -3,6 +3,16 @@ import {
   createApplicationContext,
   DaedalusError,
   normalizeError,
+  channelName,
+  codexActivityTier,
+  codexConfigPath,
+  observeClaudeHook,
+  observeCodexHook,
+  resolveAgentExecutable,
+  sweepProviderActivity,
+  writeActivityRecord,
+  type ActivityObservation,
+  type AgentActivityState,
   type ApplicationContext,
 } from "@daedalus/core";
 import {
@@ -61,6 +71,107 @@ async function captureClaudeTelemetry(): Promise<number> {
   return 0;
 }
 
+/**
+ * The sink every provider activity hook calls, as `daedal agent event <Event>`.
+ *
+ * Three rules shape all of it, and they are the same three that govern the
+ * status-line sink next door. It must never block or slow a turn, so it reads
+ * a bounded payload and returns 0 on absolutely every path. It must work when
+ * the Daedalus app is not running, so the durable record under
+ * `DAEDALUS_HOME/activity` is written before the database is touched at all.
+ * And it must never surface a failure inside the agent's session, so every
+ * error is swallowed — a broken control plane is Daedalus's problem, not
+ * something to interrupt the user's work with.
+ */
+async function captureAgentEvent(
+  event: string,
+  migrationsDirectory?: string,
+): Promise<number> {
+  try {
+    const sessionId = process.env.DAEDALUS_SESSION_ID;
+    const home = process.env.DAEDALUS_HOME;
+    if (!sessionId || !SESSION_ID.test(sessionId) || !home) return 0;
+    const input = await Bun.stdin.text();
+    if (!input.trim() || input.length > 1024 * 1024) return 0;
+    const payload = JSON.parse(input) as Record<string, unknown>;
+    const provider =
+      // Only Codex carries a turn id, and only Claude carries a prompt id;
+      // either way the hook name tells us which vocabulary to read.
+      typeof payload.turn_id === "string" ||
+      typeof payload.thread_id === "string"
+        ? "codex"
+        : "claude";
+    const observation =
+      provider === "codex"
+        ? observeCodexHook(event, payload)
+        : (observeClaudeHook(event, payload) ??
+          observeCodexHook(event, payload));
+    if (!observation) return 0;
+    const providerSessionId =
+      typeof payload.session_id === "string" ? payload.session_id : undefined;
+    await applyObservation({
+      sessionId,
+      home,
+      observation,
+      ...(providerSessionId ? { providerSessionId } : {}),
+      ...(migrationsDirectory ? { migrationsDirectory } : {}),
+    });
+  } catch {
+    // An activity hook must never interfere with the provider session.
+  }
+  return 0;
+}
+
+/**
+ * Writes the durable record first, then applies the observation to the index.
+ *
+ * The order is the whole point. The record is what makes a hook succeed while
+ * the control plane is unavailable, and `ActivityService.restore()` replays it
+ * on the next startup — so an app that is down during a turn loses the badge
+ * for the duration, never the turn.
+ */
+async function applyObservation(input: {
+  sessionId: string;
+  home: string;
+  observation: ActivityObservation;
+  providerSessionId?: string;
+  migrationsDirectory?: string;
+}): Promise<void> {
+  const now = new Date().toISOString();
+  if (!input.observation.clear)
+    await writeActivityRecord(input.home, {
+      sessionId: input.sessionId,
+      activity: input.observation.activity,
+      detail: input.observation.detail ?? null,
+      since: now,
+      observedAt: now,
+      source: input.observation.source,
+      ...(input.providerSessionId
+        ? { providerSessionId: input.providerSessionId }
+        : {}),
+    }).catch(() => undefined);
+  let context: ApplicationContext | undefined;
+  try {
+    context = await createApplicationContext({
+      reconcile: false,
+      ...(input.migrationsDirectory
+        ? { migrationsDirectory: input.migrationsDirectory }
+        : {}),
+    });
+    await context.activity.observe({
+      sessionId: input.sessionId,
+      observation: input.observation,
+      ...(input.providerSessionId
+        ? { providerSessionId: input.providerSessionId }
+        : {}),
+    });
+  } catch {
+    // The record on disk is already correct; the index catches up on restart.
+  } finally {
+    context?.close();
+  }
+}
+
 function versionAtLeast(actual: string, minimum: string): boolean {
   const parse = (version: string) => {
     const match = version.match(/(\d+)\.(\d+)([a-z]?)/i);
@@ -89,7 +200,7 @@ Usage:
   daedal workspace <create|list|get|update|archive|restore|remove> ... [--json]
   daedal task <create|list|get|current|update|status|remove> ... [--json]
   daedal repo <library|list|attach|sync|detach|worktree> ... [--json]
-  daedal agent <spawn|list|get|attach|send|archive|restore|stop|remove> ... [--json]
+  daedal agent <spawn|list|get|wait|attach|send|archive|restore|stop|remove> ... [--json]
   daedal attention "<reason>" [--session <agent-id>] [--clear] [--json]
   daedal notify "<message>" [--level info|success|error] [--desktop] [--json]
   daedal ui state [--json]
@@ -127,12 +238,23 @@ const commandHelp: Record<string, string> = {
   daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>]
   daedal agent list [--workspace <workspace>] [--running|--archived]
   daedal agent get <agent-id>
+  daedal agent wait [--session <agent-id>] [--workspace <workspace>] [--for attention|idle] [--timeout <seconds>]
   daedal agent attach <agent-id>
   daedal agent send <agent-id> <text>
   daedal agent archive <agent-id> [--force]
   daedal agent restore <agent-id>
   daedal agent stop <agent-id> [--force]
-  daedal agent remove <agent-id>`,
+  daedal agent remove <agent-id>
+
+Every session carries an 'activity' block in --json output: what the agent is
+doing, since when, and the 'source' that observed it. Sources rank
+agent > hook > transcript > pane, and a weaker source never overwrites a
+fresher stronger one. 'unknown' means this provider gave no usable signal — it
+is a real answer, not a failure.
+
+'agent wait' blocks until a session reaches a state and then exits 0, so the
+same signal drives a shell notifier, a Slack ping or a tmux bell with no
+desktop app running. It exits 3 on timeout.`,
   attention: `Attention commands — the agent reporting on itself:
   daedal attention "<reason>" [--session <agent-id>]
   daedal attention --clear [--session <agent-id>]
@@ -230,6 +352,52 @@ function printResult(data: unknown, json: boolean, human: () => void): void {
   else human();
 }
 
+/**
+ * Reports which tier Codex activity is running on. It is never `ok: false`:
+ * the rollout tier is a real, working fallback, not a broken install, and
+ * failing `doctor` over it would cry wolf.
+ */
+async function codexActivityCheck(
+  context: ApplicationContext,
+): Promise<DoctorCheck> {
+  const definition = context.config.agents.codex;
+  const executable = definition
+    ? resolveAgentExecutable("codex", definition.executable)
+    : undefined;
+  if (!executable)
+    return {
+      name: "codex activity",
+      ok: true,
+      detail: "codex is not installed",
+    };
+  let version: string | undefined;
+  try {
+    version = await probeVersion(executable, ["--version"]);
+  } catch {
+    version = undefined;
+  }
+  const configPath = codexConfigPath(context.config);
+  let configToml = "";
+  try {
+    const file = Bun.file(configPath);
+    if (await file.exists()) configToml = await file.text();
+  } catch {
+    // An unreadable configuration is the user's to own; report the floor.
+  }
+  const tier = codexActivityTier({
+    ...(version ? { version } : {}),
+    configToml,
+    configPath,
+    channel: channelName(context.config.home),
+  });
+  return {
+    name: "codex activity",
+    ok: true,
+    version: tier.tier,
+    detail: tier.detail,
+  };
+}
+
 async function doctor(
   json: boolean,
   migrationsDirectory?: string,
@@ -266,6 +434,7 @@ async function doctor(
       },
       { name: "home", ok: true, detail: context.config.home },
       { name: "database", ok: true, detail: context.config.databasePath },
+      await codexActivityCheck(context),
     ];
     const ok = checks.every((check) => check.ok);
     if (json) console.log(JSON.stringify({ ok, data: { checks } }));
@@ -684,15 +853,30 @@ async function agentCommand(
       running: parsed.flags.has("running"),
       archived: parsed.flags.has("archived"),
     });
-    printResult(result, json, () => {
-      if (!result.length) console.log("No agent sessions.");
-      for (const item of result)
-        console.log(
-          `${item.id}\t${item.status}\t${item.provider}\t${item.name}\t${item.tmuxSession}`,
-        );
-    });
+    // Polled detectors run here so the CLI reports the same activity as the
+    // app without the app having to be running.
+    await sweepProviderActivity({
+      config: context.config,
+      repositories: context.repositories,
+      activity: context.activity,
+    }).catch(() => undefined);
+    await context.activity.decay().catch(() => undefined);
+    printResult(
+      result.map((item) => withActivity(context, item)),
+      json,
+      () => {
+        if (!result.length) console.log("No agent sessions.");
+        for (const item of result) {
+          const activity = context.activity.get(item.id);
+          console.log(
+            `${item.id}\t${item.status}\t${activity?.activity ?? "unknown"}\t${item.provider}\t${item.name}\t${item.tmuxSession}`,
+          );
+        }
+      },
+    );
     return 0;
   }
+  if (action === "wait") return agentWaitCommand(context, args, json);
   const parsed = parseArguments(
     args,
     [],
@@ -701,11 +885,21 @@ async function agentCommand(
   if (action === "get") {
     expectPositionals(parsed.positionals, 1, "daedal agent get <agent-id>");
     const result = await context.agents.get(parsed.positionals[0]!);
-    printResult(result, json, () =>
+    await sweepProviderActivity({
+      config: context.config,
+      repositories: context.repositories,
+      activity: context.activity,
+    }).catch(() => undefined);
+    await context.activity.decay().catch(() => undefined);
+    const activity = context.activity.get(result.id);
+    printResult(withActivity(context, result), json, () => {
       console.log(
-        `${result.id}\t${result.status}\t${result.provider}\t${result.name}\t${result.tmuxSession}`,
-      ),
-    );
+        `${result.id}\t${result.status}\t${activity?.activity ?? "unknown"}\t${result.provider}\t${result.name}\t${result.tmuxSession}`,
+      );
+      if (activity?.detail) console.log(`  ${activity.detail}`);
+      const reasons = context.activity.attentionFor(result.id)?.reasons ?? [];
+      for (const reason of reasons) console.log(`  ! ${reason.text}`);
+    });
     return 0;
   }
   if (action === "attach") {
@@ -774,6 +968,159 @@ async function agentCommand(
   }
   throw new DaedalusError("VALIDATION", `Unknown agent command '${action}'`);
 }
+
+/** Exit code for a wait that ran out of time, distinct from any real failure. */
+const WAIT_TIMEOUT_EXIT = 3;
+
+const WAIT_POLL_MS = 1_000;
+
+/**
+ * Blocks until a session reaches a state, then exits 0.
+ *
+ * This is what makes the activity signal scriptable rather than only visible:
+ * a shell notifier, a Slack ping or a tmux bell can wait on the same fact the
+ * badge draws, with no desktop app running at all. The app's notification then
+ * becomes one consumer of a general mechanism instead of the only way to find
+ * out.
+ *
+ * A session that ends while being waited on resolves the wait rather than
+ * hanging until the timeout: lifecycle dominates activity everywhere else, and
+ * a caller waiting for "idle" on a session that just died wants to be told.
+ */
+async function agentWaitCommand(
+  context: ApplicationContext,
+  args: string[],
+  json: boolean,
+): Promise<number> {
+  const parsed = parseArguments(args, [
+    "session",
+    "workspace",
+    "for",
+    "timeout",
+  ]);
+  expectPositionals(
+    parsed.positionals,
+    0,
+    "daedal agent wait [--session <agent-id>] [--workspace <workspace>] [--for attention|idle] [--timeout <seconds>]",
+  );
+  const target = parsed.values.for ?? "attention";
+  if (target !== "attention" && target !== "idle")
+    throw new DaedalusError(
+      "VALIDATION",
+      "--for must be either 'attention' or 'idle'",
+    );
+  const timeoutSeconds = parsed.values.timeout
+    ? Number(parsed.values.timeout)
+    : undefined;
+  if (
+    timeoutSeconds !== undefined &&
+    (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0)
+  )
+    throw new DaedalusError(
+      "VALIDATION",
+      "--timeout must be a positive number",
+    );
+  if (parsed.values.session && parsed.values.workspace)
+    throw new DaedalusError(
+      "VALIDATION",
+      "Choose either --session or --workspace, not both",
+    );
+  const sessionId = parsed.values.session
+    ? await currentSessionId(context, parsed.values.session)
+    : parsed.values.workspace
+      ? undefined
+      : process.env.DAEDALUS_SESSION_ID
+        ? await currentSessionId(context)
+        : undefined;
+  if (!sessionId && !parsed.values.workspace)
+    throw new DaedalusError(
+      "VALIDATION",
+      "No Daedalus session; pass --session <agent-id> or --workspace <workspace>",
+    );
+  const workspaceId = parsed.values.workspace
+    ? (await context.workspaces.get(parsed.values.workspace)).id
+    : undefined;
+  const deadline =
+    timeoutSeconds === undefined
+      ? undefined
+      : Date.now() + timeoutSeconds * 1_000;
+
+  while (true) {
+    // Reconciliation and the polled detectors run every pass, so a wait works
+    // for a provider that never pushes an event of its own.
+    await context.agents.reconcile().catch(() => undefined);
+    await sweepProviderActivity({
+      config: context.config,
+      repositories: context.repositories,
+      activity: context.activity,
+    }).catch(() => undefined);
+    await context.activity.decay().catch(() => undefined);
+    const candidates = context.repositories
+      .listAgents({ ...(workspaceId ? { workspaceId } : {}) })
+      .filter(
+        (session) =>
+          session.kind === "agent" &&
+          !session.archivedAt &&
+          (sessionId ? session.id === sessionId : true),
+      );
+    for (const session of candidates) {
+      const activity = context.activity.get(session.id);
+      const ended = session.status === "exited" || session.status === "lost";
+      const matched =
+        target === "attention"
+          ? ATTENTION_ACTIVITY.has(activity?.activity ?? "unknown")
+          : ended ||
+            activity?.activity === "idle" ||
+            activity?.activity === "done";
+      if (!matched) continue;
+      printResult(withActivity(context, session), json, () =>
+        console.log(
+          `${session.id}\t${session.status}\t${activity?.activity ?? "unknown"}${activity?.detail ? `\t${activity.detail}` : ""}`,
+        ),
+      );
+      return 0;
+    }
+    if (deadline !== undefined && Date.now() >= deadline) {
+      if (json)
+        console.log(
+          JSON.stringify({ ok: true, data: { timedOut: true, for: target } }),
+        );
+      else console.error(`Timed out waiting for ${target}`);
+      return WAIT_TIMEOUT_EXIT;
+    }
+    await Bun.sleep(WAIT_POLL_MS);
+  }
+}
+
+/**
+ * The activity block that rides on every session in `--json` output.
+ *
+ * A session with no observation reports `unknown` from source `none` rather
+ * than being left without the key: a consumer should never have to tell "not
+ * observed" from "field missing", and a `custom` session that no detector can
+ * read is a permanent, honest `unknown`.
+ */
+function withActivity(
+  context: ApplicationContext,
+  session: { id: string },
+): Record<string, unknown> {
+  const activity = context.activity.get(session.id);
+  const attention = context.activity.attentionFor(session.id);
+  return {
+    ...session,
+    activity: activity ?? {
+      sessionId: session.id,
+      activity: "unknown",
+      detail: null,
+      since: null,
+      observedAt: null,
+      source: "none",
+    },
+    attention: attention ? attention.reasons : [],
+  };
+}
+
+const ATTENTION_ACTIVITY = new Set(["needs_permission", "needs_input"]);
 
 /**
  * Resolves the session the caller is speaking for. An agent almost never
@@ -1098,6 +1445,8 @@ export async function runCli(
   const args = inputArgs.filter((argument) => argument !== "--json");
   if (args[0] === "agent" && args[1] === "telemetry")
     return captureClaudeTelemetry();
+  if (args[0] === "agent" && args[1] === "event" && args[2])
+    return captureAgentEvent(args[2], options.migrationsDirectory);
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
     console.log(help);
     return 0;

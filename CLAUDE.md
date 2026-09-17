@@ -71,5 +71,7 @@ RPC instead (see `terminalEndpoint`).
 - TypeScript is strict with `noUncheckedIndexedAccess`. No `any`, no
   shell-string execution — executables and arguments are always arrays.
 - Prettier is authoritative; run `bunx prettier --write` on files you touch.
-- `bun test` is the suite. `bun run test` is wired to vitest, which cannot
-  resolve the `@daedalus/*` path aliases and collects only part of the suite.
+- `bun test` is the suite, and `bun run test` is the same command. Vitest
+  supplies the assertion API but cannot run the suite: it resolves neither the
+  `@daedalus/*` path aliases nor the Bun APIs the services are written against,
+  and collects only 11 of 26 files.

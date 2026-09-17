@@ -69,6 +69,7 @@ daedal agent spawn --workspace <workspace> --provider claude [--task <task-ref>]
 daedal agent spawn --workspace <workspace> --command <configured-name> [--task <task-ref>] [--message <text>]
 daedal agent list [--workspace <workspace>] [--running]
 daedal agent get <agent-id>
+daedal agent wait [--session <agent-id>] [--workspace <workspace>] [--for attention|idle] [--timeout <seconds>]
 daedal agent attach <agent-id>
 daedal agent send <agent-id> <text>
 daedal agent archive <agent-id> [--force]
@@ -84,6 +85,201 @@ Each launch gets a durable `daedalus_<uuid>` tmux session on a Daedalus server i
 `archive` is the preferred lifecycle action. It stops a live session and preserves its provider conversation locator. `restore` starts a new tmux runtime using Codex or Claude's native resume command; terminal sessions reopen as fresh login shells. `workspace archive` cascades to all sessions in that workspace, while `workspace restore` does not automatically restore them. Add `--archived` to workspace or agent lists to inspect archived records.
 
 Startup reconciliation compares SQLite with tmux. Missing live sessions become `lost`; existing starting sessions become `running`. If tmux itself is unavailable, reconciliation leaves persisted state unchanged and agent lifecycle commands report exit code 5 where applicable.
+
+## Activity
+
+Lifecycle status answers "does the process exist". Activity is a second,
+orthogonal axis answering "is the agent working, done, or waiting for me". An
+idle session and one blocked on a permission dialog are both `running`, and
+only the second one should pull a person out of what they are doing.
+
+`agent list --json` and `agent get --json` carry an `activity` block on every
+session:
+
+```json
+{
+  "activity": {
+    "sessionId": "…",
+    "activity": "needs_permission",
+    "detail": "Bash(git push)",
+    "since": "2026-09-17T09:41:02.118Z",
+    "observedAt": "2026-09-17T09:41:02.118Z",
+    "source": "hook"
+  },
+  "attention": [
+    {
+      "id": "…",
+      "text": "Claude needs permission: Bash(git push)",
+      "raisedAt": "…",
+      "source": "hook"
+    }
+  ]
+}
+```
+
+`activity` is one of `unknown`, `working`, `needs_permission`, `needs_input`,
+`idle`, `done`, `error`. `since` is when the state began and drives "waiting
+4m"; `observedAt` is when it was last seen and drives staleness. A session with
+no observation reports `unknown` from source `none` rather than omitting the
+key, so a consumer never has to tell "not observed" from "field missing".
+
+### Sources, and why they are on the wire
+
+`source` ranks `agent` > `hook` > `transcript` > `pane`. Provider fidelity is
+wildly asymmetric, so the field is not decoration: a weaker source is refused
+outright while a stronger reading is still fresh, which is what stops the
+display quietly degrading to the confidence of its worst detector. Surfaces
+render a `pane` reading as a guess, never as a fact.
+
+`agent` is the session reporting on itself through `daedal attention`. It has no
+equivalent in either provider's hook vocabulary and is the only tier that works
+for a `custom` session.
+
+### Per-provider capability
+
+| Provider                             | `working` | `idle` | `needs_permission` | `needs_input` | `done` | `error` | Source       |
+| ------------------------------------ | --------- | ------ | ------------------ | ------------- | ------ | ------- | ------------ |
+| Claude, hooks                        | yes       | yes    | yes                | yes           | yes    | yes     | `hook`       |
+| Codex 0.145+, hooks approved         | yes       | yes    | yes                | yes           | no     | no      | `hook`       |
+| Codex, rollout fallback              | yes       | yes    | **no**             | **no**        | no     | no      | `transcript` |
+| `custom`                             | no        | no     | no                 | no            | no     | no      | —            |
+| Any provider, via `daedal attention` | no        | no     | no                 | yes           | no     | no      | `agent`      |
+
+Read the gaps as limitations, not bugs. Codex approvals never reach the rollout
+JSONL, so that tier genuinely cannot report `needs_permission` — which is
+exactly why hooks are the primary path and the rollout is only the floor. Codex
+has no `agent_completed` or turn-failure event, so `done` and `error` are
+Claude-only. A `custom` session has no structured signal at all and reports a
+permanent `unknown`; `daedal attention` is how such a session says anything.
+
+The rollout tier is weaker on current Codex than the floor it was designed as.
+Measured on codex-cli 0.154.0, a session writes `task_started` and
+`task_complete` to `~/.codex/sessions/**.jsonl` for its first turn and then
+stops: later turns go to `~/.codex/thread_history_1.sqlite` instead, which has
+no documented schema and is not read here. So on 0.154 the fallback reports the
+opening turn and afterwards goes quiet, and Codex activity depends on hooks in
+practice — which is why the hooks are installed rather than skipped whenever
+another tool is present.
+
+`daedal doctor` reports which tier a machine is actually on, and what to do
+about it:
+
+```text
+✓ codex activity: hook
+  hooks are installed and approved. They are installed alongside another
+  tool's hooks; both run.
+```
+
+```text
+✓ codex activity: transcript
+  hooks are installed but not yet approved — choose "Trust all and continue"
+  at Codex's one-time "Hooks need review" prompt to enable them. Until then
+  activity falls back to the rollout.
+```
+
+That check is never a failure — the fallback is a working tier, not a broken
+install — but it is the answer to "why does my Codex session never say
+`needs_permission`", which is otherwise indistinguishable from a bug.
+
+### Hook injection, and what it costs
+
+Daedalus injects the hooks at launch and installs nothing globally.
+
+For **Claude** they ride in the same `--settings` object that already carries
+the status line. If you pass your own `--settings`, Daedalus now merges into it
+rather than skipping injection entirely: your `statusLine` is never replaced,
+your hook entries are kept and ordered first, and only Daedalus's own stale
+entries are stripped on relaunch. A `--settings` value that is neither readable
+JSON nor a readable file is left exactly as written, and activity degrades to
+`unknown`.
+
+For **Codex** there is no per-session equivalent, so they are installed into
+`~/.codex/config.toml` inside a fenced block:
+
+```toml
+# >>> daedalus activity hooks · stable (generated — do not edit) >>>
+# Delete this block to turn off Daedalus agent activity for Codex (stable).
+...
+# <<< daedalus activity hooks · stable <<<
+```
+
+This is the only global change Daedalus makes, and it is designed to share the
+file rather than own it:
+
+- **Other tools keep working.** The block is _appended_, so hook groups
+  belonging to anything else you have installed keep their position — and
+  Codex keys a hook's approval to its position, so their existing approvals
+  survive untouched. Both tools' hooks run on every event; neither replaces the
+  other. A `-c` override could not do this, because it replaces the whole
+  `hooks.<Event>` key and would silently disable whatever else was registered
+  there.
+- **Relaunching updates the block where it sits**, never lifting it to the end,
+  and nothing is rewritten unless the content actually changes. Both matter for
+  the same reason: Codex keys an approval to a hook group's _position_, so
+  moving or rewriting this block would invalidate approvals that never changed
+  — another tool's, or the other channel's.
+- **The fence is named after the channel.** A machine with both the stable and
+  dev builds installed has two applications sharing one Codex configuration; a
+  single shared block would be rewritten to whichever shim launched last and
+  re-prompt for review on every switch. Each channel owns its own block and its
+  own approval.
+- Everything outside the fence survives byte for byte, the first write leaves a
+  `config.toml.daedalus-backup`, and the write is atomic because Codex writes
+  to this file too.
+- Deleting the block turns Codex activity off.
+
+Builds older than 0.145 ignore hooks silently — no error, no log line — so the
+version is probed rather than assumed, and nothing is installed for them.
+
+Codex then gates hooks behind a one-time **"Hooks need review"** prompt, because
+a trusted hook runs outside its sandbox. **Daedalus deliberately does not answer
+that prompt.** Trusting code to run outside a sandbox is your decision, and
+clicking through a security control on your behalf is not something a status
+indicator has earned. Startup treats the prompt as finished rather than blocking
+on it, so the session is live and usable either way; until you choose **"Trust
+all and continue"**, Codex activity runs on the rollout tier. The approval
+persists, so it is a once-per-machine step rather than a per-session one.
+
+Every hook is asynchronous, carries an explicit timeout (5s, 3s for teardown),
+swallows every error, and exits 0 even when the Daedalus app is not running. A
+hook that fails because the control plane is down must never surface inside your
+session. Subagent events are ignored on both providers so the parent session
+does not flap to `working` while subagents churn.
+
+### Staleness, and the three ways a status lies
+
+- **Crash.** Lifecycle dominates. When a session becomes `exited` or `lost`,
+  activity is cleared, not preserved — "working" is the most damaging thing to
+  show for a session that is already gone.
+- **Silence.** A `working` reading with a stale `observedAt` decays to
+  `unknown` after ten minutes. Note the asymmetry: `idle`, `needs_input` and
+  `needs_permission` never decay, because waiting on a person for an hour is a
+  real state and is precisely what the badge exists to surface.
+- **Restart.** Durable activity is a per-session file under
+  `DAEDALUS_HOME/activity/`, written before the database is touched; SQLite is
+  the index over it. Startup replays those records instead of resetting to
+  defaults, so restarting the app mid-turn keeps the turn. Records belonging to
+  sessions that are no longer live are discarded rather than replayed.
+
+### Waiting on activity
+
+```text
+daedal agent wait --for attention --timeout 600
+daedal agent wait --workspace my-workspace --for idle
+```
+
+`wait` blocks until a session reaches a state and exits 0, printing the same
+JSON block as `agent get`. `--for attention` resolves on `needs_permission` or
+`needs_input`; `--for idle` resolves on `idle` or `done`, and also when the
+session ends — a caller waiting on a session that just died wants to be told,
+not left hanging. `--session` defaults to `DAEDALUS_SESSION_ID`; `--workspace`
+waits for the first matching session in that workspace. Exit code 3 means the
+timeout elapsed, distinct from any real failure.
+
+This is what makes the signal scriptable rather than only visible: a shell
+notifier, a Slack ping or a tmux bell can wait on the same fact the badge draws,
+with no desktop app running. The app's notification is one consumer of this
+mechanism rather than the only way to find out.
 
 ## Attention, notifications, and presence
 

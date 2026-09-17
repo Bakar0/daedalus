@@ -8,7 +8,11 @@ import {
   PATHS,
   Utils,
 } from "electrobun/bun";
-import { channelHome, createApplicationContext } from "@daedalus/core";
+import {
+  channelHome,
+  createApplicationContext,
+  sweepProviderActivity,
+} from "@daedalus/core";
 import {
   CommandTmuxClient,
   findExecutable,
@@ -335,6 +339,16 @@ setInterval(async () => {
       context.agents.reconcile(),
       context.terminals.reconcile(),
     ]);
+    // Polled detection and staleness decay ride the reconcile tick. Both are
+    // cheap — the rollout read is gated on file mtime and decay only touches
+    // rows that are already too old to believe — and neither deserves a timer
+    // of its own.
+    await sweepProviderActivity({
+      config: context.config,
+      repositories: context.repositories,
+      activity: context.activity,
+    }).catch(() => undefined);
+    await context.activity.decay().catch(() => undefined);
     for (const [socket, connection] of connections) {
       const target =
         socket.data.targetKind === "agent"

@@ -12,7 +12,8 @@ import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import {
   buildAgentPrompt,
-  claudeDaedalusStatusArgs,
+  claudeDaedalusSettingsArgs,
+  ensureCodexHooks,
   CODEX_DAEDALUS_TUI_ARGS,
   discoverProviderModels,
   modelArgument,
@@ -115,7 +116,20 @@ export async function recoverCodexSessionId(input: {
   workingDirectory: string;
   startedAt: string;
   claimedIds?: Iterable<string>;
+  /**
+   * How far from `startedAt` a rollout may be and still be this session's.
+   *
+   * The default minute is the right bound for archive and resume, where
+   * claiming the wrong conversation is destructive. Activity detection passes
+   * a wider one, because a session that sat on a startup prompt only writes
+   * its rollout when the user answers — and by then the narrow window has
+   * closed, leaving the locator null forever. Widening it is safe there
+   * precisely because `cwd` must still match exactly, and a Daedalus session's
+   * working directory is a per-session path nothing else owns.
+   */
+  windowMs?: number;
 }): Promise<string | undefined> {
+  const window = input.windowMs ?? SESSION_RECOVERY_WINDOW_MS;
   const startedAt = Date.parse(input.startedAt);
   if (!Number.isFinite(startedAt)) return undefined;
   const claimedIds = new Set(input.claimedIds ?? []);
@@ -165,10 +179,7 @@ export async function recoverCodexSessionId(input: {
               if (record.payload.cwd !== input.workingDirectory) return;
               const timestamp = Date.parse(record.payload.timestamp ?? "");
               const distance = Math.abs(timestamp - startedAt);
-              if (
-                Number.isFinite(distance) &&
-                distance <= SESSION_RECOVERY_WINDOW_MS
-              )
+              if (Number.isFinite(distance) && distance <= window)
                 addCandidate(id, distance);
               return;
             }
@@ -421,6 +432,15 @@ export class AgentService {
         (provider === "codex" && screen.includes("Ask Codex to do anything")) ||
         (provider === "claude" && screen.includes("shift+tab to cycle"))
       ) {
+        return;
+      } else if (provider === "codex" && screen.includes("Hooks need review")) {
+        // Daedalus injects Codex's activity hooks, and Codex gates them behind
+        // a one-time review because a trusted hook runs outside the sandbox.
+        // That is the user's decision, not Daedalus's, so the prompt is left
+        // standing and startup is treated as finished: the session is live and
+        // usable either way, and until it is answered Codex activity simply
+        // runs on the rollout tier. Answering it here would be Daedalus
+        // clicking through a security control on the user's behalf.
         return;
       } else if (
         provider === "codex" &&
@@ -850,6 +870,7 @@ export class AgentService {
           args = [
             ...definition.args,
             ...CODEX_DAEDALUS_TUI_ARGS,
+            ...(await ensureCodexHooks(this.config, executable)),
             ...modelArgs,
             ...additionalDirectories,
             "resume",
@@ -862,6 +883,7 @@ export class AgentService {
           args = [
             ...definition.args,
             ...CODEX_DAEDALUS_TUI_ARGS,
+            ...(await ensureCodexHooks(this.config, executable)),
             ...modelArgs,
             ...additionalDirectories,
           ];
@@ -874,8 +896,7 @@ export class AgentService {
             "This session predates native resume support and cannot be resumed safely",
           );
         args = [
-          ...definition.args,
-          ...claudeDaedalusStatusArgs(definition.args),
+          ...(await claudeDaedalusSettingsArgs(this.config, definition.args)),
           ...modelArgs,
           ...additionalDirectories,
           "--resume",

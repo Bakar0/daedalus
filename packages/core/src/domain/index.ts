@@ -184,6 +184,14 @@ export interface AttentionReason {
   text: string;
   raisedAt: string;
   source: AgentActivitySource;
+  /**
+   * True when Daedalus derived this text from an observation rather than the
+   * agent writing it. Several hooks describe one block — a `PermissionRequest`
+   * and the `Notification` that follows it are the same wait seen twice — so
+   * an inferred reason replaces the previous inferred one instead of stacking
+   * beside it. Only what the agent actually said accumulates.
+   */
+  generated?: boolean;
 }
 
 /**
