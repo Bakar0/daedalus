@@ -78,12 +78,37 @@ export function summarizeTool(
 }
 
 /**
- * Codex's way of asking the user a question is a tool call, so the same hook
- * that reports a permission wait also reports a question. dev-3.0's matcher is
- * the reference; the distinction is what separates "approve this command" from
- * "answer this question" in the badge.
+ * Both providers ask the user a question by calling a tool, which means the
+ * hook that reports a permission wait is the same one that reports a question.
+ * Telling them apart matters to the person being waited on: "approve this
+ * command" and "answer this question" are different requests, and a session
+ * that is really asking something should not claim it wants a tool approved.
+ *
+ * Claude's is `AskUserQuestion`; Codex's is `request_user_input`, which is why
+ * dev-3.0 puts it in the tool matcher.
  */
+export const CLAUDE_ASK_TOOL = /^AskUserQuestion$/;
+
 export const CODEX_ASK_TOOL = /^(?:functions\.)?request_user_input(?:_async)?$/;
+
+/**
+ * The question itself, when the tool carries one. "Which branch should I use?"
+ * is worth waking someone for; "AskUserQuestion" is not.
+ */
+export function askSummary(toolInput: unknown): string | undefined {
+  const input = (toolInput ?? {}) as {
+    questions?: Array<{ question?: unknown; header?: unknown }>;
+    question?: unknown;
+    prompt?: unknown;
+  };
+  const first = Array.isArray(input.questions) ? input.questions[0] : undefined;
+  const question =
+    text(first?.question) ??
+    text(first?.header) ??
+    text(input.question) ??
+    text(input.prompt);
+  return question ? shorten(question) : undefined;
+}
 
 /**
  * Subagent chatter is deliberately invisible. A parent that flips to working
@@ -106,7 +131,10 @@ export function observeClaudeHook(
 ): ActivityObservation | undefined {
   if (isSubagentPayload(payload)) return undefined;
   const source: AgentActivitySource = "hook";
-  const tool = summarizeTool(text(payload.tool_name), payload.tool_input);
+  const toolName = text(payload.tool_name);
+  const tool = summarizeTool(toolName, payload.tool_input);
+  const asking = toolName ? CLAUDE_ASK_TOOL.test(toolName) : false;
+  const ask = asking ? askSummary(payload.tool_input) : undefined;
   switch (event) {
     case "SessionStart":
       return { activity: "idle", source };
@@ -115,30 +143,41 @@ export function observeClaudeHook(
       // is allowed to retract a badge.
       return { activity: "working", source };
     case "PreToolUse":
-      return {
-        activity: "working",
-        source,
-        ...(tool ? { detail: tool } : {}),
-        ifNotActivity: ATTENTION,
-      };
+      // A question the user already allowed never reaches PermissionRequest,
+      // so it has to be caught here too or an auto-approved question reads as
+      // ordinary work and nobody is told they are being waited on.
+      return asking
+        ? { activity: "needs_input", source, ...(ask ? { detail: ask } : {}) }
+        : {
+            activity: "working",
+            source,
+            ...(tool ? { detail: tool } : {}),
+            ifNotActivity: ATTENTION,
+          };
     case "PostToolUse":
       // The tool ran, so whatever it was blocked on has been answered.
       return { activity: "working", source, ...(tool ? { detail: tool } : {}) };
     case "PermissionRequest":
       return {
-        activity: "needs_permission",
+        activity: asking ? "needs_input" : "needs_permission",
         source,
-        ...(tool ? { detail: tool } : {}),
+        ...(asking && ask ? { detail: ask } : tool ? { detail: tool } : {}),
       };
     case "Notification": {
       const message = text(payload.message);
       switch (text(payload.notification_type)) {
         case "permission_prompt":
-          return {
-            activity: "needs_permission",
-            source,
-            detail: shorten(message ?? tool ?? "Waiting for permission"),
-          };
+          return asking
+            ? {
+                activity: "needs_input",
+                source,
+                detail: ask ?? shorten(message ?? "Waiting for your answer"),
+              }
+            : {
+                activity: "needs_permission",
+                source,
+                detail: shorten(message ?? tool ?? "Waiting for permission"),
+              };
         case "idle_prompt":
         case "agent_needs_input":
           return {
@@ -194,6 +233,7 @@ export function observeCodexHook(
   const toolName = text(payload.tool_name);
   const tool = summarizeTool(toolName, payload.tool_input);
   const asking = toolName ? CODEX_ASK_TOOL.test(toolName) : false;
+  const ask = asking ? askSummary(payload.tool_input) : undefined;
   switch (event) {
     case "SessionStart":
       return { activity: "idle", source };
@@ -204,7 +244,11 @@ export function observeCodexHook(
       // as on PermissionRequest; otherwise an auto-approved question reads as
       // ordinary work and the user is never told they are being waited on.
       return asking
-        ? { activity: "needs_input", source, ...(tool ? { detail: tool } : {}) }
+        ? {
+            activity: "needs_input",
+            source,
+            ...((ask ?? tool) ? { detail: ask ?? tool! } : {}),
+          }
         : {
             activity: "working",
             source,
@@ -214,8 +258,8 @@ export function observeCodexHook(
     case "PermissionRequest":
       return {
         activity: asking ? "needs_input" : "needs_permission",
+        ...(asking && ask ? { detail: ask } : tool ? { detail: tool } : {}),
         source,
-        ...(tool ? { detail: tool } : {}),
       };
     case "PostToolUse":
       return { activity: "working", source, ...(tool ? { detail: tool } : {}) };

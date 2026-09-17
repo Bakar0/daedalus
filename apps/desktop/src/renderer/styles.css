@@ -870,23 +870,10 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   padding: 0 5px;
 }
 
-.agent-session-attention {
-  align-items: flex-start;
-  background: rgb(255 130 130 / 0.1);
-  border: 1px solid rgb(255 130 130 / 0.38);
-  border-radius: 7px;
-  display: grid;
-  gap: 4px;
-  margin-bottom: 6px;
-  padding: 6px 8px;
-}
-.agent-session-attention-headline {
-  align-items: center;
-  display: flex;
-  gap: 8px;
-  width: 100%;
-}
-.agent-session-attention-headline strong {
+/* The blocked session's wait and its way out, inline in the status line.
+   There is no reason panel: this surface only renders for the session already
+   on screen. */
+.agent-session-activity-waiting {
   color: #ffc4c4;
 }
 .agent-session-attention-clear {
@@ -897,19 +884,6 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   font-size: 10px;
   margin-left: auto;
   padding: 2px 7px;
-}
-.agent-session-attention-reasons {
-  color: #f0d4d4;
-  display: grid;
-  gap: 2px;
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.agent-session-attention-reasons li {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .agent-session-activity {
   color: var(--secondary);

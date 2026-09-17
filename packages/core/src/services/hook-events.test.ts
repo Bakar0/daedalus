@@ -119,6 +119,59 @@ describe("Claude hook payloads", () => {
     expect(type("something_new")).toBeUndefined();
   });
 
+  test("asking a question is needs_input, not needs_permission", () => {
+    // AskUserQuestion arrives through the permission machinery because it is a
+    // tool, but "answer this question" and "approve this command" are
+    // different requests and the badge has to say which one it is.
+    const toolInput = {
+      questions: [
+        {
+          question: "What would you like me to do in this workspace?",
+          header: "Next step",
+          options: [{ label: "Explore the repos" }],
+        },
+      ],
+    };
+    for (const event of ["PermissionRequest", "PreToolUse"]) {
+      expect(
+        observeClaudeHook(
+          event,
+          claude(event, {
+            tool_name: "AskUserQuestion",
+            tool_input: toolInput,
+          }),
+        ),
+      ).toMatchObject({
+        activity: "needs_input",
+        // The question itself, not the name of the tool that asked it.
+        detail: "What would you like me to do in this workspace?",
+      });
+    }
+    expect(
+      observeClaudeHook(
+        "Notification",
+        claude("Notification", {
+          notification_type: "permission_prompt",
+          message: "Claude needs your permission to use AskUserQuestion",
+          tool_name: "AskUserQuestion",
+          tool_input: toolInput,
+        }),
+      ),
+    ).toMatchObject({ activity: "needs_input" });
+  });
+
+  test("a real tool permission is still a permission", () => {
+    expect(
+      observeClaudeHook(
+        "PermissionRequest",
+        claude("PermissionRequest", {
+          tool_name: "Bash",
+          tool_input: { command: "git push" },
+        }),
+      ),
+    ).toMatchObject({ activity: "needs_permission", detail: "Bash(git push)" });
+  });
+
   test("PermissionRequest reports the tool it is blocked on", () => {
     expect(
       observeClaudeHook(
@@ -227,6 +280,21 @@ describe("Codex hook payloads", () => {
       activity: "needs_permission",
       detail: "Bash(rm -rf build)",
       source: "hook",
+    });
+  });
+
+  test("Codex reports the question text rather than the tool call", () => {
+    expect(
+      observeCodexHook(
+        "PermissionRequest",
+        codex("PermissionRequest", {
+          tool_name: "request_user_input",
+          tool_input: { question: "Which branch should I base this on?" },
+        }),
+      ),
+    ).toMatchObject({
+      activity: "needs_input",
+      detail: "Which branch should I base this on?",
     });
   });
 

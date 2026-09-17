@@ -1178,40 +1178,21 @@ function TerminalSurface({
       />
       {target === "agent" && session && view && (
         <div className="agent-session-status" aria-label="Session status">
-          {view.attention && (
-            // The loudest thing on screen, next to the readout the user is
-            // already looking at, with the reasons in reach rather than in a
-            // native tooltip that cannot be styled.
-            <div className="agent-session-attention" role="status">
-              <span className="agent-session-attention-headline">
-                <AgentStatusDot
-                  count={view.reasons.length}
-                  label={statusAriaLabel(session, view, now)}
-                  view={view}
-                />
-                <strong>{view.label}</strong>
-                {view.since && (
-                  <span>waiting {waitingLabel(view.since, now)}</span>
-                )}
-                {onClearAttention && (
-                  <button
-                    className="quiet agent-session-attention-clear"
-                    onClick={onClearAttention}
-                    type="button"
-                  >
-                    Clear
-                  </button>
-                )}
-              </span>
-              <ul className="agent-session-attention-reasons">
-                {[...view.reasons].reverse().map((reason) => (
-                  <li key={reason.id}>{reason.text}</li>
-                ))}
-              </ul>
-            </div>
-          )}
+          {/*
+            There is deliberately no reason panel here. This surface only ever
+            renders for the session the user is currently watching, so a panel
+            restating why it is blocked can never tell them anything the
+            terminal above it has not already said — it just costs rows and
+            repeats the agent back to itself. The badge still exists for every
+            surface where the session is *not* on screen: the session list, the
+            workspace roll-up, and the notification.
+
+            What does not survive being scrolled past is the wait and the way
+            out, so those fold into the status line instead.
+          */}
           <div className="agent-session-status-primary">
             <AgentStatusDot
+              count={view.reasons.length}
               label={statusAriaLabel(session, view, now)}
               view={view}
             />
@@ -1220,13 +1201,27 @@ function TerminalSurface({
               {view.label}
               {view.unconfirmed ? " (unconfirmed)" : ""}
             </span>
-            {view.detail && !view.attention && (
+            {view.attention && view.since && (
+              <span className="agent-session-activity-waiting">
+                waiting {waitingLabel(view.since, now)}
+              </span>
+            )}
+            {view.detail && (
               <span
                 className="agent-session-activity-detail"
                 title={view.detail}
               >
                 {view.detail}
               </span>
+            )}
+            {view.attention && onClearAttention && (
+              <button
+                className="quiet agent-session-attention-clear"
+                onClick={onClearAttention}
+                type="button"
+              >
+                Clear
+              </button>
             )}
             {telemetry?.model && (
               <span className="agent-session-status-model">
