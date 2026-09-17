@@ -717,7 +717,7 @@ describe("desktop application shell", () => {
     expect(html).not.toContain("Activity");
   });
 
-  test("shows a drag grip on every card and keeps it out of the tab order", () => {
+  test("gives cards no drag affordance and no extra tab stops", () => {
     const snapshot: DesktopSnapshotDto = {
       ...base,
       workspaces: [
@@ -764,15 +764,14 @@ describe("desktop application shell", () => {
         initialWorkspaceView="sessions"
       />,
     );
-    // One on the workspace card, one on the session card: the affordance is
-    // visible at rest rather than waiting for a hover nobody may try.
-    expect(html.split('class="list-drag-grip"')).toHaveLength(3);
-    // Decorative. A focusable grip would take the workspace list from two tab
-    // stops per card to three, for a gesture ⌥↑/⌥↓ already reaches.
-    expect(html).toContain('<span aria-hidden="true" class="list-drag-grip"');
-    expect(html).not.toContain('list-drag-grip" tabindex');
+    // Cards carry no drag affordance at all — no grip, no grab cursor — by
+    // request. Dragging still works from anywhere on a card.
+    expect(html).not.toContain("list-drag-grip");
     // The card's own buttons opt out of starting a drag.
     expect(html).toContain("data-no-drag");
+    // And nothing extra joined the tab order to make dragging reachable: the
+    // keyboard route is ⌥↑/⌥↓ on the card itself.
+    expect(html).not.toContain('tabindex="0" class="workspace-card');
   });
 
   test("renders lists in the order the snapshot supplies, without re-sorting", () => {

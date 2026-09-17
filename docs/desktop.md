@@ -219,14 +219,22 @@ both without a press-and-hold delay. The click that ends a real drag is
 swallowed so a drop never also selects. The card's own action buttons
 (archive, open terminal) are marked `data-no-drag` and start nothing.
 
-**The grip** drawn on the left of each card is the _signifier_, not the only
-handle. `cursor: grab` only pays off once the pointer is already over a card,
-which leaves the feature invisible to anyone who never hovers; the grip
-advertises it at rest. It reserves its width rather than fading in on hover,
-because a grip that appears and pushes the name sideways makes the column
-twitch as the pointer runs down it. It is `aria-hidden` and not focusable: a
-third tab stop per card is a poor trade for a gesture the keyboard already
-reaches.
+**No affordance.** There is no grip and no grab cursor, by request: the cards
+look exactly as they did, and dragging is something you find rather than
+something the list advertises.
+
+**The card in hand** keeps full opacity — fading it reads as disabled rather
+than picked up — and is lifted with a shadow, a slight scale, and a neutral
+hairline rather than the accent colour, which means "selected" everywhere else.
+Its background is stated outright rather than inherited from `:hover`, and the
+drag takes **no pointer capture**. Both are the same lesson: capture is released
+the moment its element moves in the DOM, and React moves the minimum number of
+nodes — the dragged node when a card travels _down_ the list, its neighbours
+when it travels _up_. Deriving the held card's look from `:hover` therefore made
+the highlight vanish in one direction only. The drag listens on the window and
+measures rects, so capture bought nothing anyway; with it gone,
+`pointer-events: none` on the list mid-drag becomes load-bearing, since it is
+what keeps `:hover` off the cards the pointer merely crosses.
 
 **Keyboard.** ⌥↑ and ⌥↓ move the focused card one place, clamped at the ends
 rather than wrapping.
@@ -244,4 +252,4 @@ Archived workspaces appear in a collapsed section at the bottom of the workspace
 
 ## Testing
 
-`apps/desktop/src/bun/rpc.test.ts` drives the RPC adapter through a real temporary application context, SQLite database, workspace filesystem, and fake tmux boundary. Terminal tests cover upgrade authentication, bounded noisy-output queues, socket high-water behavior, ANSI/Unicode capture, input, resize, reconnect status, and resource cleanup. `apps/desktop/src/renderer/App.test.tsx` renders lifecycle, dependency, and multi-session terminal selection states with an injected typed client, and covers the indicator vocabulary, the attention roll-up, the drag grip, snapshot-order rendering, and the toast cap. `apps/desktop/src/renderer/list-reorder.test.ts` covers the drag arithmetic — click-versus-drag, the drop slot, and keyboard moves — without a DOM, and `packages/core/src/services/ordering.test.ts` covers the subset-reorder rule. `packages/core/src/services/activity.test.ts` covers badge accumulation, privileged clearing, and alert debouncing against a real temporary context with the native notifier injected — no test ever reaches the real Notification Center. `bun run test:terminal-agent` exercises the real isolated tmux path. All test homes and tmux sockets are isolated and never touch the user's Daedalus data.
+`apps/desktop/src/bun/rpc.test.ts` drives the RPC adapter through a real temporary application context, SQLite database, workspace filesystem, and fake tmux boundary. Terminal tests cover upgrade authentication, bounded noisy-output queues, socket high-water behavior, ANSI/Unicode capture, input, resize, reconnect status, and resource cleanup. `apps/desktop/src/renderer/App.test.tsx` renders lifecycle, dependency, and multi-session terminal selection states with an injected typed client, and covers the indicator vocabulary, the attention roll-up, snapshot-order rendering, and the toast cap. `apps/desktop/src/renderer/list-reorder.test.ts` covers the drag arithmetic — click-versus-drag, the drop slot, and keyboard moves — without a DOM, and `packages/core/src/services/ordering.test.ts` covers the subset-reorder rule. `bun run test:reorder-ui` drives a real drag in headless Chrome and samples the DOM across it, in both directions and on an unselected card — the only way either of the two interaction bugs this feature shipped with was reachable, since both were invisible in a single rendered frame. `packages/core/src/services/activity.test.ts` covers badge accumulation, privileged clearing, and alert debouncing against a real temporary context with the native notifier injected — no test ever reaches the real Notification Center. `bun run test:terminal-agent` exercises the real isolated tmux path. All test homes and tmux sockets are isolated and never touch the user's Daedalus data.

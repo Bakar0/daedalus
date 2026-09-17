@@ -37,11 +37,9 @@ export interface ReorderHandles {
 /**
  * Pointer-driven reordering for a list of cards.
  *
- * The whole card is the drag target, not just the grip: these cards are
- * already buttons the user clicks constantly, and a 16px strip would be the
- * harder thing to hit. The grip drawn on each card is the signifier for this
- * gesture rather than its only entry point — see `.list-drag-grip` in the
- * stylesheet.
+ * The whole card is the drag target. There is deliberately no grip and no
+ * grab cursor: the cards carry no drag affordance at all, so the gesture is
+ * something you find rather than something the list advertises.
  */
 export function useListReorder({
   ids,
@@ -159,7 +157,18 @@ export function useListReorder({
         start: { x: event.clientX, y: event.clientY },
       };
 
-      const element = event.currentTarget;
+      /**
+       * Deliberately no `setPointerCapture`.
+       *
+       * Capture is released the moment its element moves in the DOM, and
+       * reordering moves elements — asymmetrically. React moves the minimum
+       * number of nodes, which for a card dragged *down* is the dragged node
+       * itself and for one dragged *up* is the cards it passes. So capture
+       * survived an upward drag and broke on a downward one, taking `:hover`
+       * with it: the card in hand visibly lost its highlight, but only in one
+       * direction. Everything here listens on the window and measures rects,
+       * so capture bought nothing to begin with.
+       */
       const handleMove = (move: PointerEvent) => {
         const active = gesture.current;
         if (!active) return;
@@ -173,7 +182,6 @@ export function useListReorder({
           return;
         if (!active.dragging) {
           active.dragging = true;
-          element.setPointerCapture?.(move.pointerId);
           setDraggingId(active.id);
         }
         const from = active.order.indexOf(active.id);

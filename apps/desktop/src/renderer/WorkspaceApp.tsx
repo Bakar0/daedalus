@@ -358,35 +358,6 @@ function PanelCollapseButton({
   );
 }
 
-/**
- * The signifier for dragging, not the only way to do it — the whole card is
- * the target. It exists because `cursor: grab` only pays off once the pointer
- * is already over the card, which means the feature stays invisible to anyone
- * who never happens to hover.
- *
- * Deliberately `aria-hidden` and not focusable: making it a control would take
- * the workspace list from two tab stops per card to three, for a gesture the
- * keyboard reaches through ⌥↑/⌥↓ on the card itself.
- */
-function DragGrip() {
-  return (
-    <span aria-hidden="true" className="list-drag-grip">
-      <svg
-        fill="currentColor"
-        viewBox="0 0 8 16"
-        xmlns="http://www.w3.org/2000/svg"
-      >
-        <circle cx="2.5" cy="4" r="1" />
-        <circle cx="5.5" cy="4" r="1" />
-        <circle cx="2.5" cy="8" r="1" />
-        <circle cx="5.5" cy="8" r="1" />
-        <circle cx="2.5" cy="12" r="1" />
-        <circle cx="5.5" cy="12" r="1" />
-      </svg>
-    </span>
-  );
-}
-
 function SessionLaunchIcon() {
   return (
     <svg
@@ -3204,7 +3175,6 @@ export function WorkspaceApp({
                   onPointerDown={workspaceReorder.onPointerDown(item.id)}
                   ref={workspaceReorder.registerCard(item.id)}
                 >
-                  <DragGrip />
                   <button
                     className="workspace-item"
                     onClick={() => selectWorkspace(item.id)}
@@ -3959,7 +3929,6 @@ export function WorkspaceApp({
                       onPointerDown={sessionReorder.onPointerDown(session.id)}
                       ref={sessionReorder.registerCard(session.id)}
                     >
-                      <DragGrip />
                       <button
                         className="session-card-main"
                         data-provider={session.provider}

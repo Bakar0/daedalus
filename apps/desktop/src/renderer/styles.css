@@ -3078,53 +3078,35 @@ dd {
 }
 
 /* Manual reordering.
-   The grip is the signifier; the whole card is the target. It reserves its
-   width at rest rather than fading in on hover, because a grip that appears
-   and pushes the name sideways makes the whole column twitch as the pointer
-   runs down it. The card body keeps `cursor: pointer` — it is still a button
-   first, and dragging from it is a convenience the grip already advertised. */
-.list-drag-grip {
-  align-items: center;
-  color: var(--muted);
-  cursor: grab;
-  display: flex;
-  flex: 0 0 auto;
-  justify-content: center;
-  opacity: 0.3;
-  transition: opacity 140ms ease;
-  width: 14px;
-}
-.list-drag-grip svg {
-  height: 16px;
-  width: 8px;
-}
-.workspace-card:hover .list-drag-grip,
-.session-card:hover .list-drag-grip {
-  opacity: 0.8;
-}
-/* Cards are drag targets, so a stray pointer must never start selecting the
-   session name instead of moving the card. */
+   No grip and no grab cursor: the cards carry no drag affordance at all, by
+   request. Dragging still works from anywhere on a card. */
 .workspace-card,
 .session-card {
+  /* Cards are drag targets, so a stray pointer must never start selecting the
+     session name instead of moving the card. */
   user-select: none;
 }
-/* While a card is in hand the list stops responding to the pointer, and the
-   container carries the grabbing cursor for the whole gesture.
 
-   Note on what this does and does not buy: pointer capture already confines
-   :hover to the held card, so cards the pointer merely crosses do not light
-   up even without this rule — measured, not assumed, in
-   scripts/reorder-ui-check.ts. This is a safety net for the case where
-   capture is lost mid-gesture, and it keeps the action buttons from reacting
-   to a pointer that is only passing over them. The drag listens on the window
-   and measures rects, so it needs no hit-testing here. */
-.item-list[data-reordering="true"],
-.session-grid[data-reordering="true"] {
-  cursor: grabbing;
-}
+/* While a card is in hand the list stops responding to the pointer.
+   This is load-bearing rather than defensive: the drag deliberately takes no
+   pointer capture (see use-list-reorder.ts), so without it `:hover` would
+   follow the pointer onto every card it crossed and a second highlight would
+   slide down the column. The drag listens on the window and measures rects,
+   so it needs no hit-testing here. */
 .item-list[data-reordering="true"] .workspace-card,
 .session-grid[data-reordering="true"] .session-card {
   pointer-events: none;
+}
+/* Stated outright rather than inherited from :hover. The held card's
+   appearance must not depend on hit-testing, which reordering interrupts: the
+   card that moves in the DOM loses :hover mid-gesture, and React moves the
+   dragged node when it travels down the list but not when it travels up.
+   Leaving this to :hover is what made the highlight vanish in one direction
+   only. A selected card keeps its own background — being picked up must not
+   cost it the accent that says it is the one you are looking at. */
+.workspace-card[data-dragging="true"]:not(.selected),
+.session-card[data-dragging="true"]:not(.selected) {
+  background: var(--raised-hover);
 }
 .workspace-card[data-dragging="true"],
 .session-card[data-dragging="true"] {
@@ -3135,21 +3117,10 @@ dd {
   box-shadow:
     0 0 0 1px var(--line-strong),
     0 14px 30px rgb(0 0 0 / 0.5);
-  cursor: grabbing;
   position: relative;
   transform: scale(1.02);
   /* Above its neighbours, so the shadow falls on them rather than under. */
   z-index: 3;
-}
-.workspace-card[data-dragging="true"] .list-drag-grip,
-.session-card[data-dragging="true"] .list-drag-grip {
-  cursor: grabbing;
-  opacity: 1;
-}
-/* Nothing to reorder in a rail that shows only icons. */
-.workspace-column.panel-compact .list-drag-grip,
-.session-navigator.panel-compact .list-drag-grip {
-  display: none;
 }
 .session-card-starting {
   border-color: rgb(69 150 254 / 0.28);
