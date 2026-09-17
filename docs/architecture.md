@@ -32,6 +32,44 @@ Workspace content follows the contract in [workspace-content.md](workspace-conte
 
 Agent sessions use names derived only from immutable UUIDs. Provider adapters build executable and argument arrays, and the tmux adapter preserves those argv boundaries. Because packaged macOS apps do not inherit an interactive shell PATH, tmux discovery also checks the standard Apple Silicon and Intel Homebrew locations before reporting it unavailable. On startup, live SQLite rows are reconciled against the isolated Daedalus tmux server; missing sessions become `lost`, while task status remains untouched.
 
+## Lifecycle and activity are orthogonal
+
+`AgentSessionStatus` (`starting`, `running`, `exited`, `lost`) is the process
+axis, owned by `reconcile()` and answered by tmux. `AgentActivity` (`unknown`,
+`working`, `needs_permission`, `needs_input`, `idle`, `done`, `error`) is a
+second, orthogonal axis answering whether the agent is working, finished, or
+waiting for a person. They are kept apart rather than widened into one enum
+because an idle session and one blocked on a permission dialog are both
+`running`, and only the second changes what the user does next. Neither axis
+touches `Task.status`: the board is a third thing again.
+
+**Lifecycle dominates on conflict.** A session that becomes `exited` or `lost`
+has its activity cleared rather than preserved, because "working" is the most
+damaging thing a display can claim about a session that is already gone.
+
+**Activity signals are advisory and carry their confidence.** Every reading
+records a `source` — `agent` (the session reporting on itself), `hook`,
+`transcript`, `pane` — and a lower-ranked source is refused outright while a
+higher-ranked reading is still fresh. Provider fidelity is asymmetric enough
+that without this the whole display silently degrades to the confidence of its
+worst detector.
+
+Transitions are guarded compare-and-sets rather than blind writes, because
+hooks fire concurrently and arrive out of order: routine activity may not
+overwrite a state meaning "the user is the thing in the way", and a turn-end
+may only finish a turn that was actually running. This replaces a turn or
+sequence identifier, which would answer a narrower question — "is this the same
+turn" rather than "is what I am about to overwrite more meaningful than what I
+carry".
+
+Durable activity is a per-session JSON file under `<DAEDALUS_HOME>/activity/`,
+written by the hook sink with the same atomic temp-and-rename discipline as
+`<DAEDALUS_HOME>/telemetry/`, and SQLite is the index over it. The split exists
+because a provider hook is a short-lived process that must succeed while the
+app is not running and the database is held by somebody else: it writes the
+record first and updates the index second, and startup replays the records so a
+restart mid-turn keeps the turn.
+
 ## Terminal lifecycle
 
 Each renderer connection names a typed agent or integrated-terminal UUID, never a tmux session directly. The Bun process resolves that UUID through core, verifies that its recorded session is live, and attaches a tmux client through Bun's native pseudo-terminal. The PTY carries tmux's exact terminal byte stream, including redraw and cursor state. User input is written directly to the PTY and resize uses the PTY's native resize operation, so multi-key terminal shortcuts are interpreted by tmux and the provider TUI rather than reconstructed as `send-keys` commands. Closing a view terminates only its attached client. Stop remains a core agent action and CLI `attach` continues to address the same tmux session.

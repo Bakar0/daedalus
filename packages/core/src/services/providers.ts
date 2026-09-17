@@ -3,6 +3,14 @@ import { runCommand } from "@daedalus/platform";
 import { dirname, join } from "node:path";
 import type { AgentDefinition, DaedalusConfig } from "../config";
 import { DaedalusError } from "../errors";
+import {
+  codexConfiguredHookEvents,
+  codexDaedalusHookArgs,
+  codexSupportsHooks,
+  daedalusClaudeSettings,
+  mergeClaudeSettings,
+  parseClaudeSettingsArgument,
+} from "./hook-install";
 
 export interface LaunchInput {
   prompt?: string;
@@ -38,24 +46,105 @@ export const CODEX_DAEDALUS_TUI_ARGS = [
   "tui.disable_mouse_capture=true",
 ] as const;
 
-export const CLAUDE_DAEDALUS_STATUS_ARGS = [
-  "--settings",
-  JSON.stringify({
-    statusLine: {
-      type: "command",
-      command: "daedal agent telemetry",
-      padding: 0,
-    },
-  }),
-] as const;
+/**
+ * The sink every hook and the status line call.
+ *
+ * Deliberately the shim inside *this* home rather than whatever `daedal` is on
+ * `PATH`. The channels exist so a dev build and the stable build are two
+ * applications, and a hook injected by one that ran the other's CLI would be
+ * the same confusion arriving through a different door. If the shim is not
+ * installed the hook simply fails, silently, which is what an observational
+ * hook is supposed to do.
+ */
+export function daedalExecutable(config: DaedalusConfig): string {
+  return join(config.home, "bin", "daedal");
+}
 
-export function claudeDaedalusStatusArgs(existingArgs: string[]): string[] {
-  return existingArgs.some(
-    (argument) =>
-      argument === "--settings" || argument.startsWith("--settings="),
-  )
-    ? []
-    : [...CLAUDE_DAEDALUS_STATUS_ARGS];
+const settingsArgumentValue = (args: string[]): string | undefined => {
+  for (let index = args.length - 1; index >= 0; index -= 1) {
+    const argument = args[index]!;
+    if (argument.startsWith("--settings="))
+      return argument.slice("--settings=".length);
+    if (argument === "--settings") return args[index + 1];
+  }
+  return undefined;
+};
+
+const withoutSettingsArgument = (args: string[]): string[] => {
+  const kept: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index]!;
+    if (argument.startsWith("--settings=")) continue;
+    if (argument === "--settings") {
+      index += 1;
+      continue;
+    }
+    kept.push(argument);
+  }
+  return kept;
+};
+
+/**
+ * Claude's launch arguments with the Daedalus status line and activity hooks
+ * folded in.
+ *
+ * This replaces the previous all-or-nothing rule, which injected nothing at
+ * all when the user supplied their own `--settings` — costing them the status
+ * line to protect a setting Daedalus was never going to overwrite. The user's
+ * settings are parsed, Daedalus's own stale hook entries are stripped, and the
+ * two are merged with every conflict resolved in the user's favour.
+ *
+ * The one case that still degrades is a `--settings` value that is neither
+ * readable JSON nor a readable file: it is left exactly as the user wrote it
+ * and activity falls back to `unknown`.
+ */
+export async function claudeDaedalusSettingsArgs(
+  config: DaedalusConfig,
+  existingArgs: string[],
+): Promise<string[]> {
+  const daedalus = daedalusClaudeSettings(daedalExecutable(config));
+  const existingValue = settingsArgumentValue(existingArgs);
+  if (existingValue === undefined)
+    return [...existingArgs, "--settings", JSON.stringify(daedalus)];
+  const parsed = await parseClaudeSettingsArgument(existingValue);
+  if (!parsed) return [...existingArgs];
+  return [
+    ...withoutSettingsArgument(existingArgs),
+    "--settings",
+    JSON.stringify(mergeClaudeSettings(parsed, daedalus)),
+  ];
+}
+
+/**
+ * Codex's activity hooks, supplied as `-c` overrides so nothing is written to
+ * the user's `~/.codex/config.toml`. Returns nothing on builds older than
+ * 0.145, which ignore hooks silently — with no error and no log line, so the
+ * version has to be asked for rather than assumed.
+ */
+export async function codexDaedalusHookConfigArgs(
+  config: DaedalusConfig,
+  executable: string,
+  run: typeof runCommand = runCommand,
+): Promise<string[]> {
+  try {
+    const version = await run(executable, ["--version"]);
+    if (version.exitCode !== 0 || !codexSupportsHooks(version.stdout))
+      return [];
+  } catch {
+    return [];
+  }
+  let configured: string[] = [];
+  try {
+    const file = Bun.file(
+      join(dirname(config.codexSessionsDirectory), "config.toml"),
+    );
+    if (await file.exists())
+      configured = codexConfiguredHookEvents(await file.text());
+  } catch {
+    // An unreadable config is treated as "no hooks of their own"; the worst
+    // case is a -c override Codex then ignores.
+  }
+  return codexDaedalusHookArgs(daedalExecutable(config), configured);
 }
 
 interface ClaudeModelInfo {
@@ -300,6 +389,7 @@ class ConfiguredProvider implements AgentProvider {
     private readonly name: string,
     private readonly definition: AgentDefinition,
     private readonly promptArgument: boolean,
+    private readonly config?: DaedalusConfig,
   ) {}
 
   async probe(): Promise<{ available: boolean; executable: string }> {
@@ -326,10 +416,23 @@ class ConfiguredProvider implements AgentProvider {
     if (this.promptArgument)
       for (const directory of input.additionalDirectories ?? [])
         args.push("--add-dir", directory);
-    if (this.promptArgument && this.name === "codex")
+    if (this.promptArgument && this.name === "codex") {
       args.push(...CODEX_DAEDALUS_TUI_ARGS);
-    if (this.promptArgument && this.name === "claude")
-      args.push(...claudeDaedalusStatusArgs(args));
+      if (this.config)
+        args.push(
+          ...(await codexDaedalusHookConfigArgs(
+            this.config,
+            resolveAgentExecutable(this.name, this.definition.executable) ??
+              this.definition.executable,
+          )),
+        );
+    }
+    if (this.promptArgument && this.name === "claude" && this.config)
+      args.splice(
+        0,
+        args.length,
+        ...(await claudeDaedalusSettingsArgs(this.config, args)),
+      );
     if (this.promptArgument && this.name === "claude" && input.sessionId) {
       providerSessionId = input.sessionId;
       args.push("--session-id", input.sessionId);
@@ -388,7 +491,12 @@ export function resolveProvider(
     name: selection.command
       ? "custom"
       : (selection.provider as "claude" | "codex"),
-    adapter: new ConfiguredProvider(key, definition, !selection.command),
+    adapter: new ConfiguredProvider(
+      key,
+      definition,
+      !selection.command,
+      config,
+    ),
   };
 }
 

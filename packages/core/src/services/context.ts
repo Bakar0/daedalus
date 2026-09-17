@@ -50,6 +50,8 @@ export interface ApplicationContextOptions {
    * toast in. Everywhere else a toast has to wait in the queue.
    */
   canDrawToasts?: () => boolean;
+  /** Injected so staleness decay is testable without waiting ten minutes. */
+  now?: () => Date;
   /** Injected so tests never reach the real Notification Center. */
   sendNativeNotification?: (
     notification: NativeNotification,
@@ -130,9 +132,18 @@ export async function createApplicationContext(
       ? { showInApp: options.showNotificationInApp }
       : {}),
   });
-  activity = new ActivityService(repositories, notifications);
-  if (options.reconcile !== false)
+  activity = new ActivityService(repositories, notifications, {
+    home: config.home,
+    ...(options.now ? { now: options.now } : {}),
+  });
+  if (options.reconcile !== false) {
     await Promise.all([agents.reconcile(), terminals.reconcile()]);
+    // Reconcile has just settled which sessions are still live, so the replay
+    // knows which records to restore and which to discard. Decay runs after,
+    // on the restored rows rather than on stale ones.
+    await activity.restore();
+    await activity.decay();
+  }
   return {
     config,
     logger: new JsonLogger(config.logsDirectory),

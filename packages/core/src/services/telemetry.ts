@@ -186,7 +186,7 @@ export function parseCodexTokenUsage(
     : undefined;
 }
 
-async function codexRolloutPath(
+export async function codexRolloutPath(
   sessionsDirectory: string,
   agent: AgentSession,
 ): Promise<string | undefined> {
