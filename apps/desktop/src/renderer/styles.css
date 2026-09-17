@@ -910,10 +910,23 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   pointer-events: none;
   position: fixed;
   right: 16px;
-  top: 68px;
+  /* Aligned with the app header, not with the content below it. The header's
+     right side holds nothing but a transient "Working…", so the deck floats
+     over static chrome instead of over the thing being read — the same reason
+     the deck collapses at all. The brand sits left and the mode switcher is
+     centred, so neither is covered. */
+  top: 10px;
   transition: height 400ms cubic-bezier(0.21, 1.02, 0.73, 1);
   width: 348px;
   z-index: 60;
+}
+/* The mode switcher is centred, so a narrow enough window brings it under a
+   right-aligned deck. Covering navigation is worse than covering a paragraph,
+   so below that width the deck drops back under the header. */
+@media (max-width: 1000px) {
+  .toast-stack {
+    top: 68px;
+  }
 }
 .toast {
   align-items: flex-start;

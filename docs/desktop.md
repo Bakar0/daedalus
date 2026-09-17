@@ -97,6 +97,14 @@ Three distinct channels, never two at once for the same event:
   itself is `pointer-events: none` so it never swallows a click meant for the
   app beneath.
 
+  The deck is aligned with the **app header**, not with the content below it.
+  The header's right side holds nothing but a transient "Working…" indicator,
+  the brand sits left and the mode switcher is centred, so the deck floats over
+  static chrome rather than over the thing being read — the same reasoning that
+  makes it collapse at all. Below 1000px the centred switcher would slide under
+  a right-aligned deck, so there it drops back beneath the header: covering
+  navigation is worse than covering a paragraph.
+
   Level is a dot in the same vocabulary as the session indicators, not a
   coloured bar down the edge. Every toast has its own labelled dismiss, shown
   on hover and always reachable by keyboard, because an auto-dismissing alert
