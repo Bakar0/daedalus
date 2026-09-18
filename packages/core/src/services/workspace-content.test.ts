@@ -75,6 +75,30 @@ async function createRepository(path: string, branch = "main"): Promise<void> {
   ).toBe(0);
 }
 
+/**
+ * A context whose agent provider is stubbed, following `agents.test.ts`.
+ *
+ * Spawning `claude` for real needs the binary on PATH — which CI does not have
+ * — waits up to thirty seconds for it to report ready, and leaves a live agent
+ * behind, all to obtain a session row that a working tree can hang from.
+ * Pointing the provider at a harmless executable and faking tmux gives the same
+ * session with none of that, and keeps it archivable, which a `command`
+ * session is not: those are provider `custom` and deliberately cannot be.
+ */
+async function contextWithStubbedAgent(home: string) {
+  await Bun.write(
+    join(home, "config.json"),
+    JSON.stringify({
+      agents: { claude: { executable: process.execPath, args: ["run"] } },
+    }),
+  );
+  return createApplicationContext({
+    env: { DAEDALUS_HOME: home },
+    tmux: new FakeTmux(),
+    reconcile: false,
+  });
+}
+
 class FakeTmux implements TmuxClient {
   sessions = new Set<string>();
   launches: TmuxLaunch[] = [];
@@ -95,7 +119,10 @@ class FakeTmux implements TmuxClient {
     return 0;
   }
   async capture() {
-    return "";
+    // A screen that looks like a started provider. Spawning a Claude session
+    // polls the pane until it recognises one, so an empty capture makes every
+    // spawn wait out the full startup timeout instead of returning.
+    return "Ask Codex to do anything\nClaude Code v2.1.251\nshift+tab to cycle";
   }
   async sendKeys() {}
   async send() {}
@@ -741,10 +768,7 @@ Before working in this workspace:
       await withTemporaryDaedalusHome(async (home) => {
         const source = join(home, "source", "product");
         await createRepository(source, "trunk");
-        const context = await createApplicationContext({
-          env: { DAEDALUS_HOME: home },
-          reconcile: false,
-        });
+        const context = await contextWithStubbedAgent(home);
         const workspace = await context.workspaces.create({ name: "Combined" });
         await context.workspaceContent.addAndAttachRepository({
           workspace: workspace.id,
@@ -777,10 +801,7 @@ Before working in this workspace:
       await withTemporaryDaedalusHome(async (home) => {
         const source = join(home, "source", "product");
         await createRepository(source);
-        const context = await createApplicationContext({
-          env: { DAEDALUS_HOME: home },
-          reconcile: false,
-        });
+        const context = await contextWithStubbedAgent(home);
         const workspace = await context.workspaces.create({ name: "Trees" });
         await context.workspaceContent.addAndAttachRepository({
           workspace: workspace.id,
@@ -857,10 +878,7 @@ Before working in this workspace:
       await withTemporaryDaedalusHome(async (home) => {
         const source = join(home, "source", "product");
         await createRepository(source);
-        const context = await createApplicationContext({
-          env: { DAEDALUS_HOME: home },
-          reconcile: false,
-        });
+        const context = await contextWithStubbedAgent(home);
         const workspace = await context.workspaces.create({ name: "Push" });
         await context.workspaceContent.addAndAttachRepository({
           workspace: workspace.id,
@@ -932,10 +950,7 @@ Before working in this workspace:
       await withTemporaryDaedalusHome(async (home) => {
         const source = join(home, "source", "product");
         await createRepository(source);
-        const context = await createApplicationContext({
-          env: { DAEDALUS_HOME: home },
-          reconcile: false,
-        });
+        const context = await contextWithStubbedAgent(home);
         const workspace = await context.workspaces.create({ name: "Push" });
         await context.workspaceContent.addAndAttachRepository({
           workspace: workspace.id,
@@ -1045,10 +1060,7 @@ Before working in this workspace:
     const scenario = async (home: string) => {
       const source = join(home, "source", "product");
       await createRepository(source);
-      const context = await createApplicationContext({
-        env: { DAEDALUS_HOME: home },
-        reconcile: false,
-      });
+      const context = await contextWithStubbedAgent(home);
       const workspace = await context.workspaces.create({ name: "Remove" });
       const repository = await context.workspaceContent.addAndAttachRepository({
         workspace: workspace.id,
