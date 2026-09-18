@@ -2613,11 +2613,13 @@ export function WorkspaceApp({
             const key = `github:${repository.nameWithOwner}`;
             try {
               updateOperation(key, { status: "cloning" });
-              const attached = await client.request.repositoryAddAndAttach({
-                workspace: workspace.id,
-                githubNameWithOwner: repository.nameWithOwner,
-                remoteUrl: repository.remoteUrl,
-              });
+              const attached = await client.request.repositoryAddAndAttachStart(
+                {
+                  workspace: workspace.id,
+                  githubNameWithOwner: repository.nameWithOwner,
+                  remoteUrl: repository.remoteUrl,
+                },
+              );
               if (!attached.ok) throw new Error(attached.error.message);
               updateOperation(key, { status: "done" });
               setSelectedGitHubRepositories((current) => {
@@ -2657,6 +2659,13 @@ export function WorkspaceApp({
         ],
         REPOSITORY_ADD_CONCURRENCY,
       );
+      // Preparation continues in the workspace, where it is visible; the only
+      // reason to stay here is a repository that could not be started at all.
+      setRepositoryOperations((current) => {
+        if (current.every((operation) => operation.status === "done"))
+          closeRepositoryModal();
+        return current;
+      });
       await refresh();
       const content = await client.request.workspaceContentGet({
         workspace: workspace.id,
@@ -2708,6 +2717,12 @@ export function WorkspaceApp({
     }
   }
 
+  async function detachWorkspaceRepository(repositoryId: string) {
+    await runRepositoryAction(`detach:${repositoryId}`, () =>
+      client.request.workspaceRepositoryDetach({ id: repositoryId }),
+    );
+  }
+
   async function fetchWorkspaceRepository(repositoryId: string) {
     await runRepositoryAction(`fetch:${repositoryId}`, () =>
       client.request.workspaceRepositoryFetch({ id: repositoryId }),
@@ -2733,18 +2748,31 @@ export function WorkspaceApp({
 
   async function addRemoteRepository(event: React.FormEvent) {
     event.preventDefault();
-    if (!looksLikeRepositorySource(repositoryForm.search)) return;
-    const repository = await perform(
-      client.request.repositoryLibraryAdd({
+    if (!workspace || !looksLikeRepositorySource(repositoryForm.search)) return;
+    const started = await perform(
+      client.request.repositoryAddAndAttachStart({
+        workspace: workspace.id,
         remoteUrl: repositoryForm.search,
       }),
     );
-    if (repository) {
-      setSelectedRepositoryIds((current) =>
-        new Set(current).add(repository.id),
-      );
+    if (started) {
       setRepositoryForm({ remoteUrl: "", search: "" });
+      closeRepositoryModal();
+      await refreshWorkspaceContent();
     }
+  }
+
+  async function refreshWorkspaceContent() {
+    if (!workspace) return;
+    const content = await client.request.workspaceContentGet({
+      workspace: workspace.id,
+    });
+    if (!content.ok) return;
+    setWorkspaceContent(content.data);
+    setWorkspaceDirectories((current) => ({
+      ...current,
+      "": content.data.files,
+    }));
   }
 
   async function appendJournal(event: React.FormEvent) {
@@ -3597,37 +3625,76 @@ export function WorkspaceApp({
                                 workspaceContent.worktrees.filter(
                                   (item) => item.repositoryId === repository.id,
                                 );
+                              const preparing =
+                                repository.status === "preparing";
+                              const failed = repository.status === "failed";
                               return (
                                 <div
                                   className="workspace-repository-group"
                                   key={repository.id}
                                 >
                                   <div
-                                    className={`workspace-resource-row repository-status-${repository.gitStatus?.state ?? "unavailable"}`}
+                                    className={`workspace-resource-row repository-status-${repository.gitStatus?.state ?? "unavailable"} ${preparing ? "repository-preparing" : ""} ${failed ? "repository-failed" : ""}`}
                                   >
                                     <span>
                                       <strong>{repository.name}</strong>
-                                      <small
-                                        title={
-                                          repository.referencePath ??
-                                          repository.canonicalPath
-                                        }
-                                      >
-                                        {repository.baseBranch ?? "Local"}
-                                        {" · "}
-                                        <span className="repository-git-status">
-                                          <i aria-hidden="true" />
-                                          {repositoryStatusText(
-                                            repository.gitStatus,
-                                          )}
-                                        </span>
-                                      </small>
+                                      {preparing ? (
+                                        <small>
+                                          <span
+                                            aria-hidden="true"
+                                            className="repository-preparing-spinner"
+                                          />
+                                          Preparing…
+                                        </small>
+                                      ) : failed ? (
+                                        <small
+                                          className="repository-failed-reason"
+                                          title={
+                                            repository.statusError ?? undefined
+                                          }
+                                        >
+                                          {repository.statusError ??
+                                            "Could not be prepared"}
+                                        </small>
+                                      ) : (
+                                        <small
+                                          title={
+                                            repository.referencePath ??
+                                            repository.canonicalPath
+                                          }
+                                        >
+                                          {repository.baseBranch ?? "Local"}
+                                          {" · "}
+                                          <span className="repository-git-status">
+                                            <i aria-hidden="true" />
+                                            {repositoryStatusText(
+                                              repository.gitStatus,
+                                            )}
+                                          </span>
+                                        </small>
+                                      )}
                                     </span>
                                     <span className="workspace-resource-actions">
+                                      {failed && (
+                                        <button
+                                          aria-label={`Dismiss ${repository.name}`}
+                                          className="quiet repository-action"
+                                          onClick={() =>
+                                            void detachWorkspaceRepository(
+                                              repository.id,
+                                            )
+                                          }
+                                          title="Remove this failed attachment"
+                                          type="button"
+                                        >
+                                          <DismissIcon />
+                                        </button>
+                                      )}
                                       <button
                                         aria-label={`Open ${repository.name} in integrated terminal`}
                                         className="quiet repository-action"
                                         disabled={
+                                          repository.status !== "ready" ||
                                           !repository.referencePath ||
                                           !snapshot?.settings.tmuxAvailable
                                         }
@@ -3649,9 +3716,12 @@ export function WorkspaceApp({
                                       <button
                                         aria-label={`Fetch ${repository.name}`}
                                         className={`quiet repository-action ${pendingRepositoryActions.has(`fetch:${repository.id}`) ? "syncing" : ""}`}
-                                        disabled={pendingRepositoryActions.has(
-                                          `fetch:${repository.id}`,
-                                        )}
+                                        disabled={
+                                          repository.status !== "ready" ||
+                                          pendingRepositoryActions.has(
+                                            `fetch:${repository.id}`,
+                                          )
+                                        }
                                         onClick={() =>
                                           void fetchWorkspaceRepository(
                                             repository.id,
@@ -3665,9 +3735,12 @@ export function WorkspaceApp({
                                       <button
                                         aria-label={`Pull ${repository.name}`}
                                         className={`quiet repository-action ${pendingRepositoryActions.has(`pull:${repository.id}`) ? "syncing" : ""}`}
-                                        disabled={pendingRepositoryActions.has(
-                                          `pull:${repository.id}`,
-                                        )}
+                                        disabled={
+                                          repository.status !== "ready" ||
+                                          pendingRepositoryActions.has(
+                                            `pull:${repository.id}`,
+                                          )
+                                        }
                                         onClick={() =>
                                           void syncWorkspaceRepository(
                                             repository.id,
@@ -3680,111 +3753,117 @@ export function WorkspaceApp({
                                       </button>
                                     </span>
                                   </div>
-                                  {worktrees.length === 0 ? (
-                                    <div className="workspace-worktree-row empty">
-                                      No working trees
-                                    </div>
-                                  ) : (
-                                    worktrees.map((worktree) => {
-                                      const session = workspaceSessions.find(
-                                        (item) =>
-                                          item.id === worktree.sessionId,
-                                      );
-                                      const key = `push:${worktree.sessionId}:${worktree.repositoryId}`;
-                                      return (
-                                        <div
-                                          className="workspace-worktree-row"
-                                          key={key}
-                                        >
-                                          <span>
-                                            <strong>
-                                              {session
-                                                ? sessionName(session)
-                                                : worktree.sessionId.slice(
-                                                    0,
-                                                    8,
-                                                  )}
-                                            </strong>
-                                            <small title={worktree.path}>
-                                              {worktree.branchName}
-                                            </small>
-                                          </span>
-                                          <span className="workspace-worktree-status">
-                                            {gitStatusParts(
-                                              worktree.gitStatus,
-                                            ).map((part) => (
-                                              <em
-                                                className={`git-part tone-${part.tone}`}
-                                                key={part.key}
-                                              >
-                                                {part.text}
-                                              </em>
-                                            ))}
-                                          </span>
-                                          <button
-                                            aria-label={`Open ${worktree.branchName} in integrated terminal`}
-                                            className="quiet repository-action"
-                                            disabled={
-                                              !snapshot?.settings.tmuxAvailable
-                                            }
-                                            onClick={() =>
-                                              void createIntegratedTerminal(
-                                                workspace,
-                                                {
-                                                  name: session
-                                                    ? sessionName(session)
-                                                    : repository.name,
-                                                  workingDirectory:
-                                                    worktree.path,
-                                                },
-                                              )
-                                            }
-                                            title="Open a terminal in this working tree"
-                                            type="button"
+                                  {worktrees.length === 0
+                                    ? // A repository that has not arrived cannot
+                                      // have working trees; saying so is noise.
+                                      repository.status === "ready" && (
+                                        <div className="workspace-worktree-row empty">
+                                          No working trees
+                                        </div>
+                                      )
+                                    : worktrees.map((worktree) => {
+                                        const session = workspaceSessions.find(
+                                          (item) =>
+                                            item.id === worktree.sessionId,
+                                        );
+                                        const key = `push:${worktree.sessionId}:${worktree.repositoryId}`;
+                                        return (
+                                          <div
+                                            className="workspace-worktree-row"
+                                            key={key}
                                           >
-                                            <TerminalIcon />
-                                          </button>
-                                          <button
-                                            aria-label={`Push ${worktree.branchName}`}
-                                            className={`quiet repository-action ${pendingRepositoryActions.has(key) ? "syncing" : ""}`}
-                                            disabled={pendingRepositoryActions.has(
-                                              key,
-                                            )}
-                                            onClick={() =>
-                                              void pushSessionWorktree(worktree)
-                                            }
-                                            title={`Push ${worktree.branchName} to origin`}
-                                            type="button"
-                                          >
-                                            <RepositoryPushIcon />
-                                          </button>
-                                          <button
-                                            aria-label={`Remove ${worktree.branchName}`}
-                                            className={`quiet repository-action ${pendingRepositoryActions.has(`remove:${worktree.sessionId}:${worktree.repositoryId}`) ? "syncing" : ""}`}
-                                            disabled={pendingRepositoryActions.has(
-                                              `remove:${worktree.sessionId}:${worktree.repositoryId}`,
-                                            )}
-                                            onClick={() =>
-                                              setWorktreeAction({
-                                                worktree,
-                                                repositoryName: repository.name,
-                                                sessionLabel: session
+                                            <span>
+                                              <strong>
+                                                {session
                                                   ? sessionName(session)
                                                   : worktree.sessionId.slice(
                                                       0,
                                                       8,
-                                                    ),
-                                              })
-                                            }
-                                            title="Remove this working tree"
-                                            type="button"
-                                          >
-                                            <DismissIcon />
-                                          </button>
-                                        </div>
-                                      );
-                                    })
-                                  )}
+                                                    )}
+                                              </strong>
+                                              <small title={worktree.path}>
+                                                {worktree.branchName}
+                                              </small>
+                                            </span>
+                                            <span className="workspace-worktree-status">
+                                              {gitStatusParts(
+                                                worktree.gitStatus,
+                                              ).map((part) => (
+                                                <em
+                                                  className={`git-part tone-${part.tone}`}
+                                                  key={part.key}
+                                                >
+                                                  {part.text}
+                                                </em>
+                                              ))}
+                                            </span>
+                                            <button
+                                              aria-label={`Open ${worktree.branchName} in integrated terminal`}
+                                              className="quiet repository-action"
+                                              disabled={
+                                                !snapshot?.settings
+                                                  .tmuxAvailable
+                                              }
+                                              onClick={() =>
+                                                void createIntegratedTerminal(
+                                                  workspace,
+                                                  {
+                                                    name: session
+                                                      ? sessionName(session)
+                                                      : repository.name,
+                                                    workingDirectory:
+                                                      worktree.path,
+                                                  },
+                                                )
+                                              }
+                                              title="Open a terminal in this working tree"
+                                              type="button"
+                                            >
+                                              <TerminalIcon />
+                                            </button>
+                                            <button
+                                              aria-label={`Push ${worktree.branchName}`}
+                                              className={`quiet repository-action ${pendingRepositoryActions.has(key) ? "syncing" : ""}`}
+                                              disabled={pendingRepositoryActions.has(
+                                                key,
+                                              )}
+                                              onClick={() =>
+                                                void pushSessionWorktree(
+                                                  worktree,
+                                                )
+                                              }
+                                              title={`Push ${worktree.branchName} to origin`}
+                                              type="button"
+                                            >
+                                              <RepositoryPushIcon />
+                                            </button>
+                                            <button
+                                              aria-label={`Remove ${worktree.branchName}`}
+                                              className={`quiet repository-action ${pendingRepositoryActions.has(`remove:${worktree.sessionId}:${worktree.repositoryId}`) ? "syncing" : ""}`}
+                                              disabled={pendingRepositoryActions.has(
+                                                `remove:${worktree.sessionId}:${worktree.repositoryId}`,
+                                              )}
+                                              onClick={() =>
+                                                setWorktreeAction({
+                                                  worktree,
+                                                  repositoryName:
+                                                    repository.name,
+                                                  sessionLabel: session
+                                                    ? sessionName(session)
+                                                    : worktree.sessionId.slice(
+                                                        0,
+                                                        8,
+                                                      ),
+                                                })
+                                              }
+                                              title="Remove this working tree"
+                                              type="button"
+                                            >
+                                              <DismissIcon />
+                                            </button>
+                                          </div>
+                                        );
+                                      })}
                                 </div>
                               );
                             })}

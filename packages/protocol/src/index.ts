@@ -89,6 +89,8 @@ export interface RepositoryDiscoveryDto {
   error?: string;
 }
 
+export type WorkspaceRepositoryStatus = "ready" | "preparing" | "failed";
+
 export interface WorkspaceRepositoryDto {
   id: string;
   workspaceId: string;
@@ -101,6 +103,8 @@ export interface WorkspaceRepositoryDto {
   baseCommit: string | null;
   fetchedAt: string | null;
   createdAt: string;
+  status: WorkspaceRepositoryStatus;
+  statusError: string | null;
   gitStatus?: GitStatusDto;
 }
 
@@ -385,6 +389,19 @@ export interface DesktopRpcSchema {
         {
           workspace: string;
           libraryRepositoryId: string;
+        },
+        WorkspaceRepositoryDto
+      >;
+      /**
+       * Attaches without waiting for the clone: the row comes back
+       * `preparing` and becomes `ready` or `failed` on its own.
+       */
+      repositoryAddAndAttachStart: Request<
+        {
+          workspace: string;
+          remoteUrl: string;
+          name?: string;
+          githubNameWithOwner?: string;
         },
         WorkspaceRepositoryDto
       >;

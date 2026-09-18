@@ -1398,7 +1398,7 @@ async function repositoryCommand(
       if (!result.length) console.log("No attached repositories.");
       for (const repository of result)
         console.log(
-          `${repository.name}\t${repository.access}\t${repository.referencePath ?? repository.canonicalPath}`,
+          `${repository.name}\t${repository.status}\t${repository.access}\t${repository.referencePath ?? repository.statusError ?? repository.canonicalPath}`,
         );
     });
     return 0;
@@ -1410,6 +1410,11 @@ async function repositoryCommand(
       1,
       "daedal repo add --workspace <workspace> <url-or-absolute-path> [--name <name>]",
     );
+    // Deliberately synchronous, unlike the app. A preparation lives only as
+    // long as the process running it, so a one-shot command that returned
+    // early would exit and leave its own clone to be reconciled as
+    // interrupted — and a script that adds a repository wants to use it on the
+    // next line anyway.
     const result = await context.workspaceContent.addAndAttachRepository({
       workspace: required(parsed.values.workspace, "--workspace"),
       remoteUrl: parsed.positionals[0]!,

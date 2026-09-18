@@ -73,6 +73,13 @@ export interface IntegratedTerminal {
 
 export type WorkspaceRepositoryAccess = "write" | "reference";
 
+/**
+ * An attachment exists from the moment it is asked for. Cloning a large
+ * history takes minutes, and holding a modal open for it made the wait the
+ * user's problem; the workspace shows the repository being prepared instead.
+ */
+export type WorkspaceRepositoryStatus = "ready" | "preparing" | "failed";
+
 export interface RepositoryLibraryEntry {
   id: UUID;
   name: string;
@@ -102,6 +109,9 @@ export interface WorkspaceRepository {
   baseCommit: string | null;
   fetchedAt: string | null;
   createdAt: string;
+  status: WorkspaceRepositoryStatus;
+  /** Why preparation failed, kept so the row can explain itself. */
+  statusError: string | null;
   gitStatus?: GitStatus;
 }
 

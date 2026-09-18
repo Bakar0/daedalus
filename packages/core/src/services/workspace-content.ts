@@ -50,7 +50,7 @@ import {
   saveWorkspaceInstructionFilesEnabled,
   type DaedalusConfig,
 } from "../config";
-import { DaedalusError } from "../errors";
+import { DaedalusError, normalizeError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import type { WorkspaceService } from "./workspaces";
 
@@ -611,11 +611,35 @@ async function gitStatusAt(
 }
 
 export class WorkspaceContentService {
+  /** In-flight preparations, so a shutdown or a test can wait for them. */
+  private readonly preparations = new Map<string, Promise<void>>();
+
   constructor(
     private readonly repositories: SqliteRepositories,
     private readonly workspaces: WorkspaceService,
     private readonly config: DaedalusConfig,
+    /**
+     * Called when a repository finishes preparing. The work happens outside
+     * any request, so without this the desktop would show "preparing" until
+     * something else happened to refresh it.
+     */
+    private readonly onRepositoriesChanged: () => void = () => {},
   ) {}
+
+  /**
+   * A preparation only lives as long as the process running the clone, so a
+   * row still marked `preparing` at startup is from a run that is over. It is
+   * reported as failed rather than left spinning forever.
+   */
+  reconcilePreparations(): void {
+    for (const repository of this.repositories.listWorkspaceRepositories())
+      if (repository.status === "preparing")
+        this.repositories.updateWorkspaceRepository({
+          ...repository,
+          status: "failed",
+          statusError: "Preparation was interrupted before it finished",
+        });
+  }
 
   async get(workspaceReference: string): Promise<WorkspaceContent> {
     const workspace = await this.workspaces.get(workspaceReference);
@@ -739,6 +763,8 @@ export class WorkspaceContentService {
     remoteUrl: string;
     name?: string;
     githubNameWithOwner?: string;
+    /** Pre-allocated so a preparing attachment can point at its real clone. */
+    id?: string;
   }): Promise<RepositoryLibraryEntry> {
     const remoteUrl = input.remoteUrl.trim();
     if (!remoteUrl || remoteUrl.length > 2048)
@@ -751,7 +777,7 @@ export class WorkspaceContentService {
     const git = findExecutable("git");
     if (!git)
       throw new DaedalusError("DEPENDENCY", "git is not available on PATH");
-    const id = crypto.randomUUID();
+    const id = input.id ?? crypto.randomUUID();
     const gitDirectory = join(this.config.repositoryRoot, `${id}.git`);
     const githubNameWithOwner = input.githubNameWithOwner?.trim();
     if (
@@ -888,6 +914,8 @@ export class WorkspaceContentService {
   private async repositoryWithGitStatus(
     repository: WorkspaceRepository,
   ): Promise<WorkspaceRepository> {
+    if (repository.status !== "ready")
+      return { ...repository, gitStatus: UNAVAILABLE_STATUS };
     return {
       ...repository,
       gitStatus: await gitStatusAt(
@@ -910,6 +938,20 @@ export class WorkspaceContentService {
     };
   }
 
+  private requireReady(repository: WorkspaceRepository): WorkspaceRepository {
+    if (repository.status === "preparing")
+      throw new DaedalusError(
+        "CONFLICT",
+        `Repository '${repository.name}' is still being prepared`,
+      );
+    if (repository.status === "failed")
+      throw new DaedalusError(
+        "CONFLICT",
+        `Repository '${repository.name}' was not prepared: ${repository.statusError ?? "unknown error"}`,
+      );
+    return repository;
+  }
+
   // Fetch updates the shared clone every workspace and worktree resolves
   // against, so it is what makes "behind 3" true again without touching a
   // single working tree.
@@ -920,6 +962,7 @@ export class WorkspaceContentService {
         "NOT_FOUND",
         `Workspace repository '${id}' was not found`,
       );
+    this.requireReady(repository);
     if (!repository.libraryRepositoryId)
       throw new DaedalusError(
         "CONFLICT",
@@ -1124,6 +1167,7 @@ export class WorkspaceContentService {
         "NOT_FOUND",
         `Workspace repository '${id}' was not found`,
       );
+    this.requireReady(repository);
     const workspace = await this.workspaces.getActive(repository.workspaceId);
     if (
       !repository.referencePath ||
@@ -1479,11 +1523,130 @@ export class WorkspaceContentService {
     return this.checkoutLibraryEntry(workspace, repository);
   }
 
+  /**
+   * Attaches without waiting for the clone.
+   *
+   * The attachment row is written immediately as `preparing` and returned, so
+   * the workspace shows the repository arriving and the caller is free. The
+   * clone and checkout then run on their own; the row becomes `ready`, or
+   * `failed` carrying the reason. Nothing else has to stay open for it, which
+   * is what stops a large history from timing out a request that was only
+   * waiting.
+   */
+  async beginAddAndAttachRepository(input: {
+    workspace: string;
+    remoteUrl: string;
+    name?: string;
+    githubNameWithOwner?: string;
+  }): Promise<WorkspaceRepository> {
+    const workspace = await this.workspaces.getActive(input.workspace);
+    const remoteUrl = input.remoteUrl.trim();
+    if (!remoteUrl || remoteUrl.length > 2048)
+      throw new DaedalusError(
+        "VALIDATION",
+        "Repository URL or local path must contain 1–2048 characters",
+      );
+    const existing = this.repositories.findRepositoryLibraryEntry(remoteUrl);
+    const name = repositoryName(
+      input.name ?? existing?.name ?? remoteRepositoryName(remoteUrl),
+    );
+    const referencePath = join(workspace.path, "repos", name);
+    if (await pathExists(referencePath))
+      throw new DaedalusError(
+        "CONFLICT",
+        `Workspace repository path '${referencePath}' already exists`,
+      );
+    // The clone's id is chosen here so the row can name where its checkout
+    // will be rather than carry a placeholder that has to be corrected later.
+    const libraryId = existing?.id ?? crypto.randomUUID();
+    const pending: WorkspaceRepository = {
+      id: crypto.randomUUID(),
+      workspaceId: workspace.id,
+      name,
+      canonicalPath:
+        existing?.gitDirectory ??
+        join(this.config.repositoryRoot, `${libraryId}.git`),
+      access: "write",
+      libraryRepositoryId: null,
+      referencePath: null,
+      baseBranch: null,
+      baseCommit: null,
+      fetchedAt: null,
+      createdAt: new Date().toISOString(),
+      status: "preparing",
+      statusError: null,
+    };
+    try {
+      this.repositories.createWorkspaceRepository(pending);
+    } catch (error) {
+      if (String(error).includes("UNIQUE constraint failed"))
+        throw new DaedalusError(
+          "CONFLICT",
+          "This repository path or name is already attached to the workspace",
+        );
+      throw error;
+    }
+    this.preparations.set(
+      pending.id,
+      this.prepareAttachment(pending, workspace, {
+        remoteUrl,
+        name: input.name,
+        githubNameWithOwner: input.githubNameWithOwner,
+        id: libraryId,
+      }).finally(() => this.preparations.delete(pending.id)),
+    );
+    return pending;
+  }
+
+  /** Settles when nothing is being prepared. Tests and the CLI wait on it. */
+  async settlePreparations(): Promise<void> {
+    while (this.preparations.size > 0)
+      await Promise.all([...this.preparations.values()]);
+  }
+
+  private async prepareAttachment(
+    pending: WorkspaceRepository,
+    workspace: Workspace,
+    library: {
+      remoteUrl: string;
+      name?: string;
+      githubNameWithOwner?: string;
+      id: string;
+    },
+  ): Promise<void> {
+    try {
+      const entry = await this.addRepositoryToLibrary(library);
+      const attached = await this.checkoutLibraryEntry(
+        workspace,
+        entry,
+        pending,
+      );
+      // Quitting mid-clone is normal, and the next start reconciles the row;
+      // writing into a closed handle would only throw where nobody is left to
+      // catch it.
+      if (this.repositories.closed) return;
+      this.repositories.updateWorkspaceRepository(attached);
+    } catch (error) {
+      if (this.repositories.closed) return;
+      const row = this.repositories.findWorkspaceRepository(pending.id);
+      // Detached while it was being prepared: nothing left to report to.
+      if (!row) return;
+      this.repositories.updateWorkspaceRepository({
+        ...row,
+        status: "failed",
+        statusError: normalizeError(error).message,
+      });
+    } finally {
+      if (!this.repositories.closed) this.onRepositoriesChanged();
+    }
+  }
+
   // `refreshed` must already carry the remote state this checkout is pinned to;
   // callers own the fetch so it is never paid twice.
   private async checkoutLibraryEntry(
     workspace: Workspace,
     refreshed: RepositoryLibraryEntry,
+    pending?: WorkspaceRepository,
   ): Promise<WorkspaceRepository> {
     const git = findExecutable("git");
     if (!git)
@@ -1524,7 +1687,7 @@ export class WorkspaceContentService {
         `Could not create the workspace repository checkout: ${checkout.stderr.trim() || checkout.stdout.trim()}`,
       );
     const item: WorkspaceRepository = {
-      id: crypto.randomUUID(),
+      id: pending?.id ?? crypto.randomUUID(),
       workspaceId: workspace.id,
       name,
       canonicalPath: refreshed.gitDirectory,
@@ -1534,8 +1697,13 @@ export class WorkspaceContentService {
       baseBranch: refreshed.defaultBranch,
       baseCommit,
       fetchedAt: refreshed.lastFetchedAt,
-      createdAt: new Date().toISOString(),
+      // A repository was attached when the user asked for it, not when its
+      // clone happened to land, and the list is ordered by this.
+      createdAt: pending?.createdAt ?? new Date().toISOString(),
+      status: "ready",
+      statusError: null,
     };
+    if (pending) return item;
     try {
       this.repositories.createWorkspaceRepository(item);
     } catch (error) {
@@ -1734,6 +1902,7 @@ export class WorkspaceContentService {
       .listSessionWorktrees({ sessionId: session.id })
       .find((item) => item.repositoryId === repository.id);
     if (existing) return existing;
+    this.requireReady(repository);
     if (repository.access !== "write")
       throw new DaedalusError(
         "CONFLICT",

@@ -424,6 +424,8 @@ describe("desktop application shell", () => {
               baseCommit: "1234567890abcdef1234567890abcdef12345678",
               fetchedAt: "now",
               createdAt: "now",
+              status: "ready" as const,
+              statusError: null,
               gitStatus: {
                 state: "behind",
                 changedFiles: 0,

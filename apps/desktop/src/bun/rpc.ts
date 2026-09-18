@@ -322,6 +322,12 @@ export function createDesktopRequestHandlers(
           alreadyUpToDate: pushed.alreadyUpToDate,
         };
       }),
+    repositoryAddAndAttachStart: (params) =>
+      mutate(async () =>
+        workspaceRepositoryDto(
+          await context.workspaceContent.beginAddAndAttachRepository(params),
+        ),
+      ),
     repositoryAddAndAttach: (params) =>
       mutate(async () =>
         workspaceRepositoryDto(

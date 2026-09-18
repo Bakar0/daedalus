@@ -102,6 +102,27 @@ const snapshot = {
   },
 } as unknown as DesktopSnapshotDto;
 
+const arriving = (
+  id: string,
+  name: string,
+  status: "preparing" | "failed",
+  statusError: string | null,
+) => ({
+  id,
+  workspaceId: "w1",
+  name,
+  canonicalPath: `/tmp/daedalus/repos/${id}.git`,
+  access: "write" as const,
+  libraryRepositoryId: null,
+  referencePath: null,
+  baseBranch: null,
+  baseCommit: null,
+  fetchedAt: null,
+  createdAt: "2026-09-18T00:00:00.000Z",
+  status,
+  statusError,
+});
+
 const repository = (id: string, name: string, behind: number) => ({
   id,
   workspaceId: "w1",
@@ -129,7 +150,18 @@ const populated: WorkspaceContentDto = {
   brief: "# Brief",
   journal: "# Journal",
   files: [{ name: "BRIEF.md", path: "BRIEF.md", kind: "file" }],
-  repositories: [repository("r1", "daedalus", 0), repository("r2", "hive", 3)],
+  repositories: [
+    repository("r1", "daedalus", 0),
+    repository("r2", "hive", 3),
+    arriving("r3", "zenity-app", "preparing", null),
+    // A long reason, because the row has to contain it rather than grow.
+    arriving(
+      "r4",
+      "archived-thing",
+      "failed",
+      "Could not clone repository: repository not found or access denied",
+    ),
+  ],
   worktrees: [
     {
       sessionId: "s-14",
@@ -279,7 +311,7 @@ try {
   }>(`(() => {
     const explorerElement = document.querySelector('.workspace-explorer');
     const box = explorerElement && explorerElement.getBoundingClientRect();
-    const rows = [...document.querySelectorAll('.workspace-resource-row, .workspace-worktree-row')].map((row) => {
+    const rows = [...document.querySelectorAll('.workspace-resource-row, .workspace-worktree-row:not(.empty)')].map((row) => {
       const rect = row.getBoundingClientRect();
       return { label: (row.textContent || '').trim().slice(0, 40), left: rect.left, right: rect.right };
     });
@@ -310,15 +342,19 @@ try {
           `Row "${row.label}" spans ${row.left.toFixed(0)}–${row.right.toFixed(0)}, outside the explorer's ${left.toFixed(0)}–${right.toFixed(0)}; its actions are unreachable`,
         );
   }
-  if (measurements.rows.length < 5)
+  const expectedRows =
+    populated.repositories.length + populated.worktrees.length;
+  if (measurements.rows.length !== expectedRows)
     failures.push(
-      `Expected repository and working-tree rows, found ${measurements.rows.length}`,
+      `Expected ${expectedRows} repository and working-tree rows, found ${measurements.rows.length}`,
     );
 
-  // Terminal, fetch and pull on each repository; terminal, push and remove on
-  // each working tree.
+  // Terminal, fetch and pull on each repository, plus a dismiss on one that
+  // failed; terminal, push and remove on each working tree.
   const expectedActions =
-    populated.repositories.length * 3 + populated.worktrees.length * 3;
+    populated.repositories.length * 3 +
+    populated.repositories.filter((item) => item.status === "failed").length +
+    populated.worktrees.length * 3;
   if (measurements.buttons.length !== expectedActions)
     failures.push(
       `Expected ${expectedActions} row actions, found ${measurements.buttons.length}`,

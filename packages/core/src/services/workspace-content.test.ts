@@ -1176,4 +1176,104 @@ Before working in this workspace:
       });
     }, 30_000);
   });
+
+  describe("preparing a repository in the background", () => {
+    test("the attachment exists immediately and becomes ready on its own", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const source = join(home, "source", "product");
+        await createRepository(source);
+        const context = await createApplicationContext({
+          env: { DAEDALUS_HOME: home },
+          reconcile: false,
+        });
+        const workspace = await context.workspaces.create({ name: "Async" });
+
+        const pending =
+          await context.workspaceContent.beginAddAndAttachRepository({
+            workspace: workspace.id,
+            remoteUrl: source,
+          });
+        // Named and listed before anything has been cloned.
+        expect(pending.status).toBe("preparing");
+        expect(pending.name).toBe("product");
+        expect(pending.referencePath).toBeNull();
+        expect(
+          (await context.workspaceContent.get(workspace.id)).repositories,
+        ).toHaveLength(1);
+
+        // Nothing can be done to it while it is still arriving.
+        await expect(
+          context.workspaceContent.fetchRepository(pending.id),
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+
+        await context.workspaceContent.settlePreparations();
+        const ready = (await context.workspaceContent.get(workspace.id))
+          .repositories[0];
+        expect(ready?.status).toBe("ready");
+        expect(ready?.id).toBe(pending.id);
+        expect(ready?.baseBranch).toBe("main");
+        expect(ready?.referencePath).toBe(
+          join(workspace.path, "repos", "product"),
+        );
+        expect(
+          await readFile(join(ready!.referencePath!, "README.md"), "utf8"),
+        ).toBe("# Source\n");
+        context.close();
+      });
+    });
+
+    test("a repository that cannot be cloned says why, and can be dismissed", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const context = await createApplicationContext({
+          env: { DAEDALUS_HOME: home },
+          reconcile: false,
+        });
+        const workspace = await context.workspaces.create({ name: "Async" });
+        const pending =
+          await context.workspaceContent.beginAddAndAttachRepository({
+            workspace: workspace.id,
+            remoteUrl: join(home, "source", "missing"),
+          });
+        await context.workspaceContent.settlePreparations();
+
+        const failed = (await context.workspaceContent.get(workspace.id))
+          .repositories[0];
+        expect(failed?.status).toBe("failed");
+        expect(failed?.statusError ?? "").not.toBe("");
+        // A failure is a row the user can clear, not a permanent resident.
+        await context.workspaceContent.detachRepository(pending.id);
+        expect(
+          (await context.workspaceContent.get(workspace.id)).repositories,
+        ).toHaveLength(0);
+        context.close();
+      });
+    });
+
+    test("a preparation interrupted by shutdown is reported, not left spinning", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const source = join(home, "source", "product");
+        await createRepository(source);
+        const first = await createApplicationContext({
+          env: { DAEDALUS_HOME: home },
+          reconcile: false,
+        });
+        const workspace = await first.workspaces.create({ name: "Async" });
+        await first.workspaceContent.beginAddAndAttachRepository({
+          workspace: workspace.id,
+          remoteUrl: source,
+        });
+        // Closing without settling is what a crash or a quit looks like.
+        first.close();
+
+        const second = await createApplicationContext({
+          env: { DAEDALUS_HOME: home },
+        });
+        const recovered = (await second.workspaceContent.get(workspace.id))
+          .repositories[0];
+        expect(recovered?.status).toBe("failed");
+        expect(recovered?.statusError).toContain("interrupted");
+        second.close();
+      });
+    });
+  });
 });

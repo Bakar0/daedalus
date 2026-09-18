@@ -2410,6 +2410,27 @@ dd {
   color: var(--muted);
 }
 
+/* An attachment exists before its clone does, so the row has to be able to say
+   it is still arriving, or that it never did. */
+.repository-preparing strong,
+.repository-failed strong {
+  color: var(--secondary);
+}
+.repository-failed-reason {
+  color: var(--danger) !important;
+}
+.repository-preparing-spinner {
+  animation: repository-progress-spin 800ms linear infinite;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 50%;
+  border-top-color: var(--accent);
+  display: inline-block;
+  height: 8px;
+  margin-right: 5px;
+  vertical-align: -1px;
+  width: 8px;
+}
+
 /* A workspace with no repositories cannot do the thing it exists for, so the
    empty state is an instruction rather than a shrug. */
 .workspace-repository-invite {

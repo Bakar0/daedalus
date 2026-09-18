@@ -11,6 +11,7 @@ import type {
   RepositoryLibraryEntry,
   SessionAttention,
   SessionWorktree,
+  WorkspaceRepositoryStatus,
   StoredAgentActivity,
   Task,
   TaskPriority,
@@ -94,6 +95,8 @@ interface WorkspaceRepositoryRow {
   base_commit: string | null;
   fetched_at: string | null;
   created_at: string;
+  status: WorkspaceRepositoryStatus;
+  status_error: string | null;
 }
 
 interface RepositoryLibraryRow {
@@ -188,6 +191,8 @@ const workspaceRepositoryFromRow = (
   baseCommit: row.base_commit,
   fetchedAt: row.fetched_at,
   createdAt: row.created_at,
+  status: row.status,
+  statusError: row.status_error,
 });
 
 const repositoryLibraryFromRow = (
@@ -284,7 +289,15 @@ export class SqliteRepositories {
     );
   }
 
+  /**
+   * True once the handle is gone. Background work that outlives a shutdown —
+   * a repository still cloning when the app quits — asks before writing
+   * rather than throwing into a promise nobody is holding.
+   */
+  closed = false;
+
   close(): void {
+    this.closed = true;
     this.database.close();
   }
 
@@ -383,8 +396,8 @@ export class SqliteRepositories {
         `INSERT INTO workspace_repositories
          (id, workspace_id, name, canonical_path, access,
           library_repository_id, reference_path, base_branch, base_commit,
-          fetched_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          fetched_at, created_at, status, status_error)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         repository.id,
@@ -398,6 +411,8 @@ export class SqliteRepositories {
         repository.baseCommit,
         repository.fetchedAt,
         repository.createdAt,
+        repository.status,
+        repository.statusError,
       );
   }
 
@@ -407,7 +422,7 @@ export class SqliteRepositories {
         `UPDATE workspace_repositories
          SET name = ?, canonical_path = ?, access = ?,
              library_repository_id = ?, reference_path = ?, base_branch = ?,
-             base_commit = ?, fetched_at = ?
+             base_commit = ?, fetched_at = ?, status = ?, status_error = ?
          WHERE id = ?`,
       )
       .run(
@@ -419,6 +434,8 @@ export class SqliteRepositories {
         repository.baseBranch,
         repository.baseCommit,
         repository.fetchedAt,
+        repository.status,
+        repository.statusError,
         repository.id,
       );
   }
