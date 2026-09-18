@@ -1209,7 +1209,9 @@ Before working in this workspace:
         await context.workspaceContent.settlePreparations();
         const ready = (await context.workspaceContent.get(workspace.id))
           .repositories[0];
-        expect(ready?.status).toBe("ready");
+        // Asserted as a pair so a failure prints why it failed rather than
+        // only that it did.
+        expect([ready?.status, ready?.statusError]).toEqual(["ready", null]);
         expect(ready?.id).toBe(pending.id);
         expect(ready?.baseBranch).toBe("main");
         expect(ready?.referencePath).toBe(
@@ -1251,18 +1253,29 @@ Before working in this workspace:
 
     test("a preparation interrupted by shutdown is reported, not left spinning", async () => {
       await withTemporaryDaedalusHome(async (home) => {
-        const source = join(home, "source", "product");
-        await createRepository(source);
         const first = await createApplicationContext({
           env: { DAEDALUS_HOME: home },
           reconcile: false,
         });
         const workspace = await first.workspaces.create({ name: "Async" });
-        await first.workspaceContent.beginAddAndAttachRepository({
-          workspace: workspace.id,
-          remoteUrl: source,
+        // The state a quit mid-clone leaves behind, written directly rather
+        // than by racing a real clone against `close()` — which way that race
+        // falls is a property of the machine, not of the behaviour under test.
+        first.repositories.createWorkspaceRepository({
+          id: crypto.randomUUID(),
+          workspaceId: workspace.id,
+          name: "product",
+          canonicalPath: join(home, "repos", "abandoned.git"),
+          access: "write",
+          libraryRepositoryId: null,
+          referencePath: null,
+          baseBranch: null,
+          baseCommit: null,
+          fetchedAt: null,
+          createdAt: new Date().toISOString(),
+          status: "preparing",
+          statusError: null,
         });
-        // Closing without settling is what a crash or a quit looks like.
         first.close();
 
         const second = await createApplicationContext({
