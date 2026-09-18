@@ -560,6 +560,13 @@ async function worktreeHeldWork(
   };
 }
 
+// Long enough that a burst of changes does not start a pass each, short enough
+// that a badge is never meaningfully behind what the user just did — and the
+// actions that change something ask for a pass directly rather than waiting.
+const STATUS_REFRESH_INTERVAL_MS = 1_000;
+
+const statusKey = (path: string) => resolve(path);
+
 const UNAVAILABLE_STATUS: GitStatus = {
   state: "unavailable",
   changedFiles: 0,
@@ -619,6 +626,11 @@ async function gitStatusAt(
 export class WorkspaceContentService {
   /** In-flight preparations, so a shutdown or a test can wait for them. */
   private readonly preparations = new Map<string, Promise<void>>();
+  /** Last measured status per working tree, keyed by path. */
+  private readonly gitStatusCache = new Map<string, GitStatus>();
+  private statusRefresh?: Promise<void>;
+  private statusRefreshAgain = false;
+  private lastStatusRefreshAt = 0;
 
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -657,27 +669,99 @@ export class WorkspaceContentService {
     const repositories = this.repositories.listWorkspaceRepositories(
       workspace.id,
     );
+    const worktrees = this.repositories.listSessionWorktrees({
+      workspaceId: workspace.id,
+    });
+    this.scheduleGitStatusRefresh(workspace.id);
     return {
       workspaceId: workspace.id,
       brief: await readTextFile(join(workspace.path, "BRIEF.md")),
       journal: await readTextFile(join(workspace.path, "JOURNAL.md")),
       files: await this.listDirectory(workspace.id),
-      repositories: await Promise.all(
-        repositories.map((repository) =>
-          this.repositoryWithGitStatus(repository),
-        ),
-      ),
-      worktrees: await Promise.all(
-        this.repositories
-          .listSessionWorktrees({ workspaceId: workspace.id })
-          .map((worktree) =>
-            this.worktreeWithGitStatus(
-              worktree,
-              new Map(repositories.map((item) => [item.id, item.baseBranch])),
-            ),
-          ),
-      ),
+      // Status comes from the cache, never from git on this path. Reading it
+      // inline cost 200–800 ms per call — dominated by the size of the working
+      // trees rather than their number — and every one of those milliseconds
+      // sat between the user and a list the database already had. A repository
+      // whose status has not been measured yet simply has none; the refresh
+      // below fills it in and says so.
+      repositories: repositories.map((repository) => {
+        const status = repository.referencePath
+          ? this.gitStatusCache.get(statusKey(repository.referencePath))
+          : undefined;
+        return { ...repository, ...(status ? { gitStatus: status } : {}) };
+      }),
+      worktrees: worktrees.map((worktree) => {
+        const status = this.gitStatusCache.get(statusKey(worktree.path));
+        return { ...worktree, ...(status ? { gitStatus: status } : {}) };
+      }),
     };
+  }
+
+  /**
+   * Measures every working tree in a workspace and announces when the answers
+   * change.
+   *
+   * Coalesced and rate limited: a burst of changes produces one pass, not one
+   * per change. `force` is for the actions that just moved something and want
+   * the row to catch up immediately.
+   */
+  private scheduleGitStatusRefresh(workspaceId: string, force = false): void {
+    if (this.statusRefresh) {
+      this.statusRefreshAgain ||= force;
+      return;
+    }
+    const since = Date.now() - this.lastStatusRefreshAt;
+    if (!force && since < STATUS_REFRESH_INTERVAL_MS) return;
+    this.statusRefresh = this.refreshGitStatuses(workspaceId)
+      .catch(() => undefined)
+      .finally(() => {
+        this.statusRefresh = undefined;
+        this.lastStatusRefreshAt = Date.now();
+        if (this.statusRefreshAgain) {
+          this.statusRefreshAgain = false;
+          this.scheduleGitStatusRefresh(workspaceId, true);
+        }
+      });
+  }
+
+  private async refreshGitStatuses(workspaceId: string): Promise<void> {
+    const repositories =
+      this.repositories.listWorkspaceRepositories(workspaceId);
+    const baseBranches = new Map(
+      repositories.map((item) => [item.id, item.baseBranch]),
+    );
+    const targets: Array<{ path: string | null; baseBranch: string | null }> = [
+      ...repositories.map((item) => ({
+        path: item.status === "ready" ? item.referencePath : null,
+        baseBranch: item.baseBranch,
+      })),
+      ...this.repositories
+        .listSessionWorktrees({ workspaceId })
+        .map((item) => ({
+          path: item.path,
+          baseBranch: baseBranches.get(item.repositoryId) ?? null,
+        })),
+    ];
+    let changed = false;
+    await Promise.all(
+      targets.map(async (target) => {
+        if (!target.path) return;
+        const status = await gitStatusAt(target.path, target.baseBranch);
+        const key = statusKey(target.path);
+        const previous = this.gitStatusCache.get(key);
+        if (
+          previous &&
+          previous.state === status.state &&
+          previous.changedFiles === status.changedFiles &&
+          previous.ahead === status.ahead &&
+          previous.behind === status.behind
+        )
+          return;
+        this.gitStatusCache.set(key, status);
+        changed = true;
+      }),
+    );
+    if (changed) this.onRepositoriesChanged();
   }
 
   async setInstructionFilesEnabled(enabled: boolean): Promise<void> {
@@ -939,6 +1023,22 @@ export class WorkspaceContentService {
     return refreshed;
   }
 
+  /**
+   * Measures one repository now and records the answer, so the row the caller
+   * is about to show and the row the next listing shows agree.
+   */
+  private async measureAndCache(
+    repository: WorkspaceRepository,
+  ): Promise<WorkspaceRepository> {
+    const measured = await this.repositoryWithGitStatus(repository);
+    if (repository.referencePath && measured.gitStatus)
+      this.gitStatusCache.set(
+        statusKey(repository.referencePath),
+        measured.gitStatus,
+      );
+    return measured;
+  }
+
   private async repositoryWithGitStatus(
     repository: WorkspaceRepository,
   ): Promise<WorkspaceRepository> {
@@ -1010,7 +1110,7 @@ export class WorkspaceContentService {
       fetchedAt: refreshed.lastFetchedAt,
     };
     this.repositories.updateWorkspaceRepository(updated);
-    return this.repositoryWithGitStatus(updated);
+    return this.measureAndCache(updated);
   }
 
   // Pushing publishes an agent's branch, so it is never implicit: nothing in
@@ -1070,11 +1170,14 @@ export class WorkspaceContentService {
         "CONFLICT",
         `Could not push ${worktree.branchName}: ${result.stderr.trim() || result.stdout.trim()}`,
       );
+    const measured = await this.worktreeWithGitStatus(
+      worktree,
+      new Map([[repository.id, repository.baseBranch]]),
+    );
+    if (measured.gitStatus)
+      this.gitStatusCache.set(statusKey(worktree.path), measured.gitStatus);
     return {
-      worktree: await this.worktreeWithGitStatus(
-        worktree,
-        new Map([[repository.id, repository.baseBranch]]),
-      ),
+      worktree: measured,
       alreadyUpToDate: /Everything up-to-date/i.test(output),
     };
   }
@@ -1164,6 +1267,7 @@ export class WorkspaceContentService {
       "-D",
       worktree.branchName,
     ]);
+    this.gitStatusCache.delete(statusKey(worktree.path));
     this.repositories.deleteSessionWorktree(worktree.sessionId, repository.id);
   }
 
@@ -1282,7 +1386,7 @@ export class WorkspaceContentService {
       fetchedAt: refreshed.lastFetchedAt,
     };
     this.repositories.updateWorkspaceRepository(updated);
-    return this.repositoryWithGitStatus(updated);
+    return this.measureAndCache(updated);
   }
 
   async listDirectory(
@@ -1624,6 +1728,19 @@ export class WorkspaceContentService {
       }).finally(() => this.preparations.delete(pending.id)),
     );
     return pending;
+  }
+
+  /**
+   * Settles when no working tree is being measured.
+   *
+   * `get` deliberately does not wait for git, so anything that needs the
+   * measured answer rather than the last known one — a test, a caller about to
+   * act on it — asks for it here.
+   */
+  async settleGitStatus(workspaceId?: string): Promise<void> {
+    if (!this.statusRefresh && workspaceId)
+      this.scheduleGitStatusRefresh(workspaceId, true);
+    while (this.statusRefresh) await this.statusRefresh;
   }
 
   /** Settles when nothing is being prepared. Tests and the CLI wait on it. */
@@ -1975,6 +2092,7 @@ export class WorkspaceContentService {
     };
     try {
       this.repositories.createSessionWorktree(worktree);
+      this.scheduleGitStatusRefresh(session.workspaceId, true);
       return worktree;
     } catch (error) {
       await runCommand(git, [

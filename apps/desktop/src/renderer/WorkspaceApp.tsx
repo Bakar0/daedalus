@@ -485,7 +485,11 @@ function TerminalIcon() {
 function repositoryStatusText(
   status: WorkspaceContentDto["repositories"][number]["gitStatus"],
 ) {
-  if (!status || status.state === "unavailable") return "Status unavailable";
+  // Not measured yet is not the same as cannot be measured. The listing no
+  // longer waits for git, so an unmeasured row says nothing for a moment
+  // rather than claiming its status is unavailable and then correcting itself.
+  if (!status) return "…";
+  if (status.state === "unavailable") return "Status unavailable";
   if (status.state === "modified")
     return `${status.changedFiles} ${status.changedFiles === 1 ? "change" : "changes"}`;
   if (status.state === "diverged") return `↑${status.ahead} ↓${status.behind}`;

@@ -393,6 +393,7 @@ Before working in this workspace:
         }),
       ).rejects.toMatchObject({ code: "CONFLICT" });
 
+      await context.workspaceContent.settleGitStatus(workspace.id);
       expect(
         (await context.workspaceContent.get(workspace.id)).repositories[0]
           ?.gitStatus,
@@ -437,6 +438,7 @@ Before working in this workspace:
         join(repository.referencePath!, "README.md"),
         "Local reference edit\n",
       );
+      await context.workspaceContent.settleGitStatus(workspace.id);
       expect(
         (await context.workspaceContent.get(workspace.id)).repositories[0]
           ?.gitStatus,
@@ -793,6 +795,11 @@ Before working in this workspace:
           repository: "product",
         });
 
+        // The listing deliberately does not wait for git, so the measurement
+        // is asked for rather than assumed to have happened.
+        await context.workspaceContent.get(workspace.id);
+        await context.workspaceContent.settleGitStatus(workspace.id);
+
         // A clean worktree sitting exactly on the base branch.
         const clean = (await context.workspaceContent.get(workspace.id))
           .worktrees[0];
@@ -826,6 +833,7 @@ Before working in this workspace:
         ).toBe(0);
         await Bun.write(join(worktree.path, "SCRATCH.md"), "# Not committed\n");
 
+        await context.workspaceContent.settleGitStatus(workspace.id);
         const moved = (await context.workspaceContent.get(workspace.id))
           .worktrees[0];
         expect(moved?.gitStatus).toEqual({
@@ -836,6 +844,7 @@ Before working in this workspace:
         });
 
         // The read-only planning checkout is unaffected by the agent's work.
+        await context.workspaceContent.settleGitStatus(workspace.id);
         expect(
           (await context.workspaceContent.get(workspace.id)).repositories[0]
             ?.gitStatus?.state,
@@ -1175,6 +1184,46 @@ Before working in this workspace:
         context.close();
       });
     }, 30_000);
+  });
+
+  test("lists repositories without waiting for git to measure them", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const source = join(home, "source", "product");
+      await createRepository(source);
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        reconcile: false,
+      });
+      const workspace = await context.workspaces.create({ name: "Fast" });
+      await context.workspaceContent.addAndAttachRepository({
+        workspace: workspace.id,
+        remoteUrl: source,
+      });
+
+      // The row is there straight away; its status is not, because measuring
+      // it means running git over a working tree and that is what used to sit
+      // between the user and a list the database already had.
+      const immediate = await context.workspaceContent.get(workspace.id);
+      expect(immediate.repositories).toHaveLength(1);
+      expect(immediate.repositories[0]?.name).toBe("product");
+      // The absence is the assertion. A timing bound would not catch a
+      // regression here: against a small repository, measuring inline is fast
+      // enough to stay under any threshold worth setting.
+      expect(immediate.repositories[0]?.gitStatus).toBeUndefined();
+
+      await context.workspaceContent.settleGitStatus(workspace.id);
+      expect(
+        (await context.workspaceContent.get(workspace.id)).repositories[0]
+          ?.gitStatus?.state,
+      ).toBe("clean");
+
+      // And once measured it is served from memory, so listing again costs
+      // nothing even when the working tree is large.
+      const start = performance.now();
+      await context.workspaceContent.get(workspace.id);
+      expect(performance.now() - start).toBeLessThan(120);
+      context.close();
+    });
   });
 
   describe("preparing a repository in the background", () => {
