@@ -39,9 +39,9 @@ describe("desktop application menu", () => {
         : [];
 
     expect(Object.fromEntries(shortcuts ?? [])).toEqual({
-      "view-board": "Command+1",
-      "view-sessions": "Command+2",
-      "view-workspace": "Command+3",
+      "view-workspace": "Command+1",
+      "view-board": "Command+2",
+      "view-sessions": "Command+3",
       "toggle-terminal": "Control+`",
     });
   });

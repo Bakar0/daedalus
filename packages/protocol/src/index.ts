@@ -101,13 +101,14 @@ export interface WorkspaceRepositoryDto {
   baseCommit: string | null;
   fetchedAt: string | null;
   createdAt: string;
-  gitStatus?: {
-    state:
-      "clean" | "modified" | "ahead" | "behind" | "diverged" | "unavailable";
-    changedFiles: number;
-    ahead: number;
-    behind: number;
-  };
+  gitStatus?: GitStatusDto;
+}
+
+export interface GitStatusDto {
+  state: "clean" | "modified" | "ahead" | "behind" | "diverged" | "unavailable";
+  changedFiles: number;
+  ahead: number;
+  behind: number;
 }
 
 export interface SessionWorktreeDto {
@@ -116,6 +117,7 @@ export interface SessionWorktreeDto {
   path: string;
   branchName: string;
   createdAt: string;
+  gitStatus?: GitStatusDto;
 }
 
 export interface WorkspaceContentDto {
@@ -400,6 +402,13 @@ export interface DesktopRpcSchema {
         WorkspaceRepositoryDto
       >;
       workspaceRepositorySync: Request<{ id: string }, WorkspaceRepositoryDto>;
+      /** Updates the shared clone only; no working tree is touched. */
+      workspaceRepositoryFetch: Request<{ id: string }, WorkspaceRepositoryDto>;
+      /** Publishes an agent's branch. Never implicit: only this call pushes. */
+      sessionWorktreePush: Request<
+        { session: string; repository: string },
+        { worktree: SessionWorktreeDto; alreadyUpToDate: boolean }
+      >;
       repositoryLibraryAdd: Request<
         {
           remoteUrl: string;

@@ -83,6 +83,13 @@ export interface RepositoryLibraryEntry {
   createdAt: string;
 }
 
+export interface GitStatus {
+  state: "clean" | "modified" | "ahead" | "behind" | "diverged" | "unavailable";
+  changedFiles: number;
+  ahead: number;
+  behind: number;
+}
+
 export interface WorkspaceRepository {
   id: UUID;
   workspaceId: UUID;
@@ -95,13 +102,7 @@ export interface WorkspaceRepository {
   baseCommit: string | null;
   fetchedAt: string | null;
   createdAt: string;
-  gitStatus?: {
-    state:
-      "clean" | "modified" | "ahead" | "behind" | "diverged" | "unavailable";
-    changedFiles: number;
-    ahead: number;
-    behind: number;
-  };
+  gitStatus?: GitStatus;
 }
 
 export interface SessionWorktree {
@@ -110,6 +111,10 @@ export interface SessionWorktree {
   path: string;
   branchName: string;
   createdAt: string;
+  /** Measured against the repository's base branch, not the worktree's own
+   * upstream: the question a worktree row answers is how far this agent has
+   * moved from the branch it started on. */
+  gitStatus?: GitStatus;
 }
 
 export interface WorkspaceFileEntry {

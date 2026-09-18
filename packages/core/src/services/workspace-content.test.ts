@@ -768,4 +768,244 @@ Before working in this workspace:
       });
     });
   });
+
+  describe("working tree state", () => {
+    test("reports each worktree's own changes and distance from the base branch", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const source = join(home, "source", "product");
+        await createRepository(source);
+        const context = await createApplicationContext({
+          env: { DAEDALUS_HOME: home },
+          reconcile: false,
+        });
+        const workspace = await context.workspaces.create({ name: "Trees" });
+        await context.workspaceContent.addAndAttachRepository({
+          workspace: workspace.id,
+          remoteUrl: source,
+        });
+        const session = await context.agents.spawn({
+          workspace: workspace.id,
+          provider: "claude",
+        });
+        const worktree = await context.workspaceContent.createSessionWorktree({
+          session: session.id,
+          repository: "product",
+        });
+
+        // A clean worktree sitting exactly on the base branch.
+        const clean = (await context.workspaceContent.get(workspace.id))
+          .worktrees[0];
+        expect(clean?.gitStatus).toEqual({
+          state: "clean",
+          changedFiles: 0,
+          ahead: 0,
+          behind: 0,
+        });
+
+        // One commit on top, plus one uncommitted file.
+        await Bun.write(join(worktree.path, "LANDED.md"), "# Landed\n");
+        expect(
+          (await runCommand("git", ["-C", worktree.path, "add", "LANDED.md"]))
+            .exitCode,
+        ).toBe(0);
+        expect(
+          (
+            await runCommand("git", [
+              "-C",
+              worktree.path,
+              "-c",
+              "user.name=Daedalus Test",
+              "-c",
+              "user.email=test@daedalus.local",
+              "commit",
+              "-qm",
+              "agent work",
+            ])
+          ).exitCode,
+        ).toBe(0);
+        await Bun.write(join(worktree.path, "SCRATCH.md"), "# Not committed\n");
+
+        const moved = (await context.workspaceContent.get(workspace.id))
+          .worktrees[0];
+        expect(moved?.gitStatus).toEqual({
+          state: "modified",
+          changedFiles: 1,
+          ahead: 1,
+          behind: 0,
+        });
+
+        // The read-only planning checkout is unaffected by the agent's work.
+        expect(
+          (await context.workspaceContent.get(workspace.id)).repositories[0]
+            ?.gitStatus?.state,
+        ).toBe("clean");
+        context.close();
+      });
+    });
+
+    test("pushes a session branch to origin, and says when there was nothing to send", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const source = join(home, "source", "product");
+        await createRepository(source);
+        const context = await createApplicationContext({
+          env: { DAEDALUS_HOME: home },
+          reconcile: false,
+        });
+        const workspace = await context.workspaces.create({ name: "Push" });
+        await context.workspaceContent.addAndAttachRepository({
+          workspace: workspace.id,
+          remoteUrl: source,
+        });
+        const session = await context.agents.spawn({
+          workspace: workspace.id,
+          provider: "claude",
+        });
+        const worktree = await context.workspaceContent.createSessionWorktree({
+          session: session.id,
+          repository: "product",
+        });
+        await Bun.write(join(worktree.path, "LANDED.md"), "# Landed\n");
+        expect(
+          (await runCommand("git", ["-C", worktree.path, "add", "LANDED.md"]))
+            .exitCode,
+        ).toBe(0);
+        expect(
+          (
+            await runCommand("git", [
+              "-C",
+              worktree.path,
+              "-c",
+              "user.name=Daedalus Test",
+              "-c",
+              "user.email=test@daedalus.local",
+              "commit",
+              "-qm",
+              "agent work",
+            ])
+          ).exitCode,
+        ).toBe(0);
+
+        const pushed = await context.workspaceContent.pushSessionWorktree({
+          session: session.id,
+          repository: "product",
+        });
+        expect(pushed.alreadyUpToDate).toBe(false);
+        expect(
+          (
+            await runCommand("git", [
+              "-C",
+              source,
+              "rev-parse",
+              worktree.branchName,
+            ])
+          ).stdout.trim(),
+        ).toBe(
+          (
+            await runCommand("git", ["-C", worktree.path, "rev-parse", "HEAD"])
+          ).stdout.trim(),
+        );
+
+        // Pushing again sends nothing, and says so rather than failing.
+        expect(
+          (
+            await context.workspaceContent.pushSessionWorktree({
+              session: session.id,
+              repository: "product",
+            })
+          ).alreadyUpToDate,
+        ).toBe(true);
+        context.close();
+      });
+    });
+
+    test("refuses to push a session that has no working tree for the repository", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const source = join(home, "source", "product");
+        await createRepository(source);
+        const context = await createApplicationContext({
+          env: { DAEDALUS_HOME: home },
+          reconcile: false,
+        });
+        const workspace = await context.workspaces.create({ name: "Push" });
+        await context.workspaceContent.addAndAttachRepository({
+          workspace: workspace.id,
+          remoteUrl: source,
+        });
+        const session = await context.agents.spawn({
+          workspace: workspace.id,
+          provider: "claude",
+        });
+        await expect(
+          context.workspaceContent.pushSessionWorktree({
+            session: session.id,
+            repository: "product",
+          }),
+        ).rejects.toMatchObject({ code: "NOT_FOUND" });
+        context.close();
+      });
+    });
+
+    test("fetching updates the shared clone without touching the checkout", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const source = join(home, "source", "product");
+        await createRepository(source);
+        const context = await createApplicationContext({
+          env: { DAEDALUS_HOME: home },
+          reconcile: false,
+        });
+        const workspace = await context.workspaces.create({ name: "Fetch" });
+        const attached = await context.workspaceContent.addAndAttachRepository({
+          workspace: workspace.id,
+          remoteUrl: source,
+        });
+        const checkedOut = (
+          await runCommand("git", [
+            "-C",
+            attached.referencePath!,
+            "rev-parse",
+            "HEAD",
+          ])
+        ).stdout.trim();
+
+        await Bun.write(join(source, "SHIPPED.md"), "# Shipped\n");
+        expect(
+          (await runCommand("git", ["-C", source, "add", "SHIPPED.md"]))
+            .exitCode,
+        ).toBe(0);
+        expect(
+          (
+            await runCommand("git", [
+              "-C",
+              source,
+              "-c",
+              "user.name=Daedalus Test",
+              "-c",
+              "user.email=test@daedalus.local",
+              "commit",
+              "-qm",
+              "landed upstream",
+            ])
+          ).exitCode,
+        ).toBe(0);
+
+        const fetched = await context.workspaceContent.fetchRepository(
+          attached.id,
+        );
+        // The status is now true again...
+        expect(fetched.gitStatus).toMatchObject({ state: "behind", behind: 1 });
+        // ...without the working tree having moved.
+        expect(
+          (
+            await runCommand("git", [
+              "-C",
+              attached.referencePath!,
+              "rev-parse",
+              "HEAD",
+            ])
+          ).stdout.trim(),
+        ).toBe(checkedOut);
+        context.close();
+      });
+    });
+  });
 });

@@ -303,6 +303,21 @@ export function createDesktopRequestHandlers(
           await context.workspaceContent.attachRepository(params),
         ),
       ),
+    workspaceRepositoryFetch: ({ id }) =>
+      mutate(async () =>
+        workspaceRepositoryDto(
+          await context.workspaceContent.fetchRepository(id),
+        ),
+      ),
+    sessionWorktreePush: (params) =>
+      mutate(async () => {
+        const pushed =
+          await context.workspaceContent.pushSessionWorktree(params);
+        return {
+          worktree: { ...pushed.worktree },
+          alreadyUpToDate: pushed.alreadyUpToDate,
+        };
+      }),
     repositoryAddAndAttach: (params) =>
       mutate(async () =>
         workspaceRepositoryDto(

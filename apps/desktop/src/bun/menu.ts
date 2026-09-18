@@ -30,15 +30,15 @@ export const APPLICATION_MENU: ApplicationMenuItemConfig[] = [
   {
     label: "View",
     submenu: [
-      { label: "Board", action: "view-board", accelerator: "Command+1" },
-      {
-        label: "Sessions",
-        action: "view-sessions",
-        accelerator: "Command+2",
-      },
       {
         label: "Workspace",
         action: "view-workspace",
+        accelerator: "Command+1",
+      },
+      { label: "Board", action: "view-board", accelerator: "Command+2" },
+      {
+        label: "Sessions",
+        action: "view-sessions",
         accelerator: "Command+3",
       },
       { type: "divider" },

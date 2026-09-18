@@ -33,6 +33,7 @@ import {
 } from "@daedalus/platform";
 import type {
   AgentSession,
+  GitStatus,
   SessionWorktree,
   Task,
   Workspace,
@@ -493,6 +494,62 @@ async function seedRemoteTrackingRefs(
   return defaultBranch;
 }
 
+const UNAVAILABLE_STATUS: GitStatus = {
+  state: "unavailable",
+  changedFiles: 0,
+  ahead: 0,
+  behind: 0,
+};
+
+// Shared by the read-only checkout under `repos/` and by session worktrees.
+// Both answer the same two questions — what is uncommitted here, and how far
+// has this tree moved from the branch it started on — so both are compared
+// against `refs/remotes/origin/<baseBranch>` rather than against whatever
+// upstream the tree happens to have.
+async function gitStatusAt(
+  path: string | null,
+  baseBranch: string | null,
+): Promise<GitStatus> {
+  if (!path || !baseBranch) return UNAVAILABLE_STATUS;
+  const git = findExecutable("git");
+  if (!git || !(await pathExists(path))) return UNAVAILABLE_STATUS;
+  const [status, comparison] = await Promise.all([
+    runCommand(git, [
+      "-C",
+      path,
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--untracked-files=normal",
+    ]),
+    runCommand(git, [
+      "-C",
+      path,
+      "rev-list",
+      "--left-right",
+      "--count",
+      `HEAD...refs/remotes/origin/${baseBranch}`,
+    ]),
+  ]);
+  if (status.exitCode !== 0 || comparison.exitCode !== 0)
+    return UNAVAILABLE_STATUS;
+  const [ahead = 0, behind = 0] = comparison.stdout
+    .trim()
+    .split(/\s+/)
+    .map((value) => Number.parseInt(value, 10) || 0);
+  const changedFiles = status.stdout.split("\0").filter(Boolean).length;
+  const state = changedFiles
+    ? ("modified" as const)
+    : ahead && behind
+      ? ("diverged" as const)
+      : behind
+        ? ("behind" as const)
+        : ahead
+          ? ("ahead" as const)
+          : ("clean" as const);
+  return { state, changedFiles, ahead, behind };
+}
+
 export class WorkspaceContentService {
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -520,9 +577,16 @@ export class WorkspaceContentService {
           this.repositoryWithGitStatus(repository),
         ),
       ),
-      worktrees: this.repositories.listSessionWorktrees({
-        workspaceId: workspace.id,
-      }),
+      worktrees: await Promise.all(
+        this.repositories
+          .listSessionWorktrees({ workspaceId: workspace.id })
+          .map((worktree) =>
+            this.worktreeWithGitStatus(
+              worktree,
+              new Map(repositories.map((item) => [item.id, item.baseBranch])),
+            ),
+          ),
+      ),
     };
   }
 
@@ -764,72 +828,123 @@ export class WorkspaceContentService {
   private async repositoryWithGitStatus(
     repository: WorkspaceRepository,
   ): Promise<WorkspaceRepository> {
-    if (!repository.referencePath || !repository.baseBranch)
-      return {
-        ...repository,
-        gitStatus: {
-          state: "unavailable",
-          changedFiles: 0,
-          ahead: 0,
-          behind: 0,
-        },
-      };
-    const git = findExecutable("git");
-    if (!git || !(await pathExists(repository.referencePath)))
-      return {
-        ...repository,
-        gitStatus: {
-          state: "unavailable",
-          changedFiles: 0,
-          ahead: 0,
-          behind: 0,
-        },
-      };
-    const [status, comparison] = await Promise.all([
-      runCommand(git, [
-        "-C",
-        repository.referencePath,
-        "status",
-        "--porcelain=v1",
-        "-z",
-        "--untracked-files=normal",
-      ]),
-      runCommand(git, [
-        "-C",
-        repository.referencePath,
-        "rev-list",
-        "--left-right",
-        "--count",
-        `HEAD...refs/remotes/origin/${repository.baseBranch}`,
-      ]),
-    ]);
-    if (status.exitCode !== 0 || comparison.exitCode !== 0)
-      return {
-        ...repository,
-        gitStatus: {
-          state: "unavailable",
-          changedFiles: 0,
-          ahead: 0,
-          behind: 0,
-        },
-      };
-    const [ahead = 0, behind = 0] = comparison.stdout
-      .trim()
-      .split(/\s+/)
-      .map((value) => Number.parseInt(value, 10) || 0);
-    const changedFiles = status.stdout.split("\0").filter(Boolean).length;
-    const state = changedFiles
-      ? ("modified" as const)
-      : ahead && behind
-        ? ("diverged" as const)
-        : behind
-          ? ("behind" as const)
-          : ahead
-            ? ("ahead" as const)
-            : ("clean" as const);
     return {
       ...repository,
-      gitStatus: { state, changedFiles, ahead, behind },
+      gitStatus: await gitStatusAt(
+        repository.referencePath,
+        repository.baseBranch,
+      ),
+    };
+  }
+
+  private async worktreeWithGitStatus(
+    worktree: SessionWorktree,
+    baseBranchByRepositoryId: ReadonlyMap<string, string | null>,
+  ): Promise<SessionWorktree> {
+    return {
+      ...worktree,
+      gitStatus: await gitStatusAt(
+        worktree.path,
+        baseBranchByRepositoryId.get(worktree.repositoryId) ?? null,
+      ),
+    };
+  }
+
+  // Fetch updates the shared clone every workspace and worktree resolves
+  // against, so it is what makes "behind 3" true again without touching a
+  // single working tree.
+  async fetchRepository(id: string): Promise<WorkspaceRepository> {
+    const repository = this.repositories.findWorkspaceRepository(id);
+    if (!repository)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Workspace repository '${id}' was not found`,
+      );
+    if (!repository.libraryRepositoryId)
+      throw new DaedalusError(
+        "CONFLICT",
+        `Repository '${repository.name}' has no shared clone to fetch`,
+      );
+    const libraryRepository = this.repositories.findRepositoryLibraryEntry(
+      repository.libraryRepositoryId,
+    );
+    if (!libraryRepository)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        "The shared repository clone is no longer available",
+      );
+    const refreshed = await this.refreshRepository(libraryRepository);
+    const updated: WorkspaceRepository = {
+      ...repository,
+      fetchedAt: refreshed.lastFetchedAt,
+    };
+    this.repositories.updateWorkspaceRepository(updated);
+    return this.repositoryWithGitStatus(updated);
+  }
+
+  // Pushing publishes an agent's branch, so it is never implicit: nothing in
+  // Daedalus pushes on its own, and the branch is always the worktree's own.
+  async pushSessionWorktree(input: {
+    session: string;
+    repository: string;
+  }): Promise<{ worktree: SessionWorktree; alreadyUpToDate: boolean }> {
+    const session = this.repositories.findAgent(input.session);
+    if (!session)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Agent session '${input.session}' was not found`,
+      );
+    const repository = this.repositories
+      .listWorkspaceRepositories(session.workspaceId)
+      .find(
+        (item) =>
+          item.id === input.repository || item.name === input.repository,
+      );
+    if (!repository)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Repository '${input.repository}' is not attached to this session's workspace`,
+      );
+    const worktree = this.repositories
+      .listSessionWorktrees({ sessionId: session.id })
+      .find((item) => item.repositoryId === repository.id);
+    if (!worktree)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Session '${session.id}' has no ${repository.name} working tree`,
+      );
+    if (!(await pathExists(worktree.path)))
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `The ${repository.name} working tree is no longer on disk`,
+      );
+    const git = findExecutable("git");
+    if (!git)
+      throw new DaedalusError("DEPENDENCY", "git is not available on PATH");
+    const result = await runCommand(
+      git,
+      [
+        "-C",
+        worktree.path,
+        "push",
+        "--set-upstream",
+        "origin",
+        `${worktree.branchName}:${worktree.branchName}`,
+      ],
+      { env: GIT_NETWORK_ENVIRONMENT },
+    );
+    const output = `${result.stderr}\n${result.stdout}`;
+    if (result.exitCode !== 0)
+      throw new DaedalusError(
+        "CONFLICT",
+        `Could not push ${worktree.branchName}: ${result.stderr.trim() || result.stdout.trim()}`,
+      );
+    return {
+      worktree: await this.worktreeWithGitStatus(
+        worktree,
+        new Map([[repository.id, repository.baseBranch]]),
+      ),
+      alreadyUpToDate: /Everything up-to-date/i.test(output),
     };
   }
 

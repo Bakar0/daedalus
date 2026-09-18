@@ -2283,11 +2283,147 @@ dd {
 .workspace-explorer-secondary {
   border-top: 1px solid var(--line);
   flex: 0 0 auto;
-  max-height: 42%;
+  /* Repositories and their working trees are one list now, so this section
+     carries about twice what the two collapsed ones did. */
+  max-height: 52%;
   overflow: auto;
 }
-.workspace-explorer-secondary details + details {
+.workspace-explorer-secondary .workspace-resource-heading {
+  align-items: center;
+  color: var(--secondary);
+  display: flex;
+  font-size: 10px;
+  font-weight: 600;
+  gap: 5px;
+  justify-content: space-between;
+  padding: 8px 10px;
+  text-transform: uppercase;
+}
+.workspace-explorer-secondary .workspace-resource-heading > span:first-child {
+  flex: 1;
+}
+.workspace-explorer-secondary .workspace-resource-heading small {
+  color: var(--muted);
+}
+.workspace-explorer-secondary .workspace-resource-heading > button {
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 18px;
+  padding: 0;
+  width: 20px;
+}
+.workspace-explorer-secondary .workspace-resource-heading > button:hover {
+  background: var(--raised-hover);
+  color: var(--text);
+}
+
+/* A repository and the working trees cut from it are one unit: the question is
+   never "what repositories are there" on its own, it is who is holding one. */
+.workspace-repository-group + .workspace-repository-group {
   border-top: 1px solid var(--line);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+/* Outranks `.workspace-resource-row > span`, which lays the row's text column
+   out as a grid and would otherwise stack these buttons vertically. */
+.workspace-resource-row > .workspace-resource-actions {
+  display: flex;
+  flex-direction: row;
+  flex-shrink: 0;
+  gap: 1px;
+}
+.workspace-worktree-row {
+  align-items: center;
+  border-radius: 6px;
+  display: flex;
+  gap: 6px;
+  margin-left: 9px;
+  padding: 4px 6px;
+  position: relative;
+}
+.workspace-worktree-row::before {
+  border-bottom: 1px solid var(--line-strong);
+  border-left: 1px solid var(--line-strong);
+  border-bottom-left-radius: 3px;
+  content: "";
+  height: 9px;
+  left: -5px;
+  position: absolute;
+  top: 2px;
+  width: 5px;
+}
+.workspace-worktree-row:hover {
+  background: var(--raised);
+}
+.workspace-worktree-row.empty {
+  color: var(--muted);
+  font-size: 9px;
+  font-style: italic;
+}
+.workspace-worktree-row > span:first-child {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.workspace-worktree-row strong {
+  font-size: 9px;
+  font-weight: 600;
+}
+.workspace-worktree-row small {
+  color: var(--muted);
+  font-size: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-worktree-status {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+}
+.workspace-worktree-status .git-part {
+  font-size: 9px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+.git-part.tone-modified {
+  color: #eab66f;
+}
+.git-part.tone-ahead {
+  color: var(--success);
+}
+.git-part.tone-behind {
+  color: var(--danger);
+}
+.git-part.tone-clean {
+  color: var(--muted);
+}
+
+/* A workspace with no repositories cannot do the thing it exists for, so the
+   empty state is an instruction rather than a shrug. */
+.workspace-repository-invite {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 10px 12px;
+}
+.workspace-repository-invite strong {
+  font-size: 11px;
+}
+.workspace-repository-invite span {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.workspace-repository-invite button {
+  align-self: flex-start;
+  font-size: 10px;
+  padding: 5px 10px;
 }
 .workspace-explorer-secondary summary {
   align-items: center;
@@ -2551,7 +2687,7 @@ dd {
 .repository-status-diverged .repository-git-status i {
   background: var(--danger);
 }
-.workspace-repository-sync {
+.repository-action {
   align-items: center;
   background: transparent;
   border: 0;
@@ -2564,15 +2700,15 @@ dd {
   padding: 4px;
   width: 24px;
 }
-.workspace-repository-sync:hover {
+.repository-action:hover:not(:disabled) {
   background: var(--raised-hover);
   color: var(--text);
 }
-.workspace-repository-sync svg {
+.repository-action svg {
   height: 14px;
   width: 14px;
 }
-.workspace-repository-sync.syncing svg {
+.repository-action.syncing svg {
   animation: repository-progress-spin 800ms linear infinite;
 }
 .workspace-resource-row small {
