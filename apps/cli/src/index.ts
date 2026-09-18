@@ -237,7 +237,8 @@ const commandHelp: Record<string, string> = {
   daedal repo detach <attachment-id>
   daedal repo worktree create --session <agent-id> --repository <name-or-id>
   daedal repo worktree list [--workspace <workspace>] [--session <agent-id>]
-  daedal repo worktree push --session <agent-id> --repository <name-or-id>`,
+  daedal repo worktree push --session <agent-id> --repository <name-or-id>
+  daedal repo worktree remove --session <agent-id> --repository <name-or-id> [--force]`,
   agent: `Agent commands:
   daedal agent models <codex|claude>
   daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>]
@@ -1463,7 +1464,7 @@ async function repositoryCommand(
       1,
       "daedal repo detach <attachment-id>",
     );
-    const result = context.workspaceContent.detachRepository(
+    const result = await context.workspaceContent.detachRepository(
       parsed.positionals[0]!,
     );
     printResult(result, json, () =>
@@ -1512,6 +1513,23 @@ async function repositoryCommand(
       });
       return 0;
     }
+    if (worktreeAction === "remove") {
+      const parsed = parseArguments(args, ["session", "repository"], ["force"]);
+      expectPositionals(
+        parsed.positionals,
+        0,
+        "daedal repo worktree remove --session <agent-id> --repository <name-or-id> [--force]",
+      );
+      const result = await context.workspaceContent.removeSessionWorktree({
+        session: required(parsed.values.session, "--session"),
+        repository: required(parsed.values.repository, "--repository"),
+        force: parsed.flags.has("force"),
+      });
+      printResult(result, json, () =>
+        console.log(`Removed working tree ${result.path}`),
+      );
+      return 0;
+    }
     if (worktreeAction === "push") {
       const parsed = parseArguments(args, ["session", "repository"]);
       expectPositionals(
@@ -1535,7 +1553,7 @@ async function repositoryCommand(
     if (worktreeAction !== "create")
       throw new DaedalusError(
         "VALIDATION",
-        "Usage: daedal repo worktree <create|list|push> ...",
+        "Usage: daedal repo worktree <create|list|push|remove> ...",
       );
     const parsed = parseArguments(args, ["session", "repository"]);
     expectPositionals(

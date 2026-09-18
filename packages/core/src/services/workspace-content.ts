@@ -494,6 +494,66 @@ async function seedRemoteTrackingRefs(
   return defaultBranch;
 }
 
+// What a working tree is holding that exists nowhere else — the only thing
+// that makes removing it destructive.
+//
+// This is deliberately not `gitStatus.ahead`. A row shows "ahead 2" to say how
+// far the agent has moved from the branch it started on, which stays true
+// after the branch is pushed; safety asks whether those commits are reachable
+// from anything on the remote, and pushing is exactly what makes them so.
+// Measuring removability with `ahead` produced a guard that told the user to
+// push and then refused just the same afterwards.
+async function worktreeHeldWork(
+  repository: WorkspaceRepository,
+  worktree: SessionWorktree,
+): Promise<{ uncommittedFiles: number; unreachableCommits: number }> {
+  const git = findExecutable("git");
+  // Nothing readable is nothing to lose: a tree whose directory is gone, or a
+  // machine with no git, must not become permanently unremovable.
+  if (!git || !(await pathExists(worktree.path)))
+    return { uncommittedFiles: 0, unreachableCommits: 0 };
+  const run = (args: string[]) =>
+    runCommand(git, ["-C", worktree.path, ...args]);
+  const status = await run([
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=normal",
+  ]);
+  if (status.exitCode !== 0)
+    return { uncommittedFiles: 0, unreachableCommits: 0 };
+  const elsewhere: string[] = [];
+  for (const reference of [
+    repository.baseBranch ? `refs/remotes/origin/${repository.baseBranch}` : "",
+    repository.baseBranch ? `refs/heads/${repository.baseBranch}` : "",
+    `refs/remotes/origin/${worktree.branchName}`,
+  ]) {
+    if (!reference) continue;
+    const resolved = await run(["rev-parse", "--verify", "--quiet", reference]);
+    if (resolved.exitCode === 0) elsewhere.push(reference);
+  }
+  const uncommittedFiles = status.stdout.split("\0").filter(Boolean).length;
+  // With nothing to compare against there is nothing to call unique. Counting
+  // `HEAD` alone would report the repository's whole history, which would make
+  // an untouched working tree permanently unremovable.
+  if (elsewhere.length === 0)
+    return { uncommittedFiles, unreachableCommits: 0 };
+  const unique = await run([
+    "rev-list",
+    "--count",
+    "HEAD",
+    "--not",
+    ...elsewhere,
+  ]);
+  return {
+    uncommittedFiles,
+    unreachableCommits:
+      unique.exitCode === 0
+        ? Number.parseInt(unique.stdout.trim(), 10) || 0
+        : 0,
+  };
+}
+
 const UNAVAILABLE_STATUS: GitStatus = {
   state: "unavailable",
   changedFiles: 0,
@@ -948,6 +1008,115 @@ export class WorkspaceContentService {
     };
   }
 
+  // Removing a working tree destroys whatever is only in it, so the guard is
+  // the point: a tree is removable without `force` only when it has nothing
+  // uncommitted and no commit the base branch does not already have. Those two
+  // facts together mean nothing can be lost.
+  async removeSessionWorktree(input: {
+    session: string;
+    repository: string;
+    force?: boolean;
+  }): Promise<SessionWorktree> {
+    const session = this.repositories.findAgent(input.session);
+    if (!session)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Agent session '${input.session}' was not found`,
+      );
+    const repository = this.repositories
+      .listWorkspaceRepositories(session.workspaceId)
+      .find(
+        (item) =>
+          item.id === input.repository || item.name === input.repository,
+      );
+    if (!repository)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Repository '${input.repository}' is not attached to this session's workspace`,
+      );
+    const worktree = this.repositories
+      .listSessionWorktrees({ sessionId: session.id })
+      .find((item) => item.repositoryId === repository.id);
+    if (!worktree)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Session '${session.id}' has no ${repository.name} working tree`,
+      );
+    if (!input.force) {
+      const held = await worktreeHeldWork(repository, worktree);
+      if (held.uncommittedFiles > 0)
+        throw new DaedalusError(
+          "CONFLICT",
+          `The ${repository.name} working tree has ${held.uncommittedFiles} uncommitted ${held.uncommittedFiles === 1 ? "change" : "changes"}; commit and push them, or remove it with force`,
+        );
+      if (held.unreachableCommits > 0)
+        throw new DaedalusError(
+          "CONFLICT",
+          `The ${repository.name} working tree has ${held.unreachableCommits} ${held.unreachableCommits === 1 ? "commit that exists" : "commits that exist"} nowhere else; push the branch, or remove it with force`,
+        );
+    }
+    await this.discardWorktree(repository, worktree);
+    return worktree;
+  }
+
+  // The filesystem removal, with no opinion about whether it is safe: callers
+  // own that. Registration is cleared even when the directory is already gone,
+  // because a row pointing at nothing is exactly what used to make a
+  // repository permanently undetachable.
+  private async discardWorktree(
+    repository: WorkspaceRepository,
+    worktree: SessionWorktree,
+  ): Promise<void> {
+    const git = findExecutable("git");
+    if (!git)
+      throw new DaedalusError("DEPENDENCY", "git is not available on PATH");
+    const sourceArguments = repository.libraryRepositoryId
+      ? ["--git-dir", repository.canonicalPath]
+      : ["-C", repository.canonicalPath];
+    const removed = await runCommand(git, [
+      ...sourceArguments,
+      "worktree",
+      "remove",
+      "--force",
+      worktree.path,
+    ]);
+    if (removed.exitCode !== 0 && (await pathExists(worktree.path)))
+      throw new DaedalusError(
+        "CONFLICT",
+        `Could not remove the ${repository.name} working tree: ${removed.stderr.trim() || removed.stdout.trim()}`,
+      );
+    await runCommand(git, [...sourceArguments, "worktree", "prune"]);
+    // The branch only ever existed to carry this tree's work.
+    await runCommand(git, [
+      ...sourceArguments,
+      "branch",
+      "-D",
+      worktree.branchName,
+    ]);
+    this.repositories.deleteSessionWorktree(worktree.sessionId, repository.id);
+  }
+
+  // Called when a session is archived. Only trees that provably hold nothing —
+  // no uncommitted change, no commit the base branch lacks — are cleared, so
+  // archiving never destroys an agent's work. Anything else is left for the
+  // user to deal with deliberately.
+  async releaseSessionWorktrees(sessionId: string): Promise<SessionWorktree[]> {
+    const worktrees = this.repositories.listSessionWorktrees({ sessionId });
+    if (worktrees.length === 0) return [];
+    const released: SessionWorktree[] = [];
+    for (const worktree of worktrees) {
+      const repository = this.repositories.findWorkspaceRepository(
+        worktree.repositoryId,
+      );
+      if (!repository) continue;
+      const held = await worktreeHeldWork(repository, worktree);
+      if (held.uncommittedFiles > 0 || held.unreachableCommits > 0) continue;
+      await this.discardWorktree(repository, worktree);
+      released.push(worktree);
+    }
+    return released;
+  }
+
   async syncRepository(id: string): Promise<WorkspaceRepository> {
     const repository = this.repositories.findWorkspaceRepository(id);
     if (!repository)
@@ -1388,7 +1557,7 @@ export class WorkspaceContentService {
     return item;
   }
 
-  detachRepository(id: string): WorkspaceRepository {
+  async detachRepository(id: string): Promise<WorkspaceRepository> {
     const repository = this.repositories.findWorkspaceRepository(id);
     if (!repository)
       throw new DaedalusError(
@@ -1405,7 +1574,29 @@ export class WorkspaceContentService {
         "Repository has session worktrees and cannot be detached",
       );
     this.repositories.deleteWorkspaceRepository(id);
+    await this.discardReferenceCheckout(repository);
     return repository;
+  }
+
+  private async discardReferenceCheckout(
+    repository: WorkspaceRepository,
+  ): Promise<void> {
+    const git = findExecutable("git");
+    if (!git || !repository.referencePath) return;
+    await runCommand(git, [
+      "--git-dir",
+      repository.canonicalPath,
+      "worktree",
+      "remove",
+      "--force",
+      repository.referencePath,
+    ]);
+    await runCommand(git, [
+      "--git-dir",
+      repository.canonicalPath,
+      "worktree",
+      "prune",
+    ]);
   }
 
   async appendJournal(input: {

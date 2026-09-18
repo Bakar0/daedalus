@@ -309,6 +309,10 @@ export function createDesktopRequestHandlers(
           await context.workspaceContent.fetchRepository(id),
         ),
       ),
+    sessionWorktreeRemove: (params) =>
+      mutate(async () => ({
+        ...(await context.workspaceContent.removeSessionWorktree(params)),
+      })),
     sessionWorktreePush: (params) =>
       mutate(async () => {
         const pushed =
@@ -339,8 +343,10 @@ export function createDesktopRequestHandlers(
     repositoryDiscovery: () =>
       result(() => context.workspaceContent.discoverGitHubRepositories()),
     workspaceRepositoryDetach: ({ id }) =>
-      mutate(() =>
-        workspaceRepositoryDto(context.workspaceContent.detachRepository(id)),
+      mutate(async () =>
+        workspaceRepositoryDto(
+          await context.workspaceContent.detachRepository(id),
+        ),
       ),
     workspaceJournalAppend: (params) =>
       mutate(async () => {

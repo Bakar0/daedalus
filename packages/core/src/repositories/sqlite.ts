@@ -521,6 +521,14 @@ export class SqliteRepositories {
       );
   }
 
+  deleteSessionWorktree(sessionId: string, repositoryId: string): void {
+    this.database
+      .query(
+        "DELETE FROM session_worktrees WHERE session_id = ? AND repository_id = ?",
+      )
+      .run(sessionId, repositoryId);
+  }
+
   listSessionWorktrees(
     filters: {
       sessionId?: string;

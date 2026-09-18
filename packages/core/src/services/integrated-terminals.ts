@@ -1,9 +1,37 @@
-import { findExecutable, type TmuxClient } from "@daedalus/platform";
+import { isAbsolute } from "node:path";
+import {
+  findExecutable,
+  isPathInside,
+  pathExists,
+  type TmuxClient,
+} from "@daedalus/platform";
 import type { DaedalusConfig } from "../config";
 import type { IntegratedTerminal } from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import type { WorkspaceService } from "./workspaces";
+
+async function resolveWorkingDirectory(
+  requested: string | undefined,
+  workspacePath: string | undefined,
+  home: string,
+): Promise<string> {
+  const fallback = workspacePath ?? home;
+  if (!requested) return fallback;
+  if (!workspacePath)
+    throw new DaedalusError(
+      "VALIDATION",
+      "A working directory needs the workspace it belongs to",
+    );
+  if (!isAbsolute(requested) || !isPathInside(workspacePath, requested))
+    throw new DaedalusError(
+      "VALIDATION",
+      "A terminal can only be opened inside its workspace",
+    );
+  if (!(await pathExists(requested)))
+    throw new DaedalusError("NOT_FOUND", `'${requested}' no longer exists`);
+  return requested;
+}
 
 export class IntegratedTerminalService {
   constructor(
@@ -32,6 +60,12 @@ export class IntegratedTerminalService {
   async create(input: {
     workspace?: string;
     name?: string;
+    /**
+     * Where the shell starts. Constrained to the workspace it belongs to, so
+     * "open in terminal" on a repository or a working tree cannot be turned
+     * into a shell anywhere on the machine.
+     */
+    workingDirectory?: string;
   }): Promise<IntegratedTerminal> {
     if (!(await this.tmux.probe()))
       throw new DaedalusError("DEPENDENCY", "tmux is not available on PATH");
@@ -61,7 +95,11 @@ export class IntegratedTerminalService {
       tmuxSession: `daedalus_terminal_${id.replaceAll("-", "")}`,
       command: shell,
       args: ["-l"],
-      workingDirectory: workspace?.path ?? this.config.home,
+      workingDirectory: await resolveWorkingDirectory(
+        input.workingDirectory,
+        workspace?.path,
+        this.config.home,
+      ),
       status: "starting",
       exitCode: null,
       startedAt: now,

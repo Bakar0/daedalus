@@ -2322,6 +2322,12 @@ dd {
 
 /* A repository and the working trees cut from it are one unit: the question is
    never "what repositories are there" on its own, it is who is holding one. */
+/* A grid item defaults to `min-width: auto`, meaning min-content, so without
+   this the group refuses to shrink below the longest branch name and pushes
+   the row's action buttons out past the explorer's edge. */
+.workspace-repository-group {
+  min-width: 0;
+}
 .workspace-repository-group + .workspace-repository-group {
   border-top: 1px solid var(--line);
   margin-top: 4px;

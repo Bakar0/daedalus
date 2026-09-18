@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { lstat, mkdir, readFile, readlink, unlink } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import {
+  pathExists,
   runCommand,
   type TmuxClient,
   type TmuxLaunch,
@@ -1007,5 +1008,172 @@ Before working in this workspace:
         context.close();
       });
     });
+  });
+
+  describe("removing a working tree", () => {
+    const commitIn = async (path: string, name: string) => {
+      await Bun.write(join(path, name), `# ${name}\n`);
+      expect(
+        (await runCommand("git", ["-C", path, "add", name])).exitCode,
+      ).toBe(0);
+      expect(
+        (
+          await runCommand("git", [
+            "-C",
+            path,
+            "-c",
+            "user.name=Daedalus Test",
+            "-c",
+            "user.email=test@daedalus.local",
+            "commit",
+            "-qm",
+            name,
+          ])
+        ).exitCode,
+      ).toBe(0);
+    };
+
+    const scenario = async (home: string) => {
+      const source = join(home, "source", "product");
+      await createRepository(source);
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        reconcile: false,
+      });
+      const workspace = await context.workspaces.create({ name: "Remove" });
+      const repository = await context.workspaceContent.addAndAttachRepository({
+        workspace: workspace.id,
+        remoteUrl: source,
+      });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "claude",
+      });
+      const worktree = await context.workspaceContent.createSessionWorktree({
+        session: session.id,
+        repository: "product",
+      });
+      return { context, workspace, repository, session, worktree };
+    };
+
+    test("removes a tree that holds nothing, and frees the repository to be detached", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const { context, workspace, repository, session, worktree } =
+          await scenario(home);
+
+        // A repository with a working tree cannot be detached...
+        await expect(
+          context.workspaceContent.detachRepository(repository.id),
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+
+        await context.workspaceContent.removeSessionWorktree({
+          session: session.id,
+          repository: "product",
+        });
+        expect(await pathExists(worktree.path)).toBe(false);
+        expect(
+          (await context.workspaceContent.get(workspace.id)).worktrees,
+        ).toHaveLength(0);
+        // The branch existed only to carry that tree.
+        expect(
+          (
+            await runCommand("git", [
+              "--git-dir",
+              repository.canonicalPath,
+              "rev-parse",
+              "--verify",
+              worktree.branchName,
+            ])
+          ).exitCode,
+        ).not.toBe(0);
+
+        // ...and now it can be, taking its checkout with it.
+        await context.workspaceContent.detachRepository(repository.id);
+        expect(await pathExists(repository.referencePath!)).toBe(false);
+        context.close();
+      });
+    });
+
+    test("refuses to remove a tree holding uncommitted or unpushed work", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const { context, session, worktree } = await scenario(home);
+
+        await Bun.write(join(worktree.path, "SCRATCH.md"), "# scratch\n");
+        await expect(
+          context.workspaceContent.removeSessionWorktree({
+            session: session.id,
+            repository: "product",
+          }),
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+        expect(await pathExists(worktree.path)).toBe(true);
+
+        // Committing everything does not make it safe either: the commits are
+        // still only here. With nothing uncommitted left, this is the unpushed
+        // guard on its own.
+        await commitIn(worktree.path, "SCRATCH.md");
+        expect(
+          (
+            await runCommand("git", [
+              "-C",
+              worktree.path,
+              "status",
+              "--porcelain",
+            ])
+          ).stdout.trim(),
+        ).toBe("");
+        await expect(
+          context.workspaceContent.removeSessionWorktree({
+            session: session.id,
+            repository: "product",
+          }),
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+        expect(await pathExists(worktree.path)).toBe(true);
+
+        // Pushing is what the message tells the user to do, so pushing has to
+        // be what clears it. Measuring this against the base branch instead
+        // produced a guard that refused just the same after a push.
+        await context.workspaceContent.pushSessionWorktree({
+          session: session.id,
+          repository: "product",
+        });
+        await context.workspaceContent.removeSessionWorktree({
+          session: session.id,
+          repository: "product",
+        });
+        expect(await pathExists(worktree.path)).toBe(false);
+        context.close();
+      });
+    });
+
+    test("archiving a session releases only the trees that hold nothing", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const { context, workspace, session, worktree } = await scenario(home);
+        const keeper = await context.agents.spawn({
+          workspace: workspace.id,
+          provider: "claude",
+        });
+        const kept = await context.workspaceContent.createSessionWorktree({
+          session: keeper.id,
+          repository: "product",
+        });
+        await commitIn(kept.path, "UNPUSHED.md");
+
+        await context.agents.archive(session.id);
+        await context.agents.archive(keeper.id);
+
+        // The empty one is gone; the one carrying a commit is untouched.
+        expect(await pathExists(worktree.path)).toBe(false);
+        expect(await pathExists(kept.path)).toBe(true);
+        expect(
+          (await context.workspaceContent.get(workspace.id)).worktrees.map(
+            (item) => item.path,
+          ),
+        ).toEqual([kept.path]);
+        expect(
+          await readFile(join(kept.path, "UNPUSHED.md"), "utf8"),
+        ).toContain("UNPUSHED.md");
+        context.close();
+      });
+    }, 30_000);
   });
 });

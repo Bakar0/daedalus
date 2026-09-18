@@ -404,6 +404,14 @@ export interface DesktopRpcSchema {
       workspaceRepositorySync: Request<{ id: string }, WorkspaceRepositoryDto>;
       /** Updates the shared clone only; no working tree is touched. */
       workspaceRepositoryFetch: Request<{ id: string }, WorkspaceRepositoryDto>;
+      /**
+       * Removing a working tree destroys whatever is only in it, so without
+       * `force` it succeeds only when nothing can be lost.
+       */
+      sessionWorktreeRemove: Request<
+        { session: string; repository: string; force?: boolean },
+        SessionWorktreeDto
+      >;
       /** Publishes an agent's branch. Never implicit: only this call pushes. */
       sessionWorktreePush: Request<
         { session: string; repository: string },
@@ -489,7 +497,7 @@ export interface DesktopRpcSchema {
       agentArchive: Request<{ id: string; force?: boolean }, AgentSessionDto>;
       agentRestore: Request<{ id: string }, AgentSessionDto>;
       terminalCreate: Request<
-        { workspace?: string; name?: string },
+        { workspace?: string; name?: string; workingDirectory?: string },
         IntegratedTerminalDto
       >;
       terminalClose: Request<{ id: string }, IntegratedTerminalDto>;

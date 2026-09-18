@@ -473,6 +473,15 @@ function RepositoryPushIcon() {
   );
 }
 
+// VS Code Codicons terminal glyph (MIT).
+function TerminalIcon() {
+  return (
+    <svg aria-hidden="true" fill="currentColor" viewBox="0 0 16 16">
+      <path d="M1.5 2h13l.5.5v11l-.5.5h-13l-.5-.5v-11l.5-.5ZM2 13h12V3H2v10Zm3.56-3.05L7.5 8 5.56 6.05l.7-.7 2.3 2.3v.7l-2.3 2.3-.7-.7ZM8 10h4v1H8v-1Z" />
+    </svg>
+  );
+}
+
 function repositoryStatusText(
   status: WorkspaceContentDto["repositories"][number]["gitStatus"],
 ) {
@@ -1693,6 +1702,11 @@ export function WorkspaceApp({
     kind: "progress",
     summary: "",
   });
+  const [worktreeAction, setWorktreeAction] = useState<{
+    worktree: SessionWorktreeDto;
+    repositoryName: string;
+    sessionLabel: string;
+  }>();
   const [sessionAction, setSessionAction] = useState<{
     session: AgentSessionDto;
   }>();
@@ -2944,15 +2958,34 @@ export function WorkspaceApp({
     if (restored) setWorkspaceId(restored.id);
   }
 
-  async function createIntegratedTerminal(workspace?: WorkspaceDto) {
+  async function createIntegratedTerminal(
+    workspaceItem?: WorkspaceDto,
+    location?: { name: string; workingDirectory: string },
+  ) {
     setTerminalPanelOpen(true);
     const created = await perform(
       client.request.terminalCreate({
-        workspace: workspace?.id,
-        name: workspace?.name,
+        workspace: workspaceItem?.id,
+        name: location?.name ?? workspaceItem?.name,
+        workingDirectory: location?.workingDirectory,
       }),
     );
     if (created) setActiveTerminalId(created.id);
+  }
+
+  async function removeSessionWorktree(
+    worktree: SessionWorktreeDto,
+    force: boolean,
+  ) {
+    await runRepositoryAction(
+      `remove:${worktree.sessionId}:${worktree.repositoryId}`,
+      () =>
+        client.request.sessionWorktreeRemove({
+          session: worktree.sessionId,
+          repository: worktree.repositoryId,
+          force,
+        }),
+    );
   }
 
   async function closeIntegratedTerminal(terminal: IntegratedTerminalDto) {
@@ -3592,6 +3625,28 @@ export function WorkspaceApp({
                                     </span>
                                     <span className="workspace-resource-actions">
                                       <button
+                                        aria-label={`Open ${repository.name} in integrated terminal`}
+                                        className="quiet repository-action"
+                                        disabled={
+                                          !repository.referencePath ||
+                                          !snapshot?.settings.tmuxAvailable
+                                        }
+                                        onClick={() =>
+                                          void createIntegratedTerminal(
+                                            workspace,
+                                            {
+                                              name: repository.name,
+                                              workingDirectory:
+                                                repository.referencePath!,
+                                            },
+                                          )
+                                        }
+                                        title="Open a terminal in this checkout"
+                                        type="button"
+                                      >
+                                        <TerminalIcon />
+                                      </button>
+                                      <button
                                         aria-label={`Fetch ${repository.name}`}
                                         className={`quiet repository-action ${pendingRepositoryActions.has(`fetch:${repository.id}`) ? "syncing" : ""}`}
                                         disabled={pendingRepositoryActions.has(
@@ -3667,6 +3722,29 @@ export function WorkspaceApp({
                                             ))}
                                           </span>
                                           <button
+                                            aria-label={`Open ${worktree.branchName} in integrated terminal`}
+                                            className="quiet repository-action"
+                                            disabled={
+                                              !snapshot?.settings.tmuxAvailable
+                                            }
+                                            onClick={() =>
+                                              void createIntegratedTerminal(
+                                                workspace,
+                                                {
+                                                  name: session
+                                                    ? sessionName(session)
+                                                    : repository.name,
+                                                  workingDirectory:
+                                                    worktree.path,
+                                                },
+                                              )
+                                            }
+                                            title="Open a terminal in this working tree"
+                                            type="button"
+                                          >
+                                            <TerminalIcon />
+                                          </button>
+                                          <button
                                             aria-label={`Push ${worktree.branchName}`}
                                             className={`quiet repository-action ${pendingRepositoryActions.has(key) ? "syncing" : ""}`}
                                             disabled={pendingRepositoryActions.has(
@@ -3679,6 +3757,29 @@ export function WorkspaceApp({
                                             type="button"
                                           >
                                             <RepositoryPushIcon />
+                                          </button>
+                                          <button
+                                            aria-label={`Remove ${worktree.branchName}`}
+                                            className={`quiet repository-action ${pendingRepositoryActions.has(`remove:${worktree.sessionId}:${worktree.repositoryId}`) ? "syncing" : ""}`}
+                                            disabled={pendingRepositoryActions.has(
+                                              `remove:${worktree.sessionId}:${worktree.repositoryId}`,
+                                            )}
+                                            onClick={() =>
+                                              setWorktreeAction({
+                                                worktree,
+                                                repositoryName: repository.name,
+                                                sessionLabel: session
+                                                  ? sessionName(session)
+                                                  : worktree.sessionId.slice(
+                                                      0,
+                                                      8,
+                                                    ),
+                                              })
+                                            }
+                                            title="Remove this working tree"
+                                            type="button"
+                                          >
+                                            <DismissIcon />
                                           </button>
                                         </div>
                                       );
@@ -5140,6 +5241,67 @@ export function WorkspaceApp({
         </Modal>
       )}
 
+      {worktreeAction &&
+        (() => {
+          const status = worktreeAction.worktree.gitStatus;
+          const unsaved = status?.changedFiles ?? 0;
+          const unpushed = status?.ahead ?? 0;
+          const holdsWork = unsaved > 0 || unpushed > 0;
+          return (
+            <Modal
+              onClose={() => setWorktreeAction(undefined)}
+              title="Remove working tree"
+            >
+              <div className="confirmation-content">
+                <p>
+                  Remove the <strong>{worktreeAction.repositoryName}</strong>{" "}
+                  working tree for{" "}
+                  <strong>{worktreeAction.sessionLabel}</strong>?
+                </p>
+                <p>
+                  {holdsWork ? (
+                    <>
+                      It has{" "}
+                      {unsaved > 0 &&
+                        `${unsaved} uncommitted ${unsaved === 1 ? "change" : "changes"}`}
+                      {unsaved > 0 && unpushed > 0 && " and "}
+                      {unpushed > 0 &&
+                        `${unpushed} unpushed ${unpushed === 1 ? "commit" : "commits"}`}
+                      . Removing it discards that permanently. Push first if you
+                      want to keep it.
+                    </>
+                  ) : (
+                    <>
+                      Nothing is uncommitted and nothing is unpushed, so the
+                      directory and its branch can go without losing anything.
+                    </>
+                  )}
+                </p>
+                <div className="modal-actions">
+                  <button
+                    className="quiet"
+                    onClick={() => setWorktreeAction(undefined)}
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    autoFocus={!holdsWork}
+                    className={holdsWork ? "danger-action" : ""}
+                    onClick={() => {
+                      const pending = worktreeAction;
+                      setWorktreeAction(undefined);
+                      void removeSessionWorktree(pending.worktree, holdsWork);
+                    }}
+                    type="button"
+                  >
+                    {holdsWork ? "Discard and remove" : "Remove"}
+                  </button>
+                </div>
+              </div>
+            </Modal>
+          );
+        })()}
       {sessionAction && (
         <Modal
           onClose={() => setSessionAction(undefined)}

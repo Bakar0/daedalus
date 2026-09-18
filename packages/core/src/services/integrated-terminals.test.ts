@@ -1,3 +1,5 @@
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { TmuxClient, TmuxLaunch } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
@@ -77,6 +79,59 @@ describe("IntegratedTerminalService", () => {
       } finally {
         context.close();
       }
+    });
+  });
+
+  describe("opening somewhere specific", () => {
+    test("starts in a directory inside the workspace, and nowhere else", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const tmux = new FakeTmux();
+        const context = await createApplicationContext({
+          env: { ...process.env, DAEDALUS_HOME: home },
+          tmux,
+        });
+        try {
+          const workspace = await context.workspaces.create({ name: "Demo" });
+          const inside = join(workspace.path, "repos");
+          await mkdir(inside, { recursive: true });
+
+          const opened = await context.terminals.create({
+            workspace: workspace.id,
+            name: "repos",
+            workingDirectory: inside,
+          });
+          expect(opened.workingDirectory).toBe(inside);
+          expect(tmux.launches.at(-1)?.cwd).toBe(inside);
+
+          // "Open in terminal" must not become a shell anywhere on the machine.
+          for (const escape of [
+            home,
+            join(workspace.path, "..", "..", "etc"),
+            "repos",
+          ])
+            await expect(
+              context.terminals.create({
+                workspace: workspace.id,
+                workingDirectory: escape,
+              }),
+            ).rejects.toMatchObject({ code: "VALIDATION" });
+
+          await expect(
+            context.terminals.create({
+              workspace: workspace.id,
+              workingDirectory: join(workspace.path, "gone"),
+            }),
+          ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+          // Without a directory nothing changes: the workspace root as before.
+          expect(
+            (await context.terminals.create({ workspace: workspace.id }))
+              .workingDirectory,
+          ).toBe(workspace.path);
+        } finally {
+          context.close();
+        }
+      });
     });
   });
 });
