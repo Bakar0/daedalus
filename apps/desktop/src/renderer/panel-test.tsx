@@ -206,6 +206,20 @@ const client = {
       current = { ...current, agents: reordered(current.agents, sessionIds) };
       return { ok: true, data: current.agents };
     },
+    // Needed since Workspace became the tab the app opens on: the view asks
+    // for its content on mount, and a missing stub throws inside a passive
+    // effect, which tears the tree down and leaves this page blank.
+    workspaceContentGet: async () => ({
+      ok: true,
+      data: {
+        workspaceId: "panel-test-workspace",
+        brief: "# Brief",
+        journal: "# Journal",
+        files: [],
+        repositories: [],
+        worktrees: [],
+      },
+    }),
     agentModels: async ({ provider }: { provider: "codex" | "claude" }) => ({
       ok: true,
       data: { provider, models: [], source: "aliases" },

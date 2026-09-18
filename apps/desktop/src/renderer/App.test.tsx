@@ -330,7 +330,14 @@ describe("desktop application shell", () => {
     expect(html).toContain("All repositories");
     expect(html).toContain("Local");
     expect(html).toContain("git@github.com:example/daedalus.git");
-    expect(html).toContain('role="checkbox"');
+    // Real checkboxes inside the form, not buttons wearing a checkbox role:
+    // that is what makes Space toggle and Enter submit without either being
+    // scripted, so the markup is what the test pins.
+    expect(html).toContain('type="checkbox"');
+    expect(html).toContain('data-repository-option="true"');
+    expect(html).not.toContain('role="checkbox"');
+    // Enter has to reach a submit button for implicit submission to happen.
+    expect(html).toContain('type="submit"');
     expect(html).toContain(
       'aria-label="Search repositories or enter a Git URL or absolute local repository path"',
     );

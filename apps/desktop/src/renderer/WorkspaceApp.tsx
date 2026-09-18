@@ -1676,16 +1676,6 @@ export function WorkspaceApp({
     useState<RepositoryDiscoveryDto>();
   const [repositoryDiscoveryLoading, setRepositoryDiscoveryLoading] =
     useState(false);
-  const [activeRepositoryResult, setActiveRepositoryResult] = useState(0);
-  const [repositoryOperations, setRepositoryOperations] = useState<
-    Array<{
-      key: string;
-      name: string;
-      detail: string;
-      status: "queued" | "cloning" | "attaching" | "done" | "error";
-      error?: string;
-    }>
-  >([]);
   const [pendingRepositoryActions, setPendingRepositoryActions] = useState<
     ReadonlySet<string>
   >(() => new Set());
@@ -1900,6 +1890,8 @@ export function WorkspaceApp({
     };
   }, [client]);
 
+  const [dataRevision, setDataRevision] = useState(0);
+
   const refresh = useCallback(async () => {
     try {
       const response = await client.request.snapshot({});
@@ -1930,8 +1922,35 @@ export function WorkspaceApp({
 
   useEffect(() => {
     void refresh();
-    return client.subscribe(() => void refresh());
+    return client.subscribe(() => {
+      void refresh();
+      setDataRevision((current) => current + 1);
+    });
   }, [client, refresh]);
+
+  // Repositories live in the workspace content, not in the snapshot, so
+  // refreshing the snapshot alone left a repository that finished preparing in
+  // the background spinning on screen until something unrelated happened to
+  // refetch. This is deliberately separate from the effect that loads the view:
+  // that one also picks the open file and seeds the editor draft, and must not
+  // run again underneath someone who is typing.
+  useEffect(() => {
+    if (dataRevision === 0 || view !== "workspace" || !workspaceId) return;
+    let cancelled = false;
+    void client.request
+      .workspaceContentGet({ workspace: workspaceId })
+      .then((response) => {
+        if (cancelled || !response.ok) return;
+        setWorkspaceContent(response.data);
+        setWorkspaceDirectories((current) => ({
+          ...current,
+          "": response.data.files,
+        }));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, dataRevision, view, workspaceId]);
 
   const clearAttention = useCallback(
     async (sessionId: string) => {
@@ -2366,33 +2385,24 @@ export function WorkspaceApp({
     selectedWorkspaceDirectory.startsWith("repos/");
   const selectedWorkspaceFileReadOnly =
     selectedWorkspaceFile?.path.startsWith("repos/") ?? false;
+  const canSubmitRepositoryPicker =
+    looksLikeRepositorySource(repositoryForm.search) ||
+    [...selectedRepositoryIds].filter(
+      (id) => !attachedLibraryRepositoryIds.has(id),
+    ).length +
+      selectedGitHubRepositories.size >
+      0;
   const selectedRepositoryCount =
     [...selectedRepositoryIds].filter(
       (id) => !attachedLibraryRepositoryIds.has(id),
     ).length + selectedGitHubRepositories.size;
-  const completedRepositoryOperations = repositoryOperations.filter(
-    (operation) => operation.status === "done",
-  ).length;
-  const failedRepositoryOperations = repositoryOperations.filter(
-    (operation) => operation.status === "error",
-  ).length;
-  const repositoryOperationFinished =
-    repositoryOperations.length > 0 &&
-    repositoryOperations.every(
-      (operation) =>
-        operation.status === "done" || operation.status === "error",
+
+  function toggleRepositoryCandidate(key: string) {
+    const candidate = repositoryCandidates.find((item) =>
+      item.kind === "library"
+        ? item.repository.id === key
+        : `github:${item.repository.nameWithOwner}` === key,
     );
-  const activeRepositoryOperation = repositoryOperations.find(
-    (operation) =>
-      operation.status === "cloning" || operation.status === "attaching",
-  );
-
-  useEffect(() => {
-    setActiveRepositoryResult(0);
-  }, [repositorySearch, repositoryDiscoveryLoading]);
-
-  function toggleRepositoryCandidate(index: number) {
-    const candidate = repositoryCandidates[index];
     if (!candidate) return;
     if (candidate.kind === "library") {
       if (attachedLibraryRepositoryIds.has(candidate.repository.id)) return;
@@ -2412,6 +2422,37 @@ export function WorkspaceApp({
       else next.add(candidate.repository.nameWithOwner);
       return next;
     });
+  }
+
+  /**
+   * Arrow navigation, which is the only part of this the platform does not do
+   * for us: Space toggling and Enter submitting are what a checkbox inside a
+   * form already does, so neither is handled here.
+   */
+  function moveRepositoryFocus(from: HTMLElement, delta: number) {
+    const options = [
+      ...(from
+        .closest(".repository-picker")
+        ?.querySelectorAll<HTMLInputElement>(
+          "input[data-repository-option]:not(:disabled)",
+        ) ?? []),
+    ];
+    if (options.length === 0) return;
+    const current = options.indexOf(from as HTMLInputElement);
+    // From the search box, down enters the list and up stays put.
+    if (current === -1) {
+      if (delta > 0) options[0]?.focus();
+      return;
+    }
+    const next = current + delta;
+    if (next < 0) {
+      from
+        .closest(".repository-picker")
+        ?.querySelector<HTMLInputElement>(".repository-unified-search input")
+        ?.focus();
+      return;
+    }
+    options[Math.min(next, options.length - 1)]?.focus();
   }
 
   async function loadRepositoryDiscovery() {
@@ -2449,15 +2490,12 @@ export function WorkspaceApp({
     setSelectedRepositoryIds(new Set());
     setSelectedGitHubRepositories(new Set());
     setRepositoryDiscovery(undefined);
-    setRepositoryOperations([]);
     setRepositoryForm({ remoteUrl: "", search: "" });
     setModal("repository");
     void loadRepositoryDiscovery();
   }
 
   function closeRepositoryModal() {
-    if (busy) return;
-    setRepositoryOperations([]);
     setModal(undefined);
   }
 
@@ -2563,6 +2601,15 @@ export function WorkspaceApp({
     }
   }
 
+  /**
+   * Starts every selected repository and closes.
+   *
+   * There is no progress to watch here any more: preparation happens in the
+   * background and each repository shows its own state in the workspace, so a
+   * window saying the same thing more loudly only stands between the user and
+   * the thing they were doing. Only a repository that could not even be
+   * started is worth reporting, and the error banner does that.
+   */
   async function attachSelectedRepositories() {
     if (!workspace) return;
     const pending = [...selectedRepositoryIds].filter(
@@ -2572,116 +2619,32 @@ export function WorkspaceApp({
       (item) => selectedGitHubRepositories.has(item.nameWithOwner),
     );
     if (pending.length === 0 && pendingGitHub.length === 0) return;
-    const localById = new Map(
-      (snapshot?.repositories ?? []).map((repository) => [
-        repository.id,
-        repository,
-      ]),
+    closeRepositoryModal();
+    const failures: string[] = [];
+    await runWithConcurrency(
+      [
+        ...pendingGitHub.map((repository) => async () => {
+          const started = await client.request.repositoryAddAndAttachStart({
+            workspace: workspace.id,
+            githubNameWithOwner: repository.nameWithOwner,
+            remoteUrl: repository.remoteUrl,
+          });
+          if (!started.ok)
+            failures.push(`${repository.name}: ${started.error.message}`);
+        }),
+        ...pending.map((libraryRepositoryId) => async () => {
+          const attached = await client.request.workspaceRepositoryAttach({
+            workspace: workspace.id,
+            libraryRepositoryId,
+          });
+          if (!attached.ok) failures.push(attached.error.message);
+        }),
+      ],
+      REPOSITORY_ADD_CONCURRENCY,
     );
-    setRepositoryOperations([
-      ...pendingGitHub.map((repository) => ({
-        key: `github:${repository.nameWithOwner}`,
-        name: repository.name,
-        detail: repository.nameWithOwner,
-        status: "queued" as const,
-      })),
-      ...pending.map((id) => ({
-        key: `library:${id}`,
-        name: localById.get(id)?.name ?? "Repository",
-        detail: "Daedalus library",
-        status: "queued" as const,
-      })),
-    ]);
-    setBusy(true);
-    setError(undefined);
-    const updateOperation = (
-      key: string,
-      update: {
-        status: "cloning" | "attaching" | "done" | "error";
-        error?: string;
-      },
-    ) =>
-      setRepositoryOperations((current) =>
-        current.map((operation) =>
-          operation.key === key ? { ...operation, ...update } : operation,
-        ),
-      );
-    try {
-      await runWithConcurrency(
-        [
-          ...pendingGitHub.map((repository) => async () => {
-            const key = `github:${repository.nameWithOwner}`;
-            try {
-              updateOperation(key, { status: "cloning" });
-              const attached = await client.request.repositoryAddAndAttachStart(
-                {
-                  workspace: workspace.id,
-                  githubNameWithOwner: repository.nameWithOwner,
-                  remoteUrl: repository.remoteUrl,
-                },
-              );
-              if (!attached.ok) throw new Error(attached.error.message);
-              updateOperation(key, { status: "done" });
-              setSelectedGitHubRepositories((current) => {
-                const next = new Set(current);
-                next.delete(repository.nameWithOwner);
-                return next;
-              });
-            } catch (cause) {
-              updateOperation(key, {
-                status: "error",
-                error: errorMessage(cause),
-              });
-            }
-          }),
-          ...pending.map((libraryRepositoryId) => async () => {
-            const key = `library:${libraryRepositoryId}`;
-            try {
-              updateOperation(key, { status: "attaching" });
-              const response = await client.request.workspaceRepositoryAttach({
-                workspace: workspace.id,
-                libraryRepositoryId,
-              });
-              if (!response.ok) throw new Error(response.error.message);
-              updateOperation(key, { status: "done" });
-              setSelectedRepositoryIds((current) => {
-                const next = new Set(current);
-                next.delete(libraryRepositoryId);
-                return next;
-              });
-            } catch (cause) {
-              updateOperation(key, {
-                status: "error",
-                error: errorMessage(cause),
-              });
-            }
-          }),
-        ],
-        REPOSITORY_ADD_CONCURRENCY,
-      );
-      // Preparation continues in the workspace, where it is visible; the only
-      // reason to stay here is a repository that could not be started at all.
-      setRepositoryOperations((current) => {
-        if (current.every((operation) => operation.status === "done"))
-          closeRepositoryModal();
-        return current;
-      });
-      await refresh();
-      const content = await client.request.workspaceContentGet({
-        workspace: workspace.id,
-      });
-      if (content.ok) {
-        setWorkspaceContent(content.data);
-        setWorkspaceDirectories((current) => ({
-          ...current,
-          "": content.data.files,
-        }));
-      } else throw new Error(content.error.message);
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
+    if (failures.length > 0) setError(failures.join("; "));
+    await refreshWorkspaceContent();
+    await refresh();
   }
 
   // Fetch, pull and push are the same shape: run one request, then re-read the
@@ -2746,9 +2709,17 @@ export function WorkspaceApp({
     );
   }
 
-  async function addRemoteRepository(event: React.FormEvent) {
-    event.preventDefault();
-    if (!workspace || !looksLikeRepositorySource(repositoryForm.search)) return;
+  /**
+   * The picker's one submit path, so Enter does the obvious thing from
+   * anywhere in the form: clone what was pasted, or add what was ticked.
+   */
+  async function submitRepositoryPicker(event?: React.FormEvent) {
+    event?.preventDefault();
+    if (!workspace || busy) return;
+    if (!looksLikeRepositorySource(repositoryForm.search)) {
+      if (selectedRepositoryCount > 0) await attachSelectedRepositories();
+      return;
+    }
     const started = await perform(
       client.request.repositoryAddAndAttachStart({
         workspace: workspace.id,
@@ -4750,337 +4721,198 @@ export function WorkspaceApp({
         <Modal
           dismissible={!busy}
           onClose={closeRepositoryModal}
-          title={
-            repositoryOperations.length
-              ? "Adding repositories"
-              : "Add repositories"
-          }
+          title="Add repositories"
           wide
         >
-          <form className="repository-picker" onSubmit={addRemoteRepository}>
-            {repositoryOperations.length ? (
-              <section
-                aria-busy={busy}
-                className="repository-add-progress"
-                aria-label="Repository progress"
-              >
-                <div className="repository-progress-summary" role="status">
-                  <strong>
-                    {repositoryOperationFinished
-                      ? failedRepositoryOperations
-                        ? `${completedRepositoryOperations} added, ${failedRepositoryOperations} failed`
-                        : `${completedRepositoryOperations} ${completedRepositoryOperations === 1 ? "repository" : "repositories"} added`
-                      : activeRepositoryOperation
-                        ? `${activeRepositoryOperation.status === "cloning" ? "Cloning" : "Adding"} ${activeRepositoryOperation.name}`
-                        : "Preparing repositories…"}
-                  </strong>
-                  <span>
-                    {repositoryOperationFinished
-                      ? failedRepositoryOperations
-                        ? "Review the errors below, then retry the failed repositories."
-                        : "Everything is ready in this workspace."
-                      : `${completedRepositoryOperations + failedRepositoryOperations} of ${repositoryOperations.length} complete`}
-                  </span>
-                </div>
-                <div
-                  aria-label={`${completedRepositoryOperations + failedRepositoryOperations} of ${repositoryOperations.length} repositories complete`}
-                  aria-valuemax={repositoryOperations.length}
-                  aria-valuemin={0}
-                  aria-valuenow={
-                    completedRepositoryOperations + failedRepositoryOperations
+          <form className="repository-picker" onSubmit={submitRepositoryPicker}>
+            <p className="repository-picker-intro">
+              Select repositories already in Daedalus, discover them through
+              GitHub, or clone from a URL or full local path.
+            </p>
+            <label className="repository-unified-search">
+              Repository
+              <div className="repository-clone-row">
+                <input
+                  autoFocus
+                  aria-label="Search repositories or enter a Git URL or absolute local repository path"
+                  placeholder="Search repositories, paste a Git URL, or enter /full/path"
+                  value={repositoryForm.search}
+                  onChange={(event) =>
+                    setRepositoryForm({
+                      remoteUrl: event.target.value,
+                      search: event.target.value,
+                    })
                   }
-                  className="repository-progress-track"
-                  role="progressbar"
-                >
-                  <span
-                    style={{
-                      width: `${((completedRepositoryOperations + failedRepositoryOperations) / repositoryOperations.length) * 100}%`,
-                    }}
-                  />
-                </div>
-                <div className="repository-operation-list">
-                  {repositoryOperations.map((operation) => (
-                    <div
-                      className={`repository-operation ${operation.status}`}
-                      key={operation.key}
-                    >
-                      <span
-                        aria-hidden="true"
-                        className="repository-operation-indicator"
-                      >
-                        {operation.status === "done"
-                          ? "✓"
-                          : operation.status === "error"
-                            ? "!"
-                            : operation.status === "queued"
-                              ? "·"
-                              : ""}
-                      </span>
-                      <span>
-                        <strong>{operation.name}</strong>
-                        <small>{operation.error ?? operation.detail}</small>
-                      </span>
-                      <small className="repository-operation-status">
-                        {operation.status === "cloning"
-                          ? "Cloning…"
-                          : operation.status === "attaching"
-                            ? "Adding…"
-                            : operation.status === "done"
-                              ? "Added"
-                              : operation.status === "error"
-                                ? "Failed"
-                                : "Waiting"}
-                      </small>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            ) : (
-              <>
-                <p className="repository-picker-intro">
-                  Select repositories already in Daedalus, discover them through
-                  GitHub, or clone from a URL or full local path.
-                </p>
-                <label className="repository-unified-search">
-                  Repository
-                  <div className="repository-clone-row">
-                    <input
-                      autoFocus
-                      aria-label="Search repositories or enter a Git URL or absolute local repository path"
-                      placeholder="Search repositories, paste a Git URL, or enter /full/path"
-                      value={repositoryForm.search}
-                      onChange={(event) =>
-                        setRepositoryForm({
-                          remoteUrl: event.target.value,
-                          search: event.target.value,
-                        })
-                      }
-                      onKeyDown={(event) => {
-                        if (event.key === "ArrowDown") {
-                          event.preventDefault();
-                          setActiveRepositoryResult((current) =>
-                            Math.min(
-                              current + 1,
-                              repositoryCandidates.length - 1,
-                            ),
-                          );
-                        } else if (event.key === "ArrowUp") {
-                          event.preventDefault();
-                          setActiveRepositoryResult((current) =>
-                            Math.max(current - 1, 0),
-                          );
-                        } else if (
-                          event.key === "Enter" &&
-                          !looksLikeRepositorySource(repositoryForm.search)
-                        ) {
-                          event.preventDefault();
-                          toggleRepositoryCandidate(activeRepositoryResult);
-                        }
-                      }}
-                    />
-                    <button
-                      className="quiet"
-                      disabled={
-                        busy ||
-                        !looksLikeRepositorySource(repositoryForm.search)
-                      }
-                      type="submit"
-                    >
-                      Clone URL/path
-                    </button>
-                  </div>
-                </label>
-
-                <div className="repository-picker-results repository-unified-results">
-                  <div className="repository-result-summary">
-                    <span>
-                      {repositorySearch ? "Best matches" : "All repositories"}
-                    </span>
-                    <small>
-                      {repositoryCandidates.length}
-                      {repositoryDiscoveryLoading
-                        ? " + discovering GitHub…"
-                        : ""}
-                    </small>
-                  </div>
-                  {repositoryCandidates.map((candidate, index) => {
-                    if (candidate.kind === "library") {
-                      const repository = candidate.repository;
-                      return (
-                        <button
-                          aria-checked={
-                            attachedLibraryRepositoryIds.has(repository.id) ||
-                            selectedRepositoryIds.has(repository.id)
-                          }
-                          className={`${selectedRepositoryIds.has(repository.id) ? "selected" : ""} ${attachedLibraryRepositoryIds.has(repository.id) ? "attached" : ""} ${activeRepositoryResult === index ? "active" : ""}`}
-                          disabled={
-                            busy ||
-                            attachedLibraryRepositoryIds.has(repository.id)
-                          }
-                          key={repository.id}
-                          onClick={() => toggleRepositoryCandidate(index)}
-                          onMouseEnter={() => setActiveRepositoryResult(index)}
-                          role="checkbox"
-                          type="button"
-                        >
-                          <span
-                            aria-hidden="true"
-                            className="repository-picker-check"
-                          >
-                            {attachedLibraryRepositoryIds.has(repository.id) ||
-                            selectedRepositoryIds.has(repository.id)
-                              ? "✓"
-                              : ""}
-                          </span>
-                          <span>
-                            <strong>{repository.name}</strong>
-                            <small>{repository.remoteUrl}</small>
-                          </span>
-                          <span>
-                            <strong>
-                              {attachedLibraryRepositoryIds.has(repository.id)
-                                ? "Added"
-                                : repository.defaultBranch}
-                            </strong>
-                            <small>Local</small>
-                          </span>
-                        </button>
-                      );
-                    }
-                    const repository = candidate.repository;
-                    return (
-                      <button
-                        aria-checked={selectedGitHubRepositories.has(
-                          repository.nameWithOwner,
-                        )}
-                        className={`${selectedGitHubRepositories.has(repository.nameWithOwner) ? "selected" : ""} ${activeRepositoryResult === index ? "active" : ""}`}
-                        disabled={busy}
-                        key={`github:${repository.nameWithOwner}`}
-                        onClick={() => toggleRepositoryCandidate(index)}
-                        onMouseEnter={() => setActiveRepositoryResult(index)}
-                        role="checkbox"
-                        type="button"
-                      >
-                        <span
-                          aria-hidden="true"
-                          className="repository-picker-check"
-                        >
-                          {selectedGitHubRepositories.has(
-                            repository.nameWithOwner,
-                          )
-                            ? "✓"
-                            : ""}
-                        </span>
-                        <span>
-                          <strong>{repository.name}</strong>
-                          <small>{repository.nameWithOwner}</small>
-                        </span>
-                        <span>
-                          <strong>GitHub</strong>
-                          <small>Will clone</small>
-                        </span>
-                      </button>
-                    );
-                  })}
-                  {repositoryDiscoveryLoading ? (
-                    <div className="empty">Discovering repositories…</div>
-                  ) : repositoryDiscovery?.authenticated &&
-                    !repositoryDiscovery.error ? (
-                    repositoryCandidates.length === 0 ? (
-                      <div className="empty">
-                        {repositorySearch
-                          ? "No matching repositories"
-                          : "No repositories available"}
-                      </div>
-                    ) : null
-                  ) : (
-                    <div className="repository-discovery-message">
-                      {repositoryDiscovery?.error &&
-                      repositoryDiscovery.authenticated ? (
-                        <>
-                          <strong>GitHub discovery unavailable</strong>
-                          <span>{repositoryDiscovery.error}</span>
-                        </>
-                      ) : !repositoryDiscovery?.githubCliAvailable ? (
-                        <>
-                          <strong>GitHub CLI not found</strong>
-                          <span>
-                            Install `gh` to discover repositories you can access
-                            automatically.
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <strong>GitHub sign-in required</strong>
-                          <span>
-                            Run `gh auth login`, then reopen this picker.
-                          </span>
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                <small className="repository-clone-destination">
-                  New clones are stored once in{" "}
-                  {snapshot?.settings.repositoryRoot}.
-                </small>
-              </>
-            )}
-            <div className="modal-actions">
-              {repositoryOperations.length ? (
-                <span className="repository-selection-count">
-                  {busy
-                    ? "Keep this window open while repositories are prepared."
-                    : failedRepositoryOperations
-                      ? "Completed repositories will not be repeated."
-                      : "Repository setup complete."}
-                </span>
-              ) : (
-                <span className="repository-selection-count">
-                  {selectedRepositoryCount
-                    ? `${selectedRepositoryCount} selected`
-                    : "Select one or more repositories"}
-                </span>
-              )}
-              {(!repositoryOperations.length ||
-                (repositoryOperationFinished &&
-                  failedRepositoryOperations > 0)) && (
+                  onKeyDown={(event) => {
+                    // Down enters the list. Enter is left alone: it submits
+                    // the form, which is what it should do from here.
+                    if (event.key !== "ArrowDown") return;
+                    event.preventDefault();
+                    moveRepositoryFocus(event.currentTarget, 1);
+                  }}
+                />
                 <button
                   className="quiet"
-                  onClick={closeRepositoryModal}
+                  disabled={
+                    busy || !looksLikeRepositorySource(repositoryForm.search)
+                  }
+                  onClick={() => void submitRepositoryPicker()}
                   type="button"
                 >
-                  {repositoryOperations.length ? "Close" : "Cancel"}
+                  Clone URL/path
                 </button>
-              )}
-              {repositoryOperations.length ? (
-                failedRepositoryOperations > 0 && !busy ? (
-                  <button
-                    disabled={selectedRepositoryCount === 0}
-                    onClick={() => void attachSelectedRepositories()}
-                    type="button"
+              </div>
+            </label>
+
+            <div
+              className="repository-picker-results repository-unified-results"
+              onKeyDown={(event) => {
+                const delta =
+                  event.key === "ArrowDown"
+                    ? 1
+                    : event.key === "ArrowUp"
+                      ? -1
+                      : 0;
+                if (!delta) return;
+                event.preventDefault();
+                moveRepositoryFocus(event.target as HTMLElement, delta);
+              }}
+            >
+              <div className="repository-result-summary">
+                <span>
+                  {repositorySearch ? "Best matches" : "All repositories"}
+                </span>
+                <small>
+                  {repositoryCandidates.length}
+                  {repositoryDiscoveryLoading ? " + discovering GitHub…" : ""}
+                </small>
+              </div>
+              {repositoryCandidates.map((candidate) => {
+                const option =
+                  candidate.kind === "library"
+                    ? {
+                        key: candidate.repository.id,
+                        name: candidate.repository.name,
+                        detail: candidate.repository.remoteUrl,
+                        trailing: candidate.repository.defaultBranch,
+                        source: "Local",
+                        attached: attachedLibraryRepositoryIds.has(
+                          candidate.repository.id,
+                        ),
+                        selected: selectedRepositoryIds.has(
+                          candidate.repository.id,
+                        ),
+                      }
+                    : {
+                        key: `github:${candidate.repository.nameWithOwner}`,
+                        name: candidate.repository.name,
+                        detail: candidate.repository.nameWithOwner,
+                        trailing: "GitHub",
+                        source: "Clone",
+                        attached: false,
+                        selected: selectedGitHubRepositories.has(
+                          candidate.repository.nameWithOwner,
+                        ),
+                      };
+                const checked = option.attached || option.selected;
+                return (
+                  <label
+                    className={`${option.selected ? "selected" : ""} ${option.attached ? "attached" : ""}`}
+                    key={option.key}
                   >
-                    Retry failed
-                  </button>
-                ) : repositoryOperationFinished ? (
-                  <button onClick={closeRepositoryModal} type="button">
-                    Done
-                  </button>
+                    {/* A real checkbox inside the form, so Space toggles it
+                            and Enter submits, with neither wired up here. */}
+                    <input
+                      checked={checked}
+                      data-repository-option="true"
+                      disabled={busy || option.attached}
+                      onChange={() => toggleRepositoryCandidate(option.key)}
+                      type="checkbox"
+                    />
+                    <span
+                      aria-hidden="true"
+                      className="repository-picker-check"
+                    >
+                      {checked ? "✓" : ""}
+                    </span>
+                    <span>
+                      <strong>{option.name}</strong>
+                      <small>{option.detail}</small>
+                    </span>
+                    <span>
+                      <strong>
+                        {option.attached ? "Added" : option.trailing}
+                      </strong>
+                      <small>{option.source}</small>
+                    </span>
+                  </label>
+                );
+              })}
+              {repositoryDiscoveryLoading ? (
+                <div className="empty">Discovering repositories…</div>
+              ) : repositoryDiscovery?.authenticated &&
+                !repositoryDiscovery.error ? (
+                repositoryCandidates.length === 0 ? (
+                  <div className="empty">
+                    {repositorySearch
+                      ? "No matching repositories"
+                      : "No repositories available"}
+                  </div>
                 ) : null
               ) : (
-                <button
-                  disabled={busy || selectedRepositoryCount === 0}
-                  onClick={() => void attachSelectedRepositories()}
-                  type="button"
-                >
-                  {selectedRepositoryCount === 1
-                    ? "Add repository"
-                    : selectedRepositoryCount > 1
-                      ? `Add ${selectedRepositoryCount} repositories`
-                      : "Add selected"}
-                </button>
+                <div className="repository-discovery-message">
+                  {repositoryDiscovery?.error &&
+                  repositoryDiscovery.authenticated ? (
+                    <>
+                      <strong>GitHub discovery unavailable</strong>
+                      <span>{repositoryDiscovery.error}</span>
+                    </>
+                  ) : !repositoryDiscovery?.githubCliAvailable ? (
+                    <>
+                      <strong>GitHub CLI not found</strong>
+                      <span>
+                        Install `gh` to discover repositories you can access
+                        automatically.
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <strong>GitHub sign-in required</strong>
+                      <span>Run `gh auth login`, then reopen this picker.</span>
+                    </>
+                  )}
+                </div>
               )}
+            </div>
+
+            <small className="repository-clone-destination">
+              New clones are stored once in {snapshot?.settings.repositoryRoot}.
+            </small>
+            <div className="modal-actions">
+              <span className="repository-selection-count">
+                {selectedRepositoryCount
+                  ? `${selectedRepositoryCount} selected`
+                  : "Select one or more repositories"}
+              </span>
+              <button
+                className="quiet"
+                onClick={closeRepositoryModal}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={busy || !canSubmitRepositoryPicker}
+                type="submit"
+              >
+                {selectedRepositoryCount === 1
+                  ? "Add repository"
+                  : selectedRepositoryCount > 1
+                    ? `Add ${selectedRepositoryCount} repositories`
+                    : looksLikeRepositorySource(repositoryForm.search)
+                      ? "Clone and add"
+                      : "Add selected"}
+              </button>
             </div>
           </form>
         </Modal>

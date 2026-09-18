@@ -86,8 +86,17 @@ try {
     number,
     { resolve: (value: any) => void; reject: (error: Error) => void }
   >();
+  const rendererErrors: string[] = [];
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(String(event.data));
+    if (message.method === "Runtime.exceptionThrown") {
+      rendererErrors.push(
+        message.params?.exceptionDetails?.exception?.description ??
+          message.params?.exceptionDetails?.text ??
+          "Unknown renderer exception",
+      );
+      return;
+    }
     if (!message.id) return;
     const request = pending.get(message.id);
     if (!request) return;
@@ -131,6 +140,40 @@ try {
     if (
       await evaluate(
         "Boolean(document.querySelector('.workspace-panel-resize-handle'))",
+      )
+    )
+      break;
+    await Bun.sleep(50);
+  }
+
+  // The secondary panel only exists beside the board and the sessions, and the
+  // app now opens on the workspace, so the view under test is chosen rather
+  // than inherited from whichever tab happens to be first.
+  // Waiting for the tab itself rather than for something rendered near it:
+  // the loop above breaks on success but simply falls through on timeout, so a
+  // page that never rendered used to surface as a confusing failure later.
+  let openedBoard = "";
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    openedBoard = await evaluate<string>(`(() => {
+      const tabs = [...document.querySelectorAll('.app-mode-switcher button')];
+      const board = tabs.find((tab) => tab.textContent.trim() === 'Board');
+      if (!board) return 'tabs: ' + JSON.stringify(tabs.map((t) => t.textContent));
+      board.click();
+      return 'ok';
+    })()`);
+    if (openedBoard === "ok") break;
+    await Bun.sleep(50);
+  }
+  if (openedBoard !== "ok")
+    throw new Error(
+      `The board tab never appeared (${openedBoard}); body: ${await evaluate<string>(
+        "document.body.innerText.slice(0, 200)",
+      )}; renderer errors: ${rendererErrors.slice(0, 3).join(" | ") || "none"}`,
+    );
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (
+      await evaluate(
+        "Boolean(document.querySelector('.secondary-panel-resize-handle'))",
       )
     )
       break;
@@ -247,7 +290,7 @@ try {
     );
 
   await evaluate(
-    "document.querySelector('.app-mode-switcher button:nth-child(2)').click()",
+    "[...document.querySelectorAll('.app-mode-switcher button')].find((b) => b.textContent === 'Sessions').click()",
   );
   await Bun.sleep(250);
   const statusTelemetry = await evaluate<{

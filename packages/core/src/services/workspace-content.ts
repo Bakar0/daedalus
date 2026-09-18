@@ -470,12 +470,18 @@ async function seedRemoteTrackingRefs(
       "DEPENDENCY",
       "The repository remote does not advertise a default branch",
     );
-  const copy = await run([
-    "fetch",
-    "--prune",
-    gitDirectory,
-    REMOTE_TRACKING_REFSPEC,
-  ]);
+  // Fetching `origin` rather than copying the repository's own refs into place.
+  // The copy needed no network and was faster, but on a case-insensitive
+  // filesystem it refuses outright for any repository whose remote carries two
+  // branches differing only in case — git cannot write both as loose refs, and
+  // fetching from a local path is the shape that takes that route. Fetching the
+  // remote handles the same repository without complaint, so the round trip is
+  // the price of working on the repositories people actually have.
+  const copy = await runCommand(
+    git,
+    ["--git-dir", gitDirectory, "fetch", "--prune", "origin"],
+    { env: GIT_NETWORK_ENVIRONMENT },
+  );
   if (copy.exitCode !== 0)
     throw new DaedalusError(
       "DEPENDENCY",
@@ -796,20 +802,42 @@ export class WorkspaceContentService {
         "DEPENDENCY",
         "GitHub CLI is no longer available on PATH",
       );
-    const clone = githubNameWithOwner
-      ? await runCommand(
-          gh!,
-          ["repo", "clone", githubNameWithOwner, gitDirectory, "--", "--bare"],
-          {
-            env: {
-              GH_PROMPT_DISABLED: "1",
-              GIT_TERMINAL_PROMPT: "0",
+    const runClone = (extra: readonly string[]) =>
+      githubNameWithOwner
+        ? runCommand(
+            gh!,
+            [
+              "repo",
+              "clone",
+              githubNameWithOwner,
+              gitDirectory,
+              "--",
+              "--bare",
+              ...extra,
+            ],
+            {
+              env: {
+                GH_PROMPT_DISABLED: "1",
+                GIT_TERMINAL_PROMPT: "0",
+              },
             },
-          },
-        )
-      : await runCommand(git, ["clone", "--bare", remoteUrl, gitDirectory], {
-          env: GIT_NETWORK_ENVIRONMENT,
-        });
+          )
+        : runCommand(
+            git,
+            ["clone", "--bare", ...extra, remoteUrl, gitDirectory],
+            { env: GIT_NETWORK_ENVIRONMENT },
+          );
+    // macOS filesystems are case-insensitive, and the default ref backend
+    // cannot store two branches whose names differ only in case — a real
+    // repository with `task/X_Deploy-...` and `task/X_deploy-...` simply
+    // refuses to finish fetching. The reftable backend has no such limit, and
+    // nothing here reads refs with anything but git. Older git does not know
+    // the option, so a clone that rejects it is retried plainly.
+    let clone = await runClone(["--ref-format=reftable"]);
+    if (clone.exitCode !== 0) {
+      if (await pathExists(gitDirectory)) await removeDirectory(gitDirectory);
+      clone = await runClone([]);
+    }
     if (clone.exitCode !== 0) {
       if (await pathExists(gitDirectory)) await removeDirectory(gitDirectory);
       throw new DaedalusError(
