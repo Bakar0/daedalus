@@ -737,9 +737,14 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   position: relative;
   width: 7px;
 }
+/* Idle is alive and doing nothing, which is the quietest thing a live session
+   can be. It used to be a glowing green, and green reads as "go": a workspace
+   of agents waiting on nothing looked like a workspace of agents hard at work,
+   and the one that really was working had no way to stand out. A flat slate
+   says "here, needs nothing" and leaves the eye free for the tones that mean
+   something. */
 .agent-dot.tone-idle {
-  background: #3fdf7e;
-  box-shadow: 0 0 0 3px rgb(63 223 126 / 0.1);
+  background: #8a97ad;
 }
 .agent-dot.tone-working {
   background: #afbaff;
@@ -763,8 +768,12 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
 .agent-dot.tone-attention {
   background: #ff8282;
 }
+/* Idle and ended are both neutral now, so colour can no longer be what tells
+   them apart: a session that is gone is hollow, one that is merely quiet is
+   solid. */
 .agent-dot.tone-ended {
-  background: #66758f;
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px #66758f;
 }
 /* Attention is the loudest thing on screen and the only tone with a ring
    that stays put rather than fading in and out. */

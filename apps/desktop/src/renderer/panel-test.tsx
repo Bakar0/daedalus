@@ -61,6 +61,30 @@ const snapshot: DesktopSnapshotDto = {
       resumeCount: 0,
       position: 1,
     },
+    // A fourth card, still starting. Opening a session that has not finished
+    // starting is the ordinary way to open a new one, and the transition to
+    // `running` rebuilds the terminal underneath the caret — which is what the
+    // focus check is here to watch.
+    {
+      id: "panel-test-starting",
+      workspaceId: "panel-test-workspace",
+      taskId: null,
+      name: "Starting agent",
+      provider: "claude",
+      kind: "agent",
+      tmuxSession: "panel_test_starting",
+      command: "claude",
+      args: [],
+      workingDirectory: "/tmp/panel-test",
+      status: "starting",
+      exitCode: null,
+      startedAt: "2026-09-14T00:00:00.000Z",
+      endedAt: null,
+      providerSessionId: null,
+      archivedAt: null,
+      resumeCount: 0,
+      position: 4,
+    },
     // A third card, so a drag has somewhere to travel and the reorder check
     // can move one past two others rather than just swapping a pair.
     {
@@ -190,6 +214,37 @@ const reordered = <T extends { id: string }>(items: T[], ids: string[]) => {
   });
 };
 
+/**
+ * Snapshot listeners, so a check can move the world on and watch the renderer
+ * react. The real adapter pushes an event and the app re-reads the snapshot;
+ * a page that could only ever show one frame cannot exercise anything that
+ * happens *because* something changed.
+ */
+const listeners = new Set<() => void>();
+const publish = () => {
+  for (const listener of [...listeners]) listener();
+};
+
+declare global {
+  interface Window {
+    panelTest: {
+      setAgentStatus: (id: string, status: "starting" | "running") => void;
+    };
+  }
+}
+
+window.panelTest = {
+  setAgentStatus: (id, status) => {
+    current = {
+      ...current,
+      agents: current.agents.map((agent) =>
+        agent.id === id ? { ...agent, status } : agent,
+      ),
+    };
+    publish();
+  },
+};
+
 const client = {
   request: {
     snapshot: async () => ({ ok: true, data: current }),
@@ -234,7 +289,10 @@ const client = {
     presencePublish: async () => ({ ok: true, data: {} }),
     toastsAcknowledge: async () => ({ ok: true, data: { acknowledged: 0 } }),
   },
-  subscribe: () => () => undefined,
+  subscribe: (listener: () => void) => {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  },
   subscribeCommands: () => () => undefined,
   subscribeWindowResize: () => () => undefined,
   subscribeFocusSession: () => () => undefined,

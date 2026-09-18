@@ -107,10 +107,12 @@ export function preferredSessionId(
 
 // Selecting a session and focusing its terminal are different things. A
 // session becomes active for many reasons Daedalus decides on its own —
-// startup restore, `preferredSessionId`, a session spawned from the CLI, a
-// remount after a panel resize — and none of those may take the keyboard away
-// from what the user is doing. Focus is granted only to the session the user
-// just opened in this window, and only until the caret lands there.
+// startup restore, `preferredSessionId`, a session spawned from the CLI — and
+// none of those may take the keyboard away from what the user is doing. Focus
+// is granted only to the session the user just opened in this window, and only
+// until the caret lands there. The one thing that may ask on the user's behalf
+// is a remount of a terminal that was holding the caret already, which is
+// giving something back rather than taking it.
 export function shouldFocusSession(
   focusRequestId: string | undefined,
   activeSessionId: string | undefined,
@@ -1058,6 +1060,18 @@ function Modal({
   );
 }
 
+/**
+ * Whether the caret is inside this terminal right now. xterm parks it in a
+ * hidden textarea, so "focused" is a containment question rather than an
+ * identity one.
+ */
+const holdsCaret = (container: HTMLElement | null) =>
+  Boolean(
+    container &&
+    document.activeElement &&
+    container.contains(document.activeElement),
+  );
+
 function TerminalSurface({
   activity,
   attention,
@@ -1119,6 +1133,16 @@ function TerminalSurface({
   };
   const focusDeliveredRef = useRef(onFocused);
   focusDeliveredRef.current = onFocused;
+  /**
+   * Rebuilding xterm in place — the session going `starting` → `running`, the
+   * endpoint arriving — disposes the textarea the caret is sitting in. That is
+   * an implementation detail of this component and must not cost the user
+   * their place, so the caret is remembered across the rebuild and handed to
+   * the terminal that replaces it. A new session is always `starting` first,
+   * so without this every new session took the keyboard and lost it again the
+   * moment it finished starting.
+   */
+  const heldCaretRef = useRef(false);
   useEffect(() => {
     fitRef.current();
     if (!focused) return;
@@ -1212,6 +1236,9 @@ function TerminalSurface({
           terminal?.focus();
           focusDeliveredRef.current?.();
         });
+      else if (heldCaretRef.current)
+        requestAnimationFrame(() => terminal?.focus());
+      heldCaretRef.current = false;
       const sendSize = () => {
         const cols = terminal?.cols ?? 0;
         const rows = terminal?.rows ?? 0;
@@ -1337,6 +1364,9 @@ function TerminalSurface({
       connect();
     })();
     return () => {
+      // Read before the dispose below removes the textarea from the document
+      // and the browser hands focus back to the body.
+      heldCaretRef.current = holdsCaret(containerRef.current);
       disposed = true;
       fitRef.current = () => undefined;
       focusRef.current = () => undefined;
@@ -1573,9 +1603,12 @@ export function WorkspaceApp({
   // Keyboard focus follows explicit intent, never mere selection. Only a
   // session the user opened from this window claims the caret; sessions that
   // become active on their own — restored from storage at startup, picked by
-  // `preferredSessionId`, or created from the CLI — leave focus alone, as does
-  // a remount caused by a layout change.
+  // `preferredSessionId`, or created from the CLI — leave focus alone. A
+  // remount caused by a layout change asks again, but only on behalf of a
+  // terminal that already had the caret: see `terminalLayoutChanged`.
   const [focusedSessionId, setFocusedSessionId] = useState<string>();
+  const activeSessionIdRef = useRef(activeSessionId);
+  activeSessionIdRef.current = activeSessionId;
   const openSession = useCallback((id: string) => {
     setActiveSessionId(id);
     setFocusedSessionId(id);
@@ -1743,10 +1776,20 @@ export function WorkspaceApp({
     // live grid immediately, then recreate only xterm after layout settles.
     setTerminalFitRevision((revision) => revision + 1);
     if (terminalLayoutTimer.current) clearTimeout(terminalLayoutTimer.current);
-    terminalLayoutTimer.current = setTimeout(
-      () => setTerminalMountRevision((revision) => revision + 1),
-      120,
-    );
+    terminalLayoutTimer.current = setTimeout(() => {
+      // Recreating xterm throws away the textarea the caret lives in, and this
+      // is Daedalus repairing its own layout rather than the user going
+      // anywhere, so the caret has to be asked for again on the other side.
+      //
+      // This is what stood between opening a session and being able to type in
+      // it. A settle lands within a frame or two of the click that opened the
+      // session, so the terminal took the keyboard, was rebuilt, and dropped it
+      // on the floor — and the only sign of it was having to click a second
+      // time.
+      if (document.activeElement?.closest(".terminal-column"))
+        setFocusedSessionId(activeSessionIdRef.current);
+      setTerminalMountRevision((revision) => revision + 1);
+    }, 120);
   }, []);
 
   const openTerminalLink = useCallback(
