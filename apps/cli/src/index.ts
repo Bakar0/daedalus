@@ -199,7 +199,7 @@ Usage:
   daedal doctor [--json]
   daedal workspace <create|list|get|update|archive|restore|remove> ... [--json]
   daedal task <create|list|get|current|update|status|remove> ... [--json]
-  daedal repo <library|list|attach|sync|detach|worktree> ... [--json]
+  daedal repo <library|list|add|attach|sync|detach|worktree> ... [--json]
   daedal agent <spawn|list|get|wait|attach|send|archive|restore|stop|remove> ... [--json]
   daedal attention "<reason>" [--session <agent-id>] [--clear] [--json]
   daedal notify "<message>" [--level info|success|error] [--desktop] [--json]
@@ -230,6 +230,7 @@ const commandHelp: Record<string, string> = {
   daedal repo library list
   daedal repo library add <url-or-absolute-path> [--name <name>]
   daedal repo list --workspace <workspace>
+  daedal repo add --workspace <workspace> <url-or-absolute-path> [--name <name>]
   daedal repo attach --workspace <workspace> --repository <library-id>
   daedal repo sync <attachment-id>
   daedal repo detach <attachment-id>
@@ -1396,6 +1397,25 @@ async function repositoryCommand(
           `${repository.name}\t${repository.access}\t${repository.referencePath ?? repository.canonicalPath}`,
         );
     });
+    return 0;
+  }
+  if (action === "add") {
+    const parsed = parseArguments(args, ["workspace", "name"]);
+    expectPositionals(
+      parsed.positionals,
+      1,
+      "daedal repo add --workspace <workspace> <url-or-absolute-path> [--name <name>]",
+    );
+    const result = await context.workspaceContent.addAndAttachRepository({
+      workspace: required(parsed.values.workspace, "--workspace"),
+      remoteUrl: parsed.positionals[0]!,
+      name: parsed.values.name,
+    });
+    printResult(result, json, () =>
+      console.log(
+        `Added and attached repository ${result.name} (${result.id}) at ${result.referencePath}`,
+      ),
+    );
     return 0;
   }
   if (action === "attach") {

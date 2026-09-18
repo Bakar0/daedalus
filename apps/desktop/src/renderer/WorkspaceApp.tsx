@@ -41,6 +41,7 @@ import type {
   ToastDto,
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
+import { runWithConcurrency } from "./concurrency";
 import { repositoryFuzzyScore } from "./repository-search";
 import { useListReorder } from "./use-list-reorder";
 
@@ -183,6 +184,10 @@ export function pendingSessionLaunches(
       !liveSessions.some((session) => launchMatchesSession(launch, session)),
   );
 }
+
+// Bounded so a multi-repository add is not N serial clones, without opening
+// every network and disk stream at once either.
+const REPOSITORY_ADD_CONCURRENCY = 4;
 
 const repositoryRemoteIdentity = (value: string) =>
   value
@@ -2541,56 +2546,56 @@ export function WorkspaceApp({
         ),
       );
     try {
-      for (const repository of pendingGitHub) {
-        const key = `github:${repository.nameWithOwner}`;
-        try {
-          updateOperation(key, { status: "cloning" });
-          const response = await client.request.repositoryLibraryAdd({
-            remoteUrl: repository.remoteUrl,
-            githubNameWithOwner: repository.nameWithOwner,
-          });
-          if (!response.ok) throw new Error(response.error.message);
-          updateOperation(key, { status: "attaching" });
-          const attached = await client.request.workspaceRepositoryAttach({
-            workspace: workspace.id,
-            libraryRepositoryId: response.data.id,
-          });
-          if (!attached.ok) throw new Error(attached.error.message);
-          updateOperation(key, { status: "done" });
-          setSelectedGitHubRepositories((current) => {
-            const next = new Set(current);
-            next.delete(repository.nameWithOwner);
-            return next;
-          });
-        } catch (cause) {
-          updateOperation(key, {
-            status: "error",
-            error: errorMessage(cause),
-          });
-        }
-      }
-      for (const libraryRepositoryId of pending) {
-        const key = `library:${libraryRepositoryId}`;
-        try {
-          updateOperation(key, { status: "attaching" });
-          const response = await client.request.workspaceRepositoryAttach({
-            workspace: workspace.id,
-            libraryRepositoryId,
-          });
-          if (!response.ok) throw new Error(response.error.message);
-          updateOperation(key, { status: "done" });
-          setSelectedRepositoryIds((current) => {
-            const next = new Set(current);
-            next.delete(libraryRepositoryId);
-            return next;
-          });
-        } catch (cause) {
-          updateOperation(key, {
-            status: "error",
-            error: errorMessage(cause),
-          });
-        }
-      }
+      await runWithConcurrency(
+        [
+          ...pendingGitHub.map((repository) => async () => {
+            const key = `github:${repository.nameWithOwner}`;
+            try {
+              updateOperation(key, { status: "cloning" });
+              const attached = await client.request.repositoryAddAndAttach({
+                workspace: workspace.id,
+                githubNameWithOwner: repository.nameWithOwner,
+                remoteUrl: repository.remoteUrl,
+              });
+              if (!attached.ok) throw new Error(attached.error.message);
+              updateOperation(key, { status: "done" });
+              setSelectedGitHubRepositories((current) => {
+                const next = new Set(current);
+                next.delete(repository.nameWithOwner);
+                return next;
+              });
+            } catch (cause) {
+              updateOperation(key, {
+                status: "error",
+                error: errorMessage(cause),
+              });
+            }
+          }),
+          ...pending.map((libraryRepositoryId) => async () => {
+            const key = `library:${libraryRepositoryId}`;
+            try {
+              updateOperation(key, { status: "attaching" });
+              const response = await client.request.workspaceRepositoryAttach({
+                workspace: workspace.id,
+                libraryRepositoryId,
+              });
+              if (!response.ok) throw new Error(response.error.message);
+              updateOperation(key, { status: "done" });
+              setSelectedRepositoryIds((current) => {
+                const next = new Set(current);
+                next.delete(libraryRepositoryId);
+                return next;
+              });
+            } catch (cause) {
+              updateOperation(key, {
+                status: "error",
+                error: errorMessage(cause),
+              });
+            }
+          }),
+        ],
+        REPOSITORY_ADD_CONCURRENCY,
+      );
       await refresh();
       const content = await client.request.workspaceContentGet({
         workspace: workspace.id,

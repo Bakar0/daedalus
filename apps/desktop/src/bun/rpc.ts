@@ -303,6 +303,12 @@ export function createDesktopRequestHandlers(
           await context.workspaceContent.attachRepository(params),
         ),
       ),
+    repositoryAddAndAttach: (params) =>
+      mutate(async () =>
+        workspaceRepositoryDto(
+          await context.workspaceContent.addAndAttachRepository(params),
+        ),
+      ),
     workspaceRepositorySync: ({ id }) =>
       mutate(async () =>
         workspaceRepositoryDto(

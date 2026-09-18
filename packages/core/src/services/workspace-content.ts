@@ -430,6 +430,69 @@ function remoteRepositoryName(remoteUrl: string): string {
   return repositoryName(basename(withoutQuery).replace(/\.git$/i, ""));
 }
 
+const REMOTE_TRACKING_REFSPEC = "+refs/heads/*:refs/remotes/origin/*";
+
+const GIT_NETWORK_ENVIRONMENT = {
+  GIT_TERMINAL_PROMPT: "0",
+  GIT_SSH_COMMAND: "ssh -oBatchMode=yes",
+};
+
+// A bare clone already carries every branch under `refs/heads/*`, but nothing
+// under `refs/remotes/origin/*` — which is what worktree creation and status
+// comparison resolve against. Populating them by fetching `origin` again costs
+// a network round trip that transfers no objects, and `remote set-head --auto`
+// costs a second one to learn a default branch the clone already recorded in
+// `HEAD`. Both are avoidable: the refs are copied from the repository to
+// itself, and the default branch is read locally. Measured against a small
+// GitHub repository the two round trips cost about a second, which is more
+// than the clone itself and is paid per repository.
+async function seedRemoteTrackingRefs(
+  git: string,
+  gitDirectory: string,
+): Promise<string> {
+  const run = (args: string[]) =>
+    runCommand(git, ["--git-dir", gitDirectory, ...args]);
+  const configure = await run([
+    "config",
+    "remote.origin.fetch",
+    REMOTE_TRACKING_REFSPEC,
+  ]);
+  if (configure.exitCode !== 0)
+    throw new DaedalusError(
+      "DEPENDENCY",
+      `Could not configure repository remote: ${configure.stderr.trim()}`,
+    );
+  const head = await run(["symbolic-ref", "--short", "HEAD"]);
+  const defaultBranch = head.stdout.trim();
+  if (head.exitCode !== 0 || !defaultBranch)
+    throw new DaedalusError(
+      "DEPENDENCY",
+      "The repository remote does not advertise a default branch",
+    );
+  const copy = await run([
+    "fetch",
+    "--prune",
+    gitDirectory,
+    REMOTE_TRACKING_REFSPEC,
+  ]);
+  if (copy.exitCode !== 0)
+    throw new DaedalusError(
+      "DEPENDENCY",
+      `Could not record the remote branches: ${copy.stderr.trim() || copy.stdout.trim()}`,
+    );
+  const symbolic = await run([
+    "symbolic-ref",
+    "refs/remotes/origin/HEAD",
+    `refs/remotes/origin/${defaultBranch}`,
+  ]);
+  if (symbolic.exitCode !== 0)
+    throw new DaedalusError(
+      "DEPENDENCY",
+      `Could not record the remote default branch: ${symbolic.stderr.trim() || symbolic.stdout.trim()}`,
+    );
+  return defaultBranch;
+}
+
 export class WorkspaceContentService {
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -595,10 +658,7 @@ export class WorkspaceContentService {
           },
         )
       : await runCommand(git, ["clone", "--bare", remoteUrl, gitDirectory], {
-          env: {
-            GIT_TERMINAL_PROMPT: "0",
-            GIT_SSH_COMMAND: "ssh -oBatchMode=yes",
-          },
+          env: GIT_NETWORK_ENVIRONMENT,
         });
     if (clone.exitCode !== 0) {
       if (await pathExists(gitDirectory)) await removeDirectory(gitDirectory);
@@ -618,9 +678,12 @@ export class WorkspaceContentService {
       createdAt: now,
     };
     try {
-      const refreshed = await this.refreshRepository(repository, false);
-      this.repositories.createRepositoryLibraryEntry(refreshed);
-      return refreshed;
+      const seeded: RepositoryLibraryEntry = {
+        ...repository,
+        defaultBranch: await seedRemoteTrackingRefs(git, gitDirectory),
+      };
+      this.repositories.createRepositoryLibraryEntry(seeded);
+      return seeded;
     } catch (error) {
       await removeDirectory(gitDirectory);
       throw error;
@@ -634,10 +697,6 @@ export class WorkspaceContentService {
     const git = findExecutable("git");
     if (!git)
       throw new DaedalusError("DEPENDENCY", "git is not available on PATH");
-    const environment = {
-      GIT_TERMINAL_PROMPT: "0",
-      GIT_SSH_COMMAND: "ssh -oBatchMode=yes",
-    };
     const configure = await runCommand(
       git,
       [
@@ -645,9 +704,9 @@ export class WorkspaceContentService {
         repository.gitDirectory,
         "config",
         "remote.origin.fetch",
-        "+refs/heads/*:refs/remotes/origin/*",
+        REMOTE_TRACKING_REFSPEC,
       ],
-      { env: environment },
+      { env: GIT_NETWORK_ENVIRONMENT },
     );
     if (configure.exitCode !== 0)
       throw new DaedalusError(
@@ -657,7 +716,7 @@ export class WorkspaceContentService {
     const fetch = await runCommand(
       git,
       ["--git-dir", repository.gitDirectory, "fetch", "--prune", "origin"],
-      { env: environment },
+      { env: GIT_NETWORK_ENVIRONMENT },
     );
     if (fetch.exitCode !== 0)
       throw new DaedalusError(
@@ -674,7 +733,7 @@ export class WorkspaceContentService {
         "origin",
         "--auto",
       ],
-      { env: environment },
+      { env: GIT_NETWORK_ENVIRONMENT },
     );
     if (remoteHead.exitCode !== 0)
       throw new DaedalusError(
@@ -1111,7 +1170,37 @@ export class WorkspaceContentService {
         "NOT_FOUND",
         `Repository '${input.libraryRepositoryId}' was not found in the library`,
       );
-    const refreshed = await this.refreshRepository(libraryRepository);
+    return this.checkoutLibraryEntry(
+      workspace,
+      await this.refreshRepository(libraryRepository),
+    );
+  }
+
+  // Adding a repository and attaching it to the workspace used to be two
+  // separate calls, and the second one re-fetched a clone the first had just
+  // produced. They are one operation here so that freshness is established
+  // exactly once.
+  async addAndAttachRepository(input: {
+    workspace: string;
+    remoteUrl: string;
+    name?: string;
+    githubNameWithOwner?: string;
+  }): Promise<WorkspaceRepository> {
+    const workspace = await this.workspaces.getActive(input.workspace);
+    const repository = await this.addRepositoryToLibrary({
+      remoteUrl: input.remoteUrl,
+      name: input.name,
+      githubNameWithOwner: input.githubNameWithOwner,
+    });
+    return this.checkoutLibraryEntry(workspace, repository);
+  }
+
+  // `refreshed` must already carry the remote state this checkout is pinned to;
+  // callers own the fetch so it is never paid twice.
+  private async checkoutLibraryEntry(
+    workspace: Workspace,
+    refreshed: RepositoryLibraryEntry,
+  ): Promise<WorkspaceRepository> {
     const git = findExecutable("git");
     if (!git)
       throw new DaedalusError("DEPENDENCY", "git is not available on PATH");

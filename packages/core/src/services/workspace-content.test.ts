@@ -48,10 +48,10 @@ test("parses every paginated GitHub repository and removes duplicates", () => {
   ]);
 });
 
-async function createRepository(path: string): Promise<void> {
+async function createRepository(path: string, branch = "main"): Promise<void> {
   await mkdir(path, { recursive: true });
   expect(
-    (await runCommand("git", ["init", "-q", "-b", "main", path])).exitCode,
+    (await runCommand("git", ["init", "-q", "-b", branch, path])).exitCode,
   ).toBe(0);
   await Bun.write(join(path, "README.md"), "# Source\n");
   expect(
@@ -653,6 +653,119 @@ Before working in this workspace:
         )?.baseCommit,
       ).toBe(attachedCommit);
       context.close();
+    });
+  });
+
+  describe("adding a repository", () => {
+    test("records the remote branches and default branch without a second fetch", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const source = join(home, "source", "product");
+        // Not `main`: the default branch has to be read from the clone rather
+        // than assumed, now that `remote set-head --auto` no longer asks.
+        await createRepository(source, "trunk");
+        const context = await createApplicationContext({
+          env: { DAEDALUS_HOME: home },
+          reconcile: false,
+        });
+        const repository =
+          await context.workspaceContent.addRepositoryToLibrary({
+            remoteUrl: source,
+          });
+        expect(repository.defaultBranch).toBe("trunk");
+
+        // Worktree creation and status comparison both resolve against
+        // refs/remotes/origin/*, which a bare clone does not create on its own.
+        const refs = await runCommand("git", [
+          "--git-dir",
+          repository.gitDirectory,
+          "for-each-ref",
+          "--format=%(refname)",
+          "refs/remotes/",
+        ]);
+        expect(refs.stdout.trim().split("\n").sort()).toEqual([
+          "refs/remotes/origin/HEAD",
+          "refs/remotes/origin/trunk",
+        ]);
+        expect(
+          (
+            await runCommand("git", [
+              "--git-dir",
+              repository.gitDirectory,
+              "symbolic-ref",
+              "--short",
+              "refs/remotes/origin/HEAD",
+            ])
+          ).stdout.trim(),
+        ).toBe("origin/trunk");
+        context.close();
+      });
+    });
+
+    test("clones and attaches in one call, pinned to the remote tip", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const source = join(home, "source", "product");
+        await createRepository(source);
+        const context = await createApplicationContext({
+          env: { DAEDALUS_HOME: home },
+          reconcile: false,
+        });
+        const workspace = await context.workspaces.create({ name: "Combined" });
+        const repository =
+          await context.workspaceContent.addAndAttachRepository({
+            workspace: workspace.id,
+            remoteUrl: source,
+          });
+        expect(repository.baseBranch).toBe("main");
+        expect(repository.baseCommit).toBe(
+          (
+            await runCommand("git", ["-C", source, "rev-parse", "HEAD"])
+          ).stdout.trim(),
+        );
+        expect(repository.referencePath).toBe(
+          join(workspace.path, "repos", "product"),
+        );
+        expect(
+          await readFile(join(repository.referencePath!, "README.md"), "utf8"),
+        ).toBe("# Source\n");
+        expect(
+          context.repositories.listWorkspaceRepositories(workspace.id),
+        ).toHaveLength(1);
+        context.close();
+      });
+    });
+
+    test("a session worktree off a one-call attachment tracks the base branch", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const source = join(home, "source", "product");
+        await createRepository(source, "trunk");
+        const context = await createApplicationContext({
+          env: { DAEDALUS_HOME: home },
+          reconcile: false,
+        });
+        const workspace = await context.workspaces.create({ name: "Combined" });
+        await context.workspaceContent.addAndAttachRepository({
+          workspace: workspace.id,
+          remoteUrl: source,
+        });
+        const session = await context.agents.spawn({
+          workspace: workspace.id,
+          provider: "claude",
+        });
+        const worktree = await context.workspaceContent.createSessionWorktree({
+          session: session.id,
+          repository: "product",
+        });
+        expect(
+          (
+            await runCommand("git", ["-C", worktree.path, "rev-parse", "HEAD"])
+          ).stdout.trim(),
+        ).toBe(
+          (
+            await runCommand("git", ["-C", source, "rev-parse", "HEAD"])
+          ).stdout.trim(),
+        );
+        context.close();
+      });
     });
   });
 });

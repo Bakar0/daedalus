@@ -386,6 +386,19 @@ export interface DesktopRpcSchema {
         },
         WorkspaceRepositoryDto
       >;
+      /**
+       * Cloning and attaching in one call. Two calls meant the attach half
+       * re-fetched the clone the add half had just made.
+       */
+      repositoryAddAndAttach: Request<
+        {
+          workspace: string;
+          remoteUrl: string;
+          name?: string;
+          githubNameWithOwner?: string;
+        },
+        WorkspaceRepositoryDto
+      >;
       workspaceRepositorySync: Request<{ id: string }, WorkspaceRepositoryDto>;
       repositoryLibraryAdd: Request<
         {
