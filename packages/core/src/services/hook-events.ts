@@ -18,6 +18,17 @@ export interface ActivityObservation {
   ifActivity?: readonly AgentActivity[];
   /** Skip when the stored activity is one of these. */
   ifNotActivity?: readonly AgentActivity[];
+  /**
+   * Exempts this reading from the source ranking.
+   *
+   * Ranking exists to stop a *guess* overwriting a fact, and an interrupt is
+   * not a guess: the provider wrote it into its own transcript. It is also the
+   * one reading with no higher tier to defer to — neither provider fires a
+   * hook when the user presses escape — so without this the observation would
+   * be dead code, rejected by exactly the fresh `working` hook it exists to
+   * correct.
+   */
+  authoritative?: boolean;
   /** Drops the record entirely; lifecycle takes over from here. */
   clear?: boolean;
 }
@@ -347,7 +358,80 @@ export function observeCodexRollout(
         ifActivity: RUNNING,
       };
     if (kind === "turn_aborted")
-      return { activity: "idle", source, detail: "Interrupted" };
+      return {
+        activity: "idle",
+        source,
+        detail: "Interrupted",
+        authoritative: true,
+      };
+  }
+  return undefined;
+}
+
+/**
+ * The entry types that are the conversation. Everything else Claude writes —
+ * hook records, file-history snapshots, prompt bookkeeping, attachments —
+ * lands *after* an interrupt marker, so a reader that simply took the last
+ * line would find bookkeeping and never see the interrupt.
+ */
+const CLAUDE_CONVERSATION_ENTRIES = new Set(["user", "assistant"]);
+
+const INTERRUPTED = /^\[Request interrupted by user/;
+
+/**
+ * The tail of a Claude transcript, read for the one thing Claude's hooks do
+ * not report.
+ *
+ * Claude has no `Interrupt` event and its `Stop` hook does not fire for a turn
+ * the user ended with escape, so a session interrupted mid-tool is left on the
+ * `working` its last `PreToolUse` wrote — right up until the ten-minute decay.
+ * Claude does record the interrupt in its own transcript, as a user turn whose
+ * text is `[Request interrupted by user]`, and that is what this reads.
+ *
+ * It reports nothing else on purpose. Unlike a Codex rollout, which has an
+ * explicit `task_complete`, a Claude transcript cannot tell a finished turn
+ * from one still streaming — the last entry is an assistant message either
+ * way. Guessing `working` there would fabricate exactly the state this is
+ * here to retract.
+ */
+export function observeClaudeTranscript(
+  text_: string,
+): ActivityObservation | undefined {
+  const lines = text_.trimEnd().split("\n");
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    let entry: {
+      type?: unknown;
+      isSidechain?: unknown;
+      message?: { content?: unknown };
+    };
+    try {
+      entry = JSON.parse(lines[index]!);
+    } catch {
+      // A truncated first line is expected when reading a tail.
+      continue;
+    }
+    const kind = text(entry.type);
+    if (!kind || !CLAUDE_CONVERSATION_ENTRIES.has(kind)) continue;
+    // Subagents write into the same transcript, and their turns are invisible
+    // here for the same reason they are invisible to the hooks: a subagent
+    // still running says nothing about whether the parent was interrupted.
+    if (entry.isSidechain === true) continue;
+    // The newest conversational entry is the whole answer. An interrupt the
+    // user has already followed with a new prompt is history, and that
+    // prompt's own `UserPromptSubmit` hook has already reported it.
+    const content = entry.message?.content;
+    const first = (
+      Array.isArray(content) ? content[0] : { type: "text", text: content }
+    ) as { type?: unknown; text?: unknown } | undefined;
+    const body = first?.type === "text" ? text(first.text) : undefined;
+    return body && INTERRUPTED.test(body)
+      ? {
+          activity: "idle",
+          source: "transcript",
+          detail: "Interrupted",
+          authoritative: true,
+        }
+      : undefined;
   }
   return undefined;
 }

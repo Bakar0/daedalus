@@ -251,6 +251,25 @@ async function readClaudeStatus(
 const claudeProjectKey = (workingDirectory: string) =>
   workingDirectory.replace(/[^a-zA-Z0-9]/g, "-");
 
+/**
+ * Where Claude keeps this session's transcript. Unlike Codex's rollout there
+ * is nothing to search for: Daedalus hands Claude `--session-id` at launch, so
+ * the file name is known before the session writes a byte.
+ *
+ * Exported because the activity detector tails the same file for the one thing
+ * Claude's hooks never report — a turn the user interrupted — and a second
+ * copy of this path is a second thing to get wrong.
+ */
+export const claudeTranscriptPath = (
+  projectsDirectory: string,
+  agent: AgentSession,
+): string =>
+  join(
+    projectsDirectory,
+    claudeProjectKey(agent.workingDirectory),
+    `${agent.providerSessionId ?? agent.id}.jsonl`,
+  );
+
 function selectedModel(args: string[]): string | undefined {
   for (let index = args.length - 1; index >= 0; index -= 1) {
     const argument = args[index]!;
@@ -334,12 +353,7 @@ async function readClaudeTranscript(
   config: DaedalusConfig,
   agent: AgentSession,
 ): Promise<SessionTelemetry | undefined> {
-  const id = agent.providerSessionId ?? agent.id;
-  const path = join(
-    config.claudeProjectsDirectory,
-    claudeProjectKey(agent.workingDirectory),
-    `${id}.jsonl`,
-  );
+  const path = claudeTranscriptPath(config.claudeProjectsDirectory, agent);
   try {
     const file = Bun.file(path);
     const text = await file.slice(Math.max(0, file.size - 512 * 1024)).text();

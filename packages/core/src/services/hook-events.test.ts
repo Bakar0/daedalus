@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   observeClaudeHook,
+  observeClaudeTranscript,
   observeCodexHook,
   observeCodexRollout,
   summarizeTool,
@@ -387,5 +388,99 @@ describe("Codex rollout fallback", () => {
   test("a rollout with no state-bearing event is no observation", () => {
     expect(observeCodexRollout(line({ type: "token_count" }))).toBeUndefined();
     expect(observeCodexRollout("")).toBeUndefined();
+  });
+});
+
+/**
+ * Real entries, trimmed of the fields the reader never looks at, from a
+ * Claude Code 2.1.272 transcript. The bookkeeping that follows an interrupt is
+ * the point of the fixture: it is what a reader that simply took the last line
+ * would see instead.
+ */
+describe("Claude transcript fallback", () => {
+  const interrupted = (
+    text = "[Request interrupted by user]",
+    extra: Record<string, unknown> = {},
+  ) =>
+    JSON.stringify({
+      type: "user",
+      isSidechain: false,
+      message: { role: "user", content: [{ type: "text", text }] },
+      ...extra,
+    });
+  const bookkeeping = [
+    JSON.stringify({ type: "system", isMeta: false }),
+    JSON.stringify({ type: "file-history-snapshot" }),
+    JSON.stringify({ type: "last-prompt" }),
+  ];
+  const assistant = JSON.stringify({
+    type: "assistant",
+    isSidechain: false,
+    message: { role: "assistant", content: [{ type: "text", text: "Done." }] },
+  });
+
+  test("an interrupted turn is idle, and outranks the hook that pinned it", () => {
+    // Claude fires no hook for escape, so this reading has no higher tier to
+    // defer to and must be allowed past the `working` its PreToolUse wrote.
+    expect(observeClaudeTranscript(interrupted())).toMatchObject({
+      activity: "idle",
+      source: "transcript",
+      detail: "Interrupted",
+      authoritative: true,
+    });
+    expect(
+      observeClaudeTranscript(
+        interrupted("[Request interrupted by user for tool use]"),
+      ),
+    ).toMatchObject({ activity: "idle", detail: "Interrupted" });
+  });
+
+  test("the bookkeeping Claude writes after an interrupt does not hide it", () => {
+    expect(
+      observeClaudeTranscript([interrupted(), ...bookkeeping].join("\n")),
+    ).toMatchObject({ activity: "idle", detail: "Interrupted" });
+  });
+
+  test("an interrupt the user has already answered is history", () => {
+    const text = [
+      interrupted(),
+      ...bookkeeping,
+      JSON.stringify({
+        type: "user",
+        isSidechain: false,
+        message: { role: "user", content: "try that again" },
+      }),
+    ].join("\n");
+    expect(observeClaudeTranscript(text)).toBeUndefined();
+  });
+
+  test("subagent turns are invisible, so one cannot mask the parent's interrupt", () => {
+    const text = [
+      interrupted(),
+      JSON.stringify({
+        type: "assistant",
+        isSidechain: true,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "..." }],
+        },
+      }),
+    ].join("\n");
+    expect(observeClaudeTranscript(text)).toMatchObject({ activity: "idle" });
+  });
+
+  test("a transcript that only says the turn is running is no observation", () => {
+    // A Claude transcript cannot tell a finished turn from a streaming one —
+    // the last entry is an assistant message either way — so it says nothing
+    // rather than fabricating `working`.
+    expect(observeClaudeTranscript(assistant)).toBeUndefined();
+    expect(observeClaudeTranscript("")).toBeUndefined();
+    expect(observeClaudeTranscript(bookkeeping.join("\n"))).toBeUndefined();
+  });
+
+  test("a truncated leading line is expected when reading a tail", () => {
+    expect(
+      observeClaudeTranscript(`{"type":"user","mess\n${interrupted()}`),
+    ).toMatchObject({ activity: "idle" });
   });
 });

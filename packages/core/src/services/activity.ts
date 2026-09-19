@@ -64,6 +64,8 @@ export interface RecordActivityInput {
   ifActivity?: readonly AgentActivity[];
   /** Skip when the stored activity is one of these. */
   ifNotActivity?: readonly AgentActivity[];
+  /** Exempts the write from the source ranking; see `ActivityObservation`. */
+  authoritative?: boolean;
   /** The provider's own session id, when the detector knows it. */
   providerSessionId?: string;
 }
@@ -249,7 +251,8 @@ export class ActivityService {
     const at = this.now();
     if (
       !this.guarded(previous, input) ||
-      this.outranked(previous, input.source, at.getTime())
+      (!input.authoritative &&
+        this.outranked(previous, input.source, at.getTime()))
     )
       return {
         state: previous
@@ -352,6 +355,7 @@ export class ActivityService {
       ...(observation.ifNotActivity
         ? { ifNotActivity: observation.ifNotActivity }
         : {}),
+      ...(observation.authoritative ? { authoritative: true } : {}),
       ...(input.providerSessionId
         ? { providerSessionId: input.providerSessionId }
         : {}),
