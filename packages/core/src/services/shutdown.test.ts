@@ -26,8 +26,10 @@ class FakeTmux implements TmuxClient {
   async attach() {
     return 0;
   }
+  // Both providers' "ready" markers, so a relaunch finishes startup instead
+  // of polling an empty screen until the timeout.
   async capture() {
-    return "";
+    return "Ask Codex to do anything\nshift+tab to cycle";
   }
   async sendKeys() {}
   async send() {}
@@ -84,6 +86,7 @@ function addSession(
     archivedAt: null,
     resumeCount: 0,
     lostReason: null,
+    resumeOnStart: false,
     position: context.repositories.nextAgentPosition(input.workspaceId),
   };
   context.repositories.createAgent(session);
@@ -248,6 +251,74 @@ describe("ShutdownService", () => {
       expect((await context.agents.get(session.id)).archivedAt).toBe(
         archivedAt,
       );
+      context.close();
+    });
+  });
+
+  test("a stop-and-resume close comes back on the next start", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Resume" });
+      const session = addSession(context, tmux, {
+        workspaceId: workspace.id,
+        name: "Claude",
+        provider: "claude",
+        providerSessionId: crypto.randomUUID(),
+      });
+
+      await context.shutdown.run({ stopServer: true, resumeOnNextStart: true });
+      const closed = await context.agents.get(session.id);
+      expect(closed.archivedAt).not.toBeNull();
+      expect(closed.resumeOnStart).toBe(true);
+
+      const resumed = await context.agents.resumeMarkedSessions();
+      expect(resumed.resumed.map((item) => item.id)).toEqual([session.id]);
+      const back = await context.agents.get(session.id);
+      expect(back.archivedAt).toBeNull();
+      expect(back.status).toBe("running");
+      // Cleared, or every launch from now on would reopen it again.
+      expect(back.resumeOnStart).toBe(false);
+      context.close();
+    });
+  });
+
+  test("the off switch stays off, and a hand-archived session is left alone", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Off" });
+      const filed = addSession(context, tmux, {
+        workspaceId: workspace.id,
+        name: "Filed away",
+        provider: "claude",
+        providerSessionId: crypto.randomUUID(),
+      });
+      // Archiving by hand is a decision to put a session away, and reads
+      // identically to a shutdown archive without the flag to tell them apart.
+      await context.agents.archive(filed.id);
+
+      const other = addSession(context, tmux, {
+        workspaceId: workspace.id,
+        name: "Still live",
+        provider: "claude",
+        providerSessionId: crypto.randomUUID(),
+      });
+      // `daedal shutdown` and the Shut Down menu item pass no resume flag.
+      await context.shutdown.run({ stopServer: true });
+
+      expect((await context.agents.get(other.id)).resumeOnStart).toBe(false);
+      const resumed = await context.agents.resumeMarkedSessions();
+      expect(resumed.resumed).toEqual([]);
+      expect(resumed.skipped).toEqual([]);
+      expect((await context.agents.get(filed.id)).archivedAt).not.toBeNull();
+      expect((await context.agents.get(other.id)).archivedAt).not.toBeNull();
       context.close();
     });
   });

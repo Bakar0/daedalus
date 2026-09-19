@@ -256,11 +256,13 @@ Archived workspaces appear in a collapsed section at the bottom of the workspace
 
 What changed is the silence. With sessions or integrated terminals still live, Cmd+Q shows a one-line confirmation — "3 sessions will keep running. Reopening Daedalus reconnects to them." — with three buttons:
 
-| Button                     | What it does                                                                                                                              |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| **Cancel**                 | Nothing. The app stays open.                                                                                                              |
-| **Quit and stop sessions** | The real close: archives every live session, closes the terminals, ends the tmux server, then quits. The same sweep as `daedal shutdown`. |
-| **Quit** (focused)         | Leaves everything running. Reopening reconnects.                                                                                          |
+| Button                     | What it does                                                                                                                                                      |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Cancel**                 | Nothing. The app stays open.                                                                                                                                      |
+| **Quit and stop sessions** | The real close: archives every live session, closes the terminals, ends the tmux server, then quits — and reopening Daedalus brings those sessions back, resumed. |
+| **Quit** (focused)         | Leaves everything running. Reopening reconnects.                                                                                                                  |
+
+"Quit and stop sessions" is a pause, not a farewell. What it archives is marked `resume_on_start`, and the next launch reopens exactly that set with their conversations resumed. The flag is what separates the two archives, which are otherwise identical rows: archiving a session by hand is a decision to put it away, archiving it on the way out is a decision to come back to it, and a startup sweep guessing between them either resurrects what the user filed or loses what they expected to find waiting. `daedal shutdown` and the **Quit and Shut Down Sessions** menu item deliberately do not set it — they are the off switch, and an off switch that turns itself back on is not one.
 
 Quitting with nothing live shows no dialog. There is no "don't ask again" and no setting behind it: the two outcomes differ by whether the user's agents are still alive afterwards, which is not a thing to decide once and then stop seeing. The stopping button is never the focused one, so Enter cannot reach it by accident.
 

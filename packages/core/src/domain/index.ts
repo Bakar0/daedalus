@@ -61,6 +61,12 @@ export interface AgentSession {
    * look identical to the ones that simply have not been reached.
    */
   lostReason: string | null;
+  /**
+   * Set when this session was archived by quitting the app with "Quit and
+   * stop sessions", and cleared when startup brings it back. It is what makes
+   * that a pause rather than a farewell: see `migrations/014_quit_resume.sql`.
+   */
+  resumeOnStart: boolean;
   /** Where the user put this session within its workspace. See `Workspace`. */
   position: number;
 }

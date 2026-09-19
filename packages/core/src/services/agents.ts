@@ -690,6 +690,7 @@ export class AgentService {
       archivedAt: null,
       resumeCount: 0,
       lostReason: null,
+      resumeOnStart: false,
       // Top of its workspace's list, leaving any manual order below it intact.
       position: this.repositories.nextAgentPosition(workspace.id),
     };
@@ -939,7 +940,48 @@ export class AgentService {
     const agent = await this.get(id);
     if (!agent.archivedAt)
       throw new DaedalusError("CONFLICT", "Session is not archived");
-    return this.relaunch(agent);
+    return this.relaunch({ ...agent, resumeOnStart: false });
+  }
+
+  /**
+   * Brings back what "Quit and stop sessions" put away, which is what makes
+   * that a pause rather than a farewell.
+   *
+   * Separate from `reviveLostSessions` because the two recover different
+   * things: revival is for sessions the OS killed and left `lost`, this is for
+   * ones Daedalus archived on purpose and promised to return. A session the
+   * user archived by hand has no flag and is deliberately left alone.
+   *
+   * Per-session try/catch throughout, and the flag is cleared either way: a
+   * session that cannot come back must cost nothing but its own card, and must
+   * not be retried on every launch from now on.
+   */
+  async resumeMarkedSessions(): Promise<{
+    resumed: AgentSession[];
+    skipped: { sessionId: string; name: string; reason: string }[];
+  }> {
+    const result: {
+      resumed: AgentSession[];
+      skipped: { sessionId: string; name: string; reason: string }[];
+    } = { resumed: [], skipped: [] };
+    const marked = this.repositories
+      .listAgents()
+      .filter((agent) => agent.resumeOnStart && agent.archivedAt);
+    if (!marked.length) return result;
+    if (!(await this.tmux.probe())) return result;
+    for (const agent of marked) {
+      try {
+        result.resumed.push(await this.restore(agent.id));
+      } catch (error) {
+        this.repositories.updateAgent({ ...agent, resumeOnStart: false });
+        result.skipped.push({
+          sessionId: agent.id,
+          name: agent.name,
+          reason: reviveFailureReason(error),
+        });
+      }
+    }
+    return result;
   }
 
   /**

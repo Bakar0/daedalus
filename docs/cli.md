@@ -109,6 +109,8 @@ Sessions whose provider has no native resume — a `--command` session, or one w
 
 `--dry-run` prints exactly what would be stopped and changes nothing. `--keep-terminals` leaves the integrated terminals open, and leaves the tmux server running with them — the server is where they live, so there is no reading of the flag that also ends it.
 
+`shutdown` never marks anything to come back. The desktop app's "Quit and stop sessions" runs the same sweep but flags what it archived as `resume_on_start`, so reopening resumes it; this command is the off switch and leaves that flag alone.
+
 Without `--force` the command refuses with exit code `4` while the desktop app is running. The app polls tmux about once a second and reconciles what it finds; a teardown underneath that races it. Quit the app first — its Daedalus menu has **Quit and Shut Down Sessions**, which runs this same sweep.
 
 ## Activity

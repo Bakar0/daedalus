@@ -1,0 +1,18 @@
+-- "Quit and stop sessions" has to be a pause, not a farewell.
+--
+-- Stopping everything on the way out is the only honest "close this app": no
+-- agent keeps burning tokens in a tmux server the user believes they shut. But
+-- a close that costs a board of sessions is one nobody uses twice, so what was
+-- stopped that way is marked here and resumed the next time the app starts.
+--
+-- It is a separate column rather than an inference from `archived_at`, because
+-- the two archives mean opposite things. Archiving a session by hand is a
+-- decision to put it away; archiving it on the way out is a decision to come
+-- back to it. A startup sweep cannot tell those apart without being told, and
+-- guessing wrong either resurrects sessions the user filed away or loses the
+-- ones they expected to find waiting.
+--
+-- `daedal shutdown` and the Shut Down menu item deliberately do not set it.
+-- They are the off switch, and an off switch that turns itself back on is not
+-- one.
+ALTER TABLE agent_sessions ADD COLUMN resume_on_start INTEGER NOT NULL DEFAULT 0;

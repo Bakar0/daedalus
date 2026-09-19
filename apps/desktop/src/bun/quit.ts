@@ -93,19 +93,32 @@ export class QuitController {
     }, this.options.ackTimeoutMs ?? QUIT_DIALOG_ACK_TIMEOUT_MS);
   }
 
-  /** "Quit and Shut Down Sessions": the same sweep `daedal shutdown` runs. */
-  async requestShutdownAndQuit(): Promise<void> {
+  /**
+   * Stops everything on the way out.
+   *
+   * `resumeOnNextStart` is the difference between the dialog's "Quit and stop
+   * sessions" and the Shut Down menu item next to it. Both end every session
+   * and the tmux server; only the first promises to bring them back, which is
+   * what makes it a way to close the app rather than a way to lose an
+   * afternoon. The menu item and `daedal shutdown` are the off switch.
+   */
+  async requestShutdownAndQuit(
+    options: { resumeOnNextStart?: boolean; reason?: string } = {},
+  ): Promise<void> {
     if (this.#state === "quitting") return;
     this.#cancelAckTimer();
     this.#state = "quitting";
     const result = await this.options
-      .runShutdown({ stopServer: true })
+      .runShutdown({
+        stopServer: true,
+        ...(options.resumeOnNextStart ? { resumeOnNextStart: true } : {}),
+      })
       .catch((error: unknown) => {
         this.#log("quit_shutdown_failed", { message: describe(error) });
         return undefined;
       });
     if (result) this.#logResult(result);
-    this.#finish("menu-shutdown");
+    this.#finish(options.reason ?? "menu-shutdown");
   }
 
   /** The window has the dialog on screen; stop counting. */
@@ -123,7 +136,11 @@ export class QuitController {
       this.#log("quit_cancelled", {});
       return;
     }
-    if (choice === "shutdown") return this.requestShutdownAndQuit();
+    if (choice === "shutdown")
+      return this.requestShutdownAndQuit({
+        resumeOnNextStart: true,
+        reason: "dialog-shutdown",
+      });
     await this.#quit("dialog-keep");
   }
 

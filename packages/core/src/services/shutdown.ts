@@ -85,6 +85,13 @@ export interface ShutdownOptions {
    * ones Daedalus did not start.
    */
   stopServer?: boolean;
+  /**
+   * Marks everything this stops to be resumed the next time the app starts,
+   * which is what makes "Quit and stop sessions" a pause rather than a
+   * farewell. `daedal shutdown` and the Shut Down menu item leave it off: they
+   * are the off switch, and an off switch that turns itself back on is not one.
+   */
+  resumeOnNextStart?: boolean;
 }
 
 const isLive = (status: AgentSessionStatus) =>
@@ -161,7 +168,9 @@ export class ShutdownService {
     // archive`, and a board of those at once is how a shutdown turns into a
     // thundering herd on the way out.
     for (const target of plan.sessions)
-      sessions.push(await this.endSession(target));
+      sessions.push(
+        await this.endSession(target, options.resumeOnNextStart === true),
+      );
     const terminals: ShutdownTerminalResult[] = [];
     if (!options.keepTerminals)
       for (const target of plan.terminals) {
@@ -196,8 +205,16 @@ export class ShutdownService {
    * and it is also what keeps a half-spawned `starting` session from being
    * left behind: whatever archiving could not do, the stop still does.
    */
+  /** Flags an archived session for the next startup sweep to bring back. */
+  private markForResume(id: string): void {
+    const agent = this.repositories.findAgent(id);
+    if (agent?.archivedAt)
+      this.repositories.updateAgent({ ...agent, resumeOnStart: true });
+  }
+
   private async endSession(
     target: ShutdownSessionTarget,
+    resumeOnNextStart: boolean,
   ): Promise<ShutdownSessionResult> {
     const identity = {
       id: target.id,
@@ -221,6 +238,9 @@ export class ShutdownService {
     }
     try {
       await this.agents.archive(target.id);
+      // After the archive, never before: a session that failed to archive is
+      // still running and has nothing to come back from.
+      if (resumeOnNextStart) this.markForResume(target.id);
       return { ...identity, outcome: "archived" };
     } catch (error) {
       const reason = message(error);

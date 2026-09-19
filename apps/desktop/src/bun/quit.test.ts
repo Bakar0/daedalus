@@ -137,12 +137,14 @@ describe("QuitController", () => {
     expect(it.asked).toHaveLength(2);
   });
 
-  test("the real close ends the sessions and the tmux server with them", async () => {
+  test("the real close ends everything and promises to bring it back", async () => {
     const it = harness();
     await it.controller.requestQuit();
     it.controller.dialogShown();
     await it.controller.decide("shutdown");
-    expect(it.swept).toEqual([{ stopServer: true }]);
+    // The flag is the difference between closing the app and losing an
+    // afternoon: the next startup reopens exactly what this stopped.
+    expect(it.swept).toEqual([{ stopServer: true, resumeOnNextStart: true }]);
     expect(it.quits).toBe(1);
   });
 
@@ -179,10 +181,11 @@ describe("QuitController", () => {
     expect(it.swept).toEqual([]);
   });
 
-  test("Quit and Shut Down Sessions ends the tmux server and asks nothing", async () => {
+  test("the Shut Down menu item is an off switch that stays off", async () => {
     const it = harness();
     await it.controller.requestShutdownAndQuit();
     expect(it.asked).toEqual([]);
+    // No resume flag: this one and `daedal shutdown` mean it.
     expect(it.swept).toEqual([{ stopServer: true }]);
     expect(it.quits).toBe(1);
   });

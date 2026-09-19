@@ -68,6 +68,7 @@ interface AgentRow {
   archived_at: string | null;
   resume_count: number;
   lost_reason: string | null;
+  resume_on_start: number;
   position: number;
 }
 
@@ -162,6 +163,7 @@ const agentFromRow = (row: AgentRow): AgentSession => ({
   archivedAt: row.archived_at,
   resumeCount: row.resume_count,
   lostReason: row.lost_reason,
+  resumeOnStart: row.resume_on_start === 1,
   position: row.position,
 });
 
@@ -686,8 +688,9 @@ export class SqliteRepositories {
         `INSERT INTO agent_sessions
          (id, workspace_id, task_id, name, provider, kind, tmux_session, command, args,
           working_directory, status, exit_code, started_at, ended_at,
-          provider_session_id, archived_at, resume_count, lost_reason, position)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          provider_session_id, archived_at, resume_count, lost_reason,
+          resume_on_start, position)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         agent.id,
@@ -708,6 +711,7 @@ export class SqliteRepositories {
         agent.archivedAt,
         agent.resumeCount,
         agent.lostReason,
+        agent.resumeOnStart ? 1 : 0,
         agent.position,
       );
   }
@@ -768,7 +772,7 @@ export class SqliteRepositories {
         `UPDATE agent_sessions SET tmux_session = ?, command = ?, args = ?,
          status = ?, exit_code = ?, started_at = ?, ended_at = ?,
          provider_session_id = ?, archived_at = ?, resume_count = ?,
-         lost_reason = ? WHERE id = ?`,
+         lost_reason = ?, resume_on_start = ? WHERE id = ?`,
       )
       .run(
         agent.tmuxSession,
@@ -782,6 +786,7 @@ export class SqliteRepositories {
         agent.archivedAt,
         agent.resumeCount,
         agent.lostReason,
+        agent.resumeOnStart ? 1 : 0,
         agent.id,
       );
   }

@@ -5461,7 +5461,7 @@ export function WorkspaceApp({
           <div className="confirmation-content">
             <p>
               {quitDisclosure(quitRequest)} Reopening Daedalus reconnects to
-              them.
+              them. Stopping them instead resumes them when you reopen.
             </p>
             <div className="modal-actions">
               <button
