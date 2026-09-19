@@ -907,6 +907,7 @@ async function agentCommand(
       config: context.config,
       repositories: context.repositories,
       activity: context.activity,
+      tmux: context.tmux,
     }).catch(() => undefined);
     await context.activity.decay().catch(() => undefined);
     printResult(
@@ -957,6 +958,7 @@ async function agentCommand(
       config: context.config,
       repositories: context.repositories,
       activity: context.activity,
+      tmux: context.tmux,
     }).catch(() => undefined);
     await context.activity.decay().catch(() => undefined);
     const activity = context.activity.get(result.id);
@@ -1176,6 +1178,7 @@ async function agentWaitCommand(
       config: context.config,
       repositories: context.repositories,
       activity: context.activity,
+      tmux: context.tmux,
     }).catch(() => undefined);
     await context.activity.decay().catch(() => undefined);
     const candidates = context.repositories

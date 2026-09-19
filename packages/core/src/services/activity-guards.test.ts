@@ -7,6 +7,8 @@ import {
   createApplicationContext,
   observeClaudeHook,
   readActivityRecord,
+  resetRolloutCache,
+  sweepProviderActivity,
   writeActivityRecord,
   type ApplicationContext,
 } from "../index";
@@ -28,8 +30,10 @@ class FakeTmux implements TmuxClient {
   async attach() {
     return 0;
   }
+  /** Overridden by a test that needs the pane to say something specific. */
+  paneText = "Claude Code\nshift+tab to cycle";
   async capture() {
-    return "Claude Code\nshift+tab to cycle";
+    return this.paneText;
   }
   async sendKeys() {}
   async send() {}
@@ -66,7 +70,9 @@ async function withSession(
     let offset = 0;
     const tmux = new FakeTmux();
     const context = await createApplicationContext({
-      env: { DAEDALUS_HOME: home },
+      // Pinned to the throwaway home so a test reads the transcripts it wrote
+      // rather than whatever the developer's own ~/.claude happens to hold.
+      env: { DAEDALUS_HOME: home, CLAUDE_CONFIG_DIR: home },
       tmux,
       now: () => new Date(Date.now() + offset),
       sendNativeNotification: async () => ({
@@ -211,6 +217,113 @@ describe("source confidence", () => {
         source: "pane",
       });
       expect(later.applied).toBe(true);
+    });
+  });
+
+  test("an interrupt retracts the working state no hook will ever retract", async () => {
+    await withSession(async ({ context, sessionId, home }) => {
+      const agent = context.repositories.findAgent(sessionId)!;
+      // Exactly where the bug lives: the last thing a hook said about an
+      // interrupted turn is the PreToolUse of the tool that never ran.
+      await context.activity.record({
+        sessionId,
+        activity: "working",
+        detail: "Bash(sleep 600)",
+        source: "hook",
+      });
+      await Bun.write(
+        join(
+          home,
+          "projects",
+          agent.workingDirectory.replace(/[^a-zA-Z0-9]/g, "-"),
+          `${agent.providerSessionId ?? agent.id}.jsonl`,
+        ),
+        [
+          JSON.stringify({
+            type: "user",
+            isSidechain: false,
+            message: {
+              role: "user",
+              content: [
+                { type: "text", text: "[Request interrupted by user]" },
+              ],
+            },
+          }),
+          JSON.stringify({ type: "file-history-snapshot" }),
+        ].join("\n"),
+      );
+
+      resetRolloutCache();
+      const applied = await sweepProviderActivity({
+        config: context.config,
+        repositories: context.repositories,
+        activity: context.activity,
+      });
+      expect(applied).toBe(1);
+      expect(context.activity.get(sessionId)).toMatchObject({
+        activity: "idle",
+        detail: "Interrupted",
+        source: "transcript",
+      });
+    });
+  });
+
+  test("an instant escape is caught by the pane, the only place it shows", async () => {
+    await withSession(async ({ context, sessionId, tmux }) => {
+      // The reported bug exactly: prompt submitted, escaped before Claude's
+      // first token. `UserPromptSubmit` set working, no `Stop` is coming, and
+      // the transcript holds the prompt and nothing else.
+      await context.activity.observe({
+        sessionId,
+        observation: observeClaudeHook("UserPromptSubmit", {
+          hook_event_name: "UserPromptSubmit",
+        })!,
+      });
+      expect(context.activity.get(sessionId)?.activity).toBe("working");
+      tmux.paneText = [
+        '⏺ Hi — I see "test". What would you like me to do?',
+        "✻ Brewed for 3s · done 6:35 PM",
+        "──────────────────────────────── Test22 ─",
+        "❯ ",
+        "  ⏵⏵ auto mode on (shift+tab to cycle)",
+      ].join("\n");
+
+      resetRolloutCache();
+      await sweepProviderActivity({
+        config: context.config,
+        repositories: context.repositories,
+        activity: context.activity,
+        tmux,
+      });
+      expect(context.activity.get(sessionId)).toMatchObject({
+        activity: "idle",
+        source: "pane",
+      });
+    });
+  });
+
+  test("the pane is never asked to speak for a session blocked on the user", async () => {
+    await withSession(async ({ context, sessionId, tmux }) => {
+      await context.activity.record({
+        sessionId,
+        activity: "needs_permission",
+        detail: "Bash(git push)",
+        source: "hook",
+      });
+      // A pane showing a finished turn says nothing about whether the user
+      // answered the dialog, so the badge has to survive it.
+      tmux.paneText = "✻ Worked for 4m 56s · done 12:35 PM";
+      resetRolloutCache();
+      await sweepProviderActivity({
+        config: context.config,
+        repositories: context.repositories,
+        activity: context.activity,
+        tmux,
+      });
+      expect(context.activity.get(sessionId)?.activity).toBe(
+        "needs_permission",
+      );
+      expect(context.activity.attentionFor(sessionId)).toBeDefined();
     });
   });
 

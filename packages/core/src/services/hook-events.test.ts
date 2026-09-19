@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import {
   observeClaudeHook,
+  observeClaudePane,
+  observeClaudeTranscript,
   observeCodexHook,
   observeCodexRollout,
   summarizeTool,
@@ -387,5 +389,203 @@ describe("Codex rollout fallback", () => {
   test("a rollout with no state-bearing event is no observation", () => {
     expect(observeCodexRollout(line({ type: "token_count" }))).toBeUndefined();
     expect(observeCodexRollout("")).toBeUndefined();
+  });
+});
+
+/**
+ * Real entries, trimmed of the fields the reader never looks at, from a
+ * Claude Code 2.1.272 transcript. The bookkeeping that follows an interrupt is
+ * the point of the fixture: it is what a reader that simply took the last line
+ * would see instead.
+ */
+describe("Claude transcript fallback", () => {
+  const interrupted = (
+    text = "[Request interrupted by user]",
+    extra: Record<string, unknown> = {},
+  ) =>
+    JSON.stringify({
+      type: "user",
+      isSidechain: false,
+      message: { role: "user", content: [{ type: "text", text }] },
+      ...extra,
+    });
+  const bookkeeping = [
+    JSON.stringify({ type: "system", isMeta: false }),
+    JSON.stringify({ type: "file-history-snapshot" }),
+    JSON.stringify({ type: "last-prompt" }),
+  ];
+  const assistant = JSON.stringify({
+    type: "assistant",
+    isSidechain: false,
+    message: { role: "assistant", content: [{ type: "text", text: "Done." }] },
+  });
+
+  test("an interrupted turn is idle, and outranks the hook that pinned it", () => {
+    // Claude fires no hook for escape, so this reading has no higher tier to
+    // defer to and must be allowed past the `working` its PreToolUse wrote.
+    expect(observeClaudeTranscript(interrupted())).toMatchObject({
+      activity: "idle",
+      source: "transcript",
+      detail: "Interrupted",
+      authoritative: true,
+    });
+    expect(
+      observeClaudeTranscript(
+        interrupted("[Request interrupted by user for tool use]"),
+      ),
+    ).toMatchObject({ activity: "idle", detail: "Interrupted" });
+  });
+
+  test("the bookkeeping Claude writes after an interrupt does not hide it", () => {
+    expect(
+      observeClaudeTranscript([interrupted(), ...bookkeeping].join("\n")),
+    ).toMatchObject({ activity: "idle", detail: "Interrupted" });
+  });
+
+  test("an interrupt the user has already answered is history", () => {
+    const text = [
+      interrupted(),
+      ...bookkeeping,
+      JSON.stringify({
+        type: "user",
+        isSidechain: false,
+        message: { role: "user", content: "try that again" },
+      }),
+    ].join("\n");
+    expect(observeClaudeTranscript(text)).toBeUndefined();
+  });
+
+  test("subagent turns are invisible, so one cannot mask the parent's interrupt", () => {
+    const text = [
+      interrupted(),
+      JSON.stringify({
+        type: "assistant",
+        isSidechain: true,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "..." }],
+        },
+      }),
+    ].join("\n");
+    expect(observeClaudeTranscript(text)).toMatchObject({ activity: "idle" });
+  });
+
+  test("a transcript that only says the turn is running is no observation", () => {
+    // A Claude transcript cannot tell a finished turn from a streaming one —
+    // the last entry is an assistant message either way — so it says nothing
+    // rather than fabricating `working`.
+    expect(observeClaudeTranscript(assistant)).toBeUndefined();
+    expect(observeClaudeTranscript("")).toBeUndefined();
+    expect(observeClaudeTranscript(bookkeeping.join("\n"))).toBeUndefined();
+  });
+
+  test("a truncated leading line is expected when reading a tail", () => {
+    expect(
+      observeClaudeTranscript(`{"type":"user","mess\n${interrupted()}`),
+    ).toMatchObject({ activity: "idle" });
+  });
+});
+
+/**
+ * Real `capture-pane` output, taken from live sessions on this machine. The
+ * five different verbs are the point: they were all on screen at the same
+ * moment, which is why neither pattern may key on the word.
+ */
+describe("Claude pane fallback", () => {
+  const box = [
+    "──────────────────────────────────────── Test22 ─",
+    "❯ ",
+    "─────────────────────────────────────────────────",
+    "  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents",
+    "                    Update available! Run: brew upgrade claude-code@latest",
+  ];
+  const pane = (status: string, trailing: string[] = []) =>
+    ["⏺ Some earlier output", status, ...trailing, ...box].join("\n");
+
+  test("a finished turn retracts working, whatever the verb happens to be", () => {
+    for (const status of [
+      "✻ Brewed for 3s · done 6:35 PM",
+      "✻ Worked for 4m 56s · done 12:35 PM",
+      "✻ Crunched for 10m 37s · done 1:32 PM",
+      "✻ Sautéed for 3m 8s · done 3:07 PM",
+      "✻ Baked for 7m 26s · done 8:24 PM",
+    ])
+      expect(observeClaudePane(pane(status))).toMatchObject({
+        activity: "idle",
+        source: "pane",
+        // It may retract a working reading and do nothing else — never invent
+        // work, never speak for a session that is blocked on the user.
+        ifActivity: ["working"],
+        authoritative: true,
+      });
+  });
+
+  test("an interrupted turn leaves no done line, only Claude's own notice", () => {
+    // Captured after escaping a live generation: there is no `done` status
+    // line at all, which is why matching only that missed the reported bug.
+    const text = [
+      "  as easily as a few dozen letters, and the",
+      "  ⎿  Interrupted · What should Claude do instead?",
+      "──────────────────────────────── test ─",
+      "❯ ",
+      "  ⏵⏵ auto mode on · 1 shell",
+    ].join("\n");
+    expect(observeClaudePane(text)).toMatchObject({
+      activity: "idle",
+      source: "pane",
+      detail: "Interrupted",
+      ifActivity: ["working"],
+    });
+  });
+
+  test("an interrupt in the scrollback loses to the turn that came after it", () => {
+    const text = [
+      "  ⎿  Interrupted · What should Claude do instead?",
+      "❯ have another go",
+      "✽ Generating… (14s · ↓ 900 tokens)",
+      "──────────────────────────────── test ─",
+    ].join("\n");
+    expect(observeClaudePane(text)).toBeUndefined();
+  });
+
+  test("a live timer means the turn is still running, so nothing is retracted", () => {
+    for (const status of [
+      "✽ Generating… (6m 17s · ↓ 24.8k tokens)",
+      "· Generating… (6m 26s · ↓ 25.2k tokens)",
+      "✢ Thinking… (3s)",
+    ])
+      expect(observeClaudePane(pane(status))).toBeUndefined();
+  });
+
+  test("the newest status line wins, so a stale done never reads past a timer", () => {
+    const text = [
+      "✻ Brewed for 3s · done 6:35 PM",
+      "❯ next thing",
+      "✽ Generating… (12s · ↓ 1.1k tokens)",
+      ...box,
+    ].join("\n");
+    expect(observeClaudePane(text)).toBeUndefined();
+  });
+
+  test("output that merely talks about a status line is not one", () => {
+    // This very session had `done 6:35 PM` inside its own transcript while
+    // working. Indented continuations and tool results are not status lines.
+    expect(
+      observeClaudePane(
+        pane("✽ Generating… (5m 29s · ↓ 21.8k tokens)", [
+          "  ⎿  │ idle │ ✻ Brewed for 3s · done 6:35 PM │",
+        ]),
+      ),
+    ).toBeUndefined();
+    expect(
+      observeClaudePane(
+        ["  ⎿  ✻ Brewed for 3s · done 6:35 PM", ...box].join("\n"),
+      ),
+    ).toBeUndefined();
+  });
+
+  test("a pane with no status line at all is no observation", () => {
+    expect(observeClaudePane(box.join("\n"))).toBeUndefined();
+    expect(observeClaudePane("")).toBeUndefined();
   });
 });

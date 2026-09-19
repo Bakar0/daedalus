@@ -18,6 +18,17 @@ export interface ActivityObservation {
   ifActivity?: readonly AgentActivity[];
   /** Skip when the stored activity is one of these. */
   ifNotActivity?: readonly AgentActivity[];
+  /**
+   * Exempts this reading from the source ranking.
+   *
+   * Ranking exists to stop a *guess* overwriting a fact, and an interrupt is
+   * not a guess: the provider wrote it into its own transcript. It is also the
+   * one reading with no higher tier to defer to — neither provider fires a
+   * hook when the user presses escape — so without this the observation would
+   * be dead code, rejected by exactly the fresh `working` hook it exists to
+   * correct.
+   */
+  authoritative?: boolean;
   /** Drops the record entirely; lifecycle takes over from here. */
   clear?: boolean;
 }
@@ -347,7 +358,147 @@ export function observeCodexRollout(
         ifActivity: RUNNING,
       };
     if (kind === "turn_aborted")
-      return { activity: "idle", source, detail: "Interrupted" };
+      return {
+        activity: "idle",
+        source,
+        detail: "Interrupted",
+        authoritative: true,
+      };
+  }
+  return undefined;
+}
+
+/**
+ * The entry types that are the conversation. Everything else Claude writes —
+ * hook records, file-history snapshots, prompt bookkeeping, attachments —
+ * lands *after* an interrupt marker, so a reader that simply took the last
+ * line would find bookkeeping and never see the interrupt.
+ */
+const CLAUDE_CONVERSATION_ENTRIES = new Set(["user", "assistant"]);
+
+const INTERRUPTED = /^\[Request interrupted by user/;
+
+/**
+ * The tail of a Claude transcript, read for the one thing Claude's hooks do
+ * not report.
+ *
+ * Claude has no `Interrupt` event and its `Stop` hook does not fire for a turn
+ * the user ended with escape, so a session interrupted mid-tool is left on the
+ * `working` its last `PreToolUse` wrote — right up until the ten-minute decay.
+ * Claude does record the interrupt in its own transcript, as a user turn whose
+ * text is `[Request interrupted by user]`, and that is what this reads.
+ *
+ * It reports nothing else on purpose. Unlike a Codex rollout, which has an
+ * explicit `task_complete`, a Claude transcript cannot tell a finished turn
+ * from one still streaming — the last entry is an assistant message either
+ * way. Guessing `working` there would fabricate exactly the state this is
+ * here to retract.
+ */
+export function observeClaudeTranscript(
+  text_: string,
+): ActivityObservation | undefined {
+  const lines = text_.trimEnd().split("\n");
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    let entry: {
+      type?: unknown;
+      isSidechain?: unknown;
+      message?: { content?: unknown };
+    };
+    try {
+      entry = JSON.parse(lines[index]!);
+    } catch {
+      // A truncated first line is expected when reading a tail.
+      continue;
+    }
+    const kind = text(entry.type);
+    if (!kind || !CLAUDE_CONVERSATION_ENTRIES.has(kind)) continue;
+    // Subagents write into the same transcript, and their turns are invisible
+    // here for the same reason they are invisible to the hooks: a subagent
+    // still running says nothing about whether the parent was interrupted.
+    if (entry.isSidechain === true) continue;
+    // The newest conversational entry is the whole answer. An interrupt the
+    // user has already followed with a new prompt is history, and that
+    // prompt's own `UserPromptSubmit` hook has already reported it.
+    const content = entry.message?.content;
+    const first = (
+      Array.isArray(content) ? content[0] : { type: "text", text: content }
+    ) as { type?: unknown; text?: unknown } | undefined;
+    const body = first?.type === "text" ? text(first.text) : undefined;
+    return body && INTERRUPTED.test(body)
+      ? {
+          activity: "idle",
+          source: "transcript",
+          detail: "Interrupted",
+          authoritative: true,
+        }
+      : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Claude's live status line, as it appears at the foot of the pane.
+ *
+ * The verb is randomised — `Worked`, `Crunched`, `Sautéed`, `Baked`, `Brewed`
+ * were all on this machine at once — so neither pattern may key on
+ * vocabulary. What is invariant is the shape: a finished turn ends in
+ * `· done <clock>`, and a live one carries a parenthesised elapsed timer.
+ *
+ * Both require the line to *start* with a single glyph and a space, which is
+ * what the status line looks like and what ordinary output does not: tool
+ * results and continuations are indented, so a transcript that merely
+ * discusses these strings cannot be mistaken for the status line itself.
+ */
+const CLAUDE_PANE_DONE = /^\S .*·\s+done\s+\d{1,2}:\d{2}(?:\s*[AP]M)?$/;
+
+/**
+ * What an *interrupted* turn leaves behind, which is not a `done` line at all
+ * — Claude replaces the status line with this and waits. It is the only mark
+ * an instant escape makes anywhere, so the pane tier exists mostly for it.
+ *
+ * Anchored to the result glyph rather than the word: `Interrupted` on its own
+ * appears in ordinary prose, and this session's own output proved it.
+ */
+const CLAUDE_PANE_INTERRUPTED = /^\s*⎿\s+Interrupted\b/;
+
+const CLAUDE_PANE_BUSY = /^\S .*\((?:\d+h\s*)?(?:\d+m\s*)?\d+s\b[^)]*\)$/;
+
+/**
+ * The last resort, and the only signal that survives an *instant* escape.
+ *
+ * Escaping after Claude has begun responding leaves `[Request interrupted by
+ * user]` in the transcript. Escaping before its first token leaves nothing at
+ * all: no hook, and a transcript holding only the user's prompt. The pane is
+ * then the sole evidence that the turn is over, and it is unambiguous — a
+ * finished turn says `done`, a live one is still counting.
+ *
+ * It may only ever *retract* a `working` reading, never create one. A stale or
+ * misread pane that could invent work, or speak for a session blocked on the
+ * user, is the failure this tier is ranked lowest to avoid; retracting a
+ * `working` that no hook is coming to retract is the one thing it can do that
+ * nothing else can.
+ */
+export function observeClaudePane(
+  text: string,
+): ActivityObservation | undefined {
+  const lines = text.replace(/\s+$/, "").split("\n");
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]!.trimEnd();
+    // A live timer is the newest word on the turn: whatever sits above it is
+    // older, so the scan stops rather than reading past it to a stale `done`.
+    if (CLAUDE_PANE_BUSY.test(line)) return undefined;
+    const interrupted = CLAUDE_PANE_INTERRUPTED.test(line);
+    if (interrupted || CLAUDE_PANE_DONE.test(line))
+      return {
+        activity: "idle",
+        source: "pane",
+        // A `done` line cannot say *why* the turn ended, so it says nothing.
+        // The interrupt line can, and matches what the transcript tier calls
+        // the same event.
+        ...(interrupted ? { detail: "Interrupted" } : {}),
+        ifActivity: ["working"],
+        authoritative: true,
+      };
   }
   return undefined;
 }

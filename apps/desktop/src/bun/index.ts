@@ -509,6 +509,7 @@ setInterval(async () => {
       config: context.config,
       repositories: context.repositories,
       activity: context.activity,
+      tmux: context.tmux,
     }).catch(() => undefined);
     await context.activity.decay().catch(() => undefined);
     for (const [socket, connection] of connections) {
