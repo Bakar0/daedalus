@@ -73,6 +73,13 @@ export interface IntegratedTerminal {
 
 export type WorkspaceRepositoryAccess = "write" | "reference";
 
+/**
+ * An attachment exists from the moment it is asked for. Cloning a large
+ * history takes minutes, and holding a modal open for it made the wait the
+ * user's problem; the workspace shows the repository being prepared instead.
+ */
+export type WorkspaceRepositoryStatus = "ready" | "preparing" | "failed";
+
 export interface RepositoryLibraryEntry {
   id: UUID;
   name: string;
@@ -81,6 +88,13 @@ export interface RepositoryLibraryEntry {
   defaultBranch: string;
   lastFetchedAt: string;
   createdAt: string;
+}
+
+export interface GitStatus {
+  state: "clean" | "modified" | "ahead" | "behind" | "diverged" | "unavailable";
+  changedFiles: number;
+  ahead: number;
+  behind: number;
 }
 
 export interface WorkspaceRepository {
@@ -95,13 +109,10 @@ export interface WorkspaceRepository {
   baseCommit: string | null;
   fetchedAt: string | null;
   createdAt: string;
-  gitStatus?: {
-    state:
-      "clean" | "modified" | "ahead" | "behind" | "diverged" | "unavailable";
-    changedFiles: number;
-    ahead: number;
-    behind: number;
-  };
+  status: WorkspaceRepositoryStatus;
+  /** Why preparation failed, kept so the row can explain itself. */
+  statusError: string | null;
+  gitStatus?: GitStatus;
 }
 
 export interface SessionWorktree {
@@ -110,6 +121,10 @@ export interface SessionWorktree {
   path: string;
   branchName: string;
   createdAt: string;
+  /** Measured against the repository's base branch, not the worktree's own
+   * upstream: the question a worktree row answers is how far this agent has
+   * moved from the branch it started on. */
+  gitStatus?: GitStatus;
 }
 
 export interface WorkspaceFileEntry {

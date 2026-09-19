@@ -151,7 +151,7 @@ try {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     if (
       await evaluate(
-        "Boolean(document.querySelector('.app-mode-switcher button:nth-child(2)'))",
+        "Boolean([...document.querySelectorAll('.app-mode-switcher button')].find((b) => b.textContent === 'Sessions'))",
       )
     ) {
       rendererReady = true;
@@ -168,7 +168,7 @@ try {
     );
   }
   await evaluate(
-    "document.querySelector('.app-mode-switcher button:nth-child(2)').click()",
+    "[...document.querySelectorAll('.app-mode-switcher button')].find((b) => b.textContent === 'Sessions').click()",
   );
 
   let telemetry:

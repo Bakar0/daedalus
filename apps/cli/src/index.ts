@@ -199,7 +199,7 @@ Usage:
   daedal doctor [--json]
   daedal workspace <create|list|get|update|archive|restore|remove> ... [--json]
   daedal task <create|list|get|current|update|status|remove> ... [--json]
-  daedal repo <library|list|attach|sync|detach|worktree> ... [--json]
+  daedal repo <library|list|add|attach|sync|fetch|detach|worktree> ... [--json]
   daedal agent <spawn|list|get|wait|attach|send|archive|restore|stop|remove> ... [--json]
   daedal attention "<reason>" [--session <agent-id>] [--clear] [--json]
   daedal notify "<message>" [--level info|success|error] [--desktop] [--json]
@@ -230,10 +230,15 @@ const commandHelp: Record<string, string> = {
   daedal repo library list
   daedal repo library add <url-or-absolute-path> [--name <name>]
   daedal repo list --workspace <workspace>
+  daedal repo add --workspace <workspace> <url-or-absolute-path> [--name <name>]
   daedal repo attach --workspace <workspace> --repository <library-id>
   daedal repo sync <attachment-id>
+  daedal repo fetch <attachment-id>
   daedal repo detach <attachment-id>
-  daedal repo worktree create --session <agent-id> --repository <name-or-id>`,
+  daedal repo worktree create --session <agent-id> --repository <name-or-id>
+  daedal repo worktree list [--workspace <workspace>] [--session <agent-id>]
+  daedal repo worktree push --session <agent-id> --repository <name-or-id>
+  daedal repo worktree remove --session <agent-id> --repository <name-or-id> [--force]`,
   agent: `Agent commands:
   daedal agent models <codex|claude>
   daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>]
@@ -1393,9 +1398,33 @@ async function repositoryCommand(
       if (!result.length) console.log("No attached repositories.");
       for (const repository of result)
         console.log(
-          `${repository.name}\t${repository.access}\t${repository.referencePath ?? repository.canonicalPath}`,
+          `${repository.name}\t${repository.status}\t${repository.access}\t${repository.referencePath ?? repository.statusError ?? repository.canonicalPath}`,
         );
     });
+    return 0;
+  }
+  if (action === "add") {
+    const parsed = parseArguments(args, ["workspace", "name"]);
+    expectPositionals(
+      parsed.positionals,
+      1,
+      "daedal repo add --workspace <workspace> <url-or-absolute-path> [--name <name>]",
+    );
+    // Deliberately synchronous, unlike the app. A preparation lives only as
+    // long as the process running it, so a one-shot command that returned
+    // early would exit and leave its own clone to be reconciled as
+    // interrupted — and a script that adds a repository wants to use it on the
+    // next line anyway.
+    const result = await context.workspaceContent.addAndAttachRepository({
+      workspace: required(parsed.values.workspace, "--workspace"),
+      remoteUrl: parsed.positionals[0]!,
+      name: parsed.values.name,
+    });
+    printResult(result, json, () =>
+      console.log(
+        `Added and attached repository ${result.name} (${result.id}) at ${result.referencePath}`,
+      ),
+    );
     return 0;
   }
   if (action === "attach") {
@@ -1440,7 +1469,7 @@ async function repositoryCommand(
       1,
       "daedal repo detach <attachment-id>",
     );
-    const result = context.workspaceContent.detachRepository(
+    const result = await context.workspaceContent.detachRepository(
       parsed.positionals[0]!,
     );
     printResult(result, json, () =>
@@ -1448,12 +1477,88 @@ async function repositoryCommand(
     );
     return 0;
   }
+  if (action === "fetch") {
+    const parsed = parseArguments(args, []);
+    expectPositionals(
+      parsed.positionals,
+      1,
+      "daedal repo fetch <attachment-id>",
+    );
+    const result = await context.workspaceContent.fetchRepository(
+      parsed.positionals[0]!,
+    );
+    printResult(result, json, () =>
+      console.log(
+        `Fetched ${result.name} · ${result.gitStatus?.state ?? "unavailable"}`,
+      ),
+    );
+    return 0;
+  }
   if (action === "worktree") {
     const worktreeAction = args.shift();
+    if (worktreeAction === "list") {
+      const parsed = parseArguments(args, ["workspace", "session"]);
+      expectPositionals(
+        parsed.positionals,
+        0,
+        "daedal repo worktree list [--workspace <workspace>] [--session <agent-id>]",
+      );
+      const workspace = parsed.values.workspace
+        ? (await context.workspaces.get(parsed.values.workspace)).id
+        : undefined;
+      const result = context.repositories.listSessionWorktrees({
+        workspaceId: workspace,
+        sessionId: parsed.values.session,
+      });
+      printResult(result, json, () => {
+        for (const worktree of result)
+          console.log(
+            `${worktree.sessionId}\t${worktree.branchName}\t${worktree.path}`,
+          );
+      });
+      return 0;
+    }
+    if (worktreeAction === "remove") {
+      const parsed = parseArguments(args, ["session", "repository"], ["force"]);
+      expectPositionals(
+        parsed.positionals,
+        0,
+        "daedal repo worktree remove --session <agent-id> --repository <name-or-id> [--force]",
+      );
+      const result = await context.workspaceContent.removeSessionWorktree({
+        session: required(parsed.values.session, "--session"),
+        repository: required(parsed.values.repository, "--repository"),
+        force: parsed.flags.has("force"),
+      });
+      printResult(result, json, () =>
+        console.log(`Removed working tree ${result.path}`),
+      );
+      return 0;
+    }
+    if (worktreeAction === "push") {
+      const parsed = parseArguments(args, ["session", "repository"]);
+      expectPositionals(
+        parsed.positionals,
+        0,
+        "daedal repo worktree push --session <agent-id> --repository <name-or-id>",
+      );
+      const result = await context.workspaceContent.pushSessionWorktree({
+        session: required(parsed.values.session, "--session"),
+        repository: required(parsed.values.repository, "--repository"),
+      });
+      printResult(result, json, () =>
+        console.log(
+          result.alreadyUpToDate
+            ? `${result.worktree.branchName} was already up to date on origin`
+            : `Pushed ${result.worktree.branchName} to origin`,
+        ),
+      );
+      return 0;
+    }
     if (worktreeAction !== "create")
       throw new DaedalusError(
         "VALIDATION",
-        "Usage: daedal repo worktree create --session <agent-id> --repository <name-or-id>",
+        "Usage: daedal repo worktree <create|list|push|remove> ...",
       );
     const parsed = parseArguments(args, ["session", "repository"]);
     expectPositionals(

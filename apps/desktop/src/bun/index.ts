@@ -67,6 +67,10 @@ const context = await createApplicationContext({
       ...(subtitle ? { subtitle } : {}),
       body,
     }),
+  // A repository finishes cloning outside any request, so the window is told
+  // the same way an external change tells it: otherwise the row would sit at
+  // "preparing" until something unrelated refreshed it.
+  onRepositoriesChanged: () => announce("external"),
 });
 const cliEntrypoint = resolve(PATHS.RESOURCES_FOLDER, "app/cli/daedal.js");
 const bunExecutable = findExecutable("bun", standardExecutableFallbacks("bun"));

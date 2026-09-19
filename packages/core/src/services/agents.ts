@@ -832,6 +832,11 @@ export class AgentService {
     }
     const archived = { ...agent, archivedAt: new Date().toISOString() };
     this.repositories.updateAgent(archived);
+    // Working trees used to outlive every session that ever held one, which is
+    // what made a repository permanently undetachable. Only trees that
+    // provably hold nothing are cleared; anything with uncommitted or unpushed
+    // work is left exactly where it is.
+    await this.workspaceContent.releaseSessionWorktrees(id);
     this.onSessionEnded(id);
     return archived;
   }

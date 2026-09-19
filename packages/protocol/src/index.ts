@@ -89,6 +89,8 @@ export interface RepositoryDiscoveryDto {
   error?: string;
 }
 
+export type WorkspaceRepositoryStatus = "ready" | "preparing" | "failed";
+
 export interface WorkspaceRepositoryDto {
   id: string;
   workspaceId: string;
@@ -101,13 +103,16 @@ export interface WorkspaceRepositoryDto {
   baseCommit: string | null;
   fetchedAt: string | null;
   createdAt: string;
-  gitStatus?: {
-    state:
-      "clean" | "modified" | "ahead" | "behind" | "diverged" | "unavailable";
-    changedFiles: number;
-    ahead: number;
-    behind: number;
-  };
+  status: WorkspaceRepositoryStatus;
+  statusError: string | null;
+  gitStatus?: GitStatusDto;
+}
+
+export interface GitStatusDto {
+  state: "clean" | "modified" | "ahead" | "behind" | "diverged" | "unavailable";
+  changedFiles: number;
+  ahead: number;
+  behind: number;
 }
 
 export interface SessionWorktreeDto {
@@ -116,6 +121,7 @@ export interface SessionWorktreeDto {
   path: string;
   branchName: string;
   createdAt: string;
+  gitStatus?: GitStatusDto;
 }
 
 export interface WorkspaceContentDto {
@@ -386,7 +392,48 @@ export interface DesktopRpcSchema {
         },
         WorkspaceRepositoryDto
       >;
+      /**
+       * Attaches without waiting for the clone: the row comes back
+       * `preparing` and becomes `ready` or `failed` on its own.
+       */
+      repositoryAddAndAttachStart: Request<
+        {
+          workspace: string;
+          remoteUrl: string;
+          name?: string;
+          githubNameWithOwner?: string;
+        },
+        WorkspaceRepositoryDto
+      >;
+      /**
+       * Cloning and attaching in one call. Two calls meant the attach half
+       * re-fetched the clone the add half had just made.
+       */
+      repositoryAddAndAttach: Request<
+        {
+          workspace: string;
+          remoteUrl: string;
+          name?: string;
+          githubNameWithOwner?: string;
+        },
+        WorkspaceRepositoryDto
+      >;
       workspaceRepositorySync: Request<{ id: string }, WorkspaceRepositoryDto>;
+      /** Updates the shared clone only; no working tree is touched. */
+      workspaceRepositoryFetch: Request<{ id: string }, WorkspaceRepositoryDto>;
+      /**
+       * Removing a working tree destroys whatever is only in it, so without
+       * `force` it succeeds only when nothing can be lost.
+       */
+      sessionWorktreeRemove: Request<
+        { session: string; repository: string; force?: boolean },
+        SessionWorktreeDto
+      >;
+      /** Publishes an agent's branch. Never implicit: only this call pushes. */
+      sessionWorktreePush: Request<
+        { session: string; repository: string },
+        { worktree: SessionWorktreeDto; alreadyUpToDate: boolean }
+      >;
       repositoryLibraryAdd: Request<
         {
           remoteUrl: string;
@@ -467,7 +514,7 @@ export interface DesktopRpcSchema {
       agentArchive: Request<{ id: string; force?: boolean }, AgentSessionDto>;
       agentRestore: Request<{ id: string }, AgentSessionDto>;
       terminalCreate: Request<
-        { workspace?: string; name?: string },
+        { workspace?: string; name?: string; workingDirectory?: string },
         IntegratedTerminalDto
       >;
       terminalClose: Request<{ id: string }, IntegratedTerminalDto>;

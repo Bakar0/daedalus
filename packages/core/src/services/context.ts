@@ -45,6 +45,8 @@ export interface ApplicationContextOptions {
   env?: NodeJS.ProcessEnv;
   tmux?: TmuxClient;
   reconcile?: boolean;
+  /** Notified when a background repository preparation settles. */
+  onRepositoriesChanged?: () => void;
   /**
    * Set by the desktop host, which is the only adapter with a window to draw a
    * toast in. Everywhere else a toast has to wait in the queue.
@@ -103,6 +105,7 @@ export async function createApplicationContext(
     repositories,
     workspaces,
     config,
+    () => options.onRepositoriesChanged?.(),
   );
   agents = new AgentService(
     repositories,
@@ -137,6 +140,9 @@ export async function createApplicationContext(
     ...(options.now ? { now: options.now } : {}),
   });
   if (options.reconcile !== false) {
+    // A clone only lives as long as the process running it, so anything still
+    // marked as preparing belongs to a run that is over.
+    workspaceContent.reconcilePreparations();
     await Promise.all([agents.reconcile(), terminals.reconcile()]);
     // Reconcile has just settled which sessions are still live, so the replay
     // knows which records to restore and which to discard. Decay runs after,

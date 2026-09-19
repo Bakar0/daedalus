@@ -303,6 +303,37 @@ export function createDesktopRequestHandlers(
           await context.workspaceContent.attachRepository(params),
         ),
       ),
+    workspaceRepositoryFetch: ({ id }) =>
+      mutate(async () =>
+        workspaceRepositoryDto(
+          await context.workspaceContent.fetchRepository(id),
+        ),
+      ),
+    sessionWorktreeRemove: (params) =>
+      mutate(async () => ({
+        ...(await context.workspaceContent.removeSessionWorktree(params)),
+      })),
+    sessionWorktreePush: (params) =>
+      mutate(async () => {
+        const pushed =
+          await context.workspaceContent.pushSessionWorktree(params);
+        return {
+          worktree: { ...pushed.worktree },
+          alreadyUpToDate: pushed.alreadyUpToDate,
+        };
+      }),
+    repositoryAddAndAttachStart: (params) =>
+      mutate(async () =>
+        workspaceRepositoryDto(
+          await context.workspaceContent.beginAddAndAttachRepository(params),
+        ),
+      ),
+    repositoryAddAndAttach: (params) =>
+      mutate(async () =>
+        workspaceRepositoryDto(
+          await context.workspaceContent.addAndAttachRepository(params),
+        ),
+      ),
     workspaceRepositorySync: ({ id }) =>
       mutate(async () =>
         workspaceRepositoryDto(
@@ -318,8 +349,10 @@ export function createDesktopRequestHandlers(
     repositoryDiscovery: () =>
       result(() => context.workspaceContent.discoverGitHubRepositories()),
     workspaceRepositoryDetach: ({ id }) =>
-      mutate(() =>
-        workspaceRepositoryDto(context.workspaceContent.detachRepository(id)),
+      mutate(async () =>
+        workspaceRepositoryDto(
+          await context.workspaceContent.detachRepository(id),
+        ),
       ),
     workspaceJournalAppend: (params) =>
       mutate(async () => {

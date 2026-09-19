@@ -183,14 +183,18 @@ describe("desktop application shell", () => {
     expect(preferredWorkspaceView("sessions")).toBe("sessions");
     expect(preferredWorkspaceView("workspace")).toBe("workspace");
     expect(preferredWorkspaceView("board")).toBe("board");
-    expect(preferredWorkspaceView("retired-mode")).toBe("board");
-    expect(preferredWorkspaceView(null)).toBe("board");
-    expect(preferredWorkspaceView()).toBe("board");
+    expect(preferredWorkspaceView("retired-mode")).toBe("workspace");
+    expect(preferredWorkspaceView(null)).toBe("workspace");
+    expect(preferredWorkspaceView()).toBe("workspace");
   });
 
   test("renders Board, Sessions, and Workspace as complete workspace modes", () => {
     const html = renderToStaticMarkup(
-      <App injectedClient={client} initialSnapshot={base} />,
+      <App
+        injectedClient={client}
+        initialSnapshot={base}
+        initialWorkspaceView="board"
+      />,
     );
     expect(html).toContain("Workspaces");
     expect(html).toContain("Board");
@@ -326,7 +330,14 @@ describe("desktop application shell", () => {
     expect(html).toContain("All repositories");
     expect(html).toContain("Local");
     expect(html).toContain("git@github.com:example/daedalus.git");
-    expect(html).toContain('role="checkbox"');
+    // Real checkboxes inside the form, not buttons wearing a checkbox role:
+    // that is what makes Space toggle and Enter submit without either being
+    // scripted, so the markup is what the test pins.
+    expect(html).toContain('type="checkbox"');
+    expect(html).toContain('data-repository-option="true"');
+    expect(html).not.toContain('role="checkbox"');
+    // Enter has to reach a submit button for implicit submission to happen.
+    expect(html).toContain('type="submit"');
     expect(html).toContain(
       'aria-label="Search repositories or enter a Git URL or absolute local repository path"',
     );
@@ -334,6 +345,46 @@ describe("desktop application shell", () => {
     expect(html).toContain("Add selected");
     expect(html).not.toContain("Planning + work");
     expect(html).not.toContain("Planning only");
+  });
+
+  test("a workspace with no repositories is told what to do about it", () => {
+    const snapshot: DesktopSnapshotDto = {
+      ...base,
+      workspaces: [
+        {
+          id: "w1",
+          slug: "demo",
+          name: "Demo",
+          path: "/tmp/demo",
+          createdAt: "now",
+          updatedAt: "now",
+          archivedAt: null,
+          available: true,
+          position: 1,
+        },
+      ],
+    };
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialSnapshot={snapshot}
+        initialWorkspaceView="workspace"
+        initialWorkspaceContent={{
+          workspaceId: "w1",
+          brief: "# Objective",
+          journal: "# Journal",
+          files: [{ name: "BRIEF.md", path: "BRIEF.md", kind: "file" }],
+          repositories: [],
+          worktrees: [],
+        }}
+      />,
+    );
+    // An instruction, not a shrug: the empty state names the next action and
+    // carries a control that performs it.
+    expect(html).toContain("No repositories yet");
+    expect(html).toContain("workspace-repository-invite");
+    expect(html).toContain("Add a repository");
+    expect(html).not.toContain("workspace-repository-group");
   });
 
   test("renders workspace files, context, repositories, and worktrees", () => {
@@ -380,6 +431,8 @@ describe("desktop application shell", () => {
               baseCommit: "1234567890abcdef1234567890abcdef12345678",
               fetchedAt: "now",
               createdAt: "now",
+              status: "ready" as const,
+              statusError: null,
               gitStatus: {
                 state: "behind",
                 changedFiles: 0,
@@ -412,10 +465,15 @@ describe("desktop application shell", () => {
     expect(html).toContain("Repositories");
     expect(html).toContain("main ·");
     expect(html).toContain("↓2 behind");
-    expect(html).toContain('aria-label="Fetch and update daedalus"');
-    expect(html).toContain("Working trees");
-    expect(html).toContain("session-");
+    expect(html).toContain('aria-label="Fetch daedalus"');
+    expect(html).toContain('aria-label="Pull daedalus"');
     expect(html).toContain('aria-label="Add repository"');
+    // The working tree is nested under the repository it was cut from, and
+    // carries the branch it is on rather than only the session's name.
+    expect(html).toContain("workspace-repository-group");
+    expect(html).toContain("workspace-worktree-row");
+    expect(html).toContain("daedalus/demo/task/session");
+    expect(html).toContain('aria-label="Push daedalus/demo/task/session"');
   });
 
   test("renders workspace, task, and session lifecycle state", () => {
@@ -502,6 +560,7 @@ describe("desktop application shell", () => {
         injectedClient={client}
         initialSelectedTaskId="t1"
         initialSnapshot={snapshot}
+        initialWorkspaceView="board"
       />,
     );
     expect(html).toContain("Demo");
@@ -907,6 +966,7 @@ describe("desktop application shell", () => {
         initialActiveTerminalId={terminalId}
         initialSnapshot={snapshot}
         initialTerminalPanelOpen
+        initialWorkspaceView="board"
       />,
     );
     expect(html).toContain('aria-label="Integrated terminal"');
