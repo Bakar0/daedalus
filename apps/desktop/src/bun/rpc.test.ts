@@ -32,6 +32,11 @@ class FakeTmux implements TmuxClient {
   async stop(session: string) {
     this.sessions.delete(session);
   }
+  async killServer() {
+    const running = this.sessions.size > 0;
+    this.sessions.clear();
+    return running;
+  }
 }
 
 describe("desktop RPC handlers", () => {
@@ -263,6 +268,45 @@ describe("desktop RPC handlers", () => {
         expect(journal.ok && journal.data.journal).toContain(
           "Developer input is required.",
         );
+      } finally {
+        context.close();
+      }
+    });
+  });
+
+  test("carries the quit dialog's two answers to the host", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const context = await createApplicationContext({
+        env: { ...process.env, DAEDALUS_HOME: home },
+        tmux: new FakeTmux(),
+      });
+      const decisions: string[] = [];
+      let shown = 0;
+      const rpc = createDesktopRequestHandlers(
+        context,
+        () => {},
+        () => false,
+        "",
+        {
+          dialogShown: () => {
+            shown += 1;
+          },
+          decide: async (choice) => {
+            decisions.push(choice);
+          },
+        },
+      );
+      try {
+        expect(await rpc.quitDialogShown({})).toEqual({
+          ok: true,
+          data: { acknowledged: true },
+        });
+        expect(shown).toBe(1);
+        expect(await rpc.quitDecision({ choice: "shutdown" })).toEqual({
+          ok: true,
+          data: { accepted: true },
+        });
+        expect(decisions).toEqual(["shutdown"]);
       } finally {
         context.close();
       }

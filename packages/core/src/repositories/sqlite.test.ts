@@ -55,6 +55,7 @@ describe("SqliteRepositories", () => {
         archivedAt: null,
         resumeCount: 0,
         lostReason: null,
+        resumeOnStart: false,
         position: 1,
       });
       repositories.createIntegratedTerminal({

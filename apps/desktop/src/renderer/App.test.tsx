@@ -16,6 +16,7 @@ import {
   pendingSessionLaunches,
   preferredSessionId,
   preferredWorkspaceView,
+  quitDisclosure,
   type SessionLaunchState,
   shouldFocusSession,
   TERMINAL_FONT_SIZE,
@@ -56,6 +57,34 @@ const base: DesktopSnapshotDto = {
     ],
   },
 };
+
+describe("quit disclosure", () => {
+  const session = (id: string) => ({
+    id,
+    name: id,
+    workspaceId: "workspace-1",
+    provider: "claude" as const,
+    disposition: "archive" as const,
+  });
+
+  test("names what keeps running, in the right number", () => {
+    expect(
+      quitDisclosure({
+        sessions: [session("a"), session("b")],
+        terminals: [{ id: "t", name: "Terminal" }],
+      }),
+    ).toBe("2 sessions and 1 terminal will keep running.");
+    expect(quitDisclosure({ sessions: [session("a")], terminals: [] })).toBe(
+      "1 session will keep running.",
+    );
+    expect(
+      quitDisclosure({ sessions: [], terminals: [{ id: "t", name: "T" }] }),
+    ).toBe("1 terminal will keep running.");
+    expect(quitDisclosure({ sessions: [], terminals: [] })).toBe(
+      "Nothing is running.",
+    );
+  });
+});
 
 describe("desktop application shell", () => {
   test("maps Shift+Enter to the portable agent multiline sequence", () => {

@@ -113,4 +113,37 @@ describe("CommandTmuxClient", () => {
       { stdin: "inherit", stdout: "inherit", stderr: "inherit" },
     );
   });
+
+  test("ends only its own server, and reads an absent one as success", async () => {
+    const stopped = vi.fn(async () => ({
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    }));
+    const tmux = new CommandTmuxClient("isolated", "tmux", stopped);
+    await expect(tmux.killServer()).resolves.toBe(true);
+    // `-L` is the whole safety story: this must never reach the user's own
+    // tmux server, only the socket Daedalus keys to its home.
+    expect(stopped).toHaveBeenCalledWith("tmux", [
+      "-L",
+      "isolated",
+      "kill-server",
+    ]);
+
+    // Nothing to stop is the goal state reached sooner, not a failure: tmux
+    // exits on its own once the last session in it ends.
+    const absent = new CommandTmuxClient("isolated", "tmux", async () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "no server running on /tmp/tmux-501/isolated",
+    }));
+    await expect(absent.killServer()).resolves.toBe(false);
+
+    const broken = new CommandTmuxClient("isolated", "tmux", async () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "permission denied",
+    }));
+    await expect(broken.killServer()).rejects.toThrow("permission denied");
+  });
 });

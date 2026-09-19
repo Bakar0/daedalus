@@ -174,6 +174,31 @@ export interface ProviderModelCatalogDto {
   source: "provider" | "aliases";
 }
 
+/**
+ * What the user chose on the way out. `keep` leaves every session running and
+ * is what reopening reconnects to; `shutdown` is the real close, ending them
+ * and the tmux server with them; `cancel` leaves the app open.
+ */
+export type QuitChoice = "keep" | "shutdown" | "cancel";
+
+export interface ShutdownSessionTargetDto {
+  id: string;
+  name: string;
+  workspaceId: string;
+  provider: AgentProviderName;
+  /** `stop` means this session has no conversation to preserve. */
+  disposition: "archive" | "stop";
+}
+
+/**
+ * What quitting would leave running, so the dialog can name it rather than
+ * make the user count cards.
+ */
+export interface ShutdownPlanDto {
+  sessions: ShutdownSessionTargetDto[];
+  terminals: { id: string; name: string }[];
+}
+
 export interface DesktopSettingsDto {
   /** The running build, so "did my update install?" is answerable in the app. */
   version: string;
@@ -379,6 +404,15 @@ export interface DesktopRpcSchema {
       >;
       focusModeSet: Request<{ enabled: boolean }, { enabled: boolean }>;
       /**
+       * Acknowledges that the quit dialog is on screen. The host quits on its
+       * own if this never arrives, so a renderer that cannot draw the dialog
+       * degrades to today's keep-everything-running quit rather than to a
+       * Cmd+Q that does nothing.
+       */
+      quitDialogShown: Request<Record<string, never>, { acknowledged: true }>;
+      /** The user's answer. `cancel` is the only one that does not quit. */
+      quitDecision: Request<{ choice: QuitChoice }, { accepted: true }>;
+      /**
        * Published by the renderer whenever the user moves, so notifications
        * can route on where the user actually is rather than merely being
        * suppressed when the window has focus.
@@ -558,9 +592,23 @@ export interface DesktopRpcSchema {
        * Without the deep link people learn to ignore notifications.
        */
       focusSession: { sessionId: string };
+      /**
+       * Quit was requested while something was still live. The renderer draws
+       * the dialog and answers with `quitDecision`; the host has already
+       * decided that asking is the right thing to do.
+       */
+      quitRequested: { plan: ShutdownPlanDto };
     };
   };
 }
+
+/**
+ * Menu actions the host handles itself rather than forwarding to the window.
+ * `{ role: "quit" }` is a native macOS role that never reaches our code, so
+ * the quit item carries an action instead.
+ */
+export const QUIT_MENU_ACTION = "quit-requested";
+export const SHUTDOWN_MENU_ACTION = "quit-and-shut-down";
 
 export const DESKTOP_COMMANDS = [
   "view-board",

@@ -197,6 +197,7 @@ const help = `daedal ${VERSION} — local-first control plane for coding agents
 
 Usage:
   daedal doctor [--json]
+  daedal shutdown [--dry-run] [--keep-terminals] [--force] [--json]
   daedal workspace <create|list|get|update|archive|restore|remove> ... [--json]
   daedal task <create|list|get|current|update|status|remove> ... [--json]
   daedal repo <library|list|add|attach|sync|fetch|detach|worktree> ... [--json]
@@ -293,6 +294,24 @@ session is blocked and the alert has to persist.`,
 
 Raises the Daedalus window and selects that session. This is what a clicked
 notification runs, and it works whether or not the app is already open.`,
+  shutdown: `Shutdown command:
+  daedal shutdown [--dry-run] [--keep-terminals] [--force] [--json]
+
+The off switch. Archives every live agent session, closes every integrated
+terminal, then ends the Daedalus tmux server on this home's socket.
+
+Sessions otherwise outlive both the app and the shell that started them, by
+design — this is the one command that ends them.
+
+  --dry-run          Print what would be stopped and change nothing.
+  --keep-terminals   Leave the integrated terminals open. The tmux server is
+                     where they live, so it is left running too.
+  --force            Run even while the Daedalus desktop app is open. Without
+                     it the command refuses, because the app's poll would
+                     otherwise race the teardown.
+
+Sessions whose provider has no native resume are stopped rather than archived,
+and reported separately. One session failing never aborts the rest.`,
   ui: `Presence command:
   daedal ui state [--json]
 
@@ -1641,6 +1660,97 @@ async function repositoryCommand(
   );
 }
 
+/**
+ * Ends everything: every live agent session archived, every integrated
+ * terminal closed, then the tmux server itself.
+ *
+ * Quitting the app deliberately does none of this — the app does not own the
+ * tmux server, and killing it from a GUI quit would take sessions the CLI
+ * started with it. That makes this the only place the server is ever stopped,
+ * and the reason it is a top-level command rather than an `agent` subcommand.
+ */
+async function shutdownCommand(
+  context: ApplicationContext,
+  args: string[],
+  json: boolean,
+): Promise<number> {
+  const parsed = parseArguments(
+    args,
+    [],
+    ["dry-run", "keep-terminals", "force"],
+  );
+  expectPositionals(
+    parsed.positionals,
+    0,
+    "daedal shutdown [--dry-run] [--keep-terminals] [--force] [--json]",
+  );
+  const keepTerminals = parsed.flags.has("keep-terminals");
+  // The app polls tmux roughly every second and reconciles what it finds. A
+  // teardown running underneath that races it: sessions this command archives
+  // can be re-observed mid-flight, and the app would be left drawing a board
+  // that no longer exists.
+  if (!parsed.flags.has("force")) {
+    const presence = await context.presence.read();
+    if (presence.appRunning)
+      throw new DaedalusError(
+        "CONFLICT",
+        "The Daedalus desktop app is running. Quit it first (its Daedalus menu has 'Quit and Shut Down Sessions'), or pass --force.",
+      );
+  }
+  if (parsed.flags.has("dry-run")) {
+    const plan = await context.shutdown.plan();
+    const data = {
+      dryRun: true as const,
+      sessions: plan.sessions,
+      terminals: keepTerminals ? [] : plan.terminals,
+      stopsServer: !keepTerminals,
+    };
+    printResult(data, json, () => {
+      if (!data.sessions.length && !data.terminals.length)
+        console.log("Nothing is running.");
+      for (const session of data.sessions)
+        console.log(
+          `${session.disposition}\t${session.provider}\t${session.name}\t${session.id}`,
+        );
+      for (const terminal of data.terminals)
+        console.log(`close\tterminal\t${terminal.name}\t${terminal.id}`);
+      console.log(
+        data.stopsServer
+          ? "Would then end the Daedalus tmux server."
+          : "Would leave the Daedalus tmux server running.",
+      );
+    });
+    return 0;
+  }
+  const result = await context.shutdown.run({
+    keepTerminals,
+    stopServer: !keepTerminals,
+  });
+  const failed = result.sessions.filter((item) => item.outcome === "failed");
+  printResult(result, json, () => {
+    if (!result.sessions.length && !result.terminals.length)
+      console.log("Nothing was running.");
+    for (const session of result.sessions)
+      console.log(
+        `${session.outcome}\t${session.provider}\t${session.name}${session.reason ? `\t${session.reason}` : ""}`,
+      );
+    for (const terminal of result.terminals)
+      console.log(
+        `${terminal.closed ? "closed" : "failed"}\tterminal\t${terminal.name}${terminal.reason ? `\t${terminal.reason}` : ""}`,
+      );
+    // The state, not the act: tmux exits on its own once its last session
+    // ends, so a sweep that stopped everything often finds nothing left to
+    // kill — and "no server is running" is what was actually asked for.
+    if (result.serverError)
+      console.log(`tmux server could not be stopped: ${result.serverError}`);
+    else if (result.serverStopped)
+      console.log("No Daedalus tmux server is running.");
+  });
+  // A partial sweep is still a real outcome, so the per-session report above
+  // is printed either way; the exit code is what tells a script about it.
+  return failed.length > 0 || result.serverError ? 4 : 0;
+}
+
 export async function runCli(
   inputArgs: string[],
   options: { migrationsDirectory?: string } = {},
@@ -1681,6 +1791,7 @@ export async function runCli(
       "notify",
       "ui",
       "focus",
+      "shutdown",
     ].includes(args[0]!)
   )
     throw new DaedalusError("VALIDATION", `Unknown command '${args[0]}'`);
@@ -1701,6 +1812,8 @@ export async function runCli(
     if (args[0] === "ui") return await uiCommand(context, args.slice(1), json);
     if (args[0] === "focus")
       return await focusCommand(context, args.slice(1), json);
+    if (args[0] === "shutdown")
+      return await shutdownCommand(context, args.slice(1), json);
     return await agentCommand(context, args.slice(1), json);
   } finally {
     context.close();

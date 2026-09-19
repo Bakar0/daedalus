@@ -1,4 +1,5 @@
 import type { ApplicationMenuItemConfig } from "electrobun/bun";
+import { QUIT_MENU_ACTION, SHUTDOWN_MENU_ACTION } from "@daedalus/protocol";
 
 export const APPLICATION_MENU: ApplicationMenuItemConfig[] = [
   {
@@ -10,7 +11,22 @@ export const APPLICATION_MENU: ApplicationMenuItemConfig[] = [
       { role: "hideOthers" },
       { role: "showAll" },
       { type: "divider" },
-      { role: "quit" },
+      // The discoverable off switch, for people who never open a terminal.
+      // It archives every live session, closes the terminals and ends the
+      // Daedalus tmux server, which is exactly `daedal shutdown`.
+      {
+        label: "Quit and Shut Down Sessions",
+        action: SHUTDOWN_MENU_ACTION,
+        accelerator: "Command+Shift+Q",
+      },
+      // Deliberately not `{ role: "quit" }`. That is a native macOS role, so
+      // Cmd+Q would terminate the app without ever reaching our code and the
+      // user would never be told what keeps running.
+      {
+        label: "Quit Daedalus",
+        action: QUIT_MENU_ACTION,
+        accelerator: "Command+Q",
+      },
     ],
   },
   {

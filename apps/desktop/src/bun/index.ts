@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import {
+import Electrobun, {
   ApplicationMenu,
   BrowserView,
   BrowserWindow,
@@ -25,9 +25,14 @@ import type {
   DesktopRpcSchema,
   TerminalServerMessage,
 } from "@daedalus/protocol";
-import { isDesktopCommand } from "@daedalus/protocol";
+import {
+  isDesktopCommand,
+  QUIT_MENU_ACTION,
+  SHUTDOWN_MENU_ACTION,
+} from "@daedalus/protocol";
 import { APPLICATION_MENU } from "./menu";
 import { installCliShim } from "./cli-shim";
+import { QuitController } from "./quit";
 import { createDesktopRequestHandlers, desktopDataFingerprint } from "./rpc";
 import { authorizeTerminalRequest, TerminalConnection } from "./terminal";
 
@@ -92,6 +97,26 @@ const revivedSessions = await context.agents
 const revivedTerminals = await context.terminals
   .reviveLost({ automatic: true })
   .catch(() => []);
+// What "Quit and stop sessions" put away, brought back. Deliberately not the
+// same sweep as the one above: that one recovers sessions the OS killed and
+// left `lost`, this one reopens ones Daedalus archived on purpose and promised
+// to return to. A session archived by hand carries no flag and is left alone.
+const resumedSessions = await context.agents
+  .resumeMarkedSessions()
+  .catch((error: unknown) => {
+    void context.logger.write("error", "session_resume_sweep_failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  });
+if (
+  resumedSessions &&
+  (resumedSessions.resumed.length || resumedSessions.skipped.length)
+)
+  await context.logger.write("info", "session_resume_sweep", {
+    resumed: resumedSessions.resumed.length,
+    skipped: resumedSessions.skipped,
+  });
 if (revivedSessions)
   await context.logger.write("info", "session_revive_sweep", {
     revived: revivedSessions.revived.length,
@@ -245,42 +270,156 @@ async function recordAttentionCount(count: number): Promise<void> {
 
 function announce(source: "desktop" | "external"): void {
   fingerprint = desktopDataFingerprint(context);
-  rpc.send.dataChanged({ revision: ++revision, source });
+  // There is no window between closing one and reopening from the Dock, and
+  // a repository finishing its clone in that gap must not throw.
+  if (windowOpen) rpc.send.dataChanged({ revision: ++revision, source });
 }
 
-const rpc = BrowserView.defineRPC<DesktopRpcSchema>({
-  // Initial repository clones and fetches can legitimately take several
-  // minutes for large histories or slower remotes.
-  maxRequestTime: 10 * 60_000,
-  handlers: {
-    requests: createDesktopRequestHandlers(
-      context,
-      () => announce("desktop"),
-      Utils.openExternal,
-      terminalEndpoint,
-    ),
-  },
+/**
+ * Quitting Daedalus has never stopped anything, and that is deliberate: the
+ * app does not own the tmux server. `daedal agent spawn` works with the window
+ * never opened, so a GUI quit that killed the server would kill sessions the
+ * CLI started, and an agent mid-turn would lose the turn.
+ *
+ * What was wrong was the silence. The controller states it instead, and the
+ * "Quit and Shut Down Sessions" menu item is the honest way to end everything.
+ */
+const quitController = new QuitController({
+  plan: () => context.shutdown.plan(),
+  runShutdown: (options) => context.shutdown.run(options),
+  askWindow: (plan) => rpc.send.quitRequested({ plan }),
+  // The heartbeat goes first for the same reason the signal handlers retire
+  // it: one that outlived the app would absorb every alert into a window that
+  // is not there.
+  quit: () => void context.presence.retire().finally(() => Utils.quit()),
+  log: (event, fields) => void context.logger.write("info", event, fields),
 });
+
+const createRpc = () =>
+  BrowserView.defineRPC<DesktopRpcSchema>({
+    // Initial repository clones and fetches can legitimately take several
+    // minutes for large histories or slower remotes.
+    maxRequestTime: 10 * 60_000,
+    handlers: {
+      requests: createDesktopRequestHandlers(
+        context,
+        () => announce("desktop"),
+        Utils.openExternal,
+        terminalEndpoint,
+        {
+          dialogShown: () => quitController.dialogShown(),
+          decide: (choice) => quitController.decide(choice),
+        },
+      ),
+    },
+  });
+
+// Both are replaced wholesale every time a window is opened: an RPC instance
+// is bound to the webview it was created for, so a reopened window needs its
+// own. Everything that sends to the window reads these bindings at call time
+// rather than capturing them.
+let rpc!: ReturnType<typeof createRpc>;
+let mainWindow!: BrowserWindow<ReturnType<typeof createRpc>>;
+let windowOpen = false;
 
 ApplicationMenu.on("application-menu-clicked", (rawEvent) => {
   const event = rawEvent as { data?: { action?: unknown } };
   const command = event.data?.action;
+  // Logged for every action, not just the quit ones: an accelerator that the
+  // native menu never registered is indistinguishable from a key that did
+  // nothing, and this is the only place that can tell them apart.
+  void context.logger.write("info", "menu_action", {
+    action: typeof command === "string" ? command : String(command),
+  });
+  if (command === QUIT_MENU_ACTION) {
+    void quitController.requestQuit();
+    return;
+  }
+  if (command === SHUTDOWN_MENU_ACTION) {
+    void quitController.requestShutdownAndQuit();
+    return;
+  }
   if (isDesktopCommand(command))
     rpc.send.command({ command: command satisfies DesktopCommand });
 });
 
-const mainWindow = new BrowserWindow({
-  title: "Daedalus",
-  url: rendererUrl,
-  rpc,
-  frame: { width: 1380, height: 820, x: 80, y: 80 },
-  hidden: Boolean(nativeStatusProbePath),
-  activate: !nativeStatusProbePath,
+/**
+ * Every `Utils.quit()` passes through `before-quit`, which makes it the one
+ * place that can say which exit actually fired. It only records that.
+ *
+ * It deliberately does not *deny* a quit it did not initiate, though the event
+ * allows it. Two things make that unacceptable. Electrobun routes `process.exit`
+ * through `quit()`, so denying turns the SIGTERM handler below into a no-op and
+ * leaves an app that survives `pkill`, a logout and a system shutdown — which
+ * is strictly worse than the silence this feature set out to fix. And the
+ * self-updater quits to restart, the one case where surviving is the point;
+ * hijacking it into a dialog would break updates.
+ *
+ * Nothing is lost by only logging. Closing the window no longer quits, so
+ * Cmd+Q is the quit, and it is already routed through the controller.
+ */
+Electrobun.events.on("before-quit", () => {
+  void context.logger.write("info", "before_quit", {
+    ours: quitController.state === "quitting",
+    windowOpen,
+  });
 });
 
-// The hidden probe window is not a place a toast could be seen, so it never
-// claims the channel.
-windowReady = !nativeStatusProbePath;
+/**
+ * Closing the window closes the window. The app keeps running, which is what
+ * every macOS app does — `applicationShouldTerminateAfterLastWindowClosed`
+ * defaults to NO — and is now also what makes the quit dialog reachable at
+ * all: Cmd+Q is the only exit, and it always has a surface to ask on.
+ *
+ * Electrobun's default is the opposite, and it was the hole in this feature.
+ * The red X called `Utils.quit()` directly, so the most ordinary way to put
+ * the app away was the one path that never said a word about what it left
+ * running. The window `close` event is not cancellable and arrives after the
+ * surface is gone, so the fix is not to intercept it but to stop it meaning
+ * "quit". `exitOnLastWindowClosed: false` in electrobun.config.ts is the
+ * other half of this.
+ */
+function openMainWindow(): void {
+  rpc = createRpc();
+  mainWindow = new BrowserWindow({
+    title: "Daedalus",
+    url: rendererUrl,
+    rpc,
+    frame: { width: 1380, height: 820, x: 80, y: 80 },
+    hidden: Boolean(nativeStatusProbePath),
+    activate: !nativeStatusProbePath,
+  });
+  windowOpen = true;
+  // The hidden probe window is not a place a toast could be seen, so it never
+  // claims the channel.
+  windowReady = !nativeStatusProbePath;
+  mainWindow.on("close", () => {
+    windowOpen = false;
+    windowReady = false;
+    void context.logger.write("info", "window_closed", {});
+  });
+  mainWindow.on("resize", (rawEvent) => {
+    const event = rawEvent as {
+      data?: { width?: unknown; height?: unknown };
+    };
+    const { width, height } = event.data ?? {};
+    if (typeof width === "number" && typeof height === "number")
+      rpc.send.windowResized({ width, height });
+  });
+}
+
+// Clicking the Dock icon of a running app with no window is how macOS expects
+// you to get it back, so it has to build a new one rather than merely focus.
+Electrobun.events.on("reopen", () => {
+  void context.logger.write("info", "reopen", { windowOpen });
+  if (windowOpen) {
+    mainWindow.show();
+    return;
+  }
+  openMainWindow();
+});
+
+openMainWindow();
 
 if (nativeStatusProbePath) {
   let probeStarted = false;
@@ -351,15 +490,6 @@ if (nativeStatusProbePath) {
     })();
   });
 }
-mainWindow.on("resize", (rawEvent) => {
-  const event = rawEvent as {
-    data?: { width?: unknown; height?: unknown };
-  };
-  const { width, height } = event.data ?? {};
-  if (typeof width === "number" && typeof height === "number")
-    rpc.send.windowResized({ width, height });
-});
-
 let checkingForExternalChanges = false;
 setInterval(async () => {
   if (checkingForExternalChanges) return;
@@ -428,9 +558,18 @@ setInterval(async () => {
 
 // A heartbeat that outlives the app would absorb every alert into a window
 // that is not there, so it is retired on the way out.
+//
+// These paths deliberately do not stop anything. A signal is a logout, a
+// shutdown or a kill — it arrives with a deadline measured in seconds, and
+// ending a board of sessions under one means being killed halfway through it.
+// They fall through to what quitting does by default: everything keeps
+// running, reachable with `daedal agent list`.
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, () => {
     windowReady = false;
+    void context.logger
+      .write("info", "quit", { reason: signal.toLowerCase() })
+      .catch(() => undefined);
     void context.presence.retire().finally(() => process.exit(0));
   });
 

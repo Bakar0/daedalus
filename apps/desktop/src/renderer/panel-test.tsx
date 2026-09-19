@@ -301,6 +301,7 @@ const client = {
   subscribeCommands: () => () => undefined,
   subscribeWindowResize: () => () => undefined,
   subscribeFocusSession: () => () => undefined,
+  subscribeQuitRequest: () => () => undefined,
 } as unknown as DesktopClient;
 
 createRoot(document.getElementById("root")!).render(

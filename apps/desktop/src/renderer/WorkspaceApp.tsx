@@ -30,9 +30,11 @@ import type {
   ProviderModelCatalogDto,
   SessionTelemetryDto,
   SessionWorktreeDto,
+  QuitChoice,
   RepositoryDiscoveryDto,
   RpcResult,
   SessionAttentionDto,
+  ShutdownPlanDto,
   TaskDto,
   TaskStatus,
   WorkspaceContentDto,
@@ -1021,6 +1023,28 @@ function WorkspaceFileEditor({
   );
 }
 
+const plural = (count: number, noun: string) =>
+  `${count} ${noun}${count === 1 ? "" : "s"}`;
+
+/**
+ * The one sentence the quit dialog says.
+ *
+ * Exported and pure because the sentence is the whole dialog. It confirms and
+ * nothing else — quitting never ends a session, so there is no choice to lay
+ * out, only a count to get right.
+ */
+export function quitDisclosure(plan: ShutdownPlanDto): string {
+  const parts = [
+    ...(plan.sessions.length ? [plural(plan.sessions.length, "session")] : []),
+    ...(plan.terminals.length
+      ? [plural(plan.terminals.length, "terminal")]
+      : []),
+  ];
+  return parts.length
+    ? `${parts.join(" and ")} will keep running.`
+    : "Nothing is running.";
+}
+
 function Modal({
   title,
   onClose,
@@ -1679,6 +1703,10 @@ export function WorkspaceApp({
     "workspace" | "task" | "session" | "repository" | "settings" | undefined
   >(initialModal);
   const [editingTask, setEditingTask] = useState(false);
+  // The quit dialog is driven entirely by the host: it arrives with the plan
+  // already computed, and every button answers back over `quitDecision`.
+  const [quitRequest, setQuitRequest] = useState<ShutdownPlanDto>();
+  const [quitting, setQuitting] = useState<QuitChoice>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [theme, setTheme] = useState<"dark" | "light">("dark");
@@ -2094,6 +2122,21 @@ export function WorkspaceApp({
       }),
     [client, openSession],
   );
+  // Deliberately not routed through Focus mode. This is a direct response to
+  // the user pressing Cmd+Q, not an alert, and suppressing it would leave a
+  // keystroke that silently does nothing.
+  useEffect(
+    () =>
+      client.subscribeQuitRequest?.((plan) => {
+        setQuitting(undefined);
+        setQuitRequest(plan);
+        // Tells the host the dialog exists. Without this it quits on its own
+        // after a couple of seconds, keeping everything running, rather than
+        // leaving Cmd+Q looking broken.
+        void client.request.quitDialogShown?.({});
+      }),
+    [client],
+  );
   useEffect(() => {
     const unsubscribe = client.subscribeWindowResize(terminalLayoutChanged);
     window.addEventListener("resize", terminalLayoutChanged);
@@ -2212,6 +2255,22 @@ export function WorkspaceApp({
       cancelled = true;
     };
   }, [client, modelCatalogs, sessionType]);
+
+  /**
+   * Answers the quit dialog. Not routed through `perform`: archiving a board
+   * of sessions is slower than one RPC deadline, and the reply to a successful
+   * quit never arrives at all because the process is gone by then.
+   */
+  function answerQuit(choice: QuitChoice) {
+    if (quitting) return;
+    if (choice === "cancel") {
+      setQuitRequest(undefined);
+      setQuitting(undefined);
+    } else setQuitting(choice);
+    void client.request.quitDecision?.({ choice }).catch(() => {
+      // The app is on its way out; there is nobody left to tell.
+    });
+  }
 
   async function perform<T>(operation: Promise<RpcResult<T>>) {
     setBusy(true);
@@ -5390,6 +5449,51 @@ export function WorkspaceApp({
               </button>
             </div>
           </form>
+        </Modal>
+      )}
+
+      {quitRequest && (
+        <Modal
+          dismissible={!quitting}
+          onClose={() => answerQuit("cancel")}
+          title="Quit Daedalus"
+        >
+          <div className="confirmation-content">
+            <p>
+              {quitDisclosure(quitRequest)} Reopening Daedalus reconnects to
+              them. Stopping them instead resumes them when you reopen.
+            </p>
+            <div className="modal-actions">
+              <button
+                className="quiet"
+                disabled={Boolean(quitting)}
+                onClick={() => answerQuit("cancel")}
+                type="button"
+              >
+                Cancel
+              </button>
+              {/* Never the focused button: it is the only one that ends
+                  anything, and Enter must not reach it by accident. */}
+              <button
+                className="danger-action"
+                disabled={Boolean(quitting)}
+                onClick={() => answerQuit("shutdown")}
+                type="button"
+              >
+                {quitting === "shutdown"
+                  ? "Stopping\u2026"
+                  : "Quit and stop sessions"}
+              </button>
+              <button
+                autoFocus
+                disabled={Boolean(quitting)}
+                onClick={() => answerQuit("keep")}
+                type="button"
+              >
+                Quit
+              </button>
+            </div>
+          </div>
         </Modal>
       )}
     </main>

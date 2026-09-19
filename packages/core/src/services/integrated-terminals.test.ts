@@ -32,6 +32,11 @@ class FakeTmux implements TmuxClient {
   async stop(session: string) {
     this.sessions.delete(session);
   }
+  async killServer() {
+    const running = this.sessions.size > 0;
+    this.sessions.clear();
+    return running;
+  }
 }
 
 describe("IntegratedTerminalService", () => {

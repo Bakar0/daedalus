@@ -1728,6 +1728,14 @@ dd {
   font-size: 10px;
   line-height: 1.4;
 }
+.settings-note {
+  color: var(--muted);
+  display: block;
+  font-family: var(--font-sans);
+  font-size: 10px;
+  line-height: 1.4;
+  margin-top: 5px;
+}
 .provider-grid {
   display: grid;
   gap: 7px;
