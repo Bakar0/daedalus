@@ -413,20 +413,25 @@ try {
       "expected the first session card to be the selected one; the drags below pick their cards on that assumption",
     );
 
+  /**
+   * The order the drag should produce: the whole list with one card moved.
+   * Spelling the three cards out by hand instead quietly asserted the fixture
+   * has exactly three, so adding a fourth failed both drags with an expected
+   * order that was simply missing its last entry.
+   */
+  const moved = (order: readonly string[], from: number, to: number) => {
+    const next = [...order];
+    const [card] = next.splice(from, 1);
+    next.splice(to, 0, card!);
+    return next;
+  };
+
   // Downward first — the direction that was broken.
   const downward = await runDrag(1, 2);
-  check("dragging down", downward, [
-    downward.before[0]!,
-    downward.before[2]!,
-    downward.before[1]!,
-  ]);
+  check("dragging down", downward, moved(downward.before, 1, 2));
 
   const upward = await runDrag(2, 0);
-  check("dragging up", upward, [
-    upward.before[2]!,
-    upward.before[0]!,
-    upward.before[1]!,
-  ]);
+  check("dragging up", upward, moved(upward.before, 2, 0));
 
   if (rendererErrors.length)
     failures.push(`renderer errors: ${rendererErrors.join("; ")}`);
