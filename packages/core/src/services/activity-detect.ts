@@ -1,9 +1,11 @@
 import type { DaedalusConfig } from "../config";
 import type { AgentSession } from "../domain";
+import type { TmuxClient } from "@daedalus/platform";
 import type { SqliteRepositories } from "../repositories";
 import type { ActivityService } from "./activity";
 import { recoverCodexSessionId } from "./agents";
 import {
+  observeClaudePane,
   observeClaudeTranscript,
   observeCodexRollout,
   type ActivityObservation,
@@ -93,6 +95,35 @@ export async function detectClaudeTranscriptActivity(
 }
 
 /**
+ * The pane has no mtime to gate on, so it gets a plain throttle. It is also
+ * only ever consulted for a session already reading `working`, which is the
+ * only state it is allowed to change — so on a quiet board it costs nothing.
+ */
+const paneChecked = new Map<string, number>();
+
+/**
+ * Captures a Claude session's pane and reads its status line.
+ *
+ * This is the tier that catches an escape so early that Claude wrote nothing
+ * anywhere — no hook, and a transcript holding only the prompt. A capture
+ * failure is not evidence of anything, so it reports nothing at all.
+ */
+export async function detectClaudePaneActivity(
+  tmux: TmuxClient,
+  agent: AgentSession,
+): Promise<ActivityObservation | undefined> {
+  const now = Date.now();
+  const checked = paneChecked.get(agent.id);
+  if (checked !== undefined && now - checked < CACHE_MS) return undefined;
+  paneChecked.set(agent.id, now);
+  try {
+    return observeClaudePane(await tmux.capture(agent.tmuxSession));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Reads the tail of a Codex rollout and turns it into an observation, or
  * nothing at all when the file has not changed since the last look.
  */
@@ -144,6 +175,8 @@ export async function sweepProviderActivity(input: {
   config: DaedalusConfig;
   repositories: SqliteRepositories;
   activity: ActivityService;
+  /** Omitted by callers with no terminal to read; the pane tier is then off. */
+  tmux?: TmuxClient;
 }): Promise<number> {
   const live = input.repositories
     .listAgents()
@@ -156,7 +189,7 @@ export async function sweepProviderActivity(input: {
   let applied = 0;
   await Promise.all(
     live.map(async (agent) => {
-      const observation =
+      let observation =
         agent.provider === "claude"
           ? await detectClaudeTranscriptActivity(input.config, agent)
           : await detectCodexRolloutActivity(
@@ -164,6 +197,16 @@ export async function sweepProviderActivity(input: {
               agent,
               input.repositories,
             );
+      // The pane is asked only when the cheaper tiers had nothing and the
+      // session is still reading `working` — the one state it may retract,
+      // and the one an instant escape leaves behind.
+      if (
+        !observation &&
+        input.tmux &&
+        agent.provider === "claude" &&
+        input.activity.get(agent.id)?.activity === "working"
+      )
+        observation = await detectClaudePaneActivity(input.tmux, agent);
       if (!observation) return;
       const outcome = await input.activity
         .observe({ sessionId: agent.id, observation })
@@ -174,5 +217,8 @@ export async function sweepProviderActivity(input: {
   return applied;
 }
 
-/** Test seam; the cache is process-local and otherwise never cleared. */
-export const resetRolloutCache = (): void => cache.clear();
+/** Test seam; the caches are process-local and otherwise never cleared. */
+export const resetRolloutCache = (): void => {
+  cache.clear();
+  paneChecked.clear();
+};

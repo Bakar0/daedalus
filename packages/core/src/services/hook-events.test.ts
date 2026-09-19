@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   observeClaudeHook,
+  observeClaudePane,
   observeClaudeTranscript,
   observeCodexHook,
   observeCodexRollout,
@@ -482,5 +483,81 @@ describe("Claude transcript fallback", () => {
     expect(
       observeClaudeTranscript(`{"type":"user","mess\n${interrupted()}`),
     ).toMatchObject({ activity: "idle" });
+  });
+});
+
+/**
+ * Real `capture-pane` output, taken from live sessions on this machine. The
+ * five different verbs are the point: they were all on screen at the same
+ * moment, which is why neither pattern may key on the word.
+ */
+describe("Claude pane fallback", () => {
+  const box = [
+    "──────────────────────────────────────── Test22 ─",
+    "❯ ",
+    "─────────────────────────────────────────────────",
+    "  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents",
+    "                    Update available! Run: brew upgrade claude-code@latest",
+  ];
+  const pane = (status: string, trailing: string[] = []) =>
+    ["⏺ Some earlier output", status, ...trailing, ...box].join("\n");
+
+  test("a finished turn retracts working, whatever the verb happens to be", () => {
+    for (const status of [
+      "✻ Brewed for 3s · done 6:35 PM",
+      "✻ Worked for 4m 56s · done 12:35 PM",
+      "✻ Crunched for 10m 37s · done 1:32 PM",
+      "✻ Sautéed for 3m 8s · done 3:07 PM",
+      "✻ Baked for 7m 26s · done 8:24 PM",
+    ])
+      expect(observeClaudePane(pane(status))).toMatchObject({
+        activity: "idle",
+        source: "pane",
+        // It may retract a working reading and do nothing else — never invent
+        // work, never speak for a session that is blocked on the user.
+        ifActivity: ["working"],
+        authoritative: true,
+      });
+  });
+
+  test("a live timer means the turn is still running, so nothing is retracted", () => {
+    for (const status of [
+      "✽ Generating… (6m 17s · ↓ 24.8k tokens)",
+      "· Generating… (6m 26s · ↓ 25.2k tokens)",
+      "✢ Thinking… (3s)",
+    ])
+      expect(observeClaudePane(pane(status))).toBeUndefined();
+  });
+
+  test("the newest status line wins, so a stale done never reads past a timer", () => {
+    const text = [
+      "✻ Brewed for 3s · done 6:35 PM",
+      "❯ next thing",
+      "✽ Generating… (12s · ↓ 1.1k tokens)",
+      ...box,
+    ].join("\n");
+    expect(observeClaudePane(text)).toBeUndefined();
+  });
+
+  test("output that merely talks about a status line is not one", () => {
+    // This very session had `done 6:35 PM` inside its own transcript while
+    // working. Indented continuations and tool results are not status lines.
+    expect(
+      observeClaudePane(
+        pane("✽ Generating… (5m 29s · ↓ 21.8k tokens)", [
+          "  ⎿  │ idle │ ✻ Brewed for 3s · done 6:35 PM │",
+        ]),
+      ),
+    ).toBeUndefined();
+    expect(
+      observeClaudePane(
+        ["  ⎿  ✻ Brewed for 3s · done 6:35 PM", ...box].join("\n"),
+      ),
+    ).toBeUndefined();
+  });
+
+  test("a pane with no status line at all is no observation", () => {
+    expect(observeClaudePane(box.join("\n"))).toBeUndefined();
+    expect(observeClaudePane("")).toBeUndefined();
   });
 });

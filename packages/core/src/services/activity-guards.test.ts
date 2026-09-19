@@ -30,8 +30,10 @@ class FakeTmux implements TmuxClient {
   async attach() {
     return 0;
   }
+  /** Overridden by a test that needs the pane to say something specific. */
+  paneText = "Claude Code\nshift+tab to cycle";
   async capture() {
-    return "Claude Code\nshift+tab to cycle";
+    return this.paneText;
   }
   async sendKeys() {}
   async send() {}
@@ -263,6 +265,65 @@ describe("source confidence", () => {
         detail: "Interrupted",
         source: "transcript",
       });
+    });
+  });
+
+  test("an instant escape is caught by the pane, the only place it shows", async () => {
+    await withSession(async ({ context, sessionId, tmux }) => {
+      // The reported bug exactly: prompt submitted, escaped before Claude's
+      // first token. `UserPromptSubmit` set working, no `Stop` is coming, and
+      // the transcript holds the prompt and nothing else.
+      await context.activity.observe({
+        sessionId,
+        observation: observeClaudeHook("UserPromptSubmit", {
+          hook_event_name: "UserPromptSubmit",
+        })!,
+      });
+      expect(context.activity.get(sessionId)?.activity).toBe("working");
+      tmux.paneText = [
+        '⏺ Hi — I see "test". What would you like me to do?',
+        "✻ Brewed for 3s · done 6:35 PM",
+        "──────────────────────────────── Test22 ─",
+        "❯ ",
+        "  ⏵⏵ auto mode on (shift+tab to cycle)",
+      ].join("\n");
+
+      resetRolloutCache();
+      await sweepProviderActivity({
+        config: context.config,
+        repositories: context.repositories,
+        activity: context.activity,
+        tmux,
+      });
+      expect(context.activity.get(sessionId)).toMatchObject({
+        activity: "idle",
+        source: "pane",
+      });
+    });
+  });
+
+  test("the pane is never asked to speak for a session blocked on the user", async () => {
+    await withSession(async ({ context, sessionId, tmux }) => {
+      await context.activity.record({
+        sessionId,
+        activity: "needs_permission",
+        detail: "Bash(git push)",
+        source: "hook",
+      });
+      // A pane showing a finished turn says nothing about whether the user
+      // answered the dialog, so the badge has to survive it.
+      tmux.paneText = "✻ Worked for 4m 56s · done 12:35 PM";
+      resetRolloutCache();
+      await sweepProviderActivity({
+        config: context.config,
+        repositories: context.repositories,
+        activity: context.activity,
+        tmux,
+      });
+      expect(context.activity.get(sessionId)?.activity).toBe(
+        "needs_permission",
+      );
+      expect(context.activity.attentionFor(sessionId)).toBeDefined();
     });
   });
 

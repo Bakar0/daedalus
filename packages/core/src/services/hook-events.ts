@@ -435,3 +435,55 @@ export function observeClaudeTranscript(
   }
   return undefined;
 }
+
+/**
+ * Claude's live status line, as it appears at the foot of the pane.
+ *
+ * The verb is randomised — `Worked`, `Crunched`, `Sautéed`, `Baked`, `Brewed`
+ * were all on this machine at once — so neither pattern may key on
+ * vocabulary. What is invariant is the shape: a finished turn ends in
+ * `· done <clock>`, and a live one carries a parenthesised elapsed timer.
+ *
+ * Both require the line to *start* with a single glyph and a space, which is
+ * what the status line looks like and what ordinary output does not: tool
+ * results and continuations are indented, so a transcript that merely
+ * discusses these strings cannot be mistaken for the status line itself.
+ */
+const CLAUDE_PANE_DONE = /^\S .*·\s+done\s+\d{1,2}:\d{2}(?:\s*[AP]M)?$/;
+
+const CLAUDE_PANE_BUSY = /^\S .*\((?:\d+h\s*)?(?:\d+m\s*)?\d+s\b[^)]*\)$/;
+
+/**
+ * The last resort, and the only signal that survives an *instant* escape.
+ *
+ * Escaping after Claude has begun responding leaves `[Request interrupted by
+ * user]` in the transcript. Escaping before its first token leaves nothing at
+ * all: no hook, and a transcript holding only the user's prompt. The pane is
+ * then the sole evidence that the turn is over, and it is unambiguous — a
+ * finished turn says `done`, a live one is still counting.
+ *
+ * It may only ever *retract* a `working` reading, never create one. A stale or
+ * misread pane that could invent work, or speak for a session blocked on the
+ * user, is the failure this tier is ranked lowest to avoid; retracting a
+ * `working` that no hook is coming to retract is the one thing it can do that
+ * nothing else can.
+ */
+export function observeClaudePane(
+  text: string,
+): ActivityObservation | undefined {
+  const lines = text.replace(/\s+$/, "").split("\n");
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]!.trimEnd();
+    // A live timer is the newest word on the turn: whatever sits above it is
+    // older, so the scan stops rather than reading past it to a stale `done`.
+    if (CLAUDE_PANE_BUSY.test(line)) return undefined;
+    if (CLAUDE_PANE_DONE.test(line))
+      return {
+        activity: "idle",
+        source: "pane",
+        ifActivity: ["working"],
+        authoritative: true,
+      };
+  }
+  return undefined;
+}
