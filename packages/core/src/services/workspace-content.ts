@@ -518,8 +518,9 @@ async function worktreeHeldWork(
   // machine with no git, must not become permanently unremovable.
   if (!git || !(await pathExists(worktree.path)))
     return { uncommittedFiles: 0, unreachableCommits: 0 };
+  // Also read-only, and also asked while an agent may be working in the tree.
   const run = (args: string[]) =>
-    runCommand(git, ["-C", worktree.path, ...args]);
+    runCommand(git, ["--no-optional-locks", "-C", worktree.path, ...args]);
   const status = await run([
     "status",
     "--porcelain=v1",
@@ -588,6 +589,12 @@ async function gitStatusAt(
   if (!git || !(await pathExists(path))) return UNAVAILABLE_STATUS;
   const [status, comparison] = await Promise.all([
     runCommand(git, [
+      // Reading a working tree must never be able to break what is working in
+      // it. `git status` refreshes the index, which takes `index.lock`, and an
+      // agent running `git add` in the same worktree at that moment fails with
+      // exit 128. This is polled in the background across every tree, so
+      // without this flag Daedalus is a race against its own agents.
+      "--no-optional-locks",
       "-C",
       path,
       "status",

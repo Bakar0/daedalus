@@ -1,5 +1,14 @@
-import { join } from "node:path";
-import { lstat, mkdir, readFile, readlink, unlink } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
+import {
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  readlink,
+  stat,
+  unlink,
+  utimes,
+} from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import {
   pathExists,
@@ -1234,6 +1243,57 @@ Before working in this workspace:
       const start = performance.now();
       await context.workspaceContent.get(workspace.id);
       expect(performance.now() - start).toBeLessThan(120);
+      context.close();
+    });
+  });
+
+  test("measuring a working tree never writes to it", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const source = join(home, "source", "product");
+      await createRepository(source);
+      const context = await contextWithStubbedAgent(home);
+      const workspace = await context.workspaces.create({ name: "Quiet" });
+      await context.workspaceContent.addAndAttachRepository({
+        workspace: workspace.id,
+        remoteUrl: source,
+      });
+      const checkout = (await context.workspaceContent.get(workspace.id))
+        .repositories[0]!.referencePath!;
+
+      // A `git status` that refreshes the index takes `index.lock` to write it
+      // back, and an agent running `git add` in the same tree at that moment
+      // fails outright — measured at 5 collisions in 30 attempts before this
+      // was fixed. Daedalus polls every tree in the background, so reading one
+      // has to leave it alone. A rewritten index is the visible proof that it
+      // did not: the lock is held too briefly to observe directly.
+      // A linked worktree's `.git` is a file, and its index lives beside the
+      // main repository's, so the path is asked for rather than assumed.
+      const indexPath = (
+        await runCommand("git", [
+          "-C",
+          checkout,
+          "rev-parse",
+          "--git-path",
+          "index",
+        ])
+      ).stdout.trim();
+      expect(indexPath).not.toBe("");
+      const resolvedIndex = isAbsolute(indexPath)
+        ? indexPath
+        : join(checkout, indexPath);
+      const before = (await stat(resolvedIndex)).mtimeMs;
+      // Make the index stale, which is what tempts git into refreshing it.
+      const entries = await readdir(checkout);
+      const now = new Date();
+      for (const entry of entries)
+        if (entry !== ".git") await utimes(join(checkout, entry), now, now);
+
+      await context.workspaceContent.settleGitStatus(workspace.id);
+      expect(
+        (await context.workspaceContent.get(workspace.id)).repositories[0]
+          ?.gitStatus?.state,
+      ).toBe("clean");
+      expect((await stat(resolvedIndex)).mtimeMs).toBe(before);
       context.close();
     });
   });
