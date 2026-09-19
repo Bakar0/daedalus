@@ -1028,35 +1028,22 @@ const plural = (count: number, noun: string) =>
   `${count} ${noun}${count === 1 ? "" : "s"}`;
 
 /**
- * What the quit dialog says is still live, in one sentence.
+ * The one sentence the quit dialog says.
  *
- * Exported and pure because the sentence is the feature. The whole point of
- * this dialog is that the user is told a true and specific thing before
- * choosing, so "2 agent sessions and 1 terminal" being right for every
- * combination of counts is worth a test rather than a glance.
+ * Exported and pure because the sentence is the whole dialog. It confirms and
+ * nothing else — quitting never ends a session, so there is no choice to lay
+ * out, only a count to get right.
  */
-export function quitDisclosure(plan: ShutdownPlanDto): {
-  sessionCount: number;
-  terminalCount: number;
-  unarchivableCount: number;
-  headline: string;
-} {
-  const sessionCount = plan.sessions.length;
-  const terminalCount = plan.terminals.length;
+export function quitDisclosure(plan: ShutdownPlanDto): string {
   const parts = [
-    ...(sessionCount ? [plural(sessionCount, "agent session")] : []),
-    ...(terminalCount ? [plural(terminalCount, "terminal")] : []),
+    ...(plan.sessions.length ? [plural(plan.sessions.length, "session")] : []),
+    ...(plan.terminals.length
+      ? [plural(plan.terminals.length, "terminal")]
+      : []),
   ];
-  return {
-    sessionCount,
-    terminalCount,
-    unarchivableCount: plan.sessions.filter(
-      (session) => session.disposition === "stop",
-    ).length,
-    headline: parts.length
-      ? `${parts.join(" and ")} ${parts.length === 1 && sessionCount + terminalCount === 1 ? "is" : "are"} still running.`
-      : "Nothing is running.",
-  };
+  return parts.length
+    ? `${parts.join(" and ")} will keep running.`
+    : "Nothing is running.";
 }
 
 function Modal({
@@ -5302,29 +5289,31 @@ export function WorkspaceApp({
             </dd>
             <dt>On quit</dt>
             <dd>
-              <select
-                aria-label="On quit"
-                disabled={busy}
-                onChange={(event) =>
-                  void perform(
-                    client.request.quitBehaviorSet({
-                      behavior: event.target.value as QuitBehavior,
-                    }),
-                  )
-                }
-                value={snapshot.settings.quitBehavior}
-              >
-                <option value="ask">Ask what to do</option>
-                <option value="keep">Keep sessions running</option>
-                <option value="archive">Archive every session</option>
-              </select>
-              <small className="settings-note">
-                Sessions outlive the app either way unless they are archived:
-                they live in a tmux server Daedalus does not own, and{" "}
-                <code>daedal agent spawn</code> starts them with the app closed.
-                To end everything at once, use Quit and Shut Down Sessions or{" "}
-                <code>daedal shutdown</code>.
-              </small>
+              <label className="settings-toggle">
+                <input
+                  checked={snapshot.settings.quitBehavior === "ask"}
+                  disabled={busy}
+                  onChange={(event) =>
+                    void perform(
+                      client.request.quitBehaviorSet({
+                        behavior: event.target.checked
+                          ? ("ask" satisfies QuitBehavior)
+                          : ("keep" satisfies QuitBehavior),
+                      }),
+                    )
+                  }
+                  type="checkbox"
+                />
+                <span>
+                  <strong>Confirm before quitting</strong>
+                  <small>
+                    Quitting never stops a session either way. They live in a
+                    tmux server Daedalus does not own, and reopening reconnects
+                    to them. To end everything, use Quit and Shut Down Sessions
+                    or <code>daedal shutdown</code>.
+                  </small>
+                </span>
+              </label>
             </dd>
             <dt>Notifications</dt>
             <dd>
@@ -5496,86 +5485,49 @@ export function WorkspaceApp({
         </Modal>
       )}
 
-      {quitRequest &&
-        (() => {
-          const disclosure = quitDisclosure(quitRequest);
-          // Everything the headline just counted, so the button does not
-          // promise to keep fewer things than the sentence above it named.
-          const keeping = disclosure.sessionCount + disclosure.terminalCount;
-          return (
-            <Modal
-              dismissible={!quitting}
-              onClose={() => answerQuit("cancel")}
-              title="Quit Daedalus"
-            >
-              <div className="confirmation-content">
-                <p>
-                  <strong>{disclosure.headline}</strong> Quitting Daedalus does
-                  not stop them: the tmux server, the agent CLIs and everything
-                  they started keep running in the background.
-                </p>
-                <p>
-                  They stay reachable from a terminal with{" "}
-                  <code>daedal agent list</code> and{" "}
-                  <code>daedal agent attach &lt;id&gt;</code>, and reopening
-                  Daedalus reconnects to them.
-                </p>
-                {disclosure.unarchivableCount > 0 && (
-                  <p>
-                    {disclosure.unarchivableCount === 1
-                      ? "One session has no resumable conversation, so archiving stops it instead of preserving it."
-                      : `${disclosure.unarchivableCount} sessions have no resumable conversation, so archiving stops them instead of preserving them.`}
-                  </p>
-                )}
-                <label className="settings-toggle">
-                  <input
-                    checked={quitRemember}
-                    disabled={Boolean(quitting)}
-                    onChange={(event) => setQuitRemember(event.target.checked)}
-                    type="checkbox"
-                  />
-                  <span>
-                    <strong>Don&apos;t ask again</strong>
-                    <small>
-                      Remembers whichever button you pick next. Settings has it
-                      back.
-                    </small>
-                  </span>
-                </label>
-                <div className="modal-actions">
-                  <button
-                    className="quiet"
-                    disabled={Boolean(quitting)}
-                    onClick={() => answerQuit("cancel")}
-                    type="button"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    className="danger-action"
-                    disabled={Boolean(quitting)}
-                    onClick={() => answerQuit("archive")}
-                    type="button"
-                  >
-                    {quitting === "archive"
-                      ? "Archiving\u2026"
-                      : "Quit and archive all"}
-                  </button>
-                  <button
-                    autoFocus
-                    disabled={Boolean(quitting)}
-                    onClick={() => answerQuit("keep")}
-                    type="button"
-                  >
-                    {keeping > 0
-                      ? `Quit and keep ${keeping} running`
-                      : "Quit and keep running"}
-                  </button>
-                </div>
-              </div>
-            </Modal>
-          );
-        })()}
+      {quitRequest && (
+        <Modal
+          dismissible={!quitting}
+          onClose={() => answerQuit("cancel")}
+          title="Quit Daedalus"
+        >
+          <div className="confirmation-content">
+            <p>
+              {quitDisclosure(quitRequest)} Reopening Daedalus reconnects to
+              them.
+            </p>
+            <label className="settings-toggle">
+              <input
+                checked={quitRemember}
+                disabled={Boolean(quitting)}
+                onChange={(event) => setQuitRemember(event.target.checked)}
+                type="checkbox"
+              />
+              <span>
+                <strong>Don&apos;t ask again</strong>
+              </span>
+            </label>
+            <div className="modal-actions">
+              <button
+                className="quiet"
+                disabled={Boolean(quitting)}
+                onClick={() => answerQuit("cancel")}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                autoFocus
+                disabled={Boolean(quitting)}
+                onClick={() => answerQuit("keep")}
+                type="button"
+              >
+                Quit
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </main>
   );
 }

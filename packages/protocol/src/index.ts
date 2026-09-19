@@ -174,11 +174,11 @@ export interface ProviderModelCatalogDto {
   source: "provider" | "aliases";
 }
 
-/** See `QuitBehavior` in core: what Cmd+Q does when sessions are still live. */
-export type QuitBehavior = "keep" | "archive" | "ask";
+/** See `QuitBehavior` in core: whether Cmd+Q confirms before closing. */
+export type QuitBehavior = "keep" | "ask";
 
-/** What the user chose in the quit dialog. `cancel` leaves the app open. */
-export type QuitChoice = "keep" | "archive" | "cancel";
+/** The quit dialog only confirms. `cancel` leaves the app open. */
+export type QuitChoice = "keep" | "cancel";
 
 export interface ShutdownSessionTargetDto {
   id: string;

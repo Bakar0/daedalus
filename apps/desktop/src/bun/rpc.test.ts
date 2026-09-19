@@ -307,9 +307,9 @@ describe("desktop RPC handlers", () => {
         });
         expect(shown).toBe(1);
         expect(
-          await rpc.quitDecision({ choice: "archive", remember: false }),
+          await rpc.quitDecision({ choice: "keep", remember: false }),
         ).toEqual({ ok: true, data: { accepted: true } });
-        expect(decisions).toEqual([["archive", false]]);
+        expect(decisions).toEqual([["keep", false]]);
 
         expect(await rpc.quitBehaviorSet({ behavior: "keep" })).toEqual({
           ok: true,

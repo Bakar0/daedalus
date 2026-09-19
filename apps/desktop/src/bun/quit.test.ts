@@ -137,14 +137,14 @@ describe("QuitController", () => {
     expect(it.remembered).toEqual([]);
   });
 
-  test("archiving on quit leaves the tmux server alone", async () => {
+  test("confirming quits and never ends a session", async () => {
     const it = harness();
     await it.controller.requestQuit();
     it.controller.dialogShown();
-    await it.controller.decide("archive", false);
-    // Quitting is not a decision about sessions the CLI started, and the
-    // server is shared with them.
-    expect(it.swept).toEqual([{ stopServer: false }]);
+    await it.controller.decide("keep", false);
+    // Quitting has no destructive branch at all: the dialog only confirms,
+    // and reopening reconnects to what is still running.
+    expect(it.swept).toEqual([]);
     expect(it.quits).toBe(1);
   });
 
@@ -168,18 +168,12 @@ describe("QuitController", () => {
     expect(it.behavior).toBe("keep");
   });
 
-  test("a remembered choice replaces the dialog rather than adding to it", async () => {
+  test("don't ask again skips the dialog and still stops nothing", async () => {
     const keep = harness({ behavior: "keep" });
     await keep.controller.requestQuit();
     expect(keep.asked).toEqual([]);
     expect(keep.swept).toEqual([]);
     expect(keep.quits).toBe(1);
-
-    const archive = harness({ behavior: "archive" });
-    await archive.controller.requestQuit();
-    expect(archive.asked).toEqual([]);
-    expect(archive.swept).toEqual([{ stopServer: false }]);
-    expect(archive.quits).toBe(1);
   });
 
   test("a window that never draws the dialog falls through to keeping everything", async () => {

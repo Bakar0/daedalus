@@ -60,48 +60,30 @@ const base: DesktopSnapshotDto = {
 };
 
 describe("quit disclosure", () => {
-  const session = (id: string, disposition: "archive" | "stop") => ({
+  const session = (id: string) => ({
     id,
     name: id,
     workspaceId: "workspace-1",
-    provider:
-      disposition === "stop" ? ("custom" as const) : ("claude" as const),
-    disposition,
+    provider: "claude" as const,
+    disposition: "archive" as const,
   });
 
-  test("names what is still running, in the right number", () => {
+  test("names what keeps running, in the right number", () => {
     expect(
       quitDisclosure({
-        sessions: [session("a", "archive"), session("b", "archive")],
+        sessions: [session("a"), session("b")],
         terminals: [{ id: "t", name: "Terminal" }],
-      }).headline,
-    ).toBe("2 agent sessions and 1 terminal are still running.");
-    // One of one thing reads as "is", which is the case the plural-by-count
-    // shortcut gets wrong.
+      }),
+    ).toBe("2 sessions and 1 terminal will keep running.");
+    expect(quitDisclosure({ sessions: [session("a")], terminals: [] })).toBe(
+      "1 session will keep running.",
+    );
     expect(
-      quitDisclosure({ sessions: [session("a", "archive")], terminals: [] })
-        .headline,
-    ).toBe("1 agent session is still running.");
-    expect(
-      quitDisclosure({ sessions: [], terminals: [{ id: "t", name: "T" }] })
-        .headline,
-    ).toBe("1 terminal is still running.");
-    expect(quitDisclosure({ sessions: [], terminals: [] }).headline).toBe(
+      quitDisclosure({ sessions: [], terminals: [{ id: "t", name: "T" }] }),
+    ).toBe("1 terminal will keep running.");
+    expect(quitDisclosure({ sessions: [], terminals: [] })).toBe(
       "Nothing is running.",
     );
-  });
-
-  test("counts the sessions archiving cannot preserve", () => {
-    expect(
-      quitDisclosure({
-        sessions: [session("a", "archive"), session("b", "stop")],
-        terminals: [],
-      }),
-    ).toMatchObject({
-      sessionCount: 2,
-      terminalCount: 0,
-      unarchivableCount: 1,
-    });
   });
 });
 

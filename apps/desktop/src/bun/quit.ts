@@ -10,9 +10,8 @@ import type { QuitChoice, ShutdownPlanDto } from "@daedalus/protocol";
  * How long the host waits for the window to say the quit dialog is up.
  *
  * A renderer that cannot draw it must not turn Cmd+Q into a key that does
- * nothing, so the wait is short and what it falls through to is today's
- * behaviour: quit, leave everything running. Never an archive — the one thing
- * a silent fallback must not do is end someone's work on a guess.
+ * nothing, so the wait is short and what it falls through to is the same
+ * thing every other path does: quit, leave everything running.
  */
 export const QUIT_DIALOG_ACK_TIMEOUT_MS = 2_000;
 
@@ -20,7 +19,7 @@ export interface QuitControllerOptions {
   plan(): Promise<ShutdownPlan>;
   runShutdown(options: ShutdownOptions): Promise<ShutdownResult>;
   quitBehavior(): QuitBehavior;
-  rememberQuitBehavior(behavior: "keep" | "archive"): Promise<void>;
+  rememberQuitBehavior(behavior: "keep"): Promise<void>;
   /** Sends the plan to the window, which draws the dialog. */
   askWindow(plan: ShutdownPlanDto): void;
   /** Ends the process. Everything here converges on exactly this call. */
@@ -52,10 +51,14 @@ const planDto = (plan: ShutdownPlan): ShutdownPlanDto => ({
  * the interesting behaviour is a state machine with two ways in, three ways
  * out and a watchdog, and none of that is testable through Electrobun.
  *
- * The policy it implements: sessions survive quitting, as they always have,
- * but never silently. The app does not own the tmux server — `daedal agent
- * spawn` works with the window never opened — so a GUI quit that killed it
- * would kill sessions started from a terminal.
+ * The policy it implements: sessions always survive quitting, and the dialog
+ * only confirms. The app does not own the tmux server — `daedal agent spawn`
+ * works with the window never opened — so a GUI quit that killed it would
+ * kill sessions started from a terminal, and reopening reconnects to what is
+ * still there, which is what makes the app come back as it was left.
+ *
+ * Quitting therefore has no destructive branch at all. Ending sessions is
+ * `daedal shutdown` and the Shut Down menu item, which are asked for by name.
  */
 export class QuitController {
   #state: "idle" | "deciding" | "quitting" = "idle";
@@ -79,12 +82,8 @@ export class QuitController {
     // about an empty list would be a dialog that only ever costs a keystroke.
     if (!plan || (!plan.sessions.length && !plan.terminals.length))
       return this.#quit("nothing-live");
-    const behavior = this.options.quitBehavior();
-    if (behavior === "keep") return this.#quit("setting-keep");
-    if (behavior === "archive") {
-      await this.#archiveEverything();
-      return this.#quit("setting-archive");
-    }
+    if (this.options.quitBehavior() === "keep")
+      return this.#quit("setting-keep");
     this.#state = "deciding";
     this.#acknowledged = false;
     this.options.askWindow(planDto(plan));
@@ -134,23 +133,7 @@ export class QuitController {
         .catch((error: unknown) =>
           this.#log("quit_behavior_save_failed", { message: describe(error) }),
         );
-    if (choice === "archive") await this.#archiveEverything();
     await this.#quit(`dialog-${choice}`);
-  }
-
-  /**
-   * Archives every live session and closes the terminals, and leaves the tmux
-   * server alone. Quitting is not a decision about sessions the CLI started,
-   * and the server is shared with them.
-   */
-  async #archiveEverything(): Promise<void> {
-    const result = await this.options
-      .runShutdown({ stopServer: false })
-      .catch((error: unknown) => {
-        this.#log("quit_archive_failed", { message: describe(error) });
-        return undefined;
-      });
-    if (result) this.#logResult(result);
   }
 
   async #quit(reason: string): Promise<void> {

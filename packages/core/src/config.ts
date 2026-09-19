@@ -10,15 +10,17 @@ export interface AgentDefinition {
 }
 
 /**
- * What Cmd+Q does when agent sessions or integrated terminals are still live.
+ * Whether Cmd+Q confirms before closing when sessions are still live.
  *
- * `keep` is what Daedalus has always done — the tmux server, the agent CLIs
- * and everything they spawned outlive the window — and stays the default
- * *behaviour*. `ask` is the default *setting* only because that behaviour was
- * previously invisible: the dialog is how the user is told, once, before
- * choosing to stop being told.
+ * Quitting always keeps them running — the tmux server, the agent CLIs and
+ * everything they spawned outlive the window, and reopening reconnects to
+ * them, so the app comes back to the state it was left in. The only question
+ * this setting answers is whether the user is told that first. There is
+ * deliberately no "archive on quit": ending sessions is what
+ * `daedal shutdown` and the Shut Down menu item are for, and folding it into
+ * the ordinary way of closing a window made quitting destructive.
  */
-export type QuitBehavior = "keep" | "archive" | "ask";
+export type QuitBehavior = "keep" | "ask";
 
 export interface DaedalusConfig {
   home: string;
@@ -85,11 +87,7 @@ export function channelHome(channel: string | undefined, home: string): string {
   return home.endsWith(suffix) ? home : `${home}${suffix}`;
 }
 
-export const QUIT_BEHAVIORS: readonly QuitBehavior[] = [
-  "keep",
-  "archive",
-  "ask",
-];
+export const QUIT_BEHAVIORS: readonly QuitBehavior[] = ["keep", "ask"];
 
 export const isQuitBehavior = (value: unknown): value is QuitBehavior =>
   typeof value === "string" &&
@@ -162,8 +160,8 @@ export async function loadConfig(
       stored.workspaceInstructionFilesEnabled !== false,
     autoRestoreSessionsEnabled: stored.autoRestoreSessionsEnabled !== false,
     focusMode: stored.focusMode === true,
-    // Anything unrecognised reads as "ask", because the one outcome worth
-    // ruling out is a stray value quietly archiving someone's sessions.
+    // Anything unrecognised reads as "ask", including the "archive" this
+    // setting used to accept.
     quitBehavior: QUIT_BEHAVIORS.includes(stored.quitBehavior as QuitBehavior)
       ? (stored.quitBehavior as QuitBehavior)
       : "ask",
