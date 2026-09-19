@@ -67,6 +67,7 @@ interface AgentRow {
   provider_session_id: string | null;
   archived_at: string | null;
   resume_count: number;
+  lost_reason: string | null;
   position: number;
 }
 
@@ -81,6 +82,7 @@ interface IntegratedTerminalRow {
   exit_code: number | null;
   started_at: string;
   ended_at: string | null;
+  revived_at: string | null;
 }
 
 interface WorkspaceRepositoryRow {
@@ -159,6 +161,7 @@ const agentFromRow = (row: AgentRow): AgentSession => ({
   providerSessionId: row.provider_session_id,
   archivedAt: row.archived_at,
   resumeCount: row.resume_count,
+  lostReason: row.lost_reason,
   position: row.position,
 });
 
@@ -175,6 +178,7 @@ const integratedTerminalFromRow = (
   exitCode: row.exit_code,
   startedAt: row.started_at,
   endedAt: row.ended_at,
+  revivedAt: row.revived_at,
 });
 
 const workspaceRepositoryFromRow = (
@@ -682,8 +686,8 @@ export class SqliteRepositories {
         `INSERT INTO agent_sessions
          (id, workspace_id, task_id, name, provider, kind, tmux_session, command, args,
           working_directory, status, exit_code, started_at, ended_at,
-          provider_session_id, archived_at, resume_count, position)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          provider_session_id, archived_at, resume_count, lost_reason, position)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         agent.id,
@@ -703,6 +707,7 @@ export class SqliteRepositories {
         agent.providerSessionId,
         agent.archivedAt,
         agent.resumeCount,
+        agent.lostReason,
         agent.position,
       );
   }
@@ -762,7 +767,8 @@ export class SqliteRepositories {
       .query(
         `UPDATE agent_sessions SET tmux_session = ?, command = ?, args = ?,
          status = ?, exit_code = ?, started_at = ?, ended_at = ?,
-         provider_session_id = ?, archived_at = ?, resume_count = ? WHERE id = ?`,
+         provider_session_id = ?, archived_at = ?, resume_count = ?,
+         lost_reason = ? WHERE id = ?`,
       )
       .run(
         agent.tmuxSession,
@@ -775,6 +781,7 @@ export class SqliteRepositories {
         agent.providerSessionId,
         agent.archivedAt,
         agent.resumeCount,
+        agent.lostReason,
         agent.id,
       );
   }
@@ -788,8 +795,8 @@ export class SqliteRepositories {
       .query(
         `INSERT INTO integrated_terminals
          (id, name, tmux_session, command, args, working_directory, status,
-          exit_code, started_at, ended_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          exit_code, started_at, ended_at, revived_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         terminal.id,
@@ -802,6 +809,7 @@ export class SqliteRepositories {
         terminal.exitCode,
         terminal.startedAt,
         terminal.endedAt,
+        terminal.revivedAt,
       );
   }
 
@@ -828,7 +836,7 @@ export class SqliteRepositories {
       .query(
         `UPDATE integrated_terminals SET name = ?, tmux_session = ?, command = ?,
          args = ?, working_directory = ?, status = ?, exit_code = ?,
-         started_at = ?, ended_at = ? WHERE id = ?`,
+         started_at = ?, ended_at = ?, revived_at = ? WHERE id = ?`,
       )
       .run(
         terminal.name,
@@ -840,6 +848,7 @@ export class SqliteRepositories {
         terminal.exitCode,
         terminal.startedAt,
         terminal.endedAt,
+        terminal.revivedAt,
         terminal.id,
       );
   }

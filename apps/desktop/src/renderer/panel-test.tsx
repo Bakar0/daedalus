@@ -39,6 +39,7 @@ const snapshot: DesktopSnapshotDto = {
       providerSessionId: null,
       archivedAt: null,
       resumeCount: 0,
+      lostReason: null,
       position: 1,
     },
     {
@@ -59,6 +60,7 @@ const snapshot: DesktopSnapshotDto = {
       providerSessionId: null,
       archivedAt: null,
       resumeCount: 0,
+      lostReason: null,
       position: 1,
     },
     // A fourth card, still starting. Opening a session that has not finished
@@ -83,6 +85,7 @@ const snapshot: DesktopSnapshotDto = {
       providerSessionId: null,
       archivedAt: null,
       resumeCount: 0,
+      lostReason: null,
       position: 4,
     },
     // A third card, so a drag has somewhere to travel and the reorder check
@@ -105,6 +108,7 @@ const snapshot: DesktopSnapshotDto = {
       providerSessionId: null,
       archivedAt: null,
       resumeCount: 0,
+      lostReason: null,
       position: 3,
     },
   ],
@@ -190,6 +194,7 @@ const snapshot: DesktopSnapshotDto = {
     repositoryRoot: "/tmp/daedalus-panel-test/repos",
     tmuxAvailable: true,
     workspaceInstructionFilesEnabled: true,
+    autoRestoreSessionsEnabled: true,
     focusMode: false,
     providers: [],
   },

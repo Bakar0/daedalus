@@ -208,6 +208,34 @@ describe("daedal CLI contract", () => {
     });
   });
 
+  test("sweeps for revivable sessions without the app, and finds none here", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      // The point of the verb: the startup sweep has to be runnable and
+      // testable without launching the desktop app.
+      const swept = await cli(home, ["agent", "revive", "--all", "--json"]);
+      expect(swept.exitCode).toBe(0);
+      const envelope = JSON.parse(swept.stdout) as {
+        ok: boolean;
+        data: { revived: unknown[]; skipped: unknown[] };
+      };
+      expect(envelope.ok).toBe(true);
+      expect(envelope.data.revived).toEqual([]);
+      expect(envelope.data.skipped).toEqual([]);
+
+      // Naming a session and sweeping are different requests, and guessing
+      // which one was meant is how a recovery command revives the wrong thing.
+      const ambiguous = await cli(home, [
+        "agent",
+        "revive",
+        "--all",
+        "some-session-id",
+        "--json",
+      ]);
+      expect(ambiguous.exitCode).toBe(2);
+      expect(JSON.parse(ambiguous.stderr).ok).toBe(false);
+    });
+  });
+
   test("reports unavailable agent executables as dependency failures", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       await Bun.write(

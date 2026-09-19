@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { chmod, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { TmuxClient, TmuxLaunch } from "@daedalus/platform";
@@ -6,9 +6,11 @@ import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
   buildAgentPrompt,
   createApplicationContext,
+  DaedalusError,
   hasPersistedCodexSession,
   isMissingCodexConversationError,
   recoverCodexSessionId,
+  reviveFailureReason,
 } from "../index";
 
 class FakeTmux implements TmuxClient {
@@ -597,6 +599,437 @@ describe("AgentService", () => {
         code: "CONFLICT",
       });
       expect(tmux.sessions.has(session.tmuxSession)).toBe(true);
+      context.close();
+    });
+  });
+});
+
+/**
+ * A Mac reboot kills the Daedalus tmux server and leaves every row behind it.
+ * Simulated here by emptying the fake server while the rows still say
+ * `running`, which is exactly the state the next startup reconciles.
+ */
+describe("reboot recovery", () => {
+  /**
+   * A stand-in `codex` that records every argv it is invoked with. The revive
+   * path's correctness is partly about a command it must *not* run, and an
+   * executable that only fails tells you nothing about which one it was.
+   */
+  async function codexRecorder(
+    home: string,
+  ): Promise<{ path: string; invocations: () => Promise<string[]> }> {
+    const path = join(home, "codex-recorder");
+    const log = join(home, "codex-invocations.log");
+    await Bun.write(
+      path,
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(log)}\nexit 0\n`,
+    );
+    await chmod(path, 0o755);
+    return {
+      path,
+      invocations: async () => {
+        const file = Bun.file(log);
+        if (!(await file.exists())) return [];
+        return (await file.text()).split("\n").filter(Boolean);
+      },
+    };
+  }
+
+  async function writeCodexRollout(input: {
+    codexHome: string;
+    id: string;
+    cwd: string;
+    startedAt: string;
+  }): Promise<void> {
+    const [year, month, day] = input.startedAt.slice(0, 10).split("-");
+    const directory = join(input.codexHome, "sessions", year!, month!, day!);
+    await mkdir(directory, { recursive: true });
+    await Bun.write(
+      join(directory, `rollout-${input.id}.jsonl`),
+      `${JSON.stringify({
+        type: "session_meta",
+        payload: { id: input.id, timestamp: input.startedAt, cwd: input.cwd },
+      })}\n`,
+    );
+  }
+
+  test("brings every resumable session back without prompting any of them", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: {
+            claude: { executable: process.execPath, args: ["run"] },
+            shell: { executable: process.execPath, args: [] },
+          },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Reboot" });
+      const first = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "claude",
+        name: "First",
+      });
+      const second = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "claude",
+        name: "Second",
+      });
+      // A custom session has no native resume command, so it is the one that
+      // has to stay lost and say why rather than fail the whole sweep.
+      const custom = await context.agents.spawn({
+        workspace: workspace.id,
+        command: "shell",
+        name: "Custom",
+      });
+      const launchesBeforeReboot = tmux.launches.length;
+
+      tmux.sessions.clear();
+      await context.agents.reconcile();
+      expect((await context.agents.get(first.id)).status).toBe("lost");
+
+      const sweep = await context.agents.reviveLostSessions();
+      expect(sweep.revived.map((item) => item.id).sort()).toEqual(
+        [first.id, second.id].sort(),
+      );
+      expect((await context.agents.get(first.id)).status).toBe("running");
+      expect((await context.agents.get(second.id)).status).toBe("running");
+      // Resumed, not restarted: the conversation is named on the command line.
+      expect(tmux.launches.at(-1)?.args).toContain("--resume");
+      // Nothing was typed at any agent. A resume loads history and waits,
+      // which is the whole reason this is safe to do unattended.
+      expect(tmux.sent).toEqual([]);
+
+      const stranded = await context.agents.get(custom.id);
+      expect(stranded.status).toBe("lost");
+      expect(stranded.lostReason).toBe(
+        "Custom sessions do not define a native resume capability",
+      );
+      expect(sweep.skipped).toEqual([
+        {
+          sessionId: custom.id,
+          name: "Custom",
+          reason: "Custom sessions do not define a native resume capability",
+        },
+      ]);
+
+      // A second sweep has nothing left to do, and `agent list` never had
+      // anything to do: revival is an explicit call, never a side effect of
+      // reconciliation, which runs on nearly every command.
+      const launchesAfterSweep = tmux.launches.length;
+      expect(launchesAfterSweep).toBe(launchesBeforeReboot + 2);
+      const second_sweep = await context.agents.reviveLostSessions();
+      expect(second_sweep.revived).toEqual([]);
+      await context.agents.list({});
+      expect(tmux.launches.length).toBe(launchesAfterSweep);
+      context.close();
+    });
+  });
+
+  test("keeps the attention badge raised across the reboot", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { claude: { executable: process.execPath, args: ["run"] } },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Blocked" });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "claude",
+      });
+      await context.activity.record({
+        sessionId: session.id,
+        activity: "needs_permission",
+        detail: "Bash(git push)",
+        source: "hook",
+      });
+      expect(context.activity.attentionFor(session.id)?.reasons).toHaveLength(
+        1,
+      );
+
+      tmux.sessions.clear();
+      await context.agents.reconcile();
+      // The agent is still blocked on the same question and the revive puts it
+      // back at that point. A reboot that wiped the badges would clear every
+      // reason the user had to look, all at once.
+      expect(context.activity.attentionFor(session.id)?.reasons).toHaveLength(
+        1,
+      );
+      await context.agents.reviveLostSessions();
+      expect(context.activity.attentionFor(session.id)?.reasons).toHaveLength(
+        1,
+      );
+      expect(context.activity.get(session.id)).toMatchObject({
+        activity: "needs_permission",
+        detail: "Bash(git push)",
+      });
+      context.close();
+    });
+  });
+
+  test("revives a Codex conversation that was never archived", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const codexHome = join(home, "codex");
+      const codex = await codexRecorder(home);
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { codex: { executable: codex.path, args: [] } },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home, CODEX_HOME: codexHome },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Codex" });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      const nativeId = "8ceaa092-b66b-4dc9-8b5d-a2e7cd40ae7b";
+      await writeCodexRollout({
+        codexHome,
+        id: nativeId,
+        cwd: session.workingDirectory,
+        startedAt: session.startedAt,
+      });
+      context.repositories.updateAgent({
+        ...session,
+        providerSessionId: nativeId,
+      });
+
+      tmux.sessions.clear();
+      await context.agents.reconcile();
+      const revived = await context.agents.reviveLost(session.id);
+
+      expect(revived.status).toBe("running");
+      expect(tmux.launches.at(-1)?.args.slice(-2)).toEqual([
+        "resume",
+        nativeId,
+      ]);
+      // The conversation never left Codex's active list, so unarchiving it is
+      // not merely wasteful — it fails with wording nothing here forgives, and
+      // would abort a revive that was about to work.
+      expect(await codex.invocations()).not.toContain(`unarchive ${nativeId}`);
+      context.close();
+    });
+  });
+
+  test("still unarchives a Codex conversation that was archived", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const codexHome = join(home, "codex");
+      const codex = await codexRecorder(home);
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { codex: { executable: codex.path, args: [] } },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home, CODEX_HOME: codexHome },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Archived" });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      const nativeId = "8ceaa092-b66b-4dc9-8b5d-a2e7cd40ae7b";
+      await writeCodexRollout({
+        codexHome,
+        id: nativeId,
+        cwd: session.workingDirectory,
+        startedAt: session.startedAt,
+      });
+      context.repositories.updateAgent({
+        ...session,
+        providerSessionId: nativeId,
+      });
+
+      await context.agents.archive(session.id);
+      const restored = await context.agents.restore(session.id);
+
+      expect(restored.status).toBe("running");
+      const invocations = await codex.invocations();
+      expect(invocations).toContain(`archive ${nativeId}`);
+      expect(invocations).toContain(`unarchive ${nativeId}`);
+      context.close();
+    });
+  });
+
+  test("refuses to revive an archived session, which is what restore is for", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { claude: { executable: process.execPath, args: ["run"] } },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Archive" });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "claude",
+      });
+      await context.agents.archive(session.id);
+      await expect(context.agents.reviveLost(session.id)).rejects.toMatchObject(
+        { code: "CONFLICT" },
+      );
+      // An archived session is a deliberate act, and a sweep that undid it
+      // would make archiving something the user had to keep re-doing.
+      const sweep = await context.agents.reviveLostSessions();
+      expect(sweep.revived).toEqual([]);
+      expect(sweep.skipped).toEqual([]);
+      context.close();
+    });
+  });
+
+  test("declines the sweep while another one holds the lock", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { claude: { executable: process.execPath, args: ["run"] } },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Race" });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "claude",
+      });
+      tmux.sessions.clear();
+      await context.agents.reconcile();
+      // The app starting while a `daedal agent revive --all` is mid-flight:
+      // without the lock both would create a tmux session under one name.
+      await Bun.write(join(home, "revive.lock"), "99999\n");
+      const blocked = await context.agents.reviveLostSessions();
+      expect(blocked).toMatchObject({ halted: "sweep_in_progress" });
+      expect((await context.agents.get(session.id)).status).toBe("lost");
+
+      await rm(join(home, "revive.lock"));
+      expect((await context.agents.reviveLostSessions()).revived).toHaveLength(
+        1,
+      );
+      context.close();
+    });
+  });
+
+  test("leaves everything alone when auto-restore is turned off", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          autoRestoreSessionsEnabled: false,
+          agents: { claude: { executable: process.execPath, args: ["run"] } },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Off" });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "claude",
+      });
+      tmux.sessions.clear();
+      await context.agents.reconcile();
+
+      expect(
+        await context.agents.reviveLostSessions({ automatic: true }),
+      ).toMatchObject({ halted: "disabled" });
+      expect((await context.agents.get(session.id)).status).toBe("lost");
+      // The setting governs what happens unasked. `daedal agent revive` is
+      // the user asking, so it still works.
+      expect((await context.agents.reviveLostSessions()).revived).toHaveLength(
+        1,
+      );
+      context.close();
+    });
+  });
+
+  test("says what the provider said when a revive fails", () => {
+    // "claude exited before finishing startup" is a symptom. The provider
+    // printed the cause on its own last screen before going, and a card that
+    // reports only the symptom sends the user to the logs for a sentence
+    // Daedalus already had.
+    expect(
+      reviveFailureReason(
+        new DaedalusError(
+          "INTERNAL",
+          "claude exited before finishing startup",
+          {
+            startupOutput: "No conversation found with session ID: abc",
+          },
+        ),
+      ),
+    ).toBe(
+      "claude exited before finishing startup: No conversation found with session ID: abc",
+    );
+    expect(reviveFailureReason(new Error("tmux is not available"))).toBe(
+      "tmux is not available",
+    );
+    // A whole terminal screen is not a card. The provider's own sentence comes
+    // first, so a cap keeps the useful part and drops the redraw behind it.
+    expect(
+      reviveFailureReason(
+        new DaedalusError("INTERNAL", "codex exited", {
+          startupOutput: "x".repeat(600),
+        }),
+      ).length,
+    ).toBe("codex exited: ".length + 200);
+  });
+
+  test("reopens a lost integrated terminal as a fresh shell", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Shells" });
+      const terminal = await context.terminals.create({
+        workspace: workspace.id,
+      });
+      tmux.sessions.clear();
+      await context.terminals.reconcile();
+      expect((await context.terminals.get(terminal.id)).status).toBe("lost");
+
+      const [revived] = await context.terminals.reviveLost();
+      expect(revived).toMatchObject({
+        id: terminal.id,
+        tmuxSession: terminal.tmuxSession,
+        workingDirectory: terminal.workingDirectory,
+        status: "running",
+      });
+      // There is no conversation to resume, so this is honestly a new shell.
+      // Saying so is what keeps an empty screen from reading as continuity.
+      expect(revived?.revivedAt).not.toBeNull();
+      expect(await context.terminals.reviveLost()).toEqual([]);
       context.close();
     });
   });

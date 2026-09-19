@@ -48,6 +48,7 @@ const base: DesktopSnapshotDto = {
     repositoryRoot: "/tmp/daedalus-test/repos",
     tmuxAvailable: false,
     workspaceInstructionFilesEnabled: true,
+    autoRestoreSessionsEnabled: true,
     focusMode: false,
     providers: [
       { name: "codex", executable: "codex", available: false },
@@ -115,6 +116,7 @@ describe("desktop application shell", () => {
           providerSessionId: null,
           archivedAt: null,
           resumeCount: 0,
+          lostReason: null,
           position: 1,
         },
       ),
@@ -526,6 +528,7 @@ describe("desktop application shell", () => {
           providerSessionId: "daedalus-agent-12345678",
           archivedAt: null,
           resumeCount: 0,
+          lostReason: null,
           position: 1,
         },
         {
@@ -546,6 +549,7 @@ describe("desktop application shell", () => {
           providerSessionId: "agent-needs-attention",
           archivedAt: null,
           resumeCount: 0,
+          lostReason: null,
           position: 1,
         },
       ],
@@ -648,6 +652,7 @@ describe("desktop application shell", () => {
       providerSessionId: "11111111-1111-4111-8111-111111111111",
       archivedAt: null,
       resumeCount: 0,
+      lostReason: null,
       position: 1,
     };
     const snapshot: DesktopSnapshotDto = {
@@ -746,6 +751,7 @@ describe("desktop application shell", () => {
           providerSessionId: null,
           archivedAt: null,
           resumeCount: 0,
+          lostReason: null,
           position: 1,
         },
       ],
@@ -811,6 +817,7 @@ describe("desktop application shell", () => {
           providerSessionId: null,
           archivedAt: null,
           resumeCount: 0,
+          lostReason: null,
           position: 1,
         },
       ],
@@ -912,6 +919,7 @@ describe("desktop application shell", () => {
           providerSessionId: "44444444-4444-4444-8444-444444444444",
           archivedAt,
           resumeCount: 0,
+          lostReason: null,
           position: 1,
         },
       ],
@@ -957,6 +965,7 @@ describe("desktop application shell", () => {
           status: "running",
           startedAt: "now",
           endedAt: null,
+          revivedAt: null,
         },
       ],
     };
@@ -1055,6 +1064,7 @@ const liveSession: AgentSessionDto = {
   providerSessionId: null,
   archivedAt: null,
   resumeCount: 0,
+  lostReason: null,
   position: 1,
 };
 
@@ -1129,6 +1139,29 @@ describe("session status indicators", () => {
       sessionStatusView({ ...liveSession, status: "exited" }).attention,
     ).toBe(false);
     expect(lifecycleTone("starting")).toBe("working");
+  });
+
+  test("a session that could not be revived says why on its card", () => {
+    // A reboot makes every session `lost` at once, so the handful that are
+    // staying that way have to be tellable apart from the rest at a glance.
+    expect(
+      sessionStatusView({
+        ...liveSession,
+        status: "lost",
+        lostReason: "Custom sessions do not define a native resume capability",
+      }).detail,
+    ).toBe("Custom sessions do not define a native resume capability");
+    expect(
+      sessionStatusView({ ...liveSession, status: "lost" }).detail,
+    ).toBeNull();
+    // An exited session was not something anything tried to bring back.
+    expect(
+      sessionStatusView({
+        ...liveSession,
+        status: "exited",
+        lostReason: "stale",
+      }).detail,
+    ).toBeNull();
   });
 
   test("elapsed time reads as a wait, not as a zero", () => {

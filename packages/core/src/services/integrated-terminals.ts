@@ -104,6 +104,7 @@ export class IntegratedTerminalService {
       exitCode: null,
       startedAt: now,
       endedAt: null,
+      revivedAt: null,
     };
     this.repositories.createIntegratedTerminal(terminal);
     try {
@@ -156,6 +157,68 @@ export class IntegratedTerminalService {
           status: "running",
         });
     }
+  }
+
+  /**
+   * Reopens terminals that a machine restart killed. A workspace whose agent
+   * sessions came back beside a row of dead terminal tabs still looks broken,
+   * and a terminal is the cheapest thing here to bring back: the same tmux
+   * name, the same directory, a fresh login shell.
+   *
+   * The scrollback is genuinely gone, and `revivedAt` records that so the tab
+   * can say so rather than presenting an empty screen as continuity.
+   */
+  async reviveLost(
+    options: { automatic?: boolean } = {},
+  ): Promise<IntegratedTerminal[]> {
+    if (options.automatic && !this.config.autoRestoreSessionsEnabled) return [];
+    if (!(await this.tmux.probe())) return [];
+    const live = new Set(await this.tmux.listSessions());
+    const shell =
+      findExecutable(process.env.SHELL ?? "") ??
+      findExecutable("/bin/zsh") ??
+      findExecutable("/bin/bash") ??
+      findExecutable("/bin/sh");
+    const revived: IntegratedTerminal[] = [];
+    for (const terminal of this.repositories.listIntegratedTerminals()) {
+      if (terminal.status !== "lost") continue;
+      const now = new Date().toISOString();
+      if (live.has(terminal.tmuxSession)) {
+        // Something else already reopened it; adopt rather than duplicate.
+        this.repositories.updateIntegratedTerminal({
+          ...terminal,
+          status: "running",
+          endedAt: null,
+        });
+        continue;
+      }
+      // A terminal whose directory went away with the work it belonged to has
+      // nowhere to open, and every other terminal still deserves to come back.
+      if (!shell || !(await pathExists(terminal.workingDirectory))) continue;
+      const reopened: IntegratedTerminal = {
+        ...terminal,
+        command: shell,
+        args: ["-l"],
+        status: "running",
+        exitCode: null,
+        startedAt: now,
+        endedAt: null,
+        revivedAt: now,
+      };
+      try {
+        await this.tmux.createSession({
+          session: reopened.tmuxSession,
+          cwd: reopened.workingDirectory,
+          executable: reopened.command,
+          args: reopened.args,
+        });
+      } catch {
+        continue;
+      }
+      this.repositories.updateIntegratedTerminal(reopened);
+      revived.push(reopened);
+    }
+    return revived;
   }
 
   private uniqueName(baseName: string): string {

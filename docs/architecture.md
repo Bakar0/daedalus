@@ -30,7 +30,7 @@ Workspace rows are indexes, not proof of existence. Services require a real non-
 
 Workspace content follows the contract in [workspace-content.md](workspace-content.md). Root `BRIEF.md` and `JOURNAL.md` files are visible, portable context while `.daedalus/` remains internal. Remote repositories have one global bare clone under `<DAEDALUS_HOME>/repos`; a successful fetch of the remote default branch produces a pinned detached planning checkout in each workspace. Agent sessions start in immutable task/session identity paths and create linked worktrees from that pinned commit only when they need to modify a repository.
 
-Agent sessions use names derived only from immutable UUIDs. Provider adapters build executable and argument arrays, and the tmux adapter preserves those argv boundaries. Because packaged macOS apps do not inherit an interactive shell PATH, tmux discovery also checks the standard Apple Silicon and Intel Homebrew locations before reporting it unavailable. On startup, live SQLite rows are reconciled against the isolated Daedalus tmux server; missing sessions become `lost`, while task status remains untouched.
+Agent sessions use names derived only from immutable UUIDs. Provider adapters build executable and argument arrays, and the tmux adapter preserves those argv boundaries. Because packaged macOS apps do not inherit an interactive shell PATH, tmux discovery also checks the standard Apple Silicon and Intel Homebrew locations before reporting it unavailable. On startup, live SQLite rows are reconciled against the isolated Daedalus tmux server; missing sessions become `lost`, while task status remains untouched. Reconciliation only observes — it runs on nearly every CLI command and on the desktop poll, so it never starts a process. Revival is a separate, explicit call: the app sweeps once at startup, and `daedal agent revive` does the same thing from the command line. Both relaunch through the one path `restore` uses, resuming the provider's native conversation so each agent returns idle at its prompt; a cross-process lock file under `DAEDALUS_HOME` and a `hasSession` check immediately before each launch keep a racing app start and CLI sweep from creating two runtimes under one tmux name. A session that cannot be resumed stays `lost` and records `lostReason`.
 
 ## Lifecycle and activity are orthogonal
 
@@ -43,9 +43,18 @@ because an idle session and one blocked on a permission dialog are both
 `running`, and only the second changes what the user does next. Neither axis
 touches `Task.status`: the board is a third thing again.
 
-**Lifecycle dominates on conflict.** A session that becomes `exited` or `lost`
-has its activity cleared rather than preserved, because "working" is the most
-damaging thing a display can claim about a session that is already gone.
+**Lifecycle dominates on conflict.** A session that becomes `exited` has its
+activity cleared rather than preserved, because "working" is the most damaging
+thing a display can claim about a session that is already gone.
+
+`lost` is deliberately not that case. A reboot kills the tmux server under every
+open conversation at once, and the revive sweep puts each agent back at the
+point it stopped — usually still blocked on the same question. Clearing the
+badges there would wipe every reason the user had to look at exactly the moment
+a restart handed them a whole board of them, so a `lost` session keeps its
+reading, its badge and its queued notifications. Staleness decay still applies,
+so a `working` reading on a session that never comes back fades to `unknown`
+rather than being believed forever.
 
 **Activity signals are advisory and carry their confidence.** Every reading
 records a `source` — `agent` (the session reporting on itself), `hook`,

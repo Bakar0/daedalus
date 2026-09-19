@@ -614,7 +614,10 @@ export function sessionStatusView(
     return {
       tone: session.status === "lost" ? "lost" : "ended",
       label: LIFECYCLE_LABEL[session.status],
-      detail: null,
+      // Why it could not be revived, when something tried and failed. A reboot
+      // makes every session `lost` at once, and the ones that are staying that
+      // way have to be tellable apart from the ones that simply came back.
+      detail: session.status === "lost" ? session.lostReason : null,
       since: session.endedAt,
       // A vanished session is today's attention signal and stays one.
       attention: session.status === "lost",
@@ -2975,6 +2978,13 @@ export function WorkspaceApp({
     if (restored) openSession(restored.id);
   }
 
+  async function reviveSession(session: AgentSessionDto) {
+    const revived = await perform(
+      client.request.agentRevive({ id: session.id }),
+    );
+    if (revived) openSession(revived.id);
+  }
+
   async function archiveWorkspace(item: WorkspaceDto) {
     const wasSelected = workspaceId === item.id;
     setWorkspaceAction(undefined);
@@ -4332,6 +4342,18 @@ export function WorkspaceApp({
                           </time>
                         </span>
                       </button>
+                      {session.status === "lost" && (
+                        <button
+                          aria-label={`Revive ${sessionName(session)} session`}
+                          className="session-card-action"
+                          data-no-drag
+                          disabled={busy}
+                          onClick={() => void reviveSession(session)}
+                          title="Resume this conversation in a new terminal"
+                        >
+                          ↻
+                        </button>
+                      )}
                       <button
                         aria-label={`Archive ${sessionName(session)} session`}
                         className="session-card-action"
@@ -4630,14 +4652,28 @@ export function WorkspaceApp({
                     aria-selected={terminal.id === activeIntegratedTerminal?.id}
                     onClick={() => setActiveTerminalId(terminal.id)}
                     role="tab"
-                    title={terminal.workingDirectory}
+                    title={
+                      terminal.revivedAt
+                        ? `${terminal.workingDirectory} — reopened after a restart, scrollback not restored`
+                        : terminal.workingDirectory
+                    }
                     type="button"
                   >
                     <span
                       className={`agent-dot tone-${lifecycleTone(terminal.status)}`}
                     />
                     <span className="integrated-terminal-tab-copy">
-                      <strong>{terminal.name}</strong>
+                      <strong>
+                        {terminal.name}
+                        {terminal.revivedAt && (
+                          <span
+                            aria-label="reopened after a restart, scrollback not restored"
+                            className="integrated-terminal-revived"
+                          >
+                            ↻
+                          </span>
+                        )}
+                      </strong>
                       <small>
                         {terminalPathHint(
                           terminal.workingDirectory,
@@ -5157,6 +5193,32 @@ export function WorkspaceApp({
                   <small>
                     Keep Daedalus-managed AGENTS.md, CLAUDE.md, and the
                     daedalus-control skill links in workspace roots.
+                  </small>
+                </span>
+              </label>
+            </dd>
+            <dt>Session recovery</dt>
+            <dd>
+              <label className="settings-toggle">
+                <input
+                  checked={snapshot.settings.autoRestoreSessionsEnabled}
+                  disabled={busy}
+                  onChange={(event) =>
+                    void perform(
+                      client.request.autoRestoreSessionsSet({
+                        enabled: event.target.checked,
+                      }),
+                    )
+                  }
+                  type="checkbox"
+                />
+                <span>
+                  <strong>Bring sessions back on startup</strong>
+                  <small>
+                    A reboot kills the tmux server every session lives in.
+                    Daedalus resumes each conversation when it next starts, so
+                    agents come back idle at their prompt with their history —
+                    nothing is sent to them and no work restarts on its own.
                   </small>
                 </span>
               </label>

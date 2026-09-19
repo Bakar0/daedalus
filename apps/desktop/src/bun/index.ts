@@ -72,6 +72,34 @@ const context = await createApplicationContext({
   // "preparing" until something unrelated refreshed it.
   onRepositoriesChanged: () => announce("external"),
 });
+// A Mac reboot kills the Daedalus tmux server and nothing else, so the context
+// that just reconciled has turned every session that was running into `lost`.
+// Bringing them back is done here, once, explicitly — before the change-check
+// loop below starts — rather than from inside `reconcile()`, which also runs on
+// that loop and on nearly every CLI command: revival wired in there would mean
+// `daedal agent list` resurrecting agents.
+//
+// Each agent comes back idle at its prompt with its conversation loaded.
+// Nothing is sent to it, so no work resumes on its own.
+const revivedSessions = await context.agents
+  .reviveLostSessions({ automatic: true })
+  .catch((error: unknown) => {
+    void context.logger.write("error", "session_revive_sweep_failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  });
+const revivedTerminals = await context.terminals
+  .reviveLost({ automatic: true })
+  .catch(() => []);
+if (revivedSessions)
+  await context.logger.write("info", "session_revive_sweep", {
+    revived: revivedSessions.revived.length,
+    skipped: revivedSessions.skipped,
+    ...(revivedSessions.halted ? { halted: revivedSessions.halted } : {}),
+    terminals: revivedTerminals.length,
+  });
+
 const cliEntrypoint = resolve(PATHS.RESOURCES_FOLDER, "app/cli/daedal.js");
 const bunExecutable = findExecutable("bun", standardExecutableFallbacks("bun"));
 if ((await pathExists(cliEntrypoint)) && bunExecutable)

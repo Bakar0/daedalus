@@ -1969,6 +1969,13 @@ dd {
   color: var(--muted);
   font-size: 9px;
 }
+/* A terminal that came back as a fresh shell says so: the tab looks the same
+   as one that never died, and the scrollback behind it is genuinely gone. */
+.integrated-terminal-revived {
+  color: var(--muted);
+  font-size: 9px;
+  margin-left: 4px;
+}
 .integrated-terminal-tab .integrated-terminal-close {
   border-radius: 5px !important;
   flex: 0 0 auto;
