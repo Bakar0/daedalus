@@ -679,8 +679,7 @@ export class WorkspaceContentService {
     const worktrees = this.repositories.listSessionWorktrees({
       workspaceId: workspace.id,
     });
-    this.scheduleGitStatusRefresh(workspace.id);
-    return {
+    const content: WorkspaceContent = {
       workspaceId: workspace.id,
       brief: await readTextFile(join(workspace.path, "BRIEF.md")),
       journal: await readTextFile(join(workspace.path, "JOURNAL.md")),
@@ -702,6 +701,15 @@ export class WorkspaceContentService {
         return { ...worktree, ...(status ? { gitStatus: status } : {}) };
       }),
     };
+    // Scheduled after the answer is built, not before. Starting it first let
+    // this call race a refresh it had started itself: the three file reads
+    // above are all the time git needs on a small repository, so the same
+    // listing sometimes carried a status and sometimes did not, decided by
+    // whichever finished first on that machine. Whatever this measures belongs
+    // to the next listing, which is what "listing never waits for git" has to
+    // mean if it is to mean anything.
+    this.scheduleGitStatusRefresh(workspace.id);
+    return content;
   }
 
   /**
