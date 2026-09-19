@@ -18,6 +18,7 @@ import { AgentService } from "./agents";
 import { IntegratedTerminalService } from "./integrated-terminals";
 import { NotificationService } from "./notifications";
 import { PresenceService } from "./presence";
+import { ShutdownService } from "./shutdown";
 import { TaskService } from "./tasks";
 import { TelemetryService } from "./telemetry";
 import { WorkspaceService } from "./workspaces";
@@ -36,6 +37,8 @@ export interface ApplicationContext {
   presence: PresenceService;
   notifications: NotificationService;
   activity: ActivityService;
+  /** Ends everything at once. Nothing else in the app reaches for it. */
+  shutdown: ShutdownService;
   tmux: TmuxClient;
   close(): void;
 }
@@ -163,6 +166,7 @@ export async function createApplicationContext(
     presence,
     notifications,
     activity,
+    shutdown: new ShutdownService(repositories, agents, terminals, tmux),
     tmux,
     close: () => repositories.close(),
   };

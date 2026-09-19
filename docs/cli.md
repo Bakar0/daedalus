@@ -93,7 +93,23 @@ Each launch gets a durable `daedalus_<uuid>` tmux session on a Daedalus server i
 
 `revive` brings back sessions that lost their tmux server, which is what a Mac reboot leaves behind: tmux sessions survive quitting the app but not a restart of the machine. It is the same operation as `restore` — the provider's native resume command, the same working directory, the same `DAEDALUS_*` identity — without the archive, because a lost conversation was never put away. Each agent comes back idle at its prompt with its history loaded; nothing is sent to it, so no work restarts on its own. Naming an id revives that one session and fails if it cannot; `--all` or `--workspace` sweeps, two at a time, and reports the sessions it could not bring back instead of aborting. A session that cannot be resumed — a `--command` session with no native resume, a Claude session with no identifiable transcript, a working directory that is gone — stays `lost` and carries the reason in `lostReason`, which `agent get --json` returns and the session card shows.
 
+Sessions outlive the process that started them, and the app. The tmux server is keyed to `DAEDALUS_HOME` rather than owned by either adapter, so closing the terminal that ran `agent spawn` leaves the agent running, and so does quitting the desktop app — the app is an optional view onto sessions it does not own. Ending them is always explicit: `agent stop`, `agent archive`, or `daedal shutdown` for all of them at once.
+
 Startup reconciliation compares SQLite with tmux. Missing live sessions become `lost`; existing starting sessions become `running`. Reconciliation observes and never starts anything: it runs on nearly every command, so revival is always an explicit call and `agent list` never spawns. The desktop app runs one sweep when it starts, before anything else, unless **Bring sessions back on startup** is turned off in Settings; a lock file under `DAEDALUS_HOME` keeps that sweep and a concurrent CLI one from creating two runtimes for the same conversation. Integrated terminals are reopened by the same sweep as fresh login shells in the same directory — there is no conversation to resume, so their scrollback is genuinely lost and their tab says so. A `lost` session keeps its activity reading and its attention badge, because it is coming back to the same point it stopped at. If tmux itself is unavailable, reconciliation leaves persisted state unchanged and agent lifecycle commands report exit code 5 where applicable.
+
+## Shutdown
+
+```
+daedal shutdown [--dry-run] [--keep-terminals] [--force] [--json]
+```
+
+The off switch, and the only command that ends the Daedalus tmux server. It archives every live agent session, closes every integrated terminal, then stops the server on this home's socket.
+
+Sessions whose provider has no native resume — a `--command` session, or one whose conversation cannot be identified — are stopped rather than archived, and reported as `stopped` with the reason archiving refused. That is also what happens when archiving fails for any other reason and the session is still live: whatever the archive could not do, the stop still does, so a half-spawned `starting` session is never left behind. One session failing never aborts the rest; the per-session report is printed either way and the exit code is `4` when anything failed.
+
+`--dry-run` prints exactly what would be stopped and changes nothing. `--keep-terminals` leaves the integrated terminals open, and leaves the tmux server running with them — the server is where they live, so there is no reading of the flag that also ends it.
+
+Without `--force` the command refuses with exit code `4` while the desktop app is running. The app polls tmux about once a second and reconciles what it finds; a teardown underneath that races it. Quit the app first — its Daedalus menu has **Quit and Shut Down Sessions**, which runs this same sweep.
 
 ## Activity
 
@@ -373,6 +389,8 @@ shim runs the packaged CLI with the resolved Bun executable rather than the
 desktop Cottontail runtime, so non-interactive commands terminate after
 emitting their result. Daedalus-launched sessions put this directory first on
 `PATH`.
+
+`quitBehavior` is `"ask"`, `"keep"`, or `"archive"`, and controls what the desktop app does when Cmd+Q is pressed with sessions still live. It defaults to `"ask"` and is written by **Don't ask again** in that dialog or by the **On quit** setting; anything unrecognised reads as `"ask"`, because the one outcome worth ruling out is a stray value quietly archiving someone's sessions. It has no effect on the CLI.
 
 `daedal doctor [--json]` checks the verified Bun version, tmux availability/minimum, resolved home, and migrated database.
 

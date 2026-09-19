@@ -32,6 +32,11 @@ class FakeTmux implements TmuxClient {
   async stop(session: string) {
     this.sessions.delete(session);
   }
+  async killServer() {
+    const running = this.sessions.size > 0;
+    this.sessions.clear();
+    return running;
+  }
 }
 
 describe("desktop RPC handlers", () => {
@@ -263,6 +268,55 @@ describe("desktop RPC handlers", () => {
         expect(journal.ok && journal.data.journal).toContain(
           "Developer input is required.",
         );
+      } finally {
+        context.close();
+      }
+    });
+  });
+
+  test("carries the quit dialog's two answers to the host", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const context = await createApplicationContext({
+        env: { ...process.env, DAEDALUS_HOME: home },
+        tmux: new FakeTmux(),
+      });
+      const decisions: Array<[string, boolean]> = [];
+      let shown = 0;
+      const rpc = createDesktopRequestHandlers(
+        context,
+        () => {},
+        () => false,
+        "",
+        {
+          dialogShown: () => {
+            shown += 1;
+          },
+          decide: async (choice, remember) => {
+            decisions.push([choice, remember]);
+          },
+        },
+      );
+      try {
+        expect((await rpc.snapshot({})).ok).toBe(true);
+        const snapshot = await rpc.snapshot({});
+        expect(snapshot.ok && snapshot.data.settings.quitBehavior).toBe("ask");
+
+        expect(await rpc.quitDialogShown({})).toEqual({
+          ok: true,
+          data: { acknowledged: true },
+        });
+        expect(shown).toBe(1);
+        expect(
+          await rpc.quitDecision({ choice: "archive", remember: false }),
+        ).toEqual({ ok: true, data: { accepted: true } });
+        expect(decisions).toEqual([["archive", false]]);
+
+        expect(await rpc.quitBehaviorSet({ behavior: "keep" })).toEqual({
+          ok: true,
+          data: { behavior: "keep" },
+        });
+        const updated = await rpc.snapshot({});
+        expect(updated.ok && updated.data.settings.quitBehavior).toBe("keep");
       } finally {
         context.close();
       }

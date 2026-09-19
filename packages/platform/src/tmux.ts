@@ -29,6 +29,15 @@ export interface TmuxClient {
   sendKeys(session: string, keys: string[]): Promise<void>;
   send(session: string, text: string): Promise<void>;
   stop(session: string, force?: boolean): Promise<void>;
+  /**
+   * Ends the whole server on this socket, and with it every session in it —
+   * including ones Daedalus never started. Only `daedal shutdown` and the menu
+   * item that runs it ever call this; nothing reaches for it implicitly.
+   *
+   * Resolves `true` when a server was running and is now gone, `false` when
+   * there was nothing to stop, which is the same goal state reached sooner.
+   */
+  killServer(): Promise<boolean>;
 }
 
 export interface TmuxTerminalTarget {
@@ -205,6 +214,22 @@ export class CommandTmuxClient implements TmuxClient {
       if (killed.exitCode !== 0)
         throw new Error(killed.stderr.trim() || "tmux stop failed");
     }
+  }
+
+  async killServer(): Promise<boolean> {
+    const result = await this.command(
+      this.executable,
+      this.args("kill-server"),
+    );
+    if (result.exitCode === 0) return true;
+    // Already down is the goal, not a failure: tmux exits on its own once the
+    // last session in it ends, so a sweep that stopped everything may well
+    // find no server left to kill.
+    const message = (
+      result.stderr.trim() || result.stdout.trim()
+    ).toLowerCase();
+    if (message.includes("no server running")) return false;
+    throw new Error(result.stderr.trim() || "tmux server could not be stopped");
   }
 }
 

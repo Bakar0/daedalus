@@ -2,11 +2,23 @@ import { homedir } from "node:os";
 import { rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { ensureDirectory } from "@daedalus/platform";
+import { DaedalusError } from "./errors";
 
 export interface AgentDefinition {
   executable: string;
   args: string[];
 }
+
+/**
+ * What Cmd+Q does when agent sessions or integrated terminals are still live.
+ *
+ * `keep` is what Daedalus has always done — the tmux server, the agent CLIs
+ * and everything they spawned outlive the window — and stays the default
+ * *behaviour*. `ask` is the default *setting* only because that behaviour was
+ * previously invisible: the dialog is how the user is told, once, before
+ * choosing to stop being told.
+ */
+export type QuitBehavior = "keep" | "archive" | "ask";
 
 export interface DaedalusConfig {
   home: string;
@@ -31,6 +43,8 @@ export interface DaedalusConfig {
    * tracking, so the board stays live while the interruptions stop.
    */
   focusMode: boolean;
+  /** See `QuitBehavior`. Set by "don't ask again" in the quit dialog. */
+  quitBehavior: QuitBehavior;
   agents: Record<string, AgentDefinition>;
 }
 
@@ -41,6 +55,7 @@ type StoredConfig = Partial<
     | "workspaceInstructionFilesEnabled"
     | "autoRestoreSessionsEnabled"
     | "focusMode"
+    | "quitBehavior"
     | "agents"
   >
 >;
@@ -69,6 +84,16 @@ export function channelHome(channel: string | undefined, home: string): string {
   const suffix = `-${channel}`;
   return home.endsWith(suffix) ? home : `${home}${suffix}`;
 }
+
+export const QUIT_BEHAVIORS: readonly QuitBehavior[] = [
+  "keep",
+  "archive",
+  "ask",
+];
+
+export const isQuitBehavior = (value: unknown): value is QuitBehavior =>
+  typeof value === "string" &&
+  (QUIT_BEHAVIORS as readonly string[]).includes(value);
 
 export const STABLE_APP_IDENTIFIER = "dev.daedalus.app";
 
@@ -137,6 +162,11 @@ export async function loadConfig(
       stored.workspaceInstructionFilesEnabled !== false,
     autoRestoreSessionsEnabled: stored.autoRestoreSessionsEnabled !== false,
     focusMode: stored.focusMode === true,
+    // Anything unrecognised reads as "ask", because the one outcome worth
+    // ruling out is a stray value quietly archiving someone's sessions.
+    quitBehavior: QUIT_BEHAVIORS.includes(stored.quitBehavior as QuitBehavior)
+      ? (stored.quitBehavior as QuitBehavior)
+      : "ask",
     agents: stored.agents || {
       codex: { executable: "codex", args: [] },
       claude: { executable: "claude", args: [] },
@@ -184,6 +214,19 @@ export async function saveAutoRestoreSessionsEnabled(
 ): Promise<void> {
   await saveSetting(config, { autoRestoreSessionsEnabled: enabled });
   config.autoRestoreSessionsEnabled = enabled;
+}
+
+export async function saveQuitBehavior(
+  config: DaedalusConfig,
+  behavior: QuitBehavior,
+): Promise<void> {
+  if (!QUIT_BEHAVIORS.includes(behavior))
+    throw new DaedalusError(
+      "VALIDATION",
+      `Unknown quit behavior '${behavior}'`,
+    );
+  await saveSetting(config, { quitBehavior: behavior });
+  config.quitBehavior = behavior;
 }
 
 export async function saveFocusMode(

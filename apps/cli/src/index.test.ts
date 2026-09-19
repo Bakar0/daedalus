@@ -1,5 +1,6 @@
-import { join } from "node:path";
-import { mkdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { join, resolve } from "node:path";
+import { mkdir, rm } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import { runCommand } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
@@ -58,6 +59,10 @@ async function createRepository(path: string): Promise<void> {
     ).exitCode,
   ).toBe(0);
 }
+
+/** The tmux server an application context keys to a home. */
+const socketNameFor = (home: string) =>
+  `daedalus-${createHash("sha256").update(resolve(home)).digest("hex").slice(0, 12)}`;
 
 describe("daedal CLI contract", () => {
   test("reports the package version in text and JSON formats", async () => {
@@ -282,6 +287,104 @@ describe("daedal CLI contract", () => {
       ]);
       expect(failed.exitCode).toBe(5);
       expect(JSON.parse(failed.stderr).error.code).toBe("DEPENDENCY");
+    });
+  });
+
+  test("shuts everything down, and refuses to race the app while it is open", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await Bun.write(
+        join(home, "config.json"),
+        // `cat` with no arguments sits on stdin, which is what a live agent
+        // session looks like to tmux.
+        JSON.stringify({
+          agents: { hold: { executable: "/bin/cat", args: [] } },
+        }),
+      );
+      const workspace = await cli(home, [
+        "workspace",
+        "create",
+        "Shutdown",
+        "--json",
+      ]);
+      expect(workspace.exitCode).toBe(0);
+      const workspaceId = JSON.parse(workspace.stdout).data.id as string;
+      for (const name of ["One", "Two"]) {
+        const spawned = await cli(home, [
+          "agent",
+          "spawn",
+          "--workspace",
+          workspaceId,
+          "--command",
+          "hold",
+          "--name",
+          name,
+          "--json",
+        ]);
+        expect(spawned.exitCode).toBe(0);
+      }
+
+      const dryRun = await cli(home, ["shutdown", "--dry-run", "--json"]);
+      expect(dryRun.exitCode).toBe(0);
+      const planned = JSON.parse(dryRun.stdout) as {
+        data: {
+          sessions: Array<{ name: string; disposition: string }>;
+          stopsServer: boolean;
+        };
+      };
+      // A configured command has no native conversation to preserve, so it is
+      // reported as a stop rather than silently promised an archive.
+      expect(
+        planned.data.sessions.map((item) => [item.name, item.disposition]),
+      ).toEqual([
+        ["Two", "stop"],
+        ["One", "stop"],
+      ]);
+      expect(planned.data.stopsServer).toBe(true);
+      // A dry run changes nothing.
+      expect(
+        JSON.parse((await cli(home, ["agent", "list", "--json"])).stdout).data,
+      ).toHaveLength(2);
+
+      // The app polls tmux about once a second; a teardown underneath that
+      // races it, so the command refuses rather than fighting for the rows.
+      await Bun.write(
+        join(home, "presence.json"),
+        JSON.stringify({
+          appForeground: true,
+          workspaceId: null,
+          sessionId: null,
+          userIdleSeconds: 0,
+          observedAt: new Date().toISOString(),
+        }),
+      );
+      const refused = await cli(home, ["shutdown", "--json"]);
+      expect(refused.exitCode).toBe(4);
+      expect(JSON.parse(refused.stderr).error.message).toMatch(
+        /desktop app is running/,
+      );
+      await rm(join(home, "presence.json"), { force: true });
+
+      const done = await cli(home, ["shutdown", "--json"]);
+      expect(done.exitCode).toBe(0);
+      const result = JSON.parse(done.stdout) as {
+        data: {
+          sessions: Array<{ outcome: string }>;
+          serverStopped: boolean;
+        };
+      };
+      expect(result.data.sessions.map((item) => item.outcome)).toEqual([
+        "stopped",
+        "stopped",
+      ]);
+      expect(result.data.serverStopped).toBe(true);
+      // The claim above is only worth as much as the socket agrees with: no
+      // Daedalus tmux server is left behind.
+      const server = await runCommand("tmux", [
+        "-L",
+        socketNameFor(home),
+        "list-sessions",
+      ]);
+      expect(server.exitCode).not.toBe(0);
     });
   });
 

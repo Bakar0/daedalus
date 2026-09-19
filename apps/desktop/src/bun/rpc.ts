@@ -4,6 +4,7 @@ import {
   DaedalusError,
   normalizeError,
   saveAutoRestoreSessionsEnabled,
+  saveQuitBehavior,
   type AgentActivityState,
   type AgentSession,
   type ApplicationContext,
@@ -19,6 +20,7 @@ import {
 } from "@daedalus/core";
 import type {
   AgentActivityDto,
+  QuitChoice,
   AgentSessionDto,
   DesktopRpcSchema,
   DesktopSnapshotDto,
@@ -33,6 +35,15 @@ import type {
   WorkspaceDto,
   WorkspaceRepositoryDto,
 } from "@daedalus/protocol";
+
+/**
+ * The host's side of the quit dialog. It lives in `index.ts` because only the
+ * host can end the process; the RPC layer just carries the two answers back.
+ */
+export interface DesktopQuitHost {
+  dialogShown(): void;
+  decide(choice: QuitChoice, remember: boolean): Promise<void>;
+}
 
 type Requests = DesktopRpcSchema["bun"]["requests"];
 export type DesktopRequestHandlers = {
@@ -163,6 +174,7 @@ export async function desktopSnapshot(
         context.config.workspaceInstructionFilesEnabled,
       autoRestoreSessionsEnabled: context.config.autoRestoreSessionsEnabled,
       focusMode: context.config.focusMode,
+      quitBehavior: context.config.quitBehavior,
       ...capabilities,
     },
   };
@@ -191,6 +203,7 @@ export function createDesktopRequestHandlers(
   onMutation: () => void = () => {},
   openExternal: (url: string) => boolean = () => false,
   terminalEndpoint = "",
+  quit: DesktopQuitHost = { dialogShown: () => {}, decide: async () => {} },
 ): DesktopRequestHandlers {
   const mutate = async <T>(operation: () => T | Promise<T>) => {
     const response = await result(operation);
@@ -282,6 +295,23 @@ export function createDesktopRequestHandlers(
       mutate(async () => ({
         enabled: await context.presence.setFocusMode(enabled),
       })),
+    quitBehaviorSet: ({ behavior }) =>
+      mutate(async () => {
+        await saveQuitBehavior(context.config, behavior);
+        return { behavior };
+      }),
+    // Neither of these is a data change, and the second one is usually the
+    // last thing this process does.
+    quitDialogShown: () =>
+      result(() => {
+        quit.dialogShown();
+        return { acknowledged: true as const };
+      }),
+    quitDecision: ({ choice, remember }) =>
+      result(async () => {
+        await quit.decide(choice, remember);
+        return { accepted: true as const };
+      }),
     // Presence is a heartbeat, not a data change: announcing it would make the
     // window refresh itself every time the user moved.
     presencePublish: (report) =>

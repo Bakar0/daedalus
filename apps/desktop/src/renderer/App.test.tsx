@@ -16,6 +16,7 @@ import {
   pendingSessionLaunches,
   preferredSessionId,
   preferredWorkspaceView,
+  quitDisclosure,
   type SessionLaunchState,
   shouldFocusSession,
   TERMINAL_FONT_SIZE,
@@ -50,12 +51,59 @@ const base: DesktopSnapshotDto = {
     workspaceInstructionFilesEnabled: true,
     autoRestoreSessionsEnabled: true,
     focusMode: false,
+    quitBehavior: "ask",
     providers: [
       { name: "codex", executable: "codex", available: false },
       { name: "claude", executable: "claude", available: true },
     ],
   },
 };
+
+describe("quit disclosure", () => {
+  const session = (id: string, disposition: "archive" | "stop") => ({
+    id,
+    name: id,
+    workspaceId: "workspace-1",
+    provider:
+      disposition === "stop" ? ("custom" as const) : ("claude" as const),
+    disposition,
+  });
+
+  test("names what is still running, in the right number", () => {
+    expect(
+      quitDisclosure({
+        sessions: [session("a", "archive"), session("b", "archive")],
+        terminals: [{ id: "t", name: "Terminal" }],
+      }).headline,
+    ).toBe("2 agent sessions and 1 terminal are still running.");
+    // One of one thing reads as "is", which is the case the plural-by-count
+    // shortcut gets wrong.
+    expect(
+      quitDisclosure({ sessions: [session("a", "archive")], terminals: [] })
+        .headline,
+    ).toBe("1 agent session is still running.");
+    expect(
+      quitDisclosure({ sessions: [], terminals: [{ id: "t", name: "T" }] })
+        .headline,
+    ).toBe("1 terminal is still running.");
+    expect(quitDisclosure({ sessions: [], terminals: [] }).headline).toBe(
+      "Nothing is running.",
+    );
+  });
+
+  test("counts the sessions archiving cannot preserve", () => {
+    expect(
+      quitDisclosure({
+        sessions: [session("a", "archive"), session("b", "stop")],
+        terminals: [],
+      }),
+    ).toMatchObject({
+      sessionCount: 2,
+      terminalCount: 0,
+      unarchivableCount: 1,
+    });
+  });
+});
 
 describe("desktop application shell", () => {
   test("maps Shift+Enter to the portable agent multiline sequence", () => {

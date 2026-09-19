@@ -30,9 +30,12 @@ import type {
   ProviderModelCatalogDto,
   SessionTelemetryDto,
   SessionWorktreeDto,
+  QuitBehavior,
+  QuitChoice,
   RepositoryDiscoveryDto,
   RpcResult,
   SessionAttentionDto,
+  ShutdownPlanDto,
   TaskDto,
   TaskStatus,
   WorkspaceContentDto,
@@ -1021,6 +1024,41 @@ function WorkspaceFileEditor({
   );
 }
 
+const plural = (count: number, noun: string) =>
+  `${count} ${noun}${count === 1 ? "" : "s"}`;
+
+/**
+ * What the quit dialog says is still live, in one sentence.
+ *
+ * Exported and pure because the sentence is the feature. The whole point of
+ * this dialog is that the user is told a true and specific thing before
+ * choosing, so "2 agent sessions and 1 terminal" being right for every
+ * combination of counts is worth a test rather than a glance.
+ */
+export function quitDisclosure(plan: ShutdownPlanDto): {
+  sessionCount: number;
+  terminalCount: number;
+  unarchivableCount: number;
+  headline: string;
+} {
+  const sessionCount = plan.sessions.length;
+  const terminalCount = plan.terminals.length;
+  const parts = [
+    ...(sessionCount ? [plural(sessionCount, "agent session")] : []),
+    ...(terminalCount ? [plural(terminalCount, "terminal")] : []),
+  ];
+  return {
+    sessionCount,
+    terminalCount,
+    unarchivableCount: plan.sessions.filter(
+      (session) => session.disposition === "stop",
+    ).length,
+    headline: parts.length
+      ? `${parts.join(" and ")} ${parts.length === 1 && sessionCount + terminalCount === 1 ? "is" : "are"} still running.`
+      : "Nothing is running.",
+  };
+}
+
 function Modal({
   title,
   onClose,
@@ -1679,6 +1717,11 @@ export function WorkspaceApp({
     "workspace" | "task" | "session" | "repository" | "settings" | undefined
   >(initialModal);
   const [editingTask, setEditingTask] = useState(false);
+  // The quit dialog is driven entirely by the host: it arrives with the plan
+  // already computed, and every button answers back over `quitDecision`.
+  const [quitRequest, setQuitRequest] = useState<ShutdownPlanDto>();
+  const [quitRemember, setQuitRemember] = useState(false);
+  const [quitting, setQuitting] = useState<QuitChoice>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [theme, setTheme] = useState<"dark" | "light">("dark");
@@ -2094,6 +2137,22 @@ export function WorkspaceApp({
       }),
     [client, openSession],
   );
+  // Deliberately not routed through Focus mode. This is a direct response to
+  // the user pressing Cmd+Q, not an alert, and suppressing it would leave a
+  // keystroke that silently does nothing.
+  useEffect(
+    () =>
+      client.subscribeQuitRequest?.((plan) => {
+        setQuitRemember(false);
+        setQuitting(undefined);
+        setQuitRequest(plan);
+        // Tells the host the dialog exists. Without this it quits on its own
+        // after a couple of seconds, keeping everything running, rather than
+        // leaving Cmd+Q looking broken.
+        void client.request.quitDialogShown?.({});
+      }),
+    [client],
+  );
   useEffect(() => {
     const unsubscribe = client.subscribeWindowResize(terminalLayoutChanged);
     window.addEventListener("resize", terminalLayoutChanged);
@@ -2212,6 +2271,24 @@ export function WorkspaceApp({
       cancelled = true;
     };
   }, [client, modelCatalogs, sessionType]);
+
+  /**
+   * Answers the quit dialog. Not routed through `perform`: archiving a board
+   * of sessions is slower than one RPC deadline, and the reply to a successful
+   * quit never arrives at all because the process is gone by then.
+   */
+  function answerQuit(choice: QuitChoice) {
+    if (quitting) return;
+    if (choice === "cancel") {
+      setQuitRequest(undefined);
+      setQuitting(undefined);
+    } else setQuitting(choice);
+    void client.request
+      .quitDecision?.({ choice, remember: quitRemember })
+      .catch(() => {
+        // The app is on its way out; there is nobody left to tell.
+      });
+  }
 
   async function perform<T>(operation: Promise<RpcResult<T>>) {
     setBusy(true);
@@ -5223,6 +5300,32 @@ export function WorkspaceApp({
                 </span>
               </label>
             </dd>
+            <dt>On quit</dt>
+            <dd>
+              <select
+                aria-label="On quit"
+                disabled={busy}
+                onChange={(event) =>
+                  void perform(
+                    client.request.quitBehaviorSet({
+                      behavior: event.target.value as QuitBehavior,
+                    }),
+                  )
+                }
+                value={snapshot.settings.quitBehavior}
+              >
+                <option value="ask">Ask what to do</option>
+                <option value="keep">Keep sessions running</option>
+                <option value="archive">Archive every session</option>
+              </select>
+              <small className="settings-note">
+                Sessions outlive the app either way unless they are archived:
+                they live in a tmux server Daedalus does not own, and{" "}
+                <code>daedal agent spawn</code> starts them with the app closed.
+                To end everything at once, use Quit and Shut Down Sessions or{" "}
+                <code>daedal shutdown</code>.
+              </small>
+            </dd>
             <dt>Notifications</dt>
             <dd>
               <label className="settings-toggle">
@@ -5392,6 +5495,87 @@ export function WorkspaceApp({
           </form>
         </Modal>
       )}
+
+      {quitRequest &&
+        (() => {
+          const disclosure = quitDisclosure(quitRequest);
+          // Everything the headline just counted, so the button does not
+          // promise to keep fewer things than the sentence above it named.
+          const keeping = disclosure.sessionCount + disclosure.terminalCount;
+          return (
+            <Modal
+              dismissible={!quitting}
+              onClose={() => answerQuit("cancel")}
+              title="Quit Daedalus"
+            >
+              <div className="confirmation-content">
+                <p>
+                  <strong>{disclosure.headline}</strong> Quitting Daedalus does
+                  not stop them: the tmux server, the agent CLIs and everything
+                  they started keep running in the background.
+                </p>
+                <p>
+                  They stay reachable from a terminal with{" "}
+                  <code>daedal agent list</code> and{" "}
+                  <code>daedal agent attach &lt;id&gt;</code>, and reopening
+                  Daedalus reconnects to them.
+                </p>
+                {disclosure.unarchivableCount > 0 && (
+                  <p>
+                    {disclosure.unarchivableCount === 1
+                      ? "One session has no resumable conversation, so archiving stops it instead of preserving it."
+                      : `${disclosure.unarchivableCount} sessions have no resumable conversation, so archiving stops them instead of preserving them.`}
+                  </p>
+                )}
+                <label className="settings-toggle">
+                  <input
+                    checked={quitRemember}
+                    disabled={Boolean(quitting)}
+                    onChange={(event) => setQuitRemember(event.target.checked)}
+                    type="checkbox"
+                  />
+                  <span>
+                    <strong>Don&apos;t ask again</strong>
+                    <small>
+                      Remembers whichever button you pick next. Settings has it
+                      back.
+                    </small>
+                  </span>
+                </label>
+                <div className="modal-actions">
+                  <button
+                    className="quiet"
+                    disabled={Boolean(quitting)}
+                    onClick={() => answerQuit("cancel")}
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="danger-action"
+                    disabled={Boolean(quitting)}
+                    onClick={() => answerQuit("archive")}
+                    type="button"
+                  >
+                    {quitting === "archive"
+                      ? "Archiving\u2026"
+                      : "Quit and archive all"}
+                  </button>
+                  <button
+                    autoFocus
+                    disabled={Boolean(quitting)}
+                    onClick={() => answerQuit("keep")}
+                    type="button"
+                  >
+                    {keeping > 0
+                      ? `Quit and keep ${keeping} running`
+                      : "Quit and keep running"}
+                  </button>
+                </div>
+              </div>
+            </Modal>
+          );
+        })()}
     </main>
   );
 }

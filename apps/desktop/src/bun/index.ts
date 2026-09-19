@@ -11,6 +11,7 @@ import {
 import {
   channelHome,
   createApplicationContext,
+  saveQuitBehavior,
   sweepProviderActivity,
 } from "@daedalus/core";
 import {
@@ -25,9 +26,14 @@ import type {
   DesktopRpcSchema,
   TerminalServerMessage,
 } from "@daedalus/protocol";
-import { isDesktopCommand } from "@daedalus/protocol";
+import {
+  isDesktopCommand,
+  QUIT_MENU_ACTION,
+  SHUTDOWN_MENU_ACTION,
+} from "@daedalus/protocol";
 import { APPLICATION_MENU } from "./menu";
 import { installCliShim } from "./cli-shim";
+import { QuitController } from "./quit";
 import { createDesktopRequestHandlers, desktopDataFingerprint } from "./rpc";
 import { authorizeTerminalRequest, TerminalConnection } from "./terminal";
 
@@ -248,6 +254,29 @@ function announce(source: "desktop" | "external"): void {
   rpc.send.dataChanged({ revision: ++revision, source });
 }
 
+/**
+ * Quitting Daedalus has never stopped anything, and that is deliberate: the
+ * app does not own the tmux server. `daedal agent spawn` works with the window
+ * never opened, so a GUI quit that killed the server would kill sessions the
+ * CLI started, and an agent mid-turn would lose the turn.
+ *
+ * What was wrong was the silence. The controller states it instead, and the
+ * "Quit and Shut Down Sessions" menu item is the honest way to end everything.
+ */
+const quitController = new QuitController({
+  plan: () => context.shutdown.plan(),
+  runShutdown: (options) => context.shutdown.run(options),
+  quitBehavior: () => context.config.quitBehavior,
+  rememberQuitBehavior: (behavior) =>
+    saveQuitBehavior(context.config, behavior),
+  askWindow: (plan) => rpc.send.quitRequested({ plan }),
+  // The heartbeat goes first for the same reason the signal handlers retire
+  // it: one that outlived the app would absorb every alert into a window that
+  // is not there.
+  quit: () => void context.presence.retire().finally(() => Utils.quit()),
+  log: (event, fields) => void context.logger.write("info", event, fields),
+});
+
 const rpc = BrowserView.defineRPC<DesktopRpcSchema>({
   // Initial repository clones and fetches can legitimately take several
   // minutes for large histories or slower remotes.
@@ -258,6 +287,10 @@ const rpc = BrowserView.defineRPC<DesktopRpcSchema>({
       () => announce("desktop"),
       Utils.openExternal,
       terminalEndpoint,
+      {
+        dialogShown: () => quitController.dialogShown(),
+        decide: (choice, remember) => quitController.decide(choice, remember),
+      },
     ),
   },
 });
@@ -265,6 +298,14 @@ const rpc = BrowserView.defineRPC<DesktopRpcSchema>({
 ApplicationMenu.on("application-menu-clicked", (rawEvent) => {
   const event = rawEvent as { data?: { action?: unknown } };
   const command = event.data?.action;
+  if (command === QUIT_MENU_ACTION) {
+    void quitController.requestQuit();
+    return;
+  }
+  if (command === SHUTDOWN_MENU_ACTION) {
+    void quitController.requestShutdownAndQuit();
+    return;
+  }
   if (isDesktopCommand(command))
     rpc.send.command({ command: command satisfies DesktopCommand });
 });
@@ -428,9 +469,20 @@ setInterval(async () => {
 
 // A heartbeat that outlives the app would absorb every alert into a window
 // that is not there, so it is retired on the way out.
+//
+// These paths deliberately do not consult `quitBehavior`, and deliberately do
+// not archive. A signal is a logout, a shutdown or a kill — it arrives with a
+// deadline measured in seconds, and archiving a board of Codex sessions under
+// one means being killed halfway through it. The same is true of a quit from
+// the Dock, which macOS routes straight to `NSApplication` and Electrobun
+// 1.18.1 offers no hook into. Both fall through to what quitting has always
+// done: everything keeps running, reachable with `daedal agent list`.
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, () => {
     windowReady = false;
+    void context.logger
+      .write("info", "quit", { reason: signal.toLowerCase() })
+      .catch(() => undefined);
     void context.presence.retire().finally(() => process.exit(0));
   });
 

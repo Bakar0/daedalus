@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { QUIT_MENU_ACTION, SHUTDOWN_MENU_ACTION } from "@daedalus/protocol";
 import { APPLICATION_MENU } from "./menu";
 
 describe("desktop application menu", () => {
@@ -23,6 +24,32 @@ describe("desktop application menu", () => {
         "selectAll",
       ]),
     );
+  });
+
+  test("routes quit through our own code rather than the native role", () => {
+    const appMenu = APPLICATION_MENU.find(
+      (item) => "label" in item && item.label === "Daedalus",
+    );
+    const submenu =
+      (appMenu && "submenu" in appMenu ? appMenu.submenu : []) ?? [];
+    // `{ role: "quit" }` is an NSApplication selector: Cmd+Q would terminate
+    // the app without ever reaching us, and the user would never be told what
+    // keeps running.
+    expect(submenu.some((item) => "role" in item && item.role === "quit")).toBe(
+      false,
+    );
+    expect(
+      Object.fromEntries(
+        submenu.flatMap((item) =>
+          "action" in item && item.action
+            ? [[item.action, item.accelerator] as const]
+            : [],
+        ),
+      ),
+    ).toEqual({
+      [QUIT_MENU_ACTION]: "Command+Q",
+      [SHUTDOWN_MENU_ACTION]: "Command+Shift+Q",
+    });
   });
 
   test("provides native navigation and terminal shortcuts", () => {
