@@ -451,6 +451,16 @@ export function observeClaudeTranscript(
  */
 const CLAUDE_PANE_DONE = /^\S .*·\s+done\s+\d{1,2}:\d{2}(?:\s*[AP]M)?$/;
 
+/**
+ * What an *interrupted* turn leaves behind, which is not a `done` line at all
+ * — Claude replaces the status line with this and waits. It is the only mark
+ * an instant escape makes anywhere, so the pane tier exists mostly for it.
+ *
+ * Anchored to the result glyph rather than the word: `Interrupted` on its own
+ * appears in ordinary prose, and this session's own output proved it.
+ */
+const CLAUDE_PANE_INTERRUPTED = /^\s*⎿\s+Interrupted\b/;
+
 const CLAUDE_PANE_BUSY = /^\S .*\((?:\d+h\s*)?(?:\d+m\s*)?\d+s\b[^)]*\)$/;
 
 /**
@@ -477,10 +487,15 @@ export function observeClaudePane(
     // A live timer is the newest word on the turn: whatever sits above it is
     // older, so the scan stops rather than reading past it to a stale `done`.
     if (CLAUDE_PANE_BUSY.test(line)) return undefined;
-    if (CLAUDE_PANE_DONE.test(line))
+    const interrupted = CLAUDE_PANE_INTERRUPTED.test(line);
+    if (interrupted || CLAUDE_PANE_DONE.test(line))
       return {
         activity: "idle",
         source: "pane",
+        // A `done` line cannot say *why* the turn ended, so it says nothing.
+        // The interrupt line can, and matches what the transcript tier calls
+        // the same event.
+        ...(interrupted ? { detail: "Interrupted" } : {}),
         ifActivity: ["working"],
         authoritative: true,
       };

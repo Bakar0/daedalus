@@ -520,6 +520,34 @@ describe("Claude pane fallback", () => {
       });
   });
 
+  test("an interrupted turn leaves no done line, only Claude's own notice", () => {
+    // Captured after escaping a live generation: there is no `done` status
+    // line at all, which is why matching only that missed the reported bug.
+    const text = [
+      "  as easily as a few dozen letters, and the",
+      "  ⎿  Interrupted · What should Claude do instead?",
+      "──────────────────────────────── test ─",
+      "❯ ",
+      "  ⏵⏵ auto mode on · 1 shell",
+    ].join("\n");
+    expect(observeClaudePane(text)).toMatchObject({
+      activity: "idle",
+      source: "pane",
+      detail: "Interrupted",
+      ifActivity: ["working"],
+    });
+  });
+
+  test("an interrupt in the scrollback loses to the turn that came after it", () => {
+    const text = [
+      "  ⎿  Interrupted · What should Claude do instead?",
+      "❯ have another go",
+      "✽ Generating… (14s · ↓ 900 tokens)",
+      "──────────────────────────────── test ─",
+    ].join("\n");
+    expect(observeClaudePane(text)).toBeUndefined();
+  });
+
   test("a live timer means the turn is still running, so nothing is retracted", () => {
     for (const status of [
       "✽ Generating… (6m 17s · ↓ 24.8k tokens)",
