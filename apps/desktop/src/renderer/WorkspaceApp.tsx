@@ -71,8 +71,86 @@ const storedPanelSize = (key: string, fallback: number) => {
   return Number.isFinite(stored) && stored > 0 ? stored : fallback;
 };
 
+export const EXPLORER_MIN_WIDTH = 170;
+export const EXPLORER_MAX_WIDTH = 560;
+export const EXPLORER_DEFAULT_WIDTH = 255;
+// The file viewer next to the explorer stops being a viewer below this.
+const EXPLORER_VIEWER_MIN_WIDTH = 300;
+export const EXPLORER_SECONDARY_MIN_HEIGHT = 84;
+export const EXPLORER_SECONDARY_DEFAULT_HEIGHT = 240;
+// Dragging the repositories section taller stops here rather than squeezing the
+// file tree into a strip nothing can be found in.
+export const EXPLORER_TREE_MIN_HEIGHT = 140;
+
+export const clampExplorerWidth = (width: number, available: number) =>
+  Math.min(
+    Math.max(EXPLORER_MIN_WIDTH, Math.round(width)),
+    Math.max(EXPLORER_MIN_WIDTH, Math.min(EXPLORER_MAX_WIDTH, available)),
+  );
+
+export const clampExplorerSecondaryHeight = (
+  height: number,
+  available: number,
+) =>
+  Math.min(
+    Math.max(EXPLORER_SECONDARY_MIN_HEIGHT, Math.round(height)),
+    Math.max(EXPLORER_SECONDARY_MIN_HEIGHT, Math.round(available)),
+  );
+
 const lastSessionStorageKey = (workspaceId: string) =>
   `daedalus.session.last.${workspaceId}`;
+
+const expandedDirectoriesStorageKey = (workspaceId: string) =>
+  `daedalus.explorer.expanded.${workspaceId}`;
+
+// Every remembered folder costs one directory listing on the way back into a
+// workspace, and a tree nobody could have opened by hand is not worth paying
+// for. The cap keeps the shallowest, because a child whose parent was dropped
+// would not be reachable anyway.
+const MAX_REMEMBERED_DIRECTORIES = 200;
+
+export function parseRememberedDirectories(raw: string | null): string[] {
+  if (!raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const paths = parsed.filter(
+    (entry): entry is string => typeof entry === "string" && entry.length > 0,
+  );
+  return [...new Set(paths)]
+    .sort((a, b) => a.split("/").length - b.split("/").length)
+    .slice(0, MAX_REMEMBERED_DIRECTORIES);
+}
+
+const rememberedExpandedDirectories = (workspaceId: string) => {
+  if (typeof window === "undefined") return [];
+  try {
+    return parseRememberedDirectories(
+      window.localStorage.getItem(expandedDirectoriesStorageKey(workspaceId)),
+    );
+  } catch {
+    return [];
+  }
+};
+
+const rememberExpandedDirectories = (
+  workspaceId: string,
+  directories: Iterable<string>,
+) => {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      expandedDirectoriesStorageKey(workspaceId),
+      JSON.stringify([...directories]),
+    );
+  } catch {
+    // A disabled or full store is not worth failing a disclosure triangle over.
+  }
+};
 
 const lastViewStorageKey = (workspaceId: string) =>
   `daedalus.view.last.${workspaceId}`;
@@ -1795,6 +1873,19 @@ export function WorkspaceApp({
   const [sessionsPanelWidth, setSessionsPanelWidth] = useState(() =>
     storedPanelSize("daedalus.panel.sessions-width", 320),
   );
+  const [explorerWidth, setExplorerWidth] = useState(() =>
+    storedPanelSize("daedalus.panel.explorer-width", EXPLORER_DEFAULT_WIDTH),
+  );
+  const [explorerSecondaryHeight, setExplorerSecondaryHeight] = useState(() =>
+    storedPanelSize(
+      "daedalus.panel.explorer-secondary-height",
+      EXPLORER_SECONDARY_DEFAULT_HEIGHT,
+    ),
+  );
+  const [explorerSecondaryMax, setExplorerSecondaryMax] = useState(
+    EXPLORER_SECONDARY_DEFAULT_HEIGHT,
+  );
+  const explorerAside = useRef<HTMLElement | null>(null);
   const workspaceExpandedWidth = useRef(
     workspacePanelWidth >= PANEL_COMPACT_THRESHOLD ? workspacePanelWidth : 210,
   );
@@ -1939,6 +2030,107 @@ export function WorkspaceApp({
       window.addEventListener("pointercancel", stop);
     },
     [boardDetailPanelWidth, sessionsPanelWidth, view, workspacePanelWidth],
+  );
+
+  // The explorer's own two borders. They are deliberately not the column
+  // resizer above: that one divides the whole shell, and the maxima here are
+  // the file viewer beside the explorer and the file tree above the
+  // repositories, neither of which the shell knows about.
+  const startExplorerWidthResize = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      const browser = event.currentTarget.closest(".workspace-browser");
+      if (!(browser instanceof HTMLElement)) return;
+      const startX = event.clientX;
+      const aside = browser.querySelector<HTMLElement>(".workspace-explorer");
+      const startWidth = aside?.offsetWidth ?? explorerWidth;
+      const available =
+        browser.clientWidth -
+        EXPLORER_VIEWER_MIN_WIDTH -
+        event.currentTarget.offsetWidth;
+
+      const handle = event.currentTarget;
+      handle.classList.add("dragging");
+      document.body.classList.add("resizing-column-panel");
+      const move = (moveEvent: PointerEvent) => {
+        setExplorerWidth(
+          clampExplorerWidth(
+            startWidth + moveEvent.clientX - startX,
+            available,
+          ),
+        );
+      };
+      const stop = () => {
+        handle.classList.remove("dragging");
+        document.body.classList.remove("resizing-column-panel");
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", stop);
+        window.removeEventListener("pointercancel", stop);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", stop);
+      window.addEventListener("pointercancel", stop);
+    },
+    [explorerWidth],
+  );
+
+  // Everything the repositories section could take: what it holds now plus
+  // whatever the file tree can give up before it hits its floor. Measured
+  // rather than assumed, because it moves with the window.
+  const measureExplorerSecondary = useCallback(() => {
+    const aside = explorerAside.current;
+    const secondary = aside?.querySelector<HTMLElement>(
+      ".workspace-explorer-secondary",
+    );
+    const tree = aside?.querySelector<HTMLElement>(".workspace-tree");
+    const height = secondary?.offsetHeight ?? explorerSecondaryHeight;
+    return {
+      height,
+      available:
+        height +
+        Math.max(0, (tree?.offsetHeight ?? 0) - EXPLORER_TREE_MIN_HEIGHT),
+    };
+  }, [explorerSecondaryHeight]);
+
+  // A focusable separator that reports `aria-valuenow` has to report a maximum
+  // too, or a screen reader reads the height against the implicit 0–100.
+  useEffect(() => {
+    const measure = () =>
+      setExplorerSecondaryMax(measureExplorerSecondary().available);
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [measureExplorerSecondary, view, workspaceContent]);
+
+  const startExplorerSectionResize = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      const startY = event.clientY;
+      const { height: startHeight, available } = measureExplorerSecondary();
+
+      const handle = event.currentTarget;
+      handle.classList.add("dragging");
+      document.body.classList.add("resizing-explorer-section");
+      const move = (moveEvent: PointerEvent) => {
+        setExplorerSecondaryHeight(
+          clampExplorerSecondaryHeight(
+            startHeight + startY - moveEvent.clientY,
+            available,
+          ),
+        );
+      };
+      const stop = () => {
+        handle.classList.remove("dragging");
+        document.body.classList.remove("resizing-explorer-section");
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", stop);
+        window.removeEventListener("pointercancel", stop);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", stop);
+      window.addEventListener("pointercancel", stop);
+    },
+    [measureExplorerSecondary],
   );
 
   const toggleWorkspacePanel = useCallback(() => {
@@ -2170,24 +2362,54 @@ export function WorkspaceApp({
     let cancelled = false;
     void client.request
       .workspaceContentGet({ workspace: workspaceId })
-      .then((response) => {
+      .then(async (response) => {
         if (cancelled) return;
-        if (response.ok) {
-          setWorkspaceContent(response.data);
-          setWorkspaceDirectories({ "": response.data.files });
+        if (!response.ok) {
+          setError(response.error.message);
+          return;
+        }
+        setWorkspaceContent(response.data);
+        setWorkspaceDirectories({ "": response.data.files });
+        setSelectedWorkspaceFile({
+          name: "BRIEF.md",
+          path: "BRIEF.md",
+          content: response.data.brief,
+          format: "markdown",
+        });
+        setWorkspaceDraft(response.data.brief);
+        setWorkspaceFileMode("edit");
+        setSelectedWorkspaceDirectory("");
+        setNewWorkspaceEntry(undefined);
+        setError(undefined);
+
+        // Folders the user opened stay open across a workspace switch, a trip
+        // to the board, and a restart. Each one is listed again rather than
+        // trusted: a folder can be gone, or no longer a folder, between two
+        // visits, and an entry that cannot be listed is simply forgotten.
+        const remembered = rememberedExpandedDirectories(workspaceId);
+        if (remembered.length === 0) {
           setExpandedWorkspaceDirectories(new Set());
-          setSelectedWorkspaceFile({
-            name: "BRIEF.md",
-            path: "BRIEF.md",
-            content: response.data.brief,
-            format: "markdown",
-          });
-          setWorkspaceDraft(response.data.brief);
-          setWorkspaceFileMode("edit");
-          setSelectedWorkspaceDirectory("");
-          setNewWorkspaceEntry(undefined);
-          setError(undefined);
-        } else setError(response.error.message);
+          return;
+        }
+        const listings = await Promise.all(
+          remembered.map(async (path) => {
+            const listing = await client.request.workspaceDirectoryList({
+              workspace: workspaceId,
+              path,
+            });
+            return listing.ok ? ([path, listing.data] as const) : undefined;
+          }),
+        );
+        if (cancelled) return;
+        const restored = listings.filter((entry) => entry !== undefined);
+        setWorkspaceDirectories((current) => ({
+          ...current,
+          ...Object.fromEntries(restored),
+        }));
+        const paths = restored.map(([path]) => path);
+        setExpandedWorkspaceDirectories(new Set(paths));
+        if (paths.length !== remembered.length)
+          rememberExpandedDirectories(workspaceId, paths);
       });
     return () => {
       cancelled = true;
@@ -2221,6 +2443,18 @@ export function WorkspaceApp({
       String(sessionsPanelWidth),
     );
   }, [sessionsPanelWidth]);
+  useEffect(() => {
+    window.localStorage.setItem(
+      "daedalus.panel.explorer-width",
+      String(explorerWidth),
+    );
+  }, [explorerWidth]);
+  useEffect(() => {
+    window.localStorage.setItem(
+      "daedalus.panel.explorer-secondary-height",
+      String(explorerSecondaryHeight),
+    );
+  }, [explorerSecondaryHeight]);
   useEffect(() => {
     if (!snapshot || sessionType === "terminal") return;
     const selected = snapshot.settings.providers.find(
@@ -2969,9 +3203,16 @@ export function WorkspaceApp({
     setNewWorkspaceEntry(undefined);
     if (created.kind === "directory") {
       setSelectedWorkspaceDirectory(created.path);
-      setExpandedWorkspaceDirectories((current) =>
-        new Set(current).add(selectedWorkspaceDirectory).add(created.path),
-      );
+      setExpandedWorkspaceDirectories((current) => {
+        const next = new Set(current)
+          .add(selectedWorkspaceDirectory)
+          .add(created.path);
+        // The root is expanded by definition and is not a path anyone can
+        // close, so it never belongs in what is remembered.
+        next.delete("");
+        rememberExpandedDirectories(workspace.id, next);
+        return next;
+      });
     } else {
       const opened = await client.request.workspaceFileRead({
         workspace: workspace.id,
@@ -2993,6 +3234,12 @@ export function WorkspaceApp({
       setExpandedWorkspaceDirectories((current) => {
         const next = new Set(current);
         next.delete(path);
+        // Closing a folder closes what is inside it. Leaving the descendants
+        // remembered would reopen them the next time the parent is opened,
+        // which is not what closing a folder means.
+        for (const entry of current)
+          if (entry.startsWith(`${path}/`)) next.delete(entry);
+        rememberExpandedDirectories(workspace.id, next);
         return next;
       });
       return;
@@ -3011,7 +3258,11 @@ export function WorkspaceApp({
         [path]: response.data,
       }));
     }
-    setExpandedWorkspaceDirectories((current) => new Set(current).add(path));
+    setExpandedWorkspaceDirectories((current) => {
+      const next = new Set(current).add(path);
+      rememberExpandedDirectories(workspace.id, next);
+      return next;
+    });
   }
 
   async function updateTask(event: React.FormEvent<HTMLFormElement>) {
@@ -3594,8 +3845,16 @@ export function WorkspaceApp({
               workspaceContent.workspaceId !== workspace.id ? (
                 <div className="empty large">Loading workspace content…</div>
               ) : (
-                <div className="workspace-browser">
-                  <aside className="workspace-explorer">
+                <div
+                  className="workspace-browser"
+                  style={
+                    {
+                      "--explorer-width": `${explorerWidth}px`,
+                      "--explorer-secondary-height": `${explorerSecondaryHeight}px`,
+                    } as CSSProperties
+                  }
+                >
+                  <aside className="workspace-explorer" ref={explorerAside}>
                     <div className="workspace-explorer-heading">
                       <div>
                         <span>Explorer</span>
@@ -3684,6 +3943,32 @@ export function WorkspaceApp({
                     >
                       {renderWorkspaceDirectory()}
                     </nav>
+                    <div
+                      aria-label="Resize repositories section"
+                      aria-orientation="horizontal"
+                      aria-valuemax={explorerSecondaryMax}
+                      aria-valuemin={EXPLORER_SECONDARY_MIN_HEIGHT}
+                      aria-valuenow={explorerSecondaryHeight}
+                      className="explorer-section-resize-handle"
+                      onKeyDown={(event) => {
+                        if (
+                          event.key !== "ArrowUp" &&
+                          event.key !== "ArrowDown"
+                        )
+                          return;
+                        event.preventDefault();
+                        const { available } = measureExplorerSecondary();
+                        setExplorerSecondaryHeight((height) =>
+                          clampExplorerSecondaryHeight(
+                            height + (event.key === "ArrowUp" ? 24 : -24),
+                            available,
+                          ),
+                        );
+                      }}
+                      onPointerDown={startExplorerSectionResize}
+                      role="separator"
+                      tabIndex={0}
+                    />
                     <div className="workspace-explorer-secondary">
                       <div className="workspace-repository-tree">
                         <div className="workspace-resource-heading">
@@ -3967,6 +4252,35 @@ export function WorkspaceApp({
                       </div>
                     </div>
                   </aside>
+
+                  <div
+                    aria-label="Resize explorer"
+                    aria-orientation="vertical"
+                    aria-valuemax={EXPLORER_MAX_WIDTH}
+                    aria-valuemin={EXPLORER_MIN_WIDTH}
+                    aria-valuenow={explorerWidth}
+                    className="column-resize-handle explorer-resize-handle"
+                    onKeyDown={(event) => {
+                      if (
+                        event.key !== "ArrowLeft" &&
+                        event.key !== "ArrowRight"
+                      )
+                        return;
+                      event.preventDefault();
+                      setExplorerWidth((width) =>
+                        clampExplorerWidth(
+                          width +
+                            (event.key === "ArrowRight"
+                              ? PANEL_STEP
+                              : -PANEL_STEP),
+                          EXPLORER_MAX_WIDTH,
+                        ),
+                      );
+                    }}
+                    onPointerDown={startExplorerWidthResize}
+                    role="separator"
+                    tabIndex={0}
+                  />
 
                   <section className="workspace-viewer">
                     <div className="workspace-viewer-tabbar">

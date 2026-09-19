@@ -2176,7 +2176,13 @@ dd {
   border-radius: 11px;
   display: grid;
   flex: 1;
-  grid-template-columns: 255px minmax(0, 1fr);
+  /* The `min()` is the floor under the viewer, not a second opinion on the
+     drag: shrinking the window past what the dragged width assumed must not
+     squeeze the file out of view. */
+  grid-template-columns: min(var(--explorer-width, 255px), 50%) 6px minmax(
+      0,
+      1fr
+    );
   min-height: 0;
   overflow: hidden;
 }
@@ -2262,10 +2268,52 @@ dd {
   padding: 5px 6px;
 }
 .workspace-tree {
-  flex: 1;
+  flex: 1 1 0;
   min-height: 120px;
   overflow: auto;
   padding: 5px 0;
+}
+/* The explorer's own two borders are draggable. The column handle above divides
+   the whole shell; these divide what is inside the explorer, so they answer to
+   the explorer's own minimums rather than the shell's.
+
+   The explorer keeps its right border, so this track carries the viewer's
+   background instead of a second line of its own. */
+.explorer-resize-handle {
+  background: rgb(7 10 17 / 0.28);
+}
+.explorer-section-resize-handle {
+  cursor: row-resize;
+  /* Wider than the border it sits on, and pulled back over its neighbours so
+     the extra grab area costs no layout. */
+  flex: 0 0 7px;
+  margin-bottom: -3px;
+  margin-top: -3px;
+  outline: none;
+  position: relative;
+  touch-action: none;
+  z-index: 5;
+}
+.explorer-section-resize-handle::after {
+  background: transparent;
+  content: "";
+  height: 2px;
+  left: 0;
+  position: absolute;
+  right: 0;
+  top: 2px;
+  transition: background 120ms ease;
+}
+.explorer-section-resize-handle:hover::after,
+.explorer-section-resize-handle:focus-visible::after,
+.explorer-section-resize-handle.dragging::after,
+.resizing-explorer-section .explorer-section-resize-handle::after {
+  background: var(--accent);
+}
+.resizing-explorer-section,
+.resizing-explorer-section * {
+  cursor: row-resize !important;
+  user-select: none !important;
 }
 .workspace-tree-entry > button {
   align-items: center;
@@ -2316,10 +2364,12 @@ dd {
 }
 .workspace-explorer-secondary {
   border-top: 1px solid var(--line);
-  flex: 0 0 auto;
-  /* Repositories and their working trees are one list now, so this section
-     carries about twice what the two collapsed ones did. */
-  max-height: 52%;
+  /* Its height is the user's, dragged on the border above. Shrink stays on so a
+     short window takes the space back from this section rather than from the
+     file tree, which has a floor and would otherwise overflow the explorer. */
+  flex: 0 1 auto;
+  height: var(--explorer-secondary-height, 240px);
+  min-height: 0;
   overflow: auto;
 }
 .workspace-explorer-secondary .workspace-resource-heading {
