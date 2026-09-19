@@ -23,6 +23,13 @@ export default {
     identifier: APP_IDENTIFIER,
     version: packageJson.version,
   },
+  // macOS apps do not quit when their last window closes —
+  // `applicationShouldTerminateAfterLastWindowClosed` defaults to NO — and
+  // Electrobun's default is the opposite. That default made the red X call
+  // `Utils.quit()` directly, so the most ordinary way to put Daedalus away was
+  // the one exit that never said what it left running. Cmd+Q is the quit now,
+  // and it always has a window to ask in.
+  runtime: { exitOnLastWindowClosed: false },
   build: {
     bun: {
       entrypoint: "apps/desktop/src/bun/index.ts",
