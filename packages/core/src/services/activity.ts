@@ -390,9 +390,16 @@ export class ActivityService {
    * defaults, so restarting the app with a session mid-turn does not report it
    * as `unknown` until the next hook happens to fire.
    *
-   * Lifecycle still dominates: a record belonging to a session that is no
-   * longer live is deleted, never restored. "Working" is the single most
-   * damaging thing to show for a session that is already gone.
+   * Lifecycle still dominates: a record belonging to a session that is over is
+   * deleted, never restored. "Working" is the single most damaging thing to
+   * show for a session that is already gone.
+   *
+   * A `lost` session is the one exception, because it is not over. Its tmux
+   * server died under an open conversation and the revive sweep puts the agent
+   * back at the point it stopped — including, most of the time, blocked on the
+   * user. Dropping its record here would throw away the binding the detectors
+   * need and the reading the badge was raised from, on the one startup where
+   * every session at once is in that state.
    */
   async restore(): Promise<number> {
     const sessions = new Map(
@@ -401,10 +408,12 @@ export class ActivityService {
     let restored = 0;
     for (const record of await listActivityRecords(this.home)) {
       const session = sessions.get(record.sessionId);
-      if (
-        !session ||
-        (session.status !== "running" && session.status !== "starting")
-      ) {
+      const survives =
+        session &&
+        (session.status === "running" ||
+          session.status === "starting" ||
+          (session.status === "lost" && !session.archivedAt));
+      if (!survives) {
         await deleteActivityRecord(this.home, record.sessionId).catch(
           () => undefined,
         );

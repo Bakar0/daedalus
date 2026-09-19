@@ -54,6 +54,13 @@ export interface AgentSession {
   providerSessionId: string | null;
   archivedAt: string | null;
   resumeCount: number;
+  /**
+   * Why a `lost` session could not be brought back, or null when nothing has
+   * tried yet. A reboot makes every live session `lost` at once, so the ones
+   * that cannot be resumed have to say what is wrong with them rather than
+   * look identical to the ones that simply have not been reached.
+   */
+  lostReason: string | null;
   /** Where the user put this session within its workspace. See `Workspace`. */
   position: number;
 }
@@ -69,6 +76,13 @@ export interface IntegratedTerminal {
   exitCode: number | null;
   startedAt: string;
   endedAt: string | null;
+  /**
+   * When this terminal was reopened after its tmux server died. A terminal has
+   * no conversation to resume, so it comes back as a fresh login shell in the
+   * same directory and the scrollback is genuinely gone — which the tab says
+   * rather than presenting an empty screen as continuity.
+   */
+  revivedAt: string | null;
 }
 
 export type WorkspaceRepositoryAccess = "write" | "reference";

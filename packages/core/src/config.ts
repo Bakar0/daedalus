@@ -18,6 +18,15 @@ export interface DaedalusConfig {
   claudeProjectsDirectory: string;
   workspaceInstructionFilesEnabled: boolean;
   /**
+   * Whether app startup brings `lost` agent sessions and integrated terminals
+   * back by resuming their native conversations. A Mac reboot kills the
+   * Daedalus tmux server and nothing else, so without this a restart costs a
+   * board of red cards and a manual archive/restore per session. Resuming
+   * leaves each agent idle at its prompt with its history loaded; nothing is
+   * re-prompted, so no work restarts on its own.
+   */
+  autoRestoreSessionsEnabled: boolean;
+  /**
    * Suppresses toasts and desktop notifications without touching activity
    * tracking, so the board stays live while the interruptions stop.
    */
@@ -30,6 +39,7 @@ type StoredConfig = Partial<
     DaedalusConfig,
     | "workspaceRoot"
     | "workspaceInstructionFilesEnabled"
+    | "autoRestoreSessionsEnabled"
     | "focusMode"
     | "agents"
   >
@@ -125,6 +135,7 @@ export async function loadConfig(
     ),
     workspaceInstructionFilesEnabled:
       stored.workspaceInstructionFilesEnabled !== false,
+    autoRestoreSessionsEnabled: stored.autoRestoreSessionsEnabled !== false,
     focusMode: stored.focusMode === true,
     agents: stored.agents || {
       codex: { executable: "codex", args: [] },
@@ -165,6 +176,14 @@ export async function saveWorkspaceInstructionFilesEnabled(
 ): Promise<void> {
   await saveSetting(config, { workspaceInstructionFilesEnabled: enabled });
   config.workspaceInstructionFilesEnabled = enabled;
+}
+
+export async function saveAutoRestoreSessionsEnabled(
+  config: DaedalusConfig,
+  enabled: boolean,
+): Promise<void> {
+  await saveSetting(config, { autoRestoreSessionsEnabled: enabled });
+  config.autoRestoreSessionsEnabled = enabled;
 }
 
 export async function saveFocusMode(

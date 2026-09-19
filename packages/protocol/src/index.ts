@@ -52,6 +52,12 @@ export interface AgentSessionDto {
   providerSessionId: string | null;
   archivedAt: string | null;
   resumeCount: number;
+  /**
+   * Why a `lost` session could not be revived, or null when nothing has tried.
+   * A reboot makes every live session `lost` at once, so the few that cannot
+   * come back have to say what is wrong rather than look like the rest.
+   */
+  lostReason: string | null;
   /** Manual list order within the workspace, ascending. */
   position: number;
 }
@@ -64,6 +70,8 @@ export interface IntegratedTerminalDto {
   status: AgentSessionStatus;
   startedAt: string;
   endedAt: string | null;
+  /** Reopened after a restart as a fresh shell: the scrollback is not back. */
+  revivedAt: string | null;
 }
 
 export type WorkspaceRepositoryAccess = "write" | "reference";
@@ -178,6 +186,7 @@ export interface DesktopSettingsDto {
   tmuxAvailable: boolean;
   tmuxVersion?: string;
   workspaceInstructionFilesEnabled: boolean;
+  autoRestoreSessionsEnabled: boolean;
   focusMode: boolean;
   providers: ProviderAvailabilityDto[];
 }
@@ -364,6 +373,10 @@ export interface DesktopRpcSchema {
         { enabled: boolean },
         { enabled: boolean }
       >;
+      autoRestoreSessionsSet: Request<
+        { enabled: boolean },
+        { enabled: boolean }
+      >;
       focusModeSet: Request<{ enabled: boolean }, { enabled: boolean }>;
       /**
        * Published by the renderer whenever the user moves, so notifications
@@ -513,6 +526,12 @@ export interface DesktopRpcSchema {
       >;
       agentArchive: Request<{ id: string; force?: boolean }, AgentSessionDto>;
       agentRestore: Request<{ id: string }, AgentSessionDto>;
+      /**
+       * Resumes a session that lost its tmux server, typically to a machine
+       * reboot. Nothing is sent to the agent: it comes back idle at its
+       * prompt with its history loaded.
+       */
+      agentRevive: Request<{ id: string }, AgentSessionDto>;
       terminalCreate: Request<
         { workspace?: string; name?: string; workingDirectory?: string },
         IntegratedTerminalDto

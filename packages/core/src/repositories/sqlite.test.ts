@@ -54,6 +54,7 @@ describe("SqliteRepositories", () => {
         providerSessionId: null,
         archivedAt: null,
         resumeCount: 0,
+        lostReason: null,
         position: 1,
       });
       repositories.createIntegratedTerminal({
@@ -67,6 +68,7 @@ describe("SqliteRepositories", () => {
         exitCode: null,
         startedAt: now,
         endedAt: null,
+        revivedAt: null,
       });
       expect(repositories.findWorkspace("demo")?.id).toBe("workspace-id");
       expect(repositories.listTasks({ status: "todo" })[0]).toMatchObject({

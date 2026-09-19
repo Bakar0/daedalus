@@ -1,8 +1,9 @@
-import { readdir, stat } from "node:fs/promises";
+import { readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import {
   findExecutable,
+  pathExists,
   runCommand,
   type TmuxClient,
 } from "@daedalus/platform";
@@ -41,6 +42,82 @@ const PROVIDER_STARTUP_POLL_MS = 150;
 // the trust prompts for directories it created itself; it must never keep
 // typing into a session the user has taken over.
 const MAX_PROMPT_CONFIRMATIONS = 3;
+// How many sessions a revive sweep brings back at once. Every relaunch is a
+// provider CLI re-reading a transcript and possibly sitting on a startup trust
+// prompt that Daedalus answers with up to MAX_PROMPT_CONFIRMATIONS synthetic
+// Enters, so ten sessions starting together at login is ten of those racing
+// each other for the machine. Two at a time is still far faster than the
+// manual archive/restore it replaces.
+const REVIVE_CONCURRENCY = 2;
+const REVIVE_LOCK_FILE = "revive.lock";
+// A sweep that crashed between taking the lock and releasing it must not
+// disable revival for ever, and no single sweep runs for anything like this
+// long — each session is bounded by the 30s provider startup timeout.
+const REVIVE_LOCK_STALE_MS = 10 * 60_000;
+// How much of a failed startup's last screen is kept in `lostReason`. Enough
+// for the provider's own sentence — "No conversation found with session ID" is
+// the whole answer — without pasting a terminal onto a session card.
+const LOST_REASON_OUTPUT_LIMIT = 200;
+
+/**
+ * What to put on the card when a revive failed. A provider that refused to
+ * start said why on its own last screen, and "claude exited before finishing
+ * startup" without that sentence is a symptom where the cause was available.
+ */
+export function reviveFailureReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const output =
+    error instanceof DaedalusError &&
+    typeof error.details?.startupOutput === "string"
+      ? error.details.startupOutput.trim()
+      : "";
+  if (!output) return message;
+  return `${message}: ${output.slice(0, LOST_REASON_OUTPUT_LIMIT)}`;
+}
+
+/**
+ * Why a sweep produced nothing, when it produced nothing on purpose.
+ *
+ * `sweep_in_progress` is the case the lock exists for: the app starting while
+ * a `daedal agent revive --all` is already running would otherwise create a
+ * second tmux session under the same name for the same conversation.
+ */
+export type ReviveHalt = "disabled" | "tmux_unavailable" | "sweep_in_progress";
+
+export interface ReviveSweepResult {
+  revived: AgentSession[];
+  /** Sessions left `lost`, each with the reason now stored on its row. */
+  skipped: Array<{ sessionId: string; name: string; reason: string }>;
+  /** Set only when the sweep declined to run at all. */
+  halted?: ReviveHalt;
+}
+
+/**
+ * A cross-process mutex for the revive sweep, held as a file under
+ * `DAEDALUS_HOME` because the racing parties are separate processes — the
+ * desktop app starting and a CLI sweep — with only the home between them.
+ */
+async function acquireReviveLock(
+  home: string,
+): Promise<(() => Promise<void>) | undefined> {
+  const path = join(home, REVIVE_LOCK_FILE);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await writeFile(path, `${process.pid}\n`, { flag: "wx" });
+      return async () => {
+        await rm(path, { force: true }).catch(() => undefined);
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") return undefined;
+      const age = await stat(path)
+        .then((metadata) => Date.now() - metadata.mtimeMs)
+        .catch(() => 0);
+      if (age < REVIVE_LOCK_STALE_MS) return undefined;
+      await rm(path, { force: true }).catch(() => undefined);
+    }
+  }
+  return undefined;
+}
 
 export function isMissingCodexConversationError(message: string): boolean {
   return /(?:^|\b)No active session found matching\s+['"][^'"]+['"]\.?/i.test(
@@ -305,8 +382,15 @@ export class AgentService {
     private readonly tmux: TmuxClient,
     private readonly config: DaedalusConfig,
     /**
-     * Called when a session stops being live. An attention badge on a session
-     * that is over is the purest form of a badge outliving its cause.
+     * Called when a session is *over* — stopped, archived, removed. An
+     * attention badge on a session that is over is the purest form of a badge
+     * outliving its cause.
+     *
+     * Deliberately not called when a session merely goes `lost`. Lost is not
+     * over: the tmux server died under a still-open conversation, and the
+     * revive sweep puts the agent back at the very point it was blocked at.
+     * Clearing the badge there would wipe every reason the user had to look,
+     * at exactly the moment a reboot gave them a whole board of them.
      */
     private readonly onSessionEnded: (sessionId: string) => void = () => {},
   ) {}
@@ -605,6 +689,7 @@ export class AgentService {
       providerSessionId: launch.providerSessionId ?? null,
       archivedAt: null,
       resumeCount: 0,
+      lostReason: null,
       // Top of its workspace's list, leaving any manual order below it intact.
       position: this.repositories.nextAgentPosition(workspace.id),
     };
@@ -664,29 +749,38 @@ export class AgentService {
     }
   }
 
+  /**
+   * Settles which rows are still backed by a live tmux session.
+   *
+   * Observation only: it never starts anything. It runs on nearly every CLI
+   * command and on the desktop poll, so a sweep triggered from here would mean
+   * `daedal agent list` resurrecting agents. Revival is an explicit call —
+   * `reviveLostSessions`.
+   */
   async reconcile(): Promise<void> {
     if (!(await this.tmux.probe())) return;
     const live = new Set(await this.tmux.listSessions());
     const now = new Date().toISOString();
-    const lost: string[] = [];
     this.repositories.transaction(() => {
       for (const agent of this.repositories.listAgents()) {
         if (
           (agent.status === "starting" || agent.status === "running") &&
           !live.has(agent.tmuxSession)
         ) {
+          // Activity and attention are deliberately left alone: see
+          // `onSessionEnded`. `lostReason` is cleared so it always describes
+          // this disappearance rather than the last one.
           this.repositories.updateAgent({
             ...agent,
             status: "lost",
             endedAt: now,
+            lostReason: null,
           });
-          lost.push(agent.id);
         } else if (agent.status === "starting" && live.has(agent.tmuxSession)) {
           this.repositories.updateAgent({ ...agent, status: "running" });
         }
       }
     });
-    for (const sessionId of lost) this.onSessionEnded(sessionId);
   }
 
   async list(filters: {
@@ -845,6 +939,69 @@ export class AgentService {
     const agent = await this.get(id);
     if (!agent.archivedAt)
       throw new DaedalusError("CONFLICT", "Session is not archived");
+    return this.relaunch(agent);
+  }
+
+  /**
+   * Brings one vanished session back with its conversation resumed, leaving it
+   * idle at its prompt. Nothing is sent to the agent: a resume loads history
+   * and waits, which is the whole reason this is safe to do unattended.
+   *
+   * Not archive-then-restore. That would run `codex archive` immediately
+   * followed by `codex unarchive` on a conversation nobody asked to archive,
+   * for no gain but two extra ways to fail.
+   */
+  async reviveLost(id: string): Promise<AgentSession> {
+    return this.reviveLostSession(await this.get(id));
+  }
+
+  private async reviveLostSession(agent: AgentSession): Promise<AgentSession> {
+    if (agent.archivedAt)
+      throw new DaedalusError(
+        "CONFLICT",
+        "Archived sessions come back through restore, not revive",
+      );
+    if (agent.status !== "lost")
+      throw new DaedalusError(
+        "CONFLICT",
+        `Agent session '${agent.id}' is not lost`,
+      );
+    try {
+      // Named before `prepareArchivable` gets to it, because its refusal is
+      // worded for archiving and this reason is read off a session card.
+      if (agent.kind === "agent" && agent.provider === "custom")
+        throw new DaedalusError(
+          "CONFLICT",
+          "Custom sessions do not define a native resume capability",
+        );
+      if (!(await pathExists(agent.workingDirectory)))
+        throw new DaedalusError(
+          "CONFLICT",
+          `Working directory ${agent.workingDirectory} no longer exists`,
+        );
+      // Really "make this resumable": it rescues a `providerSessionId` that
+      // was never recorded from the provider's own transcript directory.
+      return await this.relaunch(await this.prepareArchivable(agent));
+    } catch (error) {
+      const current = this.repositories.findAgent(agent.id);
+      // A session whose revive failed stays lost and says why, rather than
+      // being one more indistinguishable red dot on a board full of them.
+      if (current && current.status === "lost")
+        this.repositories.updateAgent({
+          ...current,
+          lostReason: reviveFailureReason(error),
+        });
+      throw error;
+    }
+  }
+
+  /**
+   * Starts a fresh tmux runtime for a session that already exists, resuming
+   * its native conversation. Shared by `restore` (archived, deliberately) and
+   * `reviveLost` (vanished with the tmux server), which differ in how the
+   * session stopped being live, not in how it comes back.
+   */
+  private async relaunch(agent: AgentSession): Promise<AgentSession> {
     const workspace = await this.workspaces.get(agent.workspaceId);
     if (workspace.archivedAt)
       throw new DaedalusError(
@@ -890,18 +1047,25 @@ export class AgentService {
             })
           : false;
         if (hasNativeConversation && nativeSessionId) {
-          const unarchive = await runCommand(
-            executable,
-            ["unarchive", nativeSessionId],
-            { cwd: agent.workingDirectory },
-          );
-          const unarchiveError =
-            unarchive.stderr.trim() || unarchive.stdout.trim();
-          if (unarchive.exitCode !== 0)
-            throw new DaedalusError(
-              "CONFLICT",
-              unarchiveError || "Codex could not restore the conversation",
+          // Only a conversation Daedalus archived needs unarchiving. A session
+          // that merely lost its tmux server never left Codex's active list,
+          // and `codex unarchive` on one fails with wording that has nothing
+          // to do with the single message `isMissingCodexConversationError`
+          // forgives — which would abort a revive that was about to work.
+          if (agent.archivedAt) {
+            const unarchive = await runCommand(
+              executable,
+              ["unarchive", nativeSessionId],
+              { cwd: agent.workingDirectory },
             );
+            const unarchiveError =
+              unarchive.stderr.trim() || unarchive.stdout.trim();
+            if (unarchive.exitCode !== 0)
+              throw new DaedalusError(
+                "CONFLICT",
+                unarchiveError || "Codex could not restore the conversation",
+              );
+          }
           args = [
             ...definition.args,
             ...CODEX_DAEDALUS_TUI_ARGS,
@@ -954,7 +1118,16 @@ export class AgentService {
       startedAt: new Date().toISOString(),
       endedAt: null,
       exitCode: null,
+      lostReason: null,
     };
+    // Last thing before the launch, because the window between the sweep's own
+    // check and this one is where a racing CLI would put a second runtime on
+    // the same tmux name for the same conversation.
+    if (await this.tmux.hasSession(agent.tmuxSession))
+      throw new DaedalusError(
+        "CONFLICT",
+        `tmux session '${agent.tmuxSession}' is already live`,
+      );
     try {
       await this.tmux.createSession({
         session: restoring.tmuxSession,
@@ -992,12 +1165,95 @@ export class AgentService {
       this.repositories.updateAgent(restored);
       return restored;
     } catch (error) {
-      if (agent.provider === "codex" && agent.providerSessionId)
+      // A launch that got as far as tmux but not as far as a ready provider
+      // leaves a live session behind a row that says otherwise. Nothing
+      // reconciles that direction, so it is cleaned up here.
+      if (await this.tmux.hasSession(restoring.tmuxSession))
+        await this.tmux
+          .stop(restoring.tmuxSession, true)
+          .catch(() => undefined);
+      // Only put back what was taken out. A revived session's conversation was
+      // never archived, so archiving it on a failed relaunch would hide a
+      // conversation the user never asked to put away.
+      if (
+        agent.archivedAt &&
+        agent.provider === "codex" &&
+        agent.providerSessionId
+      )
         await runCommand(executable, ["archive", agent.providerSessionId], {
           cwd: workspace.path,
         }).catch(() => undefined);
       throw error;
     }
+  }
+
+  /**
+   * Brings every `lost`, non-archived session back, which is what a Mac reboot
+   * leaves behind: tmux sessions survive quitting the app but not a restart of
+   * the machine, so `reconcile` finds a whole board of them at once.
+   *
+   * Serialized and throttled rather than fired in parallel, guarded by a
+   * cross-process lock, and per-session try/catch throughout: one session that
+   * cannot come back must cost nothing but its own card.
+   */
+  async reviveLostSessions(
+    options: {
+      workspaceId?: string;
+      /**
+       * A startup sweep obeys the user's setting. An explicit
+       * `daedal agent revive` is the user asking, and does not.
+       */
+      automatic?: boolean;
+    } = {},
+  ): Promise<ReviveSweepResult> {
+    const result: ReviveSweepResult = { revived: [], skipped: [] };
+    if (options.automatic && !this.config.autoRestoreSessionsEnabled)
+      return { ...result, halted: "disabled" };
+    // Without tmux there is nothing to put a session back into, and the whole
+    // sweep would be one identical failure per card.
+    if (!(await this.tmux.probe()))
+      return { ...result, halted: "tmux_unavailable" };
+    const release = await acquireReviveLock(this.config.home);
+    if (!release) return { ...result, halted: "sweep_in_progress" };
+    try {
+      await this.reconcile();
+      const queue = this.repositories
+        .listAgents(
+          options.workspaceId ? { workspaceId: options.workspaceId } : {},
+        )
+        .filter((agent) => agent.status === "lost" && !agent.archivedAt);
+      const workers = Array.from({ length: REVIVE_CONCURRENCY }, async () => {
+        for (let next = queue.shift(); next; next = queue.shift()) {
+          const current = this.repositories.findAgent(next.id);
+          if (!current || current.status !== "lost" || current.archivedAt)
+            continue;
+          if (await this.tmux.hasSession(current.tmuxSession)) {
+            // Someone else won the race. Adopting the live session is right;
+            // launching a second one under the same name is not.
+            this.repositories.updateAgent({
+              ...current,
+              status: "running",
+              endedAt: null,
+              lostReason: null,
+            });
+            continue;
+          }
+          try {
+            result.revived.push(await this.reviveLostSession(current));
+          } catch (error) {
+            result.skipped.push({
+              sessionId: current.id,
+              name: current.name,
+              reason: reviveFailureReason(error),
+            });
+          }
+        }
+      });
+      await Promise.all(workers);
+    } finally {
+      await release();
+    }
+    return result;
   }
 
   async archiveWorkspaceSessions(workspaceId: string): Promise<void> {
@@ -1009,6 +1265,13 @@ export class AgentService {
       if (!session.archivedAt) await this.archive(session.id);
   }
 
+  /**
+   * "Make this session resumable": rescues a `providerSessionId` that was
+   * never recorded by matching the provider's own transcript directory against
+   * the session's working directory and start time. Archiving needs it because
+   * a locator is what makes an archive reversible; revival needs it for the
+   * same reason, one machine reboot later.
+   */
   private async prepareArchivable(agent: AgentSession): Promise<AgentSession> {
     if (agent.kind === "terminal") return agent;
     if (agent.provider === "custom")
@@ -1058,7 +1321,7 @@ export class AgentService {
     }
     throw new DaedalusError(
       "CONFLICT",
-      "This existing session has no uniquely matching native conversation and cannot be archived safely",
+      "This existing session has no uniquely matching native conversation and cannot be resumed safely",
     );
   }
 

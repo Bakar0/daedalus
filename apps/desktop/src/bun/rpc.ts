@@ -3,6 +3,7 @@ import {
   channelName,
   DaedalusError,
   normalizeError,
+  saveAutoRestoreSessionsEnabled,
   type AgentActivityState,
   type AgentSession,
   type ApplicationContext,
@@ -80,6 +81,7 @@ const integratedTerminalDto = (
   status: terminal.status,
   startedAt: terminal.startedAt,
   endedAt: terminal.endedAt,
+  revivedAt: terminal.revivedAt,
 });
 const workspaceRepositoryDto = (
   repository: WorkspaceRepository,
@@ -159,6 +161,7 @@ export async function desktopSnapshot(
       repositoryRoot: context.config.repositoryRoot,
       workspaceInstructionFilesEnabled:
         context.config.workspaceInstructionFilesEnabled,
+      autoRestoreSessionsEnabled: context.config.autoRestoreSessionsEnabled,
       focusMode: context.config.focusMode,
       ...capabilities,
     },
@@ -268,6 +271,11 @@ export function createDesktopRequestHandlers(
     workspaceInstructionFilesSet: ({ enabled }) =>
       mutate(async () => {
         await context.workspaceContent.setInstructionFilesEnabled(enabled);
+        return { enabled };
+      }),
+    autoRestoreSessionsSet: ({ enabled }) =>
+      mutate(async () => {
+        await saveAutoRestoreSessionsEnabled(context.config, enabled);
         return { enabled };
       }),
     focusModeSet: ({ enabled }) =>
@@ -390,6 +398,8 @@ export function createDesktopRequestHandlers(
       mutate(async () => agentDto(await context.agents.archive(id, force))),
     agentRestore: ({ id }) =>
       mutate(async () => agentDto(await context.agents.restore(id))),
+    agentRevive: ({ id }) =>
+      mutate(async () => agentDto(await context.agents.reviveLost(id))),
     terminalCreate: (params) =>
       mutate(async () =>
         integratedTerminalDto(await context.terminals.create(params)),

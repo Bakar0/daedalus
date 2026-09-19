@@ -200,7 +200,7 @@ Usage:
   daedal workspace <create|list|get|update|archive|restore|remove> ... [--json]
   daedal task <create|list|get|current|update|status|remove> ... [--json]
   daedal repo <library|list|add|attach|sync|fetch|detach|worktree> ... [--json]
-  daedal agent <spawn|list|get|wait|attach|send|archive|restore|stop|remove> ... [--json]
+  daedal agent <spawn|list|get|wait|attach|send|archive|restore|revive|stop|remove> ... [--json]
   daedal attention "<reason>" [--session <agent-id>] [--clear] [--json]
   daedal notify "<message>" [--level info|success|error] [--desktop] [--json]
   daedal ui state [--json]
@@ -250,6 +250,7 @@ const commandHelp: Record<string, string> = {
   daedal agent send <agent-id> <text>
   daedal agent archive <agent-id> [--force]
   daedal agent restore <agent-id>
+  daedal agent revive <agent-id> | --all | --workspace <workspace>
   daedal agent stop <agent-id> [--force]
   daedal agent remove <agent-id>
 
@@ -258,6 +259,11 @@ doing, since when, and the 'source' that observed it. Sources rank
 agent > hook > transcript > pane, and a weaker source never overwrites a
 fresher stronger one. 'unknown' means this provider gave no usable signal — it
 is a real answer, not a failure.
+
+'agent revive' resumes sessions that lost their tmux server, which is what a
+Mac reboot leaves behind. Each one comes back idle at its prompt with its
+conversation loaded; nothing is sent to the agent, so no work restarts on its
+own. The app runs the same sweep at startup unless it is turned off.
 
 'agent wait' blocks until a session reaches a state and then exits 0, so the
 same signal drives a shell notifier, a Slack ping or a tmux bell with no
@@ -919,6 +925,7 @@ async function agentCommand(
     return 0;
   }
   if (action === "wait") return agentWaitCommand(context, args, json);
+  if (action === "revive") return agentReviveCommand(context, args, json);
   const parsed = parseArguments(
     args,
     [],
@@ -1009,6 +1016,61 @@ async function agentCommand(
     return 0;
   }
   throw new DaedalusError("VALIDATION", `Unknown agent command '${action}'`);
+}
+
+/**
+ * `agent revive` — the scriptable half of what the app does at startup. Given
+ * an id it revives that one session and fails loudly if it cannot; given
+ * `--all` or `--workspace` it sweeps, and a session it cannot bring back is
+ * reported rather than fatal, because one unrevivable card must not stop the
+ * other nine from coming back.
+ *
+ * Unlike the startup sweep it ignores `autoRestoreSessionsEnabled`: the
+ * setting governs what happens without being asked, and this is being asked.
+ */
+async function agentReviveCommand(
+  context: ApplicationContext,
+  args: string[],
+  json: boolean,
+): Promise<number> {
+  const parsed = parseArguments(args, ["workspace"], ["all"]);
+  const sweeping = parsed.flags.has("all") || Boolean(parsed.values.workspace);
+  if (sweeping && parsed.positionals.length > 0)
+    throw new DaedalusError(
+      "VALIDATION",
+      "Name a session, or sweep with --all or --workspace — not both",
+    );
+  if (!sweeping) {
+    expectPositionals(
+      parsed.positionals,
+      1,
+      "daedal agent revive <agent-id> | --all | --workspace <workspace>",
+    );
+    const result = await context.agents.reviveLost(parsed.positionals[0]!);
+    printResult(result, json, () =>
+      console.log(`Revived and resumed agent ${result.id}`),
+    );
+    return 0;
+  }
+  const workspaceId = parsed.values.workspace
+    ? (await context.workspaces.get(parsed.values.workspace)).id
+    : undefined;
+  const sweep = await context.agents.reviveLostSessions(
+    workspaceId ? { workspaceId } : {},
+  );
+  const terminals = await context.terminals.reviveLost();
+  printResult({ ...sweep, terminals }, json, () => {
+    if (sweep.halted) console.log(`No sweep: ${sweep.halted}`);
+    for (const session of sweep.revived)
+      console.log(`revived\t${session.id}\t${session.name}`);
+    for (const session of sweep.skipped)
+      console.log(`lost\t${session.sessionId}\t${session.reason}`);
+    for (const terminal of terminals)
+      console.log(`terminal\t${terminal.id}\t${terminal.name}`);
+    if (!sweep.revived.length && !sweep.skipped.length && !terminals.length)
+      console.log("No lost sessions to revive.");
+  });
+  return 0;
 }
 
 /** Exit code for a wait that ran out of time, distinct from any real failure. */

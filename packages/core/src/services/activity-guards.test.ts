@@ -305,19 +305,49 @@ describe("the durable record", () => {
     });
   });
 
-  test("lifecycle dominates: a record for a session that is gone is discarded", async () => {
-    await withSession(async ({ context, sessionId, home, tmux }) => {
+  test("lifecycle dominates: a record for a session that is over is discarded", async () => {
+    await withSession(async ({ context, sessionId, home }) => {
       await context.activity.record({
         sessionId,
         activity: "working",
         source: "hook",
       });
-      // kill -9: tmux loses the session and reconcile marks it lost.
-      tmux.sessions.clear();
-      await context.agents.reconcile();
-      expect(context.activity.get(sessionId)).toBeUndefined();
+      // Written straight to the row rather than through `stop`, which clears
+      // the reading itself: what is under test is the replay's own guard.
+      const session = context.repositories.findAgent(sessionId)!;
+      context.repositories.updateAgent({
+        ...session,
+        status: "exited",
+        endedAt: new Date().toISOString(),
+      });
       expect(await context.activity.restore()).toBe(0);
       expect(await readActivityRecord(home, sessionId)).toBeUndefined();
+    });
+  });
+
+  test("a lost session keeps its reading, because it is coming back", async () => {
+    await withSession(async ({ context, sessionId, home, tmux }) => {
+      await context.activity.record({
+        sessionId,
+        activity: "needs_permission",
+        detail: "Bash(git push)",
+        source: "hook",
+      });
+      // A Mac reboot: the tmux server dies under every open conversation at
+      // once. The agent is still blocked on the same question, and the revive
+      // sweep puts it back at exactly that point, so neither the reading nor
+      // the badge it raised may be thrown away on the way past.
+      tmux.sessions.clear();
+      await context.agents.reconcile();
+      expect(context.activity.get(sessionId)).toMatchObject({
+        activity: "needs_permission",
+        detail: "Bash(git push)",
+      });
+      expect(context.activity.attentionFor(sessionId)?.reasons).toHaveLength(1);
+      await context.activity.restore();
+      expect(await readActivityRecord(home, sessionId)).toMatchObject({
+        activity: "needs_permission",
+      });
     });
   });
 
