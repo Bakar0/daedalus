@@ -1,9 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type {
-  QuitBehavior,
-  ShutdownOptions,
-  ShutdownPlan,
-} from "@daedalus/core";
+import type { ShutdownOptions, ShutdownPlan } from "@daedalus/core";
 import type { ShutdownPlanDto } from "@daedalus/protocol";
 import { QuitController } from "./quit";
 
@@ -33,20 +29,12 @@ const livePlan: ShutdownPlan = {
 
 const emptyPlan: ShutdownPlan = { sessions: [], terminals: [] };
 
-function harness(
-  options: {
-    plan?: ShutdownPlan;
-    behavior?: QuitBehavior;
-    planFails?: boolean;
-  } = {},
-) {
+function harness(options: { plan?: ShutdownPlan; planFails?: boolean } = {}) {
   const asked: ShutdownPlanDto[] = [];
   const swept: ShutdownOptions[] = [];
-  const remembered: QuitBehavior[] = [];
   const timers: Array<() => void> = [];
   let cleared = 0;
   let quits = 0;
-  let behavior: QuitBehavior = options.behavior ?? "ask";
   const controller = new QuitController({
     plan: async () => {
       if (options.planFails) throw new Error("tmux is unreachable");
@@ -55,11 +43,6 @@ function harness(
     runShutdown: async (input) => {
       swept.push(input);
       return { sessions: [], terminals: [], serverStopped: true };
-    },
-    quitBehavior: () => behavior,
-    rememberQuitBehavior: async (value) => {
-      remembered.push(value);
-      behavior = value;
     },
     askWindow: (plan) => asked.push(plan),
     quit: () => {
@@ -77,15 +60,11 @@ function harness(
     controller,
     asked,
     swept,
-    remembered,
     get quits() {
       return quits;
     },
     get cleared() {
       return cleared;
-    },
-    get behavior() {
-      return behavior;
     },
     fireWatchdog: () => timers.forEach((callback) => callback()),
   };
@@ -131,17 +110,16 @@ describe("QuitController", () => {
     const it = harness();
     await it.controller.requestQuit();
     it.controller.dialogShown();
-    await it.controller.decide("keep", false);
+    await it.controller.decide("keep");
     expect(it.swept).toEqual([]);
     expect(it.quits).toBe(1);
-    expect(it.remembered).toEqual([]);
   });
 
   test("confirming quits and never ends a session", async () => {
     const it = harness();
     await it.controller.requestQuit();
     it.controller.dialogShown();
-    await it.controller.decide("keep", false);
+    await it.controller.decide("keep");
     // Quitting has no destructive branch at all: the dialog only confirms,
     // and reopening reconnects to what is still running.
     expect(it.swept).toEqual([]);
@@ -152,28 +130,28 @@ describe("QuitController", () => {
     const it = harness();
     await it.controller.requestQuit();
     it.controller.dialogShown();
-    await it.controller.decide("cancel", false);
+    await it.controller.decide("cancel");
     expect(it.quits).toBe(0);
     expect(it.controller.state).toBe("idle");
     await it.controller.requestQuit();
     expect(it.asked).toHaveLength(2);
   });
 
-  test("don't ask again remembers the button that was pressed", async () => {
+  test("the real close ends the sessions and the tmux server with them", async () => {
     const it = harness();
     await it.controller.requestQuit();
     it.controller.dialogShown();
-    await it.controller.decide("keep", true);
-    expect(it.remembered).toEqual(["keep"]);
-    expect(it.behavior).toBe("keep");
+    await it.controller.decide("shutdown");
+    expect(it.swept).toEqual([{ stopServer: true }]);
+    expect(it.quits).toBe(1);
   });
 
-  test("don't ask again skips the dialog and still stops nothing", async () => {
-    const keep = harness({ behavior: "keep" });
-    await keep.controller.requestQuit();
-    expect(keep.asked).toEqual([]);
-    expect(keep.swept).toEqual([]);
-    expect(keep.quits).toBe(1);
+  test("the dialog is always offered, so quitting is never a silent stop", async () => {
+    const it = harness();
+    await it.controller.requestQuit();
+    expect(it.asked).toHaveLength(1);
+    expect(it.swept).toEqual([]);
+    expect(it.quits).toBe(0);
   });
 
   test("a window that never draws the dialog falls through to keeping everything", async () => {
@@ -216,8 +194,6 @@ describe("QuitController", () => {
       runShutdown: async () => {
         throw new Error("tmux is unreachable");
       },
-      quitBehavior: () => "ask",
-      rememberQuitBehavior: async () => {},
       askWindow: () => {},
       quit: () => {
         quits += 1;

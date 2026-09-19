@@ -51,7 +51,6 @@ const base: DesktopSnapshotDto = {
     workspaceInstructionFilesEnabled: true,
     autoRestoreSessionsEnabled: true,
     focusMode: false,
-    quitBehavior: "ask",
     providers: [
       { name: "codex", executable: "codex", available: false },
       { name: "claude", executable: "claude", available: true },

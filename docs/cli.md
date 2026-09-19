@@ -390,8 +390,6 @@ desktop Cottontail runtime, so non-interactive commands terminate after
 emitting their result. Daedalus-launched sessions put this directory first on
 `PATH`.
 
-`quitBehavior` is `"ask"`, `"keep"`, or `"archive"`, and controls what the desktop app does when Cmd+Q is pressed with sessions still live. It defaults to `"ask"` and is written by **Don't ask again** in that dialog or by the **On quit** setting; anything unrecognised reads as `"ask"`, because the one outcome worth ruling out is a stray value quietly archiving someone's sessions. It has no effect on the CLI.
-
 `daedal doctor [--json]` checks the verified Bun version, tmux availability/minimum, resolved home, and migrated database.
 
 `daedal --version --json` reports the version from the same package metadata

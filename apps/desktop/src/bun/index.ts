@@ -11,7 +11,6 @@ import Electrobun, {
 import {
   channelHome,
   createApplicationContext,
-  saveQuitBehavior,
   sweepProviderActivity,
 } from "@daedalus/core";
 import {
@@ -268,9 +267,6 @@ function announce(source: "desktop" | "external"): void {
 const quitController = new QuitController({
   plan: () => context.shutdown.plan(),
   runShutdown: (options) => context.shutdown.run(options),
-  quitBehavior: () => context.config.quitBehavior,
-  rememberQuitBehavior: (behavior) =>
-    saveQuitBehavior(context.config, behavior),
   askWindow: (plan) => rpc.send.quitRequested({ plan }),
   // The heartbeat goes first for the same reason the signal handlers retire
   // it: one that outlived the app would absorb every alert into a window that
@@ -292,7 +288,7 @@ const createRpc = () =>
         terminalEndpoint,
         {
           dialogShown: () => quitController.dialogShown(),
-          decide: (choice, remember) => quitController.decide(choice, remember),
+          decide: (choice) => quitController.decide(choice),
         },
       ),
     },
@@ -543,13 +539,11 @@ setInterval(async () => {
 // A heartbeat that outlives the app would absorb every alert into a window
 // that is not there, so it is retired on the way out.
 //
-// These paths deliberately do not consult `quitBehavior`, and deliberately do
-// not archive. A signal is a logout, a shutdown or a kill — it arrives with a
-// deadline measured in seconds, and archiving a board of Codex sessions under
-// one means being killed halfway through it. The same is true of a quit from
-// the Dock, which macOS routes straight to `NSApplication` and Electrobun
-// 1.18.1 offers no hook into. Both fall through to what quitting has always
-// done: everything keeps running, reachable with `daedal agent list`.
+// These paths deliberately do not stop anything. A signal is a logout, a
+// shutdown or a kill — it arrives with a deadline measured in seconds, and
+// ending a board of sessions under one means being killed halfway through it.
+// They fall through to what quitting does by default: everything keeps
+// running, reachable with `daedal agent list`.
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, () => {
     windowReady = false;

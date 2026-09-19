@@ -196,7 +196,6 @@ const snapshot: DesktopSnapshotDto = {
     workspaceInstructionFilesEnabled: true,
     autoRestoreSessionsEnabled: true,
     focusMode: false,
-    quitBehavior: "ask",
     providers: [],
   },
 };

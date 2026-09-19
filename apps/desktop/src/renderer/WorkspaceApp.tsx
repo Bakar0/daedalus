@@ -30,7 +30,6 @@ import type {
   ProviderModelCatalogDto,
   SessionTelemetryDto,
   SessionWorktreeDto,
-  QuitBehavior,
   QuitChoice,
   RepositoryDiscoveryDto,
   RpcResult,
@@ -1707,7 +1706,6 @@ export function WorkspaceApp({
   // The quit dialog is driven entirely by the host: it arrives with the plan
   // already computed, and every button answers back over `quitDecision`.
   const [quitRequest, setQuitRequest] = useState<ShutdownPlanDto>();
-  const [quitRemember, setQuitRemember] = useState(false);
   const [quitting, setQuitting] = useState<QuitChoice>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -2130,7 +2128,6 @@ export function WorkspaceApp({
   useEffect(
     () =>
       client.subscribeQuitRequest?.((plan) => {
-        setQuitRemember(false);
         setQuitting(undefined);
         setQuitRequest(plan);
         // Tells the host the dialog exists. Without this it quits on its own
@@ -2270,11 +2267,9 @@ export function WorkspaceApp({
       setQuitRequest(undefined);
       setQuitting(undefined);
     } else setQuitting(choice);
-    void client.request
-      .quitDecision?.({ choice, remember: quitRemember })
-      .catch(() => {
-        // The app is on its way out; there is nobody left to tell.
-      });
+    void client.request.quitDecision?.({ choice }).catch(() => {
+      // The app is on its way out; there is nobody left to tell.
+    });
   }
 
   async function perform<T>(operation: Promise<RpcResult<T>>) {
@@ -5287,34 +5282,6 @@ export function WorkspaceApp({
                 </span>
               </label>
             </dd>
-            <dt>On quit</dt>
-            <dd>
-              <label className="settings-toggle">
-                <input
-                  checked={snapshot.settings.quitBehavior === "ask"}
-                  disabled={busy}
-                  onChange={(event) =>
-                    void perform(
-                      client.request.quitBehaviorSet({
-                        behavior: event.target.checked
-                          ? ("ask" satisfies QuitBehavior)
-                          : ("keep" satisfies QuitBehavior),
-                      }),
-                    )
-                  }
-                  type="checkbox"
-                />
-                <span>
-                  <strong>Confirm before quitting</strong>
-                  <small>
-                    Quitting never stops a session either way. They live in a
-                    tmux server Daedalus does not own, and reopening reconnects
-                    to them. To end everything, use Quit and Shut Down Sessions
-                    or <code>daedal shutdown</code>.
-                  </small>
-                </span>
-              </label>
-            </dd>
             <dt>Notifications</dt>
             <dd>
               <label className="settings-toggle">
@@ -5496,17 +5463,6 @@ export function WorkspaceApp({
               {quitDisclosure(quitRequest)} Reopening Daedalus reconnects to
               them.
             </p>
-            <label className="settings-toggle">
-              <input
-                checked={quitRemember}
-                disabled={Boolean(quitting)}
-                onChange={(event) => setQuitRemember(event.target.checked)}
-                type="checkbox"
-              />
-              <span>
-                <strong>Don&apos;t ask again</strong>
-              </span>
-            </label>
             <div className="modal-actions">
               <button
                 className="quiet"
@@ -5515,6 +5471,18 @@ export function WorkspaceApp({
                 type="button"
               >
                 Cancel
+              </button>
+              {/* Never the focused button: it is the only one that ends
+                  anything, and Enter must not reach it by accident. */}
+              <button
+                className="danger-action"
+                disabled={Boolean(quitting)}
+                onClick={() => answerQuit("shutdown")}
+                type="button"
+              >
+                {quitting === "shutdown"
+                  ? "Stopping\u2026"
+                  : "Quit and stop sessions"}
               </button>
               <button
                 autoFocus

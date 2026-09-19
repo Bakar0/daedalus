@@ -4,7 +4,6 @@ import {
   DaedalusError,
   normalizeError,
   saveAutoRestoreSessionsEnabled,
-  saveQuitBehavior,
   type AgentActivityState,
   type AgentSession,
   type ApplicationContext,
@@ -42,7 +41,7 @@ import type {
  */
 export interface DesktopQuitHost {
   dialogShown(): void;
-  decide(choice: QuitChoice, remember: boolean): Promise<void>;
+  decide(choice: QuitChoice): Promise<void>;
 }
 
 type Requests = DesktopRpcSchema["bun"]["requests"];
@@ -174,7 +173,6 @@ export async function desktopSnapshot(
         context.config.workspaceInstructionFilesEnabled,
       autoRestoreSessionsEnabled: context.config.autoRestoreSessionsEnabled,
       focusMode: context.config.focusMode,
-      quitBehavior: context.config.quitBehavior,
       ...capabilities,
     },
   };
@@ -295,11 +293,6 @@ export function createDesktopRequestHandlers(
       mutate(async () => ({
         enabled: await context.presence.setFocusMode(enabled),
       })),
-    quitBehaviorSet: ({ behavior }) =>
-      mutate(async () => {
-        await saveQuitBehavior(context.config, behavior);
-        return { behavior };
-      }),
     // Neither of these is a data change, and the second one is usually the
     // last thing this process does.
     quitDialogShown: () =>
@@ -307,9 +300,9 @@ export function createDesktopRequestHandlers(
         quit.dialogShown();
         return { acknowledged: true as const };
       }),
-    quitDecision: ({ choice, remember }) =>
+    quitDecision: ({ choice }) =>
       result(async () => {
-        await quit.decide(choice, remember);
+        await quit.decide(choice);
         return { accepted: true as const };
       }),
     // Presence is a heartbeat, not a data change: announcing it would make the

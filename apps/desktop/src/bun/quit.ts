@@ -1,5 +1,4 @@
 import type {
-  QuitBehavior,
   ShutdownPlan,
   ShutdownOptions,
   ShutdownResult,
@@ -18,8 +17,6 @@ export const QUIT_DIALOG_ACK_TIMEOUT_MS = 2_000;
 export interface QuitControllerOptions {
   plan(): Promise<ShutdownPlan>;
   runShutdown(options: ShutdownOptions): Promise<ShutdownResult>;
-  quitBehavior(): QuitBehavior;
-  rememberQuitBehavior(behavior: "keep"): Promise<void>;
   /** Sends the plan to the window, which draws the dialog. */
   askWindow(plan: ShutdownPlanDto): void;
   /** Ends the process. Everything here converges on exactly this call. */
@@ -57,8 +54,9 @@ const planDto = (plan: ShutdownPlan): ShutdownPlanDto => ({
  * kill sessions started from a terminal, and reopening reconnects to what is
  * still there, which is what makes the app come back as it was left.
  *
- * Quitting therefore has no destructive branch at all. Ending sessions is
- * `daedal shutdown` and the Shut Down menu item, which are asked for by name.
+ * Ending sessions is therefore never what "quit" defaults to. It is its own
+ * button, its own menu item and its own CLI command, each named for what it
+ * does, and the one that stops things is never the focused one.
  */
 export class QuitController {
   #state: "idle" | "deciding" | "quitting" = "idle";
@@ -82,8 +80,6 @@ export class QuitController {
     // about an empty list would be a dialog that only ever costs a keystroke.
     if (!plan || (!plan.sessions.length && !plan.terminals.length))
       return this.#quit("nothing-live");
-    if (this.options.quitBehavior() === "keep")
-      return this.#quit("setting-keep");
     this.#state = "deciding";
     this.#acknowledged = false;
     this.options.askWindow(planDto(plan));
@@ -118,7 +114,7 @@ export class QuitController {
     this.#cancelAckTimer();
   }
 
-  async decide(choice: QuitChoice, remember: boolean): Promise<void> {
+  async decide(choice: QuitChoice): Promise<void> {
     if (this.#state !== "deciding") return;
     this.#acknowledged = true;
     this.#cancelAckTimer();
@@ -127,13 +123,8 @@ export class QuitController {
       this.#log("quit_cancelled", {});
       return;
     }
-    if (remember)
-      await this.options
-        .rememberQuitBehavior(choice)
-        .catch((error: unknown) =>
-          this.#log("quit_behavior_save_failed", { message: describe(error) }),
-        );
-    await this.#quit(`dialog-${choice}`);
+    if (choice === "shutdown") return this.requestShutdownAndQuit();
+    await this.#quit("dialog-keep");
   }
 
   async #quit(reason: string): Promise<void> {

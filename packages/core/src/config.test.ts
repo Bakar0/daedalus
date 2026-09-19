@@ -3,7 +3,6 @@ import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
   channelHome,
   loadConfig,
-  saveQuitBehavior,
   saveWorkspaceInstructionFilesEnabled,
 } from "./config";
 
@@ -36,39 +35,6 @@ describe("loadConfig", () => {
         (await loadConfig({ DAEDALUS_HOME: home }))
           .workspaceInstructionFilesEnabled,
       ).toBe(false);
-    });
-  });
-});
-
-describe("quitBehavior", () => {
-  test("defaults to asking, and reads anything unrecognised the same way", async () => {
-    await withTemporaryDaedalusHome(async (home) => {
-      expect((await loadConfig({ DAEDALUS_HOME: home })).quitBehavior).toBe(
-        "ask",
-      );
-      // The one outcome worth ruling out is a stray value quietly archiving
-      // someone's sessions on the way out.
-      await Bun.write(
-        `${home}/config.json`,
-        JSON.stringify({ quitBehavior: "destroy-everything" }),
-      );
-      expect((await loadConfig({ DAEDALUS_HOME: home })).quitBehavior).toBe(
-        "ask",
-      );
-    });
-  });
-
-  test("remembers the choice the quit dialog made", async () => {
-    await withTemporaryDaedalusHome(async (home) => {
-      const config = await loadConfig({ DAEDALUS_HOME: home });
-      await saveQuitBehavior(config, "keep");
-      expect(config.quitBehavior).toBe("keep");
-      expect((await loadConfig({ DAEDALUS_HOME: home })).quitBehavior).toBe(
-        "keep",
-      );
-      await expect(
-        saveQuitBehavior(config, "shutdown" as never),
-      ).rejects.toThrow(/Unknown quit behavior/);
     });
   });
 });

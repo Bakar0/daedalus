@@ -254,13 +254,17 @@ Archived workspaces appear in a collapsed section at the bottom of the workspace
 
 **Quitting Daedalus does not stop anything.** The tmux server, every agent CLI inside it and everything those agents started keep running, and reopening the app reconnects to them. That is deliberate: the app does not own the sessions. The server is keyed to `DAEDALUS_HOME`, `daedal agent spawn` works with the window never opened, and a GUI quit that killed the server would kill sessions started from a terminal. Quitting is also not a decision to abandon work — an agent mid-turn has tool output and a transcript tail that a mis-click should not cost.
 
-What changed is the silence. With sessions or integrated terminals still live, Cmd+Q shows a one-line confirmation — "3 sessions will keep running. Reopening Daedalus reconnects to them." — with **Cancel**, **Quit**, and a **Don't ask again** checkbox. Quitting with nothing live shows no dialog.
+What changed is the silence. With sessions or integrated terminals still live, Cmd+Q shows a one-line confirmation — "3 sessions will keep running. Reopening Daedalus reconnects to them." — with three buttons:
 
-The dialog only confirms. There is deliberately no "quit and archive": quitting has no destructive branch at all, so reopening always finds the app as it was left. Ending sessions is `daedal shutdown` or the Shut Down menu item, both asked for by name. An earlier version offered archiving as a quit option and it was the wrong shape — it put an irreversible-looking action one keystroke from the most ordinary thing a user does, and "quit" stopped meaning "put this window away".
+| Button                     | What it does                                                                                                                              |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| **Cancel**                 | Nothing. The app stays open.                                                                                                              |
+| **Quit and stop sessions** | The real close: archives every live session, closes the terminals, ends the tmux server, then quits. The same sweep as `daedal shutdown`. |
+| **Quit** (focused)         | Leaves everything running. Reopening reconnects.                                                                                          |
+
+Quitting with nothing live shows no dialog. There is no "don't ask again" and no setting behind it: the two outcomes differ by whether the user's agents are still alive afterwards, which is not a thing to decide once and then stop seeing. The stopping button is never the focused one, so Enter cannot reach it by accident.
 
 **Quit and Shut Down Sessions** in the Daedalus menu (⇧⌘Q) is the discoverable off switch: it archives every live session, closes the terminals and ends the Daedalus tmux server, which is exactly what `daedal shutdown` does.
-
-The **On quit** setting is a single **Confirm before quitting** toggle, on by default, and is what **Don't ask again** turns off. Turning it off changes only whether the confirmation appears, never what quitting does.
 
 **Closing the window closes the window.** The app keeps running with no window, and clicking its Dock icon builds a new one. That is what macOS apps do — `applicationShouldTerminateAfterLastWindowClosed` defaults to NO — and Electrobun's `exitOnLastWindowClosed` defaults to the opposite, which is set to `false` in `electrobun.config.ts`. It is not only a platform-fit question: the red X used to call `Utils.quit()` directly, so the most ordinary way to put Daedalus away was the one exit that never said a word about what it left running, and the window `close` event is not cancellable and arrives after the surface is gone, so it could never have been turned into a dialog. Making it stop meaning "quit" is what leaves Cmd+Q as the only exit, always with a window to ask in. An RPC instance is bound to the webview it was made for, so reopening builds a fresh one; everything that sends to the window reads that binding at call time.
 

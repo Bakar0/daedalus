@@ -280,7 +280,7 @@ describe("desktop RPC handlers", () => {
         env: { ...process.env, DAEDALUS_HOME: home },
         tmux: new FakeTmux(),
       });
-      const decisions: Array<[string, boolean]> = [];
+      const decisions: string[] = [];
       let shown = 0;
       const rpc = createDesktopRequestHandlers(
         context,
@@ -291,32 +291,22 @@ describe("desktop RPC handlers", () => {
           dialogShown: () => {
             shown += 1;
           },
-          decide: async (choice, remember) => {
-            decisions.push([choice, remember]);
+          decide: async (choice) => {
+            decisions.push(choice);
           },
         },
       );
       try {
-        expect((await rpc.snapshot({})).ok).toBe(true);
-        const snapshot = await rpc.snapshot({});
-        expect(snapshot.ok && snapshot.data.settings.quitBehavior).toBe("ask");
-
         expect(await rpc.quitDialogShown({})).toEqual({
           ok: true,
           data: { acknowledged: true },
         });
         expect(shown).toBe(1);
-        expect(
-          await rpc.quitDecision({ choice: "keep", remember: false }),
-        ).toEqual({ ok: true, data: { accepted: true } });
-        expect(decisions).toEqual([["keep", false]]);
-
-        expect(await rpc.quitBehaviorSet({ behavior: "keep" })).toEqual({
+        expect(await rpc.quitDecision({ choice: "shutdown" })).toEqual({
           ok: true,
-          data: { behavior: "keep" },
+          data: { accepted: true },
         });
-        const updated = await rpc.snapshot({});
-        expect(updated.ok && updated.data.settings.quitBehavior).toBe("keep");
+        expect(decisions).toEqual(["shutdown"]);
       } finally {
         context.close();
       }

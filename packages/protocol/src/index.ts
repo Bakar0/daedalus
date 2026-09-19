@@ -174,11 +174,12 @@ export interface ProviderModelCatalogDto {
   source: "provider" | "aliases";
 }
 
-/** See `QuitBehavior` in core: whether Cmd+Q confirms before closing. */
-export type QuitBehavior = "keep" | "ask";
-
-/** The quit dialog only confirms. `cancel` leaves the app open. */
-export type QuitChoice = "keep" | "cancel";
+/**
+ * What the user chose on the way out. `keep` leaves every session running and
+ * is what reopening reconnects to; `shutdown` is the real close, ending them
+ * and the tmux server with them; `cancel` leaves the app open.
+ */
+export type QuitChoice = "keep" | "shutdown" | "cancel";
 
 export interface ShutdownSessionTargetDto {
   id: string;
@@ -212,7 +213,6 @@ export interface DesktopSettingsDto {
   workspaceInstructionFilesEnabled: boolean;
   autoRestoreSessionsEnabled: boolean;
   focusMode: boolean;
-  quitBehavior: QuitBehavior;
   providers: ProviderAvailabilityDto[];
 }
 
@@ -403,10 +403,6 @@ export interface DesktopRpcSchema {
         { enabled: boolean }
       >;
       focusModeSet: Request<{ enabled: boolean }, { enabled: boolean }>;
-      quitBehaviorSet: Request<
-        { behavior: QuitBehavior },
-        { behavior: QuitBehavior }
-      >;
       /**
        * Acknowledges that the quit dialog is on screen. The host quits on its
        * own if this never arrives, so a renderer that cannot draw the dialog
@@ -415,10 +411,7 @@ export interface DesktopRpcSchema {
        */
       quitDialogShown: Request<Record<string, never>, { acknowledged: true }>;
       /** The user's answer. `cancel` is the only one that does not quit. */
-      quitDecision: Request<
-        { choice: QuitChoice; remember: boolean },
-        { accepted: true }
-      >;
+      quitDecision: Request<{ choice: QuitChoice }, { accepted: true }>;
       /**
        * Published by the renderer whenever the user moves, so notifications
        * can route on where the user actually is rather than merely being
