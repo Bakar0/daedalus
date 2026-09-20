@@ -24,6 +24,18 @@ export interface ProviderUsage {
 export interface SessionTelemetry {
   sessionId: string;
   model?: string;
+  /**
+   * The session's current permission mode, in the provider's own vocabulary.
+   *
+   * Codex only. Its rollout writes a `turn_context` record per turn carrying
+   * the live `approvals_reviewer`, `approval_policy` and `sandbox_policy`, so
+   * this follows a `/permissions` change on the next turn rather than
+   * reporting whatever the session was launched with. Claude has no
+   * equivalent — `permission_mode` is absent from its status-line payload —
+   * but it also needs none, because Claude shows its own mode in the input
+   * border and Codex displays its mode nowhere at all.
+   */
+  permissionMode?: string;
   context?: {
     usedTokens: number;
     totalTokens?: number;
@@ -130,6 +142,47 @@ export function parseClaudeStatus(
   };
 }
 
+/**
+ * A Codex `turn_context` rendered in the wording of its own `/permissions`
+ * picker, so the badge and the picker cannot disagree about what a session is
+ * doing.
+ *
+ * Read in order of how contracted each field is, which is not the order the
+ * picker presents. `sandbox_policy.type` and `approvals_reviewer` have held a
+ * stable shape across every rollout on disk, so they decide first: sandbox
+ * outranks everything, because a read-only or full-access session is that
+ * whoever answers approvals, and the reviewer is the only field separating
+ * "Approve for me" from "Ask for approval".
+ *
+ * `approval_policy` is consulted last and only when it is a string, because
+ * it is the one that drifts: older rollouts carry a granular object
+ * (`{ granular: { sandbox_approval, rules, … } }`) where newer ones carry
+ * `"on-request"`. Leading with it dropped the badge entirely for those
+ * sessions. Anything still unrecognised returns undefined and shows no badge,
+ * which is the honest answer for a format Daedalus only scrapes.
+ */
+function codexPermissionLabel(payload: {
+  approvals_reviewer?: unknown;
+  approval_policy?: unknown;
+  sandbox_policy?: { type?: unknown };
+}): string | undefined {
+  const sandbox = payload.sandbox_policy?.type;
+  if (sandbox === "read-only") return "Read only";
+  if (sandbox === "danger-full-access") return "Full access";
+  if (payload.approvals_reviewer === "auto_review") return "Approve for me";
+  if (payload.approval_policy === "never") return "Never ask";
+  // Either field alone is enough, and neither is present in every rollout:
+  // the reviewer is missing from some, and `approval_policy` is an object
+  // rather than a string in others. Checking only one loses the sessions
+  // carrying the other.
+  if (
+    payload.approvals_reviewer === "user" ||
+    payload.approval_policy === "on-request"
+  )
+    return "Ask for approval";
+  return undefined;
+}
+
 export function parseCodexTokenUsage(
   sessionId: string,
   text: string,
@@ -138,6 +191,7 @@ export function parseCodexTokenUsage(
   const lines = text.trimEnd().split("\n");
   let context: SessionTelemetry["context"];
   let model: string | undefined;
+  let permissionMode: string | undefined;
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     try {
       const event = JSON.parse(lines[index]!) as {
@@ -145,6 +199,9 @@ export function parseCodexTokenUsage(
         payload?: {
           type?: unknown;
           model?: unknown;
+          approvals_reviewer?: unknown;
+          approval_policy?: unknown;
+          sandbox_policy?: { type?: unknown };
           info?: {
             last_token_usage?: { total_tokens?: unknown };
             total_token_usage?: { total_tokens?: unknown };
@@ -153,8 +210,11 @@ export function parseCodexTokenUsage(
         };
       };
       const payload = event.payload;
-      if (event.type === "turn_context" && typeof payload?.model === "string")
-        model ??= payload.model;
+      if (event.type === "turn_context") {
+        if (typeof payload?.model === "string") model ??= payload.model;
+        // Walking backwards, so the first record seen is the newest turn.
+        if (payload) permissionMode ??= codexPermissionLabel(payload);
+      }
       if (payload?.type !== "token_count") continue;
       const info = payload.info;
       const usedTokens =
@@ -176,10 +236,11 @@ export function parseCodexTokenUsage(
       // A truncated first line is expected when reading the tail of a rollout.
     }
   }
-  return context || model
+  return context || model || permissionMode
     ? {
         sessionId,
         ...(model ? { model } : {}),
+        ...(permissionMode ? { permissionMode } : {}),
         ...(context ? { context } : {}),
         observedAt,
       }

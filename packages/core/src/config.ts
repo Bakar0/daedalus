@@ -3,9 +3,18 @@ import { rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { ensureDirectory } from "@daedalus/platform";
 
+/**
+ * Whether Daedalus puts a freshly spawned session into the provider's own
+ * "only ask about what looks unsafe" mode, or leaves the provider's stored
+ * configuration to decide.
+ */
+export type AgentPermissionMode = "auto" | "inherit";
+
 export interface AgentDefinition {
   executable: string;
   args: string[];
+  /** Defaults to `auto`. */
+  permissionMode?: AgentPermissionMode;
 }
 
 export interface DaedalusConfig {

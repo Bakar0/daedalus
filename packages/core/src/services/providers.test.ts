@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
+import { join } from "node:path";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { loadConfig } from "../config";
 import {
@@ -6,7 +7,9 @@ import {
   isValidModelName,
   modelArgument,
   parseClaudeModelCatalog,
+  permissionModeArgs,
   resolveAgentExecutable,
+  resolveProvider,
 } from "./providers";
 
 const settingsValue = (args: string[]): string =>
@@ -213,5 +216,75 @@ describe("resolveAgentExecutable", () => {
         "darwin",
       ),
     ).toBe("/opt/homebrew/bin/codex");
+  });
+});
+
+describe("permissionModeArgs", () => {
+  test("starts each provider in its own relaxed mode by default", () => {
+    expect(permissionModeArgs("claude")).toEqual(["--permission-mode", "auto"]);
+    // `approval_policy` has to stay `on-request`: under `never` no escalation
+    // is raised and the reviewer would never be consulted at all.
+    expect(permissionModeArgs("codex")).toEqual([
+      "-c",
+      'approvals_reviewer="auto_review"',
+      "-c",
+      'approval_policy="on-request"',
+    ]);
+  });
+
+  test("inherit leaves the provider's own configuration to decide", () => {
+    expect(permissionModeArgs("claude", "inherit")).toEqual([]);
+    expect(permissionModeArgs("codex", "inherit")).toEqual([]);
+  });
+
+  test("a provider with no relaxed mode of its own gets nothing", () => {
+    expect(permissionModeArgs("custom")).toEqual([]);
+  });
+});
+
+describe("buildLaunch permission mode", () => {
+  // CODEX_HOME is isolated because `ensureCodexHooks` writes a hook block to
+  // `$CODEX_HOME/config.toml`, and the default is the developer's real one.
+  const isolated = async (home: string) =>
+    loadConfig({ DAEDALUS_HOME: home, CODEX_HOME: join(home, "codex") });
+
+  test("a spawned Claude session starts in auto", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await isolated(home);
+      const { adapter } = resolveProvider(config, { provider: "claude" });
+      const { args } = await adapter.buildLaunch({});
+      expect(args).toContain("--permission-mode");
+      expect(args[args.indexOf("--permission-mode") + 1]).toBe("auto");
+    });
+  });
+
+  test("a spawned Codex session starts with the auto reviewer", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await isolated(home);
+      const { adapter } = resolveProvider(config, { provider: "codex" });
+      const { args } = await adapter.buildLaunch({});
+      const at = args.indexOf('approvals_reviewer="auto_review"');
+      expect(at).toBeGreaterThan(-1);
+      expect(args[at - 1]).toBe("-c");
+      const policy = args.indexOf('approval_policy="on-request"');
+      expect(policy).toBeGreaterThan(-1);
+      expect(args[policy - 1]).toBe("-c");
+    });
+  });
+
+  test("inherit spawns neither provider with a mode argument", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await isolated(home);
+      config.agents.claude!.permissionMode = "inherit";
+      config.agents.codex!.permissionMode = "inherit";
+      const claude = await resolveProvider(config, {
+        provider: "claude",
+      }).adapter.buildLaunch({});
+      expect(claude.args).not.toContain("--permission-mode");
+      const codex = await resolveProvider(config, {
+        provider: "codex",
+      }).adapter.buildLaunch({});
+      expect(codex.args).not.toContain('approvals_reviewer="auto_review"');
+    });
   });
 });

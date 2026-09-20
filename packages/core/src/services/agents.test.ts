@@ -203,6 +203,11 @@ describe("AgentService", () => {
         executable: process.execPath,
         args: [
           "run",
+          // Spawned sessions start in Codex's own auto-review mode.
+          "-c",
+          'approvals_reviewer="auto_review"',
+          "-c",
+          'approval_policy="on-request"',
           "--no-alt-screen",
           "-c",
           "tui.disable_mouse_capture=true",
@@ -313,6 +318,9 @@ describe("AgentService", () => {
         "run",
         "--model",
         "claude-fable-5-1[1m]",
+        // Spawned sessions start in Claude's auto permission mode.
+        "--permission-mode",
+        "auto",
         "--settings",
         expect.stringContaining('"agent","event","Notification"'),
         "--session-id",
@@ -329,6 +337,10 @@ describe("AgentService", () => {
         status: "running",
         resumeCount: 1,
       });
+      // No `--permission-mode` here, deliberately. The mode is applied at
+      // spawn and never re-applied: a user who tightened this session with
+      // shift+tab has made a decision, and restoring it must not quietly
+      // undo that. Adding it to this list would be the regression.
       expect(tmux.launches[1]?.args).toEqual([
         "run",
         "--settings",

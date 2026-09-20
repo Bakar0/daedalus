@@ -159,3 +159,67 @@ describe("parseCodexRateLimits", () => {
     });
   });
 });
+
+describe("codex permission mode", () => {
+  const turn = (payload: Record<string, unknown>) =>
+    `${JSON.stringify({ type: "turn_context", payload })}\n`;
+  const mode = (text: string) =>
+    parseCodexTokenUsage("session-1", text, "2026-09-15T08:00:00.000Z")
+      ?.permissionMode;
+
+  test("reports the newest turn, so a /permissions change is picked up", () => {
+    const text =
+      turn({
+        sandbox_policy: { type: "workspace-write" },
+        approvals_reviewer: "user",
+        approval_policy: "on-request",
+      }) +
+      turn({
+        sandbox_policy: { type: "workspace-write" },
+        approvals_reviewer: "auto_review",
+        approval_policy: "on-request",
+      });
+    // The later record wins, not the one the session started on.
+    expect(mode(text)).toBe("Approve for me");
+  });
+
+  test("sandbox outranks who answers approvals", () => {
+    expect(
+      mode(
+        turn({
+          sandbox_policy: { type: "read-only" },
+          approvals_reviewer: "auto_review",
+        }),
+      ),
+    ).toBe("Read only");
+    expect(
+      mode(
+        turn({
+          sandbox_policy: { type: "danger-full-access" },
+          approvals_reviewer: "auto_review",
+        }),
+      ),
+    ).toBe("Full access");
+  });
+
+  test("survives a granular approval_policy object", () => {
+    // Older rollouts carry an object here where newer ones carry a string.
+    // Reading `approval_policy` first dropped the badge for all of them.
+    expect(
+      mode(
+        turn({
+          sandbox_policy: { type: "workspace-write" },
+          approvals_reviewer: "user",
+          approval_policy: { granular: { sandbox_approval: false } },
+        }),
+      ),
+    ).toBe("Ask for approval");
+  });
+
+  test("reports nothing rather than guessing at an unknown shape", () => {
+    expect(mode(turn({ sandbox_policy: { type: "something-new" } }))).toBe(
+      undefined,
+    );
+    expect(mode("")).toBe(undefined);
+  });
+});
