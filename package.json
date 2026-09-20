@@ -29,6 +29,7 @@
     "test:panels": "bun run scripts/panel-browser-check.ts",
     "test:reorder-ui": "bun run scripts/reorder-ui-check.ts",
     "test:repo-tree-ui": "bun run scripts/repo-tree-ui-check.tsx",
+    "test:explorer-ui": "bun run scripts/explorer-ui-check.ts",
     "test:repo-picker-ui": "bun run scripts/repo-picker-ui-check.ts",
     "test:status-ui": "bun run scripts/status-ui-check.ts",
     "test:session-focus": "bun run scripts/session-focus-check.ts",

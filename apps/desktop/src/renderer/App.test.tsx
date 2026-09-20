@@ -5,8 +5,16 @@ import { App, MarkdownPreview } from "./App";
 import type { DesktopClient } from "./client-types";
 import {
   agentMultilineSequence,
+  clampExplorerSecondaryHeight,
+  clampExplorerWidth,
   clampPanelSize,
+  EXPLORER_DEFAULT_WIDTH,
+  EXPLORER_MAX_WIDTH,
+  EXPLORER_MIN_WIDTH,
+  EXPLORER_SECONDARY_MIN_HEIGHT,
+  EXPLORER_TREE_MIN_HEIGHT,
   lifecycleTone,
+  parseRememberedDirectories,
   MAX_VISIBLE_TOASTS,
   sessionStatusView,
   statusAriaLabel,
@@ -113,6 +121,60 @@ describe("desktop application shell", () => {
     expect(clampPanelSize(900, 480)).toBe(480);
     expect(TERMINAL_PANEL_MIN_HEIGHT).toBeGreaterThan(PANEL_RAIL_WIDTH);
     expect(TERMINAL_FONT_SIZE).toBe(13);
+  });
+
+  test("keeps a dragged explorer between its own minimums", () => {
+    // `available` is what the viewer beside it can spare, and it outranks the
+    // nominal maximum — but never below the explorer's own floor, or a narrow
+    // window would collapse it into nothing instead of pinning it.
+    expect(clampExplorerWidth(10, 900)).toBe(EXPLORER_MIN_WIDTH);
+    expect(clampExplorerWidth(260.6, 900)).toBe(261);
+    expect(clampExplorerWidth(900, 900)).toBe(EXPLORER_MAX_WIDTH);
+    expect(clampExplorerWidth(400, 320)).toBe(320);
+    expect(clampExplorerWidth(400, 40)).toBe(EXPLORER_MIN_WIDTH);
+    expect(EXPLORER_MIN_WIDTH).toBeLessThan(EXPLORER_DEFAULT_WIDTH);
+    expect(EXPLORER_DEFAULT_WIDTH).toBeLessThan(EXPLORER_MAX_WIDTH);
+  });
+
+  test("stops the repositories section before it eats the file tree", () => {
+    // `available` is the section's own height plus whatever the tree can give
+    // up above its floor, so the tree always keeps something to scroll.
+    expect(clampExplorerSecondaryHeight(10, 600)).toBe(
+      EXPLORER_SECONDARY_MIN_HEIGHT,
+    );
+    expect(clampExplorerSecondaryHeight(240.4, 600)).toBe(240);
+    expect(clampExplorerSecondaryHeight(600, 380)).toBe(380);
+    expect(clampExplorerSecondaryHeight(600, 20)).toBe(
+      EXPLORER_SECONDARY_MIN_HEIGHT,
+    );
+    expect(EXPLORER_TREE_MIN_HEIGHT).toBeGreaterThan(0);
+  });
+
+  test("restores remembered folders parents first, and survives junk", () => {
+    expect(
+      parseRememberedDirectories(
+        JSON.stringify(["repos/daedalus/src", "repos", "repos/daedalus"]),
+      ),
+    ).toEqual(["repos", "repos/daedalus", "repos/daedalus/src"]);
+    // A child listed before its parent would be restored into a tree that
+    // cannot show it, so depth, not insertion order, decides.
+    expect(parseRememberedDirectories(JSON.stringify(["a/b", "a"]))).toEqual([
+      "a",
+      "a/b",
+    ]);
+    expect(
+      parseRememberedDirectories(JSON.stringify(["a", "a", "", 7, null])),
+    ).toEqual(["a"]);
+    // Nothing here is worth a blank explorer: a key written by an older build,
+    // a hand-edited store, or no key at all all mean "nothing remembered".
+    expect(parseRememberedDirectories(null)).toEqual([]);
+    expect(parseRememberedDirectories("not json")).toEqual([]);
+    expect(parseRememberedDirectories(JSON.stringify({ a: 1 }))).toEqual([]);
+    expect(
+      parseRememberedDirectories(
+        JSON.stringify(Array.from({ length: 400 }, (_, index) => `d${index}`)),
+      ),
+    ).toHaveLength(200);
   });
 
   test("reconciles a starting card with its server-created session", () => {
@@ -505,6 +567,12 @@ describe("desktop application shell", () => {
     expect(html).toContain("workspace-worktree-row");
     expect(html).toContain("daedalus/demo/task/session");
     expect(html).toContain('aria-label="Push daedalus/demo/task/session"');
+    // Both of the explorer's own borders are grabbable, and both carry the
+    // size they are currently set to so a keyboard can move them too.
+    expect(html).toContain('aria-label="Resize explorer"');
+    expect(html).toContain('aria-label="Resize repositories section"');
+    expect(html).toContain("--explorer-width:");
+    expect(html).toContain("--explorer-secondary-height:");
   });
 
   test("renders workspace, task, and session lifecycle state", () => {
