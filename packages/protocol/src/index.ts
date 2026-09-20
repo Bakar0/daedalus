@@ -147,6 +147,14 @@ export interface WorkspaceFileEntryDto {
   kind: "file" | "directory" | "symlink";
 }
 
+/** One coalesced filesystem change, relative to the workspace root. */
+export interface WorkspaceFileChangeDto {
+  path: string;
+  kind: "added" | "updated" | "deleted";
+  /** `null` for a deletion, where there is nothing left to stat. */
+  entryKind: "file" | "directory" | null;
+}
+
 export interface WorkspaceFileDto {
   name: string;
   path: string;
@@ -396,6 +404,31 @@ export interface DesktopRpcSchema {
         },
         WorkspaceFileEntryDto
       >;
+      /** `name` is one path segment; crossing folders is `workspaceEntryMove`. */
+      workspaceEntryRename: Request<
+        { workspace: string; path: string; name: string },
+        WorkspaceFileEntryDto
+      >;
+      /** `destinationPath` is a folder, or `""` for the workspace root. */
+      workspaceEntryMove: Request<
+        { workspace: string; path: string; destinationPath: string },
+        WorkspaceFileEntryDto
+      >;
+      /** Recursive for a folder. Returns the entry as it was, to report on. */
+      workspaceEntryRemove: Request<
+        { workspace: string; path: string },
+        WorkspaceFileEntryDto
+      >;
+      /**
+       * Names the workspaces whose files the window is showing, which is the
+       * only thing the host needs in order to watch the right trees. An empty
+       * list stops watching — a view that is not the explorer has no tree to
+       * keep fresh, and a watcher is a kernel resource.
+       */
+      workspaceWatchSet: Request<
+        { workspaces: string[] },
+        { watching: string[] }
+      >;
       workspaceInstructionFilesSet: Request<
         { enabled: boolean },
         { enabled: boolean }
@@ -587,6 +620,17 @@ export interface DesktopRpcSchema {
     };
     messages: {
       dataChanged: { revision: number; source: "desktop" | "external" };
+      /**
+       * A workspace's files changed on disk. Already coalesced and debounced
+       * by the host; `overflow` means the batch was too large to describe and
+       * `changes` is empty, so the renderer should re-read what it is showing
+       * rather than trust a partial list.
+       */
+      workspaceFilesChanged: {
+        workspaceId: string;
+        changes: WorkspaceFileChangeDto[];
+        overflow: boolean;
+      };
       command: { command: DesktopCommand };
       windowResized: { width: number; height: number };
       /**

@@ -3,22 +3,36 @@
  *
  * Unlike `repo-test`, this page is mounted rather than rendered to a string:
  * everything the check is here to prove — a folder that stays open, a border
- * that drags — only exists once React is running and state can survive a
- * reload. The directory listings come from a stub rather than a real
- * workspace so the tree is the same on every run.
+ * that drags, a tree that notices a file appearing — only exists once React is
+ * running and state can survive a reload.
+ *
+ * The file half of the client is not stubbed. `?api=<port>` points at a bridge
+ * the check script runs in front of a real `ApplicationContext`, a real
+ * workspace directory and a real `fs.watch`, so a listing is a listing and a
+ * change event is one the watcher actually produced. Stubbing that would have
+ * left the coalescing, the debounce and the reconciliation all proven against
+ * a fixture that agrees with them by construction.
+ *
+ * Repositories and working trees stay fabricated: the geometry assertions need
+ * more rows than fit the section's default height, and producing them for real
+ * would mean cloning.
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import type {
   DesktopSnapshotDto,
   WorkspaceContentDto,
-  WorkspaceFileEntryDto,
+  WorkspaceFileChangeDto,
 } from "@daedalus/protocol";
 import { App } from "./App";
 import type { DesktopClient } from "./client-types";
 import "./styles.css";
 
-const workspaceId = "explorer-test-workspace";
+const api = new URLSearchParams(location.search).get("api");
+const bridge = `http://127.0.0.1:${api}`;
+const workspaceId =
+  new URLSearchParams(location.search).get("workspace") ??
+  "explorer-test-workspace";
 
 const snapshot: DesktopSnapshotDto = {
   workspaces: [
@@ -58,38 +72,6 @@ const snapshot: DesktopSnapshotDto = {
   },
 };
 
-const directory = (path: string): WorkspaceFileEntryDto => ({
-  name: path.slice(path.lastIndexOf("/") + 1),
-  path,
-  kind: "directory",
-});
-const file = (path: string): WorkspaceFileEntryDto => ({
-  name: path.slice(path.lastIndexOf("/") + 1),
-  path,
-  kind: "file",
-});
-
-// Deep enough that restoring it proves parents come back before children.
-const listings: Record<string, WorkspaceFileEntryDto[]> = {
-  "": [
-    directory("repos"),
-    directory("worktrees"),
-    file("BRIEF.md"),
-    file("JOURNAL.md"),
-  ],
-  repos: [directory("repos/daedalus")],
-  "repos/daedalus": [
-    directory("repos/daedalus/packages"),
-    file("repos/daedalus/README.md"),
-  ],
-  "repos/daedalus/packages": [
-    file("repos/daedalus/packages/core.ts"),
-    file("repos/daedalus/packages/protocol.ts"),
-  ],
-  worktrees: [directory("worktrees/alpha")],
-  "worktrees/alpha": [file("worktrees/alpha/notes.md")],
-};
-
 const repository = (id: string, name: string) => ({
   id,
   workspaceId,
@@ -115,11 +97,7 @@ const repository = (id: string, name: string) => ({
 // The repositories section needs more than fits its default height, so a drag
 // that makes it taller is visible as more of the list rather than only as a
 // number.
-const content: WorkspaceContentDto = {
-  workspaceId,
-  brief: "# Brief",
-  journal: "# Journal",
-  files: listings[""]!,
+const fabricated = {
   repositories: [
     repository("r1", "daedalus"),
     repository("r2", "hive"),
@@ -132,7 +110,12 @@ const content: WorkspaceContentDto = {
       path: "/tmp/explorer-test/worktrees/alpha/daedalus",
       branchName: "daedalus/explorer-test/alpha",
       createdAt: "2026-09-19T00:00:00.000Z",
-      gitStatus: { state: "clean", changedFiles: 0, ahead: 0, behind: 0 },
+      gitStatus: {
+        state: "clean" as const,
+        changedFiles: 0,
+        ahead: 0,
+        behind: 0,
+      },
     },
     {
       sessionId: "s-2",
@@ -140,33 +123,60 @@ const content: WorkspaceContentDto = {
       path: "/tmp/explorer-test/worktrees/beta/hive",
       branchName: "hive/explorer-test/beta",
       createdAt: "2026-09-19T00:00:00.000Z",
-      gitStatus: { state: "clean", changedFiles: 0, ahead: 0, behind: 0 },
+      gitStatus: {
+        state: "clean" as const,
+        changedFiles: 0,
+        ahead: 0,
+        behind: 0,
+      },
     },
   ],
 };
 
+const call = async (route: string, body: unknown) => {
+  const response = await fetch(`${bridge}${route}`, {
+    body: JSON.stringify(body ?? {}),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  });
+  return (await response.json()) as { ok: boolean };
+};
+
+const fileListeners = new Set<
+  (change: {
+    workspaceId: string;
+    changes: WorkspaceFileChangeDto[];
+    overflow: boolean;
+  }) => void
+>();
+const events = new WebSocket(`ws://127.0.0.1:${api}/events`);
+events.addEventListener("message", (event) => {
+  const change = JSON.parse(String(event.data));
+  for (const listener of fileListeners) listener(change);
+});
+
 const client = {
   request: {
     snapshot: async () => ({ ok: true, data: snapshot }),
-    workspaceContentGet: async () => ({ ok: true, data: content }),
-    workspaceDirectoryList: async ({ path }: { path?: string }) => {
-      const listing = listings[path ?? ""];
-      return listing
-        ? { ok: true, data: listing }
-        : {
-            ok: false,
-            error: { code: "NOT_FOUND", message: `No such directory: ${path}` },
-          };
+    workspaceContentGet: async () => {
+      const content = (await call("/content", {})) as {
+        ok: boolean;
+        data: WorkspaceContentDto;
+      };
+      return {
+        ok: true,
+        data: { ...content.data, ...fabricated, workspaceId },
+      };
     },
-    workspaceFileRead: async ({ path }: { path: string }) => ({
-      ok: true,
-      data: {
-        name: path.slice(path.lastIndexOf("/") + 1),
-        path,
-        content: `Contents of ${path}`,
-        format: path.endsWith(".md") ? "markdown" : "text",
-      },
-    }),
+    workspaceDirectoryList: (params: { path?: string }) =>
+      call("/list", params),
+    workspaceFileRead: (params: { path: string }) => call("/read", params),
+    workspaceFileWrite: (params: unknown) => call("/write", params),
+    workspaceEntryCreate: (params: unknown) => call("/create", params),
+    workspaceEntryRename: (params: unknown) => call("/rename", params),
+    workspaceEntryMove: (params: unknown) => call("/move", params),
+    workspaceEntryRemove: (params: unknown) => call("/remove", params),
+    workspaceWatchSet: (params: unknown) => call("/watch", params),
     agentModels: async ({ provider }: { provider: "codex" | "claude" }) => ({
       ok: true,
       data: { provider, models: [], source: "aliases" },
@@ -182,8 +192,25 @@ const client = {
   subscribeCommands: () => () => undefined,
   subscribeWindowResize: () => () => undefined,
   subscribeFocusSession: () => () => undefined,
+  subscribeWorkspaceFiles: (
+    listener: (change: {
+      workspaceId: string;
+      changes: WorkspaceFileChangeDto[];
+      overflow: boolean;
+    }) => void,
+  ) => {
+    fileListeners.add(listener);
+    return () => fileListeners.delete(listener);
+  },
   subscribeQuitRequest: () => () => undefined,
 } as unknown as DesktopClient;
+
+// The content is fetched before the first render for the same reason the real
+// app passes one in: the explorer draws nothing without it, and a page that
+// starts empty would make every `waitFor` in the check race the first paint.
+const initial = (await client.request.workspaceContentGet({} as never)) as {
+  data: WorkspaceContentDto;
+};
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -191,7 +218,7 @@ createRoot(document.getElementById("root")!).render(
       injectedClient={client}
       initialSnapshot={snapshot}
       initialWorkspaceView="workspace"
-      initialWorkspaceContent={content}
+      initialWorkspaceContent={initial.data}
     />
   </StrictMode>,
 );

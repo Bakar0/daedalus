@@ -168,6 +168,31 @@ export const DAEDALUS_CONTROL_OPENAI_METADATA = daedalusControlOpenAiMetadata;
 
 const SAFE_SEGMENT = /[^a-z0-9]+/g;
 const MAX_VIEWABLE_FILE_BYTES = 1024 * 1024;
+
+/**
+ * Top-level folders Daedalus creates and keeps pointing at.
+ * `ensureWorkspaceContentFiles` recreates them, so losing one is survivable,
+ * but `repos/` and `worktrees/` hold checkouts and session working trees that
+ * database rows name by path — renaming either orphans those rows silently.
+ */
+const MANAGED_WORKSPACE_DIRECTORIES = ["repos", "worktrees", "artifacts"];
+
+/** One valid path segment, shared by every verb that takes a new name. */
+function assertEntryName(value: string): string {
+  const name = value.trim();
+  if (
+    !name ||
+    name === "." ||
+    name === ".." ||
+    name.length > 255 ||
+    /[\\/\0]/.test(name)
+  )
+    throw new DaedalusError(
+      "VALIDATION",
+      "File and folder names must be one valid path segment",
+    );
+  return name;
+}
 const GH_EXECUTABLE_FALLBACKS = standardExecutableFallbacks("gh");
 
 type GitHubRepositoryResponse = {
@@ -1543,27 +1568,12 @@ export class WorkspaceContentService {
     kind: "file" | "directory";
   }): Promise<WorkspaceFileEntry> {
     const workspace = await this.workspaces.getActive(input.workspace);
-    const name = input.name.trim();
-    if (
-      !name ||
-      name === "." ||
-      name === ".." ||
-      name.length > 255 ||
-      /[\\/\0]/.test(name)
-    )
-      throw new DaedalusError(
-        "VALIDATION",
-        "File and folder names must be one valid path segment",
-      );
+    const name = assertEntryName(input.name);
     const parent = await this.resolveVisiblePath(
       workspace,
       input.parentPath ?? "",
     );
-    if (parent.relativePath.split(/[\\/]/)[0] === "repos")
-      throw new DaedalusError(
-        "CONFLICT",
-        "Workspace repository references are managed and read-only",
-      );
+    this.assertWritable(parent.relativePath);
     if (!(await lstat(parent.target)).isDirectory())
       throw new DaedalusError("VALIDATION", "New entries require a folder");
     const path = join(parent.relativePath, name);
@@ -1585,6 +1595,208 @@ export class WorkspaceContentService {
       throw error;
     }
     return { name, path, kind: input.kind };
+  }
+
+  /**
+   * Renames one entry in place. The name is a single path segment, exactly as
+   * `createEntry` takes one; moving between folders is `moveEntry`.
+   */
+  async renameEntry(input: {
+    workspace: string;
+    path: string;
+    name: string;
+  }): Promise<WorkspaceFileEntry> {
+    const workspace = await this.workspaces.getActive(input.workspace);
+    const name = assertEntryName(input.name);
+    const source = await this.resolveMutablePath(workspace, input.path);
+    const destinationPath = join(dirname(source.relativePath), name);
+    const destination = await this.resolveDestination(
+      workspace,
+      destinationPath,
+    );
+    await this.assertVacant(destination.target, source.target, destinationPath);
+    await rename(source.target, destination.target);
+    return this.describeEntry(destination.target, destinationPath);
+  }
+
+  /**
+   * Moves an entry into another folder, keeping its name. The destination is a
+   * folder path, or `""` for the workspace root.
+   */
+  async moveEntry(input: {
+    workspace: string;
+    path: string;
+    destinationPath: string;
+  }): Promise<WorkspaceFileEntry> {
+    const workspace = await this.workspaces.getActive(input.workspace);
+    const source = await this.resolveMutablePath(workspace, input.path);
+    const folder = await this.resolveVisiblePath(
+      workspace,
+      input.destinationPath,
+    );
+    this.assertWritable(folder.relativePath);
+    if (!(await lstat(folder.target)).isDirectory())
+      throw new DaedalusError(
+        "VALIDATION",
+        `'${input.destinationPath}' is not a folder`,
+      );
+    // `rename` answers this with EINVAL, which reaches the user as a bare
+    // errno. A folder cannot contain itself, and saying so is cheap.
+    if (
+      folder.target === source.target ||
+      isPathInside(source.target, folder.target)
+    )
+      throw new DaedalusError(
+        "VALIDATION",
+        "A folder cannot be moved inside itself",
+      );
+    const name = basename(source.relativePath);
+    const destinationPath = join(folder.relativePath, name);
+    if (destinationPath === source.relativePath)
+      return this.describeEntry(source.target, source.relativePath);
+    const destination = await this.resolveDestination(
+      workspace,
+      destinationPath,
+    );
+    await this.assertVacant(destination.target, source.target, destinationPath);
+    await rename(source.target, destination.target);
+    return this.describeEntry(destination.target, destinationPath);
+  }
+
+  /** Removes an entry, and everything under it when it is a folder. */
+  async removeEntry(input: {
+    workspace: string;
+    path: string;
+  }): Promise<WorkspaceFileEntry> {
+    const workspace = await this.workspaces.getActive(input.workspace);
+    const source = await this.resolveMutablePath(workspace, input.path);
+    const entry = await this.describeEntry(source.target, source.relativePath);
+    await rm(source.target, { recursive: true, force: false });
+    return entry;
+  }
+
+  private async describeEntry(
+    target: string,
+    relativePath: string,
+  ): Promise<WorkspaceFileEntry> {
+    const entry = await lstat(target);
+    return {
+      name: basename(relativePath),
+      path: relativePath,
+      kind: entry.isSymbolicLink()
+        ? "symlink"
+        : entry.isDirectory()
+          ? "directory"
+          : "file",
+    };
+  }
+
+  /**
+   * `repos/` holds pinned read-only checkouts the repository library owns, and
+   * the renderer already disables the actions that would write there. It is
+   * checked again here because a service that trusts its caller is not a
+   * guard — the RPC surface is reachable without the UI.
+   */
+  private assertWritable(relativePath: string): void {
+    if (relativePath.split(/[\\/]/)[0] === "repos")
+      throw new DaedalusError(
+        "CONFLICT",
+        "Workspace repository references are managed and read-only",
+      );
+  }
+
+  /**
+   * Resolves an existing path that is about to be renamed, moved or removed.
+   *
+   * Beyond the escape guard this refuses the entries Daedalus itself keeps
+   * pointing at: the workspace root, the managed top-level folders, and any
+   * registered session worktree. Every one of those has a database row naming
+   * its path, and renaming it would not fail — it would quietly orphan the
+   * row and leave an agent's working tree unreachable.
+   */
+  private async resolveMutablePath(
+    workspace: Workspace,
+    requestedPath: string,
+  ): Promise<{ target: string; relativePath: string }> {
+    const resolved = await this.resolveVisiblePath(workspace, requestedPath);
+    if (resolved.relativePath === "")
+      throw new DaedalusError(
+        "VALIDATION",
+        "The workspace root itself cannot be renamed, moved or removed",
+      );
+    this.assertWritable(resolved.relativePath);
+    if (MANAGED_WORKSPACE_DIRECTORIES.includes(resolved.relativePath))
+      throw new DaedalusError(
+        "CONFLICT",
+        `'${resolved.relativePath}' is managed by Daedalus and cannot be renamed, moved or removed`,
+      );
+    const worktree = this.repositories
+      .listSessionWorktrees({ workspaceId: workspace.id })
+      .find((candidate) => resolve(candidate.path) === resolved.target);
+    if (worktree)
+      throw new DaedalusError(
+        "CONFLICT",
+        "This is a session working tree; remove it from its session instead",
+      );
+    return resolved;
+  }
+
+  /**
+   * Resolves a path that is not supposed to exist yet. `resolveVisiblePath`
+   * cannot do this — it requires the target to exist — so the parent is
+   * resolved through it and the new segment joined on, which is how
+   * `createEntry` reaches the same guarantee.
+   */
+  private async resolveDestination(
+    workspace: Workspace,
+    requestedPath: string,
+  ): Promise<{ target: string; relativePath: string }> {
+    const parent = await this.resolveVisiblePath(
+      workspace,
+      dirname(requestedPath) === "." ? "" : dirname(requestedPath),
+    );
+    this.assertWritable(parent.relativePath);
+    const name = basename(requestedPath);
+    if (parent.relativePath === "" && name === ".daedalus")
+      throw new DaedalusError(
+        "VALIDATION",
+        "The .daedalus directory is reserved",
+      );
+    return {
+      target: join(parent.target, name),
+      relativePath: join(parent.relativePath, name),
+    };
+  }
+
+  /**
+   * Refuses to land on something that is already there.
+   *
+   * This is not politeness: `rename` overwrites an existing file silently and
+   * reports success, so without this check renaming `notes.md` onto
+   * `README.md` destroys `README.md` and says nothing.
+   *
+   * The exception is the one this filesystem makes. macOS is case-insensitive
+   * but case-preserving, so `README.md` "already exists" when the file on disk
+   * is `Readme.md` — and refusing there would make a case-only rename
+   * impossible. `realpath` reports the stored spelling, so when both sides
+   * resolve to the same real path they are the same entry reached by two
+   * spellings, and the rename is a change of case rather than a collision.
+   */
+  private async assertVacant(
+    target: string,
+    source: string,
+    relativePath: string,
+  ): Promise<void> {
+    if (!(await pathExists(target))) return;
+    const [targetReal, sourceReal] = await Promise.all([
+      canonicalPath(target),
+      canonicalPath(source),
+    ]);
+    if (targetReal === sourceReal) return;
+    throw new DaedalusError(
+      "CONFLICT",
+      `Workspace path '${relativePath}' already exists`,
+    );
   }
 
   private async resolveVisiblePath(
