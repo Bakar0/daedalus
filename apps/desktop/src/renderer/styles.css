@@ -1419,6 +1419,16 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   font-size: 11px;
   white-space: nowrap;
 }
+/* Codex shows its permission mode nowhere of its own, so this row is the only
+   ambient reading of it. Quiet by default; it is a state, not a warning. */
+.agent-session-status-permission {
+  border: 1px solid rgb(130 144 169 / 0.22);
+  border-radius: 4px;
+  color: #8290a9;
+  font-size: 10px;
+  padding: 0 4px;
+  white-space: nowrap;
+}
 .agent-session-status-primary small {
   color: #8290a9;
   margin-left: auto;

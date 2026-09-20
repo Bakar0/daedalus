@@ -296,6 +296,8 @@ export interface PresenceStateDto {
 export interface SessionTelemetryDto {
   sessionId: string;
   model?: string;
+  /** Codex only; absent for Claude, which shows its own mode in its input. */
+  permissionMode?: string;
   context?: {
     usedTokens: number;
     totalTokens?: number;

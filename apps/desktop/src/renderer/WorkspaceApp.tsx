@@ -1484,6 +1484,14 @@ function TerminalSurface({
                 {telemetry.model}
               </span>
             )}
+            {telemetry?.permissionMode && (
+              <span
+                className="agent-session-status-permission"
+                title="Permission mode, as of this session's latest turn. Change it with /permissions."
+              >
+                {telemetry.permissionMode}
+              </span>
+            )}
             {locationLabel && (
               <span
                 className="agent-session-status-path"

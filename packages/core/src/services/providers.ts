@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import {
   channelName,
   type AgentDefinition,
+  type AgentPermissionMode,
   type DaedalusConfig,
 } from "../config";
 import { DaedalusError } from "../errors";
@@ -118,6 +119,53 @@ export async function claudeDaedalusSettingsArgs(
     "--settings",
     JSON.stringify(mergeClaudeSettings(parsed, daedalus)),
   ];
+}
+
+/**
+ * The launch arguments that start a session in the provider's own
+ * "only ask about what looks unsafe" mode.
+ *
+ * Daedalus exists to let agents work continuously, so a spawned session
+ * starts relaxed unless the user configures `permissionMode: "inherit"`.
+ *
+ * Applied at spawn and nowhere else. A user who tightens a live session —
+ * Claude's shift+tab, Codex's `/permissions` — has made a decision, and
+ * re-applying this on restore would silently undo it. `relaunch` therefore
+ * rebuilds its arguments without calling this, and that asymmetry is
+ * deliberate: a restored session that is stricter than expected is friction,
+ * one that is quietly looser is a bug.
+ *
+ * The same idea needs different arguments and does not have the same reach in
+ * each provider. Claude's `auto` weighs every tool call, because nothing but
+ * judgement bounds it. Codex's reviewer only sees escalations *out of* the
+ * seatbelt sandbox, so it engages far less often — which is also why
+ * `approval_policy` must stay `on-request`: under `never` no escalation is
+ * ever raised, and the reviewer would have nothing to review.
+ *
+ * Neither reaches an enterprise `PreToolUse` hook. Those run ahead of the
+ * permission flow and are not a permission mode, so a managed guardrail stops
+ * an `auto` session exactly as it stops a default one.
+ */
+export function permissionModeArgs(
+  provider: string,
+  mode: AgentPermissionMode = "auto",
+): string[] {
+  if (mode === "inherit") return [];
+  switch (provider) {
+    case "claude":
+      return ["--permission-mode", "auto"];
+    case "codex":
+      // Values are quoted so Codex parses them as TOML strings rather than
+      // falling back to its raw-literal path.
+      return [
+        "-c",
+        'approvals_reviewer="auto_review"',
+        "-c",
+        'approval_policy="on-request"',
+      ];
+    default:
+      return [];
+  }
 }
 
 export const codexConfigPath = (config: DaedalusConfig): string =>
@@ -457,6 +505,10 @@ class ConfiguredProvider implements AgentProvider {
     if (this.promptArgument)
       for (const directory of input.additionalDirectories ?? [])
         args.push("--add-dir", directory);
+    if (this.promptArgument)
+      args.push(
+        ...permissionModeArgs(this.name, this.definition.permissionMode),
+      );
     if (this.promptArgument && this.name === "codex") {
       args.push(...CODEX_DAEDALUS_TUI_ARGS);
       if (this.config)
