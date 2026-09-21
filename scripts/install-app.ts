@@ -27,8 +27,22 @@ if (!(await Bun.file(join(SOURCE, "Contents", "Info.plist")).exists())) {
   process.exit(1);
 }
 
-const running = Bun.spawnSync(["pgrep", "-f", "Daedalus.app/Contents/MacOS"]);
-if (running.exitCode === 0) {
+// `pgrep -f` is the obvious check here and the wrong one: it was observed
+// matching a long-running `npm exec` process whose argv contained no such path,
+// on strings that existed only in that process's environment (COLORTERM,
+// DAEDALUS_WORKSPACE_ID). Every agent session Daedalus spawns exports
+// COTTONTAIL_ELECTROBUN_DIST, which carries a .../Daedalus.app/Contents/MacOS
+// path, so a descendant process can read as a running app long after the app
+// has quit — blocking installs with the app closed. `ps` reports argv alone,
+// and matching the install destination rather than any bundle keeps the check
+// to what actually matters: is the bundle we are about to overwrite executing.
+const processes = Bun.spawnSync(["ps", "-Ao", "command="]);
+const bundleExecutables = join(DESTINATION, "Contents", "MacOS");
+const running = processes.stdout
+  .toString()
+  .split("\n")
+  .some((line) => line.includes(bundleExecutables));
+if (running) {
   console.error(
     "Daedalus is running. Quit it first — replacing a running bundle leaves it in a half-updated state.",
   );
