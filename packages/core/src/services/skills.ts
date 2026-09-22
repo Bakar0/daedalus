@@ -132,8 +132,11 @@ export const MANAGED_SKILLS: readonly ManagedSkillDefinition[] = [
     summary:
       "Cuts AI tells from writing. On demand it adds the /unslop command. Always also installs a Claude output style and a Codex instructions block, so the rules apply to every response.",
     supportsAlways: true,
-    defaultEnabled: false,
-    defaultMode: "on-demand",
+    // On, and on in its `always` form, because the point of the capability is
+    // that the rules hold for every response. Shipping it `on-demand` would
+    // install a command nobody asked for and change no writing at all.
+    defaultEnabled: true,
+    defaultMode: "always",
     skillFiles: [{ path: "SKILL.md", contents: unslopSkillTemplate }],
     style: {
       fileName: "Unslop.md",
@@ -874,7 +877,11 @@ export class SkillService {
     );
     const existing = await readFile(path, "utf8");
     const cleared = removeMarkedBlock(existing, markers);
-    if (cleared !== existing) await writeFileAtomic(path, cleared);
+    if (cleared === existing) return;
+    // Same reasoning as the settings file: an AGENTS.md with nothing in it
+    // says nothing to Codex, and it only exists because Daedalus made it.
+    if (!cleared.trim()) await rm(path, { force: true });
+    else await writeFileAtomic(path, cleared);
   }
 
   /**
@@ -1133,10 +1140,19 @@ export class SkillService {
     const serialized = `${JSON.stringify(next, null, 2)}\n`;
     if (serialized !== raw) {
       await ensureDirectory(dirname(path));
+      // Only before the *first* write, and only over something that was there
+      // to begin with. Keying off the backup's absence alone meant that on a
+      // machine where Daedalus created the file, the first write made no
+      // backup and the second one filed Daedalus's own output as though it
+      // were the user's.
+      const untouched = written.length === 0 && writtenStyle === undefined;
       const backup = `${path}.daedalus-backup`;
-      if (raw && !(await pathExists(backup)))
+      if (raw && untouched && !(await pathExists(backup)))
         await writeFile(backup, raw, { encoding: "utf8", mode: 0o600 });
-      await writeFileAtomic(path, serialized);
+      // An empty object is what Claude reads from no file at all, so leaving
+      // one behind is litter rather than a setting.
+      if (Object.keys(next).length === 0) await rm(path, { force: true });
+      else await writeFileAtomic(path, serialized);
     }
     const names = Object.keys(ours);
     if (

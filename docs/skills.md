@@ -10,13 +10,22 @@ Design notes and the research behind the choices are in
 
 ## What Daedalus ships
 
-| Capability         | Default | What it is                                                      |
-| ------------------ | ------- | --------------------------------------------------------------- |
-| `daedalus-control` | on      | Drives Daedalus through the `daedal` CLI                        |
-| `unslop`           | off     | Writing rules that cut AI tells, from `cursor/plugins` `pstack` |
+| Capability         | Default      | What it is                                                      |
+| ------------------ | ------------ | --------------------------------------------------------------- |
+| `daedalus-control` | on           | Drives Daedalus through the `daedal` CLI                        |
+| `unslop`           | on, `always` | Writing rules that cut AI tells, from `cursor/plugins` `pstack` |
 
-Both are listed in Settings and in `daedal skill list`, and both can be turned
-off. Daedalus installs nothing the user did not ask for.
+Both are on out of the box, both are listed in Settings and in
+`daedal skill list` with the exact paths they write, and either can be turned
+off. `unslop` ships in its `always` form because the point of it is that the
+rules hold for every response; shipping it `on-demand` would install a command
+nobody asked for and change no writing at all.
+
+So a first launch writes into the provider directories without being asked.
+Everything it writes is on the row in the panel, and
+`daedal skill disable unslop` takes all of it back. An existing install keeps
+whatever is already in its `config.json`, so this default only reaches a
+machine that has never set it.
 
 ## Layout on disk
 

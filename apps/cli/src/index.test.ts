@@ -523,9 +523,13 @@ describe("daedal CLI contract", () => {
         };
       };
       expect(listing.ok).toBe(true);
+      // Both ship on, and unslop ships in its `always` form.
       expect(
         listing.data.managed.find((one) => one.id === "unslop"),
-      ).toMatchObject({ enabled: false });
+      ).toMatchObject({ enabled: true, mode: "always" });
+      expect(
+        listing.data.managed.find((one) => one.id === "daedalus-control"),
+      ).toMatchObject({ enabled: true });
 
       expect(
         (await run(["skill", "enable", "unslop", "--mode", "always"])).exitCode,

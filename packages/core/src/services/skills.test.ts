@@ -2,6 +2,7 @@ import {
   mkdir,
   readFile,
   readlink,
+  rm,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -85,24 +86,45 @@ describe("skill frontmatter", () => {
 });
 
 describe("SkillService", () => {
-  test("installs the shipped skill globally and leaves unslop off", async () => {
-    await withSkillHomes(async ({ context, home, claudeHome, agentsHome }) => {
-      await context.skills.sync();
-      expect(
-        await readFile(
-          join(claudeHome, "skills", "daedalus-control", "SKILL.md"),
-          "utf8",
-        ),
-      ).toContain("name: daedalus-control");
-      expect(
-        await readlink(join(agentsHome, "skills", "daedalus-control")),
-      ).toBe(join(home, "skills", "daedalus-control"));
-      expect(await pathExists(join(claudeHome, "skills", "unslop"))).toBe(
-        false,
-      );
-      const managed = await context.skills.managedStatus();
-      expect(managed.find((one) => one.id === "unslop")?.enabled).toBe(false);
-    });
+  test("a fresh install arrives with both shipped capabilities on", async () => {
+    await withSkillHomes(
+      async ({ context, home, claudeHome, agentsHome, codexHome }) => {
+        await context.skills.sync();
+        expect(
+          await readFile(
+            join(claudeHome, "skills", "daedalus-control", "SKILL.md"),
+            "utf8",
+          ),
+        ).toContain("name: daedalus-control");
+        expect(
+          await readlink(join(agentsHome, "skills", "daedalus-control")),
+        ).toBe(join(home, "skills", "daedalus-control"));
+
+        // unslop ships in its `always` form, so the writing rules hold from
+        // the first session rather than waiting to be asked for.
+        const managed = await context.skills.managedStatus();
+        expect(managed.find((one) => one.id === "unslop")).toMatchObject({
+          enabled: true,
+          mode: "always",
+        });
+        expect(await pathExists(join(claudeHome, "skills", "unslop"))).toBe(
+          true,
+        );
+        expect(
+          await pathExists(join(claudeHome, "output-styles", "Unslop.md")),
+        ).toBe(true);
+        expect(await readFile(join(codexHome, "AGENTS.md"), "utf8")).toContain(
+          "Write without AI tells",
+        );
+        expect(
+          (
+            JSON.parse(
+              await readFile(join(claudeHome, "settings.json"), "utf8"),
+            ) as { outputStyle: string }
+          ).outputStyle,
+        ).toBe("Unslop");
+      },
+    );
   });
 
   test("on-demand installs the skill only; always adds the style and the block", async () => {
@@ -455,16 +477,49 @@ describe("SkillService", () => {
       expect(selection).toMatchObject({ present: true, blocked: false });
 
       // On demand installs the skill but selects nothing, so the slot goes
-      // back exactly as it was found.
+      // back exactly as it was found. Here the file held only Daedalus's
+      // selection, so giving it back leaves nothing and the file goes too.
       await context.skills.setEnabled("unslop", true, "on-demand");
-      expect(
-        (
-          JSON.parse(await readFile(settings, "utf8")) as Record<
-            string,
-            unknown
-          >
-        ).outputStyle,
-      ).toBeUndefined();
+      expect(await pathExists(settings)).toBe(false);
+    });
+  });
+
+  test("backs up the user's file, not its own, and leaves no empty one behind", async () => {
+    await withSkillHomes(async ({ context, claudeHome, codexHome }) => {
+      const settings = join(claudeHome, "settings.json");
+      const backup = `${settings}.daedalus-backup`;
+
+      // A machine where Daedalus creates the file. Its own output is not the
+      // user's file, so there is nothing here worth keeping a copy of.
+      await context.skills.sync();
+      expect(await pathExists(backup)).toBe(false);
+      await context.skills.setEnabled("unslop", false);
+      await context.skills.setEnabled("daedalus-control", false);
+      expect(await pathExists(backup)).toBe(false);
+      // And nothing empty is left standing in for a setting.
+      expect(await pathExists(settings)).toBe(false);
+      expect(await pathExists(join(codexHome, "AGENTS.md"))).toBe(false);
+    });
+  });
+
+  test("keeps one copy of a settings file the user wrote", async () => {
+    await withSkillHomes(async ({ context, claudeHome }) => {
+      const settings = join(claudeHome, "settings.json");
+      await mkdir(claudeHome, { recursive: true });
+      const theirs = `${JSON.stringify({ env: { A: "b" } }, null, 2)}\n`;
+      await writeFile(settings, theirs, "utf8");
+
+      await context.skills.sync();
+      expect(await readFile(`${settings}.daedalus-backup`, "utf8")).toBe(
+        theirs,
+      );
+      // Their file is still theirs, with Daedalus's selection added to it.
+      const after = JSON.parse(await readFile(settings, "utf8")) as {
+        env: { A: string };
+        outputStyle: string;
+      };
+      expect(after.env.A).toBe("b");
+      expect(after.outputStyle).toBe("Unslop");
     });
   });
 
@@ -573,6 +628,11 @@ describe("SkillService", () => {
 
   test("creates no settings file when there is nothing of ours to put in it", async () => {
     await withSkillHomes(async ({ context, claudeHome }) => {
+      // Both shipped capabilities off, so Daedalus has no setting to
+      // contribute. It must not create a settings file to hold nothing.
+      await context.skills.setEnabled("unslop", false);
+      await context.skills.setEnabled("daedalus-control", false);
+      await rm(join(claudeHome, "settings.json"), { force: true });
       await context.skills.sync();
       expect(await pathExists(join(claudeHome, "settings.json"))).toBe(false);
     });
