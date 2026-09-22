@@ -209,6 +209,9 @@ const client = {
     }),
     presencePublish: async () => ({ ok: true, data: {} }),
     toastsAcknowledge: async () => ({ ok: true, data: { acknowledged: 0 } }),
+    // Asked for on mount. Without it the request throws inside a passive
+    // effect and React tears the whole tree down, leaving a blank page.
+    workspaceWatchSet: async () => ({ ok: true, data: { watching: [] } }),
   },
   subscribe: (listener: () => void) => {
     listeners.add(listener);
@@ -218,6 +221,7 @@ const client = {
   subscribeWindowResize: () => () => undefined,
   subscribeFocusSession: () => () => undefined,
   subscribeQuitRequest: () => () => undefined,
+  subscribeWorkspaceFiles: () => () => undefined,
 } as unknown as DesktopClient;
 
 createRoot(document.getElementById("root")!).render(
