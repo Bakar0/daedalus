@@ -371,6 +371,37 @@ depend on the attachment.
 
 Agent sessions receive `DAEDALUS_SESSION_ID`, `DAEDALUS_HOME`, and a PATH containing Daedalus's bundled CLI. They start in an isolated session folder without eagerly creating a worktree for every attached repository. The worktree command creates the selected repository's writable worktree from the attachment's pinned base commit and prints its path; repeating it returns the existing worktree.
 
+## Skills
+
+```text
+daedal skill list [--provider claude|codex|cursor] [--managed] [--json]
+daedal skill get <name>
+daedal skill enable <name> [--mode on-demand|always]
+daedal skill disable <name>
+daedal skill visibility <name> <on|name-only|user-invocable-only|off>
+daedal skill install <path> [--name <name>]
+daedal skill install --git <url> --path <subdir> [--name <name>]
+daedal skill remove <name> --force
+daedal skill sync
+daedal skill doctor
+```
+
+Skills are global, so none of these takes `--workspace`. `list` reports both
+the capabilities Daedalus ships and every other skill the providers can see,
+with the path each one was found at. `enable` and `disable` print every path
+they wrote and every path they left alone because something that was not
+Daedalus's already sat there.
+
+`--mode always` applies only to a capability that has a style form, which today
+is `unslop`. It installs a Claude output style and a fenced block in
+`~/.codex/AGENTS.md` on top of the skill.
+
+`visibility` uses each provider's own switch. Claude Code applies it to the next
+session; Codex applies it after it restarts and applies it everywhere. `remove`
+takes `--force` because it deletes files, and refuses on a skill Daedalus ships.
+`sync` is idempotent and also runs when the app starts. See
+[`skills.md`](skills.md) for the layout on disk.
+
 ## Configuration and isolation
 
 ```json

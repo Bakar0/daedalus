@@ -8,8 +8,8 @@ Research and strategy for two related asks:
    user skills, not only the Daedalus one.
 
 This document records what the providers actually support as of September 2026
-and recommends a build order. It is a plan, not shipped behavior. Nothing here
-is implemented yet.
+and the reasoning behind the design. All six steps of the build order are
+implemented. For how to use the result, see [`skills.md`](skills.md).
 
 ## Part 1: making unslop always apply
 
@@ -38,14 +38,14 @@ not an on-demand workflow.
 
 ### What each provider offers for always-on instructions
 
-| Mechanism | Claude Code | Codex and Cursor | Applies to every response |
-| --- | --- | --- | --- |
-| Skill (`SKILL.md`) | `~/.claude/skills`, `.claude/skills`, plugin `skills/` | `~/.agents/skills`, `.agents/skills`, `~/.cursor/skills`, `.cursor/skills` | No. Loaded when the description matches, or on `/name` |
-| Skill with `disable-model-invocation` | supported | supported, reported as ignored under `.agents/skills` | No. Strictly less often than a normal skill |
-| Memory file | `CLAUDE.md`, added as a user message after the system prompt | `AGENTS.md`, read at session start | Yes, but it competes with project content and fades over a long session |
-| Output style | `~/.claude/output-styles`, `.claude/output-styles`, `outputStyle` setting | no equivalent | Yes. Sent with every request, and Claude Code re-states it during the conversation |
-| `--append-system-prompt` | CLI flag | no equivalent | Yes, for one launch |
-| `UserPromptSubmit` hook | supported | supported | Yes, once per turn, at the cost of tokens on every turn |
+| Mechanism                             | Claude Code                                                               | Codex and Cursor                                                           | Applies to every response                                                          |
+| ------------------------------------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Skill (`SKILL.md`)                    | `~/.claude/skills`, `.claude/skills`, plugin `skills/`                    | `~/.agents/skills`, `.agents/skills`, `~/.cursor/skills`, `.cursor/skills` | No. Loaded when the description matches, or on `/name`                             |
+| Skill with `disable-model-invocation` | supported                                                                 | supported, reported as ignored under `.agents/skills`                      | No. Strictly less often than a normal skill                                        |
+| Memory file                           | `CLAUDE.md`, added as a user message after the system prompt              | `AGENTS.md`, read at session start                                         | Yes, but it competes with project content and fades over a long session            |
+| Output style                          | `~/.claude/output-styles`, `.claude/output-styles`, `outputStyle` setting | no equivalent                                                              | Yes. Sent with every request, and Claude Code re-states it during the conversation |
+| `--append-system-prompt`              | CLI flag                                                                  | no equivalent                                                              | Yes, for one launch                                                                |
+| `UserPromptSubmit` hook               | supported                                                                 | supported                                                                  | Yes, once per turn, at the cost of tokens on every turn                            |
 
 ### Recommendation
 
@@ -81,6 +81,7 @@ equivalent.
 For all three, also install `unslop/SKILL.md` unchanged, keeping
 `disable-model-invocation: true`. That gives `/unslop` for editing text that is
 already written, which is a different job from writing cleanly the first time.
+
 ### Why not put the rules in the generated workspace files
 
 `BRIEF.md` records the decision that Daedalus does not author the user's
@@ -178,8 +179,8 @@ through `saveSetting`, and this follows it:
 {
   "skills": {
     "daedalus-control": { "enabled": true },
-    "unslop": { "enabled": false, "mode": "on-demand" }
-  }
+    "unslop": { "enabled": false, "mode": "on-demand" },
+  },
 }
 ```
 
@@ -347,22 +348,23 @@ the scan and the symlink calls, most of which exist. `@daedalus/protocol` gains
 a `SkillDto` and RPC methods. `apps/cli` maps arguments and exit codes. The
 renderer calls RPC. No logic in either adapter.
 
-### Build order
+### Build order, and what landed
 
-1. Generalize `ensureDaedalusControlSkill` into a capability installer, and
-   move `daedalus-control` to global links. No new capability yet, so the only
-   visible change is where the links are.
-2. Add `unslop` as the second capability, with its three states and the
-   `outputStyle` line in the settings injection. This is the point where the
-   original ask is satisfied.
-3. Read-only discovery and `daedal skill list`, covering everything on the
-   machine.
-4. The Skills panel in Settings.
-5. Toggles for skills Daedalus does not own, Claude first.
-6. Installing from a path or a git repository.
+1. `ensureDaedalusControlSkill` became a capability installer and
+   `daedalus-control` moved to global links.
+2. `unslop` arrived as the second capability, with its three states and the
+   `outputStyle` line in the settings injection.
+3. Discovery and `daedal skill list`, covering everything on the machine.
+4. The Skills panel in Settings, in its own renderer file.
+5. Visibility for skills Daedalus does not own, through each provider's switch.
+6. Installing from a directory or a shallow git clone.
 
-Steps 1 and 2 are small and deliver the writing rules. Step 3 is the visibility
-half and cannot break a running session.
+All six are implemented. Two things that were planned here changed on contact
+with the code. State lives in `config.json` rather than in SQLite, because it
+turned out to be one small global map and a migration bought nothing. And the
+collision check counts what each link resolves to rather than counting names:
+every managed skill is linked into two provider directories, so counting names
+reported a collision for each of them on a clean install.
 
 ### Risks
 

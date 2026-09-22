@@ -4,3 +4,9 @@ apps/desktop/dist
 .hutch
 bun.lock
 PLAN.md
+
+# Verbatim from cursor/plugins, and its rule numbers are stable ids that other
+# skills cite by number. Prettier renumbers an ordered list with gaps in it,
+# which silently rewrites those ids. The gaps are deliberate.
+skills/unslop/SKILL.md
+styles/Unslop.md

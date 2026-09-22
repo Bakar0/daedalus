@@ -1,66 +1,107 @@
 # Agent skills
 
-Daedalus ships one provider-neutral skill instead of maintaining separate
-Claude and Codex instructions. Its distributable source is
-`skills/daedalus-control/` and follows the Agent Skills `SKILL.md` format.
+Daedalus manages skills globally. One canonical copy per skill under
+`DAEDALUS_HOME`, and a link in each provider's personal directory, so a skill
+installed once applies to every session on the machine rather than only to the
+ones Daedalus starts.
 
-## App integration
+Design notes and the research behind the choices are in
+[`skill-system.md`](skill-system.md).
 
-When **Create workspace agent guidance** is enabled in Settings, Daedalus keeps
-one app-managed skill at:
+## What Daedalus ships
+
+| Capability         | Default | What it is                                                      |
+| ------------------ | ------- | --------------------------------------------------------------- |
+| `daedalus-control` | on      | Drives Daedalus through the `daedal` CLI                        |
+| `unslop`           | off     | Writing rules that cut AI tells, from `cursor/plugins` `pstack` |
+
+Both are listed in Settings and in `daedal skill list`, and both can be turned
+off. Daedalus installs nothing the user did not ask for.
+
+## Layout on disk
 
 ```text
-$DAEDALUS_HOME/skills/daedalus-control/
+$DAEDALUS_HOME/skills/<name>/      the one real copy
+$DAEDALUS_HOME/styles/<Name>.md    the one real copy of an output style
+
+~/.claude/skills/<name>            symlink to the copy
+~/.agents/skills/<name>            symlink to the copy
+~/.claude/output-styles/<Name>.md  symlink to the copy
+~/.codex/AGENTS.md                 a fenced block, for providers with no style
 ```
 
-`DAEDALUS_HOME` defaults to `$HOME/.daedalus`. Each available workspace gets
-two provider discovery links pointing to that canonical directory:
+`DAEDALUS_HOME` defaults to `$HOME/.daedalus`. The provider directories follow
+`CLAUDE_CONFIG_DIR` and `CODEX_HOME` where those exist; `DAEDALUS_AGENTS_HOME`
+and `DAEDALUS_CURSOR_HOME` override the other two, which have no published
+variable of their own.
+
+Two skill links cover all three providers. Claude Code reads `~/.claude/skills`,
+and Codex and Cursor both read `~/.agents/skills`. `~/.cursor/skills` is still
+scanned when listing, because a user may have put something there by hand.
+
+Daedalus only ever removes a symlink that points at its own copy, and only ever
+cuts the block between its own markers. A real file or directory at a discovery
+path is left alone, and the Skills panel says so on the row rather than failing
+quietly.
+
+## The three states of a writing style
+
+`unslop` has one more state than a plain skill, because a style can sit ready
+or apply to everything.
+
+| State       | Installs                                    | Effect                                   |
+| ----------- | ------------------------------------------- | ---------------------------------------- |
+| `off`       | nothing                                     | the default                              |
+| `on-demand` | the skill                                   | `/unslop` cleans text already written    |
+| `always`    | the skill, the style, the `AGENTS.md` block | the agent writes this way from the start |
+
+Selecting the style is the last step, and it rides the `--settings` JSON
+Daedalus already passes on each Claude launch, so it never edits the user's own
+settings file. A user who set their own `outputStyle` keeps it.
+
+Two consequences worth knowing. The style applies to sessions Daedalus launches;
+a Claude session started in a plain terminal has the file available but has to
+select it with `/output-style Unslop`. And Claude Code runs one output style at
+a time, so `always` means giving up Concise, Explanatory, and Learning.
+
+## Everything else on the machine
+
+`daedal skill list` and the Skills panel also report skills Daedalus does not
+own: ones the user wrote, plugin skills, and whatever else the providers can
+see. Each row carries its origin, the providers that can see it, whether the
+agent may select it on its own, and its path.
+
+Turning one of those off uses the provider's own switch rather than moving the
+user's files. Claude Code takes `skillOverrides` through the settings argument,
+which makes it per session. Codex takes `[[skills.config]]` in `config.toml`,
+which is global and applies only after Codex restarts. Cursor has no documented
+switch, so there the only honest action is adding or removing a link.
+
+## Commands
 
 ```text
-<workspace>/.agents/skills/daedalus-control/SKILL.md
-<workspace>/.claude/skills/daedalus-control/SKILL.md
+daedal skill list [--provider claude|codex|cursor] [--managed] [--json]
+daedal skill get <name>
+daedal skill enable <name> [--mode on-demand|always]
+daedal skill disable <name>
+daedal skill visibility <name> <on|name-only|user-invocable-only|off>
+daedal skill install <path> [--name <name>]
+daedal skill install --git <url> --path <subdir> [--name <name>]
+daedal skill remove <name> --force
+daedal skill sync
+daedal skill doctor
 ```
 
-Codex and Claude sessions launched by Daedalus start below the workspace root,
-so they discover the relevant project-scoped link. Both agents support
-symlinked skill folders. This keeps one installed copy while requiring no
-changes to a user's global agent configuration.
+None of them takes `--workspace`. `sync` is idempotent and also runs when the
+app starts.
 
-The skill first uses `daedal` from `PATH`. For sessions launched another way,
-it falls back to `${DAEDALUS_HOME:-$HOME/.daedalus}/bin/daedal`, which the app
-creates whenever it starts.
+## Authoring
 
-Disabling the setting removes only workspace links that target the managed
-Daedalus skill. It preserves the canonical package and any user-created file or
-directory at the discovery location.
-
-## Personal installation
-
-To make the skill available when Codex or Claude is launched outside a
-Daedalus workspace, copy or symlink the canonical `skills/daedalus-control/`
-directory into the provider's personal skill directory:
-
-| Provider    | Personal location                        |
-| ----------- | ---------------------------------------- |
-| Codex       | `$HOME/.agents/skills/daedalus-control/` |
-| Claude Code | `$HOME/.claude/skills/daedalus-control/` |
-
-Using symlinks keeps both providers on the same source revision. A packaged
-release should copy the folder instead, because the application bundle is the
-stable source and may move during updates.
-
-Codex invokes the skill explicitly as `$daedalus-control`. Claude Code invokes
-it as `/daedalus-control`. Both agents may also select it automatically when a
-request matches its description.
-
-## Distribution
-
-Keep `skills/daedalus-control/` as the canonical authoring package. For local
-development and project-scoped use, the direct skill folder is enough. For
-installation by other users, bundle that same folder under `skills/` in the
-provider's plugin package; provider-specific manifests should wrap the shared
-skill rather than fork its instructions.
+`skills/daedalus-control/` and `skills/unslop/` are the canonical authoring
+packages, in the Agent Skills `SKILL.md` format, with `styles/Unslop.md` beside
+them. They are compiled into the binary as text, so a Daedalus upgrade ships new
+skill text without the user reinstalling anything.
 
 The optional `agents/openai.yaml` supplies Codex and ChatGPT desktop metadata.
-Claude ignores that product-specific metadata and reads the shared `SKILL.md`
-plus its references.
+Claude ignores that product-specific file and reads the shared `SKILL.md` plus
+its references.
