@@ -162,6 +162,37 @@ export const skillLinkPaths = (
   },
 ];
 
+/**
+ * The name a managed artifact is installed under.
+ *
+ * The canonical copy lives inside `DAEDALUS_HOME`, which already carries the
+ * channel, but the provider directories do not: `~/.claude/skills` is one
+ * directory shared by every build on the machine. Without a suffix the stable
+ * app and a dev build would each relink the same path to their own home, and
+ * the last one launched would win. The Codex hook block is fenced by channel
+ * for exactly this reason; these links need the same treatment.
+ */
+export const channelArtifactName = (
+  config: DaedalusConfig,
+  name: string,
+): string => {
+  const channel = channelName(config.home);
+  return channel === "stable" ? name : `${name}-${channel}`;
+};
+
+/** Rewrites the `name:` line of a frontmatter block, leaving the rest alone. */
+export function withFrontmatterName(contents: string, name: string): string {
+  const normalized = contents.replace(/^\uFEFF/, "");
+  if (!normalized.startsWith("---")) return contents;
+  const end = normalized.indexOf("\n---", 3);
+  if (end === -1) return contents;
+  const head = normalized.slice(0, end);
+  const rest = normalized.slice(end);
+  return /^name\s*:/m.test(head)
+    ? `${head.replace(/^name\s*:.*$/m, `name: ${name}`)}${rest}`
+    : contents;
+}
+
 export const styleLinkPath = (
   config: DaedalusConfig,
   fileName: string,
@@ -626,6 +657,50 @@ export class SkillService {
     return [...MANAGED_SKILLS, ...installed];
   }
 
+  /**
+   * A capability's names and file contents for *this* channel.
+   *
+   * Every install and removal site goes through this, so the name a link is
+   * created under can never drift from the name it is removed under.
+   */
+  private resolve(definition: ManagedSkillDefinition): {
+    id: string;
+    linkName: string;
+    skillFiles: ManagedFile[];
+    style?: { fileName: string; styleName: string; contents: string };
+  } {
+    const linkName = channelArtifactName(this.config, definition.id);
+    const skillFiles =
+      linkName === definition.id
+        ? definition.skillFiles
+        : definition.skillFiles.map((file) =>
+            file.path === "SKILL.md"
+              ? {
+                  ...file,
+                  contents: withFrontmatterName(file.contents, linkName),
+                }
+              : file,
+          );
+    if (!definition.style) return { id: definition.id, linkName, skillFiles };
+    const styleName = channelArtifactName(
+      this.config,
+      definition.style.styleName,
+    );
+    return {
+      id: definition.id,
+      linkName,
+      skillFiles,
+      style: {
+        fileName: `${styleName}.md`,
+        styleName,
+        contents:
+          styleName === definition.style.styleName
+            ? definition.style.contents
+            : withFrontmatterName(definition.style.contents, styleName),
+      },
+    };
+  }
+
   private styleWanted(definition: ManagedSkillDefinition): boolean {
     const setting = this.settingFor(definition.id);
     return Boolean(
@@ -659,20 +734,21 @@ export class SkillService {
   private async installArtifacts(
     definition: ManagedSkillDefinition,
   ): Promise<void> {
+    const resolved = this.resolve(definition);
     const target = managedSkillPath(this.config, definition.id);
     // A built-in rewrites its canonical copy every time, so a Daedalus upgrade
     // ships new skill text without the user reinstalling anything. An
     // installed skill has no bundled text and keeps whatever was copied in.
-    for (const file of definition.skillFiles)
+    for (const file of resolved.skillFiles)
       await writeFileAtomic(join(target, file.path), file.contents);
     if (!(await pathExists(target))) return;
-    for (const { path } of skillLinkPaths(this.config, definition.id))
+    for (const { path } of skillLinkPaths(this.config, resolved.linkName))
       await ensureSkillLink(path, target);
-    if (!definition.style) return;
-    const stylePath = managedStylePath(this.config, definition.style.fileName);
-    const styleLink = styleLinkPath(this.config, definition.style.fileName);
+    if (!resolved.style) return;
+    const stylePath = managedStylePath(this.config, resolved.style.fileName);
+    const styleLink = styleLinkPath(this.config, resolved.style.fileName);
     if (this.styleWanted(definition)) {
-      await writeFileAtomic(stylePath, definition.style.contents);
+      await writeFileAtomic(stylePath, resolved.style.contents);
       await ensureSkillLink(styleLink, stylePath);
       await this.writeInstructionsBlock(definition);
     } else {
@@ -684,13 +760,14 @@ export class SkillService {
   private async removeArtifacts(
     definition: ManagedSkillDefinition,
   ): Promise<void> {
+    const resolved = this.resolve(definition);
     const target = managedSkillPath(this.config, definition.id);
-    for (const { path } of skillLinkPaths(this.config, definition.id))
+    for (const { path } of skillLinkPaths(this.config, resolved.linkName))
       await removeSkillLink(path, target);
-    if (!definition.style) return;
+    if (!resolved.style) return;
     await removeSkillLink(
-      styleLinkPath(this.config, definition.style.fileName),
-      managedStylePath(this.config, definition.style.fileName),
+      styleLinkPath(this.config, resolved.style.fileName),
+      managedStylePath(this.config, resolved.style.fileName),
     );
     await this.clearInstructionsBlock(definition);
   }
@@ -706,7 +783,8 @@ export class SkillService {
   private async writeInstructionsBlock(
     definition: ManagedSkillDefinition,
   ): Promise<void> {
-    if (!definition.style) return;
+    const resolved = this.resolve(definition);
+    if (!resolved.style) return;
     const path = codexInstructionsPath(this.config);
     const markers = instructionsMarkers(
       channelName(this.config.home),
@@ -716,7 +794,7 @@ export class SkillService {
       markers.begin,
       `<!-- Turn this off with: daedal skill disable ${definition.id} -->`,
       "",
-      styleBody(definition.style.contents),
+      styleBody(resolved.style.contents),
       "",
       markers.end,
     ].join("\n");
@@ -750,7 +828,10 @@ export class SkillService {
     const root = join(this.config.home, "skills");
     for (const id of await directoryNames(root)) {
       if (known.has(id)) continue;
-      for (const { path } of skillLinkPaths(this.config, id))
+      for (const { path } of skillLinkPaths(
+        this.config,
+        channelArtifactName(this.config, id),
+      ))
         await removeSkillLink(path, join(root, id));
     }
   }
@@ -763,21 +844,22 @@ export class SkillService {
     const statuses: ManagedSkillStatus[] = [];
     for (const definition of this.definitions()) {
       const setting = this.settingFor(definition.id);
+      const resolved = this.resolve(definition);
       const target = managedSkillPath(this.config, definition.id);
       const artifacts: ManagedArtifactStatus[] = [];
-      for (const { path } of skillLinkPaths(this.config, definition.id))
+      for (const { path } of skillLinkPaths(this.config, resolved.linkName))
         artifacts.push({
           kind: "skill",
           path,
           present: await linkPointsAt(path, target),
           blocked: await occupiedByOther(path, target),
         });
-      if (definition.style) {
+      if (resolved.style) {
         const stylePath = managedStylePath(
           this.config,
-          definition.style.fileName,
+          resolved.style.fileName,
         );
-        const link = styleLinkPath(this.config, definition.style.fileName);
+        const link = styleLinkPath(this.config, resolved.style.fileName);
         artifacts.push({
           kind: "style",
           path: link,
@@ -992,7 +1074,10 @@ export class SkillService {
           : `No installed skill named '${name}'`,
       );
     const target = managedSkillPath(this.config, name);
-    for (const { path } of skillLinkPaths(this.config, name))
+    for (const { path } of skillLinkPaths(
+      this.config,
+      channelArtifactName(this.config, name),
+    ))
       await removeSkillLink(path, target);
     await rm(target, { recursive: true, force: true });
     const managedSkills = { ...this.config.managedSkills };
@@ -1078,12 +1163,13 @@ export class SkillService {
     outputStyle?: string;
     skillOverrides?: Record<string, SkillVisibility>;
   } {
-    const style = MANAGED_SKILLS.find(
-      (definition) => definition.style && this.styleWanted(definition),
+    const definition = MANAGED_SKILLS.find(
+      (one) => one.style && this.styleWanted(one),
     );
+    const style = definition ? this.resolve(definition).style : undefined;
     const overrides = this.config.skillOverrides;
     return {
-      ...(style?.style ? { outputStyle: style.style.styleName } : {}),
+      ...(style ? { outputStyle: style.styleName } : {}),
       ...(Object.keys(overrides).length
         ? { skillOverrides: { ...overrides } }
         : {}),

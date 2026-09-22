@@ -10,7 +10,12 @@ import { describe, expect, test } from "vitest";
 import { pathExists } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { createApplicationContext } from "../index";
-import { parseSkillFrontmatter, removeMarkedBlock, styleBody } from "./skills";
+import {
+  parseSkillFrontmatter,
+  removeMarkedBlock,
+  styleBody,
+  withFrontmatterName,
+} from "./skills";
 
 /**
  * Every test gets its own provider homes as well as its own Daedalus home.
@@ -316,6 +321,59 @@ describe("SkillService", () => {
     });
   });
 
+  test("a dev build installs under its own names, so two channels cannot fight", async () => {
+    // ~/.claude/skills is one directory shared by every build on the machine.
+    // DAEDALUS_HOME carries the channel; the provider directories do not.
+    await withTemporaryDaedalusHome(async (root) => {
+      const home = join(root, ".daedalus-dev");
+      const claudeHome = join(root, "claude");
+      const context = await createApplicationContext({
+        env: {
+          DAEDALUS_HOME: home,
+          CLAUDE_CONFIG_DIR: claudeHome,
+          CODEX_HOME: join(root, "codex"),
+          DAEDALUS_AGENTS_HOME: join(root, "agents"),
+          DAEDALUS_CURSOR_HOME: join(root, "cursor"),
+        },
+        reconcile: false,
+      });
+      try {
+        await context.skills.setEnabled("unslop", true, "always");
+        expect(await pathExists(join(claudeHome, "skills", "unslop-dev"))).toBe(
+          true,
+        );
+        expect(await pathExists(join(claudeHome, "skills", "unslop"))).toBe(
+          false,
+        );
+        expect(
+          await pathExists(join(claudeHome, "output-styles", "Unslop-dev.md")),
+        ).toBe(true);
+        expect(context.skills.claudeSkillSettings().outputStyle).toBe(
+          "Unslop-dev",
+        );
+        // The frontmatter follows the directory, so nothing reports a name
+        // that does not match the folder it sits in.
+        expect(
+          await readFile(
+            join(claudeHome, "skills", "unslop-dev", "SKILL.md"),
+            "utf8",
+          ),
+        ).toContain("name: unslop-dev");
+        const { discovered } = await context.skills.list();
+        expect(
+          discovered.find((one) => one.name === "unslop-dev")?.problem,
+        ).toBeUndefined();
+
+        await context.skills.setEnabled("unslop", false);
+        expect(await pathExists(join(claudeHome, "skills", "unslop-dev"))).toBe(
+          false,
+        );
+      } finally {
+        context.close();
+      }
+    });
+  });
+
   test("rejects a mode a capability does not have, and an unknown skill", async () => {
     await withSkillHomes(async ({ context }) => {
       await expect(
@@ -328,6 +386,18 @@ describe("SkillService", () => {
         /No skill named/,
       );
     });
+  });
+});
+
+describe("frontmatter rewriting", () => {
+  test("replaces the name and leaves a file without frontmatter alone", () => {
+    expect(
+      withFrontmatterName(
+        "---\nname: unslop\ndescription: x\n---\nBody\n",
+        "unslop-dev",
+      ),
+    ).toBe("---\nname: unslop-dev\ndescription: x\n---\nBody\n");
+    expect(withFrontmatterName("# Plain\n", "x")).toBe("# Plain\n");
   });
 });
 

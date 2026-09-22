@@ -30,6 +30,14 @@ $DAEDALUS_HOME/styles/<Name>.md    the one real copy of an output style
 ~/.codex/AGENTS.md                 a fenced block, for providers with no style
 ```
 
+A non-stable build suffixes every name it installs: a dev build writes
+`~/.claude/skills/daedalus-control-dev` and `~/.claude/output-styles/
+Unslop-dev.md`, pointing at `~/.daedalus-dev`. `DAEDALUS_HOME` carries the
+channel but the provider directories do not, so without the suffix the stable
+app and a dev build would relink the same path to their own home and the last
+one launched would win. The frontmatter `name:` is rewritten to match, so
+nothing reports a name that disagrees with its folder.
+
 `DAEDALUS_HOME` defaults to `$HOME/.daedalus`. The provider directories follow
 `CLAUDE_CONFIG_DIR` and `CODEX_HOME` where those exist; `DAEDALUS_AGENTS_HOME`
 and `DAEDALUS_CURSOR_HOME` override the other two, which have no published
