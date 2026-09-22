@@ -103,11 +103,23 @@ else. The skill's own files are never moved, renamed or deleted; they belong to
 the user. The setting is applied at launch, through each provider's own switch,
 and each provider answers differently:
 
-| Provider    | How it is applied                                         | What it reaches                                 |
-| ----------- | --------------------------------------------------------- | ----------------------------------------------- |
-| Claude Code | `skillOverrides` in the settings argument Daedalus passes | the sessions Daedalus starts, from the next one |
-| Codex       | `[[skills.config]]` in `~/.codex/config.toml`             | every Codex on the machine, once it restarts    |
-| Cursor      | nothing exists                                            | nothing                                         |
+| Provider    | How it is applied                                                                           | What it reaches                              |
+| ----------- | ------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| Claude Code | `skillOverrides` in `~/.claude/settings.json`, and in the settings argument Daedalus passes | every Claude session, from its next one      |
+| Codex       | `[[skills.config]]` in `~/.codex/config.toml`                                               | every Codex on the machine, once it restarts |
+| Cursor      | nothing exists                                                                              | nothing                                      |
+
+`~/.claude/settings.json` is the one file of the user's own that Daedalus
+edits, and it is what makes a switch mean every Claude session rather than only
+the ones Daedalus starts. The launch argument still carries the same overrides,
+so a Daedalus session is covered even if that write cannot happen.
+
+JSON has no comment to fence a block with, the way the Codex config does, so
+the keys Daedalus owns there are the ones it wrote down having written. An
+override the user set themselves is never removed, every other setting in the
+file is carried across, the first write leaves a one-time
+`settings.json.daedalus-backup`, and a file Daedalus cannot parse is left alone
+for the user to repair.
 
 Cursor publishes no way to turn a skill off, so for a skill that only Cursor
 loads the panel disables the switch and says to move or rename the folder

@@ -44,6 +44,7 @@ import {
 } from "@daedalus/platform";
 import {
   channelName,
+  saveClaudeOverridesWritten,
   saveManagedSkillSetting,
   saveSkillOverride,
   type DaedalusConfig,
@@ -209,6 +210,10 @@ export const styleLinkPath = (
 
 export const codexInstructionsPath = (config: DaedalusConfig): string =>
   join(config.codexHome, "AGENTS.md");
+
+/** The user's own Claude settings, which is what makes a switch global. */
+export const claudeSettingsPath = (config: DaedalusConfig): string =>
+  join(config.claudeHome, "settings.json");
 
 /**
  * The fence around the block Daedalus owns inside the user's own `AGENTS.md`.
@@ -775,6 +780,7 @@ export class SkillService {
       else await this.removeArtifacts(definition);
     }
     await this.cleanRemovedInstalls();
+    await this.syncClaudeSkillOverrides();
   }
 
   private async installArtifacts(
@@ -1031,7 +1037,70 @@ export class SkillService {
     if (!discovered.some((one) => one.name === name))
       throw new DaedalusError("NOT_FOUND", `No skill named '${name}'`);
     await saveSkillOverride(this.config, name, visibility);
+    await this.syncClaudeSkillOverrides();
     return { name, visibility };
+  }
+
+  /**
+   * Writes the user's skill overrides into their own Claude settings file.
+   *
+   * This is the one place Daedalus edits `~/.claude/settings.json`, and it is
+   * what makes turning a skill off mean every Claude session rather than only
+   * the ones Daedalus starts. The launch argument still carries the same
+   * overrides, so a Daedalus session is covered even when this write cannot
+   * happen.
+   *
+   * The care here is the care the Codex block already takes, minus the one
+   * thing JSON cannot do. There is no comment to fence a block with, so the
+   * keys Daedalus owns are the ones it wrote down having written. A key the
+   * user set themselves is never removed, and every other setting in the file
+   * is carried across untouched.
+   */
+  async syncClaudeSkillOverrides(): Promise<void> {
+    const path = claudeSettingsPath(this.config);
+    const ours = this.config.skillOverrides;
+    const written = this.config.claudeOverridesWritten;
+    const exists = await pathExists(path);
+    // Nothing of ours to say and nothing of ours to take back. Creating a
+    // settings file the user never had, to hold no settings, would be a change
+    // to their setup in exchange for nothing.
+    if (!exists && Object.keys(ours).length === 0) {
+      if (written.length) await saveClaudeOverridesWritten(this.config, []);
+      return;
+    }
+    const raw = exists ? await readFile(path, "utf8") : "";
+    let existing: Record<string, unknown>;
+    try {
+      existing = raw.trim() ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    } catch {
+      // A settings file Daedalus cannot parse is the user's to repair. Editing
+      // it would mean replacing something it could not read.
+      return;
+    }
+    const overrides: Record<string, unknown> = {
+      ...((existing.skillOverrides as Record<string, unknown>) ?? {}),
+    };
+    for (const name of written)
+      if (!(name in ours) && overrides[name] === "off") delete overrides[name];
+    for (const [name, visibility] of Object.entries(ours))
+      overrides[name] = visibility;
+    const next = { ...existing };
+    if (Object.keys(overrides).length) next.skillOverrides = overrides;
+    else delete next.skillOverrides;
+    const serialized = `${JSON.stringify(next, null, 2)}\n`;
+    if (serialized !== raw) {
+      await ensureDirectory(dirname(path));
+      const backup = `${path}.daedalus-backup`;
+      if (raw && !(await pathExists(backup)))
+        await writeFile(backup, raw, { encoding: "utf8", mode: 0o600 });
+      await writeFileAtomic(path, serialized);
+    }
+    const names = Object.keys(ours);
+    if (
+      names.length !== written.length ||
+      names.some((name) => !written.includes(name))
+    )
+      await saveClaudeOverridesWritten(this.config, names);
   }
 
   /* ---------------------------------------------------------------------- */

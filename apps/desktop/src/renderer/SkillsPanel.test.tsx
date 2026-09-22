@@ -230,11 +230,9 @@ describe("what a switch reaches", () => {
   test("names the catch for each provider that can be reached", () => {
     const claude = visibilityReach(discoveredSkill({ providers: ["claude"] }));
     expect(claude.reachable).toBe(true);
-    // Claude takes the override through the launch argument, so it is the
-    // sessions Daedalus starts and not a terminal the user opened.
-    expect(claude.sentences.join(" ")).toContain(
-      "next session Daedalus starts",
-    );
+    // The override lands in Claude's own settings file, so it reaches every
+    // Claude session and not only the ones Daedalus starts.
+    expect(claude.sentences.join(" ")).toContain("everywhere, from its next");
 
     const shared = visibilityReach(
       discoveredSkill({ providers: ["codex", "cursor"] }),

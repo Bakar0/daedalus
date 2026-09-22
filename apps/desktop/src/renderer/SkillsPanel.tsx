@@ -49,9 +49,9 @@ const SOURCE_LABEL: Record<DiscoveredSkillDto["source"], string> = {
  *
  * Each provider has a different answer and two of them come with a catch, so
  * the row says which rather than leaving the user to find out by trying it.
- * Claude takes the override through the launch argument Daedalus passes, which
- * is only the sessions Daedalus starts. Codex takes it globally and reads it
- * when it starts. Cursor has no switch, so for a skill only Cursor loads there
+ * Claude takes the override in its own settings file, so it reaches every
+ * Claude session and not only the ones Daedalus starts. Codex takes it
+ * globally too and reads it when it starts. Cursor has no switch, so for a skill only Cursor loads there
  * is nothing to turn and the control says so instead of lying.
  */
 export function visibilityReach(skill: DiscoveredSkillDto): {
@@ -60,7 +60,7 @@ export function visibilityReach(skill: DiscoveredSkillDto): {
 } {
   const sentences: string[] = [];
   if (skill.providers.includes("claude"))
-    sentences.push("Claude: from the next session Daedalus starts.");
+    sentences.push("Claude: everywhere, from its next session.");
   if (skill.providers.includes("codex"))
     sentences.push("Codex: everywhere on this machine, once Codex restarts.");
   if (skill.providers.includes("cursor"))

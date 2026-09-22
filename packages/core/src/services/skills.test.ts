@@ -441,6 +441,77 @@ describe("SkillService", () => {
     });
   });
 
+  test("switching a skill off reaches every Claude session, not only ours", async () => {
+    await withSkillHomes(async ({ context, claudeHome }) => {
+      const directory = join(claudeHome, "skills", "loud");
+      await mkdir(directory, { recursive: true });
+      await writeFile(
+        join(directory, "SKILL.md"),
+        "---\nname: loud\ndescription: Loud\n---\n",
+        "utf8",
+      );
+      // A settings file the user already had, with their own content in it.
+      const settings = join(claudeHome, "settings.json");
+      await writeFile(
+        settings,
+        JSON.stringify(
+          { outputStyle: "Explanatory", skillOverrides: { theirs: "off" } },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      await context.skills.setVisibility("loud", "off");
+      const after = JSON.parse(await readFile(settings, "utf8")) as {
+        outputStyle: string;
+        skillOverrides: Record<string, string>;
+      };
+      expect(after.skillOverrides.loud).toBe("off");
+      // Everything else in their file survives, including an override of their
+      // own that Daedalus knows nothing about.
+      expect(after.outputStyle).toBe("Explanatory");
+      expect(after.skillOverrides.theirs).toBe("off");
+      expect(
+        await pathExists(join(claudeHome, "settings.json.daedalus-backup")),
+      ).toBe(true);
+
+      await context.skills.setVisibility("loud", "on");
+      const restored = JSON.parse(await readFile(settings, "utf8")) as {
+        outputStyle: string;
+        skillOverrides: Record<string, string>;
+      };
+      expect(restored.skillOverrides.loud).toBeUndefined();
+      expect(restored.skillOverrides.theirs).toBe("off");
+      expect(restored.outputStyle).toBe("Explanatory");
+    });
+  });
+
+  test("leaves a settings file it cannot parse for the user to repair", async () => {
+    await withSkillHomes(async ({ context, claudeHome }) => {
+      const directory = join(claudeHome, "skills", "loud");
+      await mkdir(directory, { recursive: true });
+      await writeFile(
+        join(directory, "SKILL.md"),
+        "---\nname: loud\ndescription: Loud\n---\n",
+        "utf8",
+      );
+      const settings = join(claudeHome, "settings.json");
+      await writeFile(settings, "{ this is not json", "utf8");
+
+      await context.skills.setVisibility("loud", "off");
+      // Rewriting it would mean replacing something Daedalus could not read.
+      expect(await readFile(settings, "utf8")).toBe("{ this is not json");
+    });
+  });
+
+  test("creates no settings file when there is nothing of ours to put in it", async () => {
+    await withSkillHomes(async ({ context, claudeHome }) => {
+      await context.skills.sync();
+      expect(await pathExists(join(claudeHome, "settings.json"))).toBe(false);
+    });
+  });
+
   test("rejects a mode a capability does not have, and an unknown skill", async () => {
     await withSkillHomes(async ({ context }) => {
       await expect(

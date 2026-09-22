@@ -98,6 +98,15 @@ export interface DaedalusConfig {
    * the user's files.
    */
   skillOverrides: Record<string, SkillVisibility>;
+  /**
+   * The keys Daedalus last wrote into the user's own Claude settings file.
+   *
+   * JSON has no comment to fence a block with, so the only way to know which
+   * entries in that file are Daedalus's is to have written down which ones it
+   * put there. Without this, removing an override would mean either leaving
+   * every one behind or deleting entries the user set themselves.
+   */
+  claudeOverridesWritten: string[];
 }
 
 type StoredConfig = Partial<
@@ -112,6 +121,7 @@ type StoredConfig = Partial<
 > & {
   managedSkills?: Record<string, ManagedSkillSetting>;
   skillOverrides?: Record<string, SkillVisibility>;
+  claudeOverridesWritten?: string[];
 };
 
 function expandHome(path: string): string {
@@ -220,6 +230,7 @@ export async function loadConfig(
     },
     managedSkills: stored.managedSkills || {},
     skillOverrides: stored.skillOverrides || {},
+    claudeOverridesWritten: stored.claudeOverridesWritten || [],
   };
 }
 
@@ -302,4 +313,13 @@ export async function saveSkillOverride(
   else skillOverrides[name] = visibility;
   await saveSetting(config, { skillOverrides });
   config.skillOverrides = skillOverrides;
+}
+
+/** Records which override keys now belong to Daedalus in Claude's settings. */
+export async function saveClaudeOverridesWritten(
+  config: DaedalusConfig,
+  names: string[],
+): Promise<void> {
+  await saveSetting(config, { claudeOverridesWritten: names });
+  config.claudeOverridesWritten = names;
 }
