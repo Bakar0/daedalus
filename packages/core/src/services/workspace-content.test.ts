@@ -171,26 +171,18 @@ describe("WorkspaceContentService", () => {
       expect(
         await readFile(join(workspace.path, "CLAUDE.md"), "utf8"),
       ).toContain("@AGENTS.md");
+      // Skills are installed globally now, so a workspace carries instruction
+      // files and no skill links of its own.
       expect(
-        await readFile(
-          join(workspace.path, ".agents/skills/daedalus-control/SKILL.md"),
-          "utf8",
+        await pathExists(
+          join(workspace.path, ".agents/skills/daedalus-control"),
         ),
-      ).toContain("name: daedalus-control");
+      ).toBe(false);
       expect(
-        await readFile(
-          join(workspace.path, ".claude/skills/daedalus-control/SKILL.md"),
-          "utf8",
+        await pathExists(
+          join(workspace.path, ".claude/skills/daedalus-control"),
         ),
-      ).toContain("daedal repo library add");
-      expect(
-        (
-          await lstat(join(workspace.path, ".agents/skills/daedalus-control"))
-        ).isSymbolicLink(),
-      ).toBe(true);
-      expect(
-        await readlink(join(workspace.path, ".agents/skills/daedalus-control")),
-      ).toBe(join(home, "skills", "daedalus-control"));
+      ).toBe(false);
       const briefPath = join(workspace.path, "BRIEF.md");
       const simpleBrief = await readFile(briefPath, "utf8");
       await Bun.write(
@@ -295,8 +287,11 @@ Before working in this workspace:
         customized.path,
         ".agents/skills/daedalus-control/SKILL.md",
       );
-      await unlink(join(customized.path, ".agents/skills/daedalus-control"));
-      await mkdir(join(customized.path, ".agents/skills/daedalus-control"));
+      // A real directory the user put where the old managed link used to sit.
+      // Retiring the per-workspace links must not take it with them.
+      await mkdir(join(customized.path, ".agents/skills/daedalus-control"), {
+        recursive: true,
+      });
       await Bun.write(customizedSkillPath, "# My custom skill\n");
 
       await context.workspaceContent.setInstructionFilesEnabled(false);
@@ -355,15 +350,15 @@ Before working in this workspace:
         false,
       );
       expect(
-        await Bun.file(
-          join(generated.path, ".agents/skills/daedalus-control/SKILL.md"),
-        ).exists(),
-      ).toBe(true);
+        await pathExists(
+          join(generated.path, ".agents/skills/daedalus-control"),
+        ),
+      ).toBe(false);
       expect(
-        await Bun.file(
-          join(generated.path, ".claude/skills/daedalus-control/SKILL.md"),
-        ).exists(),
-      ).toBe(true);
+        await pathExists(
+          join(generated.path, ".claude/skills/daedalus-control"),
+        ),
+      ).toBe(false);
       expect(await readFile(customizedSkillPath, "utf8")).toBe(
         "# My custom skill\n",
       );

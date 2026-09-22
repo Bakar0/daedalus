@@ -46,6 +46,8 @@ export interface ClaudeHookEntry {
 export interface ClaudeSettings {
   statusLine?: unknown;
   hooks?: Record<string, ClaudeHookEntry[]>;
+  outputStyle?: unknown;
+  skillOverrides?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -127,10 +129,18 @@ export function mergeClaudeSettings(
     const merged = [...theirs, ...ours];
     if (merged.length) hooks[event] = merged;
   }
+  // Merged key by key rather than replaced wholesale, so a user who turned one
+  // skill off does not lose the entries Daedalus contributed, and Daedalus
+  // never overrides a decision the user made about the same skill.
+  const skillOverrides = {
+    ...daedalus.skillOverrides,
+    ...existing.skillOverrides,
+  };
   return {
     ...daedalus,
     ...existing,
     ...(Object.keys(hooks).length ? { hooks } : {}),
+    ...(Object.keys(skillOverrides).length ? { skillOverrides } : {}),
   };
 }
 
@@ -231,6 +241,7 @@ const tomlString = (value: string): string =>
 export function renderCodexHookBlock(
   daedalExecutable: string,
   channel = "stable",
+  skillEntries: ReadonlyArray<{ path: string; enabled: boolean }> = [],
 ): string {
   const markers = codexBlockMarkers(channel);
   const quoted = `'${daedalExecutable.replace(/'/g, `'\\''`)}'`;
@@ -238,6 +249,16 @@ export function renderCodexHookBlock(
     markers.begin,
     `# Delete this block to turn off Daedalus agent activity for Codex (${channel}).`,
   ];
+  // Written before the hook tables so the hook groups keep the positions Codex
+  // keyed their approval to. Codex reads these only at startup, so a change
+  // here reaches a session that has not begun yet.
+  for (const entry of skillEntries)
+    lines.push(
+      "",
+      "[[skills.config]]",
+      `path = ${tomlString(entry.path)}`,
+      `enabled = ${entry.enabled}`,
+    );
   for (const { event, matcher } of CODEX_HOOK_EVENTS) {
     lines.push("", `[[hooks.${event}]]`);
     if (matcher) lines.push(`matcher = ${tomlString(matcher)}`);

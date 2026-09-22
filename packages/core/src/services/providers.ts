@@ -9,9 +9,11 @@ import {
   type DaedalusConfig,
 } from "../config";
 import { DaedalusError } from "../errors";
+import { SkillService } from "./skills";
 import {
   codexSupportsHooks,
   daedalusClaudeSettings,
+  type ClaudeSettings,
   mergeClaudeSettings,
   mergeCodexConfigToml,
   parseClaudeSettingsArgument,
@@ -108,7 +110,14 @@ export async function claudeDaedalusSettingsArgs(
   config: DaedalusConfig,
   existingArgs: string[],
 ): Promise<string[]> {
-  const daedalus = daedalusClaudeSettings(daedalExecutable(config));
+  // The skill system contributes two keys here: `outputStyle`, which is what
+  // actually turns an installed writing style on, and `skillOverrides` for
+  // skills the user switched off. Both ride the settings argument Daedalus
+  // already passes, so neither one edits the user's own settings file.
+  const daedalus: ClaudeSettings = {
+    ...daedalusClaudeSettings(daedalExecutable(config)),
+    ...new SkillService(config).claudeSkillSettings(),
+  };
   const existingValue = settingsArgumentValue(existingArgs);
   if (existingValue === undefined)
     return [...existingArgs, "--settings", JSON.stringify(daedalus)];
@@ -211,7 +220,11 @@ export async function ensureCodexHooks(
     const channel = channelName(config.home);
     const merged = mergeCodexConfigToml(
       existing,
-      renderCodexHookBlock(daedalExecutable(config), channel),
+      renderCodexHookBlock(
+        daedalExecutable(config),
+        channel,
+        await new SkillService(config).codexSkillEntries(),
+      ),
       channel,
     );
     if (merged !== existing) {
