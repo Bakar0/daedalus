@@ -152,7 +152,10 @@ describe("rows", () => {
         skill={discoveredSkill()}
       />,
     );
+    // Still a real checkbox, so it keeps its role, label, Space key and focus
+    // ring; only its appearance is replaced.
     expect(on).toContain('type="checkbox"');
+    expect(on).toContain('class="switch"');
     expect(on).not.toContain("<select");
     expect(on).not.toContain("name-only");
     expect(on).not.toContain("is-off");

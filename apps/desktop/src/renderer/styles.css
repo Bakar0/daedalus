@@ -3819,6 +3819,59 @@ dd {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* An on/off switch that is still a real checkbox.
+   The input keeps its own role, label association, Space key and focus ring,
+   and only its appearance is replaced: the element is the track and its
+   ::after is the knob. A div with a click handler would have cost all of
+   that and bought nothing. */
+.switch {
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--line-strong);
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  flex: none;
+  height: 16px;
+  margin: 0;
+  position: relative;
+  transition:
+    background 140ms ease,
+    opacity 140ms ease;
+  width: 28px;
+}
+.switch::after {
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
+  content: "";
+  height: 12px;
+  left: 2px;
+  position: absolute;
+  top: 2px;
+  transition: transform 140ms ease;
+  width: 12px;
+}
+.switch:checked {
+  background: var(--accent);
+}
+.switch:checked::after {
+  transform: translateX(12px);
+}
+.switch:hover:not(:disabled) {
+  opacity: 0.85;
+}
+.switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+/* The label sits beside a 16px track, so it lines up with the knob rather
+   than with the top of a two-line description. */
+.settings-row .switch,
+.settings-toggle .switch {
+  margin-top: 1px;
+}
+
 .skills-switch {
   cursor: pointer;
   display: flex;

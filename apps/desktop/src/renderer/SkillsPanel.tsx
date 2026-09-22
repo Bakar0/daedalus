@@ -383,6 +383,7 @@ export function ManagedRow({
       <label className="settings-toggle">
         <input
           checked={skill.enabled}
+          className="switch"
           disabled={disabled}
           onChange={(event) => onSet(event.target.checked)}
           type="checkbox"
@@ -483,6 +484,7 @@ export function DiscoveredRow({
       <label className="skills-switch" title="Let your agents load this skill">
         <input
           checked={skill.visibility === "on"}
+          className="switch"
           disabled={disabled}
           onChange={(event) =>
             onVisibility(event.target.checked ? "on" : "off")

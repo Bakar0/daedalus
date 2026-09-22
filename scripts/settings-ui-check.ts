@@ -25,6 +25,10 @@ const groupsScreenshotPath = join(
   projectRoot,
   "artifacts/settings-ui-groups.png",
 );
+const generalScreenshotPath = join(
+  projectRoot,
+  "artifacts/settings-ui-general.png",
+);
 const artifactsDirectory = join(projectRoot, "artifacts");
 await mkdir(artifactsDirectory, { recursive: true });
 const profile = await mkdtemp(
@@ -331,6 +335,51 @@ try {
       `Expected one switch per visible row, saw ${controls.switches} for ${totalRows}`,
     );
 
+  // That the switch is styled, not merely classed. A native checkbox is about
+  // 13px square, so measuring the track is what tells the two apart, and the
+  // knob has to actually move when the state changes.
+  const shape = await evaluate<{
+    width: number;
+    height: number;
+    appearance: string;
+    onKnob: string;
+    offKnob: string;
+    onTrack: string;
+    offTrack: string;
+  }>(`(() => {
+    const rows = [...document.querySelectorAll('.skills-found-row')];
+    const on = rows.find((row) => row.querySelector('.switch').checked);
+    const off = rows.find((row) => !row.querySelector('.switch').checked);
+    const onSwitch = on.querySelector('.switch');
+    const offSwitch = off.querySelector('.switch');
+    const rect = onSwitch.getBoundingClientRect();
+    return {
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      appearance: getComputedStyle(onSwitch).appearance,
+      onKnob: getComputedStyle(onSwitch, '::after').transform,
+      offKnob: getComputedStyle(offSwitch, '::after').transform,
+      onTrack: getComputedStyle(onSwitch).backgroundColor,
+      offTrack: getComputedStyle(offSwitch).backgroundColor,
+    };
+  })()`);
+  if (shape.appearance !== "none")
+    throw new Error(
+      `The switch is still drawing as a native control: appearance ${shape.appearance}`,
+    );
+  if (shape.width !== 28 || shape.height !== 16)
+    throw new Error(
+      `The switch is not the size the style sets: ${shape.width}x${shape.height}`,
+    );
+  if (shape.onKnob === shape.offKnob)
+    throw new Error(
+      `The knob does not move between states: ${shape.onKnob} both ways`,
+    );
+  if (shape.onTrack === shape.offTrack)
+    throw new Error(
+      `The track colour is the same on and off: ${shape.onTrack}`,
+    );
+
   // Collapsing hides a group's rows and keeps its header.
   await evaluate(
     "document.querySelector('.skills-group .skills-group-head').click()",
@@ -425,7 +474,7 @@ try {
     `All five categories open at a steady ${[...distinct][0]}px: ${Object.keys(heights).join(", ")}`,
   );
   console.log(
-    `Found skills: ${grouped.length} groups (${labels.join(", ")}), ${totalRows} rows with one switch each, collapse works, fuzzy filter narrows to ${filteredRows}, viewer opens`,
+    `Found skills: ${grouped.length} groups (${labels.join(", ")}), ${totalRows} rows each with a ${shape.width}x${shape.height} switch that moves, collapse works, fuzzy filter narrows to ${filteredRows}, viewer opens`,
   );
   // A second image with every group shut, which is where the headings are
   // all visible at once and the per-plugin naming can be read.
@@ -438,7 +487,23 @@ try {
     format: "png",
   });
   await Bun.write(groupsScreenshotPath, Buffer.from(groupsShot.data, "base64"));
-  console.log(`Screenshots: ${screenshotPath}, ${groupsScreenshotPath}`);
+  // And General, where a switch sits beside a two-line description and the
+  // alignment either reads or does not.
+  await evaluate(`(() => {
+    [...document.querySelectorAll('.settings-nav button')]
+      .find((one) => one.textContent.trim() === 'General').click();
+  })()`);
+  await Bun.sleep(150);
+  const generalShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(
+    generalScreenshotPath,
+    Buffer.from(generalShot.data, "base64"),
+  );
+  console.log(
+    `Screenshots: ${screenshotPath}, ${groupsScreenshotPath}, ${generalScreenshotPath}`,
+  );
   socket.close();
 } finally {
   chrome?.kill();

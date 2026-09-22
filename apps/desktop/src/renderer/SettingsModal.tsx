@@ -47,6 +47,7 @@ export function SettingRow({
     <label className="settings-row">
       <input
         checked={checked}
+        className="switch"
         disabled={disabled}
         onChange={(event) => onChange(event.target.checked)}
         type="checkbox"
