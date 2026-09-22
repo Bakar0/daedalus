@@ -34,6 +34,7 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import {
+  canonicalPath,
   ensureDirectory,
   findExecutable,
   isPathInside,
@@ -1029,14 +1030,23 @@ export class SkillService {
           level: "warn",
           message: `${skill.name}: ${skill.problem.replace(/-/g, " ")} at ${skill.skillPath}`,
         });
-    const byName = new Map<string, number>();
-    for (const skill of discovered)
-      byName.set(skill.name, (byName.get(skill.name) ?? 0) + 1);
-    for (const [name, count] of byName)
-      if (count > 1)
+    // A collision is two *different* skills answering to one name, not one
+    // skill linked into two provider directories, which is what every managed
+    // skill looks like from here. Identity is the file each link resolves to.
+    const identities = new Map<string, Set<string>>();
+    for (const skill of discovered) {
+      const identity = skill.managedId
+        ? `managed:${skill.managedId}`
+        : await canonicalPath(skill.skillPath).catch(() => skill.skillPath);
+      const seen = identities.get(skill.name) ?? new Set<string>();
+      seen.add(identity);
+      identities.set(skill.name, seen);
+    }
+    for (const [name, seen] of identities)
+      if (seen.size > 1)
         findings.push({
           level: "warn",
-          message: `${name}: found in ${count} places. Providers list a collision twice rather than merging it.`,
+          message: `${name}: ${seen.size} different skills answer to this name. Providers list a collision twice rather than merging it.`,
         });
     if (Object.keys(this.config.skillOverrides).length)
       findings.push({

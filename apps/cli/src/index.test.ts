@@ -501,4 +501,69 @@ describe("daedal CLI contract", () => {
       ).toBe(0);
     });
   });
+  test("manages skills globally, and holds the documented exit codes", async () => {
+    await withTemporaryDaedalusHome(async (root) => {
+      const home = join(root, "daedalus");
+      // The skill system writes into the provider homes, so the test gets its
+      // own rather than the machine's.
+      const providerHomes = {
+        CLAUDE_CONFIG_DIR: join(root, "claude"),
+        CODEX_HOME: join(root, "codex"),
+        DAEDALUS_AGENTS_HOME: join(root, "agents"),
+        DAEDALUS_CURSOR_HOME: join(root, "cursor"),
+      };
+      const run = (args: string[]) => cli(home, args, providerHomes);
+
+      const listed = await run(["skill", "list", "--json"]);
+      expect(listed.exitCode).toBe(0);
+      const listing = JSON.parse(listed.stdout) as {
+        ok: boolean;
+        data: {
+          managed: Array<{ id: string; enabled: boolean; mode: string }>;
+        };
+      };
+      expect(listing.ok).toBe(true);
+      expect(
+        listing.data.managed.find((one) => one.id === "unslop"),
+      ).toMatchObject({ enabled: false });
+
+      expect(
+        (await run(["skill", "enable", "unslop", "--mode", "always"])).exitCode,
+      ).toBe(0);
+      expect(
+        await Bun.file(
+          join(providerHomes.CLAUDE_CONFIG_DIR, "output-styles", "Unslop.md"),
+        ).exists(),
+      ).toBe(true);
+      expect(
+        await Bun.file(join(providerHomes.CODEX_HOME, "AGENTS.md")).exists(),
+      ).toBe(true);
+
+      expect((await run(["skill", "disable", "unslop"])).exitCode).toBe(0);
+      expect(
+        await Bun.file(
+          join(providerHomes.CLAUDE_CONFIG_DIR, "output-styles", "Unslop.md"),
+        ).exists(),
+      ).toBe(false);
+
+      // 2 validation, 3 not found, 4 conflict, exactly as the contract says.
+      expect(
+        (await run(["skill", "enable", "unslop", "--mode", "loud"])).exitCode,
+      ).toBe(2);
+      expect(
+        (await run(["skill", "enable", "daedalus-control", "--mode", "always"]))
+          .exitCode,
+      ).toBe(2);
+      expect((await run(["skill", "get", "nothing-here"])).exitCode).toBe(3);
+      expect(
+        (await run(["skill", "remove", "unslop", "--force"])).exitCode,
+      ).toBe(4);
+      expect((await run(["skill", "remove", "unslop"])).exitCode).toBe(2);
+      expect((await run(["skill", "wibble"])).exitCode).toBe(2);
+
+      const doctored = await run(["skill", "doctor", "--json"]);
+      expect(doctored.exitCode).toBe(0);
+      expect(JSON.parse(doctored.stdout).ok).toBe(true);
+    });
+  });
 });
