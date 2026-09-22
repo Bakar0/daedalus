@@ -135,6 +135,18 @@ if ((await pathExists(cliEntrypoint)) && bunExecutable)
     bunExecutable,
     cliEntrypoint,
   });
+// Skills are installed from here rather than from the application context,
+// so a CLI run never writes into the user's provider directories as a side
+// effect of loading. The app is the thing that installs; the CLI installs when
+// asked. A failure is logged and swallowed, because a provider directory
+// Daedalus cannot write to is the user's to own and is no reason to refuse to
+// start.
+await context.skills.sync().catch(async (error: unknown) => {
+  await context.logger.write("warn", "skill_sync_failed", {
+    message: error instanceof Error ? error.message : String(error),
+  });
+});
+
 const terminalTmux = context.tmux;
 if (!(terminalTmux instanceof CommandTmuxClient))
   throw new Error("Desktop terminal requires the command tmux adapter");

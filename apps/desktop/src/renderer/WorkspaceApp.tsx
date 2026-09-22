@@ -45,6 +45,7 @@ import type {
   ToastDto,
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
+import { SkillsPanel } from "./SkillsPanel";
 import { runWithConcurrency } from "./concurrency";
 import { repositoryFuzzyScore } from "./repository-search";
 import { useListReorder } from "./use-list-reorder";
@@ -6120,6 +6121,10 @@ export function WorkspaceApp({
                   </small>
                 </span>
               </label>
+            </dd>
+            <dt>Skills</dt>
+            <dd>
+              <SkillsPanel busy={busy} client={client} onError={setError} />
             </dd>
             <dt>Notifications</dt>
             <dd>
