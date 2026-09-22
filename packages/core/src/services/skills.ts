@@ -44,6 +44,7 @@ import {
 } from "@daedalus/platform";
 import {
   channelName,
+  saveClaudeOutputStyleWritten,
   saveClaudeOverridesWritten,
   saveManagedSkillSetting,
   saveSkillOverride,
@@ -66,7 +67,12 @@ export type SkillOrigin = "daedalus" | "user" | "plugin";
 export type SkillSource =
   "claude-personal" | "agents-personal" | "cursor-personal" | "claude-plugin";
 export type SkillInvocation = "auto" | "user-only" | "model-only";
-export type SkillArtifactKind = "skill" | "style" | "instructions";
+export type SkillArtifactKind =
+  | "skill"
+  | "style"
+  | "instructions"
+  /** The style being the one Claude actually uses, not merely installed. */
+  | "selection";
 export type SkillProblem =
   "unreadable-frontmatter" | "name-mismatch" | "broken-link";
 
@@ -780,7 +786,7 @@ export class SkillService {
       else await this.removeArtifacts(definition);
     }
     await this.cleanRemovedInstalls();
-    await this.syncClaudeSkillOverrides();
+    await this.syncClaudeSettings();
   }
 
   private async installArtifacts(
@@ -932,6 +938,20 @@ export class SkillService {
           present: contents.includes(markers.begin),
           blocked: false,
         });
+        // Installing a style only makes it available. Claude runs one at a
+        // time, so if the user has their own selected, Daedalus leaves it and
+        // the rules are not actually applying. Without this row that failure
+        // looks exactly like success.
+        if (this.styleWanted(definition)) {
+          const selected = await this.selectedClaudeStyle();
+          artifacts.push({
+            kind: "selection",
+            path: claudeSettingsPath(this.config),
+            present: selected === resolved.style.styleName,
+            blocked:
+              selected !== undefined && selected !== resolved.style.styleName,
+          });
+        }
       }
       statuses.push({
         id: definition.id,
@@ -1037,35 +1057,43 @@ export class SkillService {
     if (!discovered.some((one) => one.name === name))
       throw new DaedalusError("NOT_FOUND", `No skill named '${name}'`);
     await saveSkillOverride(this.config, name, visibility);
-    await this.syncClaudeSkillOverrides();
+    await this.syncClaudeSettings();
     return { name, visibility };
   }
 
   /**
-   * Writes the user's skill overrides into their own Claude settings file.
+   * Writes Daedalus's two contributions into the user's own Claude settings.
    *
    * This is the one place Daedalus edits `~/.claude/settings.json`, and it is
-   * what makes turning a skill off mean every Claude session rather than only
-   * the ones Daedalus starts. The launch argument still carries the same
-   * overrides, so a Daedalus session is covered even when this write cannot
-   * happen.
+   * what makes both the skill switches and the writing style mean every Claude
+   * session rather than only the ones Daedalus starts. The launch argument
+   * still carries the same two, so a Daedalus session is covered even when
+   * this write cannot happen.
    *
    * The care here is the care the Codex block already takes, minus the one
-   * thing JSON cannot do. There is no comment to fence a block with, so the
-   * keys Daedalus owns are the ones it wrote down having written. A key the
-   * user set themselves is never removed, and every other setting in the file
-   * is carried across untouched.
+   * thing JSON cannot do. There is no comment to fence a block with, so what
+   * Daedalus owns is what it wrote down having written. A value the user set
+   * themselves is never removed or replaced, and every other setting in the
+   * file is carried across untouched.
    */
-  async syncClaudeSkillOverrides(): Promise<void> {
+  async syncClaudeSettings(): Promise<void> {
     const path = claudeSettingsPath(this.config);
     const ours = this.config.skillOverrides;
     const written = this.config.claudeOverridesWritten;
+    const wantedStyle = this.claudeSkillSettings().outputStyle;
+    const writtenStyle = this.config.claudeOutputStyleWritten;
     const exists = await pathExists(path);
     // Nothing of ours to say and nothing of ours to take back. Creating a
     // settings file the user never had, to hold no settings, would be a change
     // to their setup in exchange for nothing.
-    if (!exists && Object.keys(ours).length === 0) {
+    if (
+      !exists &&
+      Object.keys(ours).length === 0 &&
+      wantedStyle === undefined
+    ) {
       if (written.length) await saveClaudeOverridesWritten(this.config, []);
+      if (writtenStyle !== undefined)
+        await saveClaudeOutputStyleWritten(this.config, undefined);
       return;
     }
     const raw = exists ? await readFile(path, "utf8") : "";
@@ -1087,6 +1115,21 @@ export class SkillService {
     const next = { ...existing };
     if (Object.keys(overrides).length) next.skillOverrides = overrides;
     else delete next.skillOverrides;
+
+    // One style is active at a time, so selecting ours means taking whatever
+    // was selected before. A style the user chose is theirs: Daedalus sets its
+    // own only into an empty slot or over its own previous choice, and gives
+    // the slot back the same way.
+    const currentStyle = existing.outputStyle;
+    let selectedStyle: string | undefined;
+    if (wantedStyle !== undefined) {
+      if (currentStyle === undefined || currentStyle === writtenStyle) {
+        next.outputStyle = wantedStyle;
+        selectedStyle = wantedStyle;
+      } else if (currentStyle === wantedStyle) selectedStyle = wantedStyle;
+    } else if (writtenStyle !== undefined && currentStyle === writtenStyle)
+      delete next.outputStyle;
+
     const serialized = `${JSON.stringify(next, null, 2)}\n`;
     if (serialized !== raw) {
       await ensureDirectory(dirname(path));
@@ -1101,6 +1144,24 @@ export class SkillService {
       names.some((name) => !written.includes(name))
     )
       await saveClaudeOverridesWritten(this.config, names);
+    if (selectedStyle !== writtenStyle)
+      await saveClaudeOutputStyleWritten(this.config, selectedStyle);
+  }
+
+  /** The style Claude is actually set to use, from the user's own settings. */
+  private async selectedClaudeStyle(): Promise<string | undefined> {
+    const path = claudeSettingsPath(this.config);
+    if (!(await pathExists(path))) return undefined;
+    try {
+      const parsed = JSON.parse(await readFile(path, "utf8")) as {
+        outputStyle?: unknown;
+      };
+      return typeof parsed.outputStyle === "string"
+        ? parsed.outputStyle
+        : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /* ---------------------------------------------------------------------- */

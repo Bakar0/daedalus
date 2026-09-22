@@ -242,7 +242,7 @@ export interface DiscoveredSkillDto {
 }
 
 export interface ManagedSkillArtifactDto {
-  kind: "skill" | "style" | "instructions";
+  kind: "skill" | "style" | "instructions" | "selection";
   path: string;
   present: boolean;
   /** Something that is not Daedalus's sits here, so it was left alone. */

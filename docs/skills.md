@@ -63,14 +63,23 @@ or apply to everything.
 | `on-demand` | the skill                                   | `/unslop` cleans text already written    |
 | `always`    | the skill, the style, the `AGENTS.md` block | the agent writes this way from the start |
 
-Selecting the style is the last step, and it rides the `--settings` JSON
-Daedalus already passes on each Claude launch, so it never edits the user's own
-settings file. A user who set their own `outputStyle` keeps it.
+Installing a style only makes it available. A style applies when it is
+selected, so `always` also sets `outputStyle` in `~/.claude/settings.json`,
+which is what makes it every Claude session and not only the ones Daedalus
+starts. The launch argument carries the same selection, so a Daedalus session
+is covered either way.
 
-Two consequences worth knowing. The style applies to sessions Daedalus launches;
-a Claude session started in a plain terminal has the file available but has to
-select it with `/output-style Unslop`. And Claude Code runs one output style at
-a time, so `always` means giving up Concise, Explanatory, and Learning.
+Claude Code runs one output style at a time, and that is why the selection is
+the one thing here Daedalus will refuse to do. If the user already has a style
+of their own selected, Daedalus installs the file and leaves the slot alone,
+because taking it would silently switch their style off. The panel then shows a
+`selected` row marked as left alone and says the rules are not applying, rather
+than reporting an install that is doing nothing. Daedalus sets the slot only
+when it is empty or already holds its own choice, and gives it back the same
+way when the capability is turned off.
+
+The other consequence worth knowing: choosing `always` means giving up Concise,
+Explanatory and Learning while it is on.
 
 ## Everything else on the machine
 

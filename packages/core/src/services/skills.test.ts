@@ -441,6 +441,72 @@ describe("SkillService", () => {
     });
   });
 
+  test("always selects the style in Claude's own settings, and gives it back", async () => {
+    await withSkillHomes(async ({ context, claudeHome }) => {
+      const settings = join(claudeHome, "settings.json");
+      await context.skills.setEnabled("unslop", true, "always");
+      const chosen = JSON.parse(await readFile(settings, "utf8")) as {
+        outputStyle: string;
+      };
+      expect(chosen.outputStyle).toBe("Unslop");
+      const selection = (await context.skills.managedStatus())
+        .find((one) => one.id === "unslop")
+        ?.artifacts.find((one) => one.kind === "selection");
+      expect(selection).toMatchObject({ present: true, blocked: false });
+
+      // On demand installs the skill but selects nothing, so the slot goes
+      // back exactly as it was found.
+      await context.skills.setEnabled("unslop", true, "on-demand");
+      expect(
+        (
+          JSON.parse(await readFile(settings, "utf8")) as Record<
+            string,
+            unknown
+          >
+        ).outputStyle,
+      ).toBeUndefined();
+    });
+  });
+
+  test("never takes a style slot the user filled themselves", async () => {
+    await withSkillHomes(async ({ context, claudeHome }) => {
+      const settings = join(claudeHome, "settings.json");
+      await mkdir(claudeHome, { recursive: true });
+      await writeFile(
+        settings,
+        JSON.stringify({ outputStyle: "Explanatory" }, null, 2),
+        "utf8",
+      );
+
+      await context.skills.setEnabled("unslop", true, "always");
+      // Claude runs one style at a time, so selecting ours would silently take
+      // theirs away. Theirs stands.
+      expect(
+        (
+          JSON.parse(await readFile(settings, "utf8")) as {
+            outputStyle: string;
+          }
+        ).outputStyle,
+      ).toBe("Explanatory");
+      // And the panel says so, rather than reporting an install that is not
+      // doing anything.
+      const selection = (await context.skills.managedStatus())
+        .find((one) => one.id === "unslop")
+        ?.artifacts.find((one) => one.kind === "selection");
+      expect(selection).toMatchObject({ present: false, blocked: true });
+
+      // Turning it off leaves their style exactly where it was.
+      await context.skills.setEnabled("unslop", false);
+      expect(
+        (
+          JSON.parse(await readFile(settings, "utf8")) as {
+            outputStyle: string;
+          }
+        ).outputStyle,
+      ).toBe("Explanatory");
+    });
+  });
+
   test("switching a skill off reaches every Claude session, not only ours", async () => {
     await withSkillHomes(async ({ context, claudeHome }) => {
       const directory = join(claudeHome, "skills", "loud");

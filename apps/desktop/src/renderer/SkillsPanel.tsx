@@ -31,6 +31,14 @@ const INVOCATION_LABEL: Record<string, string> = {
   "model-only": "only the agent",
 };
 
+/** "selection" is the one that is not a file Daedalus put somewhere. */
+const ARTIFACT_LABEL: Record<string, string> = {
+  skill: "skill",
+  style: "style",
+  instructions: "instructions",
+  selection: "selected",
+};
+
 const PROBLEM_LABEL: Record<string, string> = {
   "unreadable-frontmatter": "Daedalus cannot read its frontmatter",
   "name-mismatch": "its name does not match its folder",
@@ -146,6 +154,8 @@ export function groupSkillsBySource(
 export function managedDetail(skill: ManagedSkillDto): string {
   if (!skill.enabled) return "Off. Nothing is installed.";
   const blocked = skill.artifacts.filter((artifact) => artifact.blocked);
+  if (blocked.some((artifact) => artifact.kind === "selection"))
+    return "Installed, but Claude is set to a different output style, which is yours to change. One style runs at a time, so the rules are not applying.";
   if (blocked.length)
     return `${blocked.length} path(s) already had something else, so Daedalus left them alone.`;
   const missing = skill.artifacts.filter(
@@ -405,7 +415,9 @@ export function ManagedRow({
         <ul className="skills-artifacts">
           {skill.artifacts.map((artifact) => (
             <li key={artifact.path}>
-              <span className="skills-kind">{artifact.kind}</span>
+              <span className="skills-kind">
+                {ARTIFACT_LABEL[artifact.kind] ?? artifact.kind}
+              </span>
               <code>{artifact.path}</code>
               <span>
                 {artifact.blocked

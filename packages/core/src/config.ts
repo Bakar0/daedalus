@@ -107,6 +107,14 @@ export interface DaedalusConfig {
    * every one behind or deleting entries the user set themselves.
    */
   claudeOverridesWritten: string[];
+  /**
+   * The output style Daedalus last selected in the user's Claude settings.
+   *
+   * Same reason as the override list: it is how Daedalus tells its own
+   * selection from one the user made, so it never takes away a style it did
+   * not choose.
+   */
+  claudeOutputStyleWritten?: string;
 }
 
 type StoredConfig = Partial<
@@ -122,6 +130,7 @@ type StoredConfig = Partial<
   managedSkills?: Record<string, ManagedSkillSetting>;
   skillOverrides?: Record<string, SkillVisibility>;
   claudeOverridesWritten?: string[];
+  claudeOutputStyleWritten?: string;
 };
 
 function expandHome(path: string): string {
@@ -231,6 +240,9 @@ export async function loadConfig(
     managedSkills: stored.managedSkills || {},
     skillOverrides: stored.skillOverrides || {},
     claudeOverridesWritten: stored.claudeOverridesWritten || [],
+    ...(stored.claudeOutputStyleWritten
+      ? { claudeOutputStyleWritten: stored.claudeOutputStyleWritten }
+      : {}),
   };
 }
 
@@ -322,4 +334,14 @@ export async function saveClaudeOverridesWritten(
 ): Promise<void> {
   await saveSetting(config, { claudeOverridesWritten: names });
   config.claudeOverridesWritten = names;
+}
+
+/** Records which output style, if any, is Daedalus's in Claude's settings. */
+export async function saveClaudeOutputStyleWritten(
+  config: DaedalusConfig,
+  style: string | undefined,
+): Promise<void> {
+  await saveSetting(config, { claudeOutputStyleWritten: style ?? null });
+  if (style === undefined) delete config.claudeOutputStyleWritten;
+  else config.claudeOutputStyleWritten = style;
 }

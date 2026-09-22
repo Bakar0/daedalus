@@ -1871,10 +1871,19 @@ async function skillCommand(
             `  left alone: ${artifact.path} is not Daedalus's to replace`,
           );
         else if (artifact.present) console.log(`  wrote ${artifact.path}`);
-      if (status.enabled && status.mode === "always")
-        console.log(
-          "  Claude picks the style up on its next session. Codex reads its instructions at startup.",
+      if (status.enabled && status.mode === "always") {
+        // Only promise the style is on when the selection actually took. It
+        // does not when the user already has a style of their own, and saying
+        // otherwise is how a setting looks applied while doing nothing.
+        const selection = status.artifacts.find(
+          (artifact) => artifact.kind === "selection",
         );
+        console.log(
+          selection?.blocked
+            ? "  Claude is set to a different output style, which is yours to change, so the rules are not applying there yet. Codex reads its instructions at startup."
+            : "  Claude picks the style up on its next session. Codex reads its instructions at startup.",
+        );
+      }
     });
     return 0;
   }
