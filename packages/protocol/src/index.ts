@@ -233,8 +233,10 @@ export interface DiscoveredSkillDto {
     "claude-personal" | "agents-personal" | "cursor-personal" | "claude-plugin";
   /** The directory it was found in, which is the group it is listed under. */
   sourcePath: string;
+  /** The plugin's name, when the source is one plugin rather than a provider. */
+  sourceName?: string;
   invocation: "auto" | "user-only" | "model-only";
-  visibility: "on" | "name-only" | "user-invocable-only" | "off";
+  visibility: "on" | "off";
   managedId?: string;
   problem?: "unreadable-frontmatter" | "name-mismatch" | "broken-link";
 }
@@ -511,7 +513,7 @@ export interface DesktopRpcSchema {
       skillVisibilitySet: Request<
         {
           name: string;
-          visibility: "on" | "name-only" | "user-invocable-only" | "off";
+          visibility: "on" | "off";
         },
         { name: string; visibility: string }
       >;

@@ -21,6 +21,10 @@ const pageUrl = `http://127.0.0.1:${port}/settings-test.html`;
 const chromePath =
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const screenshotPath = join(projectRoot, "artifacts/settings-ui-check.png");
+const groupsScreenshotPath = join(
+  projectRoot,
+  "artifacts/settings-ui-groups.png",
+);
 const artifactsDirectory = join(projectRoot, "artifacts");
 await mkdir(artifactsDirectory, { recursive: true });
 const profile = await mkdtemp(
@@ -297,13 +301,35 @@ try {
   type Group = { label: string; open: boolean; rows: number };
 
   const grouped = await evaluate<Group[]>(readGroups);
-  if (grouped.length < 3)
-    throw new Error(
-      `Expected the found skills to be grouped by source, saw ${JSON.stringify(grouped)}`,
-    );
+  const labels = grouped.map((group) => group.label);
+  // Each plugin is its own group under its own name. One shared "Claude
+  // plugin" heading over several different plugins is what this replaced.
+  for (const expected of ["Claude", "Codex and Cursor", "pstack", "toolkit"])
+    if (!labels.includes(expected))
+      throw new Error(
+        `Expected a group called ${expected}, saw ${JSON.stringify(labels)}`,
+      );
+  if (new Set(labels).size !== labels.length)
+    throw new Error(`Two groups share a heading: ${JSON.stringify(labels)}`);
   const totalRows = grouped.reduce((sum, group) => sum + group.rows, 0);
-  if (totalRows !== 16)
-    throw new Error(`Expected 16 rows across the groups, saw ${totalRows}`);
+  if (totalRows !== 18)
+    throw new Error(`Expected 18 rows across the groups, saw ${totalRows}`);
+
+  // The control is a switch, not a four-way picker: the other two states are
+  // the skill author's to set, not the user's.
+  const controls = await evaluate<{
+    switches: number;
+    selects: number;
+  }>(`(() => ({
+    switches: document.querySelectorAll('.skills-found-row .skills-switch input').length,
+    selects: document.querySelectorAll('.skills-found-row select').length,
+  }))()`);
+  if (controls.selects !== 0)
+    throw new Error(`A found row still has a dropdown: ${controls.selects}`);
+  if (controls.switches !== totalRows)
+    throw new Error(
+      `Expected one switch per visible row, saw ${controls.switches} for ${totalRows}`,
+    );
 
   // Collapsing hides a group's rows and keeps its header.
   await evaluate(
@@ -399,9 +425,20 @@ try {
     `All five categories open at a steady ${[...distinct][0]}px: ${Object.keys(heights).join(", ")}`,
   );
   console.log(
-    `Found skills: ${grouped.length} groups, ${totalRows} rows, collapse works, fuzzy filter narrows to ${filteredRows}, viewer opens`,
+    `Found skills: ${grouped.length} groups (${labels.join(", ")}), ${totalRows} rows with one switch each, collapse works, fuzzy filter narrows to ${filteredRows}, viewer opens`,
   );
-  console.log(`Screenshot: ${screenshotPath}`);
+  // A second image with every group shut, which is where the headings are
+  // all visible at once and the per-plugin naming can be read.
+  await evaluate(`(() => {
+    for (const head of document.querySelectorAll('.skills-group-head'))
+      if (head.getAttribute('aria-expanded') === 'true') head.click();
+  })()`);
+  await Bun.sleep(150);
+  const groupsShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(groupsScreenshotPath, Buffer.from(groupsShot.data, "base64"));
+  console.log(`Screenshots: ${screenshotPath}, ${groupsScreenshotPath}`);
   socket.close();
 } finally {
   chrome?.kill();

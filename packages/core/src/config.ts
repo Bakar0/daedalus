@@ -39,12 +39,16 @@ export interface ManagedSkillSetting {
 }
 
 /**
- * The four states Claude Code's `skillOverrides` accepts, reused for every
- * provider so one toggle means one thing across the app. Providers that offer
- * less than four map `off` onto whatever they do support.
+ * Whether a skill Daedalus does not own reaches the agent at all.
+ *
+ * Claude Code's `skillOverrides` accepts four states, and only these two are
+ * the user's to set. `name-only` is a token-budget trick that does not
+ * describe anything the user wants. `user-invocable-only` is the same decision
+ * as `disable-model-invocation` in the skill's own frontmatter, which is the
+ * author's call and is already reported on the row, so offering it here too
+ * would ask the user to overrule a choice whose reason they cannot see.
  */
-export type SkillVisibility =
-  "on" | "name-only" | "user-invocable-only" | "off";
+export type SkillVisibility = "on" | "off";
 
 export interface DaedalusConfig {
   home: string;

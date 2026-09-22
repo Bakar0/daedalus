@@ -319,7 +319,7 @@ and reported separately. One session failing never aborts the rest.`,
   daedal skill get <name> [--json]
   daedal skill enable <name> [--mode on-demand|always]
   daedal skill disable <name>
-  daedal skill visibility <name> <on|name-only|user-invocable-only|off>
+  daedal skill visibility <name> <on|off>
   daedal skill install <path> [--name <name>]
   daedal skill install --git <url> --path <subdir> [--name <name>]
   daedal skill remove <name> --force
@@ -1883,7 +1883,7 @@ async function skillCommand(
     expectPositionals(
       parsed.positionals,
       2,
-      "daedal skill visibility <name> <on|name-only|user-invocable-only|off>",
+      "daedal skill visibility <name> <on|off>",
     );
     const requested = parsed.positionals[1]!;
     if (!VISIBILITIES.has(requested))
@@ -1893,7 +1893,7 @@ async function skillCommand(
       );
     const result = await context.skills.setVisibility(
       parsed.positionals[0]!,
-      requested as "on" | "name-only" | "user-invocable-only" | "off",
+      requested as "on" | "off",
     );
     printResult(result, json, () => {
       console.log(`${result.name} is ${result.visibility}`);

@@ -204,6 +204,49 @@ describe("SkillService", () => {
     });
   });
 
+  test("names a plugin source after the plugin", async () => {
+    await withSkillHomes(async ({ context, claudeHome }) => {
+      const directory = join(
+        claudeHome,
+        "plugins",
+        "pstack",
+        "skills",
+        "no-comments",
+      );
+      await mkdir(directory, { recursive: true });
+      await writeFile(
+        join(directory, "SKILL.md"),
+        "---\nname: no-comments\ndescription: From a plugin\n---\n",
+        "utf8",
+      );
+      const nested = join(
+        claudeHome,
+        "plugins",
+        "market",
+        "toolkit",
+        "skills",
+        "shipper",
+      );
+      await mkdir(nested, { recursive: true });
+      await writeFile(
+        join(nested, "SKILL.md"),
+        "---\nname: shipper\ndescription: From another plugin\n---\n",
+        "utf8",
+      );
+
+      const { discovered } = await context.skills.list();
+      expect(
+        discovered.find((one) => one.name === "no-comments"),
+      ).toMatchObject({ origin: "plugin", sourceName: "pstack" });
+      // A marketplace nests the plugin under its marketplace, and the plugin
+      // is what the user installed, so the plugin is the name.
+      expect(discovered.find((one) => one.name === "shipper")).toMatchObject({
+        origin: "plugin",
+        sourceName: "toolkit",
+      });
+    });
+  });
+
   test("reports a name answered by two different skills, not one linked twice", async () => {
     await withSkillHomes(async ({ context, claudeHome, cursorHome }) => {
       await context.skills.sync();

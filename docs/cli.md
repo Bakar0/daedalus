@@ -378,7 +378,7 @@ daedal skill list [--provider claude|codex|cursor] [--managed] [--json]
 daedal skill get <name>
 daedal skill enable <name> [--mode on-demand|always]
 daedal skill disable <name>
-daedal skill visibility <name> <on|name-only|user-invocable-only|off>
+daedal skill visibility <name> <on|off>
 daedal skill install <path> [--name <name>]
 daedal skill install --git <url> --path <subdir> [--name <name>]
 daedal skill remove <name> --force
@@ -396,7 +396,10 @@ Daedalus's already sat there.
 is `unslop`. It installs a Claude output style and a fenced block in
 `~/.codex/AGENTS.md` on top of the skill.
 
-`visibility` uses each provider's own switch. Claude Code applies it to the next
+`visibility` is on or off and uses each provider's own switch. The other two
+states Claude Code accepts are left out on purpose: `name-only` is a
+token-budget trick, and `user-invocable-only` is the same decision the skill's
+own `disable-model-invocation` already makes. Claude Code applies it to the next
 session; Codex applies it after it restarts and applies it everywhere. `remove`
 takes `--force` because it deletes files, and refuses on a skill Daedalus ships.
 `sync` is idempotent and also runs when the app starts. See

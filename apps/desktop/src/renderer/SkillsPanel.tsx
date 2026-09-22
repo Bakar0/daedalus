@@ -37,14 +37,17 @@ const PROBLEM_LABEL: Record<string, string> = {
   "broken-link": "its link points at nothing",
 };
 
-const VISIBILITIES = ["on", "name-only", "user-invocable-only", "off"] as const;
-
 const SOURCE_LABEL: Record<DiscoveredSkillDto["source"], string> = {
   "claude-personal": "Claude",
   "agents-personal": "Codex and Cursor",
   "cursor-personal": "Cursor",
   "claude-plugin": "Claude plugin",
 };
+
+/** A group's heading: the plugin's own name, or the provider it belongs to. */
+export function sourceLabel(skill: DiscoveredSkillDto): string {
+  return skill.sourceName ?? SOURCE_LABEL[skill.source];
+}
 
 /**
  * What a row shows for its path.
@@ -69,6 +72,8 @@ export function shortenPath(path: string, home = "/Users/"): string {
 export interface SkillGroup {
   key: string;
   label: string;
+  /** Shown beside the label when the label alone does not say what this is. */
+  qualifier?: string;
   path: string;
   skills: DiscoveredSkillDto[];
 }
@@ -93,7 +98,10 @@ export function groupSkillsBySource(
     }
     groups.set(skill.sourcePath, {
       key: skill.sourcePath,
-      label: SOURCE_LABEL[skill.source],
+      label: sourceLabel(skill),
+      // A plugin group is headed by the plugin's name, which says nothing
+      // about where it came from, so the kind rides along as a qualifier.
+      ...(skill.sourceName ? { qualifier: SOURCE_LABEL[skill.source] } : {}),
       path: skill.sourcePath,
       skills: [skill],
     });
@@ -324,6 +332,9 @@ export function SkillsPanel({
             >
               <span className={`skills-caret ${open ? "is-open" : ""}`}>›</span>
               <strong>{group.label}</strong>
+              {group.qualifier ? (
+                <span className="skills-tag">{group.qualifier}</span>
+              ) : undefined}
               <code>{shortenPath(group.path)}</code>
               <span className="skills-count">{group.skills.length}</span>
             </button>
@@ -436,11 +447,15 @@ export function DiscoveredRow({
   disabled: boolean;
   expanded: boolean;
   onToggle: () => void;
-  onVisibility: (visibility: (typeof VISIBILITIES)[number]) => void;
+  onVisibility: (visibility: "on" | "off") => void;
   skill: DiscoveredSkillDto;
 }) {
   return (
-    <li className={`skills-found-row ${expanded ? "is-open" : ""}`}>
+    <li
+      className={`skills-found-row ${expanded ? "is-open" : ""} ${
+        skill.visibility === "off" ? "is-off" : ""
+      }`}
+    >
       <button
         aria-expanded={expanded}
         className="skills-row-head"
@@ -465,20 +480,16 @@ export function DiscoveredRow({
           {rowPath(skill.skillPath, skill.sourcePath)}
         </code>
       </button>
-      <select
-        aria-label={`${skill.name} visibility`}
-        disabled={disabled}
-        onChange={(event) =>
-          onVisibility(event.target.value as (typeof VISIBILITIES)[number])
-        }
-        value={skill.visibility}
-      >
-        {VISIBILITIES.map((visibility) => (
-          <option key={visibility} value={visibility}>
-            {visibility}
-          </option>
-        ))}
-      </select>
+      <label className="skills-switch" title="Let your agents load this skill">
+        <input
+          checked={skill.visibility === "on"}
+          disabled={disabled}
+          onChange={(event) =>
+            onVisibility(event.target.checked ? "on" : "off")
+          }
+          type="checkbox"
+        />
+      </label>
       {expanded ? (
         <div className="skills-detail">
           {skill.description ? <p>{skill.description}</p> : undefined}

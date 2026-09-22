@@ -77,9 +77,20 @@ const SOURCES = [
   {
     source: "claude-plugin" as const,
     sourcePath: "/Users/someone/.claude/plugins/pstack/skills",
+    sourceName: "pstack",
     providers: ["claude"] as const,
     origin: "plugin" as const,
     count: 3,
+  },
+  // A second plugin, because one "Claude plugin" heading covering several
+  // different plugins is the thing this grouping replaced.
+  {
+    source: "claude-plugin" as const,
+    sourcePath: "/Users/someone/.claude/plugins/marketplace/toolkit/skills",
+    sourceName: "toolkit",
+    providers: ["claude"] as const,
+    origin: "plugin" as const,
+    count: 2,
   },
 ];
 
@@ -95,8 +106,9 @@ const discovered: DiscoveredSkillDto[] = SOURCES.flatMap((group, groupIndex) =>
       origin: group.origin,
       source: group.source,
       sourcePath: group.sourcePath,
+      ...("sourceName" in group ? { sourceName: group.sourceName } : {}),
       invocation: index % 3 === 0 ? "user-only" : "auto",
-      visibility: "on",
+      visibility: index === 1 ? ("off" as const) : ("on" as const),
       ...(groupIndex === 2 && index === 0
         ? { problem: "unreadable-frontmatter" as const }
         : {}),

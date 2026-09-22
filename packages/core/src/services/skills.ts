@@ -449,6 +449,8 @@ export interface DiscoveredSkill {
   source: SkillSource;
   /** The directory the skill was found in, which is the group it belongs to. */
   sourcePath: string;
+  /** The plugin's name, when this source is one plugin rather than a provider. */
+  sourceName?: string;
   invocation: SkillInvocation;
   visibility: SkillVisibility;
   /** Set when this is a link to a skill Daedalus manages. */
@@ -482,6 +484,12 @@ interface ScanRoot {
   providers: SkillProvider[];
   origin: SkillOrigin;
   source: SkillSource;
+  /**
+   * What to call this particular directory, when the kind alone does not say
+   * it. Every plugin is its own source, so "Claude plugin" would name several
+   * different places the same thing.
+   */
+  sourceName?: string;
 }
 
 function scanRoots(config: DaedalusConfig): ScanRoot[] {
@@ -535,16 +543,20 @@ async function pluginRoots(config: DaedalusConfig): Promise<ScanRoot[]> {
         providers: ["claude"],
         origin: "plugin",
         source: "claude-plugin",
+        sourceName: first,
       });
     for (const second of await directoryNames(firstPath)) {
       if (second === "skills") continue;
       const secondPath = join(firstPath, second, "skills");
       if (await pathExists(secondPath))
+        // A marketplace layout nests the plugin under its marketplace. The
+        // plugin is what the user installed, so the plugin is the name.
         roots.push({
           path: secondPath,
           providers: ["claude"],
           origin: "plugin",
           source: "claude-plugin",
+          sourceName: second,
         });
     }
   }
@@ -580,6 +592,7 @@ async function readDiscoveredSkill(
       origin: managedId ? "daedalus" : root.origin,
       source: root.source,
       sourcePath: root.path,
+      ...(root.sourceName ? { sourceName: root.sourceName } : {}),
       invocation: "auto",
       visibility: config.skillOverrides[name] ?? "on",
       ...(managedId ? { managedId } : {}),
@@ -603,6 +616,7 @@ async function readDiscoveredSkill(
       origin,
       source: root.source,
       sourcePath: root.path,
+      ...(root.sourceName ? { sourceName: root.sourceName } : {}),
       invocation: "auto",
       visibility,
       ...(managedId ? { managedId } : {}),
@@ -619,6 +633,7 @@ async function readDiscoveredSkill(
     origin,
     source: root.source,
     sourcePath: root.path,
+    ...(root.sourceName ? { sourceName: root.sourceName } : {}),
     invocation: invocationOf(frontmatter),
     visibility,
     ...(managedId ? { managedId } : {}),

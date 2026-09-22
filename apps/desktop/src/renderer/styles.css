@@ -3819,12 +3819,19 @@ dd {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* The app's selects are sized for a form field. In a list row the control is
-   secondary to the name and the path, so it steps back to match the row. */
-.skills-found-row select {
-  border-radius: 6px;
-  font-size: 10px;
-  padding: 3px 6px;
+.skills-switch {
+  cursor: pointer;
+  display: flex;
+  padding: 2px;
+}
+.skills-switch input {
+  margin: 0;
+}
+/* A row for a skill that is switched off still has to be readable, because it
+   is the row you come back to when you want it on again. */
+.skills-found-row.is-off .skills-row-head strong,
+.skills-found-row.is-off .skills-row-head code {
+  opacity: 0.5;
 }
 .skills-tag {
   background: var(--line);

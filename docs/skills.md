@@ -87,7 +87,18 @@ fetched only then rather than shipped with the list. The filter is the same
 fuzzy matcher the repository picker uses, so `clskl2` finds `claude-skill-2`,
 and a search reopens whatever it matched.
 
-Turning one of those off uses the provider's own switch rather than moving the
+Each group is one directory. The provider directories are named after the
+provider; every plugin is its own group under the plugin's own name, because
+one "Claude plugin" heading over several plugins says nothing about which
+plugin a skill came from.
+
+The switch on a row is on or off, and nothing else. Claude Code's
+`skillOverrides` also accepts `name-only` and `user-invocable-only`, and
+neither is the user's to set: the first is a token-budget trick, and the second
+is the same decision as `disable-model-invocation` in the skill's own
+frontmatter, which the author already made and which the row already reports.
+
+Turning a skill off uses the provider's own switch rather than moving the
 user's files. Claude Code takes `skillOverrides` through the settings argument,
 which makes it per session. Codex takes `[[skills.config]]` in `config.toml`,
 which is global and applies only after Codex restarts. Cursor has no documented
@@ -100,7 +111,7 @@ daedal skill list [--provider claude|codex|cursor] [--managed] [--json]
 daedal skill get <name>
 daedal skill enable <name> [--mode on-demand|always]
 daedal skill disable <name>
-daedal skill visibility <name> <on|name-only|user-invocable-only|off>
+daedal skill visibility <name> <on|off>
 daedal skill install <path> [--name <name>]
 daedal skill install --git <url> --path <subdir> [--name <name>]
 daedal skill remove <name> --force

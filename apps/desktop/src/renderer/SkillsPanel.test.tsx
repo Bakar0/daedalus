@@ -8,6 +8,7 @@ import {
   managedDetail,
   rowPath,
   shortenPath,
+  sourceLabel,
 } from "./SkillsPanel";
 
 const discoveredSkill = (
@@ -139,6 +140,35 @@ describe("rows", () => {
     ).toContain("Remove");
   });
 
+  test("the row control is a switch, and off reads as off", () => {
+    // Not a four-way picker: `name-only` means nothing to a user and
+    // `user-invocable-only` is the skill author's call, already shown as a tag.
+    const on = renderToStaticMarkup(
+      <DiscoveredRow
+        disabled={false}
+        expanded={false}
+        onToggle={() => undefined}
+        onVisibility={() => undefined}
+        skill={discoveredSkill()}
+      />,
+    );
+    expect(on).toContain('type="checkbox"');
+    expect(on).not.toContain("<select");
+    expect(on).not.toContain("name-only");
+    expect(on).not.toContain("is-off");
+
+    const off = renderToStaticMarkup(
+      <DiscoveredRow
+        disabled={false}
+        expanded={false}
+        onToggle={() => undefined}
+        onVisibility={() => undefined}
+        skill={discoveredSkill({ visibility: "off" })}
+      />,
+    );
+    expect(off).toContain("is-off");
+  });
+
   test("a collapsed row is one line: name, path, and any problem", () => {
     const markup = renderToStaticMarkup(
       <DiscoveredRow
@@ -204,6 +234,41 @@ describe("grouping", () => {
       "/home/.agents/skills",
     ]);
     expect(groups[0]?.skills.map((skill) => skill.name)).toEqual(["a", "c"]);
+  });
+
+  test("each plugin is its own group under its own name", () => {
+    // One "Claude plugin" heading covering several different plugins told the
+    // user nothing about which plugin a skill came from.
+    const groups = groupSkillsBySource([
+      discoveredSkill({
+        name: "a",
+        source: "claude-plugin",
+        sourceName: "pstack",
+        sourcePath: "/home/.claude/plugins/pstack/skills",
+      }),
+      discoveredSkill({
+        name: "b",
+        source: "claude-plugin",
+        sourceName: "toolkit",
+        sourcePath: "/home/.claude/plugins/market/toolkit/skills",
+      }),
+    ]);
+    expect(groups.map((group) => group.label)).toEqual(["pstack", "toolkit"]);
+    // The name says which plugin; the qualifier says what kind of thing it is.
+    expect(groups.every((group) => group.qualifier === "Claude plugin")).toBe(
+      true,
+    );
+  });
+
+  test("a provider directory is named after the provider, with no qualifier", () => {
+    const [group] = groupSkillsBySource([
+      discoveredSkill({ source: "claude-personal", sourcePath: "/a" }),
+    ]);
+    expect(group?.label).toBe("Claude");
+    expect(group?.qualifier).toBeUndefined();
+    expect(sourceLabel(discoveredSkill({ source: "agents-personal" }))).toBe(
+      "Codex and Cursor",
+    );
   });
 
   test("one name in two directories stays two entries", () => {
