@@ -319,12 +319,6 @@ export function createDesktopRequestHandlers(
       mutate(() => context.skills.setEnabled(id, enabled, mode)),
     skillVisibilitySet: ({ name, visibility }) =>
       mutate(() => context.skills.setVisibility(name, visibility)),
-    skillInstall: ({ path, git, subpath, name }) =>
-      mutate(() =>
-        git
-          ? context.skills.installFromGit(git, subpath ?? "", name)
-          : context.skills.installFromPath(path ?? "", name),
-      ),
     skillRemove: ({ name }) =>
       mutate(() => context.skills.removeInstalled(name)),
     skillRead: ({ path }) => result(() => context.skills.readSkill(path)),

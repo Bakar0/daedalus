@@ -122,6 +122,12 @@ daedal skill doctor
 None of them takes `--workspace`. `sync` is idempotent and also runs when the
 app starts.
 
+`install` is a CLI operation only. The Skills panel shows what is installed and
+switches it on and off; it does not offer a box to type a path or a repository
+URL into, because installing a skill is a thing you do once and a control you
+then read past every time you open Settings. A skill installed from the CLI
+appears in the panel like any other, with a Remove button.
+
 ## Authoring
 
 `skills/daedalus-control/` and `skills/unslop/` are the canonical authoring

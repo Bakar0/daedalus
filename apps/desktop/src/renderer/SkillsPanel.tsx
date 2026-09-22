@@ -135,8 +135,6 @@ export function SkillsPanel({
 }) {
   const [listing, setListing] = React.useState<SkillListingDto>();
   const [working, setWorking] = React.useState(false);
-  const [source, setSource] = React.useState("");
-  const [subpath, setSubpath] = React.useState("");
   const [filter, setFilter] = React.useState("");
   const [collapsed, setCollapsed] = React.useState<ReadonlySet<string>>(
     new Set(),
@@ -224,9 +222,6 @@ export function SkillsPanel({
   // A filter that matched something opens what it matched: collapsed groups
   // would hide the result and read as "nothing found".
   const filtering = filter.trim().length > 0;
-  // A git URL and a local directory go in the same box, because the user is
-  // answering one question and should not have to pick a form first.
-  const looksLikeGit = /^(https?:\/\/|git@)/.test(source.trim());
 
   return (
     <div className="skills-panel">
@@ -254,43 +249,6 @@ export function SkillsPanel({
           }
         />
       ))}
-
-      <h3>Install a skill</h3>
-      <div className="skills-install">
-        <input
-          aria-label="Skill source"
-          disabled={disabled}
-          onChange={(event) => setSource(event.target.value)}
-          placeholder="A folder with a SKILL.md, or a git URL"
-          value={source}
-        />
-        {looksLikeGit ? (
-          <input
-            aria-label="Path inside the repository"
-            disabled={disabled}
-            onChange={(event) => setSubpath(event.target.value)}
-            placeholder="pstack/skills/no-comments"
-            value={subpath}
-          />
-        ) : undefined}
-        <button
-          disabled={disabled || !source.trim()}
-          onClick={() =>
-            void run(
-              client.request.skillInstall(
-                looksLikeGit
-                  ? { git: source.trim(), subpath: subpath.trim() }
-                  : { path: source.trim() },
-              ),
-            ).then(() => {
-              setSource("");
-              setSubpath("");
-            })
-          }
-        >
-          Install
-        </button>
-      </div>
 
       <h3>Found on this machine</h3>
       <p className="skills-note">

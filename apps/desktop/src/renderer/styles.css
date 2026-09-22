@@ -3718,14 +3718,6 @@ dd {
   color: var(--muted);
   font-size: 9px;
 }
-.skills-install {
-  display: flex;
-  gap: 7px;
-}
-.skills-install input {
-  flex: 1;
-  min-width: 0;
-}
 .skills-found {
   display: grid;
   gap: 1px;

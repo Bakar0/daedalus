@@ -517,10 +517,6 @@ export interface DesktopRpcSchema {
         },
         { name: string; visibility: string }
       >;
-      skillInstall: Request<
-        { path?: string; git?: string; subpath?: string; name?: string },
-        ManagedSkillDto
-      >;
       skillRemove: Request<{ name: string }, { removed: string }>;
       /** The text of one discovered SKILL.md, for the viewer in the panel. */
       skillRead: Request<
