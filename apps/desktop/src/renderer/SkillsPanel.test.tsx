@@ -1,7 +1,29 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 import type { DiscoveredSkillDto, ManagedSkillDto } from "@daedalus/protocol";
-import { DiscoveredRow, ManagedRow, managedDetail } from "./SkillsPanel";
+import {
+  DiscoveredRow,
+  ManagedRow,
+  groupSkillsBySource,
+  managedDetail,
+  rowPath,
+  shortenPath,
+} from "./SkillsPanel";
+
+const discoveredSkill = (
+  overrides: Partial<DiscoveredSkillDto> = {},
+): DiscoveredSkillDto => ({
+  name: "broken",
+  description: "A long description that only belongs in the expanded state.",
+  skillPath: "/Users/someone/.cursor/skills/broken/SKILL.md",
+  providers: ["cursor"],
+  origin: "user",
+  source: "cursor-personal",
+  sourcePath: "/Users/someone/.cursor/skills",
+  invocation: "auto",
+  visibility: "on",
+  ...overrides,
+});
 
 const managed = (
   overrides: Partial<ManagedSkillDto> = {},
@@ -117,26 +139,98 @@ describe("rows", () => {
     ).toContain("Remove");
   });
 
-  test("a discovered row carries its path, origin, and any problem", () => {
-    const skill: DiscoveredSkillDto = {
-      name: "broken",
-      description: "",
-      skillPath: "/home/.cursor/skills/broken/SKILL.md",
-      providers: ["cursor"],
-      origin: "user",
-      invocation: "auto",
-      visibility: "on",
-      problem: "unreadable-frontmatter",
-    };
+  test("a collapsed row is one line: name, path, and any problem", () => {
     const markup = renderToStaticMarkup(
       <DiscoveredRow
         disabled={false}
+        expanded={false}
+        onToggle={() => undefined}
         onVisibility={() => undefined}
-        skill={skill}
+        skill={discoveredSkill({ problem: "unreadable-frontmatter" })}
       />,
     );
-    expect(markup).toContain("/home/.cursor/skills/broken/SKILL.md");
+    // The row shows the part under the group, and carries the whole path as
+    // its title so nothing is actually lost.
+    expect(markup).toContain(">broken/SKILL.md<");
+    expect(markup).toContain(
+      'title="/Users/someone/.cursor/skills/broken/SKILL.md"',
+    );
     expect(markup).toContain("cannot read its frontmatter");
-    expect(markup).toContain("Cursor");
+    // The description and the provider list belong to the expanded state, or
+    // the row stops being one line.
+    expect(markup).not.toContain("Cursor");
+    expect(markup).not.toContain("A long description");
+  });
+
+  test("expanding a row shows its detail, then its text once it arrives", () => {
+    const waiting = renderToStaticMarkup(
+      <DiscoveredRow
+        disabled={false}
+        expanded
+        onToggle={() => undefined}
+        onVisibility={() => undefined}
+        skill={discoveredSkill()}
+      />,
+    );
+    expect(waiting).toContain("A long description");
+    expect(waiting).toContain("Cursor");
+    expect(waiting).toContain("Reading…");
+
+    const loaded = renderToStaticMarkup(
+      <DiscoveredRow
+        content={{ content: "---\nname: broken\n---\n", truncated: true }}
+        disabled={false}
+        expanded
+        onToggle={() => undefined}
+        onVisibility={() => undefined}
+        skill={discoveredSkill()}
+      />,
+    );
+    expect(loaded).toContain("name: broken");
+    expect(loaded).toContain("truncated");
+    expect(loaded).not.toContain("Reading…");
+  });
+});
+
+describe("grouping", () => {
+  test("groups by the directory, keeping first-seen order", () => {
+    const groups = groupSkillsBySource([
+      discoveredSkill({ name: "a", sourcePath: "/home/.claude/skills" }),
+      discoveredSkill({ name: "b", sourcePath: "/home/.agents/skills" }),
+      discoveredSkill({ name: "c", sourcePath: "/home/.claude/skills" }),
+    ]);
+    expect(groups.map((group) => group.path)).toEqual([
+      "/home/.claude/skills",
+      "/home/.agents/skills",
+    ]);
+    expect(groups[0]?.skills.map((skill) => skill.name)).toEqual(["a", "c"]);
+  });
+
+  test("one name in two directories stays two entries", () => {
+    // Both are loaded by a provider, so collapsing them would hide the very
+    // thing the list exists to show.
+    const groups = groupSkillsBySource([
+      discoveredSkill({ name: "twins", sourcePath: "/home/.claude/skills" }),
+      discoveredSkill({ name: "twins", sourcePath: "/home/.cursor/skills" }),
+    ]);
+    expect(groups).toHaveLength(2);
+  });
+});
+
+describe("paths", () => {
+  test("a row drops the group's directory and keeps anything outside it", () => {
+    expect(rowPath("/a/b/skills/x/SKILL.md", "/a/b/skills")).toBe("x/SKILL.md");
+    expect(rowPath("/Users/someone/elsewhere/SKILL.md", "/a/b/skills")).toBe(
+      "~/elsewhere/SKILL.md",
+    );
+  });
+
+  test("replaces the home prefix and leaves anything else alone", () => {
+    expect(shortenPath("/Users/someone/.claude/skills/x/SKILL.md")).toBe(
+      "~/.claude/skills/x/SKILL.md",
+    );
+    expect(shortenPath("/etc/codex/skills/x/SKILL.md")).toBe(
+      "/etc/codex/skills/x/SKILL.md",
+    );
   });
 });

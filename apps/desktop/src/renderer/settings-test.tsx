@@ -58,17 +58,49 @@ const snapshot = {
   },
 } as unknown as DesktopSnapshotDto;
 
-const discovered: DiscoveredSkillDto[] = Array.from(
-  { length: 14 },
-  (_unused, index) => ({
-    name: `found-skill-${index + 1}`,
-    description:
-      "A skill that lives somewhere on this machine and is long enough in its description to wrap onto a second line.",
-    skillPath: `/Users/someone/.claude/skills/found-skill-${index + 1}/SKILL.md`,
-    providers: ["claude"],
-    origin: "user",
-    invocation: "auto",
-    visibility: "on",
+/** Spread across sources, so the grouping and the collapsing are exercised. */
+const SOURCES = [
+  {
+    source: "claude-personal" as const,
+    sourcePath: "/Users/someone/.claude/skills",
+    providers: ["claude"] as const,
+    origin: "user" as const,
+    count: 8,
+  },
+  {
+    source: "agents-personal" as const,
+    sourcePath: "/Users/someone/.agents/skills",
+    providers: ["codex", "cursor"] as const,
+    origin: "user" as const,
+    count: 5,
+  },
+  {
+    source: "claude-plugin" as const,
+    sourcePath: "/Users/someone/.claude/plugins/pstack/skills",
+    providers: ["claude"] as const,
+    origin: "plugin" as const,
+    count: 3,
+  },
+];
+
+const discovered: DiscoveredSkillDto[] = SOURCES.flatMap((group, groupIndex) =>
+  Array.from({ length: group.count }, (_unused, index) => {
+    const name = `${group.source.split("-")[0]}-skill-${index + 1}`;
+    return {
+      name,
+      description:
+        "A skill that lives somewhere on this machine and is long enough in its description to wrap onto a second line.",
+      skillPath: `${group.sourcePath}/${name}/SKILL.md`,
+      providers: [...group.providers],
+      origin: group.origin,
+      source: group.source,
+      sourcePath: group.sourcePath,
+      invocation: index % 3 === 0 ? "user-only" : "auto",
+      visibility: "on",
+      ...(groupIndex === 2 && index === 0
+        ? { problem: "unreadable-frontmatter" as const }
+        : {}),
+    };
   }),
 );
 
@@ -127,6 +159,14 @@ const client = {
   request: {
     snapshot: async () => ({ ok: true, data: snapshot }),
     skillList: async () => ({ ok: true, data: listing }),
+    skillRead: async ({ path }: { path: string }) => ({
+      ok: true,
+      data: {
+        path,
+        content: `---\nname: example\ndescription: The file at ${path}\n---\n\n# Example\n\nBody text for the viewer.\n`,
+        truncated: false,
+      },
+    }),
     workspaceContentGet: async () => ({
       ok: true,
       data: {

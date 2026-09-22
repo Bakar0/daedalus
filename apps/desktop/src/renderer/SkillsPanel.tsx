@@ -17,6 +17,7 @@ import type {
   SkillListingDto,
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
+import { fuzzyScore } from "./repository-search";
 
 const PROVIDER_LABEL: Record<string, string> = {
   claude: "Claude",
@@ -37,6 +38,68 @@ const PROBLEM_LABEL: Record<string, string> = {
 };
 
 const VISIBILITIES = ["on", "name-only", "user-invocable-only", "off"] as const;
+
+const SOURCE_LABEL: Record<DiscoveredSkillDto["source"], string> = {
+  "claude-personal": "Claude",
+  "agents-personal": "Codex and Cursor",
+  "cursor-personal": "Cursor",
+  "claude-plugin": "Claude plugin",
+};
+
+/**
+ * What a row shows for its path.
+ *
+ * The group header already carries the directory, so repeating it on every row
+ * spends the width that would otherwise show the end of the path, which is the
+ * part that identifies the skill. The full path is still on the row, as its
+ * title, for anyone who wants to read or copy it.
+ */
+export function rowPath(skillPath: string, sourcePath: string): string {
+  return skillPath.startsWith(`${sourcePath}/`)
+    ? skillPath.slice(sourcePath.length + 1)
+    : shortenPath(skillPath);
+}
+
+/** Shortens a path the way a shell prompt does, so a row stays one line. */
+export function shortenPath(path: string, home = "/Users/"): string {
+  const match = new RegExp(`^${home}[^/]+/`).exec(path);
+  return match ? `~/${path.slice(match[0].length)}` : path;
+}
+
+export interface SkillGroup {
+  key: string;
+  label: string;
+  path: string;
+  skills: DiscoveredSkillDto[];
+}
+
+/**
+ * Skills by the directory they were found in.
+ *
+ * Grouping by directory rather than by provider, because a name found in two
+ * directories is two entries the providers will both load, and collapsing them
+ * into one row would hide exactly the thing worth seeing. Order follows the
+ * first appearance, so the list does not reshuffle as a filter narrows it.
+ */
+export function groupSkillsBySource(
+  skills: DiscoveredSkillDto[],
+): SkillGroup[] {
+  const groups = new Map<string, SkillGroup>();
+  for (const skill of skills) {
+    const existing = groups.get(skill.sourcePath);
+    if (existing) {
+      existing.skills.push(skill);
+      continue;
+    }
+    groups.set(skill.sourcePath, {
+      key: skill.sourcePath,
+      label: SOURCE_LABEL[skill.source],
+      path: skill.sourcePath,
+      skills: [skill],
+    });
+  }
+  return [...groups.values()];
+}
 
 /** What a managed row says under its title once it is on. */
 export function managedDetail(skill: ManagedSkillDto): string {
@@ -67,6 +130,43 @@ export function SkillsPanel({
   const [source, setSource] = React.useState("");
   const [subpath, setSubpath] = React.useState("");
   const [filter, setFilter] = React.useState("");
+  const [collapsed, setCollapsed] = React.useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  const [viewing, setViewing] = React.useState<string>();
+  const [content, setContent] = React.useState<{
+    content: string;
+    truncated: boolean;
+  }>();
+
+  /**
+   * Opens a skill's own text, or closes it again.
+   *
+   * The content is fetched rather than carried on the listing: a list of forty
+   * skills would otherwise ship forty files to draw forty one-line rows.
+   */
+  const view = React.useCallback(
+    async (path: string) => {
+      if (viewing === path) {
+        setViewing(undefined);
+        setContent(undefined);
+        return;
+      }
+      setViewing(path);
+      setContent(undefined);
+      const response = await client.request.skillRead({ path });
+      if (!response.ok) {
+        onError(response.error.message);
+        setViewing(undefined);
+        return;
+      }
+      setContent({
+        content: response.data.content,
+        truncated: response.data.truncated,
+      });
+    },
+    [client, onError, viewing],
+  );
 
   const reload = React.useCallback(async () => {
     const response = await client.request.skillList({});
@@ -95,13 +195,27 @@ export function SkillsPanel({
   }
 
   const disabled = busy || working;
-  const needle = filter.trim().toLowerCase();
-  const found = (listing?.discovered ?? []).filter(
-    (skill) =>
-      !needle ||
-      skill.name.toLowerCase().includes(needle) ||
-      skill.skillPath.toLowerCase().includes(needle),
-  );
+  // The same fuzzy matcher the repository picker uses, so typing "clsk" finds
+  // a Claude skill here exactly as it would there. The name is scored ahead of
+  // the path, because a path match on a shared parent directory would
+  // otherwise rank every sibling equally.
+  const found = (listing?.discovered ?? [])
+    .map((skill) => ({
+      skill,
+      score: filter.trim()
+        ? Math.max(
+            (fuzzyScore(filter, skill.name) ?? Number.NEGATIVE_INFINITY) + 60,
+            fuzzyScore(filter, skill.skillPath) ?? Number.NEGATIVE_INFINITY,
+          )
+        : 0,
+    }))
+    .filter((entry) => Number.isFinite(entry.score))
+    .sort((left, right) => right.score - left.score)
+    .map((entry) => entry.skill);
+  const groups = groupSkillsBySource(found);
+  // A filter that matched something opens what it matched: collapsed groups
+  // would hide the result and read as "nothing found".
+  const filtering = filter.trim().length > 0;
   // A git URL and a local directory go in the same box, because the user is
   // answering one question and should not have to pick a form first.
   const looksLikeGit = /^(https?:\/\/|git@)/.test(source.trim());
@@ -191,23 +305,53 @@ export function SkillsPanel({
           {listing.discovered.length ? "Nothing matches." : "Nothing found."}
         </p>
       ) : undefined}
-      <ul className="skills-found">
-        {found.map((skill) => (
-          <DiscoveredRow
-            key={`${skill.name}:${skill.skillPath}`}
-            disabled={disabled}
-            skill={skill}
-            onVisibility={(visibility) =>
-              void run(
-                client.request.skillVisibilitySet({
-                  name: skill.name,
-                  visibility,
-                }),
-              )
-            }
-          />
-        ))}
-      </ul>
+      {groups.map((group) => {
+        const open = filtering || !collapsed.has(group.key);
+        return (
+          <section className="skills-group" key={group.key}>
+            <button
+              aria-expanded={open}
+              className="skills-group-head"
+              onClick={() =>
+                setCollapsed((current) => {
+                  const next = new Set(current);
+                  if (next.has(group.key)) next.delete(group.key);
+                  else next.add(group.key);
+                  return next;
+                })
+              }
+              type="button"
+            >
+              <span className={`skills-caret ${open ? "is-open" : ""}`}>›</span>
+              <strong>{group.label}</strong>
+              <code>{shortenPath(group.path)}</code>
+              <span className="skills-count">{group.skills.length}</span>
+            </button>
+            {open ? (
+              <ul className="skills-found">
+                {group.skills.map((skill) => (
+                  <DiscoveredRow
+                    key={skill.skillPath}
+                    disabled={disabled}
+                    expanded={viewing === skill.skillPath}
+                    content={viewing === skill.skillPath ? content : undefined}
+                    onToggle={() => void view(skill.skillPath)}
+                    skill={skill}
+                    onVisibility={(visibility) =>
+                      void run(
+                        client.request.skillVisibilitySet({
+                          name: skill.name,
+                          visibility,
+                        }),
+                      )
+                    }
+                  />
+                ))}
+              </ul>
+            ) : undefined}
+          </section>
+        );
+      })}
     </div>
   );
 }
@@ -283,27 +427,44 @@ export function ManagedRow({
 export function DiscoveredRow({
   skill,
   disabled,
+  expanded,
+  content,
+  onToggle,
   onVisibility,
 }: {
+  content?: { content: string; truncated: boolean };
   disabled: boolean;
+  expanded: boolean;
+  onToggle: () => void;
   onVisibility: (visibility: (typeof VISIBILITIES)[number]) => void;
   skill: DiscoveredSkillDto;
 }) {
   return (
-    <li className="skills-found-row">
-      <div>
+    <li className={`skills-found-row ${expanded ? "is-open" : ""}`}>
+      <button
+        aria-expanded={expanded}
+        className="skills-row-head"
+        onClick={onToggle}
+        type="button"
+      >
         <strong>{skill.name}</strong>
-        <span className="skills-origin">{skill.origin}</span>
-        <span>
-          {skill.providers.map((one) => PROVIDER_LABEL[one]).join(", ")}
-        </span>
-        <span>{INVOCATION_LABEL[skill.invocation]}</span>
-      </div>
-      {skill.description ? <small>{skill.description}</small> : undefined}
-      <code>{skill.skillPath}</code>
-      {skill.problem ? (
-        <p className="skills-problem">{PROBLEM_LABEL[skill.problem]}</p>
-      ) : undefined}
+        {skill.invocation === "auto" ? undefined : (
+          <span className="skills-tag">
+            {INVOCATION_LABEL[skill.invocation]}
+          </span>
+        )}
+        {skill.origin === "user" ? undefined : (
+          <span className="skills-tag">{skill.origin}</span>
+        )}
+        {skill.problem ? (
+          <span className="skills-tag is-problem">
+            {PROBLEM_LABEL[skill.problem]}
+          </span>
+        ) : undefined}
+        <code title={skill.skillPath}>
+          {rowPath(skill.skillPath, skill.sourcePath)}
+        </code>
+      </button>
       <select
         aria-label={`${skill.name} visibility`}
         disabled={disabled}
@@ -318,6 +479,23 @@ export function DiscoveredRow({
           </option>
         ))}
       </select>
+      {expanded ? (
+        <div className="skills-detail">
+          {skill.description ? <p>{skill.description}</p> : undefined}
+          <p className="skills-note">
+            {skill.providers.map((one) => PROVIDER_LABEL[one]).join(", ")} ·{" "}
+            {INVOCATION_LABEL[skill.invocation]}
+          </p>
+          {content ? (
+            <pre>
+              {content.content}
+              {content.truncated ? "\n\n[…truncated]" : ""}
+            </pre>
+          ) : (
+            <p className="skills-note">Reading…</p>
+          )}
+        </div>
+      ) : undefined}
     </li>
   );
 }

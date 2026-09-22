@@ -327,6 +327,7 @@ export function createDesktopRequestHandlers(
       ),
     skillRemove: ({ name }) =>
       mutate(() => context.skills.removeInstalled(name)),
+    skillRead: ({ path }) => result(() => context.skills.readSkill(path)),
     skillDoctor: () =>
       result(async () => ({ findings: await context.skills.doctor() })),
     // Neither of these is a data change, and the second one is usually the

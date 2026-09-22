@@ -280,10 +280,109 @@ try {
       `Renderer errors: ${rendererErrors.slice(0, 3).join(" | ")}`,
     );
 
-  // Skills last, because it is the category worth looking at in the image.
+  // The found list: grouped, collapsible, fuzzy-filtered, and openable. Driven
+  // rather than asserted in markup, because collapsing and fetching only mean
+  // anything once something has clicked them.
   await evaluate(`(() => {
     [...document.querySelectorAll('.settings-nav button')]
       .find((one) => one.textContent.trim() === 'Skills').click();
+  })()`);
+  await Bun.sleep(150);
+
+  const readGroups = `(() => [...document.querySelectorAll('.skills-group')].map((group) => ({
+    label: group.querySelector('strong').textContent.trim(),
+    open: group.querySelector('.skills-group-head').getAttribute('aria-expanded') === 'true',
+    rows: group.querySelectorAll('.skills-found-row').length,
+  })))()`;
+  type Group = { label: string; open: boolean; rows: number };
+
+  const grouped = await evaluate<Group[]>(readGroups);
+  if (grouped.length < 3)
+    throw new Error(
+      `Expected the found skills to be grouped by source, saw ${JSON.stringify(grouped)}`,
+    );
+  const totalRows = grouped.reduce((sum, group) => sum + group.rows, 0);
+  if (totalRows !== 16)
+    throw new Error(`Expected 16 rows across the groups, saw ${totalRows}`);
+
+  // Collapsing hides a group's rows and keeps its header.
+  await evaluate(
+    "document.querySelector('.skills-group .skills-group-head').click()",
+  );
+  await Bun.sleep(120);
+  const collapsed = await evaluate<Group[]>(readGroups);
+  if (collapsed[0]?.open !== false || collapsed[0]?.rows !== 0)
+    throw new Error(
+      `Collapsing the first group did not hide its rows: ${JSON.stringify(collapsed[0])}`,
+    );
+  if (collapsed.length !== grouped.length)
+    throw new Error("Collapsing a group removed its header");
+
+  // A fuzzy query matches on subsequence, the way the repository picker does,
+  // and reopens whatever it matched so the result is not hidden by a collapse.
+  await evaluate(`(() => {
+    const input = document.querySelector('.skills-filter');
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(input, 'clskl2');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await Bun.sleep(150);
+  const filtered = await evaluate<Group[]>(readGroups);
+  const filteredRows = filtered.reduce((sum, group) => sum + group.rows, 0);
+  if (filteredRows === 0)
+    throw new Error(
+      "The fuzzy filter matched nothing; 'clskl2' should reach claude-skill-2",
+    );
+  if (filteredRows >= totalRows)
+    throw new Error(
+      `The filter narrowed nothing: ${filteredRows} of ${totalRows}`,
+    );
+  if (filtered.some((group) => !group.open))
+    throw new Error("A filtered group stayed collapsed, hiding its match");
+
+  await evaluate(`(() => {
+    const input = document.querySelector('.skills-filter');
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(input, '');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await Bun.sleep(150);
+
+  // Clicking a row opens its text.
+  await evaluate(
+    "document.querySelector('.skills-found-row .skills-row-head').click()",
+  );
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    if (await evaluate("Boolean(document.querySelector('.skills-detail pre'))"))
+      break;
+    if (attempt === 59)
+      throw new Error("Opening a skill never showed its text");
+    await Bun.sleep(50);
+  }
+  const viewer = await evaluate<{ text: string; stillFits: boolean }>(`(() => {
+    const rect = document.querySelector('.modal').getBoundingClientRect();
+    return {
+      text: document.querySelector('.skills-detail pre').textContent.slice(0, 40),
+      stillFits: rect.top >= 0 && rect.bottom <= window.innerHeight,
+    };
+  })()`);
+  if (!viewer.text.includes("name: example"))
+    throw new Error(`The viewer showed something unexpected: ${viewer.text}`);
+  if (!viewer.stillFits)
+    throw new Error("Opening a skill pushed the dialog off the screen");
+
+  // Skills last, scrolled to the found list, because that is the part of the
+  // image worth looking at and it sits below the fold.
+  await evaluate(`(() => {
+    [...document.querySelectorAll('.settings-nav button')]
+      .find((one) => one.textContent.trim() === 'Skills').click();
+  })()`);
+  await Bun.sleep(150);
+  await evaluate(`(() => {
+    const pane = document.querySelector('.settings-pane');
+    const heading = [...pane.querySelectorAll('h3')]
+      .find((one) => one.textContent.trim() === 'Found on this machine');
+    pane.scrollTop = heading.offsetTop - pane.offsetTop - 8;
   })()`);
   await Bun.sleep(150);
   const screenshot = await send<{ data: string }>("Page.captureScreenshot", {
@@ -298,6 +397,9 @@ try {
   );
   console.log(
     `All five categories open at a steady ${[...distinct][0]}px: ${Object.keys(heights).join(", ")}`,
+  );
+  console.log(
+    `Found skills: ${grouped.length} groups, ${totalRows} rows, collapse works, fuzzy filter narrows to ${filteredRows}, viewer opens`,
   );
   console.log(`Screenshot: ${screenshotPath}`);
   socket.close();

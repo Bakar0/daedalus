@@ -282,7 +282,13 @@ textarea {
   resize: vertical;
 }
 
-button:not(.workspace-item, .quiet, .danger-link) {
+button:not(
+  .workspace-item,
+  .quiet,
+  .danger-link,
+  .skills-group-head,
+  .skills-row-head
+) {
   background: var(--accent);
   border: 0;
   border-radius: 8px;
@@ -292,7 +298,13 @@ button:not(.workspace-item, .quiet, .danger-link) {
   padding: 8px 12px;
   transition: background 140ms ease;
 }
-button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
+button:not(
+    .workspace-item,
+    .quiet,
+    .danger-link,
+    .skills-group-head,
+    .skills-row-head
+  ):hover:not(:disabled) {
   background: var(--accent-hover);
 }
 .quiet,
@@ -3692,14 +3704,12 @@ dd {
   gap: 7px;
   grid-template-columns: 74px minmax(0, 1fr) auto;
 }
-.skills-artifacts code,
-.skills-found-row code {
+.skills-artifacts code {
   color: var(--muted);
   font-size: 9px;
   overflow-wrap: anywhere;
 }
-.skills-kind,
-.skills-origin {
+.skills-kind {
   color: var(--muted);
   font-size: 9px;
   text-transform: uppercase;
@@ -3718,7 +3728,7 @@ dd {
 }
 .skills-found {
   display: grid;
-  gap: 7px;
+  gap: 1px;
   list-style: none;
   margin: 0;
   padding: 0;
@@ -3726,38 +3736,137 @@ dd {
 .skills-filter {
   width: 100%;
 }
-.skills-found-row {
+.skills-group {
   border: 1px solid var(--line);
-  border-radius: 6px;
-  display: grid;
-  gap: 4px;
-  padding: 8px;
+  border-radius: 7px;
+  overflow: hidden;
 }
-.skills-found-row > div {
+.skills-group-head {
   align-items: baseline;
+  background: none;
+  border: 0;
+  color: var(--text);
+  cursor: pointer;
   display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
+  font-family: var(--font-sans);
+  gap: 8px;
+  padding: 8px 10px;
+  text-align: left;
+  width: 100%;
 }
-.skills-found-row strong {
+.skills-group-head:hover {
+  background: var(--raised);
+}
+.skills-group-head strong {
   font-size: 11px;
 }
-.skills-found-row > div > span {
+.skills-group-head code {
+  color: var(--muted);
+  flex: 1;
+  font-size: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skills-count {
   color: var(--muted);
   font-size: 9px;
 }
-.skills-found-row small {
+.skills-caret {
   color: var(--muted);
-  font-size: 10px;
-  line-height: 1.4;
+  display: inline-block;
+  font-size: 11px;
+  transition: transform 120ms ease;
+  width: 9px;
 }
+.skills-caret.is-open {
+  transform: rotate(90deg);
+}
+.skills-found-row {
+  align-items: center;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 5px 10px 5px 27px;
+}
+.skills-found-row.is-open {
+  background: var(--raised);
+}
+.skills-row-head {
+  align-items: baseline;
+  background: none;
+  border: 0;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  font-family: var(--font-sans);
+  gap: 7px;
+  min-width: 0;
+  padding: 2px 0;
+  text-align: left;
+}
+.skills-row-head strong {
+  font-size: 11px;
+  white-space: nowrap;
+}
+.skills-row-head code {
+  color: var(--muted);
+  flex: 1;
+  font-size: 9px;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The app's selects are sized for a form field. In a list row the control is
+   secondary to the name and the path, so it steps back to match the row. */
 .skills-found-row select {
-  justify-self: start;
-}
-.skills-problem {
-  color: var(--danger);
+  border-radius: 6px;
   font-size: 10px;
+  padding: 3px 6px;
+}
+.skills-tag {
+  background: var(--line);
+  border-radius: 4px;
+  color: var(--secondary);
+  font-size: 8px;
+  letter-spacing: 0.03em;
+  padding: 2px 5px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.skills-tag.is-problem {
+  background: transparent;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+.skills-detail {
+  display: grid;
+  gap: 7px;
+  grid-column: 1 / -1;
+  padding: 2px 0 8px;
+}
+.skills-detail p {
+  color: var(--secondary);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  line-height: 1.45;
   margin: 0;
+}
+.skills-detail pre {
+  background: var(--overlay);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--secondary);
+  font-size: 9px;
+  line-height: 1.5;
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  padding: 9px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* Settings. A fixed sidebar of categories and one scrolling pane, sized to the

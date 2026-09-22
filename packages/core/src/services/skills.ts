@@ -61,6 +61,9 @@ import unslopStyleTemplate from "../../../../styles/Unslop.md" with { type: "tex
 
 export type SkillProvider = "claude" | "codex" | "cursor";
 export type SkillOrigin = "daedalus" | "user" | "plugin";
+/** Which directory a skill was found in, which is how the list groups. */
+export type SkillSource =
+  "claude-personal" | "agents-personal" | "cursor-personal" | "claude-plugin";
 export type SkillInvocation = "auto" | "user-only" | "model-only";
 export type SkillArtifactKind = "skill" | "style" | "instructions";
 export type SkillProblem =
@@ -68,6 +71,12 @@ export type SkillProblem =
 
 const GIT_EXECUTABLE_FALLBACKS = standardExecutableFallbacks("git");
 const SKILL_NAME = /^[a-z0-9]+(?:[-a-z0-9]+)*$/;
+/**
+ * How much of a `SKILL.md` the viewer will show. A skill is meant to be a page
+ * an agent reads, so anything past this is a sign of something else, and the
+ * renderer should not have to hold it.
+ */
+const MAX_SKILL_CONTENT = 256 * 1024;
 
 /* -------------------------------------------------------------------------- */
 /* The capabilities Daedalus ships                                            */
@@ -437,6 +446,9 @@ export interface DiscoveredSkill {
   skillPath: string;
   providers: SkillProvider[];
   origin: SkillOrigin;
+  source: SkillSource;
+  /** The directory the skill was found in, which is the group it belongs to. */
+  sourcePath: string;
   invocation: SkillInvocation;
   visibility: SkillVisibility;
   /** Set when this is a link to a skill Daedalus manages. */
@@ -447,6 +459,13 @@ export interface DiscoveredSkill {
 export interface SkillListing {
   managed: ManagedSkillStatus[];
   discovered: DiscoveredSkill[];
+}
+
+export interface SkillContent {
+  path: string;
+  content: string;
+  /** True when the file was longer than the app is willing to hand over. */
+  truncated: boolean;
 }
 
 export interface SkillDoctorFinding {
@@ -462,6 +481,7 @@ interface ScanRoot {
   path: string;
   providers: SkillProvider[];
   origin: SkillOrigin;
+  source: SkillSource;
 }
 
 function scanRoots(config: DaedalusConfig): ScanRoot[] {
@@ -470,16 +490,19 @@ function scanRoots(config: DaedalusConfig): ScanRoot[] {
       path: join(config.claudeHome, "skills"),
       providers: ["claude"],
       origin: "user",
+      source: "claude-personal",
     },
     {
       path: join(config.agentsHome, "skills"),
       providers: ["codex", "cursor"],
       origin: "user",
+      source: "agents-personal",
     },
     {
       path: join(config.cursorHome, "skills"),
       providers: ["cursor"],
       origin: "user",
+      source: "cursor-personal",
     },
   ];
 }
@@ -511,6 +534,7 @@ async function pluginRoots(config: DaedalusConfig): Promise<ScanRoot[]> {
         path: join(firstPath, "skills"),
         providers: ["claude"],
         origin: "plugin",
+        source: "claude-plugin",
       });
     for (const second of await directoryNames(firstPath)) {
       if (second === "skills") continue;
@@ -520,6 +544,7 @@ async function pluginRoots(config: DaedalusConfig): Promise<ScanRoot[]> {
           path: secondPath,
           providers: ["claude"],
           origin: "plugin",
+          source: "claude-plugin",
         });
     }
   }
@@ -553,6 +578,8 @@ async function readDiscoveredSkill(
       skillPath,
       providers: root.providers,
       origin: managedId ? "daedalus" : root.origin,
+      source: root.source,
+      sourcePath: root.path,
       invocation: "auto",
       visibility: config.skillOverrides[name] ?? "on",
       ...(managedId ? { managedId } : {}),
@@ -574,6 +601,8 @@ async function readDiscoveredSkill(
       skillPath,
       providers: root.providers,
       origin,
+      source: root.source,
+      sourcePath: root.path,
       invocation: "auto",
       visibility,
       ...(managedId ? { managedId } : {}),
@@ -588,6 +617,8 @@ async function readDiscoveredSkill(
     skillPath,
     providers: root.providers,
     origin,
+    source: root.source,
+    sourcePath: root.path,
     invocation: invocationOf(frontmatter),
     visibility,
     ...(managedId ? { managedId } : {}),
@@ -913,6 +944,32 @@ export class SkillService {
     if (!mine && theirs.length === 0)
       throw new DaedalusError("NOT_FOUND", `No skill named '${name}'`);
     return { ...(mine ? { managed: mine } : {}), discovered: theirs };
+  }
+
+  /**
+   * The text of one discovered `SKILL.md`.
+   *
+   * The path has to be one discovery just reported, not any path the caller
+   * cares to name. The renderer is an adapter and this arrives over RPC, so
+   * without that check the panel would be a general-purpose file reader with a
+   * skill-shaped label on it.
+   */
+  async readSkill(skillPath: string): Promise<SkillContent> {
+    const discovered = await discoverSkills(this.config);
+    if (!discovered.some((skill) => skill.skillPath === skillPath))
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `No skill is installed at ${skillPath}`,
+      );
+    const raw = await readFile(skillPath, "utf8").catch(() => undefined);
+    if (raw === undefined)
+      throw new DaedalusError("NOT_FOUND", `Could not read ${skillPath}`);
+    const truncated = raw.length > MAX_SKILL_CONTENT;
+    return {
+      path: skillPath,
+      content: truncated ? raw.slice(0, MAX_SKILL_CONTENT) : raw,
+      truncated,
+    };
   }
 
   /* ---------------------------------------------------------------------- */

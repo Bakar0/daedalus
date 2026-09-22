@@ -229,6 +229,10 @@ export interface DiscoveredSkillDto {
   skillPath: string;
   providers: Array<"claude" | "codex" | "cursor">;
   origin: "daedalus" | "user" | "plugin";
+  source:
+    "claude-personal" | "agents-personal" | "cursor-personal" | "claude-plugin";
+  /** The directory it was found in, which is the group it is listed under. */
+  sourcePath: string;
   invocation: "auto" | "user-only" | "model-only";
   visibility: "on" | "name-only" | "user-invocable-only" | "off";
   managedId?: string;
@@ -516,6 +520,11 @@ export interface DesktopRpcSchema {
         ManagedSkillDto
       >;
       skillRemove: Request<{ name: string }, { removed: string }>;
+      /** The text of one discovered SKILL.md, for the viewer in the panel. */
+      skillRead: Request<
+        { path: string },
+        { path: string; content: string; truncated: boolean }
+      >;
       skillDoctor: Request<
         Record<string, never>,
         { findings: SkillDoctorFindingDto[] }

@@ -76,8 +76,16 @@ a time, so `always` means giving up Concise, Explanatory, and Learning.
 
 `daedal skill list` and the Skills panel also report skills Daedalus does not
 own: ones the user wrote, plugin skills, and whatever else the providers can
-see. Each row carries its origin, the providers that can see it, whether the
-agent may select it on its own, and its path.
+see.
+
+The panel groups them by the directory they were found in, and each group
+collapses. A name found in two directories stays two rows, because that is two
+files both providers will load. A row is one line carrying the name, its path
+under the group, and a tag when the agent cannot select it on its own or when
+Daedalus could not read it. Clicking a row opens the skill's own text, which is
+fetched only then rather than shipped with the list. The filter is the same
+fuzzy matcher the repository picker uses, so `clskl2` finds `claude-skill-2`,
+and a search reopens whatever it matched.
 
 Turning one of those off uses the provider's own switch rather than moving the
 user's files. Claude Code takes `skillOverrides` through the settings argument,

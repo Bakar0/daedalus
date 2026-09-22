@@ -194,6 +194,8 @@ describe("SkillService", () => {
       const { discovered } = await context.skills.list();
       const handwritten = discovered.find((one) => one.name === "handwritten");
       expect(handwritten?.origin).toBe("user");
+      expect(handwritten?.source).toBe("claude-personal");
+      expect(handwritten?.sourcePath).toBe(join(claudeHome, "skills"));
       expect(handwritten?.providers).toEqual(["claude"]);
       expect(handwritten?.invocation).toBe("user-only");
       const broken = discovered.find((one) => one.name === "broken");
@@ -371,6 +373,28 @@ describe("SkillService", () => {
       } finally {
         context.close();
       }
+    });
+  });
+
+  test("reads a discovered skill, and only a discovered skill", async () => {
+    await withSkillHomes(async ({ context, claudeHome, home }) => {
+      const directory = join(claudeHome, "skills", "readable");
+      await mkdir(directory, { recursive: true });
+      await writeFile(
+        join(directory, "SKILL.md"),
+        "---\nname: readable\ndescription: Mine\n---\n\nBody\n",
+        "utf8",
+      );
+      const read = await context.skills.readSkill(join(directory, "SKILL.md"));
+      expect(read.content).toContain("Body");
+      expect(read.truncated).toBe(false);
+
+      // The path comes over RPC from an adapter, so anything discovery did not
+      // just report is refused. Otherwise the panel is a file reader.
+      const secret = join(home, "config.json");
+      await expect(context.skills.readSkill(secret)).rejects.toThrow(
+        /No skill is installed/,
+      );
     });
   });
 
