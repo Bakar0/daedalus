@@ -145,6 +145,18 @@ export interface WorkspaceFileEntryDto {
   name: string;
   path: string;
   kind: "file" | "directory" | "symlink";
+  /**
+   * Whether this entry can be renamed, moved or removed.
+   *
+   * Computed by the service, which is the only thing that knows the answer —
+   * a read-only checkout, a folder Daedalus points at by path, a registered
+   * working tree, or a file it regenerates. The renderer greys out its menu
+   * from this rather than keeping a second list, because two lists drift and
+   * the drift shows up as a menu offering what the service refuses.
+   */
+  mutable: boolean;
+  /** Why not, in one short phrase the menu can show. */
+  immutableReason?: string;
 }
 
 /** One coalesced filesystem change, relative to the workspace root. */

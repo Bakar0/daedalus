@@ -555,7 +555,14 @@ describe("desktop application shell", () => {
           workspaceId: "w1",
           brief: "# Objective",
           journal: "# Journal",
-          files: [{ name: "BRIEF.md", path: "BRIEF.md", kind: "file" }],
+          files: [
+            {
+              name: "BRIEF.md",
+              path: "BRIEF.md",
+              kind: "file",
+              mutable: false,
+            },
+          ],
           repositories: [],
           worktrees: [],
         }}
@@ -596,9 +603,24 @@ describe("desktop application shell", () => {
           brief: "# Objective\n\nBuild the workspace view.",
           journal: "# Journal\n\n## progress\n\nStarted.",
           files: [
-            { name: "worktrees", path: "worktrees", kind: "directory" },
-            { name: "BRIEF.md", path: "BRIEF.md", kind: "file" },
-            { name: "JOURNAL.md", path: "JOURNAL.md", kind: "file" },
+            {
+              name: "worktrees",
+              path: "worktrees",
+              kind: "directory",
+              mutable: false,
+            },
+            {
+              name: "BRIEF.md",
+              path: "BRIEF.md",
+              kind: "file",
+              mutable: false,
+            },
+            {
+              name: "JOURNAL.md",
+              path: "JOURNAL.md",
+              kind: "file",
+              mutable: false,
+            },
           ],
           repositories: [
             {

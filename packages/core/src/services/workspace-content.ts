@@ -175,7 +175,48 @@ const MAX_VIEWABLE_FILE_BYTES = 1024 * 1024;
  * but `repos/` and `worktrees/` hold checkouts and session working trees that
  * database rows name by path — renaming either orphans those rows silently.
  */
+/**
+ * A greyed-out menu item with no explanation reads as a broken one — that is
+ * exactly how the first version of this was reported, as "delete does
+ * nothing". The reason travels with the entry so the menu can say it.
+ */
+function immutableEntryFields(
+  refusal: { code: "VALIDATION" | "CONFLICT"; message: string } | undefined,
+): { mutable: boolean; immutableReason?: string } {
+  return refusal
+    ? { mutable: false, immutableReason: refusal.message }
+    : { mutable: true };
+}
+
 const MANAGED_WORKSPACE_DIRECTORIES = ["repos", "worktrees", "artifacts"];
+
+/**
+ * Entries at the workspace root that `ensureWorkspaceContentFiles` recreates.
+ *
+ * Removing one appeared to do nothing, and that was worse than a refusal: the
+ * delete succeeded, and the very next `workspaceContentGet` — which the
+ * desktop fires after every mutation — put the file straight back, so from the
+ * tree the menu item looked broken. Renaming was worse still, because the
+ * rename also succeeded and the original then regenerated beside it, silently
+ * leaving two files.
+ *
+ * Only at the root: a `BRIEF.md` inside a folder is an ordinary file.
+ */
+const REGENERATED_WORKSPACE_ENTRIES = [
+  "BRIEF.md",
+  "JOURNAL.md",
+  "AGENTS.md",
+  "CLAUDE.md",
+  ".agents",
+  ".claude",
+];
+
+/**
+ * Top-level folders Daedalus creates and keeps pointing at.
+ * `ensureWorkspaceContentFiles` recreates them, so losing one is survivable,
+ * but `repos/` and `worktrees/` hold checkouts and session working trees that
+ * database rows name by path — renaming either orphans those rows silently.
+ */
 
 /** One valid path segment, shared by every verb that takes a new name. */
 function assertEntryName(value: string): string {
@@ -1450,15 +1491,34 @@ export class WorkspaceContentService {
         (entry) =>
           entry.name !== ".git" && (relativePath || entry.name !== ".daedalus"),
       )
-      .map((entry) => ({
-        name: entry.name,
-        path: join(relativePath, entry.name),
-        kind: entry.isSymbolicLink()
-          ? ("symlink" as const)
-          : entry.isDirectory()
-            ? ("directory" as const)
-            : ("file" as const),
-      }))
+      .map((entry) => {
+        const path = join(relativePath, entry.name);
+        return {
+          name: entry.name,
+          path,
+          kind: entry.isSymbolicLink()
+            ? ("symlink" as const)
+            : entry.isDirectory()
+              ? ("directory" as const)
+              : ("file" as const),
+          // Carried per row so the renderer never needs a second copy of the
+          // rule. A symlink is never offered either: the viewer refuses to
+          // open one, and following it out of the workspace is the escape
+          // every guard here exists to prevent.
+          ...immutableEntryFields(
+            entry.isSymbolicLink()
+              ? {
+                  code: "VALIDATION",
+                  message: "Symbolic links cannot be changed here",
+                }
+              : this.immutableReason({
+                  workspaceId: workspace.id,
+                  relativePath: path,
+                  target: join(target, entry.name),
+                }),
+          ),
+        };
+      })
       .sort((left, right) => {
         const rank = (kind: WorkspaceFileEntry["kind"]) =>
           kind === "directory" ? 0 : kind === "file" ? 1 : 2;
@@ -1594,7 +1654,7 @@ export class WorkspaceContentService {
         );
       throw error;
     }
-    return { name, path, kind: input.kind };
+    return this.describeEntry(workspace.id, target, path);
   }
 
   /**
@@ -1616,7 +1676,11 @@ export class WorkspaceContentService {
     );
     await this.assertVacant(destination.target, source.target, destinationPath);
     await rename(source.target, destination.target);
-    return this.describeEntry(destination.target, destinationPath);
+    return this.describeEntry(
+      workspace.id,
+      destination.target,
+      destinationPath,
+    );
   }
 
   /**
@@ -1653,14 +1717,22 @@ export class WorkspaceContentService {
     const name = basename(source.relativePath);
     const destinationPath = join(folder.relativePath, name);
     if (destinationPath === source.relativePath)
-      return this.describeEntry(source.target, source.relativePath);
+      return this.describeEntry(
+        workspace.id,
+        source.target,
+        source.relativePath,
+      );
     const destination = await this.resolveDestination(
       workspace,
       destinationPath,
     );
     await this.assertVacant(destination.target, source.target, destinationPath);
     await rename(source.target, destination.target);
-    return this.describeEntry(destination.target, destinationPath);
+    return this.describeEntry(
+      workspace.id,
+      destination.target,
+      destinationPath,
+    );
   }
 
   /** Removes an entry, and everything under it when it is a folder. */
@@ -1670,12 +1742,67 @@ export class WorkspaceContentService {
   }): Promise<WorkspaceFileEntry> {
     const workspace = await this.workspaces.getActive(input.workspace);
     const source = await this.resolveMutablePath(workspace, input.path);
-    const entry = await this.describeEntry(source.target, source.relativePath);
+    const entry = await this.describeEntry(
+      workspace.id,
+      source.target,
+      source.relativePath,
+    );
     await rm(source.target, { recursive: true, force: false });
     return entry;
   }
 
+  /**
+   * Why an entry cannot be renamed, moved or removed, or `undefined` when it
+   * can be.
+   *
+   * The single source for both the refusal below and the `mutable` flag every
+   * listing carries. Keeping those apart is exactly what let the menu offer a
+   * delete that the service would quietly undo.
+   */
+  private immutableReason(input: {
+    workspaceId: string;
+    relativePath: string;
+    target: string;
+  }): { code: "VALIDATION" | "CONFLICT"; message: string } | undefined {
+    const { relativePath } = input;
+    if (relativePath === "")
+      return {
+        code: "VALIDATION",
+        message: "The workspace root itself cannot be changed",
+      };
+    if (relativePath.split(/[\\/]/)[0] === "repos")
+      return {
+        code: "CONFLICT",
+        message: "Reference checkouts are read-only",
+      };
+    if (MANAGED_WORKSPACE_DIRECTORIES.includes(relativePath))
+      return {
+        code: "CONFLICT",
+        message: `Daedalus manages ${relativePath}/`,
+      };
+    if (REGENERATED_WORKSPACE_ENTRIES.includes(relativePath))
+      return {
+        code: "CONFLICT",
+        message:
+          relativePath.startsWith(".") ||
+          relativePath === "AGENTS.md" ||
+          relativePath === "CLAUDE.md"
+            ? `Daedalus generates ${relativePath} — turn off instruction files in Settings to remove it`
+            : `Daedalus regenerates ${relativePath}, so removing it would not stick`,
+      };
+    const worktree = this.repositories
+      .listSessionWorktrees({ workspaceId: input.workspaceId })
+      .find((candidate) => resolve(candidate.path) === input.target);
+    if (worktree)
+      return {
+        code: "CONFLICT",
+        message: "A session working tree — remove it from its session",
+      };
+    return undefined;
+  }
+
   private async describeEntry(
+    workspaceId: string,
     target: string,
     relativePath: string,
   ): Promise<WorkspaceFileEntry> {
@@ -1688,6 +1815,9 @@ export class WorkspaceContentService {
         : entry.isDirectory()
           ? "directory"
           : "file",
+      ...immutableEntryFields(
+        this.immutableReason({ workspaceId, relativePath, target }),
+      ),
     };
   }
 
@@ -1719,25 +1849,12 @@ export class WorkspaceContentService {
     requestedPath: string,
   ): Promise<{ target: string; relativePath: string }> {
     const resolved = await this.resolveVisiblePath(workspace, requestedPath);
-    if (resolved.relativePath === "")
-      throw new DaedalusError(
-        "VALIDATION",
-        "The workspace root itself cannot be renamed, moved or removed",
-      );
-    this.assertWritable(resolved.relativePath);
-    if (MANAGED_WORKSPACE_DIRECTORIES.includes(resolved.relativePath))
-      throw new DaedalusError(
-        "CONFLICT",
-        `'${resolved.relativePath}' is managed by Daedalus and cannot be renamed, moved or removed`,
-      );
-    const worktree = this.repositories
-      .listSessionWorktrees({ workspaceId: workspace.id })
-      .find((candidate) => resolve(candidate.path) === resolved.target);
-    if (worktree)
-      throw new DaedalusError(
-        "CONFLICT",
-        "This is a session working tree; remove it from its session instead",
-      );
+    const refusal = this.immutableReason({
+      workspaceId: workspace.id,
+      relativePath: resolved.relativePath,
+      target: resolved.target,
+    });
+    if (refusal) throw new DaedalusError(refusal.code, refusal.message);
     return resolved;
   }
 

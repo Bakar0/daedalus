@@ -3849,10 +3849,14 @@ export function WorkspaceApp({
    * — it has to, because the RPC surface is reachable without the UI — but a
    * menu item that is going to fail is better greyed out than clickable.
    */
-  const workspaceEntryMutable = (entry: WorkspaceFileEntryDto) =>
-    entry.path !== "" &&
-    !entry.path.startsWith("repos/") &&
-    !["repos", "worktrees", "artifacts"].includes(entry.path);
+  /**
+   * The service decides, and says so on every row it lists. The renderer used
+   * to keep its own copy of the rule, and the copy drifted: it greyed out the
+   * three managed folders but not the files Daedalus regenerates, so Delete
+   * was offered on BRIEF.md, succeeded, and the content refetch that follows
+   * every mutation put the file back before the tree redrew.
+   */
+  const workspaceEntryMutable = (entry: WorkspaceFileEntryDto) => entry.mutable;
 
   const renderWorkspaceDirectory = (
     directory = "",
@@ -4405,6 +4409,15 @@ export function WorkspaceApp({
                           role="menu"
                           style={{ left: entryMenu.x, top: entryMenu.y }}
                         >
+                          {entryMenu.entry.immutableReason && (
+                            // Greyed-out items with no explanation read as
+                            // broken ones. This was reported as "delete does
+                            // nothing", and it was the menu's silence, not the
+                            // action, that was wrong.
+                            <small className="workspace-tree-menu-reason">
+                              {entryMenu.entry.immutableReason}
+                            </small>
+                          )}
                           <button
                             disabled={!workspaceEntryMutable(entryMenu.entry)}
                             onClick={() => {

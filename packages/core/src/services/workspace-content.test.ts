@@ -209,7 +209,12 @@ describe("WorkspaceContentService", () => {
       expect(
         await context.workspaceContent.listDirectory(workspace.id, "notes"),
       ).toEqual([
-        { name: "idea.txt", path: join("notes", "idea.txt"), kind: "file" },
+        {
+          name: "idea.txt",
+          path: join("notes", "idea.txt"),
+          kind: "file",
+          mutable: true,
+        },
       ]);
       expect(
         await context.workspaceContent.readFile(
@@ -744,7 +749,12 @@ Before working in this workspace:
             path: "notes.md",
             name: "ideas.md",
           }),
-        ).toEqual({ name: "ideas.md", path: "ideas.md", kind: "file" });
+        ).toEqual({
+          name: "ideas.md",
+          path: "ideas.md",
+          kind: "file",
+          mutable: true,
+        });
         expect(
           await context.workspaceContent.readFile(workspaceId, "ideas.md"),
         ).toMatchObject({ content: "# Notes\n" });
@@ -873,14 +883,24 @@ Before working in this workspace:
             path: "note.md",
             destinationPath: "inbox",
           }),
-        ).toEqual({ name: "note.md", path: "inbox/note.md", kind: "file" });
+        ).toEqual({
+          name: "note.md",
+          path: "inbox/note.md",
+          kind: "file",
+          mutable: true,
+        });
         expect(
           await context.workspaceContent.moveEntry({
             workspace: workspaceId,
             path: "inbox/note.md",
             destinationPath: "",
           }),
-        ).toEqual({ name: "note.md", path: "note.md", kind: "file" });
+        ).toEqual({
+          name: "note.md",
+          path: "note.md",
+          kind: "file",
+          mutable: true,
+        });
       });
     });
 
@@ -926,7 +946,12 @@ Before working in this workspace:
             workspace: workspaceId,
             path: "scratch",
           }),
-        ).toEqual({ name: "scratch", path: "scratch", kind: "directory" });
+        ).toEqual({
+          name: "scratch",
+          path: "scratch",
+          kind: "directory",
+          mutable: true,
+        });
         expect(await pathExists(join(workspacePath, "scratch"))).toBe(false);
       });
     });
@@ -998,6 +1023,119 @@ Before working in this workspace:
               name: "renamed",
             }),
           ).rejects.toMatchObject({ code: "CONFLICT" });
+      });
+    });
+
+    /**
+     * The bug this exists for: deleting BRIEF.md *succeeded*, and the next
+     * `workspaceContentGet` — which the desktop fires after every mutation —
+     * recreated it before the tree redrew, so the menu looked broken while the
+     * service did exactly what it was told.
+     */
+    test("refuses the files Daedalus regenerates, rather than deleting them twice", async () => {
+      await withWorkspace(async ({ context, workspaceId, workspacePath }) => {
+        for (const path of [
+          "BRIEF.md",
+          "JOURNAL.md",
+          "AGENTS.md",
+          "CLAUDE.md",
+        ]) {
+          await expect(
+            context.workspaceContent.removeEntry({
+              workspace: workspaceId,
+              path,
+            }),
+          ).rejects.toMatchObject({ code: "CONFLICT" });
+          // Renaming is the worse half: it also succeeded, and the original
+          // then regenerated beside it, silently leaving two files.
+          await expect(
+            context.workspaceContent.renameEntry({
+              workspace: workspaceId,
+              path,
+              name: `renamed-${path}`,
+            }),
+          ).rejects.toMatchObject({ code: "CONFLICT" });
+          expect(await pathExists(join(workspacePath, path))).toBe(true);
+        }
+      });
+    });
+
+    test("leaves a same-named file inside a folder alone", async () => {
+      // Only the workspace root regenerates; a BRIEF.md in a folder is an
+      // ordinary file and refusing it would be a guard that overreached.
+      await withWorkspace(async ({ context, workspaceId }) => {
+        await context.workspaceContent.createEntry({
+          workspace: workspaceId,
+          name: "notes",
+          kind: "directory",
+        });
+        await context.workspaceContent.createEntry({
+          workspace: workspaceId,
+          parentPath: "notes",
+          name: "BRIEF.md",
+          kind: "file",
+        });
+        expect(
+          await context.workspaceContent.removeEntry({
+            workspace: workspaceId,
+            path: "notes/BRIEF.md",
+          }),
+        ).toMatchObject({ path: "notes/BRIEF.md" });
+      });
+    });
+
+    /**
+     * The flag the renderer greys its menu from. It is computed by the same
+     * rule that does the refusing, so the menu cannot drift out of agreement
+     * with the service — which is how Delete came to be offered on BRIEF.md.
+     */
+    test("tells the caller which listed entries can be changed", async () => {
+      await withWorkspace(async ({ context, workspaceId }) => {
+        await context.workspaceContent.createEntry({
+          workspace: workspaceId,
+          name: "notes.md",
+          kind: "file",
+        });
+        const byPath = new Map(
+          (await context.workspaceContent.listDirectory(workspaceId)).map(
+            (entry) => [entry.path, entry.mutable],
+          ),
+        );
+        for (const path of [
+          "repos",
+          "worktrees",
+          "artifacts",
+          "BRIEF.md",
+          "JOURNAL.md",
+          "AGENTS.md",
+          "CLAUDE.md",
+        ])
+          expect([path, byPath.get(path)]).toEqual([path, false]);
+        expect(byPath.get("notes.md")).toBe(true);
+      });
+    });
+
+    test("marks a same-named file inside a folder as changeable", async () => {
+      // Only the workspace root regenerates; a BRIEF.md in a folder is an
+      // ordinary file, and a guard that caught it would be overreaching.
+      await withWorkspace(async ({ context, workspaceId }) => {
+        await context.workspaceContent.createEntry({
+          workspace: workspaceId,
+          name: "notes",
+          kind: "directory",
+        });
+        const created = await context.workspaceContent.createEntry({
+          workspace: workspaceId,
+          parentPath: "notes",
+          name: "BRIEF.md",
+          kind: "file",
+        });
+        expect(created.mutable).toBe(true);
+        expect(
+          (
+            await context.workspaceContent.listDirectory(workspaceId, "notes")
+          )[0]?.mutable,
+        ).toBe(true);
       });
     });
 

@@ -149,10 +149,21 @@ const fileListeners = new Set<
     overflow: boolean;
   }) => void
 >();
+/**
+ * `dataChanged` listeners. These used to be stubbed away, and that is exactly
+ * why a delete that succeeded and was immediately undone by the content
+ * refetch went unnoticed: without the subscription the renderer never refetches
+ * workspace content, so the regeneration that put the file back never ran.
+ */
+const dataListeners = new Set<() => void>();
 const events = new WebSocket(`ws://127.0.0.1:${api}/events`);
 events.addEventListener("message", (event) => {
-  const change = JSON.parse(String(event.data));
-  for (const listener of fileListeners) listener(change);
+  const payload = JSON.parse(String(event.data));
+  if (payload.kind === "dataChanged") {
+    for (const listener of dataListeners) listener();
+    return;
+  }
+  for (const listener of fileListeners) listener(payload);
 });
 
 const client = {
@@ -188,7 +199,10 @@ const client = {
     presencePublish: async () => ({ ok: true, data: {} }),
     toastsAcknowledge: async () => ({ ok: true, data: { acknowledged: 0 } }),
   },
-  subscribe: () => () => undefined,
+  subscribe: (listener: () => void) => {
+    dataListeners.add(listener);
+    return () => dataListeners.delete(listener);
+  },
   subscribeCommands: () => () => undefined,
   subscribeWindowResize: () => () => undefined,
   subscribeFocusSession: () => () => undefined,

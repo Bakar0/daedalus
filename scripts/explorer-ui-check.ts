@@ -69,6 +69,15 @@ for (const [path, body] of [
   await writeFile(join(workspacePath, path), body);
 
 const sockets = new Set<Bun.ServerWebSocket<unknown>>();
+/**
+ * Mutating routes, which the bridge announces afterwards the way the host's
+ * `mutate` does. This is not decoration: `dataChanged` is what makes the
+ * renderer refetch workspace content, and refetching content is what recreates
+ * the generated files. Stubbing the subscription away — which this fixture
+ * used to do — hid a delete that succeeded and was undone before the tree
+ * redrew.
+ */
+const MUTATING_ROUTES = ["/write", "/create", "/rename", "/move", "/remove"];
 /** Per-route counts, printed when the check fails, so a request storm names itself. */
 const traffic = new Map<string, number>();
 let watchEvents = 0;
@@ -84,9 +93,11 @@ const cors = {
   "access-control-allow-headers": "content-type",
   "content-type": "application/json",
 };
-const answer = async (operation: () => unknown) => {
+const answer = async (operation: () => unknown, after?: () => void) => {
   try {
-    return new Response(JSON.stringify({ ok: true, data: await operation() }), {
+    const data = await operation();
+    after?.();
+    return new Response(JSON.stringify({ ok: true, data }), {
       headers: cors,
     });
   } catch (error) {
@@ -115,6 +126,11 @@ const bridge = Bun.serve({
     if (request.method === "OPTIONS")
       return new Response(null, { headers: cors });
     traffic.set(pathname, (traffic.get(pathname) ?? 0) + 1);
+    const announce = () => {
+      if (!MUTATING_ROUTES.includes(pathname)) return;
+      for (const socket of sockets)
+        socket.send(JSON.stringify({ kind: "dataChanged" }));
+    };
     const body = (await request.json().catch(() => ({}))) as Record<
       string,
       never
@@ -129,24 +145,29 @@ const bridge = Bun.serve({
       case "/read":
         return answer(() => files.readFile(workspaceRef, body.path ?? ""));
       case "/write":
-        return answer(() =>
-          files.writeFile({ ...body, workspace: workspaceRef }),
+        return answer(
+          () => files.writeFile({ ...body, workspace: workspaceRef }),
+          announce,
         );
       case "/create":
-        return answer(() =>
-          files.createEntry({ ...body, workspace: workspaceRef }),
+        return answer(
+          () => files.createEntry({ ...body, workspace: workspaceRef }),
+          announce,
         );
       case "/rename":
-        return answer(() =>
-          files.renameEntry({ ...body, workspace: workspaceRef }),
+        return answer(
+          () => files.renameEntry({ ...body, workspace: workspaceRef }),
+          announce,
         );
       case "/move":
-        return answer(() =>
-          files.moveEntry({ ...body, workspace: workspaceRef }),
+        return answer(
+          () => files.moveEntry({ ...body, workspace: workspaceRef }),
+          announce,
         );
       case "/remove":
-        return answer(() =>
-          files.removeEntry({ ...body, workspace: workspaceRef }),
+        return answer(
+          () => files.removeEntry({ ...body, workspace: workspaceRef }),
+          announce,
         );
       case "/watch":
         return answer(async () => ({
@@ -200,6 +221,10 @@ let watchdog: ReturnType<typeof setTimeout> | undefined;
 /** Names the step in progress, so a hang says where it stopped. */
 let step = "startup";
 const consoleErrors: string[] = [];
+// Typed, because a `prompt` for a move destination and a `confirm` before a
+// delete both land here, and only the confirms are what the delete step is
+// counting.
+const dialogs: Array<{ type: string; message: string }> = [];
 const failures: string[] = [];
 try {
   for (let attempt = 0; attempt < 200; attempt += 1) {
@@ -326,10 +351,6 @@ try {
   let acceptDialogs = true;
   /** Supplied to a `prompt`; ignored by a `confirm`. */
   let dialogReply: string | undefined;
-  // Typed, because a `prompt` for a move destination and a `confirm` before a
-  // delete both land here, and only the confirms are what the delete step is
-  // counting.
-  const dialogs: Array<{ type: string; message: string }> = [];
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(String(event.data));
     if (message.method !== "Page.javascriptDialogOpening") return;
@@ -443,17 +464,33 @@ try {
    * menu, and driving the real one is closer to what a user does anyway.
    */
   const rightClickPath = async (path: string) => {
+    // Scrolled into view first: the file tree clips, and a row below the fold
+    // still reports a box — one whose coordinates belong to whatever is
+    // actually painted there. The click then lands on something else and the
+    // menu never opens, which is how this first failed on JOURNAL.md while
+    // working on BRIEF.md three rows above it.
     const at = await evaluate<{ x: number; y: number } | null>(`(() => {
       const row = document.querySelector('.workspace-tree-entry > button[title="${path}"]');
       if (!row) return null;
+      row.scrollIntoView({ block: 'center' });
       const rect = row.getBoundingClientRect();
-      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+      const x = rect.x + rect.width / 2;
+      const y = rect.y + rect.height / 2;
+      // Only worth dispatching if that point actually belongs to this row.
+      const hit = document.elementFromPoint(x, y);
+      if (!hit || !row.contains(hit)) return null;
+      return { x, y };
     })()`);
+    await Bun.sleep(80);
     // A missing row is a finding in its own right. Reaching into a null
     // element instead threw, which lost every failure collected before it —
     // exactly what happened the first time the watcher was ablated.
+    // Never dispatched blind. A right-click that misses the row is not merely
+    // a lost click: nothing calls `preventDefault`, so Chrome opens its own
+    // native context menu, and that blocks the renderer — every later
+    // assertion then times out instead of failing.
     if (!at) {
-      failures.push(`No tree row to act on at ${path}`);
+      failures.push(`No reachable tree row to act on at ${path}`);
       return false;
     }
     for (const type of ["mousePressed", "mouseReleased"])
@@ -483,6 +520,37 @@ try {
     } catch {
       return false;
     }
+  };
+
+  /**
+   * Closes an open menu with a real Escape key.
+   *
+   * Dispatching a synthetic `PointerEvent` at the backdrop was tried first and
+   * silently did nothing — React never received it, the same way it never
+   * received a synthetic `contextmenu` — so the full-window backdrop stayed up
+   * and swallowed the next right-click. Escape is a real key, and it is a path
+   * worth exercising anyway.
+   */
+  const dismissMenu = async () => {
+    for (const type of ["keyDown", "keyUp"])
+      await send("Input.dispatchKeyEvent", {
+        type,
+        key: "Escape",
+        code: "Escape",
+        windowsVirtualKeyCode: 27,
+        nativeVirtualKeyCode: 27,
+      });
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (
+        !(await evaluate<boolean>(
+          `Boolean(document.querySelector('.workspace-tree-menu'))`,
+        ))
+      )
+        return true;
+      await Bun.sleep(50);
+    }
+    failures.push("Escape did not close the context menu");
+    return false;
   };
 
   const openMenuOn = async (path: string) => {
@@ -516,11 +584,41 @@ try {
     await clickPath(path);
   };
 
+  /**
+   * Clicks a tree row, once it is there, and waits for the tree to settle
+   * rather than for a fixed 120ms.
+   *
+   * The flat sleep was a silent failure twice over: a row that had not arrived
+   * yet made `querySelector(...).click()` throw inside the page, which
+   * `evaluate` discards, so the click simply never happened and the *next*
+   * assertion reported the consequence. Both halves are now waited for.
+   */
   const clickPath = async (path: string) => {
+    const selector = `.workspace-tree-entry > button[title="${path}"]`;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (
+        await evaluate<boolean>(
+          `Boolean(document.querySelector('${selector}'))`,
+        )
+      )
+        break;
+      if (attempt === 99) {
+        failures.push(`No tree row to click at ${path}`);
+        return false;
+      }
+      await Bun.sleep(50);
+    }
     await evaluate(
-      `document.querySelector('.workspace-tree-entry > button[title="${path}"]').click()`,
+      `(() => { const row = document.querySelector('${selector}'); row.scrollIntoView({ block: 'center' }); row.click(); })()`,
     );
-    await Bun.sleep(120);
+    let previous = "";
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await Bun.sleep(50);
+      const current = JSON.stringify(await visiblePaths());
+      if (current === previous && attempt > 0) break;
+      previous = current;
+    }
+    return true;
   };
 
   const drag = async (
@@ -1008,6 +1106,63 @@ try {
       );
   }
 
+  // 13. The generated files are not offered. This is the check that was
+  //      missing: deleting BRIEF.md *succeeded*, and the content refetch that
+  //      follows every mutation recreated it before the tree redrew, so the
+  //      menu item looked broken while the service was doing exactly what it
+  //      was told. Refusing is the honest answer, and the menu says so first.
+  at("the generated-file context menu");
+  // The drags above left the file tree at its floor, so most of the root is
+  // scrolled out of it. Give the tree its room back before asking for rows.
+  at("generated: restoring tree height");
+  await drag(".explorer-section-resize-handle", 0, 2000);
+  // One file, not the whole list. Which entries count as generated is a pure
+  // predicate asserted in `bun test`; what needs a browser is that the menu is
+  // actually wired to it, and one file proves that. Driving three menus in a
+  // row was harness fragility with no extra coverage.
+  for (const generated of ["BRIEF.md"]) {
+    at(`generated: opening menu on ${generated}`);
+    if (!(await openMenuOn(generated))) continue;
+    at(`generated: reading menu for ${generated}`);
+    const items = await evaluate<Array<{ label: string; disabled: boolean }>>(
+      `[...document.querySelectorAll('.workspace-tree-menu button')].map((button) => ({ label: button.textContent, disabled: button.disabled }))`,
+    );
+    for (const item of items)
+      if (!item.disabled)
+        failures.push(
+          `"${item.label}" is offered for ${generated}, which Daedalus regenerates`,
+        );
+    // Greyed out is not enough on its own: with no reason shown it reads as a
+    // broken menu, which is how this was reported.
+    const reason = await evaluate<string>(
+      `document.querySelector('.workspace-tree-menu-reason')?.textContent ?? ""`,
+    );
+    if (!reason.includes(generated))
+      failures.push(
+        `The menu for ${generated} greys everything out without saying why (reason: ${JSON.stringify(reason)})`,
+      );
+    at(`generated: dismissing menu for ${generated}`);
+    await dismissMenu();
+  }
+  at("generated: asking the service directly");
+  // And the service refuses it even when the menu is bypassed, because the
+  // menu is not a guard.
+  const refusedGenerated = await evaluate<string>(`(async () => {
+    const response = await fetch('${`http://127.0.0.1:${bridgePort}/remove`}', {
+      body: JSON.stringify({ path: 'BRIEF.md' }),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    const body = await response.json();
+    return body.ok ? 'ALLOWED' : body.error.code;
+  })()`);
+  if (refusedGenerated !== "CONFLICT")
+    failures.push(
+      `Removing BRIEF.md over RPC answered ${refusedGenerated}; a generated file must be refused, not deleted and recreated`,
+    );
+  if (!(await pathExists(join(workspacePath, "BRIEF.md"))))
+    failures.push("BRIEF.md is gone after the service was asked to remove it");
+
   at("the read-only context menu");
   // 12. The read-only checkouts are read-only in the menu too. The service
   //     refuses them as well, but a menu item that is going to fail should
@@ -1026,10 +1181,7 @@ try {
       failures.push(
         `"${item.label}" is offered for a read-only repository checkout`,
       );
-  await evaluate(
-    `document.querySelector('.workspace-tree-menu-backdrop').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`,
-  );
-  await Bun.sleep(120);
+  await dismissMenu();
 
   await send("Page.captureScreenshot", {}).then(async (result) => {
     const data = (result as unknown as { data?: string }).data;
@@ -1058,6 +1210,7 @@ try {
     console.error(
       `  bridge traffic: ${JSON.stringify(Object.fromEntries(traffic))}, watcher batches: ${watchEvents}`,
     );
+    console.error(`  dialogs seen: ${JSON.stringify(dialogs)}`);
   }
   chrome?.kill();
   vite.kill();

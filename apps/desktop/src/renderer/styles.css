@@ -2303,6 +2303,16 @@ dd {
   position: fixed;
   z-index: 41;
 }
+.workspace-tree-menu-reason {
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  display: block;
+  font-size: 10px;
+  line-height: 1.35;
+  margin-bottom: 4px;
+  max-width: 220px;
+  padding: 4px 8px 6px;
+}
 .workspace-tree-menu button {
   background: none;
   border: 0;
