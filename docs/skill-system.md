@@ -3,9 +3,9 @@
 Research and strategy for two related asks:
 
 1. Make the Cursor `unslop` writing rules apply to every agent response.
-2. Give Daedalus a skill system that installs, enables, disables, and shows
-   skills, covering native Claude, Codex, and Cursor skills as well as user
-   skills, not only the Daedalus one.
+2. Give Daedalus a global skill system that installs, enables, disables, and
+   shows skills, covering native Claude, Codex, and Cursor skills as well as
+   user skills, not only the Daedalus one.
 
 This document records what the providers actually support as of September 2026
 and recommends a build order. It is a plan, not shipped behavior. Nothing here
@@ -81,141 +81,202 @@ equivalent.
 For all three, also install `unslop/SKILL.md` unchanged, keeping
 `disable-model-invocation: true`. That gives `/unslop` for editing text that is
 already written, which is a different job from writing cleanly the first time.
-
 ### Why not put the rules in the generated workspace files
 
 `BRIEF.md` records the decision that Daedalus does not author the user's
-workflow: generated instruction files carry workspace context and stop there. A
-writing style baked into `AGENTS_TEMPLATE` would break that decision for every
-workspace on the machine, including workspaces where the user does not want it.
+workflow: generated instruction files carry workspace context and stop there.
+Writing the rules into `AGENTS_TEMPLATE` would break that decision, because
+every workspace on the machine would get them with no way to see them or turn
+them off.
 
-The skill system in part 2 resolves the tension. Daedalus ships no writing
-opinion of its own. It installs and toggles content the user chose, and unslop
-is one such choice. The generated `AGENTS.md` stays as it is.
+Shipping them as a Daedalus capability is different. The rules are listed, they
+are labelled as coming from Daedalus, and the user turns them on and off. They
+ship off by default. Daedalus offers the style, it does not impose it.
 
-### The integration point that already exists
-
-`claudeDaedalusSettingsArgs` in `packages/core/src/services/providers.ts`
-already builds a `--settings` JSON for each Claude launch, and
-`mergeClaudeSettings` merges it with whatever the user passed, resolving every
-conflict in the user's favor. `outputStyle` is a settings field. Daedalus can
-set it there per session without touching any global config, using the merge
-rules that already work.
-
-The same holds on the Codex side. `mergeCodexConfigToml` already writes a
-marked block into `~/.codex/config.toml`, and Codex reads skill state from that
-same file.
+That distinction is the one thing this design asks `BRIEF.md` to record.
 
 ## Part 2: the skill system
 
+### Scope: global
+
+Everything here is global, not per workspace. One canonical store under
+`$DAEDALUS_HOME`, one state file, and links into each provider's personal
+directory. A skill is on or off for the whole machine.
+
+Per-workspace scoping is deliberately left out of the first version. It doubles
+the state, and every question it answers can wait.
+
+### Two halves
+
+The system does two separate jobs and it is worth keeping them apart.
+
+**Capabilities that Daedalus ships.** Today that is `daedalus-control`. This
+design adds `unslop`. Daedalus owns the files, installs them, and toggles them.
+The user sees them and can turn any of them off.
+
+**Everything else on the machine.** Skills the user wrote, skills from plugins,
+skills bundled with a provider. Daedalus does not own these. It finds them,
+lists them, and where the provider offers a switch, toggles them.
+
+The first half is what makes unslop work. The second half is what answers "what
+skills can my agents actually see right now".
+
 ### Principle
 
-Reuse the rule the rest of the codebase follows: the filesystem is
-authoritative for existence and SQLite is an index. A skill exists because a
-`SKILL.md` sits in a directory a provider scans. Daedalus discovers skills by
-scanning those directories. It never reports a skill from a database row alone,
-for the same reason a workspace row is not proof of a workspace.
+Same rule as the rest of the codebase: the filesystem is authoritative for
+existence and the state file is an index. A skill exists because a `SKILL.md`
+sits where a provider scans. Discovery is always a scan, never a row.
 
-### Where skills live
+### Layout on disk
 
-Claude Code:
+Canonical copies, owned by Daedalus:
 
-- `~/.claude/skills/<name>/SKILL.md`
-- `<project>/.claude/skills/<name>/SKILL.md`, including nested directories
-- `<plugin>/skills/<name>/SKILL.md`, invoked as `/plugin-name:skill-name`
-- the managed settings directory, for enterprise policy
-- any directory passed with `--add-dir`
+```text
+$DAEDALUS_HOME/skills/daedalus-control/SKILL.md
+$DAEDALUS_HOME/skills/unslop/SKILL.md
+$DAEDALUS_HOME/styles/Unslop.md
+```
 
-Codex, checked in this order:
+Installed into the provider's personal locations, as symlinks to the canonical
+copy:
 
-- `$CWD/.agents/skills` and parents up to `$REPO_ROOT/.agents/skills`
-- `$HOME/.agents/skills`
-- `/etc/codex/skills`
-- skills bundled with Codex
+```text
+~/.claude/skills/daedalus-control   -> $DAEDALUS_HOME/skills/daedalus-control
+~/.agents/skills/daedalus-control   -> $DAEDALUS_HOME/skills/daedalus-control
+~/.claude/skills/unslop             -> $DAEDALUS_HOME/skills/unslop
+~/.agents/skills/unslop             -> $DAEDALUS_HOME/skills/unslop
+~/.claude/output-styles/Unslop.md   -> $DAEDALUS_HOME/styles/Unslop.md
+```
 
-Cursor:
+Plus one marked block, for the providers with no style slot:
 
-- `.agents/skills/` and `.cursor/skills/` in the project
-- `~/.agents/skills/` and `~/.cursor/skills/`
+```text
+~/.codex/AGENTS.md   <!-- BEGIN daedalus:unslop --> ... <!-- END daedalus:unslop -->
+```
 
-Daedalus today:
+### Artifact kinds
 
-- `$DAEDALUS_HOME/skills/daedalus-control/`, the one canonical copy
-- `<workspace>/.agents/skills/daedalus-control` and
-  `<workspace>/.claude/skills/daedalus-control`, symlinks to that copy
+A capability installs one or more artifacts, and there are three kinds.
 
-### Frontmatter worth reading
+A `skill` artifact is a directory with a `SKILL.md`, linked into
+`~/.claude/skills/` and `~/.agents/skills/`.
 
-`name` and `description` are the two fields every provider shares. Claude Code
-accepts a longer list, and the fields that change what a skill does are
-`disable-model-invocation`, `user-invocable`, `paths`, `allowed-tools`,
-`disallowed-tools`, `model`, `effort`, and `context: fork`. A scanner should
-read the whole block, show `name`, `description`, and invocation mode, and keep
-the rest for a detail view.
+A `style` artifact is a single Markdown file linked into
+`~/.claude/output-styles/`. Only Claude Code has this slot.
 
-### How each provider turns a skill off
+An `instructions` artifact is a block written between markers into an existing
+file such as `~/.codex/AGENTS.md`. This is the fallback for providers with no
+style slot.
 
-Claude Code uses `skillOverrides` in a settings file:
+### State
 
-```json
+State is global and small, so it belongs in the existing config file rather
+than in SQLite. `config.ts` already stores `workspaceInstructionFilesEnabled`
+through `saveSetting`, and this follows it:
+
+```jsonc
 {
-  "skillOverrides": {
-    "deploy": "off",
-    "legacy-context": "name-only",
-    "review": "user-invocable-only"
+  "skills": {
+    "daedalus-control": { "enabled": true },
+    "unslop": { "enabled": false, "mode": "on-demand" }
   }
 }
 ```
 
-The four states are `on`, `name-only`, `user-invocable-only`, and `off`.
-`disableBundledSkills: true` turns off the bundled set, and individual entries
-in `skillOverrides` override that. Because Daedalus already passes `--settings`
-per launch, a Claude toggle can be scoped to one session, which is better than
-editing the user's global settings.
+SQLite stays out of it until something needs history or per-workspace rows.
 
-Codex uses `~/.codex/config.toml`:
+### Sync
 
-```toml
-[[skills.config]]
-path = "/path/to/skill/SKILL.md"
-enabled = false
-```
+One idempotent function, `syncManagedSkills(config)`, runs at app start and
+after every toggle. It is the same shape as `syncWorkspaceInstructionFiles`.
 
-Codex applies this after a restart, and the setting is global rather than per
-session. A Daedalus toggle here changes state for every Codex session on the
-machine, so the UI has to label it that way and the CLI has to say it in the
-help text.
+For each enabled capability it writes the canonical copy and makes sure each
+artifact is in place. For each disabled capability it removes what Daedalus
+owns and nothing else.
 
-Cursor has no documented programmatic switch. The only reliable action is
-linking or unlinking the skill directory under `.agents/skills` or
-`.cursor/skills`. Treat this as a known gap rather than a hidden failure: report
-Cursor state as link presence and say that is what it means.
+The safety rules already in `workspace-content.ts` carry over unchanged and
+they are the reason this is safe to run repeatedly. `removeSkillLink` deletes a
+path only when it is a symlink pointing at the managed target. `removeIfGenerated`
+deletes a file only when its content matches what Daedalus generated. A real
+file the user put at `~/.claude/skills/unslop` is never touched, and the marked
+block in `AGENTS.md` is removed by its markers, leaving the rest of the file
+alone.
 
-### Domain model
+### How unslop rides on this
+
+One capability, three states, because "on" means two different things for a
+style that can either sit ready or apply to everything.
+
+`off` installs nothing.
+
+`on-demand` installs the skill only. You get `/unslop` for cleaning text that
+is already written. Nothing changes about how the agent writes by default.
+
+`always` installs the skill, the style, and the `AGENTS.md` block. Claude gets
+the output style on every request, Codex and Cursor read the block at session
+start.
+
+Activating the style is the last step and it uses machinery that already
+exists. `claudeDaedalusSettingsArgs` builds a `--settings` JSON for every Claude
+launch and `mergeClaudeSettings` merges it with the user winning every conflict.
+Adding `"outputStyle": "Unslop"` there turns the style on for sessions Daedalus
+launches, without editing the user's own settings file. If the user has set
+their own `outputStyle`, theirs wins and Daedalus leaves it alone.
+
+The consequence to state in the UI: the style applies to sessions Daedalus
+launches. A Claude session the user starts in a plain terminal still has the
+style file available, but has to select it with `/output-style Unslop`.
+
+The other consequence to state: Claude Code runs one output style at a time, so
+`always` means giving up Concise, Explanatory, and Learning.
+
+### What changes for daedalus-control
+
+Today `daedalus-control` is linked per workspace, at
+`<workspace>/.agents/skills/daedalus-control` and
+`<workspace>/.claude/skills/daedalus-control`. Going global replaces that with
+one link per provider under the user's home directory, and
+`syncWorkspaceInstructionFiles` stops creating the per-workspace links.
+`removeSkillLink` already cleans up the old ones safely, since they point at
+the managed target.
+
+This is a real behavior change, not just a move. Per-workspace links meant the
+skill appeared only inside Daedalus workspaces. Global means it appears in
+every Claude and Codex session on the machine, including ones started nowhere
+near Daedalus. The skill is about the `daedal` CLI, which is useful anywhere,
+and its description costs a little context in every session. The toggle is the
+answer for anyone who does not want that, and the manual "personal
+installation" step in `docs/skills.md` goes away because this is now what the
+app does.
+
+### Discovery, for everything Daedalus does not own
+
+A scan of the personal and bundled locations for each provider.
+
+Claude Code reads `~/.claude/skills/`, project `.claude/skills/` including
+nested directories, plugin `skills/` directories, the managed settings
+directory, and anything passed with `--add-dir`.
+
+Codex reads `$CWD/.agents/skills` and parents up to the repository root, then
+`$HOME/.agents/skills`, then `/etc/codex/skills`, then its bundled set.
+
+Cursor reads `.agents/skills/` and `.cursor/skills/` in the project, and
+`~/.agents/skills/` and `~/.cursor/skills/`.
+
+The first version scans the personal locations, since the scope is global.
+Project locations are read later, for the per-session view.
 
 ```ts
-type SkillScope =
-  | "daedalus-managed"
-  | "user-claude"
-  | "user-codex"
-  | "user-cursor"
-  | "project-claude"
-  | "project-codex"
-  | "project-cursor"
-  | "plugin-claude"
-  | "bundled";
-
+type SkillOrigin = "daedalus" | "user" | "plugin" | "bundled";
 type SkillInvocation = "auto" | "user-only" | "model-only";
 type SkillState = "on" | "name-only" | "user-invocable-only" | "off";
 
 interface DiscoveredSkill {
-  id: string;
   name: string;
   description: string;
   skillPath: string;
-  scope: SkillScope;
   providers: Array<"claude" | "codex" | "cursor">;
-  managedBy: "daedalus" | "user" | "plugin";
+  origin: SkillOrigin;
   invocation: SkillInvocation;
   state: SkillState;
   linkTarget?: string;
@@ -223,106 +284,99 @@ interface DiscoveredSkill {
 }
 ```
 
-`problem` is there because the existing provider scrapers return `undefined` on
-every failure path, which `BRIEF.md` already lists as a risk. A skill with a
-`SKILL.md` Daedalus cannot parse should appear in the list marked unreadable,
-not vanish from it.
+`problem` exists because the provider scrapers already in the codebase return
+`undefined` on every failure path, which `BRIEF.md` lists as a risk. A
+`SKILL.md` that cannot be parsed appears in the list marked unreadable rather
+than disappearing from it.
 
-### Installation
+### Turning off a skill Daedalus does not own
 
-Generalize what `workspace-content.ts` already does for one skill.
-`ensureDaedalusControlSkill` writes a fixed set of three files to a fixed path.
-Replace it with an installer that takes a source and a name, writes the
-canonical copy to `$DAEDALUS_HOME/skills/<name>/`, and records the install.
+Each provider has its own switch and the design uses it rather than moving the
+user's files.
 
-`ensureSkillLink` and `removeSkillLink` generalize without changes to their
-logic. Keep their safety rule exactly as written: `removeSkillLink` removes a
-path only when it is a symlink pointing at the managed target, so a user's own
-file or directory at a discovery path is never touched.
+Claude Code has `skillOverrides` in settings, with the states `on`,
+`name-only`, `user-invocable-only`, and `off`, plus `disableBundledSkills`.
+Daedalus already injects a settings JSON per launch, so this works without
+touching the user's own settings file.
 
-Sources, in the order they are worth building:
+Codex has `[[skills.config]]` with `path` and `enabled = false` in
+`~/.codex/config.toml`, and `mergeCodexConfigToml` already writes a marked
+block into that file. It applies after a restart and it is global, and both
+facts have to reach the user at the moment they toggle.
 
-1. A local directory containing `SKILL.md`.
-2. A git repository and a subdirectory inside it, which covers
-   `cursor/plugins` at `pstack/skills/unslop`.
-3. A plugin or marketplace package, once the first two work.
+Cursor has no documented programmatic switch. The only honest action is adding
+or removing a link, and the UI should say that is what the toggle does.
 
 ### CLI surface
 
-The existing shape is `daedal <noun> <verb>`, with human text on stdout, errors
-on stderr, one JSON envelope under `--json`, and the fixed exit codes 0, 1, 2,
-3, 4, 5.
+Global, so no `--workspace`.
 
 ```text
-daedal skill list [--workspace <ws>] [--provider claude|codex|cursor]
-                  [--scope <scope>] [--json]
-daedal skill get <name> [--json]
+daedal skill list [--provider claude|codex|cursor] [--json]
+daedal skill show <name> [--json]
+daedal skill enable <name> [--mode on-demand|always]
+daedal skill disable <name>
 daedal skill install <path> [--name <name>]
 daedal skill install --git <url> --path <subdir> [--name <name>]
 daedal skill remove <name> --force
-daedal skill enable <name> [--provider <p>] [--workspace <ws>]
-daedal skill disable <name> [--provider <p>] [--workspace <ws>]
-daedal skill link <name> --workspace <ws>
 daedal skill doctor
 ```
 
-`remove` takes `--force` because it deletes files, matching task removal.
-`doctor` reports broken links, unreadable frontmatter, name collisions across
-scopes, and Codex entries waiting for a restart.
-
-### Storage
-
-One migration adds two tables. `skill_install` indexes what Daedalus installed:
-id, name, source kind, source reference, canonical path, installed timestamp.
-`skill_state` holds desired state keyed by skill id, provider, and scope.
-
-Both are indexes. Discovery scans the filesystem every time and reconciles
-against these tables the way session reconciliation works against tmux. An
-installed skill whose directory is gone reports as missing rather than
-disappearing.
-
-### Layering
-
-`packages/core/src/services/skills.ts` owns discovery, install, removal, and
-state, and is the only place that decides anything. `@daedalus/platform` owns
-the directory scan and the symlink calls, most of which exist already.
-`@daedalus/protocol` gains a `SkillDto` and the RPC methods. `apps/cli` maps
-arguments and exit codes. The renderer gets a Skills panel and calls RPC. No
-logic moves into either adapter.
+`--mode` applies to a capability that has more than one on state, which today
+is only `unslop`. `remove` takes `--force` because it deletes files, matching
+task removal. `doctor` reports broken links, unreadable frontmatter, name
+collisions, and Codex entries waiting for a restart.
 
 ### What the user sees
 
-A Skills panel in Settings lists every discovered skill grouped by scope, with
-the provider it applies to, whether the model can select it on its own, its
-current state, and its path on disk. Per session, show the skills that session
-can actually see, because that is the question the user is asking when they open
-the panel.
+One Skills panel in Settings, global, with two groups.
+
+"From Daedalus" lists `daedalus-control` and `unslop` with a toggle each, and
+for `unslop` the three states. Each row says what turning it on writes and
+where.
+
+"Found on your machine" lists everything discovered, grouped by provider, with
+the origin, whether the model can select it on its own, its state, and its path
+on disk. Read-only in the first version.
+
+### Layering
+
+`packages/core/src/services/skills.ts` owns discovery, install, sync, and
+state, and is the only place that decides anything. `@daedalus/platform` owns
+the scan and the symlink calls, most of which exist. `@daedalus/protocol` gains
+a `SkillDto` and RPC methods. `apps/cli` maps arguments and exit codes. The
+renderer calls RPC. No logic in either adapter.
 
 ### Build order
 
-1. Read-only discovery and `daedal skill list`. This alone answers the
-   visibility half of the ask and cannot break a running session.
-2. Generalize the managed installer, then `install`, `remove`, and `link`.
-3. Enable and disable through each provider's own switch, Claude first, since
-   the settings injection already exists and is per session.
-4. The desktop Skills panel.
-5. Git sources.
+1. Generalize `ensureDaedalusControlSkill` into a capability installer, and
+   move `daedalus-control` to global links. No new capability yet, so the only
+   visible change is where the links are.
+2. Add `unslop` as the second capability, with its three states and the
+   `outputStyle` line in the settings injection. This is the point where the
+   original ask is satisfied.
+3. Read-only discovery and `daedal skill list`, covering everything on the
+   machine.
+4. The Skills panel in Settings.
+5. Toggles for skills Daedalus does not own, Claude first.
+6. Installing from a path or a git repository.
+
+Steps 1 and 2 are small and deliver the writing rules. Step 3 is the visibility
+half and cannot break a running session.
 
 ### Risks
 
-Reports say Cursor ignores `disable-model-invocation` under `.agents/skills`, so
-the invocation column states intent rather than a guarantee. Label it as read
-from frontmatter.
+Moving `daedalus-control` to global puts it in every session on the machine.
+That is the intended meaning of global, and it is still worth saying out loud
+before it ships.
 
-A skill scanner reads three provider on-disk formats, which adds to the scraping
-risk `BRIEF.md` already records for session recovery and telemetry. The `problem`
-field keeps a parse failure visible instead of silent.
+Reports say Cursor ignores `disable-model-invocation` under `.agents/skills`,
+so the invocation column states what the frontmatter says, not a guarantee.
 
-Codex applies `[[skills.config]]` only after a restart, and the change is
-global. Both facts have to reach the user at the moment they toggle.
+The scanner reads three provider on-disk formats, adding to the scraping risk
+`BRIEF.md` already records. The `problem` field keeps a parse failure visible.
 
-Cursor has no documented disable, so a Cursor toggle can only add or remove a
-link.
+Codex applies `[[skills.config]]` only after a restart.
 
-Name collisions are allowed by the providers. Codex shows both entries rather
-than merging them. Daedalus should show both as well and mark the collision.
+Name collisions are allowed. Codex shows both entries rather than merging them,
+and Daedalus should show both and mark the collision.
