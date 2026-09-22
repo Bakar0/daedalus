@@ -151,6 +151,10 @@ export interface WorkspaceFileEntry {
   name: string;
   path: string;
   kind: "file" | "directory" | "symlink";
+  /** Whether it can be renamed, moved or removed. See `WorkspaceFileEntryDto`. */
+  mutable: boolean;
+  /** Why not, in one short phrase the menu can show. */
+  immutableReason?: string;
 }
 
 export interface WorkspaceFile {

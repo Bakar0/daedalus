@@ -2267,6 +2267,71 @@ dd {
   font-size: 10px;
   padding: 5px 6px;
 }
+/* Renaming happens in the row the entry already occupies, so the tree does not
+   reflow under the user while they type. The padding is the row's, computed
+   from the same depth, which is what keeps the input aligned with the name it
+   replaced rather than with the left edge. */
+.workspace-tree-rename {
+  display: flex;
+  padding-right: 8px;
+}
+.workspace-tree-rename input {
+  border-radius: 3px;
+  flex: 1 1 auto;
+  font-family: "SFMono-Regular", Menlo, monospace;
+  font-size: 10px;
+  min-width: 0;
+  padding: 3px 5px;
+}
+/* Covers the window rather than the tree: a menu that stayed open behind a
+   click somewhere else in the app would be a menu the user cannot dismiss. */
+.workspace-tree-menu-backdrop {
+  inset: 0;
+  position: fixed;
+  z-index: 40;
+}
+.workspace-tree-menu {
+  /* `--overlay` rather than `--panel`: a floating menu needs an opaque ground,
+     and `--panel` carries alpha so the tree would read through it. */
+  background: var(--overlay);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+  display: grid;
+  min-width: 150px;
+  padding: 4px;
+  position: fixed;
+  z-index: 41;
+}
+.workspace-tree-menu-reason {
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  display: block;
+  font-size: 10px;
+  line-height: 1.35;
+  margin-bottom: 4px;
+  max-width: 220px;
+  padding: 4px 8px 6px;
+}
+.workspace-tree-menu button {
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 11px;
+  padding: 5px 8px;
+  text-align: left;
+}
+.workspace-tree-menu button:hover:not(:disabled) {
+  background: var(--raised-hover);
+}
+.workspace-tree-menu button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+.workspace-tree-menu button.destructive:not(:disabled) {
+  color: var(--danger);
+}
 .workspace-tree {
   flex: 1 1 0;
   min-height: 120px;

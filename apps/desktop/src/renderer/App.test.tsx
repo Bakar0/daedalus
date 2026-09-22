@@ -15,6 +15,7 @@ import {
   EXPLORER_TREE_MIN_HEIGHT,
   lifecycleTone,
   parseRememberedDirectories,
+  planExplorerRefresh,
   MAX_VISIBLE_TOASTS,
   sessionStatusView,
   statusAriaLabel,
@@ -175,6 +176,94 @@ describe("desktop application shell", () => {
         JSON.stringify(Array.from({ length: 400 }, (_, index) => `d${index}`)),
       ),
     ).toHaveLength(200);
+  });
+
+  describe("planning an explorer refresh from filesystem changes", () => {
+    const known = ["", "repos", "repos/daedalus", "worktrees"];
+    const change = (
+      path: string,
+      kind: "added" | "updated" | "deleted",
+      entryKind: "file" | "directory" | null = kind === "deleted"
+        ? null
+        : "file",
+    ) => ({ path, kind, entryKind }) as const;
+
+    test("re-lists only the folder a change happened in", () => {
+      expect(
+        planExplorerRefresh({
+          known,
+          changes: [change("repos/daedalus/README.md", "updated")],
+          overflow: false,
+        }),
+      ).toEqual({ relist: ["repos/daedalus"], dropped: [] });
+    });
+
+    test("re-lists the root for a change at the top level", () => {
+      expect(
+        planExplorerRefresh({
+          known,
+          changes: [change("BRIEF.md", "updated")],
+          overflow: false,
+        }),
+      ).toEqual({ relist: [""], dropped: [] });
+    });
+
+    test("ignores a change inside a folder nobody has opened", () => {
+      // Real, but nothing on screen is wrong because of it, and listing it
+      // would be work for no one.
+      expect(
+        planExplorerRefresh({
+          known,
+          changes: [change("worktrees/alpha/src/main.ts", "added")],
+          overflow: false,
+        }),
+      ).toEqual({ relist: [], dropped: [] });
+    });
+
+    test("names one folder however many changes happened in it", () => {
+      expect(
+        planExplorerRefresh({
+          known,
+          changes: Array.from({ length: 50 }, (_, index) =>
+            change(`repos/daedalus/f${index}.ts`, "added"),
+          ),
+          overflow: false,
+        }),
+      ).toEqual({ relist: ["repos/daedalus"], dropped: [] });
+    });
+
+    test("drops a deleted folder and everything cached beneath it", () => {
+      expect(
+        planExplorerRefresh({
+          known,
+          changes: [change("repos", "deleted")],
+          overflow: false,
+        }),
+      ).toEqual({ relist: [""], dropped: ["repos", "repos/daedalus"] });
+    });
+
+    test("does not re-list a folder it is about to drop", () => {
+      // Its own parent is in the same batch and reports it missing; asking for
+      // a listing of a folder that is gone is a round trip that can only fail.
+      expect(
+        planExplorerRefresh({
+          known,
+          changes: [
+            change("repos", "deleted"),
+            change("repos/daedalus/README.md", "deleted"),
+          ],
+          overflow: false,
+        }).relist,
+      ).toEqual([""]);
+    });
+
+    test("re-reads everything on screen when the host reports an overflow", () => {
+      // An overflow carries no paths at all, so the only correct answer is
+      // everything the explorer has listed.
+      expect(
+        planExplorerRefresh({ known, changes: [], overflow: true }),
+      ).toEqual({ relist: known, dropped: [] });
+    });
   });
 
   test("reconciles a starting card with its server-created session", () => {
@@ -466,7 +555,14 @@ describe("desktop application shell", () => {
           workspaceId: "w1",
           brief: "# Objective",
           journal: "# Journal",
-          files: [{ name: "BRIEF.md", path: "BRIEF.md", kind: "file" }],
+          files: [
+            {
+              name: "BRIEF.md",
+              path: "BRIEF.md",
+              kind: "file",
+              mutable: false,
+            },
+          ],
           repositories: [],
           worktrees: [],
         }}
@@ -507,9 +603,24 @@ describe("desktop application shell", () => {
           brief: "# Objective\n\nBuild the workspace view.",
           journal: "# Journal\n\n## progress\n\nStarted.",
           files: [
-            { name: "worktrees", path: "worktrees", kind: "directory" },
-            { name: "BRIEF.md", path: "BRIEF.md", kind: "file" },
-            { name: "JOURNAL.md", path: "JOURNAL.md", kind: "file" },
+            {
+              name: "worktrees",
+              path: "worktrees",
+              kind: "directory",
+              mutable: false,
+            },
+            {
+              name: "BRIEF.md",
+              path: "BRIEF.md",
+              kind: "file",
+              mutable: false,
+            },
+            {
+              name: "JOURNAL.md",
+              path: "JOURNAL.md",
+              kind: "file",
+              mutable: false,
+            },
           ],
           repositories: [
             {

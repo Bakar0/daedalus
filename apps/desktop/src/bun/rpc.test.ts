@@ -259,6 +259,49 @@ describe("desktop RPC handlers", () => {
           expectedContent: "",
         });
         expect(savedFile.ok && savedFile.data.content).toBe("# Notes\n");
+        const renamed = await rpc.workspaceEntryRename({
+          workspace: created.data.id,
+          path: "NOTES.md",
+          name: "IDEAS.md",
+        });
+        expect(renamed.ok && renamed.data.path).toBe("IDEAS.md");
+        const folder = await rpc.workspaceEntryCreate({
+          workspace: created.data.id,
+          name: "inbox",
+          kind: "directory",
+        });
+        expect(folder.ok).toBe(true);
+        const moved = await rpc.workspaceEntryMove({
+          workspace: created.data.id,
+          path: "IDEAS.md",
+          destinationPath: "inbox",
+        });
+        expect(moved.ok && moved.data.path).toBe("inbox/IDEAS.md");
+        const removed = await rpc.workspaceEntryRemove({
+          workspace: created.data.id,
+          path: "inbox",
+        });
+        expect(removed.ok && removed.data.kind).toBe("directory");
+        const gone = await rpc.workspaceFileRead({
+          workspace: created.data.id,
+          path: "inbox/IDEAS.md",
+        });
+        expect(gone.ok).toBe(false);
+        // The verbs answer with a structured error rather than throwing, which
+        // is the whole contract the renderer's `perform` is written against.
+        const refused = await rpc.workspaceEntryRemove({
+          workspace: created.data.id,
+          path: "worktrees",
+        });
+        expect(refused.ok === false && refused.error.code).toBe("CONFLICT");
+        const watching = await rpc.workspaceWatchSet({
+          workspaces: [created.data.id],
+        });
+        expect(watching.ok && watching.data.watching).toEqual([
+          created.data.id,
+        ]);
+        const unwatched = await rpc.workspaceWatchSet({ workspaces: [] });
+        expect(unwatched.ok && unwatched.data.watching).toEqual([]);
         const journal = await rpc.workspaceJournalAppend({
           workspace: created.data.id,
           kind: "blocker",

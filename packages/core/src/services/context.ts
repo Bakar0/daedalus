@@ -10,6 +10,7 @@ import {
   type TmuxClient,
 } from "@daedalus/platform";
 import { channelIdentifier, loadConfig, type DaedalusConfig } from "../config";
+import { EventBus } from "../events";
 import { JsonLogger } from "../logging";
 import { runMigrations } from "../repositories/migrations";
 import { SqliteRepositories } from "../repositories/sqlite";
@@ -23,13 +24,21 @@ import { TaskService } from "./tasks";
 import { TelemetryService } from "./telemetry";
 import { WorkspaceService } from "./workspaces";
 import { WorkspaceContentService } from "./workspace-content";
+import { WorkspaceWatchService } from "./workspace-watch";
 
 export interface ApplicationContext {
   config: DaedalusConfig;
   logger: JsonLogger;
+  /** Domain events an adapter forwards to its own surface. */
+  events: EventBus;
   repositories: SqliteRepositories;
   workspaces: WorkspaceService;
   workspaceContent: WorkspaceContentService;
+  /**
+   * Live filesystem changes for whichever workspaces an adapter says are
+   * open. Publishes on `events`; nothing polls it.
+   */
+  workspaceWatch: WorkspaceWatchService;
   tasks: TaskService;
   agents: AgentService;
   terminals: IntegratedTerminalService;
@@ -125,6 +134,17 @@ export async function createApplicationContext(
     tmux,
     config,
   );
+  const events = new EventBus();
+  const logger = new JsonLogger(config.logsDirectory);
+  const workspaceWatch = new WorkspaceWatchService(
+    workspaces,
+    events,
+    (workspaceId, error) =>
+      void logger.write("error", "workspace_watch_failed", {
+        workspaceId,
+        message: error.message,
+      }),
+  );
   const telemetry = new TelemetryService(repositories, config);
   const presence = new PresenceService(config);
   const notifications = new NotificationService(repositories, presence, {
@@ -155,10 +175,12 @@ export async function createApplicationContext(
   }
   return {
     config,
-    logger: new JsonLogger(config.logsDirectory),
+    logger,
+    events,
     repositories,
     workspaces,
     workspaceContent,
+    workspaceWatch,
     tasks,
     agents,
     terminals,
@@ -168,6 +190,11 @@ export async function createApplicationContext(
     activity,
     shutdown: new ShutdownService(repositories, agents, terminals, tmux),
     tmux,
-    close: () => repositories.close(),
+    // Watchers are kernel resources held outside the database, so they are
+    // released here rather than left to the process exiting.
+    close: () => {
+      workspaceWatch.close();
+      repositories.close();
+    },
   };
 }

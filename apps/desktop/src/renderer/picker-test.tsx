@@ -129,11 +129,13 @@ const client = {
     }),
     presencePublish: async () => ({ ok: true, data: {} }),
     toastsAcknowledge: async () => ({ ok: true, data: { acknowledged: 0 } }),
+    workspaceWatchSet: async () => ({ ok: true, data: { watching: [] } }),
   },
   subscribe: () => () => undefined,
   subscribeCommands: () => () => undefined,
   subscribeWindowResize: () => () => undefined,
   subscribeFocusSession: () => () => undefined,
+  subscribeWorkspaceFiles: () => () => undefined,
   subscribeQuitRequest: () => () => undefined,
 } as unknown as DesktopClient;
 

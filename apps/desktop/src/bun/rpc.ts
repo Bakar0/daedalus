@@ -279,6 +279,24 @@ export function createDesktopRequestHandlers(
       mutate(async () => ({
         ...(await context.workspaceContent.createEntry(params)),
       })),
+    workspaceEntryRename: (params) =>
+      mutate(async () => ({
+        ...(await context.workspaceContent.renameEntry(params)),
+      })),
+    workspaceEntryMove: (params) =>
+      mutate(async () => ({
+        ...(await context.workspaceContent.moveEntry(params)),
+      })),
+    workspaceEntryRemove: (params) =>
+      mutate(async () => ({
+        ...(await context.workspaceContent.removeEntry(params)),
+      })),
+    // Deliberately not a `mutate`: nothing about the snapshot changes, and
+    // announcing would make every view switch redraw the whole window.
+    workspaceWatchSet: ({ workspaces }) =>
+      result(async () => ({
+        watching: await context.workspaceWatch.watchOnly(workspaces),
+      })),
     workspaceInstructionFilesSet: ({ enabled }) =>
       mutate(async () => {
         await context.workspaceContent.setInstructionFilesEnabled(enabled);

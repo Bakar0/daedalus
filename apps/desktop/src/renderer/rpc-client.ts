@@ -1,5 +1,9 @@
 import { Electroview } from "electrobun/view";
-import type { DesktopRpcSchema, ShutdownPlanDto } from "@daedalus/protocol";
+import type {
+  DesktopRpcSchema,
+  ShutdownPlanDto,
+  WorkspaceFileChangeDto,
+} from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 
 function defineRendererRpc() {
@@ -36,6 +40,15 @@ export function createElectrobunClient(): DesktopClient {
         listener(sessionId);
       rpc.addMessageListener("focusSession", receive);
       return () => rpc.removeMessageListener("focusSession", receive);
+    },
+    subscribeWorkspaceFiles(listener) {
+      const receive = (change: {
+        workspaceId: string;
+        changes: WorkspaceFileChangeDto[];
+        overflow: boolean;
+      }) => listener(change);
+      rpc.addMessageListener("workspaceFilesChanged", receive);
+      return () => rpc.removeMessageListener("workspaceFilesChanged", receive);
     },
     subscribeQuitRequest(listener) {
       const receive = ({ plan }: { plan: ShutdownPlanDto }) => listener(plan);

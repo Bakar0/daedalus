@@ -12,6 +12,8 @@ import {
   channelHome,
   createApplicationContext,
   sweepProviderActivity,
+  WORKSPACE_FILES_CHANGED,
+  type WorkspaceFilesChanged,
 } from "@daedalus/core";
 import {
   CommandTmuxClient,
@@ -322,6 +324,19 @@ let rpc!: ReturnType<typeof createRpc>;
 let mainWindow!: BrowserWindow<ReturnType<typeof createRpc>>;
 let windowOpen = false;
 
+/**
+ * Filesystem changes go straight to the window rather than through
+ * `announce`. They are not a snapshot change — nothing in the database moved —
+ * and routing them through the revision counter would make an agent writing
+ * files redraw every list in the app a few times a second.
+ */
+context.events.subscribe((event) => {
+  if (event.type !== WORKSPACE_FILES_CHANGED || !windowOpen) return;
+  const { workspaceId, changes, overflow } =
+    event.payload as WorkspaceFilesChanged;
+  rpc.send.workspaceFilesChanged({ workspaceId, changes, overflow });
+});
+
 ApplicationMenu.on("application-menu-clicked", (rawEvent) => {
   const event = rawEvent as { data?: { action?: unknown } };
   const command = event.data?.action;
@@ -396,6 +411,10 @@ function openMainWindow(): void {
   mainWindow.on("close", () => {
     windowOpen = false;
     windowReady = false;
+    // No window, no tree to keep fresh. The app outlives its window, so a
+    // watcher left running here would hold a kernel resource for a view that
+    // is not there — and the renderer re-asks for one when it comes back.
+    context.workspaceWatch.close();
     void context.logger.write("info", "window_closed", {});
   });
   mainWindow.on("resize", (rawEvent) => {

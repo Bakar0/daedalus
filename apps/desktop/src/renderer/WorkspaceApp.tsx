@@ -38,6 +38,7 @@ import type {
   TaskDto,
   TaskStatus,
   WorkspaceContentDto,
+  WorkspaceFileChangeDto,
   WorkspaceFileDto,
   WorkspaceFileEntryDto,
   WorkspaceDto,
@@ -342,6 +343,55 @@ const workspaceParentPath = (path: string) => {
   const separator = path.lastIndexOf("/");
   return separator < 0 ? "" : path.slice(0, separator);
 };
+
+export interface ExplorerRefreshPlan {
+  /** Folders whose listing is now wrong and has to be fetched again. */
+  relist: string[];
+  /** Folders that are gone: drop their cached listing and their expansion. */
+  dropped: string[];
+}
+
+/**
+ * Turns a batch of filesystem changes into the smallest amount of work the
+ * explorer has to do.
+ *
+ * It answers in folders, never in rows, and deliberately never touches the
+ * DOM. Re-listing the affected folders and writing the result back into the
+ * directory cache is what lets expansion, selection, scroll position and an
+ * unsaved draft survive a change on disk — replacing the tree would lose all
+ * four.
+ *
+ * Only folders the explorer has already listed are re-listed. A change deep
+ * inside a folder nobody has opened is real, but there is nothing on screen
+ * that is wrong because of it, and listing it would be work for no one.
+ */
+export function planExplorerRefresh(input: {
+  known: readonly string[];
+  changes: readonly WorkspaceFileChangeDto[];
+  overflow: boolean;
+}): ExplorerRefreshPlan {
+  const known = new Set(input.known);
+  // Past the overflow limit the host stops describing individual paths, so
+  // the only correct answer is to re-read everything that is on screen.
+  if (input.overflow) return { relist: [...known], dropped: [] };
+
+  const dropped = new Set<string>();
+  for (const change of input.changes) {
+    if (change.kind !== "deleted") continue;
+    for (const folder of known)
+      if (folder === change.path || folder.startsWith(`${change.path}/`))
+        dropped.add(folder);
+  }
+
+  const relist = new Set<string>();
+  for (const change of input.changes) {
+    const parent = workspaceParentPath(change.path);
+    // A folder that is itself gone is not worth re-listing; its own parent is
+    // already in the set and will report it missing.
+    if (known.has(parent) && !dropped.has(parent)) relist.add(parent);
+  }
+  return { relist: [...relist], dropped: [...dropped] };
+}
 
 const sessionTool = (
   session: AgentSessionDto,
@@ -1777,10 +1827,80 @@ export function WorkspaceApp({
   const [workspaceFileMode, setWorkspaceFileMode] = useState<
     "edit" | "preview"
   >("edit");
+  // The filesystem subscription is established once per workspace and must not
+  // be torn down and rebuilt every time a listing lands, so it reads the cache
+  // and the open file through refs rather than closing over them.
+  const workspaceDirectoriesRef = useRef(workspaceDirectories);
+  workspaceDirectoriesRef.current = workspaceDirectories;
+  const selectedWorkspaceFileRef = useRef(selectedWorkspaceFile);
+  selectedWorkspaceFileRef.current = selectedWorkspaceFile;
+  const workspaceDraftRef = useRef(workspaceDraft);
+  workspaceDraftRef.current = workspaceDraft;
+  /**
+   * What a change on disk does to the file the viewer has open.
+   *
+   * An unsaved draft is never touched. Someone typing into the editor while an
+   * agent writes the same file would lose their work, and a stale draft the
+   * user can still see and save is strictly better than a silent overwrite —
+   * `workspaceFileWrite` compares against `expectedContent`, so the conflict
+   * is caught at save time and reported rather than lost here.
+   */
+  const reconcileOpenFile = useCallback(
+    async (changes: readonly WorkspaceFileChangeDto[], overflow: boolean) => {
+      const open = selectedWorkspaceFileRef.current;
+      if (!open || !workspaceId) return;
+      if (workspaceDraftRef.current !== open.content) return;
+      const touched = overflow
+        ? undefined
+        : changes.find((change) => change.path === open.path);
+      if (!overflow && !touched) return;
+      if (touched?.kind === "deleted") {
+        setSelectedWorkspaceFile(null);
+        setWorkspaceDraft("");
+        return;
+      }
+      const reread = await client.request.workspaceFileRead({
+        workspace: workspaceId,
+        path: open.path,
+      });
+      // Still the same file, and still unedited — checked again because the
+      // read was a round trip and the user may have started typing during it.
+      if (
+        selectedWorkspaceFileRef.current?.path !== open.path ||
+        workspaceDraftRef.current !== open.content
+      )
+        return;
+      if (!reread.ok) {
+        // An overflow says nothing about this file in particular, so a read
+        // that fails under one is the only evidence that it is gone.
+        if (overflow) {
+          setSelectedWorkspaceFile(null);
+          setWorkspaceDraft("");
+        }
+        return;
+      }
+      if (reread.data.content === open.content) return;
+      setSelectedWorkspaceFile(reread.data);
+      setWorkspaceDraft(reread.data.content);
+    },
+    [client, workspaceId],
+  );
   const [selectedWorkspaceDirectory, setSelectedWorkspaceDirectory] =
     useState("");
   const [newWorkspaceEntry, setNewWorkspaceEntry] = useState<{
     kind: "file" | "directory";
+    name: string;
+  }>();
+  // The context menu is positioned at the pointer rather than anchored to the
+  // row, which is what every file explorer does and what makes it reachable
+  // for a row scrolled to the edge of the tree.
+  const [entryMenu, setEntryMenu] = useState<{
+    entry: WorkspaceFileEntryDto;
+    x: number;
+    y: number;
+  }>();
+  const [renamingEntry, setRenamingEntry] = useState<{
+    path: string;
     name: string;
   }>();
   const [filter, setFilter] = useState<TaskStatus | "all">("all");
@@ -2415,6 +2535,95 @@ export function WorkspaceApp({
       cancelled = true;
     };
   }, [client, view, workspaceId]);
+
+  useEffect(() => {
+    if (!entryMenu) return;
+    const close = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setEntryMenu(undefined);
+    };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [entryMenu]);
+  // A menu and a half-typed rename both belong to a tree that is on screen.
+  useEffect(() => {
+    setEntryMenu(undefined);
+    setRenamingEntry(undefined);
+  }, [view, workspaceId]);
+
+  // The host watches whichever workspace this window is actually showing, and
+  // nothing when it is showing something else. A watcher is a kernel resource
+  // and a tree nobody is looking at does not need to be fresh.
+  useEffect(() => {
+    if (view !== "workspace" || !workspaceId) {
+      void client.request.workspaceWatchSet({ workspaces: [] });
+      return;
+    }
+    void client.request.workspaceWatchSet({ workspaces: [workspaceId] });
+    return () => {
+      void client.request.workspaceWatchSet({ workspaces: [] });
+    };
+  }, [client, view, workspaceId]);
+
+  // Changes on disk are reconciled into the directory cache, never applied to
+  // the tree directly. Re-listing the affected folders is what lets expansion,
+  // selection and an unsaved draft survive a file appearing underneath them.
+  useEffect(() => {
+    if (!workspaceId) return;
+    let cancelled = false;
+    const unsubscribe = client.subscribeWorkspaceFiles(
+      ({ workspaceId: changed, changes, overflow }) => {
+        if (changed !== workspaceId) return;
+        void (async () => {
+          const plan = planExplorerRefresh({
+            known: Object.keys(workspaceDirectoriesRef.current),
+            changes,
+            overflow,
+          });
+          if (plan.dropped.length > 0) {
+            setWorkspaceDirectories((current) => {
+              const next = { ...current };
+              for (const folder of plan.dropped) delete next[folder];
+              return next;
+            });
+            // A folder that no longer exists cannot be open. Forgetting it here
+            // also keeps it out of what is remembered for the next visit.
+            setExpandedWorkspaceDirectories((current) => {
+              if (!plan.dropped.some((folder) => current.has(folder)))
+                return current;
+              const next = new Set(current);
+              for (const folder of plan.dropped) next.delete(folder);
+              rememberExpandedDirectories(workspaceId, next);
+              return next;
+            });
+          }
+          const listings = await Promise.all(
+            plan.relist.map(async (path) => {
+              const listing = await client.request.workspaceDirectoryList({
+                workspace: workspaceId,
+                path: path || undefined,
+              });
+              // A folder that vanished between the event and this call simply
+              // has no listing; its own parent is in the same batch and will
+              // report it gone.
+              return listing.ok ? ([path, listing.data] as const) : undefined;
+            }),
+          );
+          if (cancelled) return;
+          const refreshed = listings.filter((entry) => entry !== undefined);
+          if (refreshed.length > 0)
+            setWorkspaceDirectories((current) => ({
+              ...current,
+              ...Object.fromEntries(refreshed),
+            }));
+          await reconcileOpenFile(changes, overflow);
+        })();
+      },
+    );
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [client, workspaceId, reconcileOpenFile]);
   useEffect(() => {
     const stored = window.localStorage.getItem("daedalus.theme");
     if (stored === "dark" || stored === "light") setTheme(stored);
@@ -3227,6 +3436,168 @@ export function WorkspaceApp({
     }
   }
 
+  /** Fetches the named folders again and writes them back into the cache. */
+  async function relistDirectories(paths: readonly string[]) {
+    if (!workspace || paths.length === 0) return;
+    const listings = await Promise.all(
+      paths.map(async (path) => {
+        const listing = await client.request.workspaceDirectoryList({
+          workspace: workspace.id,
+          path: path || undefined,
+        });
+        return listing.ok ? ([path, listing.data] as const) : undefined;
+      }),
+    );
+    const refreshed = listings.filter((entry) => entry !== undefined);
+    if (refreshed.length > 0)
+      setWorkspaceDirectories((current) => ({
+        ...current,
+        ...Object.fromEntries(refreshed),
+      }));
+  }
+
+  /**
+   * Follows an entry that moved, so the explorer ends up in the state the user
+   * left it in rather than collapsing whatever they had open.
+   *
+   * The watcher would eventually re-list both parents on its own, but it would
+   * leave the renamed folder closed and the open file unselected — it reports
+   * two unrelated paths, and nothing on disk says they are the same entry.
+   * Only the caller knows that, so only the caller can carry the state across.
+   */
+  async function followMovedEntry(from: string, to: string) {
+    if (!workspace) return;
+    const repath = (path: string) =>
+      path === from
+        ? to
+        : path.startsWith(`${from}/`)
+          ? to + path.slice(from.length)
+          : path;
+    const moved = [...expandedWorkspaceDirectories].filter(
+      (path) => path === from || path.startsWith(`${from}/`),
+    );
+    if (moved.length > 0)
+      setExpandedWorkspaceDirectories((current) => {
+        const next = new Set([...current].map(repath));
+        rememberExpandedDirectories(workspace.id, next);
+        return next;
+      });
+    setWorkspaceDirectories((current) => {
+      const next: Record<string, WorkspaceFileEntryDto[]> = {};
+      for (const [path, entries] of Object.entries(current))
+        if (path !== from && !path.startsWith(`${from}/`)) next[path] = entries;
+      return next;
+    });
+    if (
+      selectedWorkspaceDirectory === from ||
+      selectedWorkspaceDirectory.startsWith(`${from}/`)
+    )
+      setSelectedWorkspaceDirectory(repath(selectedWorkspaceDirectory));
+    const open = selectedWorkspaceFile;
+    if (open && (open.path === from || open.path.startsWith(`${from}/`))) {
+      const reopened = await client.request.workspaceFileRead({
+        workspace: workspace.id,
+        path: repath(open.path),
+      });
+      if (reopened.ok) {
+        const wasEdited = workspaceDraft !== open.content;
+        setSelectedWorkspaceFile(reopened.data);
+        // A draft in progress belongs to the user, not to the path it was
+        // opened from. It follows the file rather than being discarded.
+        if (!wasEdited) setWorkspaceDraft(reopened.data.content);
+      }
+    }
+    await relistDirectories([
+      ...new Set([
+        workspaceParentPath(from),
+        workspaceParentPath(to),
+        ...moved.map(repath),
+      ]),
+    ]);
+  }
+
+  async function renameWorkspaceEntry(path: string, name: string) {
+    if (!workspace) return;
+    const trimmed = name.trim();
+    setRenamingEntry(undefined);
+    if (!trimmed || trimmed === path.slice(path.lastIndexOf("/") + 1)) return;
+    const renamed = await perform(
+      client.request.workspaceEntryRename({
+        workspace: workspace.id,
+        path,
+        name: trimmed,
+      }),
+    );
+    if (renamed) await followMovedEntry(path, renamed.path);
+  }
+
+  async function moveWorkspaceEntry(entry: WorkspaceFileEntryDto) {
+    if (!workspace) return;
+    const from = workspaceParentPath(entry.path);
+    const destination = window.prompt(
+      `Move ${entry.name} into which folder? Leave empty for the workspace root.`,
+      from,
+    );
+    if (destination === null) return;
+    const moved = await perform(
+      client.request.workspaceEntryMove({
+        workspace: workspace.id,
+        path: entry.path,
+        destinationPath: destination.trim().replace(/^\/+|\/+$/g, ""),
+      }),
+    );
+    if (moved) await followMovedEntry(entry.path, moved.path);
+  }
+
+  async function removeWorkspaceEntry(entry: WorkspaceFileEntryDto) {
+    if (!workspace) return;
+    if (
+      !window.confirm(
+        entry.kind === "directory"
+          ? `Delete the folder ${entry.name} and everything inside it? This cannot be undone.`
+          : `Delete ${entry.name}? This cannot be undone.`,
+      )
+    )
+      return;
+    const removed = await perform(
+      client.request.workspaceEntryRemove({
+        workspace: workspace.id,
+        path: entry.path,
+      }),
+    );
+    if (!removed) return;
+    setWorkspaceDirectories((current) => {
+      const next: Record<string, WorkspaceFileEntryDto[]> = {};
+      for (const [path, entries] of Object.entries(current))
+        if (path !== entry.path && !path.startsWith(`${entry.path}/`))
+          next[path] = entries;
+      return next;
+    });
+    setExpandedWorkspaceDirectories((current) => {
+      const next = new Set(
+        [...current].filter(
+          (path) => path !== entry.path && !path.startsWith(`${entry.path}/`),
+        ),
+      );
+      rememberExpandedDirectories(workspace.id, next);
+      return next;
+    });
+    if (
+      selectedWorkspaceFile &&
+      (selectedWorkspaceFile.path === entry.path ||
+        selectedWorkspaceFile.path.startsWith(`${entry.path}/`))
+    ) {
+      setSelectedWorkspaceFile(null);
+      setWorkspaceDraft("");
+    }
+    if (
+      selectedWorkspaceDirectory === entry.path ||
+      selectedWorkspaceDirectory.startsWith(`${entry.path}/`)
+    )
+      setSelectedWorkspaceDirectory(workspaceParentPath(entry.path));
+    await relistDirectories([workspaceParentPath(entry.path)]);
+  }
+
   async function toggleWorkspaceDirectory(path: string) {
     if (!workspace) return;
     const isExpanded = expandedWorkspaceDirectories.has(path);
@@ -3473,6 +3844,20 @@ export function WorkspaceApp({
     </div>
   );
 
+  /**
+   * Entries Daedalus keeps pointing at by path. The service refuses these too
+   * — it has to, because the RPC surface is reachable without the UI — but a
+   * menu item that is going to fail is better greyed out than clickable.
+   */
+  /**
+   * The service decides, and says so on every row it lists. The renderer used
+   * to keep its own copy of the rule, and the copy drifted: it greyed out the
+   * three managed folders but not the files Daedalus regenerates, so Delete
+   * was offered on BRIEF.md, succeeded, and the content refetch that follows
+   * every mutation put the file back before the tree redrew.
+   */
+  const workspaceEntryMutable = (entry: WorkspaceFileEntryDto) => entry.mutable;
+
   const renderWorkspaceDirectory = (
     directory = "",
     depth = 0,
@@ -3483,37 +3868,82 @@ export function WorkspaceApp({
         entry.kind === "directory"
           ? selectedWorkspaceDirectory === entry.path
           : selectedWorkspaceFile?.path === entry.path;
+      const renaming = renamingEntry?.path === entry.path;
       return (
         <div className="workspace-tree-entry" key={entry.path}>
-          <button
-            aria-expanded={entry.kind === "directory" ? expanded : undefined}
-            className={selected ? "selected" : ""}
-            disabled={entry.kind === "symlink"}
-            onClick={() => {
-              if (entry.kind === "directory") {
-                setSelectedWorkspaceDirectory(entry.path);
-                void toggleWorkspaceDirectory(entry.path);
-              } else if (entry.kind === "file")
-                void openWorkspaceFile(entry.path);
-            }}
-            style={{ paddingLeft: `${8 + depth * 14}px` }}
-            title={entry.path}
-            type="button"
-          >
-            <span
-              className={`workspace-tree-icon ${entry.kind}`}
-              aria-hidden="true"
+          {renaming ? (
+            // Deliberately not a <form>. The explorer's "new entry" field is
+            // one, but a form here submits on Enter through the browser's own
+            // implicit-submission path, which wedged the renderer outright in
+            // the browser check — the handler never ran and the page stopped
+            // answering. An input with its own keys has no such path, and it
+            // is what the editor this imitates does anyway.
+            <div
+              className="workspace-tree-rename"
+              style={{ paddingLeft: `${8 + depth * 14}px` }}
             >
-              {entry.kind === "directory"
-                ? expanded
-                  ? "⌄"
-                  : "›"
-                : entry.kind === "symlink"
-                  ? "↗"
-                  : ""}
-            </span>
-            <span>{entry.name}</span>
-          </button>
+              <input
+                aria-label={`Rename ${entry.name}`}
+                autoFocus
+                onBlur={() =>
+                  void renameWorkspaceEntry(entry.path, renamingEntry.name)
+                }
+                onChange={(event) =>
+                  setRenamingEntry({
+                    path: entry.path,
+                    name: event.target.value,
+                  })
+                }
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void renameWorkspaceEntry(entry.path, renamingEntry.name);
+                    return;
+                  }
+                  if (event.key !== "Escape") return;
+                  // Escape has to win over the blur that follows it, or
+                  // cancelling would commit whatever was half-typed.
+                  event.preventDefault();
+                  setRenamingEntry(undefined);
+                }}
+                value={renamingEntry.name}
+              />
+            </div>
+          ) : (
+            <button
+              aria-expanded={entry.kind === "directory" ? expanded : undefined}
+              className={selected ? "selected" : ""}
+              disabled={entry.kind === "symlink"}
+              onClick={() => {
+                if (entry.kind === "directory") {
+                  setSelectedWorkspaceDirectory(entry.path);
+                  void toggleWorkspaceDirectory(entry.path);
+                } else if (entry.kind === "file")
+                  void openWorkspaceFile(entry.path);
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                setEntryMenu({ entry, x: event.clientX, y: event.clientY });
+              }}
+              style={{ paddingLeft: `${8 + depth * 14}px` }}
+              title={entry.path}
+              type="button"
+            >
+              <span
+                className={`workspace-tree-icon ${entry.kind}`}
+                aria-hidden="true"
+              >
+                {entry.kind === "directory"
+                  ? expanded
+                    ? "⌄"
+                    : "›"
+                  : entry.kind === "symlink"
+                    ? "↗"
+                    : ""}
+              </span>
+              <span>{entry.name}</span>
+            </button>
+          )}
           {entry.kind === "directory" && expanded && (
             <div>{renderWorkspaceDirectory(entry.path, depth + 1)}</div>
           )}
@@ -3943,6 +4373,93 @@ export function WorkspaceApp({
                     >
                       {renderWorkspaceDirectory()}
                     </nav>
+                    {entryMenu && (
+                      <>
+                        {/*
+                          A full-window backdrop, so the next click anywhere
+                          closes the menu. Without it the menu survives a click
+                          on the tree behind it and two can be open at once.
+                        */}
+                        <div
+                          className="workspace-tree-menu-backdrop"
+                          onContextMenu={(event) => {
+                            event.preventDefault();
+                            setEntryMenu(undefined);
+                          }}
+                          onPointerDown={() => setEntryMenu(undefined)}
+                        />
+                        <div
+                          aria-label={`Actions for ${entryMenu.entry.name}`}
+                          className="workspace-tree-menu"
+                          // Opened at the pointer, then pulled back inside the
+                          // window if it would hang off the bottom or the
+                          // right. Measured rather than estimated: the menu's
+                          // size depends on its labels and the theme's font.
+                          ref={(node) => {
+                            if (!node) return;
+                            const box = node.getBoundingClientRect();
+                            const overflowX = box.right - window.innerWidth + 8;
+                            const overflowY =
+                              box.bottom - window.innerHeight + 8;
+                            if (overflowX > 0)
+                              node.style.left = `${Math.max(8, entryMenu.x - overflowX)}px`;
+                            if (overflowY > 0)
+                              node.style.top = `${Math.max(8, entryMenu.y - overflowY)}px`;
+                          }}
+                          role="menu"
+                          style={{ left: entryMenu.x, top: entryMenu.y }}
+                        >
+                          {entryMenu.entry.immutableReason && (
+                            // Greyed-out items with no explanation read as
+                            // broken ones. This was reported as "delete does
+                            // nothing", and it was the menu's silence, not the
+                            // action, that was wrong.
+                            <small className="workspace-tree-menu-reason">
+                              {entryMenu.entry.immutableReason}
+                            </small>
+                          )}
+                          <button
+                            disabled={!workspaceEntryMutable(entryMenu.entry)}
+                            onClick={() => {
+                              setRenamingEntry({
+                                path: entryMenu.entry.path,
+                                name: entryMenu.entry.name,
+                              });
+                              setEntryMenu(undefined);
+                            }}
+                            role="menuitem"
+                            type="button"
+                          >
+                            Rename
+                          </button>
+                          <button
+                            disabled={!workspaceEntryMutable(entryMenu.entry)}
+                            onClick={() => {
+                              const target = entryMenu.entry;
+                              setEntryMenu(undefined);
+                              void moveWorkspaceEntry(target);
+                            }}
+                            role="menuitem"
+                            type="button"
+                          >
+                            Move to…
+                          </button>
+                          <button
+                            className="destructive"
+                            disabled={!workspaceEntryMutable(entryMenu.entry)}
+                            onClick={() => {
+                              const target = entryMenu.entry;
+                              setEntryMenu(undefined);
+                              void removeWorkspaceEntry(target);
+                            }}
+                            role="menuitem"
+                            type="button"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </>
+                    )}
                     <div
                       aria-label="Resize repositories section"
                       aria-orientation="horizontal"
