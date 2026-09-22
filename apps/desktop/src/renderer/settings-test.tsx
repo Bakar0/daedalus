@@ -82,6 +82,15 @@ const SOURCES = [
     origin: "plugin" as const,
     count: 3,
   },
+  // Cursor-only, where no provider offers a switch and the control has to say
+  // so rather than pretend.
+  {
+    source: "cursor-personal" as const,
+    sourcePath: "/Users/someone/.cursor/skills",
+    providers: ["cursor"] as const,
+    origin: "user" as const,
+    count: 2,
+  },
   // A second plugin, because one "Claude plugin" heading covering several
   // different plugins is the thing this grouping replaced.
   {

@@ -2,8 +2,11 @@ import { describe, expect, test, vi } from "vitest";
 import { join } from "node:path";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { loadConfig } from "../config";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { saveSkillOverride } from "../config";
 import {
   claudeDaedalusSettingsArgs,
+  ensureCodexHooks,
   isValidModelName,
   modelArgument,
   parseClaudeModelCatalog,
@@ -285,6 +288,117 @@ describe("buildLaunch permission mode", () => {
         provider: "codex",
       }).adapter.buildLaunch({});
       expect(codex.args).not.toContain('approvals_reviewer="auto_review"');
+    });
+  });
+});
+
+describe("ensureCodexHooks and the user's skill settings", () => {
+  /** A skill Codex scans, switched off by the user. */
+  const withSwitchedOffSkill = async (home: string) => {
+    const config = await loadConfig({
+      DAEDALUS_HOME: home,
+      CODEX_HOME: join(home, "codex"),
+      CLAUDE_CONFIG_DIR: join(home, "claude"),
+      DAEDALUS_AGENTS_HOME: join(home, "agents"),
+      DAEDALUS_CURSOR_HOME: join(home, "cursor"),
+    });
+    const directory = join(home, "agents", "skills", "loud");
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      join(directory, "SKILL.md"),
+      "---\nname: loud\ndescription: Loud\n---\n",
+      "utf8",
+    );
+    await saveSkillOverride(config, "loud", "off");
+    return config;
+  };
+
+  test("an old Codex still gets the skill settings, just no hooks", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await withSwitchedOffSkill(home);
+      // The version probe used to decide both, so on a build that ignores
+      // hooks, turning a skill off wrote the preference and then quietly did
+      // nothing about it.
+      const args = await ensureCodexHooks(config, "codex", async () => ({
+        exitCode: 0,
+        stdout: "codex-cli 0.144.9",
+        stderr: "",
+      }));
+      expect(args).toEqual([]);
+      const written = await readFile(
+        join(home, "codex", "config.toml"),
+        "utf8",
+      );
+      expect(written).toContain("[[skills.config]]");
+      expect(written).toContain("enabled = false");
+      expect(written).not.toContain("[[hooks.");
+    });
+  });
+
+  test("a current Codex gets both", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await withSwitchedOffSkill(home);
+      const args = await ensureCodexHooks(config, "codex", async () => ({
+        exitCode: 0,
+        stdout: "codex-cli 0.154.0",
+        stderr: "",
+      }));
+      expect(args).toEqual(["-c", "features.hooks=true"]);
+      const written = await readFile(
+        join(home, "codex", "config.toml"),
+        "utf8",
+      );
+      expect(written).toContain("[[skills.config]]");
+      expect(written).toContain("[[hooks.");
+    });
+  });
+
+  test("an old Codex with nothing switched off leaves the file alone", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await loadConfig({
+        DAEDALUS_HOME: home,
+        CODEX_HOME: join(home, "codex"),
+      });
+      const args = await ensureCodexHooks(config, "codex", async () => ({
+        exitCode: 0,
+        stdout: "codex-cli 0.144.9",
+        stderr: "",
+      }));
+      expect(args).toEqual([]);
+      expect(await Bun.file(join(home, "codex", "config.toml")).exists()).toBe(
+        false,
+      );
+    });
+  });
+
+  test("a skill only Cursor loads gets no Codex entry", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await loadConfig({
+        DAEDALUS_HOME: home,
+        CODEX_HOME: join(home, "codex"),
+        CLAUDE_CONFIG_DIR: join(home, "claude"),
+        DAEDALUS_AGENTS_HOME: join(home, "agents"),
+        DAEDALUS_CURSOR_HOME: join(home, "cursor"),
+      });
+      const directory = join(home, "cursor", "skills", "cursor-only");
+      await mkdir(directory, { recursive: true });
+      await writeFile(
+        join(directory, "SKILL.md"),
+        "---\nname: cursor-only\ndescription: Cursor\n---\n",
+        "utf8",
+      );
+      await saveSkillOverride(config, "cursor-only", "off");
+      // Codex never scans ~/.cursor/skills, so an entry naming that path would
+      // sit in the config looking like a setting that was doing something.
+      const args = await ensureCodexHooks(config, "codex", async () => ({
+        exitCode: 0,
+        stdout: "codex-cli 0.144.9",
+        stderr: "",
+      }));
+      expect(args).toEqual([]);
+      expect(await Bun.file(join(home, "codex", "config.toml")).exists()).toBe(
+        false,
+      );
     });
   });
 });

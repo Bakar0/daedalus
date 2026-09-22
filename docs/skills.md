@@ -98,11 +98,27 @@ neither is the user's to set: the first is a token-budget trick, and the second
 is the same decision as `disable-model-invocation` in the skill's own
 frontmatter, which the author already made and which the row already reports.
 
-Turning a skill off uses the provider's own switch rather than moving the
-user's files. Claude Code takes `skillOverrides` through the settings argument,
-which makes it per session. Codex takes `[[skills.config]]` in `config.toml`,
-which is global and applies only after Codex restarts. Cursor has no documented
-switch, so there the only honest action is adding or removing a link.
+Turning a skill off writes one line into `config.json` and touches nothing
+else. The skill's own files are never moved, renamed or deleted; they belong to
+the user. The setting is applied at launch, through each provider's own switch,
+and each provider answers differently:
+
+| Provider    | How it is applied                                         | What it reaches                                 |
+| ----------- | --------------------------------------------------------- | ----------------------------------------------- |
+| Claude Code | `skillOverrides` in the settings argument Daedalus passes | the sessions Daedalus starts, from the next one |
+| Codex       | `[[skills.config]]` in `~/.codex/config.toml`             | every Codex on the machine, once it restarts    |
+| Cursor      | nothing exists                                            | nothing                                         |
+
+Cursor publishes no way to turn a skill off, so for a skill that only Cursor
+loads the panel disables the switch and says to move or rename the folder
+instead. A switch that silently does nothing is worse than no switch.
+
+The Codex entries are written whether or not that build supports hooks. The two
+travel in the same fenced block, and deciding both from one version probe meant
+that on an older Codex a skill switched off was switched off in name only.
+Entries are written only for skills Codex actually scans, so a skill under
+`~/.cursor/skills` never appears in `~/.codex/config.toml` naming a path Codex
+would never load.
 
 ## Commands
 

@@ -308,7 +308,13 @@ try {
   const labels = grouped.map((group) => group.label);
   // Each plugin is its own group under its own name. One shared "Claude
   // plugin" heading over several different plugins is what this replaced.
-  for (const expected of ["Claude", "Codex and Cursor", "pstack", "toolkit"])
+  for (const expected of [
+    "Claude",
+    "Codex and Cursor",
+    "Cursor",
+    "pstack",
+    "toolkit",
+  ])
     if (!labels.includes(expected))
       throw new Error(
         `Expected a group called ${expected}, saw ${JSON.stringify(labels)}`,
@@ -316,8 +322,30 @@ try {
   if (new Set(labels).size !== labels.length)
     throw new Error(`Two groups share a heading: ${JSON.stringify(labels)}`);
   const totalRows = grouped.reduce((sum, group) => sum + group.rows, 0);
-  if (totalRows !== 18)
-    throw new Error(`Expected 18 rows across the groups, saw ${totalRows}`);
+  if (totalRows !== 20)
+    throw new Error(`Expected 20 rows across the groups, saw ${totalRows}`);
+
+  // A switch that cannot reach any provider is disabled rather than lying. No
+  // provider offers a way to turn off a skill only Cursor loads.
+  const unreachable = await evaluate<{
+    disabled: number;
+    reason: string;
+  }>(`(() => {
+    const rows = [...document.querySelectorAll('.skills-found-row')]
+      .filter((row) => row.querySelector('.switch').disabled);
+    return {
+      disabled: rows.length,
+      reason: rows[0]?.querySelector('.skills-switch').title ?? '',
+    };
+  })()`);
+  if (unreachable.disabled !== 2)
+    throw new Error(
+      `Expected the two Cursor-only rows to have a disabled switch, saw ${unreachable.disabled}`,
+    );
+  if (!unreachable.reason.includes("Cursor has no switch"))
+    throw new Error(
+      `A disabled switch does not say why: ${unreachable.reason || "no title"}`,
+    );
 
   // The control is a switch, not a four-way picker: the other two states are
   // the skill author's to set, not the user's.

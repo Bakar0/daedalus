@@ -1248,7 +1248,14 @@ export class SkillService {
     };
   }
 
-  /** The `[[skills.config]]` entries for skills the user turned off. */
+  /**
+   * The `[[skills.config]]` entries for skills the user turned off.
+   *
+   * Only skills Codex itself scans. A skill under `~/.cursor/skills` is read
+   * by Cursor and by nothing else, so an entry for it in `~/.codex/config.toml`
+   * would name a path Codex never loads and would look, in the file, like a
+   * setting that was doing something.
+   */
   async codexSkillEntries(): Promise<Array<{ path: string; enabled: false }>> {
     const off = Object.entries(this.config.skillOverrides)
       .filter(([, visibility]) => visibility === "off")
@@ -1258,9 +1265,7 @@ export class SkillService {
     return discovered
       .filter(
         (skill) =>
-          off.includes(skill.name) &&
-          (skill.providers.includes("codex") ||
-            skill.providers.includes("cursor")),
+          off.includes(skill.name) && skill.providers.includes("codex"),
       )
       .map((skill) => ({ path: skill.skillPath, enabled: false as const }));
   }

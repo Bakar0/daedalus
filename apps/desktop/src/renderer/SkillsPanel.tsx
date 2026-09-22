@@ -44,6 +44,39 @@ const SOURCE_LABEL: Record<DiscoveredSkillDto["source"], string> = {
   "claude-plugin": "Claude plugin",
 };
 
+/**
+ * What a switch on this skill will and will not reach.
+ *
+ * Each provider has a different answer and two of them come with a catch, so
+ * the row says which rather than leaving the user to find out by trying it.
+ * Claude takes the override through the launch argument Daedalus passes, which
+ * is only the sessions Daedalus starts. Codex takes it globally and reads it
+ * when it starts. Cursor has no switch, so for a skill only Cursor loads there
+ * is nothing to turn and the control says so instead of lying.
+ */
+export function visibilityReach(skill: DiscoveredSkillDto): {
+  reachable: boolean;
+  sentences: string[];
+} {
+  const sentences: string[] = [];
+  if (skill.providers.includes("claude"))
+    sentences.push("Claude: from the next session Daedalus starts.");
+  if (skill.providers.includes("codex"))
+    sentences.push("Codex: everywhere on this machine, once Codex restarts.");
+  if (skill.providers.includes("cursor"))
+    sentences.push(
+      skill.providers.length > 1
+        ? "Cursor: not reached. Cursor has no switch for this."
+        : "Cursor has no switch for a skill, so this cannot be turned off from here. Move or rename its folder instead.",
+    );
+  return {
+    reachable: skill.providers.some(
+      (provider) => provider === "claude" || provider === "codex",
+    ),
+    sentences,
+  };
+}
+
 /** A group's heading: the plugin's own name, or the provider it belongs to. */
 export function sourceLabel(skill: DiscoveredSkillDto): string {
   return skill.sourceName ?? SOURCE_LABEL[skill.source];
@@ -409,6 +442,7 @@ export function DiscoveredRow({
   onVisibility: (visibility: "on" | "off") => void;
   skill: DiscoveredSkillDto;
 }) {
+  const reach = visibilityReach(skill);
   return (
     <li
       className={`skills-found-row ${expanded ? "is-open" : ""} ${
@@ -439,11 +473,19 @@ export function DiscoveredRow({
           {rowPath(skill.skillPath, skill.sourcePath)}
         </code>
       </button>
-      <label className="skills-switch" title="Let your agents load this skill">
+      <label
+        className="skills-switch"
+        title={
+          reach.reachable
+            ? `Let your agents load this skill. ${reach.sentences.join(" ")}`
+            : reach.sentences.join(" ")
+        }
+      >
         <input
+          aria-label={`${skill.name} enabled`}
           checked={skill.visibility === "on"}
           className="switch"
-          disabled={disabled}
+          disabled={disabled || !reach.reachable}
           onChange={(event) =>
             onVisibility(event.target.checked ? "on" : "off")
           }
@@ -456,6 +498,10 @@ export function DiscoveredRow({
           <p className="skills-note">
             {skill.providers.map((one) => PROVIDER_LABEL[one]).join(", ")} ·{" "}
             {INVOCATION_LABEL[skill.invocation]}
+          </p>
+          <p className={reach.reachable ? "skills-note" : "skills-problem"}>
+            {reach.reachable ? "Turning it off reaches " : ""}
+            {reach.sentences.join(" ")}
           </p>
           {content ? (
             <pre>

@@ -9,6 +9,7 @@ import {
   rowPath,
   shortenPath,
   sourceLabel,
+  visibilityReach,
 } from "./SkillsPanel";
 
 const discoveredSkill = (
@@ -191,7 +192,7 @@ describe("rows", () => {
     expect(markup).toContain("cannot read its frontmatter");
     // The description and the provider list belong to the expanded state, or
     // the row stops being one line.
-    expect(markup).not.toContain("Cursor");
+    expect(markup).not.toContain("skills-detail");
     expect(markup).not.toContain("A long description");
   });
 
@@ -222,6 +223,55 @@ describe("rows", () => {
     expect(loaded).toContain("name: broken");
     expect(loaded).toContain("truncated");
     expect(loaded).not.toContain("Reading…");
+  });
+});
+
+describe("what a switch reaches", () => {
+  test("names the catch for each provider that can be reached", () => {
+    const claude = visibilityReach(discoveredSkill({ providers: ["claude"] }));
+    expect(claude.reachable).toBe(true);
+    // Claude takes the override through the launch argument, so it is the
+    // sessions Daedalus starts and not a terminal the user opened.
+    expect(claude.sentences.join(" ")).toContain(
+      "next session Daedalus starts",
+    );
+
+    const shared = visibilityReach(
+      discoveredSkill({ providers: ["codex", "cursor"] }),
+    );
+    expect(shared.reachable).toBe(true);
+    expect(shared.sentences.join(" ")).toContain("once Codex restarts");
+    expect(shared.sentences.join(" ")).toContain("Cursor: not reached");
+  });
+
+  test("a skill only Cursor loads cannot be reached at all", () => {
+    const reach = visibilityReach(discoveredSkill({ providers: ["cursor"] }));
+    expect(reach.reachable).toBe(false);
+    expect(reach.sentences.join(" ")).toContain("Move or rename its folder");
+  });
+
+  test("its switch is disabled rather than pretending to work", () => {
+    const markup = renderToStaticMarkup(
+      <DiscoveredRow
+        disabled={false}
+        expanded={false}
+        onToggle={() => undefined}
+        onVisibility={() => undefined}
+        skill={discoveredSkill({ providers: ["cursor"] })}
+      />,
+    );
+    expect(markup).toContain('disabled=""');
+
+    const reachable = renderToStaticMarkup(
+      <DiscoveredRow
+        disabled={false}
+        expanded={false}
+        onToggle={() => undefined}
+        onVisibility={() => undefined}
+        skill={discoveredSkill({ providers: ["claude"] })}
+      />,
+    );
+    expect(reachable).not.toContain('disabled=""');
   });
 });
 

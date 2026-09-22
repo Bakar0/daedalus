@@ -1,4 +1,4 @@
-import { findExecutable } from "@daedalus/platform";
+import { ensureDirectory, findExecutable } from "@daedalus/platform";
 import { runCommand } from "@daedalus/platform";
 import { rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -181,8 +181,8 @@ export const codexConfigPath = (config: DaedalusConfig): string =>
   join(dirname(config.codexSessionsDirectory), "config.toml");
 
 /**
- * Installs Daedalus's activity hooks into the user's Codex configuration and
- * returns the launch arguments that go with them.
+ * Writes Daedalus's block into the user's Codex configuration and returns the
+ * launch arguments that go with it.
  *
  * Codex has no per-session way to add hooks without taking over the key, so
  * this writes to `~/.codex/config.toml` — the only global mutation Daedalus
@@ -196,23 +196,37 @@ export const codexConfigPath = (config: DaedalusConfig): string =>
  * - The first write leaves a one-time `config.toml.daedalus-backup` beside it.
  * - The write is atomic, because Codex writes to this file too.
  *
- * Builds older than 0.145 ignore hooks silently, so nothing is installed for
- * them and activity falls back to the rollout tail.
+ * Builds older than 0.145 ignore hooks silently, so no hook tables are written
+ * for them and activity falls back to the rollout tail. The block is still
+ * written, because the user's skill settings also live in it and they do not
+ * depend on hook support. Deciding both from one version probe meant that on
+ * an older Codex, turning a skill off wrote the preference and then silently
+ * did nothing about it.
  */
 export async function ensureCodexHooks(
   config: DaedalusConfig,
   executable: string,
   run: typeof runCommand = runCommand,
 ): Promise<string[]> {
+  let hooks = false;
   try {
     const version = await run(executable, ["--version"]);
-    if (version.exitCode !== 0 || !codexSupportsHooks(version.stdout))
-      return [];
+    hooks = version.exitCode === 0 && codexSupportsHooks(version.stdout);
   } catch {
-    return [];
+    hooks = false;
   }
+  const skillEntries = await new SkillService(config).codexSkillEntries();
+  // Nothing of ours to say, and saying nothing is what leaves the user's file
+  // alone on the machines where neither feature applies.
+  if (!hooks && skillEntries.length === 0) return [];
   const configPath = codexConfigPath(config);
   try {
+    // Codex creates its own home on first run, so a user who has installed it
+    // but not started it yet has no directory here. Writing into a directory
+    // that does not exist threw, and the catch below swallowed it, which meant
+    // a skill switched off before Codex had ever run was switched off in name
+    // only.
+    await ensureDirectory(dirname(configPath));
     const file = Bun.file(configPath);
     const existing = (await file.exists()) ? await file.text() : "";
     // Named after this channel, so a machine with both builds installed keeps
@@ -223,7 +237,8 @@ export async function ensureCodexHooks(
       renderCodexHookBlock(
         daedalExecutable(config),
         channel,
-        await new SkillService(config).codexSkillEntries(),
+        skillEntries,
+        hooks,
       ),
       channel,
     );
@@ -245,8 +260,9 @@ export async function ensureCodexHooks(
     return [];
   }
   // Stable and on by default from 0.154, but not on every build in the
-  // supported range, and a per-session flag costs nothing.
-  return ["-c", "features.hooks=true"];
+  // supported range, and a per-session flag costs nothing. A build that does
+  // not understand hooks gets no flag, only its skill settings.
+  return hooks ? ["-c", "features.hooks=true"] : [];
 }
 
 interface ClaudeModelInfo {

@@ -242,6 +242,11 @@ export function renderCodexHookBlock(
   daedalExecutable: string,
   channel = "stable",
   skillEntries: ReadonlyArray<{ path: string; enabled: boolean }> = [],
+  /**
+   * Whether this Codex understands hooks. Skill settings do not depend on
+   * that, so they are written either way; only the hook tables are held back.
+   */
+  hooks = true,
 ): string {
   const markers = codexBlockMarkers(channel);
   const quoted = `'${daedalExecutable.replace(/'/g, `'\\''`)}'`;
@@ -259,7 +264,7 @@ export function renderCodexHookBlock(
       `path = ${tomlString(entry.path)}`,
       `enabled = ${entry.enabled}`,
     );
-  for (const { event, matcher } of CODEX_HOOK_EVENTS) {
+  for (const { event, matcher } of hooks ? CODEX_HOOK_EVENTS : []) {
     lines.push("", `[[hooks.${event}]]`);
     if (matcher) lines.push(`matcher = ${tomlString(matcher)}`);
     lines.push(
