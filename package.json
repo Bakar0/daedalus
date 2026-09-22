@@ -27,6 +27,7 @@
     "test:terminal-spike": "bun run scripts/terminal-spike-check.ts",
     "test:terminal-agent": "bun run scripts/terminal-agent-check.ts",
     "test:panels": "bun run scripts/panel-browser-check.ts",
+    "test:settings-ui": "bun run scripts/settings-ui-check.ts",
     "test:reorder-ui": "bun run scripts/reorder-ui-check.ts",
     "test:repo-tree-ui": "bun run scripts/repo-tree-ui-check.tsx",
     "test:explorer-ui": "bun run scripts/explorer-ui-check.ts",

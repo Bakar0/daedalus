@@ -1538,7 +1538,11 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   border: 1px solid var(--line-strong);
   border-radius: 16px;
   box-shadow: 0 30px 90px rgb(0 0 0 / 0.62);
+  /* No dialog may outgrow the window. Without this a tall one ran off the top
+     and the bottom at once, with nothing to scroll and no way back to it. */
+  max-height: calc(100vh - 48px);
   max-width: 520px;
+  overflow: auto;
   padding: 24px;
   width: calc(100% - 48px);
 }
@@ -1697,12 +1701,6 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   border-top-color: var(--accent);
   height: 18px;
   width: 18px;
-}
-.settings-list {
-  display: grid;
-  grid-template-columns: 125px minmax(0, 1fr);
-  margin: 20px 0;
-  row-gap: 13px;
 }
 dt {
   color: var(--muted);
@@ -3723,9 +3721,10 @@ dd {
   gap: 7px;
   list-style: none;
   margin: 0;
-  max-height: 220px;
-  overflow-y: auto;
   padding: 0;
+}
+.skills-filter {
+  width: 100%;
 }
 .skills-found-row {
   border: 1px solid var(--line);
@@ -3759,4 +3758,119 @@ dd {
   color: var(--danger);
   font-size: 10px;
   margin: 0;
+}
+
+/* Settings. A fixed sidebar of categories and one scrolling pane, sized to the
+   viewport so the dialog is the same shape whichever category is open. */
+.settings {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: 146px minmax(0, 1fr);
+  height: min(560px, calc(100vh - 200px));
+  margin-top: 18px;
+  min-height: 300px;
+}
+.settings-nav {
+  border-right: 1px solid var(--line);
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  padding-right: 12px;
+}
+.settings-nav button {
+  background: none;
+  border: 0;
+  border-radius: 7px;
+  color: var(--secondary);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  padding: 7px 10px;
+  text-align: left;
+}
+.settings-nav button:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+.settings-nav button.is-current {
+  background: var(--raised);
+  color: var(--text);
+  font-weight: 600;
+}
+.settings-pane {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.settings-section {
+  display: grid;
+  gap: 14px;
+}
+.settings-section h3 {
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  margin: 0;
+  text-transform: uppercase;
+}
+.settings-section h3:not(:first-child) {
+  margin-top: 8px;
+}
+.settings-row {
+  align-items: flex-start;
+  cursor: pointer;
+  display: flex;
+  font-family: var(--font-sans);
+  gap: 10px;
+}
+.settings-row input {
+  margin: 2px 0 0;
+}
+.settings-row span {
+  display: grid;
+  gap: 4px;
+}
+.settings-row strong {
+  color: var(--text);
+  font-size: 12px;
+}
+.settings-row small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.settings-choice {
+  align-items: center;
+  display: flex;
+  font-family: var(--font-sans);
+  gap: 12px;
+  justify-content: space-between;
+}
+.settings-choice strong {
+  color: var(--text);
+  font-size: 12px;
+}
+.settings-choice select {
+  min-width: 140px;
+}
+.settings-facts {
+  display: grid;
+  gap: 9px;
+}
+.settings-fact {
+  display: grid;
+  gap: 3px;
+}
+.settings-fact span {
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.settings-fact code {
+  color: var(--secondary);
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }

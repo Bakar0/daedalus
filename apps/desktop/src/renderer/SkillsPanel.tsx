@@ -66,6 +66,7 @@ export function SkillsPanel({
   const [working, setWorking] = React.useState(false);
   const [source, setSource] = React.useState("");
   const [subpath, setSubpath] = React.useState("");
+  const [filter, setFilter] = React.useState("");
 
   const reload = React.useCallback(async () => {
     const response = await client.request.skillList({});
@@ -94,6 +95,13 @@ export function SkillsPanel({
   }
 
   const disabled = busy || working;
+  const needle = filter.trim().toLowerCase();
+  const found = (listing?.discovered ?? []).filter(
+    (skill) =>
+      !needle ||
+      skill.name.toLowerCase().includes(needle) ||
+      skill.skillPath.toLowerCase().includes(needle),
+  );
   // A git URL and a local directory go in the same box, because the user is
   // answering one question and should not have to pick a form first.
   const looksLikeGit = /^(https?:\/\/|git@)/.test(source.trim());
@@ -168,11 +176,23 @@ export function SkillsPanel({
         install. Turning one off uses the provider's own switch. Codex applies
         that only after it restarts, and it applies everywhere.
       </p>
-      {listing && listing.discovered.length === 0 ? (
-        <p className="skills-note">Nothing found.</p>
+      {listing && listing.discovered.length > 6 ? (
+        <input
+          aria-label="Filter skills"
+          className="skills-filter"
+          disabled={disabled}
+          onChange={(event) => setFilter(event.target.value)}
+          placeholder="Filter by name or path"
+          value={filter}
+        />
+      ) : undefined}
+      {listing && found.length === 0 ? (
+        <p className="skills-note">
+          {listing.discovered.length ? "Nothing matches." : "Nothing found."}
+        </p>
       ) : undefined}
       <ul className="skills-found">
-        {(listing?.discovered ?? []).map((skill) => (
+        {found.map((skill) => (
           <DiscoveredRow
             key={`${skill.name}:${skill.skillPath}`}
             disabled={disabled}
