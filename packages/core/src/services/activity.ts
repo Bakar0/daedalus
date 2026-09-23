@@ -30,6 +30,12 @@ import type {
  */
 export const MAX_ATTENTION_REASONS = 5;
 
+/**
+ * Cleared reasons kept per session for the task timeline. The same five, for
+ * the same reason: enough to answer "what did it ask me last time?".
+ */
+export const MAX_CLEARED_REASONS = 5;
+
 /** A reason longer than this is truncated; badges are read, not studied. */
 export const MAX_REASON_LENGTH = 200;
 
@@ -559,6 +565,7 @@ export class ActivityService {
   }
 
   private clearAttentionRecords(sessionId: string): void {
+    this.fileClearedReasons(sessionId);
     this.repositories.deleteSessionAttention(sessionId);
     // Badge alerts queue while the app is down. Without this purge a cleared
     // badge resurrects the moment that queue flushes.
@@ -593,8 +600,42 @@ export class ActivityService {
     return { cleared: existing?.reasons.length ?? 0 };
   }
 
-  /** Drops every trace of a session, for archive and removal. */
+  /**
+   * Keeps what the badge said before it goes. The badge must hold only open
+   * reasons, so a clear deletes it; without this the one thing the user
+   * cannot reconstruct afterwards, what the agent asked, went with it.
+   */
+  private fileClearedReasons(sessionId: string): void {
+    const existing = this.repositories.findSessionAttention(sessionId);
+    if (!existing || existing.reasons.length === 0) return;
+    const clearedAt = this.now().toISOString();
+    this.repositories.appendAttentionHistory(
+      existing.reasons.map((reason) => ({
+        id: reason.id,
+        sessionId,
+        workspaceId: existing.workspaceId,
+        text: reason.text,
+        source: reason.source,
+        raisedAt: reason.raisedAt,
+        clearedAt,
+      })),
+      MAX_CLEARED_REASONS,
+    );
+  }
+
+  /** Reasons cleared from these sessions' badges, oldest first. */
+  clearedReasons(sessionIds: readonly string[]) {
+    return this.repositories.listAttentionHistory(sessionIds);
+  }
+
+  /**
+   * Drops every live trace of a session, for archive and removal. An open
+   * badge is filed as cleared rather than lost: archiving a session is the
+   * end of its wait, and the timeline should still say what it asked.
+   * Removing the session row removes that history with it.
+   */
   forget(sessionId: string): void {
+    this.fileClearedReasons(sessionId);
     this.repositories.deleteAgentActivity(sessionId);
     this.repositories.deleteSessionAttention(sessionId);
     this.notifications.purge(sessionId);

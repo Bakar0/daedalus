@@ -4,7 +4,10 @@ import type { TmuxClient, TmuxLaunch } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
   buildAgentPrompt,
+  buildTaskTimeline,
   createApplicationContext,
+  journalEntriesForTask,
+  mentionsTaskNumber,
   parsePullRequestView,
   type ApplicationContext,
 } from "../index";
@@ -255,5 +258,196 @@ describe("pull request lookup", () => {
       JSON.stringify({ number: 23, url: "https://x", state: "WEIRD" }),
     ])
       expect(parsePullRequestView(bad)).toBeUndefined();
+  });
+});
+
+describe("journal entries for a task", () => {
+  const journal = [
+    "# Journal",
+    "## 2026-09-19 · A reboot should be a non-event (task #19)",
+    "## #15 — Shipped as PR #22",
+    "## #22 — Escape left a session reading working",
+    "### #22 follow-up — still reading working",
+    "```",
+    "## #22 — an example heading inside a code block",
+    "```",
+    "## other-workspace#22 is someone else's",
+    "## #220 is a different task",
+  ].join("\n");
+
+  test("match #N in second- and third-level headings only", () => {
+    expect(journalEntriesForTask(journal, 22)).toEqual([
+      {
+        heading: "#22 — Escape left a session reading working",
+        line: 3,
+        date: null,
+      },
+      {
+        heading: "#22 follow-up — still reading working",
+        line: 4,
+        date: null,
+      },
+    ]);
+    expect(journalEntriesForTask(journal, 19)).toEqual([
+      {
+        heading: "2026-09-19 · A reboot should be a non-event (task #19)",
+        line: 1,
+        date: "2026-09-19",
+      },
+    ]);
+  });
+
+  test("a pull request number is not a task number", () => {
+    expect(mentionsTaskNumber("Shipped as PR #22", 22)).toBe(false);
+    expect(mentionsTaskNumber("pull request #22 merged", 22)).toBe(false);
+    expect(mentionsTaskNumber("Follow-on to #22", 22)).toBe(true);
+    expect(mentionsTaskNumber("(#22)", 22)).toBe(true);
+  });
+});
+
+describe("task timeline", () => {
+  const task = {
+    id: "t",
+    workspaceId: "w",
+    number: 7,
+    title: "Seven",
+    description: "",
+    status: "done" as const,
+    priority: "normal" as const,
+    createdAt: "2026-09-20T09:00:00.000Z",
+    updatedAt: "2026-09-21T18:00:00.000Z",
+    completedAt: "2026-09-21T18:00:00.000Z",
+    briefUpdatedAt: "2026-09-20T09:30:00.000Z",
+  };
+  const session = {
+    id: "s",
+    workspaceId: "w",
+    taskId: "t",
+    name: "Seven",
+    provider: "claude" as const,
+    kind: "agent" as const,
+    tmuxSession: "daedalus_s",
+    command: "claude",
+    args: ["--model", "opus"],
+    workingDirectory: "/tmp",
+    status: "exited" as const,
+    exitCode: 0,
+    startedAt: "2026-09-20T10:00:00.000Z",
+    endedAt: "2026-09-21T12:00:00.000Z",
+    providerSessionId: null,
+    archivedAt: null,
+    resumeCount: 0,
+    lostReason: null,
+    resumeOnStart: false,
+    position: 0,
+  };
+
+  test("orders a join over sessions, worktrees, attention and the journal", () => {
+    const events = buildTaskTimeline({
+      task,
+      sessions: [session],
+      worktrees: [
+        {
+          sessionId: "s",
+          repositoryId: "r",
+          path: "/tmp/w/s/repo",
+          branchName: "daedalus/seven",
+          createdAt: "2026-09-20T10:01:00.000Z",
+        },
+      ],
+      openAttention: [],
+      clearedAttention: [
+        {
+          id: "a",
+          sessionId: "s",
+          workspaceId: "w",
+          text: "Which base branch?",
+          source: "agent",
+          raisedAt: "2026-09-20T11:00:00.000Z",
+          clearedAt: "2026-09-20T11:04:00.000Z",
+        },
+        {
+          id: "b",
+          sessionId: "s",
+          workspaceId: "w",
+          text: "Push to origin?",
+          source: "hook",
+          raisedAt: "2026-09-20T11:02:00.000Z",
+          clearedAt: "2026-09-20T11:04:00.000Z",
+        },
+      ],
+      journal: "## 2026-09-21 · Task #7 landed\n## #7 — the undated one",
+    });
+    expect(events.map((event) => [event.kind, event.text])).toEqual([
+      ["created", "Created"],
+      ["brief_edited", "Brief edited"],
+      ["session_spawned", "Claude started · opus"],
+      ["worktree_created", "Worktree daedalus/seven"],
+      ["attention_raised", "Claude asked"],
+      ["attention_raised", "Claude asked"],
+      // Two reasons came off the badge in one clear: one event, not two.
+      ["attention_cleared", "Attention cleared (2 reasons)"],
+      ["session_stopped", "Claude session stopped"],
+      ["done", "Marked done"],
+      // A day-precision heading sorts after that day's timestamps.
+      ["journal", "Journal entry"],
+      // An undated heading sorts last.
+      ["journal", "Journal entry"],
+    ]);
+    expect(events[4]?.detail).toBe("Which base branch?");
+    expect(events.at(-1)?.journalHeading).toBe("#7 — the undated one");
+  });
+});
+
+describe("attention history", () => {
+  test("keeps the newest five cleared reasons, and files an open badge on archive", async () => {
+    await withBoardContext(async (context) => {
+      const workspace = await context.workspaces.create({ name: "History" });
+      const task = await context.tasks.create({
+        workspace: workspace.id,
+        title: "Asks a lot",
+      });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        taskId: task.id,
+        provider: "codex",
+      });
+      for (let round = 1; round <= 7; round += 1) {
+        await context.activity.raise({
+          sessionId: session.id,
+          reason: `Question ${round}`,
+        });
+        context.activity.clear(session.id);
+      }
+      expect(
+        context.activity.clearedReasons([session.id]).map((item) => item.text),
+      ).toEqual([
+        "Question 3",
+        "Question 4",
+        "Question 5",
+        "Question 6",
+        "Question 7",
+      ]);
+      // The badge itself still holds only what is open.
+      expect(context.activity.attentionFor(session.id)).toBeUndefined();
+
+      await context.activity.raise({
+        sessionId: session.id,
+        reason: "Still waiting when archived",
+      });
+      await context.agents.archive(session.id, true);
+      expect(context.activity.clearedReasons([session.id]).at(-1)?.text).toBe(
+        "Still waiting when archived",
+      );
+
+      const timeline = await context.taskHistory.timeline(task.id);
+      const kinds = timeline.map((event) => event.kind);
+      expect(kinds[0]).toBe("created");
+      expect(kinds).toContain("session_spawned");
+      expect(kinds).toContain("session_archived");
+      expect(
+        timeline.filter((event) => event.kind === "attention_raised"),
+      ).toHaveLength(5);
+    });
   });
 });

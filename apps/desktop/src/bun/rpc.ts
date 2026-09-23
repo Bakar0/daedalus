@@ -433,6 +433,13 @@ export function createDesktopRequestHandlers(
       mutate(() => taskDto(context.tasks.update(id, changes))),
     taskSetStatus: ({ id, status }) =>
       mutate(() => taskDto(context.tasks.setStatus(id, status))),
+    taskTimeline: ({ id }) =>
+      result(async () => ({
+        taskId: id,
+        events: (await context.taskHistory.timeline(id)).map((event) => ({
+          ...event,
+        })),
+      })),
     taskRemove: ({ id, force }) =>
       mutate(async () => taskDto(await context.tasks.remove(id, force))),
     agentGet: ({ id }) =>

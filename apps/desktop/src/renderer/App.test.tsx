@@ -821,6 +821,11 @@ describe("desktop application shell", () => {
     expect(html).not.toContain('aria-label="Start Ship desktop"');
     expect(html).toContain("Sessions");
     expect(html).toContain("Acceptance criteria");
+    // Status sits below the brief now, followed by the task's history.
+    expect(html.indexOf("Acceptance criteria")).toBeLessThan(
+      html.indexOf('aria-label="Task status"'),
+    );
+    expect(html).toContain('aria-label="Timeline"');
     expect(html).toContain("Edit");
     expect(html).toContain("board-detail-column");
     expect(html).not.toContain("linked-sessions");

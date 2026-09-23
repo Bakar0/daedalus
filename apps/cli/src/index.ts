@@ -200,7 +200,7 @@ Usage:
   daedal doctor [--json]
   daedal shutdown [--dry-run] [--keep-terminals] [--force] [--json]
   daedal workspace <create|list|get|update|archive|restore|remove> ... [--json]
-  daedal task <create|list|get|current|update|status|remove> ... [--json]
+  daedal task <create|list|get|current|update|status|timeline|remove> ... [--json]
   daedal repo <library|list|add|attach|sync|fetch|detach|worktree> ... [--json]
   daedal agent <spawn|list|get|wait|attach|send|archive|restore|revive|stop|remove> ... [--json]
   daedal skill <list|get|enable|disable|visibility|install|remove|sync|doctor> ... [--json]
@@ -235,6 +235,7 @@ from the board or from 'agent spawn --task'. --default-provider and
   daedal task current
   daedal task update <task-ref> [--workspace <workspace>] [--title <title>] [--description <text>] [--priority <priority>]
   daedal task status <task-ref> <status> [--workspace <workspace>]
+  daedal task timeline <task-ref> [--workspace <workspace>]
   daedal task remove <task-ref> [--workspace <workspace>] --force`,
   repo: `Repository commands:
   daedal repo library list
@@ -819,6 +820,36 @@ async function taskCommand(
     printResult(result, json, () =>
       console.log(`Updated task #${result.number}: ${result.title}`),
     );
+    return 0;
+  }
+  if (action === "timeline") {
+    const parsed = parseArguments(args, ["workspace"]);
+    expectPositionals(
+      parsed.positionals,
+      1,
+      "daedal task timeline <task-ref> [--workspace <workspace>]",
+    );
+    const task = await resolveTaskReference(
+      context,
+      parsed.positionals[0]!,
+      parsed.values.workspace,
+    );
+    const events = await context.taskHistory.timeline(task.id);
+    printResult({ taskId: task.id, events }, json, () => {
+      console.log(`#${task.number} ${task.title}`);
+      for (const event of events) {
+        const when =
+          event.at === null
+            ? "".padEnd(16)
+            : event.at.length === 10
+              ? event.at.padEnd(16)
+              : event.at.slice(0, 16).replace("T", " ");
+        const detail = event.detail ? `\t${event.detail}` : "";
+        console.log(
+          `${when}  ${event.text}${event.open ? " (open)" : ""}${detail}`,
+        );
+      }
+    });
     return 0;
   }
   if (action === "status") {

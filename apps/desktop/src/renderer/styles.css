@@ -2025,8 +2025,7 @@ dd {
 .workspace-main-header,
 .board-toolbar,
 .sessions-toolbar,
-.terminal-heading,
-.brief-modal-toolbar {
+.terminal-heading {
   align-items: center;
   display: flex;
   justify-content: space-between;
@@ -3416,9 +3415,6 @@ dd {
   max-width: 700px;
   overflow: auto;
 }
-.brief-modal-toolbar {
-  margin-top: 18px;
-}
 @media (max-width: 820px) {
   .workspace-shell.mode-board,
   .workspace-shell.mode-sessions,
@@ -4222,5 +4218,131 @@ dd {
     max-width: 120px;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+}
+
+/* Inspector below the brief: status, then the task's history. */
+.task-inspector-section {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+}
+.task-status-row > label {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 11px;
+  gap: 10px;
+  justify-content: space-between;
+}
+.task-status-row select {
+  min-width: 140px;
+}
+.task-timeline {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+}
+.task-timeline > h3,
+.task-inspector-section > h3 {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  margin: 0;
+  text-transform: uppercase;
+}
+.task-timeline > ol {
+  display: grid;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.task-timeline-event {
+  align-items: baseline;
+  display: grid;
+  font-size: 11px;
+  gap: 8px;
+  grid-template-columns: 14px 78px minmax(0, 1fr);
+  line-height: 1.45;
+  padding: 3px 0;
+}
+.task-timeline-glyph {
+  color: var(--muted);
+  font-size: 10px;
+  text-align: center;
+}
+.task-timeline-event > time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.task-timeline-text {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  min-width: 0;
+}
+.task-timeline-text > strong {
+  color: var(--secondary);
+  font-weight: 560;
+}
+.task-timeline-detail {
+  color: var(--muted);
+  flex-basis: 100%;
+  overflow-wrap: anywhere;
+}
+.task-timeline-event.kind-attention_raised .task-timeline-glyph {
+  color: #ff8987;
+}
+.task-timeline-event.kind-done .task-timeline-glyph,
+.task-timeline-event.kind-attention_cleared .task-timeline-glyph {
+  color: #58c79a;
+}
+.task-timeline-open {
+  border: 1px solid rgb(255 130 130 / 0.45);
+  border-radius: 999px;
+  color: #ff8987;
+  font-size: 9px;
+  padding: 0 6px;
+}
+.task-timeline-journal {
+  background: transparent !important;
+  border: 0 !important;
+  color: #91c2ff !important;
+  font-size: 11px !important;
+  padding: 0 !important;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: rgb(145 194 255 / 0.35);
+  text-underline-offset: 2px;
+}
+.app[data-theme="light"] .task-timeline-journal {
+  color: var(--accent) !important;
+}
+.task-timeline-empty {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 0;
+}
+.markdown-body .journal-target {
+  animation: journal-target-fade 2.4s ease-out;
+  border-radius: 6px;
+}
+@keyframes journal-target-fade {
+  from {
+    background: var(--accent-wash);
+  }
+  to {
+    background: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .markdown-body .journal-target {
+    animation: none;
+    outline: 1px solid var(--accent);
   }
 }

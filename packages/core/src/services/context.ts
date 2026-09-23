@@ -21,6 +21,7 @@ import { IntegratedTerminalService } from "./integrated-terminals";
 import { NotificationService } from "./notifications";
 import { PresenceService } from "./presence";
 import { ShutdownService } from "./shutdown";
+import { TaskHistoryService } from "./task-history";
 import { TaskService } from "./tasks";
 import { TelemetryService } from "./telemetry";
 import { WorkspaceService } from "./workspaces";
@@ -41,6 +42,8 @@ export interface ApplicationContext {
    */
   workspaceWatch: WorkspaceWatchService;
   tasks: TaskService;
+  /** Read-only: a task's timeline and cost, assembled on demand. */
+  taskHistory: TaskHistoryService;
   agents: AgentService;
   terminals: IntegratedTerminalService;
   telemetry: TelemetryService;
@@ -184,6 +187,7 @@ export async function createApplicationContext(
     workspaceContent,
     workspaceWatch,
     tasks,
+    taskHistory: new TaskHistoryService(repositories, workspaces, telemetry),
     agents,
     terminals,
     telemetry,

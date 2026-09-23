@@ -19,6 +19,7 @@ import type {
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
+  TaskTimelineDto,
   AgentActivity,
   AgentActivityDto,
   AgentSessionDto,
@@ -50,6 +51,7 @@ import { runWithConcurrency } from "./concurrency";
 import { repositoryFuzzyScore } from "./repository-search";
 import { useListReorder } from "./use-list-reorder";
 import { BoardView, type BoardProvider } from "./BoardView";
+import { TaskTimeline } from "./TaskTimeline";
 import {
   AgentStatusDot,
   compactTokenLabel,
@@ -1639,6 +1641,14 @@ export function WorkspaceApp({
   const [settingsSection, setSettingsSection] =
     useState<SettingsSection>("general");
   const [editingTask, setEditingTask] = useState(false);
+  const [taskTimeline, setTaskTimeline] = useState<TaskTimelineDto>();
+  const [taskTimelineLoading, setTaskTimelineLoading] = useState(false);
+  // A journal heading the workspace view should scroll to once it has opened
+  // JOURNAL.md. Read through a ref by the view's loader, which must not
+  // re-run just because a link was followed.
+  const [journalTarget, setJournalTarget] = useState<string>();
+  const journalTargetRef = useRef(journalTarget);
+  journalTargetRef.current = journalTarget;
   // The quit dialog is driven entirely by the host: it arrives with the plan
   // already computed, and every button answers back over `quitDecision`.
   const [quitRequest, setQuitRequest] = useState<ShutdownPlanDto>();
@@ -2089,6 +2099,57 @@ export function WorkspaceApp({
     [client, refresh],
   );
 
+  // The timeline reads the journal and the history tables, so it is asked for
+  // when a task is selected and again whenever the data moves, never carried
+  // on the snapshot.
+  useEffect(() => {
+    if (!selectedTaskId || view !== "board") {
+      setTaskTimeline(undefined);
+      return;
+    }
+    let cancelled = false;
+    setTaskTimelineLoading(true);
+    void client.request
+      .taskTimeline?.({ id: selectedTaskId })
+      .then((response) => {
+        if (cancelled) return;
+        setTaskTimeline(response.ok ? response.data : undefined);
+      })
+      .catch(() => {
+        if (!cancelled) setTaskTimeline(undefined);
+      })
+      .finally(() => {
+        if (!cancelled) setTaskTimelineLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, dataRevision, selectedTaskId, view]);
+
+  // Once the journal is rendered, bring the linked entry into view. Matched on
+  // the heading's text, which is what the timeline carries, and dropped after
+  // one attempt so a later visit to the journal is not yanked back to it.
+  useEffect(() => {
+    if (
+      !journalTarget ||
+      view !== "workspace" ||
+      selectedWorkspaceFile?.path !== "JOURNAL.md" ||
+      workspaceFileMode !== "preview"
+    )
+      return;
+    const frame = requestAnimationFrame(() => {
+      const heading = [
+        ...document.querySelectorAll<HTMLElement>(
+          ".workspace-viewer-content h2, .workspace-viewer-content h3",
+        ),
+      ].find((element) => element.textContent?.trim() === journalTarget);
+      heading?.scrollIntoView({ block: "start" });
+      heading?.classList.add("journal-target");
+      setJournalTarget(undefined);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [journalTarget, selectedWorkspaceFile, view, workspaceFileMode]);
+
   const setFocusMode = useCallback(
     async (enabled: boolean) => {
       const response = await client.request.focusModeSet({ enabled });
@@ -2220,14 +2281,19 @@ export function WorkspaceApp({
         }
         setWorkspaceContent(response.data);
         setWorkspaceDirectories({ "": response.data.files });
+        // A journal link from the task timeline lands on the entry, rendered,
+        // rather than on the brief the view opens by default.
+        const journal = Boolean(journalTargetRef.current);
         setSelectedWorkspaceFile({
-          name: "BRIEF.md",
-          path: "BRIEF.md",
-          content: response.data.brief,
+          name: journal ? "JOURNAL.md" : "BRIEF.md",
+          path: journal ? "JOURNAL.md" : "BRIEF.md",
+          content: journal ? response.data.journal : response.data.brief,
           format: "markdown",
         });
-        setWorkspaceDraft(response.data.brief);
-        setWorkspaceFileMode("edit");
+        setWorkspaceDraft(
+          journal ? response.data.journal : response.data.brief,
+        );
+        setWorkspaceFileMode(journal ? "preview" : "edit");
         setSelectedWorkspaceDirectory("");
         setNewWorkspaceEntry(undefined);
         setError(undefined);
@@ -3644,30 +3710,43 @@ export function WorkspaceApp({
     </form>
   ) : (
     <div className="task-brief">
-      <div className="brief-modal-toolbar">
-        <select
-          aria-label="Task status"
-          value={selectedTask.status}
-          onChange={(event) =>
-            void perform(
-              client.request.taskSetStatus({
-                id: selectedTask.id,
-                status: event.target.value as TaskStatus,
-              }),
-            )
-          }
-        >
-          {STATUSES.map((status) => (
-            <option key={status} value={status}>
-              {status.replace("_", " ")}
-            </option>
-          ))}
-        </select>
-      </div>
       <h2>
         #{selectedTask.number} {selectedTask.title}
       </h2>
       <MarkdownPreview source={selectedTask.description} />
+      <div className="task-inspector-section task-status-row">
+        <label>
+          Status
+          <select
+            aria-label="Task status"
+            value={selectedTask.status}
+            onChange={(event) =>
+              void perform(
+                client.request.taskSetStatus({
+                  id: selectedTask.id,
+                  status: event.target.value as TaskStatus,
+                }),
+              )
+            }
+          >
+            {STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {status.replace("_", " ")}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <TaskTimeline
+        loading={taskTimelineLoading}
+        onOpenJournal={(heading) => {
+          setJournalTarget(heading);
+          setView("workspace");
+        }}
+        timeline={
+          taskTimeline?.taskId === selectedTask.id ? taskTimeline : undefined
+        }
+      />
       <button
         className="danger-link brief-delete"
         onClick={() =>

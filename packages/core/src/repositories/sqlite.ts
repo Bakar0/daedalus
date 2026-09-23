@@ -988,7 +988,8 @@ export class SqliteRepositories {
 
   /**
    * Files cleared reasons and trims the session to its newest `keep`, in one
-   * transaction so a reader never sees six.
+   * transaction so a reader never sees six. Ties on time, which a fast raise
+   * and clear produce, fall back to insertion order.
    */
   appendAttentionHistory(
     entries: readonly ClearedAttentionReason[],
@@ -1003,7 +1004,7 @@ export class SqliteRepositories {
     const trim = this.database.query(
       `DELETE FROM attention_history WHERE session_id = ? AND id NOT IN (
          SELECT id FROM attention_history WHERE session_id = ?
-         ORDER BY cleared_at DESC, raised_at DESC, id DESC LIMIT ?
+         ORDER BY cleared_at DESC, rowid DESC LIMIT ?
        )`,
     );
     this.database.transaction(() => {
@@ -1030,7 +1031,7 @@ export class SqliteRepositories {
       .query<AttentionHistoryRow, string[]>(
         `SELECT * FROM attention_history WHERE session_id IN (${sessionIds
           .map(() => "?")
-          .join(", ")}) ORDER BY raised_at, id`,
+          .join(", ")}) ORDER BY raised_at, rowid`,
       )
       .all(...sessionIds)
       .map((row) => ({

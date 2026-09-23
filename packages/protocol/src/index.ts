@@ -398,6 +398,36 @@ export interface SessionTelemetryDto {
   observedAt: string;
 }
 
+/** One thing that happened to a task. See `TaskTimelineEvent` in the core. */
+export interface TaskTimelineEventDto {
+  kind:
+    | "created"
+    | "brief_edited"
+    | "session_spawned"
+    | "worktree_created"
+    | "attention_raised"
+    | "attention_cleared"
+    | "session_stopped"
+    | "session_archived"
+    | "journal"
+    | "done"
+    | "cancelled";
+  /** ISO time, a bare `YYYY-MM-DD` for a dated journal heading, or null. */
+  at: string | null;
+  text: string;
+  detail?: string;
+  sessionId?: string;
+  /** For a journal entry: the heading as written, to scroll the journal to. */
+  journalHeading?: string;
+  /** For a raised reason: still open on the badge. */
+  open?: boolean;
+}
+
+export interface TaskTimelineDto {
+  taskId: string;
+  events: TaskTimelineEventDto[];
+}
+
 export interface DesktopSnapshotDto {
   workspaces: WorkspaceDto[];
   tasks: TaskDto[];
@@ -689,6 +719,11 @@ export interface DesktopRpcSchema {
         TaskDto
       >;
       taskSetStatus: Request<{ id: string; status: TaskStatus }, TaskDto>;
+      /**
+       * Assembled on demand, so it is a request rather than a snapshot field:
+       * it reads `JOURNAL.md` and would otherwise ride along on every tick.
+       */
+      taskTimeline: Request<{ id: string }, TaskTimelineDto>;
       taskRemove: Request<{ id: string; force: true }, TaskDto>;
       agentGet: Request<{ id: string }, AgentSessionDto>;
       agentSpawn: Request<

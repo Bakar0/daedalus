@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { DaedalusConfig } from "../config";
 import type { AgentSession } from "../domain";
 import type { SqliteRepositories } from "../repositories";
-import { resolveAgentExecutable } from "./providers";
+import { resolveAgentExecutable, sessionLaunchModel } from "./providers";
 
 const SESSION_CACHE_MS = 5_000;
 const PROVIDER_CACHE_MS = 60_000;
@@ -331,15 +331,6 @@ export const claudeTranscriptPath = (
     `${agent.providerSessionId ?? agent.id}.jsonl`,
   );
 
-function selectedModel(args: string[]): string | undefined {
-  for (let index = args.length - 1; index >= 0; index -= 1) {
-    const argument = args[index]!;
-    if (argument.startsWith("--model=")) return argument.slice(8);
-    if (argument === "--model") return args[index + 1];
-  }
-  return undefined;
-}
-
 function contextWindowFromModel(model?: string): number | undefined {
   const match = model?.match(/\[(\d+)([mk])\]$/i);
   if (!match) return undefined;
@@ -418,7 +409,11 @@ async function readClaudeTranscript(
   try {
     const file = Bun.file(path);
     const text = await file.slice(Math.max(0, file.size - 512 * 1024)).text();
-    return parseClaudeTranscript(agent.id, text, selectedModel(agent.args));
+    return parseClaudeTranscript(
+      agent.id,
+      text,
+      sessionLaunchModel(agent.args),
+    );
   } catch {
     return undefined;
   }

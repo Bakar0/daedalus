@@ -622,6 +622,18 @@ export function resolveProvider(
   };
 }
 
+/** The `--model` a session was launched with, if it was given one. */
+export function sessionLaunchModel(
+  args: readonly string[],
+): string | undefined {
+  for (let index = args.length - 1; index >= 0; index -= 1) {
+    const argument = args[index]!;
+    if (argument.startsWith("--model=")) return argument.slice(8);
+    if (argument === "--model") return args[index + 1];
+  }
+  return undefined;
+}
+
 export function buildAgentPrompt(input: {
   taskNumber?: number;
   message?: string;
