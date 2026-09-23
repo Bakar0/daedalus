@@ -4331,6 +4331,8 @@ dd {
 .markdown-body .journal-target {
   animation: journal-target-fade 2.4s ease-out;
   border-radius: 6px;
+  /* Lands a little below the viewer's edge rather than flush against it. */
+  scroll-margin-top: 14px;
 }
 @keyframes journal-target-fade {
   from {
@@ -4367,6 +4369,8 @@ dd {
 }
 .board-chip {
   align-items: center;
+  flex: 0 0 auto;
+  white-space: nowrap;
   background: var(--elevated) !important;
   border: 1px solid var(--line) !important;
   border-radius: 999px !important;
@@ -4411,8 +4415,11 @@ dd {
 }
 .task-relations dd {
   display: grid;
+  /* The global dd is monospace, for paths in Settings; these are titles. */
+  font-family: inherit;
   gap: 4px;
   margin: 0;
+  min-width: 0;
 }
 .task-relation {
   align-items: center;

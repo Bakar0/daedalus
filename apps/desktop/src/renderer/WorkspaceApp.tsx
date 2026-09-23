@@ -2144,8 +2144,9 @@ export function WorkspaceApp({
           ".workspace-viewer-content h2, .workspace-viewer-content h3",
         ),
       ].find((element) => element.textContent?.trim() === journalTarget);
-      heading?.scrollIntoView({ block: "start" });
+      // The class carries the scroll margin, so it goes on before the scroll.
       heading?.classList.add("journal-target");
+      heading?.scrollIntoView({ block: "start" });
       setJournalTarget(undefined);
     });
     return () => cancelAnimationFrame(frame);

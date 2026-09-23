@@ -718,10 +718,13 @@ export class TelemetryService {
    */
   async sessionUsage(agent: AgentSession): Promise<SessionUsageHistory> {
     const launched = sessionLaunchModel(agent.args);
+    // What the transcript names is what ran. The launch argument is often an
+    // alias for the same model ("opus[1m]" for "claude-opus-5"), so it only
+    // speaks when the transcript is silent.
     const merge = (history?: SessionUsageHistory): SessionUsageHistory => {
       const models: string[] = [];
-      addModel(models, launched);
       for (const model of history?.models ?? []) addModel(models, model);
+      if (models.length === 0) addModel(models, launched);
       return { ...history, models };
     };
     if (agent.kind !== "agent") return { models: [] };

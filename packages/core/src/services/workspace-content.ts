@@ -578,6 +578,15 @@ async function worktreeHeldWork(
 // actions that change something ask for a pass directly rather than waiting.
 const STATUS_REFRESH_INTERVAL_MS = 1_000;
 
+/**
+ * The board's pass covers every workspace's worktrees and is asked for on
+ * every snapshot, which arrives on every activity change while agents work.
+ * Measured on a real machine a pass took four seconds, so unforced passes
+ * are held to one per ten seconds; a worktree's delta changes when an agent
+ * commits, not several times a second.
+ */
+const BOARD_STATUS_REFRESH_INTERVAL_MS = 10_000;
+
 const statusKey = (path: string) => resolve(path);
 
 const UNAVAILABLE_STATUS: GitStatus = {
@@ -768,6 +777,7 @@ export class WorkspaceContentService {
    */
   private statusRefreshAgain: string | null | undefined;
   private lastStatusRefreshAt = 0;
+  private lastBoardRefreshAt = 0;
 
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -889,6 +899,13 @@ export class WorkspaceContentService {
     }
     const since = Date.now() - this.lastStatusRefreshAt;
     if (!force && since < STATUS_REFRESH_INTERVAL_MS) return;
+    if (
+      !force &&
+      workspaceId === null &&
+      Date.now() - this.lastBoardRefreshAt < BOARD_STATUS_REFRESH_INTERVAL_MS
+    )
+      return;
+    if (workspaceId === null) this.lastBoardRefreshAt = Date.now();
     this.statusRefresh = this.refreshGitStatuses(workspaceId)
       .catch(() => undefined)
       .finally(() => {
@@ -910,22 +927,28 @@ export class WorkspaceContentService {
       repositories.map((item) => [item.id, item.baseBranch]),
     );
     // Only a session worktree carries a branch, and only a branch can have a
-    // pull request; the read-only checkouts under `repos/` never do.
+    // pull request; the read-only checkouts under `repos/` never do. The
+    // board's pass (every workspace) skips those checkouts entirely: it never
+    // shows them, and on a real machine they were most of the pass.
     const targets: Array<{
       path: string | null;
       baseBranch: string | null;
       branchName?: string;
+      wantsPullRequest?: boolean;
     }> = [
-      ...repositories.map((item) => ({
-        path: item.status === "ready" ? item.referencePath : null,
-        baseBranch: item.baseBranch,
-      })),
+      ...(workspaceId === null
+        ? []
+        : repositories.map((item) => ({
+            path: item.status === "ready" ? item.referencePath : null,
+            baseBranch: item.baseBranch,
+          }))),
       ...this.repositories
         .listSessionWorktrees(workspaceId ? { workspaceId } : {})
         .map((item) => ({
           path: item.path,
           baseBranch: baseBranches.get(item.repositoryId) ?? null,
           branchName: item.branchName,
+          wantsPullRequest: this.worktreeWantsPullRequest(item.sessionId),
         })),
     ];
     let changed = false;
@@ -940,6 +963,7 @@ export class WorkspaceContentService {
         // being checked, so a closed or merged state still arrives.
         if (
           target.branchName &&
+          target.wantsPullRequest &&
           (status.ahead > 0 || this.pullRequestCache.get(key)?.value) &&
           (await this.refreshPullRequest(key, target.path, target.branchName))
         )
@@ -958,6 +982,22 @@ export class WorkspaceContentService {
       }),
     );
     if (changed) this.onRepositoriesChanged();
+  }
+
+  /**
+   * Whether a worktree's pull request is worth a `gh` call: its task is still
+   * open, or it has no task and its session is not archived. A done task's
+   * card sits in a collapsed lane, and on a real machine most worktrees with
+   * commits belonged to one.
+   */
+  private worktreeWantsPullRequest(sessionId: string): boolean {
+    const session = this.repositories.findAgent(sessionId);
+    if (!session) return false;
+    if (!session.taskId) return !session.archivedAt;
+    const task = this.repositories.findTask(session.taskId);
+    return Boolean(
+      task && task.status !== "done" && task.status !== "cancelled",
+    );
   }
 
   /**

@@ -6,7 +6,7 @@
  * before it answers "what stage was this filed under". The lanes come from
  * `board-lanes.ts`; this file only draws them and forwards clicks.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type {
   AgentActivityDto,
   AgentSessionDto,
@@ -275,6 +275,13 @@ function BoardSessionRow({
   telemetry?: SessionTelemetryDto;
 }) {
   const view = sessionStatusView(session, activity, attention);
+  // A reason Daedalus generated restates the activity ("Codex needs
+  // permission: Bash(…)" under "needs permission"), so the row shows what the
+  // agent is blocked on instead. A reason the agent wrote is shown as is.
+  const detail =
+    view.attention && view.reasons.at(-1)?.generated && activity?.detail
+      ? activity.detail
+      : view.detail;
   const tool = sessionTool(session);
   const model = telemetry?.model ?? sessionConfiguredModel(session);
   const context = telemetry?.context?.usedPercent;
@@ -319,9 +326,7 @@ function BoardSessionRow({
               unconfirmed
             </span>
           )}
-          {view.detail && (
-            <span className="board-session-detail"> · {view.detail}</span>
-          )}
+          {detail && <span className="board-session-detail"> · {detail}</span>}
         </span>
       )}
     </button>
@@ -334,10 +339,12 @@ function BoardSessionRow({
  * belongs in the terminal, which is one click away beside it.
  */
 function AnswerBox({
+  children,
   onAnswer,
   onOpenTerminal,
   session,
 }: {
+  children?: ReactNode;
   onAnswer: (text: string) => Promise<boolean>;
   onOpenTerminal: () => void;
   session: AgentSessionDto;
@@ -379,6 +386,7 @@ function AnswerBox({
       <button className="quiet" onClick={onOpenTerminal} type="button">
         Terminal
       </button>
+      {children}
     </div>
   );
 }
@@ -738,7 +746,9 @@ export function BoardView(props: BoardViewProps) {
             onAnswer={(text) => props.onAnswer(answerTarget, text)}
             onOpenTerminal={() => props.onOpenSession(answerTarget)}
             session={answerTarget}
-          />
+          >
+            {secondOpinion}
+          </AnswerBox>
         )}
         {lane === "review" && (
           <div className="board-card-actions board-review-actions">
@@ -783,10 +793,10 @@ export function BoardView(props: BoardViewProps) {
           </div>
         )}
         {(startable ||
-          (offersSecondOpinion && lane !== "review") ||
+          (offersSecondOpinion && lane !== "review" && !answerTarget) ||
           (lane === "running" && task.status === "todo")) && (
           <div className="board-card-actions">
-            {secondOpinion}
+            {!answerTarget && secondOpinion}
             {lane === "running" && task.status === "todo" && (
               <button
                 className="quiet"
