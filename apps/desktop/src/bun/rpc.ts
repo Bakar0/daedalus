@@ -148,11 +148,17 @@ export async function desktopSnapshot(
       context.agents.capabilities(),
       context.telemetry.read(),
     ]);
+  const references = context.tasks.references(tasks);
   return {
     workspaces: workspaces.map(({ workspace, available }) =>
       workspaceDto(workspace, available),
     ),
-    tasks: tasks.map(taskDto),
+    tasks: tasks.map((task) => ({
+      ...taskDto(task),
+      references: (references.get(task.id) ?? []).map((item) => ({
+        ...item,
+      })),
+    })),
     agents: agents.map(agentDto),
     terminals: terminals.map(integratedTerminalDto),
     repositories: context.workspaceContent
@@ -160,6 +166,9 @@ export async function desktopSnapshot(
       .map(repositoryLibraryDto),
     ...telemetry,
     sessionActivity: context.activity.list().map(agentActivityDto),
+    worktrees: context.workspaceContent
+      .listWorktrees()
+      .map((worktree) => ({ ...worktree })),
     attention: context.activity.listAttention().map(sessionAttentionDto),
     toasts: context.notifications.pending("toast").map(toastDto),
     settings: {
@@ -375,6 +384,10 @@ export function createDesktopRequestHandlers(
       mutate(async () => ({
         ...(await context.workspaceContent.removeSessionWorktree(params)),
       })),
+    // Opening a folder changes nothing Daedalus stores, so it announces
+    // nothing either.
+    sessionWorktreeOpen: (params) =>
+      result(() => context.workspaceContent.openSessionWorktree(params)),
     sessionWorktreePush: (params) =>
       mutate(async () => {
         const pushed =
@@ -430,6 +443,15 @@ export function createDesktopRequestHandlers(
       mutate(() => taskDto(context.tasks.update(id, changes))),
     taskSetStatus: ({ id, status }) =>
       mutate(() => taskDto(context.tasks.setStatus(id, status))),
+    taskTimeline: ({ id }) =>
+      result(async () => {
+        const report = await context.taskHistory.report(id);
+        return {
+          taskId: id,
+          events: report.events.map((event) => ({ ...event })),
+          cost: { ...report.cost, models: [...report.cost.models] },
+        };
+      }),
     taskRemove: ({ id, force }) =>
       mutate(async () => taskDto(await context.tasks.remove(id, force))),
     agentGet: ({ id }) =>

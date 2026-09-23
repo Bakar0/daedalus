@@ -8,7 +8,7 @@ Add `--json` anywhere on a non-interactive command for a compact result envelope
 daedal workspace create <name> [--slug <slug>] [--path <path>]
 daedal workspace list [--archived]
 daedal workspace get <workspace>
-daedal workspace update <workspace> [--name <name>] [--slug <slug>]
+daedal workspace update <workspace> [--name <name>] [--slug <slug>] [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--default-model <model>|none]
 daedal workspace archive <workspace>
 daedal workspace restore <workspace>
 daedal workspace remove <workspace> [--delete-files] --force
@@ -17,14 +17,21 @@ daedal workspace remove <workspace> [--delete-files] --force
 ## Tasks and board status
 
 ```text
-daedal task create --workspace <workspace> --title <title> [--description <text>] [--priority <priority>]
+daedal task create --workspace <workspace> --title <title> [--description <text> | --description-file <path|->] [--priority <priority>]
 daedal task list [--workspace <workspace>] [--status <status>]
 daedal task get <task-ref> [--workspace <workspace>]
 daedal task current
-daedal task update <task-ref> [--workspace <workspace>] [--title <title>] [--description <text>] [--priority <priority>]
+daedal task update <task-ref> [--workspace <workspace>] [--title <title>] [--description <text> | --description-file <path|->] [--priority <priority>]
 daedal task status <task-ref> <status> [--workspace <workspace>]
+daedal task timeline <task-ref> [--workspace <workspace>]
 daedal task remove <task-ref> [--workspace <workspace>] --force
 ```
+
+`--description-file -` reads the brief from standard input, which is the way to
+hand over a long Markdown brief without shell quoting. A brief that says
+`depends on #N`, `after #N` or `blocked by #N` makes the board warn before
+Start while #N is not done; any other `#N` is a plain link. The board's lanes
+are derived, never stored, so there is no status to set for "ready for review".
 
 ## Repository library, attachments, and worktrees
 
@@ -50,7 +57,7 @@ library ID.
 
 ```text
 daedal agent models <codex|claude>
-daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <configured-name>) [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>]
+daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <configured-name>) [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>] [--draft-brief]
 daedal agent list [--workspace <workspace>] [--running|--archived]
 daedal agent get <agent-id>
 daedal agent attach <agent-id>
@@ -60,6 +67,11 @@ daedal agent restore <agent-id>
 daedal agent stop <agent-id> [--force]
 daedal agent remove <agent-id>
 ```
+
+`agent spawn --task` moves a `todo` or `blocked` task to `in_progress` when the
+workspace's `--start-sets-in-progress` setting is on (the default); do not set
+it again yourself. `--draft-brief` links the session to the task but asks it to
+write the brief rather than do the work, and leaves the status alone.
 
 `agent models` does not require a workspace. With `--json`, pass an exact
 `data.models[].id` to `agent spawn --model`; omit `--model` to use

@@ -34,6 +34,7 @@ import {
 import type {
   AgentSession,
   GitStatus,
+  PullRequestRef,
   SessionWorktree,
   Task,
   Workspace,
@@ -577,6 +578,15 @@ async function worktreeHeldWork(
 // actions that change something ask for a pass directly rather than waiting.
 const STATUS_REFRESH_INTERVAL_MS = 1_000;
 
+/**
+ * The board's pass covers every workspace's worktrees and is asked for on
+ * every snapshot, which arrives on every activity change while agents work.
+ * Measured on a real machine a pass took four seconds, so unforced passes
+ * are held to one per ten seconds; a worktree's delta changes when an agent
+ * commits, not several times a second.
+ */
+const BOARD_STATUS_REFRESH_INTERVAL_MS = 10_000;
+
 const statusKey = (path: string) => resolve(path);
 
 const UNAVAILABLE_STATUS: GitStatus = {
@@ -629,6 +639,22 @@ async function gitStatusAt(
     .split(/\s+/)
     .map((value) => Number.parseInt(value, 10) || 0);
   const changedFiles = status.stdout.split("\0").filter(Boolean).length;
+  // The size of the diff a reviewer would read. Three-dot, so work that
+  // landed on the base branch since this tree branched is not counted as its.
+  let filesAhead: number | undefined;
+  if (ahead > 0) {
+    const diff = await runCommand(git, [
+      "--no-optional-locks",
+      "-C",
+      path,
+      "diff",
+      "--name-only",
+      "-z",
+      `refs/remotes/origin/${baseBranch}...HEAD`,
+    ]);
+    if (diff.exitCode === 0)
+      filesAhead = diff.stdout.split("\0").filter(Boolean).length;
+  }
   const state = changedFiles
     ? ("modified" as const)
     : ahead && behind
@@ -638,17 +664,120 @@ async function gitStatusAt(
         : ahead
           ? ("ahead" as const)
           : ("clean" as const);
-  return { state, changedFiles, ahead, behind };
+  return {
+    state,
+    changedFiles,
+    ahead,
+    behind,
+    ...(filesAhead === undefined ? {} : { filesAhead }),
+  };
 }
+
+/**
+ * Editors that install a command-line launcher, in the order to try them. A
+ * packaged app inherits no shell PATH, so each also names where its app
+ * bundle keeps the launcher when the user never put it on PATH.
+ */
+const EDITOR_LAUNCHERS: Array<{
+  name: string;
+  command: string;
+  fallbacks: string[];
+}> = [
+  {
+    name: "VS Code",
+    command: "code",
+    fallbacks: [
+      ...standardExecutableFallbacks("code"),
+      "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+    ],
+  },
+  {
+    name: "Cursor",
+    command: "cursor",
+    fallbacks: [
+      ...standardExecutableFallbacks("cursor"),
+      "/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
+    ],
+  },
+  {
+    name: "Zed",
+    command: "zed",
+    fallbacks: [
+      ...standardExecutableFallbacks("zed"),
+      "/Applications/Zed.app/Contents/MacOS/cli",
+    ],
+  },
+];
+
+/** How often one branch is asked about. `gh` is a network round trip. */
+const PULL_REQUEST_REFRESH_MS = 60_000;
+
+/**
+ * Reads `gh pr view --json number,url,state,isDraft`. Anything else, including
+ * a partial answer, is no pull request: a link that might be wrong is worse
+ * than no link.
+ */
+export function parsePullRequestView(
+  stdout: string,
+): PullRequestRef | undefined {
+  try {
+    const value = JSON.parse(stdout) as Partial<Record<string, unknown>>;
+    const state = value.state;
+    if (
+      typeof value.number !== "number" ||
+      !Number.isInteger(value.number) ||
+      typeof value.url !== "string" ||
+      !/^https:\/\//.test(value.url) ||
+      (state !== "OPEN" && state !== "CLOSED" && state !== "MERGED")
+    )
+      return undefined;
+    return {
+      number: value.number,
+      url: value.url,
+      state,
+      isDraft: value.isDraft === true,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+const samePullRequest = (
+  left: PullRequestRef | undefined,
+  right: PullRequestRef | undefined,
+) =>
+  left === right ||
+  (left !== undefined &&
+    right !== undefined &&
+    left.number === right.number &&
+    left.url === right.url &&
+    left.state === right.state &&
+    left.isDraft === right.isDraft);
 
 export class WorkspaceContentService {
   /** In-flight preparations, so a shutdown or a test can wait for them. */
   private readonly preparations = new Map<string, Promise<void>>();
   /** Last measured status per working tree, keyed by path. */
   private readonly gitStatusCache = new Map<string, GitStatus>();
+  /**
+   * Last `gh` answer per worktree path. `checkedAt` is kept even when nothing
+   * was found, so a branch with no pull request is not asked about every
+   * second.
+   */
+  private readonly pullRequestCache = new Map<
+    string,
+    { checkedAt: number; value?: PullRequestRef }
+  >();
   private statusRefresh?: Promise<void>;
-  private statusRefreshAgain = false;
+  /**
+   * What the next pass has to cover. `null` is every workspace, which is what
+   * the board asks for; a string is one. Two different single workspaces
+   * asking during one pass widen it to every workspace rather than dropping
+   * one of them.
+   */
+  private statusRefreshAgain: string | null | undefined;
   private lastStatusRefreshAt = 0;
+  private lastBoardRefreshAt = 0;
 
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -724,6 +853,28 @@ export class WorkspaceContentService {
   }
 
   /**
+   * Every registered session worktree, with whatever status and pull request
+   * has been measured, for the board. Like `get`, it never waits for git or
+   * `gh`: the answer comes from the cache and a refresh is scheduled behind
+   * it, so the board shows a worktree's delta without the workspace view ever
+   * having been opened.
+   */
+  listWorktrees(): SessionWorktree[] {
+    const worktrees = this.repositories.listSessionWorktrees({});
+    this.scheduleGitStatusRefresh(null);
+    return worktrees.map((worktree) => {
+      const key = statusKey(worktree.path);
+      const status = this.gitStatusCache.get(key);
+      const pullRequest = this.pullRequestCache.get(key)?.value;
+      return {
+        ...worktree,
+        ...(status ? { gitStatus: status } : {}),
+        ...(pullRequest ? { pullRequest } : {}),
+      };
+    });
+  }
+
+  /**
    * Measures every working tree in a workspace and announces when the answers
    * change.
    *
@@ -731,41 +882,73 @@ export class WorkspaceContentService {
    * per change. `force` is for the actions that just moved something and want
    * the row to catch up immediately.
    */
-  private scheduleGitStatusRefresh(workspaceId: string, force = false): void {
+  private scheduleGitStatusRefresh(
+    workspaceId: string | null,
+    force = false,
+  ): void {
     if (this.statusRefresh) {
-      this.statusRefreshAgain ||= force;
+      // Only a forced request is worth a second pass; an ordinary one is
+      // already being answered by the pass in flight or the next listing.
+      if (force)
+        this.statusRefreshAgain =
+          this.statusRefreshAgain === undefined ||
+          this.statusRefreshAgain === workspaceId
+            ? workspaceId
+            : null;
       return;
     }
     const since = Date.now() - this.lastStatusRefreshAt;
     if (!force && since < STATUS_REFRESH_INTERVAL_MS) return;
+    if (
+      !force &&
+      workspaceId === null &&
+      Date.now() - this.lastBoardRefreshAt < BOARD_STATUS_REFRESH_INTERVAL_MS
+    )
+      return;
+    if (workspaceId === null) this.lastBoardRefreshAt = Date.now();
     this.statusRefresh = this.refreshGitStatuses(workspaceId)
       .catch(() => undefined)
       .finally(() => {
         this.statusRefresh = undefined;
         this.lastStatusRefreshAt = Date.now();
-        if (this.statusRefreshAgain) {
-          this.statusRefreshAgain = false;
-          this.scheduleGitStatusRefresh(workspaceId, true);
+        const again = this.statusRefreshAgain;
+        if (again !== undefined) {
+          this.statusRefreshAgain = undefined;
+          this.scheduleGitStatusRefresh(again, true);
         }
       });
   }
 
-  private async refreshGitStatuses(workspaceId: string): Promise<void> {
-    const repositories =
-      this.repositories.listWorkspaceRepositories(workspaceId);
+  private async refreshGitStatuses(workspaceId: string | null): Promise<void> {
+    const repositories = this.repositories.listWorkspaceRepositories(
+      workspaceId ?? undefined,
+    );
     const baseBranches = new Map(
       repositories.map((item) => [item.id, item.baseBranch]),
     );
-    const targets: Array<{ path: string | null; baseBranch: string | null }> = [
-      ...repositories.map((item) => ({
-        path: item.status === "ready" ? item.referencePath : null,
-        baseBranch: item.baseBranch,
-      })),
+    // Only a session worktree carries a branch, and only a branch can have a
+    // pull request; the read-only checkouts under `repos/` never do. The
+    // board's pass (every workspace) skips those checkouts entirely: it never
+    // shows them, and on a real machine they were most of the pass.
+    const targets: Array<{
+      path: string | null;
+      baseBranch: string | null;
+      branchName?: string;
+      wantsPullRequest?: boolean;
+    }> = [
+      ...(workspaceId === null
+        ? []
+        : repositories.map((item) => ({
+            path: item.status === "ready" ? item.referencePath : null,
+            baseBranch: item.baseBranch,
+          }))),
       ...this.repositories
-        .listSessionWorktrees({ workspaceId })
+        .listSessionWorktrees(workspaceId ? { workspaceId } : {})
         .map((item) => ({
           path: item.path,
           baseBranch: baseBranches.get(item.repositoryId) ?? null,
+          branchName: item.branchName,
+          wantsPullRequest: this.worktreeWantsPullRequest(item.sessionId),
         })),
     ];
     let changed = false;
@@ -775,12 +958,23 @@ export class WorkspaceContentService {
         const status = await gitStatusAt(target.path, target.baseBranch);
         const key = statusKey(target.path);
         const previous = this.gitStatusCache.get(key);
+        // A branch with no commits of its own has nothing to open a pull
+        // request for, so it costs no `gh` call. One that had a link keeps
+        // being checked, so a closed or merged state still arrives.
+        if (
+          target.branchName &&
+          target.wantsPullRequest &&
+          (status.ahead > 0 || this.pullRequestCache.get(key)?.value) &&
+          (await this.refreshPullRequest(key, target.path, target.branchName))
+        )
+          changed = true;
         if (
           previous &&
           previous.state === status.state &&
           previous.changedFiles === status.changedFiles &&
           previous.ahead === status.ahead &&
-          previous.behind === status.behind
+          previous.behind === status.behind &&
+          previous.filesAhead === status.filesAhead
         )
           return;
         this.gitStatusCache.set(key, status);
@@ -788,6 +982,59 @@ export class WorkspaceContentService {
       }),
     );
     if (changed) this.onRepositoriesChanged();
+  }
+
+  /**
+   * Whether a worktree's pull request is worth a `gh` call: its task is still
+   * open, or it has no task and its session is not archived. A done task's
+   * card sits in a collapsed lane, and on a real machine most worktrees with
+   * commits belonged to one.
+   */
+  private worktreeWantsPullRequest(sessionId: string): boolean {
+    const session = this.repositories.findAgent(sessionId);
+    if (!session) return false;
+    if (!session.taskId) return !session.archivedAt;
+    const task = this.repositories.findTask(session.taskId);
+    return Boolean(
+      task && task.status !== "done" && task.status !== "cancelled",
+    );
+  }
+
+  /**
+   * Asks `gh` whether this branch has a pull request, at most once a minute
+   * per worktree. Returns whether the answer changed.
+   *
+   * Every failure is silence: `gh` missing, signed out, offline, or a branch
+   * that was never pushed all leave the card without a link, which is the
+   * whole of what the board promises about pull requests.
+   */
+  private async refreshPullRequest(
+    key: string,
+    path: string,
+    branchName: string,
+  ): Promise<boolean> {
+    const cached = this.pullRequestCache.get(key);
+    if (cached && Date.now() - cached.checkedAt < PULL_REQUEST_REFRESH_MS)
+      return false;
+    const gh = findExecutable("gh", GH_EXECUTABLE_FALLBACKS);
+    if (!gh || !(await pathExists(path))) {
+      this.pullRequestCache.set(key, { checkedAt: Date.now() });
+      return cached?.value !== undefined;
+    }
+    const response = await runCommand(
+      gh,
+      ["pr", "view", branchName, "--json", "number,url,state,isDraft"],
+      { cwd: path, env: { GH_PROMPT_DISABLED: "1" } },
+    ).catch(() => undefined);
+    const value =
+      response && response.exitCode === 0
+        ? parsePullRequestView(response.stdout)
+        : undefined;
+    this.pullRequestCache.set(key, {
+      checkedAt: Date.now(),
+      ...(value ? { value } : {}),
+    });
+    return !samePullRequest(cached?.value, value);
   }
 
   async setInstructionFilesEnabled(enabled: boolean): Promise<void> {
@@ -1206,6 +1453,63 @@ export class WorkspaceContentService {
       worktree: measured,
       alreadyUpToDate: /Everything up-to-date/i.test(output),
     };
+  }
+
+  /**
+   * Opens a session's worktree for review: in the first editor found on this
+   * machine (VS Code, Cursor, Zed, by their command-line launchers), or in
+   * Finder when there is none. The path comes from the worktree registry,
+   * never from the caller, so this cannot be pointed at anything else.
+   */
+  async openSessionWorktree(input: {
+    session: string;
+    repository: string;
+  }): Promise<{ path: string; openedWith: string }> {
+    const session = this.repositories.findAgent(input.session);
+    if (!session)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Agent session '${input.session}' was not found`,
+      );
+    const worktree = this.repositories
+      .listSessionWorktrees({ sessionId: session.id })
+      .find((item) => {
+        if (item.repositoryId === input.repository) return true;
+        const repository = this.repositories
+          .listWorkspaceRepositories(session.workspaceId)
+          .find((candidate) => candidate.id === item.repositoryId);
+        return repository?.name === input.repository;
+      });
+    if (!worktree)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Session '${session.id}' has no '${input.repository}' working tree`,
+      );
+    if (!(await pathExists(worktree.path)))
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `The working tree at '${worktree.path}' no longer exists`,
+      );
+    for (const editor of EDITOR_LAUNCHERS) {
+      const executable = findExecutable(editor.command, editor.fallbacks);
+      if (!executable) continue;
+      const result = await runCommand(executable, [worktree.path]);
+      if (result.exitCode === 0)
+        return { path: worktree.path, openedWith: editor.name };
+    }
+    const open = findExecutable("open", standardExecutableFallbacks("open"));
+    if (!open)
+      throw new DaedalusError(
+        "DEPENDENCY",
+        "Nothing on this machine can open a folder",
+      );
+    const result = await runCommand(open, [worktree.path]);
+    if (result.exitCode !== 0)
+      throw new DaedalusError(
+        "INTERNAL",
+        `Could not open ${worktree.path}: ${result.stderr.trim()}`,
+      );
+    return { path: worktree.path, openedWith: "Finder" };
   }
 
   // Removing a working tree destroys whatever is only in it, so the guard is
@@ -2026,8 +2330,9 @@ export class WorkspaceContentService {
    * measured answer rather than the last known one — a test, a caller about to
    * act on it — asks for it here.
    */
-  async settleGitStatus(workspaceId?: string): Promise<void> {
-    if (!this.statusRefresh && workspaceId)
+  /** `null` measures every workspace, which is what the board reads. */
+  async settleGitStatus(workspaceId?: string | null): Promise<void> {
+    if (!this.statusRefresh && workspaceId !== undefined)
       this.scheduleGitStatusRefresh(workspaceId, true);
     while (this.statusRefresh) await this.statusRefresh;
   }

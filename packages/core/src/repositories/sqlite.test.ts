@@ -23,6 +23,9 @@ describe("SqliteRepositories", () => {
         updatedAt: now,
         archivedAt: null,
         position: 1,
+        startSetsInProgress: true,
+        defaultProvider: null,
+        defaultModel: null,
       });
       repositories.createTask({
         id: "task-id",
@@ -35,6 +38,7 @@ describe("SqliteRepositories", () => {
         createdAt: now,
         updatedAt: now,
         completedAt: null,
+        briefUpdatedAt: null,
       });
       repositories.createAgent({
         id: "agent-id",

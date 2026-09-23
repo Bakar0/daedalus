@@ -18,6 +18,16 @@ export interface Workspace {
    * its neighbours. Ties fall back to id, so the order is always total.
    */
   position: number;
+  /**
+   * Whether clicking Start on a board card moves a `todo` or `blocked` task
+   * to `in_progress`. The click is the user deciding to begin, so it is the
+   * one status change the app makes for them; on by default.
+   */
+  startSetsInProgress: boolean;
+  /** What Start and Start next launch when the user does not choose. */
+  defaultProvider: "claude" | "codex" | null;
+  /** A provider model id, or null for the provider's own default. */
+  defaultModel: string | null;
 }
 
 export interface Task {
@@ -31,6 +41,11 @@ export interface Task {
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
+  /**
+   * When the title or brief last changed, or null if never since creation.
+   * `updatedAt` also moves on a status change, so it cannot answer this.
+   */
+  briefUpdatedAt: string | null;
 }
 
 export type AgentSessionStatus = "starting" | "running" | "exited" | "lost";
@@ -112,9 +127,26 @@ export interface RepositoryLibraryEntry {
 
 export interface GitStatus {
   state: "clean" | "modified" | "ahead" | "behind" | "diverged" | "unavailable";
+  /** Uncommitted paths in the working tree. */
   changedFiles: number;
   ahead: number;
   behind: number;
+  /**
+   * Files the committed work touches relative to the base branch: the size of
+   * the diff a reviewer would read. Measured only when `ahead` is non-zero.
+   */
+  filesAhead?: number;
+}
+
+/**
+ * A pull request `gh` found for a worktree's branch. Visibility only: nothing
+ * in Daedalus reviews or merges from it.
+ */
+export interface PullRequestRef {
+  number: number;
+  url: string;
+  state: "OPEN" | "CLOSED" | "MERGED";
+  isDraft: boolean;
 }
 
 export interface WorkspaceRepository {
@@ -145,6 +177,8 @@ export interface SessionWorktree {
    * upstream: the question a worktree row answers is how far this agent has
    * moved from the branch it started on. */
   gitStatus?: GitStatus;
+  /** Absent when `gh` is missing, signed out, or found nothing. */
+  pullRequest?: PullRequestRef;
 }
 
 export interface WorkspaceFileEntry {
@@ -254,6 +288,21 @@ export interface SessionAttention {
   /** When the badge was first raised, for "waiting 4m". */
   raisedAt: string;
   updatedAt: string;
+}
+
+/**
+ * A reason that was on a badge and has been cleared. The badge itself only
+ * ever holds open reasons; this is what lets the task timeline show what an
+ * agent asked before. Capped at five per session.
+ */
+export interface ClearedAttentionReason {
+  id: UUID;
+  sessionId: UUID;
+  workspaceId: UUID;
+  text: string;
+  source: AgentActivitySource;
+  raisedAt: string;
+  clearedAt: string;
 }
 
 export type NotificationLevel = "info" | "success" | "error";

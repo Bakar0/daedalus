@@ -48,6 +48,7 @@ const base: DesktopSnapshotDto = {
   sessionTelemetry: [],
   sessionActivity: [],
   attention: [],
+  worktrees: [],
   toasts: [],
   settings: {
     version: "0.3.0",
@@ -463,6 +464,9 @@ describe("desktop application shell", () => {
               archivedAt: null,
               available: true,
               position: 1,
+              startSetsInProgress: true,
+              defaultProvider: null,
+              defaultModel: null,
             },
           ],
           settings: {
@@ -500,6 +504,9 @@ describe("desktop application shell", () => {
               archivedAt: null,
               available: true,
               position: 1,
+              startSetsInProgress: true,
+              defaultProvider: null,
+              defaultModel: null,
             },
           ],
           repositories: [
@@ -549,6 +556,9 @@ describe("desktop application shell", () => {
           archivedAt: null,
           available: true,
           position: 1,
+          startSetsInProgress: true,
+          defaultProvider: null,
+          defaultModel: null,
         },
       ],
     };
@@ -596,6 +606,9 @@ describe("desktop application shell", () => {
           archivedAt: null,
           available: true,
           position: 1,
+          startSetsInProgress: true,
+          defaultProvider: null,
+          defaultModel: null,
         },
       ],
     };
@@ -706,6 +719,9 @@ describe("desktop application shell", () => {
           archivedAt: null,
           available: true,
           position: 1,
+          startSetsInProgress: true,
+          defaultProvider: null,
+          defaultModel: null,
         },
       ],
       tasks: [
@@ -721,6 +737,7 @@ describe("desktop application shell", () => {
           createdAt: "now",
           updatedAt: "now",
           completedAt: null,
+          briefUpdatedAt: null,
         },
       ],
       agents: [
@@ -785,8 +802,13 @@ describe("desktop application shell", () => {
     expect(html).toContain("Ship desktop");
     expect(html).toContain("#1");
     expect(html).toContain("in progress");
-    expect(html).toContain('aria-label="Open Ship desktop session"');
-    expect(html).toContain("task-session-link tool-codex running");
+    // The card is a run summary: a row per linked session, in the lane the
+    // session's state puts it in, rather than a status pill and a date.
+    expect(html).toContain('aria-label="Open Ship desktop: running"');
+    expect(html).toContain("board-session-row tone-idle");
+    expect(html).toContain('aria-label="Running, 1 task"');
+    expect(html).toContain("board-card lane-running selected");
+    expect(html).not.toContain('aria-label="Filter tasks by status"');
     expect(html).toContain(
       'aria-label="2 sessions in Demo: 1 live, 1 need you"',
     );
@@ -794,14 +816,240 @@ describe("desktop application shell", () => {
     expect(html).toContain("1 needs you");
     expect(html).toContain('aria-label="Archive Demo workspace"');
     expect(html).toContain('class="archive-icon"');
-    expect(html).toContain("Start session…");
+    // A running task is not offered Start again; a second session is the
+    // dispatcher's "second opinion", not a second click on the same button.
+    expect(html).not.toContain('aria-label="Start Ship desktop"');
     expect(html).toContain("Sessions");
     expect(html).toContain("Acceptance criteria");
+    // Status sits below the brief now, followed by the task's history.
+    expect(html.indexOf("Acceptance criteria")).toBeLessThan(
+      html.indexOf('aria-label="Task status"'),
+    );
+    expect(html).toContain('aria-label="Timeline"');
     expect(html).toContain("Edit");
     expect(html).toContain("board-detail-column");
     expect(html).not.toContain("linked-sessions");
     expect(html).not.toContain("terminal-column");
     expect(html).not.toContain("Priority");
+  });
+
+  test("shows dependency chips, a warning Start, capture, and both directions in the inspector", () => {
+    const workspace = {
+      id: "w-deps",
+      slug: "deps",
+      name: "Deps",
+      path: "/tmp/deps",
+      createdAt: "2026-09-20T00:00:00.000Z",
+      updatedAt: "2026-09-20T00:00:00.000Z",
+      archivedAt: null,
+      available: true,
+      position: 1,
+      startSetsInProgress: true,
+      defaultProvider: null,
+      defaultModel: null,
+    };
+    const task = (
+      id: string,
+      number: number,
+      title: string,
+      status: "todo" | "in_progress" | "done",
+      references: Array<{ taskId: string; number: number; hard: boolean }>,
+    ) => ({
+      id,
+      workspaceId: workspace.id,
+      number,
+      title,
+      description: "",
+      status,
+      priority: "normal" as const,
+      createdAt: "2026-09-20T00:00:00.000Z",
+      updatedAt: "2026-09-20T00:00:00.000Z",
+      completedAt: null,
+      briefUpdatedAt: null,
+      references,
+    });
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialSelectedTaskId="t10"
+        initialSnapshot={{
+          ...base,
+          workspaces: [workspace],
+          tasks: [
+            task("t10", 10, "Foundation", "todo", []),
+            task("t11", 11, "Builds on it", "todo", [
+              { taskId: "t10", number: 10, hard: true },
+            ]),
+            task("t12", 12, "Mentions it", "todo", [
+              { taskId: "t10", number: 10, hard: false },
+            ]),
+          ],
+          settings: { ...base.settings, tmuxAvailable: true },
+        }}
+        initialWorkspaceView="board"
+      />,
+    );
+    expect(html).toContain(
+      'aria-label="Quick capture: type a task title and press Enter"',
+    );
+    // #11 waits on #10, which is queued: the chip says so and Start warns.
+    expect(html).toContain('aria-label="waiting on #10 Foundation, queued"');
+    expect(html).toContain('aria-label="Start Builds on it, waiting on #10"');
+    expect(html).toContain("Start ⚠");
+    // A plain mention links without blocking.
+    expect(html).toContain('aria-label="#10 Foundation, queued"');
+    expect(html).toContain('aria-label="Start Mentions it"');
+    // #10's own brief says nothing, and still shows what it unblocks.
+    expect(html).toContain("Depends on / Unblocks");
+    expect(html).toContain("<dt>Unblocks</dt>");
+    expect(html).toContain("<dt>Mentioned by</dt>");
+    expect(html).toContain("Draft brief with agent");
+    // An empty brief offers the draft on the card too.
+    expect(html).toContain(">Draft brief</button>");
+    // The waiting task sinks below the ready ones in Queued.
+    expect(html.indexOf('data-task-number="12"')).toBeLessThan(
+      html.indexOf('data-task-number="11"'),
+    );
+  });
+
+  test("gives each lane its dispatcher actions", () => {
+    const workspace = {
+      id: "w-dispatch",
+      slug: "dispatch",
+      name: "Dispatch",
+      path: "/tmp/dispatch",
+      createdAt: "2026-09-20T00:00:00.000Z",
+      updatedAt: "2026-09-20T00:00:00.000Z",
+      archivedAt: null,
+      available: true,
+      position: 1,
+      startSetsInProgress: true,
+      defaultProvider: "codex" as const,
+      defaultModel: null,
+    };
+    const task = (
+      id: string,
+      number: number,
+      title: string,
+      status: "todo" | "in_progress",
+    ) => ({
+      id,
+      workspaceId: workspace.id,
+      number,
+      title,
+      description: "Brief",
+      status,
+      priority: "normal" as const,
+      createdAt: "2026-09-20T00:00:00.000Z",
+      updatedAt: "2026-09-20T00:00:00.000Z",
+      completedAt: null,
+      briefUpdatedAt: null,
+      references: [],
+    });
+    const session = (id: string, taskId: string) => ({
+      id,
+      workspaceId: workspace.id,
+      taskId,
+      name: `Session ${id}`,
+      provider: "claude" as const,
+      kind: "agent" as const,
+      tmuxSession: `daedalus_${id}`,
+      command: "claude",
+      args: [],
+      workingDirectory: "/tmp/dispatch",
+      status: "running" as const,
+      exitCode: null,
+      startedAt: "2026-09-23T10:00:00.000Z",
+      endedAt: null,
+      providerSessionId: null,
+      archivedAt: null,
+      resumeCount: 0,
+      lostReason: null,
+      position: 0,
+    });
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialSnapshot={{
+          ...base,
+          workspaces: [workspace],
+          tasks: [
+            task("t24", 24, "Asks a question", "in_progress"),
+            task("t20", 20, "Finished", "in_progress"),
+            task("t26", 26, "Next up", "todo"),
+          ],
+          agents: [session("s24", "t24"), session("s20", "t20")],
+          sessionActivity: [
+            {
+              sessionId: "s24",
+              activity: "needs_permission",
+              detail: "Bash(git push)",
+              since: "2026-09-23T10:05:00.000Z",
+              observedAt: "2026-09-23T10:05:00.000Z",
+              source: "hook",
+            },
+            {
+              sessionId: "s20",
+              activity: "idle",
+              detail: null,
+              since: "2026-09-23T11:00:00.000Z",
+              observedAt: "2026-09-23T11:00:00.000Z",
+              source: "hook",
+            },
+          ],
+          worktrees: [
+            {
+              sessionId: "s20",
+              repositoryId: "r",
+              path: "/tmp/dispatch/worktrees/s20/repo",
+              branchName: "daedalus/finished",
+              createdAt: "2026-09-23T10:00:00.000Z",
+              gitStatus: {
+                state: "ahead",
+                changedFiles: 0,
+                ahead: 4,
+                behind: 0,
+                filesAhead: 9,
+              },
+              pullRequest: {
+                number: 20,
+                url: "https://github.com/o/r/pull/20",
+                state: "OPEN",
+                isDraft: false,
+              },
+            },
+          ],
+          settings: {
+            ...base.settings,
+            tmuxAvailable: true,
+            providers: [
+              { name: "codex", executable: "codex", available: true },
+              { name: "claude", executable: "claude", available: true },
+            ],
+          },
+        }}
+        initialWorkspaceView="board"
+      />,
+    );
+    // Needs me: the wait, the detail, a reply box and the terminal.
+    expect(html).toContain('aria-label="Needs me, 1 task"');
+    expect(html).toContain("needs permission");
+    expect(html).toContain("Bash(git push)");
+    expect(html).toContain('aria-label="Answer Session s24"');
+    expect(html).toContain(">Terminal</button>");
+    // Ready for review: the delta, the PR, and the three review actions.
+    expect(html).toContain('aria-label="Ready for review, 1 task"');
+    expect(html).toContain("+4 commits, 9 files");
+    expect(html).toContain(">PR #20</button>");
+    expect(html).toContain(">Open worktree</button>");
+    expect(html).toContain(">Open PR</button>");
+    expect(html).toContain(">Mark done</button>");
+    // Both live cards offer the other provider.
+    expect(html.match(/>Second opinion</g)).toHaveLength(2);
+    expect(html).toContain("Start Codex on this task beside Claude");
+    // Queued offers Start next.
+    expect(html).toContain(">Start next</button>");
+    expect(html).toContain("Start #26 Next up with Codex");
   });
 
   test("renders GitHub-flavored Markdown task briefs safely", () => {
@@ -837,6 +1085,9 @@ describe("desktop application shell", () => {
           archivedAt: null,
           available: false,
           position: 1,
+          startSetsInProgress: true,
+          defaultProvider: null,
+          defaultModel: null,
         },
       ],
     };
@@ -882,6 +1133,9 @@ describe("desktop application shell", () => {
           archivedAt: null,
           available: true,
           position: 1,
+          startSetsInProgress: true,
+          defaultProvider: null,
+          defaultModel: null,
         },
       ],
       tasks: [
@@ -896,6 +1150,7 @@ describe("desktop application shell", () => {
           createdAt: "now",
           updatedAt: "now",
           completedAt: null,
+          briefUpdatedAt: null,
         },
       ],
       agents: [
@@ -944,6 +1199,9 @@ describe("desktop application shell", () => {
           archivedAt: null,
           available: true,
           position: 1,
+          startSetsInProgress: true,
+          defaultProvider: null,
+          defaultModel: null,
         },
       ],
       agents: [
@@ -1010,6 +1268,9 @@ describe("desktop application shell", () => {
           archivedAt: null,
           available: true,
           position: 1,
+          startSetsInProgress: true,
+          defaultProvider: null,
+          defaultModel: null,
         },
       ],
       agents: [
@@ -1065,6 +1326,9 @@ describe("desktop application shell", () => {
       archivedAt: null,
       available: true,
       position,
+      startSetsInProgress: true,
+      defaultProvider: null,
+      defaultModel: null,
     });
     // Deliberately not alphabetical, not by creation, and not by position
     // value either: the array order is what the service already applied, and
@@ -1101,6 +1365,9 @@ describe("desktop application shell", () => {
           archivedAt: null,
           available: true,
           position: 1,
+          startSetsInProgress: true,
+          defaultProvider: null,
+          defaultModel: null,
         },
         {
           id: "w2",
@@ -1112,6 +1379,9 @@ describe("desktop application shell", () => {
           archivedAt,
           available: true,
           position: 1,
+          startSetsInProgress: true,
+          defaultProvider: null,
+          defaultModel: null,
         },
       ],
       agents: [
@@ -1168,6 +1438,9 @@ describe("desktop application shell", () => {
           archivedAt: null,
           available: true,
           position: 1,
+          startSetsInProgress: true,
+          defaultProvider: null,
+          defaultModel: null,
         },
       ],
       terminals: [
@@ -1219,6 +1492,9 @@ describe("desktop application shell", () => {
       archivedAt: null,
       available: true,
       position: 1,
+      startSetsInProgress: true,
+      defaultProvider: null,
+      defaultModel: null,
     };
     const html = renderToStaticMarkup(
       <App
@@ -1434,6 +1710,9 @@ describe("session status indicators", () => {
       archivedAt: null,
       available: true,
       position: 1,
+      startSetsInProgress: true,
+      defaultProvider: null,
+      defaultModel: null,
     };
     const blocked: AgentSessionDto = {
       ...liveSession,

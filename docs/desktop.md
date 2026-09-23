@@ -6,6 +6,47 @@ The desktop is a thin adapter over the same `ApplicationContext` used by `daedal
 
 The bottom integrated-terminal panel is a separate utility surface available in Board, Sessions, and Workspace modes. Its **+** action creates a persisted login shell in the configured Daedalus home. Each active workspace card has an **Open in integrated terminal** action that creates a named tab in the workspace's validated registered path. Tabs show live state, can be selected or closed, and survive panel collapse and app restart through SQLite metadata plus tmux ownership. They never appear in the agent Sessions list.
 
+## Board
+
+The board's user is a dispatcher running several agents, so a card answers "is this waiting on me, and for how long?" before "what stage was it filed under". `Task.status` stays the human's and only a person's click changes it. What the board draws is a lane computed from that status plus the state of the task's sessions and worktrees, recomputed from every snapshot and never stored, so a lane cannot lag reality by more than one snapshot.
+
+### Lanes
+
+`laneFor` in `board-lanes.ts` holds every rule, and is pure. First match wins:
+
+| Lane             | Rule                                                                                                        | Sorted by                                                |
+| ---------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| Needs me         | A linked session has an open attention reason, or is alive and `needs_permission`, `needs_input` or `error` | Longest wait first                                       |
+| Running          | A linked session is `working` or starting                                                                   | Real work first, then most recent activity               |
+| Ready for review | Status `in_progress` and a linked worktree is ahead of its base branch                                      | Most recent stop first                                   |
+| Queued           | Status `todo` and no live agent                                                                             | Ready before waiting, then priority, then creation order |
+| Parked           | Status `blocked`                                                                                            | Most recently updated                                    |
+| Done             | Status `done` or `cancelled`; collapsed by default                                                          | Most recently completed                                  |
+
+Two combinations fit none of those rows: an `in_progress` task with nothing ahead of base and nothing working, and a `todo` task whose agent is alive but idle. Both go to Running, below the tasks that are really working, because somebody started them and "is it still making progress?" is the question Running answers. A `todo` task in Running offers **Set in progress**. Archived sessions never put a task in Needs me or Running, but their worktrees still count as the task's output.
+
+Lanes stack vertically, Needs me first, each a collapsible section with a count. Which ones are collapsed is remembered per workspace. The status filter and the last-updated date are gone.
+
+### Cards
+
+A card is a run summary, top to bottom: number, title and priority when it is not `normal`; dependency chips; one row per linked session; one output line per worktree; the lane's actions. A session row reuses the Sessions list's indicator vocabulary from `session-view.tsx`, the same module that list draws from: the ringed dot for attention, the pulsing ring for working (still under `prefers-reduced-motion`), hollow for stopped, dashed for a `pane` reading. Its first line is provider, model and context; its second is the activity with its wait ("needs permission 14m") and the detail, which the board hides below 430px of column width. A reason Daedalus generated restates the activity, so the row shows the activity's detail instead; a reason the agent wrote is shown as written.
+
+The output line is the worktree's short name, commits and files ahead of the base branch, and a pull request link when `gh pr view` finds one for the branch. `gh` missing, signed out, offline, or a branch that was never pushed all render nothing. It is asked at most once a minute per branch, only for branches with commits whose task is still open. Nothing merges from the board.
+
+Worktrees ride on the snapshot for every workspace, measured in the background from a cache so the snapshot never waits on git. The board's pass skips the read-only checkouts under `repos/` and runs at most every ten seconds unless an action forces it; on a real machine a full pass over 23 worktrees took 2.4 seconds.
+
+### Capture, dependencies and actions
+
+The capture line above the lanes creates a `todo` with the typed title on Enter. **Draft brief** (on a card with an empty brief, and in the inspector) starts a session whose one instruction is to read the workspace and write the brief back; it does not move the status.
+
+Chips come from `#N` references in the brief, resolved in the core (see `docs/cli.md`). A chip carries the referenced task's lane glyph and says `after #23` when a hard dependency is done, `waiting on #25` when it is not, and `#21` for a plain reference; clicking one selects that task. A queued task that waits on something sinks below the ready ones and its Start reads **Start ⚠**. Clicking it asks for confirmation naming what is not done. It is a warning, never a lock.
+
+**Start** launches with the workspace's default provider and model without asking and stays on the board; the ▾ beside it opens the session dialog to choose. The core moves the task to `in_progress` when **Start moves the task to in progress** is on, which is set with the provider and model under **Start with …** in the toolbar. **Start next** on the Queued header starts the top of the lane. **Second opinion** on Needs me, Running and Ready for review cards starts the other installed provider on the same task, and the card then shows both rows and both deltas. A Needs me card has a reply box that runs `agent send` against the session that has waited longest, which types the text and presses Enter, and a **Terminal** button for anything longer. A Ready for review card has **Open worktree** (VS Code, Cursor or Zed, else Finder), **Open PR**, and **Mark done**.
+
+### Inspector
+
+Below the brief: the status select; **Depends on / Unblocks**, with the reverse direction computed from every other task's brief; the timeline; and the cost line. Both come from `taskTimeline`, asked for when a task is selected and whenever the data changes, never carried on the snapshot. A journal entry in the timeline opens `JOURNAL.md` rendered and scrolled to that heading.
+
 ## Agent status and attention
 
 Lifecycle status answers "is this session running". Activity answers "does it
@@ -179,11 +220,12 @@ The Bun handlers only convert DTOs, normalize errors, and call `context.workspac
 Available calls cover:
 
 - workspace snapshot/create/get/update/remove;
-- task create/get/update/status/remove;
+- task create/get/update/status/remove, and the timeline with its cost line;
 - agent get/spawn/send/stop/remove/archive/restore;
 - attention raise/clear, toast acknowledgement, presence publication, and the
   Focus mode setting;
 - integrated terminal create/close;
+- session worktree open, push and remove;
 - settings and executable capability discovery through the snapshot.
 
 Workspace removal always supplies the core `force` guard after UI confirmation. The UI first asks whether files should be deleted and then requires a second confirmation describing the exact action. Task deletion, agent stop, and session-history removal also require confirmation. Live agents continue to block task and workspace removal in core.
@@ -275,5 +317,7 @@ The quit item carries an action rather than `{ role: "quit" }`, because that rol
 `before-quit` is the one event every `Utils.quit()` passes through, and the host only _logs_ it. Denying a quit there is possible and is deliberately not done: Electrobun routes `process.exit` through `quit()`, so a denial turns the `SIGTERM` handler into a no-op and leaves an app that survives `pkill`, a logout and a system shutdown — strictly worse than the silence this feature exists to fix — and the self-updater quits in order to restart, the one case where surviving is the whole point.
 
 ## Testing
+
+`apps/desktop/src/renderer/board-lanes.test.ts` covers every lane rule, both fallbacks, each lane's sort, and the dependency directions. `packages/core/src/services/board.test.ts` covers the in_progress move and its setting, the draft-brief launch, the board settings, brief-edit dating, the `gh` answer parser, journal matching, timeline order, the five-reason history cap, the reference parser, and the usage scanners behind the cost line. `bun run test:board-ui` drives the board in headless Chrome against `board-test.tsx`, a stateful stand-in for the host that announces after every mutation the way `rpc.ts` does: lane order and counts, chips, the confirmation a waiting Start raises, capture, Start and Start next, the reply box, the review actions, second opinion, the inspector's timeline and cost, the journal link scrolling to its heading, the detail line hiding at compact width, reduced motion, and card and popover geometry. It writes screenshots to `artifacts/board-ui-check-*.png` for wide, compact, settings, inspector, journal and light theme, which are meant to be looked at.
 
 `apps/desktop/src/bun/rpc.test.ts` drives the RPC adapter through a real temporary application context, SQLite database, workspace filesystem, and fake tmux boundary. Terminal tests cover upgrade authentication, bounded noisy-output queues, socket high-water behavior, ANSI/Unicode capture, input, resize, reconnect status, and resource cleanup. `apps/desktop/src/renderer/App.test.tsx` renders lifecycle, dependency, and multi-session terminal selection states with an injected typed client, and covers the indicator vocabulary, the attention roll-up, snapshot-order rendering, and the toast cap. `apps/desktop/src/renderer/list-reorder.test.ts` covers the drag arithmetic — click-versus-drag, the drop slot, and keyboard moves — without a DOM, and `packages/core/src/services/ordering.test.ts` covers the subset-reorder rule. `bun run test:reorder-ui` drives a real drag in headless Chrome and samples the DOM across it, in both directions and on an unselected card — the only way either of the two interaction bugs this feature shipped with was reachable, since both were invisible in a single rendered frame. `packages/core/src/services/activity.test.ts` covers badge accumulation, privileged clearing, and alert debouncing against a real temporary context with the native notifier injected — no test ever reaches the real Notification Center. `apps/desktop/src/bun/quit.test.ts` covers the quit state machine — the dialog, the remembered answers, cancel, the shutdown menu item, and the two fallbacks that must never archive — and `packages/core/src/services/shutdown.test.ts` covers the sweep itself against a real temporary context. `bun run test:terminal-agent` exercises the real isolated tmux path. All test homes and tmux sockets are isolated and never touch the user's Daedalus data.

@@ -37,6 +37,8 @@ daedal workspace create <name> [--slug <slug>] [--path <path>]
 daedal workspace list [--json]
 daedal workspace get <workspace> [--json]
 daedal workspace update <workspace> [--name <name>] [--slug <slug>]
+    [--start-sets-in-progress on|off] [--default-provider claude|codex|none]
+    [--default-model <model>|none]
 daedal workspace reorder <workspace> [<workspace>...]
 daedal workspace archive <workspace>
 daedal workspace restore <workspace>
@@ -45,6 +47,8 @@ daedal workspace remove <workspace> [--delete-files] --force
 
 Create makes a real directory and identity marker before committing metadata. Slugs contain lowercase ASCII letters, digits, and hyphens. Updating a slug changes the lookup alias, not the directory path.
 
+The three board settings are per workspace. `--start-sets-in-progress` (on by default) decides whether starting a task-backed session moves a `todo` or `blocked` task to `in_progress`. `--default-provider` and `--default-model` are what the board's Start and Start next launch with; `none` clears them, and the board then uses the first installed provider and that provider's default model. Changing the provider without naming a model clears the model, so Codex is never launched with a Claude model id.
+
 Removal requires `--force`. Without `--delete-files`, it unregisters the workspace and preserves every file. With `--delete-files`, it only removes a canonical, non-root, non-symlink directory carrying the exact registered workspace ID marker. Live agents block removal.
 
 Both workspaces and sessions carry a manual `position`, which is the order `list` returns and the desktop app draws. A new workspace or session takes the top slot, so the thing you just made is the thing you are looking for, and the order below it is left alone. `reorder` takes the workspaces in the order you want them and may name a subset — the ones you leave out keep their exact places, which is what lets the app reorder a filtered list without disturbing what it is hiding. Naming an unknown workspace, or the same one twice, is an error rather than a silent partial reorder.
@@ -52,16 +56,23 @@ Both workspaces and sessions carry a manual `position`, which is the order `list
 ## Task
 
 ```text
-daedal task create --workspace <workspace> --title <title> [--description <text>] [--priority <priority>]
+daedal task create --workspace <workspace> --title <title> [--description <text> | --description-file <path|->] [--priority <priority>]
 daedal task list [--workspace <workspace>] [--status <status>]
 daedal task get <task-ref> [--workspace <workspace>]
 daedal task current
-daedal task update <task-ref> [--workspace <workspace>] [--title <title>] [--description <text>] [--priority <priority>]
+daedal task update <task-ref> [--workspace <workspace>] [--title <title>] [--description <text> | --description-file <path|->] [--priority <priority>]
 daedal task status <task-ref> <status> [--workspace <workspace>]
+daedal task timeline <task-ref> [--workspace <workspace>]
 daedal task remove <task-ref> [--workspace <workspace>] --force
 ```
 
-Statuses are `todo`, `in_progress`, `blocked`, `done`, and `cancelled`. Priorities are `low`, `normal`, and `high`. Entering `done` sets `completedAt`; moving to any other status clears it. Agent lifecycle never changes task status. Task removal requires `--force` and refuses while a live agent references the task.
+Statuses are `todo`, `in_progress`, `blocked`, `done`, and `cancelled`. Priorities are `low`, `normal`, and `high`. Entering `done` sets `completedAt`; moving to any other status clears it. Agent lifecycle never changes task status. The one status change Daedalus makes is on a person's behalf: starting a task-backed session, from the board or with `agent spawn --task`, moves a `todo` or `blocked` task to `in_progress` when the workspace's `--start-sets-in-progress` setting is on. `in_progress`, `done` and `cancelled` are never touched. Task removal requires `--force` and refuses while a live agent references the task.
+
+`--description-file` reads the brief from a file, or from standard input when the path is `-`, so a long Markdown brief needs no shell quoting. Passing it together with `--description` is a validation error, and a missing file exits 3. `briefUpdatedAt` records when the title or brief last actually changed; `updatedAt` also moves on a status change and cannot answer that.
+
+A brief can name other tasks. `depends on #N`, `after #N` and `blocked by #N` (case-insensitive, several numbers joined by commas or "and") are hard dependencies; any other `#N` is a plain reference. Code spans, fenced and indented code, `PR #N`, and numbers glued to another word (`other-workspace#3`) are not references, and only tasks in the same workspace resolve. Nothing locks: the board sorts a task with an unfinished hard dependency below the ready ones and asks before starting it.
+
+`timeline` lists what happened to a task in order: created, brief edited, each session started (provider, model, name) and stopped or archived, each worktree created, what agents asked and when it was cleared, journal entries whose heading names `#N`, and marked done. It first prints the cost line: sessions, wall time from the first start to the last stop, the peak context any session reached, and the models they ran, read from the full rollout or transcript. The badge keeps only open reasons, so cleared ones are filed on clear and on archive; the newest five per session are kept.
 
 ## Agent
 
@@ -70,6 +81,7 @@ daedal agent models <codex|claude>
 daedal agent spawn --workspace <workspace> --provider codex [--task <task-ref>] [--model <model>] [--message <text>]
 daedal agent spawn --workspace <workspace> --provider claude [--task <task-ref>] [--model <model>] [--message <text>]
 daedal agent spawn --workspace <workspace> --command <configured-name> [--task <task-ref>] [--message <text>]
+daedal agent spawn --workspace <workspace> --provider <codex|claude> --task <task-ref> --draft-brief
 daedal agent list [--workspace <workspace>] [--running]
 daedal agent reorder --workspace <workspace> <agent-id> [<agent-id>...]
 daedal agent get <agent-id>
@@ -84,6 +96,8 @@ daedal agent remove <agent-id>
 ```
 
 Built-in provider definitions come from `config.json`. Named custom definitions use `--command`. Executables and arguments are always passed as arrays. A task-backed launch receives only `Execute task #<number>` plus optional `--message` guidance; the installed skill supplies the workflow, so task content and CLI instructions are not duplicated in the prompt. Claude and Codex receive the prompt through their native initial-prompt argument, while custom launches receive it in `DAEDALUS_TASK_PROMPT`. Daedalus never types the initial prompt into the terminal. Agent processes receive their current session, workspace, internal task ID, and task number through `DAEDALUS_SESSION_ID`, `DAEDALUS_WORKSPACE_ID`, `DAEDALUS_TASK_ID`, and `DAEDALUS_TASK_NUMBER`. These variables are restored when a session resumes.
+
+`--draft-brief` links the session to the task but asks it to write the brief instead of doing the work: its one instruction is to read the workspace and send the brief back with `task update <number> --description-file -`. It leaves the task's status alone.
 
 Each launch gets a durable `daedalus_<uuid>` tmux session on a Daedalus server isolated by `DAEDALUS_HOME`. `attach` hands the terminal to tmux and therefore rejects `--json`; every non-interactive command supports the JSON envelope. `send` sends literal text followed by Enter. `stop` first sends Ctrl-C unless `--force` is used, then closes the session. A running session must be stopped before its history row can be removed.
 
@@ -360,7 +374,10 @@ daedal repo attach --workspace <workspace> --repository <library-id>
 daedal repo sync <attachment-id>
 daedal repo detach <attachment-id>
 daedal repo worktree create --session <agent-id> --repository <name-or-id>
+daedal repo worktree open --session <agent-id> --repository <name-or-id>
 ```
+
+`worktree open` opens a registered worktree in the first editor whose launcher is installed (VS Code, Cursor, Zed, looked up on `PATH`, at the standard Homebrew locations, and inside the app bundles) and falls back to Finder. It only opens paths from the worktree registry.
 
 Library entries are bare clones shared across workspaces. `library add` accepts
 a remote URL or full local path and refreshes an existing entry with the same

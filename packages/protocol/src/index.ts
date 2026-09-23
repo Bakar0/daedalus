@@ -19,6 +19,12 @@ export interface WorkspaceDto {
   available: boolean;
   /** Manual list order, ascending. Lists arrive already sorted by it. */
   position: number;
+  /** Start on a board card moves a `todo` or `blocked` task to `in_progress`. */
+  startSetsInProgress: boolean;
+  /** What Start and Start next launch with; null leaves it to the app. */
+  defaultProvider: "claude" | "codex" | null;
+  /** A provider model id, or null for that provider's default. */
+  defaultModel: string | null;
 }
 
 export interface TaskDto {
@@ -32,6 +38,20 @@ export interface TaskDto {
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
+  /** When the title or brief last changed; null if never since creation. */
+  briefUpdatedAt: string | null;
+  /**
+   * Other tasks in the same workspace this brief names as `#N`, resolved.
+   * `hard` is "depends on", "after" or "blocked by". Present on snapshot
+   * tasks; single-task responses leave it out.
+   */
+  references?: TaskReferenceDto[];
+}
+
+export interface TaskReferenceDto {
+  taskId: string;
+  number: number;
+  hard: boolean;
 }
 
 export interface AgentSessionDto {
@@ -118,9 +138,20 @@ export interface WorkspaceRepositoryDto {
 
 export interface GitStatusDto {
   state: "clean" | "modified" | "ahead" | "behind" | "diverged" | "unavailable";
+  /** Uncommitted paths. */
   changedFiles: number;
   ahead: number;
   behind: number;
+  /** Files the commits ahead of base touch; present only when `ahead > 0`. */
+  filesAhead?: number;
+}
+
+/** A link `gh` found for a branch. Visibility only; nothing merges from it. */
+export interface PullRequestRefDto {
+  number: number;
+  url: string;
+  state: "OPEN" | "CLOSED" | "MERGED";
+  isDraft: boolean;
 }
 
 export interface SessionWorktreeDto {
@@ -130,6 +161,8 @@ export interface SessionWorktreeDto {
   branchName: string;
   createdAt: string;
   gitStatus?: GitStatusDto;
+  /** Absent when `gh` is missing, signed out, or found nothing. */
+  pullRequest?: PullRequestRefDto;
 }
 
 export interface WorkspaceContentDto {
@@ -377,6 +410,48 @@ export interface SessionTelemetryDto {
   observedAt: string;
 }
 
+/** One thing that happened to a task. See `TaskTimelineEvent` in the core. */
+export interface TaskTimelineEventDto {
+  kind:
+    | "created"
+    | "brief_edited"
+    | "session_spawned"
+    | "worktree_created"
+    | "attention_raised"
+    | "attention_cleared"
+    | "session_stopped"
+    | "session_archived"
+    | "journal"
+    | "done"
+    | "cancelled";
+  /** ISO time, a bare `YYYY-MM-DD` for a dated journal heading, or null. */
+  at: string | null;
+  text: string;
+  detail?: string;
+  sessionId?: string;
+  /** For a journal entry: the heading as written, to scroll the journal to. */
+  journalHeading?: string;
+  /** For a raised reason: still open on the badge. */
+  open?: boolean;
+}
+
+/** Sessions, wall time, peak context and models across a task's sessions. */
+export interface TaskCostDto {
+  sessions: number;
+  firstStartedAt: string | null;
+  /** Null while any session is still live; wall time then runs to now. */
+  lastEndedAt: string | null;
+  running: boolean;
+  peakContextPercent?: number;
+  models: string[];
+}
+
+export interface TaskTimelineDto {
+  taskId: string;
+  events: TaskTimelineEventDto[];
+  cost: TaskCostDto;
+}
+
 export interface DesktopSnapshotDto {
   workspaces: WorkspaceDto[];
   tasks: TaskDto[];
@@ -387,6 +462,12 @@ export interface DesktopSnapshotDto {
   sessionTelemetry: SessionTelemetryDto[];
   sessionActivity: AgentActivityDto[];
   attention: SessionAttentionDto[];
+  /**
+   * Every session worktree across every workspace, with cached git status. It
+   * rides on the snapshot so the board can show a task's output without the
+   * workspace view ever having been opened.
+   */
+  worktrees: SessionWorktreeDto[];
   toasts: ToastDto[];
   settings: DesktopSettingsDto;
 }
@@ -425,7 +506,14 @@ export interface DesktopRpcSchema {
       >;
       workspaceGet: Request<{ reference: string }, WorkspaceDto>;
       workspaceUpdate: Request<
-        { reference: string; name?: string; slug?: string },
+        {
+          reference: string;
+          name?: string;
+          slug?: string;
+          startSetsInProgress?: boolean;
+          defaultProvider?: "claude" | "codex" | null;
+          defaultModel?: string | null;
+        },
         WorkspaceDto
       >;
       workspaceRemove: Request<
@@ -600,6 +688,14 @@ export interface DesktopRpcSchema {
         { session: string; repository: string; force?: boolean },
         SessionWorktreeDto
       >;
+      /**
+       * Opens the worktree in the first editor installed (VS Code, Cursor,
+       * Zed), or in Finder. The path comes from the registry, not the caller.
+       */
+      sessionWorktreeOpen: Request<
+        { session: string; repository: string },
+        { path: string; openedWith: string }
+      >;
       /** Publishes an agent's branch. Never implicit: only this call pushes. */
       sessionWorktreePush: Request<
         { session: string; repository: string },
@@ -655,6 +751,11 @@ export interface DesktopRpcSchema {
         TaskDto
       >;
       taskSetStatus: Request<{ id: string; status: TaskStatus }, TaskDto>;
+      /**
+       * Assembled on demand, so it is a request rather than a snapshot field:
+       * it reads `JOURNAL.md` and would otherwise ride along on every tick.
+       */
+      taskTimeline: Request<{ id: string }, TaskTimelineDto>;
       taskRemove: Request<{ id: string; force: true }, TaskDto>;
       agentGet: Request<{ id: string }, AgentSessionDto>;
       agentSpawn: Request<

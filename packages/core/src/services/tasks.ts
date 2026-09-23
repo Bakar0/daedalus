@@ -1,6 +1,10 @@
 import type { Task, TaskPriority, TaskStatus } from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
+import {
+  resolveTaskReferences,
+  type ResolvedTaskReference,
+} from "./task-references";
 import type { WorkspaceService } from "./workspaces";
 
 export const TASK_STATUSES: readonly TaskStatus[] = [
@@ -77,6 +81,7 @@ export class TaskService {
       createdAt: now,
       updatedAt: now,
       completedAt: null,
+      briefUpdatedAt: null,
     });
     return task;
   }
@@ -92,6 +97,26 @@ export class TaskService {
       workspaceId,
       status: filters.status ? taskStatus(filters.status) : undefined,
     });
+  }
+
+  /**
+   * Each task's references to other tasks in its workspace, read from its
+   * brief. Resolved against the list given, so a caller that already holds
+   * every task pays nothing extra.
+   */
+  references(tasks: readonly Task[]): Map<string, ResolvedTaskReference[]> {
+    const byWorkspace = new Map<string, Task[]>();
+    for (const task of tasks)
+      byWorkspace.set(task.workspaceId, [
+        ...(byWorkspace.get(task.workspaceId) ?? []),
+        task,
+      ]);
+    return new Map(
+      tasks.map((task) => [
+        task.id,
+        resolveTaskReferences(task, byWorkspace.get(task.workspaceId) ?? []),
+      ]),
+    );
   }
 
   get(id: string): Task {
@@ -125,18 +150,28 @@ export class TaskService {
         "VALIDATION",
         "At least one task field is required",
       );
+    const now = new Date().toISOString();
+    const nextTitle =
+      changes.title === undefined ? task.title : title(changes.title);
+    const nextDescription =
+      changes.description === undefined
+        ? task.description
+        : description(changes.description);
     const updated: Task = {
       ...task,
-      title: changes.title === undefined ? task.title : title(changes.title),
-      description:
-        changes.description === undefined
-          ? task.description
-          : description(changes.description),
+      title: nextTitle,
+      description: nextDescription,
       priority:
         changes.priority === undefined
           ? task.priority
           : taskPriority(changes.priority),
-      updatedAt: new Date().toISOString(),
+      updatedAt: now,
+      // Only a real change counts. The editor saves title and brief together,
+      // so a save that touched neither must not claim the brief was edited.
+      briefUpdatedAt:
+        nextTitle !== task.title || nextDescription !== task.description
+          ? now
+          : task.briefUpdatedAt,
     };
     this.repositories.updateTask(updated);
     return updated;

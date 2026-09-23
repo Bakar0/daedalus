@@ -8,7 +8,7 @@ import {
   type TmuxClient,
 } from "@daedalus/platform";
 import type { DaedalusConfig } from "../config";
-import type { AgentSession } from "../domain";
+import type { AgentSession, Workspace } from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import {
@@ -602,6 +602,12 @@ export class AgentService {
     message?: string;
     command?: string;
     terminal?: boolean;
+    /**
+     * Launch the session to write the task's brief rather than to do the task.
+     * It is still linked to the task, so the board shows it, but it does not
+     * count as starting the work and leaves the status alone.
+     */
+    draftBrief?: boolean;
   }): Promise<AgentSession> {
     const workspace = await this.workspaces.getActive(input.workspace);
     const task = input.taskId ? this.tasks.get(input.taskId) : undefined;
@@ -654,9 +660,15 @@ export class AgentService {
           sessionId: id,
         })
       : { workingDirectory: workspace.path, worktrees: [], references: [] };
+    if (input.draftBrief && !task)
+      throw new DaedalusError(
+        "VALIDATION",
+        "Drafting a brief needs the task it is for",
+      );
     const launchPrompt = buildAgentPrompt({
       taskNumber: task?.number,
       message: input.message,
+      mode: input.draftBrief ? "draft-brief" : "execute",
     });
     const launch = input.terminal
       ? { executable: shell!, args: ["-l"], env: {} }
@@ -730,6 +742,8 @@ export class AgentService {
       }
       const running = { ...runningSession, status: "running" as const };
       this.repositories.updateAgent(running);
+      if (task && !input.terminal && !input.draftBrief)
+        this.markTaskStarted(workspace, task.id);
       return running;
     } catch (error) {
       if (await this.tmux.hasSession(session.tmuxSession))
@@ -1374,6 +1388,21 @@ export class AgentService {
       .some(
         (agent) => agent.status === "running" || agent.status === "starting",
       );
+  }
+
+  /**
+   * Starting a session on a task is the user deciding to begin it, whether
+   * they clicked Start on the board or asked an agent to spawn one. That is
+   * the one status change Daedalus makes on their behalf, and only forward:
+   * `in_progress`, `done` and `cancelled` are left exactly as they are. The
+   * agent's own lifecycle never reaches here.
+   */
+  private markTaskStarted(workspace: Workspace, taskId: string): void {
+    if (!workspace.startSetsInProgress) return;
+    const current = this.repositories.findTask(taskId);
+    if (!current || (current.status !== "todo" && current.status !== "blocked"))
+      return;
+    this.tasks.setStatus(taskId, "in_progress");
   }
 
   async hasLiveTaskAgents(taskId: string): Promise<boolean> {

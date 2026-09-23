@@ -60,6 +60,15 @@ function workspaceConflict(error: unknown, slug: string, path: string): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
+function boardProvider(value: string | null): "claude" | "codex" | null {
+  if (value === null || value === "" || value === "none") return null;
+  if (value === "claude" || value === "codex") return value;
+  throw new DaedalusError(
+    "VALIDATION",
+    "Default provider must be 'claude', 'codex' or 'none'",
+  );
+}
+
 export class WorkspaceService {
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -103,6 +112,9 @@ export class WorkspaceService {
       // Top of the list. The thing you just made is the thing you are looking
       // for, and a manual order the user has set is never disturbed to do it.
       position: this.repositories.nextWorkspacePosition(),
+      startSetsInProgress: true,
+      defaultProvider: null,
+      defaultModel: null,
     };
     let created = false;
     try {
@@ -203,14 +215,29 @@ export class WorkspaceService {
 
   async update(
     reference: string,
-    changes: { name?: string; slug?: string },
+    changes: {
+      name?: string;
+      slug?: string;
+      startSetsInProgress?: boolean;
+      /** `null` clears it back to "no preference". */
+      defaultProvider?: string | null;
+      defaultModel?: string | null;
+    },
   ): Promise<Workspace> {
     const workspace = await this.get(reference);
-    if (changes.name === undefined && changes.slug === undefined)
+    if (Object.values(changes).every((value) => value === undefined))
       throw new DaedalusError(
         "VALIDATION",
         "At least one workspace field is required",
       );
+    const defaultProvider =
+      changes.defaultProvider === undefined
+        ? workspace.defaultProvider
+        : boardProvider(changes.defaultProvider);
+    const defaultModel =
+      changes.defaultModel === undefined
+        ? workspace.defaultModel
+        : changes.defaultModel?.trim() || null;
     const slug =
       changes.slug === undefined ? workspace.slug : workspaceSlug(changes.slug);
     const collision = this.repositories.findWorkspace(slug);
@@ -223,6 +250,17 @@ export class WorkspaceService {
           ? workspace.name
           : requiredName(changes.name),
       slug,
+      startSetsInProgress:
+        changes.startSetsInProgress ?? workspace.startSetsInProgress,
+      defaultProvider,
+      // A model belongs to a provider. Changing the provider without naming a
+      // model drops the old one rather than launching Codex with a Claude id.
+      defaultModel:
+        changes.defaultProvider !== undefined &&
+        changes.defaultModel === undefined &&
+        defaultProvider !== workspace.defaultProvider
+          ? null
+          : defaultModel,
       updatedAt: new Date().toISOString(),
     };
     try {

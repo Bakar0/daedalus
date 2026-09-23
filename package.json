@@ -33,6 +33,7 @@
     "test:explorer-ui": "bun run scripts/explorer-ui-check.ts",
     "test:repo-picker-ui": "bun run scripts/repo-picker-ui-check.ts",
     "test:status-ui": "bun run scripts/status-ui-check.ts",
+    "test:board-ui": "bun run scripts/board-ui-check.ts",
     "test:session-focus": "bun run scripts/session-focus-check.ts",
     "test:status-native": "bun run scripts/status-native-check.ts",
     "typecheck": "bun run scripts/typecheck.ts",

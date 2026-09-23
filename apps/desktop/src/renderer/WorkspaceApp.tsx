@@ -19,6 +19,7 @@ import type {
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
+  TaskTimelineDto,
   AgentActivity,
   AgentActivityDto,
   AgentSessionDto,
@@ -49,6 +50,37 @@ import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import { runWithConcurrency } from "./concurrency";
 import { repositoryFuzzyScore } from "./repository-search";
 import { useListReorder } from "./use-list-reorder";
+import { BoardView, TaskRelationsBlock, type BoardProvider } from "./BoardView";
+import { laneFor } from "./board-lanes";
+import { TaskCostLine, TaskTimeline } from "./TaskTimeline";
+import {
+  AgentStatusDot,
+  compactTokenLabel,
+  lifecycleTone,
+  CreateButton,
+  providerLabel,
+  SessionLaunchIcon,
+  sessionConfiguredModel,
+  sessionIsLive,
+  sessionName,
+  sessionStatusView,
+  sessionTool,
+  statusAriaLabel,
+  ToolIcon,
+  waitingLabel,
+  type SessionStatusView,
+} from "./session-view";
+
+// The indicator vocabulary moved to `session-view.tsx`; these stay importable
+// from here because the tests and harnesses have always found them here.
+export {
+  lifecycleTone,
+  sessionStatusView,
+  statusAriaLabel,
+  waitingLabel,
+  type SessionStatusView,
+  type SessionTone,
+} from "./session-view";
 
 const STATUSES: TaskStatus[] = [
   "todo",
@@ -296,12 +328,6 @@ const looksLikeRepositorySource = (value: string) => {
   );
 };
 
-const sessionName = (session: AgentSessionDto) =>
-  session.name ||
-  (session.kind === "terminal"
-    ? "Terminal"
-    : session.provider.slice(0, 1).toUpperCase() + session.provider.slice(1));
-
 const terminalPathHint = (path: string, home?: string) => {
   if (home && path === home) return "Daedalus home";
   const parts = path.split("/").filter(Boolean);
@@ -322,22 +348,6 @@ const elapsedLabel = (
   const hours = Math.floor(minutes / 60);
   const remainder = minutes % 60;
   return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
-};
-
-const providerLabel = (provider: string) =>
-  provider.slice(0, 1).toUpperCase() + provider.slice(1);
-
-const compactTokenLabel = (tokens: number) =>
-  tokens >= 1_000 ? `${Math.round(tokens / 1_000)}k` : String(tokens);
-
-const sessionConfiguredModel = (session?: AgentSessionDto) => {
-  if (!session) return undefined;
-  for (let index = session.args.length - 1; index >= 0; index -= 1) {
-    const argument = session.args[index]!;
-    if (argument.startsWith("--model=")) return argument.slice(8);
-    if (argument === "--model") return session.args[index + 1];
-  }
-  return undefined;
 };
 
 const workspaceParentPath = (path: string) => {
@@ -394,80 +404,6 @@ export function planExplorerRefresh(input: {
   return { relist: [...relist], dropped: [...dropped] };
 }
 
-const sessionTool = (
-  session: AgentSessionDto,
-): "codex" | "claude" | "terminal" =>
-  session.kind === "terminal" || session.provider === "custom"
-    ? "terminal"
-    : session.provider;
-
-// Codex and Claude paths are bundled from @lobehub/icons-static-svg (MIT).
-function ToolIcon({ tool }: { tool: "codex" | "claude" | "terminal" }) {
-  if (tool === "codex")
-    return (
-      <svg aria-hidden="true" fill="currentColor" viewBox="0 0 24 24">
-        <path
-          clipRule="evenodd"
-          d="M8.086.457a6.105 6.105 0 013.046-.415c1.333.153 2.521.72 3.564 1.7a.117.117 0 00.107.029c1.408-.346 2.762-.224 4.061.366l.063.03.154.076c1.357.703 2.33 1.77 2.918 3.198.278.679.418 1.388.421 2.126a5.655 5.655 0 01-.18 1.631.167.167 0 00.04.155 5.982 5.982 0 011.578 2.891c.385 1.901-.01 3.615-1.183 5.14l-.182.22a6.063 6.063 0 01-2.934 1.851.162.162 0 00-.108.102c-.255.736-.511 1.364-.987 1.992-1.199 1.582-2.962 2.462-4.948 2.451-1.583-.008-2.986-.587-4.21-1.736a.145.145 0 00-.14-.032c-.518.167-1.04.191-1.604.185a5.924 5.924 0 01-2.595-.622 6.058 6.058 0 01-2.146-1.781c-.203-.269-.404-.522-.551-.821a7.74 7.74 0 01-.495-1.283 6.11 6.11 0 01-.017-3.064.166.166 0 00.008-.074.115.115 0 00-.037-.064 5.958 5.958 0 01-1.38-2.202 5.196 5.196 0 01-.333-1.589 6.915 6.915 0 01.188-2.132c.45-1.484 1.309-2.648 2.577-3.493.282-.188.55-.334.802-.438.286-.12.573-.22.861-.304a.129.129 0 00.087-.087A6.016 6.016 0 015.635 2.31C6.315 1.464 7.132.846 8.086.457zm-.804 7.85a.848.848 0 00-1.473.842l1.694 2.965-1.688 2.848a.849.849 0 001.46.864l1.94-3.272a.849.849 0 00.007-.854l-1.94-3.393zm5.446 6.24a.849.849 0 000 1.695h4.848a.849.849 0 000-1.696h-4.848z"
-          fillRule="evenodd"
-        />
-      </svg>
-    );
-  if (tool === "claude")
-    return (
-      <svg aria-hidden="true" fill="currentColor" viewBox="0 0 24 24">
-        <path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z" />
-      </svg>
-    );
-  return (
-    <svg
-      aria-hidden="true"
-      fill="none"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="1.8"
-      viewBox="0 0 24 24"
-    >
-      <rect height="18" rx="2.5" width="20" x="2" y="3" />
-      <path d="m7 9 3 3-3 3M13 15h4" />
-    </svg>
-  );
-}
-
-function CreateButton({
-  disabled,
-  label,
-  onClick,
-}: {
-  disabled?: boolean;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      aria-label={label}
-      className="create-button"
-      disabled={disabled}
-      onClick={onClick}
-      title={label}
-      type="button"
-    >
-      <svg
-        aria-hidden="true"
-        fill="none"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="2"
-        viewBox="0 0 16 16"
-      >
-        <path d="M8 3v10M3 8h10" />
-      </svg>
-      <span>New</span>
-    </button>
-  );
-}
-
 function PanelCollapseButton({
   collapsed,
   label,
@@ -497,23 +433,6 @@ function PanelCollapseButton({
     >
       {direction}
     </button>
-  );
-}
-
-function SessionLaunchIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      fill="none"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="1.6"
-      viewBox="0 0 18 18"
-    >
-      <rect height="13" rx="2" width="16" x="1" y="2.5" />
-      <path d="m5 7 2 2-2 2M9.5 11h3" />
-    </svg>
   );
 }
 
@@ -649,196 +568,6 @@ function gitStatusParts(status: GitStatusDto | undefined) {
   if (parts.length === 0)
     parts.push({ key: "clean", tone: "clean", text: "clean" });
   return parts;
-}
-
-const sessionIsLive = (session: AgentSessionDto) =>
-  session.status === "running" || session.status === "starting";
-
-/**
- * The visual tier a session sits in. `attention` is deliberately the only tier
- * that is loud: a grid where the one session blocked on you is instantly
- * obvious is the entire point, and everything else is ambient by comparison.
- */
-export type SessionTone =
-  "attention" | "working" | "idle" | "done" | "error" | "lost" | "ended";
-
-export interface SessionStatusView {
-  tone: SessionTone;
-  /** Short label naming the activity, never the colour. */
-  label: string;
-  /** Secondary line: "Editing agents.ts", "Bash(git push)", the question. */
-  detail: string | null;
-  /** Start of the current state, for "waiting 4m". */
-  since: string | null;
-  /** True while the user is the thing standing in the way. */
-  attention: boolean;
-  /** Open reasons on the badge, newest last, capped at five upstream. */
-  reasons: AttentionReasonDto[];
-  /**
-   * A pane-derived guess. Rendered muted and hedged, because presenting a
-   * heuristic as a fact is how a status display loses its credibility.
-   */
-  unconfirmed: boolean;
-}
-
-const ACTIVITY_LABEL: Record<AgentActivity, string> = {
-  unknown: "no signal",
-  working: "working",
-  needs_permission: "needs permission",
-  needs_input: "needs input",
-  idle: "idle",
-  done: "done",
-  error: "error",
-};
-
-/** For surfaces with no activity to show: integrated terminals, workspaces. */
-export const lifecycleTone = (
-  status: AgentSessionDto["status"],
-): SessionTone =>
-  status === "running"
-    ? "idle"
-    : status === "starting"
-      ? "working"
-      : status === "lost"
-        ? "lost"
-        : "ended";
-
-const LIFECYCLE_LABEL: Record<AgentSessionDto["status"], string> = {
-  starting: "starting",
-  running: "running",
-  exited: "exited",
-  lost: "lost",
-};
-
-/**
- * Folds the three inputs the renderer is given — lifecycle status, observed
- * activity, and the attention badge — into one thing to draw. This is the only
- * place the precedence lives, and it is an adapter: no inference, no
- * heuristics, no timers deciding state.
- */
-export function sessionStatusView(
-  session: AgentSessionDto,
-  activity?: AgentActivityDto,
-  attention?: SessionAttentionDto,
-): SessionStatusView {
-  const reasons = attention?.reasons ?? [];
-  const newest = reasons.at(-1);
-  if (attention && reasons.length > 0) {
-    const blocked =
-      activity &&
-      (activity.activity === "needs_permission" ||
-        activity.activity === "needs_input")
-        ? activity.activity
-        : "needs_input";
-    return {
-      tone: "attention",
-      label: ACTIVITY_LABEL[blocked],
-      detail: newest?.text ?? activity?.detail ?? null,
-      since: attention.raisedAt,
-      attention: true,
-      reasons,
-      // A badge the agent raised about itself is a report, not a reading.
-      unconfirmed: reasons.every((reason) => reason.source === "pane"),
-    };
-  }
-  if (!sessionIsLive(session))
-    return {
-      tone: session.status === "lost" ? "lost" : "ended",
-      label: LIFECYCLE_LABEL[session.status],
-      // Why it could not be revived, when something tried and failed. A reboot
-      // makes every session `lost` at once, and the ones that are staying that
-      // way have to be tellable apart from the ones that simply came back.
-      detail: session.status === "lost" ? session.lostReason : null,
-      since: session.endedAt,
-      // A vanished session is today's attention signal and stays one.
-      attention: session.status === "lost",
-      reasons: [],
-      unconfirmed: false,
-    };
-  if (!activity || activity.activity === "unknown")
-    return {
-      tone: session.status === "starting" ? "working" : "idle",
-      label: LIFECYCLE_LABEL[session.status],
-      detail: null,
-      since: session.startedAt,
-      attention: false,
-      reasons: [],
-      unconfirmed: false,
-    };
-  return {
-    tone:
-      activity.activity === "error"
-        ? "error"
-        : activity.activity === "done"
-          ? "done"
-          : activity.activity === "idle"
-            ? "idle"
-            : "working",
-    label: ACTIVITY_LABEL[activity.activity],
-    detail: activity.detail,
-    since: activity.since,
-    attention: false,
-    reasons: [],
-    unconfirmed: activity.source === "pane",
-  };
-}
-
-/**
- * "waiting 4m" is what makes a stalled session visible; the bare word
- * "waiting" is not. Sub-minute waits read as "just now" rather than "0m".
- */
-export function waitingLabel(since: string | null, now: number): string {
-  if (!since) return "";
-  const elapsed = now - Date.parse(since);
-  if (!Number.isFinite(elapsed) || elapsed < 60_000) return "just now";
-  const minutes = Math.floor(elapsed / 60_000);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const remainder = minutes % 60;
-  return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
-}
-
-/** Screen readers get the activity and the wait, never the colour. */
-export function statusAriaLabel(
-  session: AgentSessionDto,
-  view: SessionStatusView,
-  now: number,
-): string {
-  const parts = [`${sessionName(session)}: ${view.label}`];
-  if (view.attention && view.since)
-    parts.push(`waiting ${waitingLabel(view.since, now)}`);
-  if (view.reasons.length > 1) parts.push(`${view.reasons.length} reasons`);
-  if (view.detail) parts.push(view.detail);
-  if (view.unconfirmed) parts.push("unconfirmed reading");
-  return parts.join(", ");
-}
-
-/**
- * Colour is never the only carrier: attention draws a solid outer ring and a
- * count, working pulses, and everything else is a plain dot. That survives
- * colour-blindness and a glance at a dense list.
- */
-function AgentStatusDot({
-  count,
-  label,
-  view,
-}: {
-  count?: number;
-  label?: string;
-  view: SessionStatusView;
-}) {
-  return (
-    <span
-      aria-hidden={label ? undefined : "true"}
-      aria-label={label}
-      className={`agent-dot tone-${view.tone}${view.unconfirmed ? " unconfirmed" : ""}`}
-      role={label ? "img" : undefined}
-    >
-      {view.attention && count !== undefined && count > 1 && (
-        <span className="agent-dot-count">{count}</span>
-      )}
-    </span>
-  );
 }
 
 const sessionNeedsAttention = (view: SessionStatusView) => view.attention;
@@ -1904,7 +1633,6 @@ export function WorkspaceApp({
     path: string;
     name: string;
   }>();
-  const [filter, setFilter] = useState<TaskStatus | "all">("all");
   const [sessionFilter, setSessionFilter] = useState<"all" | "needs-me">("all");
   const [modal, setModal] = useState<
     "workspace" | "task" | "session" | "repository" | "settings" | undefined
@@ -1914,6 +1642,14 @@ export function WorkspaceApp({
   const [settingsSection, setSettingsSection] =
     useState<SettingsSection>("general");
   const [editingTask, setEditingTask] = useState(false);
+  const [taskTimeline, setTaskTimeline] = useState<TaskTimelineDto>();
+  const [taskTimelineLoading, setTaskTimelineLoading] = useState(false);
+  // A journal heading the workspace view should scroll to once it has opened
+  // JOURNAL.md. Read through a ref by the view's loader, which must not
+  // re-run just because a link was followed.
+  const [journalTarget, setJournalTarget] = useState<string>();
+  const journalTargetRef = useRef(journalTarget);
+  journalTargetRef.current = journalTarget;
   // The quit dialog is driven entirely by the host: it arrives with the plan
   // already computed, and every button answers back over `quitDecision`.
   const [quitRequest, setQuitRequest] = useState<ShutdownPlanDto>();
@@ -2364,6 +2100,58 @@ export function WorkspaceApp({
     [client, refresh],
   );
 
+  // The timeline reads the journal and the history tables, so it is asked for
+  // when a task is selected and again whenever the data moves, never carried
+  // on the snapshot.
+  useEffect(() => {
+    if (!selectedTaskId || view !== "board") {
+      setTaskTimeline(undefined);
+      return;
+    }
+    let cancelled = false;
+    setTaskTimelineLoading(true);
+    void client.request
+      .taskTimeline?.({ id: selectedTaskId })
+      .then((response) => {
+        if (cancelled) return;
+        setTaskTimeline(response.ok ? response.data : undefined);
+      })
+      .catch(() => {
+        if (!cancelled) setTaskTimeline(undefined);
+      })
+      .finally(() => {
+        if (!cancelled) setTaskTimelineLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, dataRevision, selectedTaskId, view]);
+
+  // Once the journal is rendered, bring the linked entry into view. Matched on
+  // the heading's text, which is what the timeline carries, and dropped after
+  // one attempt so a later visit to the journal is not yanked back to it.
+  useEffect(() => {
+    if (
+      !journalTarget ||
+      view !== "workspace" ||
+      selectedWorkspaceFile?.path !== "JOURNAL.md" ||
+      workspaceFileMode !== "preview"
+    )
+      return;
+    const frame = requestAnimationFrame(() => {
+      const heading = [
+        ...document.querySelectorAll<HTMLElement>(
+          ".workspace-viewer-content h2, .workspace-viewer-content h3",
+        ),
+      ].find((element) => element.textContent?.trim() === journalTarget);
+      // The class carries the scroll margin, so it goes on before the scroll.
+      heading?.classList.add("journal-target");
+      heading?.scrollIntoView({ block: "start" });
+      setJournalTarget(undefined);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [journalTarget, selectedWorkspaceFile, view, workspaceFileMode]);
+
   const setFocusMode = useCallback(
     async (enabled: boolean) => {
       const response = await client.request.focusModeSet({ enabled });
@@ -2495,14 +2283,19 @@ export function WorkspaceApp({
         }
         setWorkspaceContent(response.data);
         setWorkspaceDirectories({ "": response.data.files });
+        // A journal link from the task timeline lands on the entry, rendered,
+        // rather than on the brief the view opens by default.
+        const journal = Boolean(journalTargetRef.current);
         setSelectedWorkspaceFile({
-          name: "BRIEF.md",
-          path: "BRIEF.md",
-          content: response.data.brief,
+          name: journal ? "JOURNAL.md" : "BRIEF.md",
+          path: journal ? "JOURNAL.md" : "BRIEF.md",
+          content: journal ? response.data.journal : response.data.brief,
           format: "markdown",
         });
-        setWorkspaceDraft(response.data.brief);
-        setWorkspaceFileMode("edit");
+        setWorkspaceDraft(
+          journal ? response.data.journal : response.data.brief,
+        );
+        setWorkspaceFileMode(journal ? "preview" : "edit");
         setSelectedWorkspaceDirectory("");
         setNewWorkspaceEntry(undefined);
         setError(undefined);
@@ -2754,6 +2547,9 @@ export function WorkspaceApp({
   const attentionById = new Map(
     (snapshot?.attention ?? []).map((item) => [item.sessionId, item]),
   );
+  const telemetryById = new Map(
+    (snapshot?.sessionTelemetry ?? []).map((item) => [item.sessionId, item]),
+  );
   const statusViewFor = (session: AgentSessionDto) =>
     sessionStatusView(
       session,
@@ -2780,9 +2576,6 @@ export function WorkspaceApp({
   );
   const allTasks = (snapshot?.tasks ?? []).filter(
     (item) => item.workspaceId === workspaceId,
-  );
-  const tasks = allTasks.filter(
-    (item) => filter === "all" || item.status === filter,
   );
   // Order is the user's, kept in the database and applied by the query that
   // built this snapshot. The renderer filters it but never re-sorts it: a list
@@ -2834,6 +2627,20 @@ export function WorkspaceApp({
     ),
   );
   const archivedSessions = workspaceSessions.filter((item) => item.archivedAt);
+  const workspaceSessionIds = new Set(workspaceSessions.map((item) => item.id));
+  // The snapshot carries every workspace's worktrees so the board can read
+  // them without the workspace view open; the board shows only this one's.
+  const workspaceWorktrees = (snapshot?.worktrees ?? []).filter((item) =>
+    workspaceSessionIds.has(item.sessionId),
+  );
+  // Claude first when both are installed: it is the order the session dialog
+  // lists them in, and Start has to pick something when nothing is chosen.
+  const availableBoardProviders = (["claude", "codex"] as const).filter(
+    (name) =>
+      snapshot?.settings.providers.some(
+        (provider) => provider.name === name && provider.available,
+      ),
+  ) as BoardProvider[];
   const selectedTask = snapshot?.tasks.find(
     (item) => item.id === selectedTaskId,
   );
@@ -3044,6 +2851,108 @@ export function WorkspaceApp({
     }
   }
 
+  /** Loads a provider's model list once, for the board's settings. */
+  const ensureModelCatalog = useCallback(
+    (provider: BoardProvider) => {
+      if (modelCatalogs[provider]) return;
+      void client.request
+        .agentModels({ provider })
+        .then((response) => {
+          if (response.ok)
+            setModelCatalogs((current) => ({
+              ...current,
+              [provider]: response.data,
+            }));
+        })
+        .catch(() => {
+          // The model list is a convenience; the provider default still works.
+        });
+    },
+    [client, modelCatalogs],
+  );
+
+  /**
+   * Start on a board card. It launches with the workspace's default provider
+   * and model without asking, and stays on the board: a dispatcher starting
+   * three tasks does not want to be carried into each terminal in turn. The
+   * core moves the task to `in_progress` when the workspace setting says so.
+   */
+  async function startTaskSession(
+    task: TaskDto,
+    options: {
+      provider?: BoardProvider;
+      model?: string;
+      draftBrief?: boolean;
+    } = {},
+  ) {
+    if (!workspace) return;
+    const provider =
+      options.provider ??
+      workspace.defaultProvider ??
+      availableBoardProviders[0];
+    if (!provider) {
+      setError("No agent provider is installed");
+      return;
+    }
+    const model =
+      options.model ??
+      (!options.provider || options.provider === workspace.defaultProvider
+        ? (workspace.defaultModel ?? undefined)
+        : undefined);
+    const launch: SessionLaunchState = {
+      key: crypto.randomUUID(),
+      workspaceId: workspace.id,
+      taskId: task.id,
+      name: task.title,
+      tool: provider,
+      startedAt: new Date().toISOString(),
+      status: "starting",
+    };
+    setSessionLaunches((current) => [launch, ...current]);
+    try {
+      const response = await client.request.agentSpawn({
+        workspace: workspace.id,
+        taskId: task.id,
+        provider,
+        ...(model ? { model } : {}),
+        ...(options.draftBrief ? { draftBrief: true } : {}),
+      });
+      if (response.ok) {
+        setSessionLaunches((current) =>
+          current.filter((item) => item.key !== launch.key),
+        );
+        await refresh();
+        return response.data;
+      }
+      const sessionId =
+        typeof response.error.details?.sessionId === "string"
+          ? response.error.details.sessionId
+          : undefined;
+      setSessionLaunches((current) =>
+        current.map((item) =>
+          item.key === launch.key
+            ? {
+                ...item,
+                sessionId,
+                status: "error",
+                error: response.error.message,
+              }
+            : item,
+        ),
+      );
+      await refresh();
+    } catch (cause) {
+      setSessionLaunches((current) =>
+        current.map((item) =>
+          item.key === launch.key
+            ? { ...item, status: "error", error: errorMessage(cause) }
+            : item,
+        ),
+      );
+    }
+    return undefined;
+  }
+
   function openSessionModal(task?: TaskDto) {
     setSessionForm({ name: task?.title ?? "", taskId: task?.id });
     setSessionModel("");
@@ -3084,6 +2993,18 @@ export function WorkspaceApp({
       setWorkspaceForm({ name: "", slug: "", path: "" });
       setModal(undefined);
     }
+  }
+
+  /**
+   * The board's capture line: a title, a `todo`, nothing else. Most tasks in
+   * a workspace start as a line typed fast, and a modal is a reason not to.
+   */
+  async function quickCaptureTask(title: string): Promise<boolean> {
+    if (!workspace) return false;
+    const created = await perform(
+      client.request.taskCreate({ workspace: workspace.id, title }),
+    );
+    return Boolean(created);
   }
 
   async function createTask(event: React.FormEvent) {
@@ -3803,30 +3724,75 @@ export function WorkspaceApp({
     </form>
   ) : (
     <div className="task-brief">
-      <div className="brief-modal-toolbar">
-        <select
-          aria-label="Task status"
-          value={selectedTask.status}
-          onChange={(event) =>
-            void perform(
-              client.request.taskSetStatus({
-                id: selectedTask.id,
-                status: event.target.value as TaskStatus,
-              }),
-            )
-          }
-        >
-          {STATUSES.map((status) => (
-            <option key={status} value={status}>
-              {status.replace("_", " ")}
-            </option>
-          ))}
-        </select>
-      </div>
       <h2>
         #{selectedTask.number} {selectedTask.title}
       </h2>
       <MarkdownPreview source={selectedTask.description} />
+      <div className="task-inspector-section task-status-row">
+        <label>
+          Status
+          <select
+            aria-label="Task status"
+            value={selectedTask.status}
+            onChange={(event) =>
+              void perform(
+                client.request.taskSetStatus({
+                  id: selectedTask.id,
+                  status: event.target.value as TaskStatus,
+                }),
+              )
+            }
+          >
+            {STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {status.replace("_", " ")}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <TaskRelationsBlock
+        laneOf={(task) =>
+          laneFor(task, {
+            sessions: workspaceSessions,
+            activity: activityById,
+            attention: attentionById,
+            worktrees: workspaceWorktrees,
+          })
+        }
+        onSelect={(task) => {
+          setSelectedTaskId(task.id);
+          setEditingTask(false);
+        }}
+        task={selectedTask}
+        tasks={allTasks}
+      />
+      <TaskTimeline
+        loading={taskTimelineLoading}
+        onOpenJournal={(heading) => {
+          setJournalTarget(heading);
+          setView("workspace");
+        }}
+        timeline={
+          taskTimeline?.taskId === selectedTask.id ? taskTimeline : undefined
+        }
+      />
+      {taskTimeline?.taskId === selectedTask.id && (
+        <TaskCostLine cost={taskTimeline.cost} now={now} />
+      )}
+      <div className="task-inspector-actions">
+        <button
+          className="quiet"
+          disabled={!snapshot?.settings.tmuxAvailable}
+          onClick={() =>
+            void startTaskSession(selectedTask, { draftBrief: true })
+          }
+          title="Start a session that reads the workspace and writes this brief back. It does not start the task."
+          type="button"
+        >
+          Draft brief with agent
+        </button>
+      </div>
       <button
         className="danger-link brief-delete"
         onClick={() =>
@@ -4947,113 +4913,80 @@ export function WorkspaceApp({
               )}
             </>
           ) : view === "board" ? (
-            <>
-              <div className="board-toolbar">
-                <div>
-                  <strong>Tasks</strong>
-                  <span className="count-badge">{tasks.length}</span>
-                </div>
-                <div className="heading-actions">
-                  <select
-                    aria-label="Filter tasks by status"
-                    value={filter}
-                    onChange={(event) =>
-                      setFilter(event.target.value as TaskStatus | "all")
-                    }
-                  >
-                    <option value="all">All statuses</option>
-                    {STATUSES.map((status) => (
-                      <option key={status} value={status}>
-                        {status.replace("_", " ")}
-                      </option>
-                    ))}
-                  </select>
-                  <CreateButton
-                    label="Create task"
-                    onClick={() => setModal("task")}
-                  />
-                </div>
-              </div>
-              <div className="board-grid">
-                {tasks.length === 0 && (
-                  <div className="empty large">
-                    <strong>No matching tasks</strong>
-                    <span>Use New to create a task.</span>
-                  </div>
-                )}
-                {tasks.map((task) => {
-                  const linked = sessions.filter(
-                    (item) => item.taskId === task.id,
-                  );
-                  return (
-                    <article
-                      className={`task-item status-card-${task.status} ${task.id === selectedTaskId ? "selected" : ""}`}
-                      key={task.id}
-                      onClick={() => {
-                        setSelectedTaskId(task.id);
-                        setEditingTask(false);
-                      }}
-                    >
-                      <div className="task-card-top">
-                        <span className={`pill status-${task.status}`}>
-                          {task.status.replace("_", " ")}
-                        </span>
-                        <small>
-                          #{task.number} ·{" "}
-                          {new Date(task.updatedAt).toLocaleDateString()}
-                        </small>
-                      </div>
-                      <strong>{task.title}</strong>
-                      <p>{taskExcerpt(task.description) || "No task brief"}</p>
-                      <div className="task-card-footer">
-                        <div
-                          aria-label={`Sessions for ${task.title}`}
-                          className="task-session-links"
-                        >
-                          {linked.length === 0 && (
-                            <span className="task-session-empty">
-                              No sessions
-                            </span>
-                          )}
-                          {linked.map((session) => {
-                            const tool = sessionTool(session);
-                            return (
-                              <button
-                                aria-label={`Open ${sessionName(session)} session`}
-                                className={`task-session-link tool-${tool} ${session.status}`}
-                                key={session.id}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  openSession(session.id);
-                                  setView("sessions");
-                                }}
-                                title={`${sessionName(session)} · ${session.status}`}
-                                type="button"
-                              >
-                                <ToolIcon tool={tool} />
-                              </button>
-                            );
-                          })}
-                        </div>
-                        <button
-                          aria-label={`Create session for ${task.title}`}
-                          className="task-session-create"
-                          disabled={!snapshot?.settings.tmuxAvailable}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            openSessionModal(task);
-                          }}
-                          type="button"
-                        >
-                          <SessionLaunchIcon />
-                          <span>Start session…</span>
-                        </button>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            </>
+            <BoardView
+              activity={activityById}
+              attention={attentionById}
+              availableProviders={availableBoardProviders}
+              busy={busy}
+              launches={workspaceSessionLaunches}
+              modelCatalogs={modelCatalogs}
+              now={now}
+              onCreateTask={() => setModal("task")}
+              onDismissLaunch={dismissSessionLaunch}
+              onDraftBrief={(task) =>
+                void startTaskSession(task, { draftBrief: true })
+              }
+              onQuickCapture={quickCaptureTask}
+              onAnswer={async (session, text) =>
+                Boolean(
+                  await perform(
+                    client.request.agentSend({ id: session.id, text }),
+                  ),
+                )
+              }
+              onMarkDone={(task) =>
+                void perform(
+                  client.request.taskSetStatus({ id: task.id, status: "done" }),
+                )
+              }
+              onOpenWorktree={(worktree) =>
+                void perform(
+                  client.request.sessionWorktreeOpen({
+                    session: worktree.sessionId,
+                    repository: worktree.repositoryId,
+                  }),
+                )
+              }
+              onSecondOpinion={(task, provider) =>
+                void startTaskSession(task, { provider })
+              }
+              onStartNext={(task) => void startTaskSession(task)}
+              onNeedModels={ensureModelCatalog}
+              onOpenLink={openTerminalLink}
+              onOpenSession={(session) => {
+                openSession(session.id);
+                setView("sessions");
+              }}
+              onSelectTask={(task) => {
+                setSelectedTaskId(task.id);
+                setEditingTask(false);
+              }}
+              onSetInProgress={(task) =>
+                void perform(
+                  client.request.taskSetStatus({
+                    id: task.id,
+                    status: "in_progress",
+                  }),
+                )
+              }
+              onStart={(task) => void startTaskSession(task)}
+              onStartWith={(task) => openSessionModal(task)}
+              onUpdateSettings={(changes) =>
+                void perform(
+                  client.request.workspaceUpdate({
+                    reference: workspace.id,
+                    ...changes,
+                  }),
+                )
+              }
+              selectedTaskId={selectedTaskId}
+              sessions={workspaceSessions}
+              tasks={allTasks}
+              telemetry={telemetryById}
+              tmuxAvailable={Boolean(snapshot?.settings.tmuxAvailable)}
+              workspace={workspace}
+              worktrees={workspaceWorktrees}
+            />
           ) : (
             <>
               <div className="sessions-toolbar">

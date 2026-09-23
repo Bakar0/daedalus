@@ -46,6 +46,9 @@ const snapshot: DesktopSnapshotDto = {
       archivedAt: null,
       available: true,
       position: 1,
+      startSetsInProgress: true,
+      defaultProvider: null,
+      defaultModel: null,
     },
   ],
   tasks: [],
@@ -56,6 +59,7 @@ const snapshot: DesktopSnapshotDto = {
   sessionTelemetry: [],
   sessionActivity: [],
   attention: [],
+  worktrees: [],
   toasts: [],
   settings: {
     version: "0.6.0",

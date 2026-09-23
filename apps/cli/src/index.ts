@@ -14,6 +14,7 @@ import {
   type ActivityObservation,
   type AgentActivityState,
   type ApplicationContext,
+  type TaskCost,
   type ManagedSkillStatus,
 } from "@daedalus/core";
 import {
@@ -22,7 +23,7 @@ import {
   TMUX_EXECUTABLE_FALLBACKS,
 } from "@daedalus/platform";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { DoctorCheck } from "@daedalus/protocol";
 import packageJson from "../../../package.json";
 
@@ -200,7 +201,7 @@ Usage:
   daedal doctor [--json]
   daedal shutdown [--dry-run] [--keep-terminals] [--force] [--json]
   daedal workspace <create|list|get|update|archive|restore|remove> ... [--json]
-  daedal task <create|list|get|current|update|status|remove> ... [--json]
+  daedal task <create|list|get|current|update|status|timeline|remove> ... [--json]
   daedal repo <library|list|add|attach|sync|fetch|detach|worktree> ... [--json]
   daedal agent <spawn|list|get|wait|attach|send|archive|restore|revive|stop|remove> ... [--json]
   daedal skill <list|get|enable|disable|visibility|install|remove|sync|doctor> ... [--json]
@@ -218,17 +219,32 @@ const commandHelp: Record<string, string> = {
   daedal workspace reorder <workspace> [<workspace>...]
   daedal workspace get <workspace>
   daedal workspace update <workspace> [--name <name>] [--slug <slug>]
+      [--start-sets-in-progress on|off] [--default-provider claude|codex|none]
+      [--default-model <model>|none]
   daedal workspace archive <workspace>
   daedal workspace restore <workspace>
-  daedal workspace remove <workspace> [--delete-files] --force`,
+  daedal workspace remove <workspace> [--delete-files] --force
+
+The board settings are per workspace. --start-sets-in-progress (on by default)
+moves a todo or blocked task to in_progress when a session is started on it,
+from the board or from 'agent spawn --task'. --default-provider and
+--default-model are what the board's Start and Start next launch with.`,
   task: `Task commands:
-  daedal task create --workspace <workspace> --title <title> [--description <text>] [--priority <priority>]
+  daedal task create --workspace <workspace> --title <title> [--description <text> | --description-file <path|->] [--priority <priority>]
   daedal task list [--workspace <workspace>] [--status <status>]
   daedal task get <task-ref> [--workspace <workspace>]
   daedal task current
-  daedal task update <task-ref> [--workspace <workspace>] [--title <title>] [--description <text>] [--priority <priority>]
+  daedal task update <task-ref> [--workspace <workspace>] [--title <title>] [--description <text> | --description-file <path|->] [--priority <priority>]
   daedal task status <task-ref> <status> [--workspace <workspace>]
-  daedal task remove <task-ref> [--workspace <workspace>] --force`,
+  daedal task timeline <task-ref> [--workspace <workspace>]
+  daedal task remove <task-ref> [--workspace <workspace>] --force
+
+--description-file reads the brief from a file, or from standard input when
+the path is '-', so a long Markdown brief needs no shell quoting.
+
+'task timeline' lists what happened to a task in order: created, brief
+edited, sessions started and stopped, worktrees, what agents asked and when
+it was cleared, journal entries whose heading names the task, and done.`,
   repo: `Repository commands:
   daedal repo library list
   daedal repo library add <url-or-absolute-path> [--name <name>]
@@ -240,11 +256,12 @@ const commandHelp: Record<string, string> = {
   daedal repo detach <attachment-id>
   daedal repo worktree create --session <agent-id> --repository <name-or-id>
   daedal repo worktree list [--workspace <workspace>] [--session <agent-id>]
+  daedal repo worktree open --session <agent-id> --repository <name-or-id>
   daedal repo worktree push --session <agent-id> --repository <name-or-id>
   daedal repo worktree remove --session <agent-id> --repository <name-or-id> [--force]`,
   agent: `Agent commands:
   daedal agent models <codex|claude>
-  daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>]
+  daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>] [--draft-brief]
   daedal agent list [--workspace <workspace>] [--running|--archived]
   daedal agent reorder --workspace <workspace> <agent-id> [<agent-id>...]
   daedal agent get <agent-id>
@@ -267,6 +284,12 @@ is a real answer, not a failure.
 Mac reboot leaves behind. Each one comes back idle at its prompt with its
 conversation loaded; nothing is sent to the agent, so no work restarts on its
 own. The app runs the same sweep at startup unless it is turned off.
+
+'agent spawn --task' moves a todo or blocked task to in_progress when the
+workspace's --start-sets-in-progress setting is on, which is the default.
+--draft-brief links the session to the task but asks it to write the brief
+back with 'task update --description-file -' instead of doing the task, and
+leaves the status alone.
 
 'agent wait' blocks until a session reaches a state and then exits 0, so the
 same signal drives a shell notifier, a Slack ping or a tmux bell with no
@@ -378,6 +401,54 @@ function parseArguments(
     index += 1;
   }
   return { positionals, values, flags };
+}
+
+const durationLabel = (milliseconds: number) => {
+  const minutes = Math.max(0, Math.floor(milliseconds / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
+};
+
+/** "2 sessions · 3h 12m · peak 64% ctx · opus, gpt-5", as the board shows it. */
+function taskCostLine(cost: TaskCost): string {
+  if (cost.sessions === 0) return "No sessions yet";
+  const parts = [`${cost.sessions} session${cost.sessions === 1 ? "" : "s"}`];
+  if (cost.firstStartedAt) {
+    const end = cost.lastEndedAt ? Date.parse(cost.lastEndedAt) : Date.now();
+    parts.push(
+      `${durationLabel(end - Date.parse(cost.firstStartedAt))}${cost.running ? " so far" : ""}`,
+    );
+  }
+  if (cost.peakContextPercent !== undefined)
+    parts.push(`peak ${Math.round(cost.peakContextPercent)}% ctx`);
+  if (cost.models.length) parts.push(cost.models.join(", "));
+  return parts.join(" · ");
+}
+
+/**
+ * `--description` or `--description-file`, never both. A file path of `-`
+ * reads standard input, which is how an agent hands over a long brief
+ * without quoting it through a shell.
+ */
+async function descriptionOption(
+  values: Record<string, string>,
+): Promise<string | undefined> {
+  const file = values["description-file"];
+  if (file === undefined) return values.description;
+  if (values.description !== undefined)
+    throw new DaedalusError(
+      "VALIDATION",
+      "Use either --description or --description-file, not both",
+    );
+  if (file === "-") return Bun.stdin.text();
+  const source = Bun.file(resolve(file));
+  if (!(await source.exists()))
+    throw new DaedalusError(
+      "NOT_FOUND",
+      `Description file '${file}' was not found`,
+    );
+  return source.text();
 }
 
 function required(value: string | undefined, description: string): string {
@@ -563,15 +634,41 @@ async function workspaceCommand(
     return 0;
   }
   if (action === "update") {
-    const parsed = parseArguments(args, ["name", "slug"]);
+    const parsed = parseArguments(args, [
+      "name",
+      "slug",
+      "start-sets-in-progress",
+      "default-provider",
+      "default-model",
+    ]);
     expectPositionals(
       parsed.positionals,
       1,
-      "daedal workspace update <workspace> [--name <name>] [--slug <slug>]",
+      "daedal workspace update <workspace> [--name <name>] [--slug <slug>] [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--default-model <model>|none]",
     );
+    const startSetting = parsed.values["start-sets-in-progress"];
+    if (
+      startSetting !== undefined &&
+      startSetting !== "on" &&
+      startSetting !== "off"
+    )
+      throw new DaedalusError(
+        "VALIDATION",
+        "--start-sets-in-progress must be 'on' or 'off'",
+      );
+    const defaultModel = parsed.values["default-model"];
     const result = await context.workspaces.update(parsed.positionals[0]!, {
       name: parsed.values.name,
       slug: parsed.values.slug,
+      startSetsInProgress:
+        startSetting === undefined ? undefined : startSetting === "on",
+      defaultProvider: parsed.values["default-provider"],
+      defaultModel:
+        defaultModel === undefined
+          ? undefined
+          : defaultModel === "none"
+            ? null
+            : defaultModel,
     });
     printResult(result, json, () =>
       console.log(`Updated workspace ${result.slug} (${result.id})`),
@@ -693,6 +790,7 @@ async function taskCommand(
       "workspace",
       "title",
       "description",
+      "description-file",
       "priority",
     ]);
     expectPositionals(
@@ -703,7 +801,7 @@ async function taskCommand(
     const result = await context.tasks.create({
       workspace: required(parsed.values.workspace, "--workspace"),
       title: required(parsed.values.title, "--title"),
-      description: parsed.values.description,
+      description: await descriptionOption(parsed.values),
       priority: parsed.values.priority,
     });
     printResult(result, json, () =>
@@ -766,6 +864,7 @@ async function taskCommand(
       "workspace",
       "title",
       "description",
+      "description-file",
       "priority",
     ]);
     expectPositionals(
@@ -780,12 +879,43 @@ async function taskCommand(
     );
     const result = context.tasks.update(task.id, {
       title: parsed.values.title,
-      description: parsed.values.description,
+      description: await descriptionOption(parsed.values),
       priority: parsed.values.priority,
     });
     printResult(result, json, () =>
       console.log(`Updated task #${result.number}: ${result.title}`),
     );
+    return 0;
+  }
+  if (action === "timeline") {
+    const parsed = parseArguments(args, ["workspace"]);
+    expectPositionals(
+      parsed.positionals,
+      1,
+      "daedal task timeline <task-ref> [--workspace <workspace>]",
+    );
+    const task = await resolveTaskReference(
+      context,
+      parsed.positionals[0]!,
+      parsed.values.workspace,
+    );
+    const { events, cost } = await context.taskHistory.report(task.id);
+    printResult({ taskId: task.id, events, cost }, json, () => {
+      console.log(`#${task.number} ${task.title}`);
+      console.log(taskCostLine(cost));
+      for (const event of events) {
+        const when =
+          event.at === null
+            ? "".padEnd(16)
+            : event.at.length === 10
+              ? event.at.padEnd(16)
+              : event.at.slice(0, 16).replace("T", " ");
+        const detail = event.detail ? `\t${event.detail}` : "";
+        console.log(
+          `${when}  ${event.text}${event.open ? " (open)" : ""}${detail}`,
+        );
+      }
+    });
     return 0;
   }
   if (action === "status") {
@@ -866,15 +996,11 @@ async function agentCommand(
     return 0;
   }
   if (action === "spawn") {
-    const parsed = parseArguments(args, [
-      "workspace",
-      "provider",
-      "command",
-      "task",
-      "name",
-      "model",
-      "message",
-    ]);
+    const parsed = parseArguments(
+      args,
+      ["workspace", "provider", "command", "task", "name", "model", "message"],
+      ["draft-brief"],
+    );
     expectPositionals(
       parsed.positionals,
       0,
@@ -892,6 +1018,7 @@ async function agentCommand(
       name: parsed.values.name,
       model: parsed.values.model,
       message: parsed.values.message,
+      draftBrief: parsed.flags.has("draft-brief") || undefined,
     });
     printResult(result, json, () =>
       console.log(
@@ -1655,10 +1782,26 @@ async function repositoryCommand(
       );
       return 0;
     }
+    if (worktreeAction === "open") {
+      const parsed = parseArguments(args, ["session", "repository"]);
+      expectPositionals(
+        parsed.positionals,
+        0,
+        "daedal repo worktree open --session <agent-id> --repository <name-or-id>",
+      );
+      const result = await context.workspaceContent.openSessionWorktree({
+        session: required(parsed.values.session, "--session"),
+        repository: required(parsed.values.repository, "--repository"),
+      });
+      printResult(result, json, () =>
+        console.log(`Opened ${result.path} in ${result.openedWith}`),
+      );
+      return 0;
+    }
     if (worktreeAction !== "create")
       throw new DaedalusError(
         "VALIDATION",
-        "Usage: daedal repo worktree <create|list|push|remove> ...",
+        "Usage: daedal repo worktree <create|list|open|push|remove> ...",
       );
     const parsed = parseArguments(args, ["session", "repository"]);
     expectPositionals(
