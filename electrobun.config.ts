@@ -14,8 +14,10 @@ const channel = (() => {
   return flag === "stable" || flag === "canary" ? flag : "dev";
 })();
 
+export const STABLE_IDENTIFIER = "dev.daedalus.app";
+
 export const APP_IDENTIFIER =
-  channel === "stable" ? "dev.daedalus.app" : `dev.daedalus.app.${channel}`;
+  channel === "stable" ? STABLE_IDENTIFIER : `${STABLE_IDENTIFIER}.${channel}`;
 
 export default {
   app: {
