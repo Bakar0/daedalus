@@ -45,6 +45,7 @@ import type {
   ToastDto,
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
+import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import { runWithConcurrency } from "./concurrency";
 import { repositoryFuzzyScore } from "./repository-search";
 import { useListReorder } from "./use-list-reorder";
@@ -1908,6 +1909,10 @@ export function WorkspaceApp({
   const [modal, setModal] = useState<
     "workspace" | "task" | "session" | "repository" | "settings" | undefined
   >(initialModal);
+  // Which settings category is open. Kept here rather than inside the dialog
+  // so reopening Settings returns to where the user was.
+  const [settingsSection, setSettingsSection] =
+    useState<SettingsSection>("general");
   const [editingTask, setEditingTask] = useState(false);
   // The quit dialog is driven entirely by the host: it arrives with the plan
   // already computed, and every button answers back over `quitDecision`.
@@ -6037,125 +6042,22 @@ export function WorkspaceApp({
       )}
 
       {modal === "settings" && snapshot && (
-        <Modal onClose={() => setModal(undefined)} title="Settings">
-          <dl className="settings-list">
-            {/* First, and deliberately: the question this dialog gets opened
-                for most often is "which build am I actually running". */}
-            <dt>Version</dt>
-            <dd>
-              {snapshot.settings.version}
-              {snapshot.settings.channel === "stable"
-                ? ""
-                : ` · ${snapshot.settings.channel}`}
-            </dd>
-            <dt>Daedalus home</dt>
-            <dd>{snapshot.settings.home}</dd>
-            <dt>Workspace root</dt>
-            <dd>{snapshot.settings.workspaceRoot}</dd>
-            <dt>Database</dt>
-            <dd>{snapshot.settings.databasePath}</dd>
-            <dt>tmux</dt>
-            <dd>{snapshot.settings.tmuxVersion ?? "Not found"}</dd>
-            <dt>Theme</dt>
-            <dd>
-              <select
-                aria-label="Theme"
-                value={theme}
-                onChange={(event) => {
-                  const value = event.target.value as "dark" | "light";
-                  setTheme(value);
-                  window.localStorage.setItem("daedalus.theme", value);
-                }}
-              >
-                <option value="dark">Dark</option>
-                <option value="light">Light</option>
-              </select>
-            </dd>
-            <dt>Agent context</dt>
-            <dd>
-              <label className="settings-toggle">
-                <input
-                  checked={snapshot.settings.workspaceInstructionFilesEnabled}
-                  disabled={busy}
-                  onChange={(event) =>
-                    void perform(
-                      client.request.workspaceInstructionFilesSet({
-                        enabled: event.target.checked,
-                      }),
-                    )
-                  }
-                  type="checkbox"
-                />
-                <span>
-                  <strong>Create workspace agent guidance</strong>
-                  <small>
-                    Keep Daedalus-managed AGENTS.md, CLAUDE.md, and the
-                    daedalus-control skill links in workspace roots.
-                  </small>
-                </span>
-              </label>
-            </dd>
-            <dt>Session recovery</dt>
-            <dd>
-              <label className="settings-toggle">
-                <input
-                  checked={snapshot.settings.autoRestoreSessionsEnabled}
-                  disabled={busy}
-                  onChange={(event) =>
-                    void perform(
-                      client.request.autoRestoreSessionsSet({
-                        enabled: event.target.checked,
-                      }),
-                    )
-                  }
-                  type="checkbox"
-                />
-                <span>
-                  <strong>Bring sessions back on startup</strong>
-                  <small>
-                    A reboot kills the tmux server every session lives in.
-                    Daedalus resumes each conversation when it next starts, so
-                    agents come back idle at their prompt with their history —
-                    nothing is sent to them and no work restarts on its own.
-                  </small>
-                </span>
-              </label>
-            </dd>
-            <dt>Notifications</dt>
-            <dd>
-              <label className="settings-toggle">
-                <input
-                  checked={snapshot.settings.focusMode}
-                  disabled={busy}
-                  onChange={(event) => void setFocusMode(event.target.checked)}
-                  type="checkbox"
-                />
-                <span>
-                  <strong>Focus mode</strong>
-                  <small>
-                    Stop toasts and desktop notifications. Indicators and
-                    attention badges keep updating, and a badge being cleared
-                    always goes through.
-                  </small>
-                </span>
-              </label>
-            </dd>
-          </dl>
-          <h3>Agent executables</h3>
-          <div className="provider-grid">
-            {snapshot.settings.providers.map((item) => (
-              <div key={item.name}>
-                <span
-                  className={`agent-dot tone-${item.available ? "idle" : "lost"}`}
-                />
-                <strong>{item.name}</strong>
-                <code>{item.executable}</code>
-                <small>
-                  {item.available ? "Available" : "Not found on PATH"}
-                </small>
-              </div>
-            ))}
-          </div>
+        <Modal onClose={() => setModal(undefined)} title="Settings" wide>
+          <SettingsModal
+            busy={busy}
+            client={client}
+            onError={setError}
+            onFocusMode={(enabled) => void setFocusMode(enabled)}
+            onSection={setSettingsSection}
+            onTheme={(value) => {
+              setTheme(value);
+              window.localStorage.setItem("daedalus.theme", value);
+            }}
+            perform={perform}
+            section={settingsSection}
+            settings={snapshot.settings}
+            theme={theme}
+          />
         </Modal>
       )}
 

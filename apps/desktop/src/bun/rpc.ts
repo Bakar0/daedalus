@@ -311,6 +311,19 @@ export function createDesktopRequestHandlers(
       mutate(async () => ({
         enabled: await context.presence.setFocusMode(enabled),
       })),
+    // Reading is a plain result. Everything that writes goes through `mutate`,
+    // because a skill toggle changes what every future session sees and the
+    // rest of the app should redraw around it.
+    skillList: () => result(() => context.skills.list()),
+    skillSet: ({ id, enabled, mode }) =>
+      mutate(() => context.skills.setEnabled(id, enabled, mode)),
+    skillVisibilitySet: ({ name, visibility }) =>
+      mutate(() => context.skills.setVisibility(name, visibility)),
+    skillRemove: ({ name }) =>
+      mutate(() => context.skills.removeInstalled(name)),
+    skillRead: ({ path }) => result(() => context.skills.readSkill(path)),
+    skillDoctor: () =>
+      result(async () => ({ findings: await context.skills.doctor() })),
     // Neither of these is a data change, and the second one is usually the
     // last thing this process does.
     quitDialogShown: () =>

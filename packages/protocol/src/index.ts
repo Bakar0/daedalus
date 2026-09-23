@@ -219,6 +219,57 @@ export interface ShutdownPlanDto {
   terminals: { id: string; name: string }[];
 }
 
+/**
+ * A skill the providers can see. Reported per directory it was found in
+ * rather than merged, because a provider lists a name found twice twice.
+ */
+export interface DiscoveredSkillDto {
+  name: string;
+  description: string;
+  skillPath: string;
+  providers: Array<"claude" | "codex" | "cursor">;
+  origin: "daedalus" | "user" | "plugin";
+  source:
+    "claude-personal" | "agents-personal" | "cursor-personal" | "claude-plugin";
+  /** The directory it was found in, which is the group it is listed under. */
+  sourcePath: string;
+  /** The plugin's name, when the source is one plugin rather than a provider. */
+  sourceName?: string;
+  invocation: "auto" | "user-only" | "model-only";
+  visibility: "on" | "off";
+  managedId?: string;
+  problem?: "unreadable-frontmatter" | "name-mismatch" | "broken-link";
+}
+
+export interface ManagedSkillArtifactDto {
+  kind: "skill" | "style" | "instructions" | "selection";
+  path: string;
+  present: boolean;
+  /** Something that is not Daedalus's sits here, so it was left alone. */
+  blocked: boolean;
+}
+
+export interface ManagedSkillDto {
+  id: string;
+  title: string;
+  summary: string;
+  supportsAlways: boolean;
+  enabled: boolean;
+  mode: "on-demand" | "always";
+  source?: { kind: "path" | "git"; ref: string; subpath?: string };
+  artifacts: ManagedSkillArtifactDto[];
+}
+
+export interface SkillListingDto {
+  managed: ManagedSkillDto[];
+  discovered: DiscoveredSkillDto[];
+}
+
+export interface SkillDoctorFindingDto {
+  level: "ok" | "warn";
+  message: string;
+}
+
 export interface DesktopSettingsDto {
   /** The running build, so "did my update install?" is answerable in the app. */
   version: string;
@@ -450,6 +501,32 @@ export interface DesktopRpcSchema {
         { enabled: boolean }
       >;
       focusModeSet: Request<{ enabled: boolean }, { enabled: boolean }>;
+      /**
+       * The skill system. Global, so none of these takes a workspace: a skill
+       * is installed once and applies to every session on the machine.
+       */
+      skillList: Request<Record<string, never>, SkillListingDto>;
+      skillSet: Request<
+        { id: string; enabled: boolean; mode?: "on-demand" | "always" },
+        ManagedSkillDto
+      >;
+      skillVisibilitySet: Request<
+        {
+          name: string;
+          visibility: "on" | "off";
+        },
+        { name: string; visibility: string }
+      >;
+      skillRemove: Request<{ name: string }, { removed: string }>;
+      /** The text of one discovered SKILL.md, for the viewer in the panel. */
+      skillRead: Request<
+        { path: string },
+        { path: string; content: string; truncated: boolean }
+      >;
+      skillDoctor: Request<
+        Record<string, never>,
+        { findings: SkillDoctorFindingDto[] }
+      >;
       /**
        * Acknowledges that the quit dialog is on screen. The host quits on its
        * own if this never arrives, so a renderer that cannot draw the dialog

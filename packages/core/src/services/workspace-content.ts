@@ -43,14 +43,12 @@ import type {
   WorkspaceRepository,
   RepositoryLibraryEntry,
 } from "../domain";
-import daedalusControlSkillTemplate from "../../../../skills/daedalus-control/SKILL.md" with { type: "text" };
-import daedalusControlCliReference from "../../../../skills/daedalus-control/references/cli.md" with { type: "text" };
-import daedalusControlOpenAiMetadata from "../../../../skills/daedalus-control/agents/openai.yaml" with { type: "text" };
 import {
   saveWorkspaceInstructionFilesEnabled,
   type DaedalusConfig,
 } from "../config";
 import { DaedalusError, normalizeError } from "../errors";
+import { removeSkillLink } from "./skills";
 import type { SqliteRepositories } from "../repositories";
 import type { WorkspaceService } from "./workspaces";
 
@@ -161,10 +159,6 @@ Workspace context:
 6. Treat the checkouts under \`${join(workspacePath, "repos")}\` as read-only. Before modifying a repository, create only the worktree you need with \`daedal repo worktree create --session "$DAEDALUS_SESSION_ID" --repository <repository-name>\`, then work in the returned path.
 `;
 }
-
-export const DAEDALUS_CONTROL_SKILL_TEMPLATE = daedalusControlSkillTemplate;
-export const DAEDALUS_CONTROL_CLI_REFERENCE = daedalusControlCliReference;
-export const DAEDALUS_CONTROL_OPENAI_METADATA = daedalusControlOpenAiMetadata;
 
 const SAFE_SEGMENT = /[^a-z0-9]+/g;
 const MAX_VIEWABLE_FILE_BYTES = 1024 * 1024;
@@ -336,63 +330,29 @@ async function removeIfGenerated(
   if (await generatedFileMatchesAny(path, generated)) await unlink(path);
 }
 
-async function ensureDaedalusControlSkill(
+/**
+ * Retires the per-workspace skill links this function used to create.
+ *
+ * Skills are installed globally now, into the providers' own personal
+ * directories, so a link inside every workspace is a second copy of a decision
+ * that is already made once. Only a symlink still pointing at the managed
+ * package is removed, so a real directory a user put here survives.
+ */
+async function removeLegacyWorkspaceSkillLinks(
+  path: string,
   daedalusHome: string,
-): Promise<string> {
-  const skillPath = join(daedalusHome, "skills", "daedalus-control");
+): Promise<void> {
+  const target = join(daedalusHome, "skills", "daedalus-control");
   await Promise.all([
-    ensureDirectory(join(skillPath, "references")),
-    ensureDirectory(join(skillPath, "agents")),
-  ]);
-  await Promise.all([
-    writeFile(
-      join(skillPath, "SKILL.md"),
-      DAEDALUS_CONTROL_SKILL_TEMPLATE,
-      "utf8",
+    removeSkillLink(
+      join(path, ".agents", "skills", "daedalus-control"),
+      target,
     ),
-    writeFile(
-      join(skillPath, "references", "cli.md"),
-      DAEDALUS_CONTROL_CLI_REFERENCE,
-      "utf8",
-    ),
-    writeFile(
-      join(skillPath, "agents", "openai.yaml"),
-      DAEDALUS_CONTROL_OPENAI_METADATA,
-      "utf8",
+    removeSkillLink(
+      join(path, ".claude", "skills", "daedalus-control"),
+      target,
     ),
   ]);
-  return skillPath;
-}
-
-async function ensureSkillLink(
-  linkPath: string,
-  target: string,
-): Promise<void> {
-  await ensureDirectory(dirname(linkPath));
-  try {
-    const stats = await lstat(linkPath);
-    if (!stats.isSymbolicLink()) return;
-    const existingTarget = resolve(dirname(linkPath), await readlink(linkPath));
-    if (existingTarget === target) return;
-    return;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  await symlink(target, linkPath, "dir");
-}
-
-async function removeSkillLink(
-  linkPath: string,
-  target: string,
-): Promise<void> {
-  try {
-    const stats = await lstat(linkPath);
-    if (!stats.isSymbolicLink()) return;
-    const existingTarget = resolve(dirname(linkPath), await readlink(linkPath));
-    if (existingTarget === target) await unlink(linkPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
 }
 
 export async function syncWorkspaceInstructionFiles(
@@ -402,9 +362,7 @@ export async function syncWorkspaceInstructionFiles(
 ): Promise<void> {
   const agentsPath = join(path, "AGENTS.md");
   const claudePath = join(path, "CLAUDE.md");
-  const codexSkillLink = join(path, ".agents", "skills", "daedalus-control");
-  const claudeSkillLink = join(path, ".claude", "skills", "daedalus-control");
-  const centralSkillPath = join(daedalusHome, "skills", "daedalus-control");
+  await removeLegacyWorkspaceSkillLinks(path, daedalusHome);
   if (!enabled) {
     await Promise.all([
       removeIfGenerated(agentsPath, [
@@ -413,8 +371,6 @@ export async function syncWorkspaceInstructionFiles(
         LEGACY_AGENTS_TEMPLATE,
       ]),
       removeIfGenerated(claudePath, [CLAUDE_TEMPLATE]),
-      removeSkillLink(codexSkillLink, centralSkillPath),
-      removeSkillLink(claudeSkillLink, centralSkillPath),
     ]);
     return;
   }
@@ -434,11 +390,6 @@ export async function syncWorkspaceInstructionFiles(
   )
     await writeFile(agentsPath, AGENTS_TEMPLATE, "utf8");
   if (agentsIsGenerated) await createIfMissing(claudePath, CLAUDE_TEMPLATE);
-  const installedSkillPath = await ensureDaedalusControlSkill(daedalusHome);
-  await Promise.all([
-    ensureSkillLink(codexSkillLink, installedSkillPath),
-    ensureSkillLink(claudeSkillLink, installedSkillPath),
-  ]);
 }
 
 export async function ensureSessionInstructionFiles(
@@ -448,19 +399,13 @@ export async function ensureSessionInstructionFiles(
   enabled: boolean,
 ): Promise<void> {
   const agentsPath = join(sessionPath, "AGENTS.md");
-  const skillLink = join(sessionPath, ".agents", "skills", "daedalus-control");
-  const centralSkillPath = join(daedalusHome, "skills", "daedalus-control");
   const template = sessionInstructionsTemplate(workspacePath);
+  await removeLegacyWorkspaceSkillLinks(sessionPath, daedalusHome);
   if (!enabled) {
-    await Promise.all([
-      removeIfGenerated(agentsPath, [template]),
-      removeSkillLink(skillLink, centralSkillPath),
-    ]);
+    await removeIfGenerated(agentsPath, [template]);
     return;
   }
   await createIfMissing(agentsPath, template);
-  const installedSkillPath = await ensureDaedalusControlSkill(daedalusHome);
-  await ensureSkillLink(skillLink, installedSkillPath);
 }
 
 export async function ensureWorkspaceContentFiles(

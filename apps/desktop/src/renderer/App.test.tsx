@@ -426,7 +426,7 @@ describe("desktop application shell", () => {
     expect(html).toContain("7d 33%");
   });
 
-  test("shows the workspace instruction files preference in Settings", () => {
+  test("opens Settings on General, with its categories and the first toggle", () => {
     const html = renderToStaticMarkup(
       <App
         injectedClient={client}
@@ -435,8 +435,12 @@ describe("desktop application shell", () => {
       />,
     );
     expect(html).toContain("Create workspace agent guidance");
-    expect(html).toContain("daedalus-control skill");
     expect(html).toContain('type="checkbox" checked=""');
+    // Every category is one click away, and only General is rendered. The
+    // skill wording moved to the Skills category with the panel itself.
+    for (const label of ["General", "Skills", "Notifications", "About"])
+      expect(html).toContain(label);
+    expect(html).not.toContain("Focus mode");
   });
 
   test("keeps provider default selected in the session model picker", () => {

@@ -15,6 +15,7 @@ import { JsonLogger } from "../logging";
 import { runMigrations } from "../repositories/migrations";
 import { SqliteRepositories } from "../repositories/sqlite";
 import { ActivityService } from "./activity";
+import { SkillService } from "./skills";
 import { AgentService } from "./agents";
 import { IntegratedTerminalService } from "./integrated-terminals";
 import { NotificationService } from "./notifications";
@@ -46,6 +47,7 @@ export interface ApplicationContext {
   presence: PresenceService;
   notifications: NotificationService;
   activity: ActivityService;
+  skills: SkillService;
   /** Ends everything at once. Nothing else in the app reaches for it. */
   shutdown: ShutdownService;
   tmux: TmuxClient;
@@ -188,6 +190,7 @@ export async function createApplicationContext(
     presence,
     notifications,
     activity,
+    skills: new SkillService(config),
     shutdown: new ShutdownService(repositories, agents, terminals, tmux),
     tmux,
     // Watchers are kernel resources held outside the database, so they are

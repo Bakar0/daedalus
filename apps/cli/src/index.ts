@@ -14,6 +14,7 @@ import {
   type ActivityObservation,
   type AgentActivityState,
   type ApplicationContext,
+  type ManagedSkillStatus,
 } from "@daedalus/core";
 import {
   findExecutable,
@@ -202,6 +203,7 @@ Usage:
   daedal task <create|list|get|current|update|status|remove> ... [--json]
   daedal repo <library|list|add|attach|sync|fetch|detach|worktree> ... [--json]
   daedal agent <spawn|list|get|wait|attach|send|archive|restore|revive|stop|remove> ... [--json]
+  daedal skill <list|get|enable|disable|visibility|install|remove|sync|doctor> ... [--json]
   daedal attention "<reason>" [--session <agent-id>] [--clear] [--json]
   daedal notify "<message>" [--level info|success|error] [--desktop] [--json]
   daedal ui state [--json]
@@ -312,6 +314,20 @@ design — this is the one command that ends them.
 
 Sessions whose provider has no native resume are stopped rather than archived,
 and reported separately. One session failing never aborts the rest.`,
+  skill: `Skill commands — global, so no --workspace:
+  daedal skill list [--provider claude|codex|cursor] [--managed] [--json]
+  daedal skill get <name> [--json]
+  daedal skill enable <name> [--mode on-demand|always]
+  daedal skill disable <name>
+  daedal skill visibility <name> <on|off>
+  daedal skill install <path> [--name <name>]
+  daedal skill install --git <url> --path <subdir> [--name <name>]
+  daedal skill remove <name> --force
+  daedal skill sync
+  daedal skill doctor
+
+Skills install once, under your home directory, and apply to every session on
+this machine. Codex reads its skill settings only when it starts.`,
   ui: `Presence command:
   daedal ui state [--json]
 
@@ -1754,6 +1770,217 @@ async function shutdownCommand(
   return failed.length > 0 || result.serverError ? 4 : 0;
 }
 
+const VISIBILITIES = new Set(["on", "name-only", "user-invocable-only", "off"]);
+
+const artifactSummary = (skill: ManagedSkillStatus): string => {
+  if (!skill.enabled) return "off";
+  const blocked = skill.artifacts.filter((one) => one.blocked).length;
+  const missing = skill.artifacts.filter(
+    (one) => !one.present && !one.blocked,
+  ).length;
+  if (blocked) return `${skill.mode} · ${blocked} path(s) left alone`;
+  if (missing) return `${skill.mode} · ${missing} missing`;
+  return skill.mode;
+};
+
+async function skillCommand(
+  context: ApplicationContext,
+  args: string[],
+  json: boolean,
+): Promise<number> {
+  const action = args.shift();
+  if (!action || action === "help") {
+    console.log(commandHelp.skill);
+    return 0;
+  }
+  if (action === "list") {
+    const parsed = parseArguments(args, ["provider"], ["managed"]);
+    expectPositionals(parsed.positionals, 0, "daedal skill list [--json]");
+    const listing = await context.skills.list();
+    const provider = parsed.values.provider;
+    if (provider && !["claude", "codex", "cursor"].includes(provider))
+      throw new DaedalusError("VALIDATION", `Unknown provider '${provider}'`);
+    const discovered = parsed.flags.has("managed")
+      ? []
+      : listing.discovered.filter(
+          (skill) =>
+            !provider ||
+            skill.providers.includes(provider as "claude" | "codex" | "cursor"),
+        );
+    printResult({ ...listing, discovered }, json, () => {
+      console.log("From Daedalus:");
+      for (const skill of listing.managed)
+        console.log(`  ${skill.id}\t${artifactSummary(skill)}\t${skill.title}`);
+      if (parsed.flags.has("managed")) return;
+      console.log(
+        discovered.length
+          ? "\nFound on this machine:"
+          : "\nNothing else found.",
+      );
+      for (const skill of discovered)
+        console.log(
+          `  ${skill.name}\t${skill.origin}\t${skill.providers.join(",")}\t${skill.invocation}\t${skill.visibility}${skill.problem ? `\t${skill.problem}` : ""}`,
+        );
+    });
+    return 0;
+  }
+  if (action === "get") {
+    const parsed = parseArguments(args, []);
+    expectPositionals(parsed.positionals, 1, "daedal skill get <name>");
+    const found = await context.skills.get(parsed.positionals[0]!);
+    printResult(found, json, () => {
+      if (found.managed) {
+        console.log(`${found.managed.id}\t${artifactSummary(found.managed)}`);
+        console.log(found.managed.summary);
+        for (const artifact of found.managed.artifacts)
+          console.log(
+            `  ${artifact.kind}\t${artifact.present ? "installed" : artifact.blocked ? "left alone" : "absent"}\t${artifact.path}`,
+          );
+      }
+      for (const skill of found.discovered)
+        console.log(
+          `  ${skill.origin}\t${skill.providers.join(",")}\t${skill.skillPath}`,
+        );
+    });
+    return 0;
+  }
+  if (action === "enable" || action === "disable") {
+    const parsed = parseArguments(args, ["mode"]);
+    expectPositionals(parsed.positionals, 1, `daedal skill ${action} <name>`);
+    const mode = parsed.values.mode;
+    if (mode && mode !== "on-demand" && mode !== "always")
+      throw new DaedalusError(
+        "VALIDATION",
+        "Option '--mode' must be 'on-demand' or 'always'",
+      );
+    if (mode && action === "disable")
+      throw new DaedalusError(
+        "VALIDATION",
+        "Option '--mode' does not apply to 'disable'",
+      );
+    const status = await context.skills.setEnabled(
+      parsed.positionals[0]!,
+      action === "enable",
+      mode as "on-demand" | "always" | undefined,
+    );
+    printResult(status, json, () => {
+      console.log(`${status.id} is ${status.enabled ? status.mode : "off"}`);
+      for (const artifact of status.artifacts)
+        if (artifact.blocked)
+          console.log(
+            `  left alone: ${artifact.path} is not Daedalus's to replace`,
+          );
+        else if (artifact.present) console.log(`  wrote ${artifact.path}`);
+      if (status.enabled && status.mode === "always") {
+        // Only promise the style is on when the selection actually took. It
+        // does not when the user already has a style of their own, and saying
+        // otherwise is how a setting looks applied while doing nothing.
+        const selection = status.artifacts.find(
+          (artifact) => artifact.kind === "selection",
+        );
+        console.log(
+          selection?.blocked
+            ? "  Claude is set to a different output style, which is yours to change, so the rules are not applying there yet. Codex reads its instructions at startup."
+            : "  Claude picks the style up on its next session. Codex reads its instructions at startup.",
+        );
+      }
+    });
+    return 0;
+  }
+  if (action === "visibility") {
+    const parsed = parseArguments(args, []);
+    expectPositionals(
+      parsed.positionals,
+      2,
+      "daedal skill visibility <name> <on|off>",
+    );
+    const requested = parsed.positionals[1]!;
+    if (!VISIBILITIES.has(requested))
+      throw new DaedalusError(
+        "VALIDATION",
+        `Unknown visibility '${requested}'`,
+      );
+    const result = await context.skills.setVisibility(
+      parsed.positionals[0]!,
+      requested as "on" | "off",
+    );
+    printResult(result, json, () => {
+      console.log(`${result.name} is ${result.visibility}`);
+      console.log(
+        "Claude applies this to its next session. Codex applies it after it restarts, and it is global.",
+      );
+    });
+    return 0;
+  }
+  if (action === "install") {
+    const parsed = parseArguments(args, ["name", "git", "path"]);
+    const url = parsed.values.git;
+    const status = url
+      ? await context.skills.installFromGit(
+          url,
+          required(parsed.values.path, "Option '--path'"),
+          parsed.values.name,
+        )
+      : await context.skills.installFromPath(
+          required(
+            parsed.positionals[0] ?? parsed.values.path,
+            "A source path",
+          ),
+          parsed.values.name,
+        );
+    printResult(status, json, () => {
+      console.log(`Installed ${status.id}`);
+      for (const artifact of status.artifacts)
+        if (artifact.present) console.log(`  linked ${artifact.path}`);
+    });
+    return 0;
+  }
+  if (action === "remove") {
+    const parsed = parseArguments(args, [], ["force"]);
+    expectPositionals(
+      parsed.positionals,
+      1,
+      "daedal skill remove <name> --force",
+    );
+    if (!parsed.flags.has("force"))
+      throw new DaedalusError(
+        "VALIDATION",
+        "Removing a skill deletes its files. Pass --force.",
+      );
+    const removed = await context.skills.removeInstalled(
+      parsed.positionals[0]!,
+    );
+    printResult(removed, json, () => console.log(`Removed ${removed.removed}`));
+    return 0;
+  }
+  if (action === "sync") {
+    const parsed = parseArguments(args, []);
+    expectPositionals(parsed.positionals, 0, "daedal skill sync");
+    await context.skills.sync();
+    const managed = await context.skills.managedStatus();
+    printResult({ managed }, json, () => {
+      for (const skill of managed)
+        console.log(`${skill.id}\t${artifactSummary(skill)}`);
+    });
+    return 0;
+  }
+  if (action === "doctor") {
+    const parsed = parseArguments(args, []);
+    expectPositionals(parsed.positionals, 0, "daedal skill doctor");
+    const findings = await context.skills.doctor();
+    printResult({ findings }, json, () => {
+      for (const finding of findings)
+        console.log(
+          `${finding.level === "ok" ? "ok" : "warn"}\t${finding.message}`,
+        );
+    });
+    // A report, not a gate. Every finding here is something the user can
+    // choose to live with, so none of them fails the command.
+    return 0;
+  }
+  throw new DaedalusError("VALIDATION", `Unknown skill command '${action}'`);
+}
+
 export async function runCli(
   inputArgs: string[],
   options: { migrationsDirectory?: string } = {},
@@ -1790,6 +2017,7 @@ export async function runCli(
       "task",
       "repo",
       "agent",
+      "skill",
       "attention",
       "notify",
       "ui",
@@ -1808,6 +2036,8 @@ export async function runCli(
       return await taskCommand(context, args.slice(1), json);
     if (args[0] === "repo")
       return await repositoryCommand(context, args.slice(1), json);
+    if (args[0] === "skill")
+      return await skillCommand(context, args.slice(1), json);
     if (args[0] === "attention")
       return await attentionCommand(context, args.slice(1), json);
     if (args[0] === "notify")

@@ -282,7 +282,13 @@ textarea {
   resize: vertical;
 }
 
-button:not(.workspace-item, .quiet, .danger-link) {
+button:not(
+  .workspace-item,
+  .quiet,
+  .danger-link,
+  .skills-group-head,
+  .skills-row-head
+) {
   background: var(--accent);
   border: 0;
   border-radius: 8px;
@@ -292,7 +298,13 @@ button:not(.workspace-item, .quiet, .danger-link) {
   padding: 8px 12px;
   transition: background 140ms ease;
 }
-button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
+button:not(
+    .workspace-item,
+    .quiet,
+    .danger-link,
+    .skills-group-head,
+    .skills-row-head
+  ):hover:not(:disabled) {
   background: var(--accent-hover);
 }
 .quiet,
@@ -1538,7 +1550,11 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   border: 1px solid var(--line-strong);
   border-radius: 16px;
   box-shadow: 0 30px 90px rgb(0 0 0 / 0.62);
+  /* No dialog may outgrow the window. Without this a tall one ran off the top
+     and the bottom at once, with nothing to scroll and no way back to it. */
+  max-height: calc(100vh - 48px);
   max-width: 520px;
+  overflow: auto;
   padding: 24px;
   width: calc(100% - 48px);
 }
@@ -1697,12 +1713,6 @@ button:not(.workspace-item, .quiet, .danger-link):hover:not(:disabled) {
   border-top-color: var(--accent);
   height: 18px;
   width: 18px;
-}
-.settings-list {
-  display: grid;
-  grid-template-columns: 125px minmax(0, 1fr);
-  margin: 20px 0;
-  row-gap: 13px;
 }
 dt {
   color: var(--muted);
@@ -3632,4 +3642,396 @@ dd {
   .secondary-panel-resize-handle {
     display: none;
   }
+}
+
+/* Skills panel. Lives inside the settings modal, so it inherits the dd
+   monospace and steps back out of it wherever the text is prose. */
+.skills-panel {
+  display: grid;
+  font-family: var(--font-sans);
+  gap: 10px;
+}
+.skills-panel h3 {
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  margin: 6px 0 0;
+  padding-top: 10px;
+  text-transform: uppercase;
+}
+.skills-panel h3:first-child {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+.skills-note {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+  margin: 0;
+}
+.skills-managed {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+}
+.skills-mode {
+  align-items: center;
+  display: flex;
+  font-size: 10px;
+  gap: 7px;
+}
+.skills-mode span {
+  color: var(--muted);
+}
+.skills-mode select {
+  flex: 1;
+  min-width: 0;
+}
+.skills-artifacts {
+  display: grid;
+  gap: 3px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.skills-artifacts li {
+  align-items: baseline;
+  display: grid;
+  gap: 7px;
+  grid-template-columns: 74px minmax(0, 1fr) auto;
+}
+.skills-artifacts code {
+  color: var(--muted);
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+.skills-kind {
+  color: var(--muted);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+.skills-artifacts li > span:last-child {
+  color: var(--muted);
+  font-size: 9px;
+}
+.skills-found {
+  display: grid;
+  gap: 1px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.skills-filter {
+  width: 100%;
+}
+.skills-group {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.skills-group-head {
+  align-items: baseline;
+  background: none;
+  border: 0;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  font-family: var(--font-sans);
+  gap: 8px;
+  padding: 8px 10px;
+  text-align: left;
+  width: 100%;
+}
+.skills-group-head:hover {
+  background: var(--raised);
+}
+.skills-group-head strong {
+  font-size: 11px;
+}
+.skills-group-head code {
+  color: var(--muted);
+  flex: 1;
+  font-size: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skills-count {
+  color: var(--muted);
+  font-size: 9px;
+}
+.skills-caret {
+  color: var(--muted);
+  display: inline-block;
+  font-size: 11px;
+  transition: transform 120ms ease;
+  width: 9px;
+}
+.skills-caret.is-open {
+  transform: rotate(90deg);
+}
+.skills-found-row {
+  align-items: center;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 5px 10px 5px 27px;
+}
+.skills-found-row.is-open {
+  background: var(--raised);
+}
+.skills-row-head {
+  align-items: baseline;
+  background: none;
+  border: 0;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  font-family: var(--font-sans);
+  gap: 7px;
+  min-width: 0;
+  padding: 2px 0;
+  text-align: left;
+}
+.skills-row-head strong {
+  font-size: 11px;
+  white-space: nowrap;
+}
+.skills-row-head code {
+  color: var(--muted);
+  flex: 1;
+  font-size: 9px;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* An on/off switch that is still a real checkbox.
+   The input keeps its own role, label association, Space key and focus ring,
+   and only its appearance is replaced: the element is the track and its
+   ::after is the knob. A div with a click handler would have cost all of
+   that and bought nothing. */
+.switch {
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--line-strong);
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  flex: none;
+  height: 16px;
+  margin: 0;
+  position: relative;
+  transition:
+    background 140ms ease,
+    opacity 140ms ease;
+  width: 28px;
+}
+.switch::after {
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
+  content: "";
+  height: 12px;
+  left: 2px;
+  position: absolute;
+  top: 2px;
+  transition: transform 140ms ease;
+  width: 12px;
+}
+.switch:checked {
+  background: var(--accent);
+}
+.switch:checked::after {
+  transform: translateX(12px);
+}
+.switch:hover:not(:disabled) {
+  opacity: 0.85;
+}
+.switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+/* The label sits beside a 16px track, so it lines up with the knob rather
+   than with the top of a two-line description. */
+.settings-row .switch,
+.settings-toggle .switch {
+  margin-top: 1px;
+}
+
+.skills-switch {
+  cursor: pointer;
+  display: flex;
+  padding: 2px;
+}
+.skills-switch input {
+  margin: 0;
+}
+/* A row for a skill that is switched off still has to be readable, because it
+   is the row you come back to when you want it on again. */
+.skills-found-row.is-off .skills-row-head strong,
+.skills-found-row.is-off .skills-row-head code {
+  opacity: 0.5;
+}
+.skills-tag {
+  background: var(--line);
+  border-radius: 4px;
+  color: var(--secondary);
+  font-size: 8px;
+  letter-spacing: 0.03em;
+  padding: 2px 5px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.skills-tag.is-problem {
+  background: transparent;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+.skills-detail {
+  display: grid;
+  gap: 7px;
+  grid-column: 1 / -1;
+  padding: 2px 0 8px;
+}
+.skills-detail p {
+  color: var(--secondary);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  line-height: 1.45;
+  margin: 0;
+}
+.skills-detail pre {
+  background: var(--overlay);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--secondary);
+  font-size: 9px;
+  line-height: 1.5;
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  padding: 9px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Settings. A fixed sidebar of categories and one scrolling pane, sized to the
+   viewport so the dialog is the same shape whichever category is open. */
+.settings {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: 146px minmax(0, 1fr);
+  height: min(560px, calc(100vh - 200px));
+  margin-top: 18px;
+  min-height: 300px;
+}
+.settings-nav {
+  border-right: 1px solid var(--line);
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  padding-right: 12px;
+}
+.settings-nav button {
+  background: none;
+  border: 0;
+  border-radius: 7px;
+  color: var(--secondary);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  padding: 7px 10px;
+  text-align: left;
+}
+.settings-nav button:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+.settings-nav button.is-current {
+  background: var(--raised);
+  color: var(--text);
+  font-weight: 600;
+}
+.settings-pane {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.settings-section {
+  display: grid;
+  gap: 14px;
+}
+.settings-section h3 {
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  margin: 0;
+  text-transform: uppercase;
+}
+.settings-section h3:not(:first-child) {
+  margin-top: 8px;
+}
+.settings-row {
+  align-items: flex-start;
+  cursor: pointer;
+  display: flex;
+  font-family: var(--font-sans);
+  gap: 10px;
+}
+.settings-row input {
+  margin: 2px 0 0;
+}
+.settings-row span {
+  display: grid;
+  gap: 4px;
+}
+.settings-row strong {
+  color: var(--text);
+  font-size: 12px;
+}
+.settings-row small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.settings-choice {
+  align-items: center;
+  display: flex;
+  font-family: var(--font-sans);
+  gap: 12px;
+  justify-content: space-between;
+}
+.settings-choice strong {
+  color: var(--text);
+  font-size: 12px;
+}
+.settings-choice select {
+  min-width: 140px;
+}
+.settings-facts {
+  display: grid;
+  gap: 9px;
+}
+.settings-fact {
+  display: grid;
+  gap: 3px;
+}
+.settings-fact span {
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.settings-fact code {
+  color: var(--secondary);
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }

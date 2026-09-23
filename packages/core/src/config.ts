@@ -17,6 +17,39 @@ export interface AgentDefinition {
   permissionMode?: AgentPermissionMode;
 }
 
+/**
+ * How much of a Daedalus-shipped capability is installed.
+ *
+ * `on-demand` puts the skill where the providers look, so the user can call it
+ * by name. `always` additionally installs the style and instruction artifacts,
+ * which is what makes a writing style apply to every response rather than to
+ * the turns somebody remembers to ask for it.
+ */
+export type ManagedSkillMode = "on-demand" | "always";
+
+export interface ManagedSkillSetting {
+  enabled: boolean;
+  /** Ignored by a capability that has no `always` form. */
+  mode?: ManagedSkillMode;
+  /**
+   * Present only for a skill the user installed. A built-in capability has no
+   * source, which is how the two are told apart in one map.
+   */
+  source?: { kind: "path" | "git"; ref: string; subpath?: string };
+}
+
+/**
+ * Whether a skill Daedalus does not own reaches the agent at all.
+ *
+ * Claude Code's `skillOverrides` accepts four states, and only these two are
+ * the user's to set. `name-only` is a token-budget trick that does not
+ * describe anything the user wants. `user-invocable-only` is the same decision
+ * as `disable-model-invocation` in the skill's own frontmatter, which is the
+ * author's call and is already reported on the row, so offering it here too
+ * would ask the user to overrule a choice whose reason they cannot see.
+ */
+export type SkillVisibility = "on" | "off";
+
 export interface DaedalusConfig {
   home: string;
   workspaceRoot: string;
@@ -25,6 +58,19 @@ export interface DaedalusConfig {
   repositoryRoot: string;
   codexSessionsDirectory: string;
   claudeProjectsDirectory: string;
+  /**
+   * The provider configuration directories skills are installed into and
+   * discovered from.
+   *
+   * `claudeHome` and `codexHome` follow the providers' own environment
+   * variables. The other two have no published variable, so Daedalus defines
+   * its own overrides for tests and for unusual installs.
+   */
+  claudeHome: string;
+  codexHome: string;
+  /** `~/.agents`, the shared skills directory Codex and Cursor both read. */
+  agentsHome: string;
+  cursorHome: string;
   workspaceInstructionFilesEnabled: boolean;
   /**
    * Whether app startup brings `lost` agent sessions and integrated terminals
@@ -41,6 +87,34 @@ export interface DaedalusConfig {
    */
   focusMode: boolean;
   agents: Record<string, AgentDefinition>;
+  /**
+   * Per-capability state for the skills Daedalus ships. Absent means the
+   * capability's own default, so a fresh install needs no config file.
+   */
+  managedSkills: Record<string, ManagedSkillSetting>;
+  /**
+   * Requested visibility for skills Daedalus does not own, keyed by skill
+   * name. Applied through each provider's own switch rather than by moving
+   * the user's files.
+   */
+  skillOverrides: Record<string, SkillVisibility>;
+  /**
+   * The keys Daedalus last wrote into the user's own Claude settings file.
+   *
+   * JSON has no comment to fence a block with, so the only way to know which
+   * entries in that file are Daedalus's is to have written down which ones it
+   * put there. Without this, removing an override would mean either leaving
+   * every one behind or deleting entries the user set themselves.
+   */
+  claudeOverridesWritten: string[];
+  /**
+   * The output style Daedalus last selected in the user's Claude settings.
+   *
+   * Same reason as the override list: it is how Daedalus tells its own
+   * selection from one the user made, so it never takes away a style it did
+   * not choose.
+   */
+  claudeOutputStyleWritten?: string;
 }
 
 type StoredConfig = Partial<
@@ -52,7 +126,12 @@ type StoredConfig = Partial<
     | "focusMode"
     | "agents"
   >
->;
+> & {
+  managedSkills?: Record<string, ManagedSkillSetting>;
+  skillOverrides?: Record<string, SkillVisibility>;
+  claudeOverridesWritten?: string[];
+  claudeOutputStyleWritten?: string;
+};
 
 function expandHome(path: string): string {
   return path === "~"
@@ -122,6 +201,12 @@ export async function loadConfig(
   );
   const logsDirectory = join(home, "logs");
   const repositoryRoot = join(home, "repos");
+  const claudeHome = resolve(
+    expandHome(env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude")),
+  );
+  const codexHome = resolve(
+    expandHome(env.CODEX_HOME || join(homedir(), ".codex")),
+  );
   await Promise.all([
     ensureDirectory(home),
     ensureDirectory(workspaceRoot),
@@ -134,13 +219,15 @@ export async function loadConfig(
     databasePath: join(home, "state.db"),
     logsDirectory,
     repositoryRoot,
-    codexSessionsDirectory: join(
-      resolve(expandHome(env.CODEX_HOME || join(homedir(), ".codex"))),
-      "sessions",
+    codexSessionsDirectory: join(codexHome, "sessions"),
+    claudeProjectsDirectory: join(claudeHome, "projects"),
+    claudeHome,
+    codexHome,
+    agentsHome: resolve(
+      expandHome(env.DAEDALUS_AGENTS_HOME || join(homedir(), ".agents")),
     ),
-    claudeProjectsDirectory: join(
-      resolve(expandHome(env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"))),
-      "projects",
+    cursorHome: resolve(
+      expandHome(env.DAEDALUS_CURSOR_HOME || join(homedir(), ".cursor")),
     ),
     workspaceInstructionFilesEnabled:
       stored.workspaceInstructionFilesEnabled !== false,
@@ -150,6 +237,12 @@ export async function loadConfig(
       codex: { executable: "codex", args: [] },
       claude: { executable: "claude", args: [] },
     },
+    managedSkills: stored.managedSkills || {},
+    skillOverrides: stored.skillOverrides || {},
+    claudeOverridesWritten: stored.claudeOverridesWritten || [],
+    ...(stored.claudeOutputStyleWritten
+      ? { claudeOutputStyleWritten: stored.claudeOutputStyleWritten }
+      : {}),
   };
 }
 
@@ -201,4 +294,54 @@ export async function saveFocusMode(
 ): Promise<void> {
   await saveSetting(config, { focusMode: enabled });
   config.focusMode = enabled;
+}
+
+/**
+ * Stores one capability's state, leaving every other capability's entry alone.
+ *
+ * The whole map is rewritten rather than patched key by key because
+ * `saveSetting` merges at the top level only, so passing a partial map here
+ * would drop the capabilities it left out.
+ */
+export async function saveManagedSkillSetting(
+  config: DaedalusConfig,
+  id: string,
+  setting: ManagedSkillSetting,
+): Promise<void> {
+  const managedSkills = { ...config.managedSkills, [id]: setting };
+  await saveSetting(config, { managedSkills });
+  config.managedSkills = managedSkills;
+}
+
+/** Stores one discovered skill's requested visibility, leaving the rest alone. */
+export async function saveSkillOverride(
+  config: DaedalusConfig,
+  name: string,
+  visibility: SkillVisibility | undefined,
+): Promise<void> {
+  const skillOverrides = { ...config.skillOverrides };
+  if (visibility === undefined || visibility === "on")
+    delete skillOverrides[name];
+  else skillOverrides[name] = visibility;
+  await saveSetting(config, { skillOverrides });
+  config.skillOverrides = skillOverrides;
+}
+
+/** Records which override keys now belong to Daedalus in Claude's settings. */
+export async function saveClaudeOverridesWritten(
+  config: DaedalusConfig,
+  names: string[],
+): Promise<void> {
+  await saveSetting(config, { claudeOverridesWritten: names });
+  config.claudeOverridesWritten = names;
+}
+
+/** Records which output style, if any, is Daedalus's in Claude's settings. */
+export async function saveClaudeOutputStyleWritten(
+  config: DaedalusConfig,
+  style: string | undefined,
+): Promise<void> {
+  await saveSetting(config, { claudeOutputStyleWritten: style ?? null });
+  if (style === undefined) delete config.claudeOutputStyleWritten;
+  else config.claudeOutputStyleWritten = style;
 }

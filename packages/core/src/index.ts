@@ -22,3 +22,4 @@ export * from "./services/telemetry";
 export * from "./services/workspaces";
 export * from "./services/workspace-content";
 export * from "./services/workspace-watch";
+export * from "./services/skills";
