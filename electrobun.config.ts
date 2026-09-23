@@ -37,6 +37,11 @@ export default {
     copy: {
       "apps/desktop/dist/index.html": "views/mainview/index.html",
       "apps/desktop/dist/assets": "views/mainview/assets",
+      // Vite copies `src/renderer/public` to the top of `dist`, beside
+      // `index.html` rather than under `assets`, so each public file needs its
+      // own entry or the page asks for it and gets nothing.
+      "apps/desktop/dist/daedalus-app-icon.png":
+        "views/mainview/daedalus-app-icon.png",
       "apps/desktop/dist/cli.js": "cli/daedal.js",
       migrations: "migrations",
     },
