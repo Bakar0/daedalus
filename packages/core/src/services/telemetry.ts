@@ -299,11 +299,18 @@ async function readClaudeStatus(
   config: DaedalusConfig,
   agent: AgentSession,
 ): Promise<ReturnType<typeof parseClaudeStatus> | undefined> {
+  const payload = await readClaudeStatusPayload(config, agent);
+  return payload ? parseClaudeStatus(agent.id, payload) : undefined;
+}
+
+async function readClaudeStatusPayload(
+  config: DaedalusConfig,
+  agent: AgentSession,
+): Promise<ClaudeStatusPayload | undefined> {
   try {
-    const payload = (await Bun.file(
+    return (await Bun.file(
       join(config.home, "telemetry", `${agent.id}.json`),
     ).json()) as ClaudeStatusPayload;
-    return parseClaudeStatus(agent.id, payload);
   } catch {
     return undefined;
   }
@@ -542,14 +549,217 @@ async function readCodexUsage(
   }
 }
 
+/**
+ * What a whole session used, as opposed to what it is using now: every model
+ * it ran and the fullest its context got. Read from the same files as live
+ * telemetry, but from start to end rather than from the tail.
+ */
+export interface SessionUsageHistory {
+  models: string[];
+  peakTokens?: number;
+  peakPercent?: number;
+}
+
+/** A transcript past this is read from its end; a peak before it is missed. */
+const MAX_HISTORY_BYTES = 64 * 1024 * 1024;
+
+const addModel = (models: string[], model: unknown) => {
+  if (typeof model !== "string" || !model.trim()) return;
+  if (!models.some((known) => known.toLowerCase() === model.toLowerCase()))
+    models.push(model);
+};
+
+/** Every `token_count` and `turn_context` in a Codex rollout. */
+export function codexUsageHistory(text: string): SessionUsageHistory {
+  const models: string[] = [];
+  let peakTokens: number | undefined;
+  let peakPercent: number | undefined;
+  for (const line of text.split("\n")) {
+    if (!line.includes("token_count") && !line.includes("turn_context"))
+      continue;
+    try {
+      const event = JSON.parse(line) as {
+        type?: unknown;
+        payload?: {
+          type?: unknown;
+          model?: unknown;
+          info?: {
+            last_token_usage?: { total_tokens?: unknown };
+            model_context_window?: unknown;
+          };
+        };
+      };
+      if (event.type === "turn_context") addModel(models, event.payload?.model);
+      if (event.payload?.type !== "token_count") continue;
+      const used = finiteNumber(
+        event.payload.info?.last_token_usage?.total_tokens,
+      );
+      const window = finiteNumber(event.payload.info?.model_context_window);
+      if (used === undefined) continue;
+      peakTokens = Math.max(peakTokens ?? 0, used);
+      if (window && window > 0)
+        peakPercent = Math.max(peakPercent ?? 0, (used / window) * 100);
+    } catch {
+      // A line cut by the read window is expected; it carries nothing.
+    }
+  }
+  return {
+    models,
+    ...(peakTokens === undefined ? {} : { peakTokens }),
+    ...(peakPercent === undefined
+      ? {}
+      : { peakPercent: Math.min(100, peakPercent) }),
+  };
+}
+
+/**
+ * Every assistant turn in a Claude transcript. The context window is not in
+ * the transcript, so the percentage needs one from elsewhere: the status
+ * line's reported size, or a `[1m]` suffix on the launch model.
+ */
+export function claudeUsageHistory(
+  text: string,
+  contextWindow?: number,
+): SessionUsageHistory {
+  const models: string[] = [];
+  let peakTokens: number | undefined;
+  for (const line of text.split("\n")) {
+    if (!line.includes('"assistant"')) continue;
+    try {
+      const event = JSON.parse(line) as {
+        type?: unknown;
+        message?: {
+          model?: unknown;
+          usage?: Record<string, unknown>;
+        };
+      };
+      if (event.type !== "assistant" || !event.message?.usage) continue;
+      const usage = event.message.usage;
+      const used = [
+        usage.input_tokens,
+        usage.cache_creation_input_tokens,
+        usage.cache_read_input_tokens,
+        usage.output_tokens,
+      ]
+        .map((value) => finiteNumber(value) ?? 0)
+        .reduce((total, value) => total + value, 0);
+      // "<synthetic>" marks turns Claude Code wrote itself, not a model.
+      if (event.message.model !== "<synthetic>")
+        addModel(models, event.message.model);
+      if (used > 0) peakTokens = Math.max(peakTokens ?? 0, used);
+    } catch {
+      // As above.
+    }
+  }
+  return {
+    models,
+    ...(peakTokens === undefined ? {} : { peakTokens }),
+    ...(peakTokens !== undefined && contextWindow
+      ? { peakPercent: Math.min(100, (peakTokens / contextWindow) * 100) }
+      : {}),
+  };
+}
+
+async function readHistoryText(path: string): Promise<string | undefined> {
+  try {
+    const file = Bun.file(path);
+    if (!(await file.exists())) return undefined;
+    return await file.slice(Math.max(0, file.size - MAX_HISTORY_BYTES)).text();
+  } catch {
+    return undefined;
+  }
+}
+
 export class TelemetryService {
   private sessionCache?: { expiresAt: number; value: TelemetrySnapshot };
   private providerCache?: { expiresAt: number; value?: ProviderUsage };
+
+  /** Keyed by file path; reused while the file's size and mtime hold. */
+  private readonly historyCache = new Map<
+    string,
+    { size: number; modified: number; value: SessionUsageHistory }
+  >();
 
   constructor(
     private readonly repositories: SqliteRepositories,
     private readonly config: DaedalusConfig,
   ) {}
+
+  private async cachedHistory(
+    path: string,
+    read: (text: string) => SessionUsageHistory,
+  ): Promise<SessionUsageHistory | undefined> {
+    let stat: { size: number; modified: number };
+    try {
+      const file = Bun.file(path);
+      if (!(await file.exists())) return undefined;
+      stat = { size: file.size, modified: file.lastModified };
+    } catch {
+      return undefined;
+    }
+    const cached = this.historyCache.get(path);
+    if (
+      cached &&
+      cached.size === stat.size &&
+      cached.modified === stat.modified
+    )
+      return cached.value;
+    const text = await readHistoryText(path);
+    if (text === undefined) return undefined;
+    const value = read(text);
+    this.historyCache.set(path, { ...stat, value });
+    return value;
+  }
+
+  /**
+   * What one session used over its whole life, live or finished. Absent
+   * files degrade to what the launch arguments say, never to an error: a
+   * session whose transcript is gone still has a model it was started with.
+   */
+  async sessionUsage(agent: AgentSession): Promise<SessionUsageHistory> {
+    const launched = sessionLaunchModel(agent.args);
+    const merge = (history?: SessionUsageHistory): SessionUsageHistory => {
+      const models: string[] = [];
+      addModel(models, launched);
+      for (const model of history?.models ?? []) addModel(models, model);
+      return { ...history, models };
+    };
+    if (agent.kind !== "agent") return { models: [] };
+    if (agent.provider === "codex") {
+      const path = await codexRolloutPath(
+        this.config.codexSessionsDirectory,
+        agent,
+      );
+      return merge(
+        path ? await this.cachedHistory(path, codexUsageHistory) : undefined,
+      );
+    }
+    if (agent.provider === "claude") {
+      const status = await readClaudeStatusPayload(this.config, agent);
+      const window =
+        finiteNumber(status?.context_window?.context_window_size) ??
+        contextWindowFromModel(launched);
+      const history = await this.cachedHistory(
+        claudeTranscriptPath(this.config.claudeProjectsDirectory, agent),
+        (text) => claudeUsageHistory(text, window),
+      );
+      // The status line's own percentage is a reading the transcript may not
+      // reach, so it is a floor under the peak rather than ignored.
+      const reported = percentage(status?.context_window?.used_percentage);
+      const peakPercent =
+        reported === undefined
+          ? history?.peakPercent
+          : Math.max(reported, history?.peakPercent ?? 0);
+      return merge({
+        models: history?.models ?? [],
+        ...(history?.peakTokens === undefined
+          ? {}
+          : { peakTokens: history.peakTokens }),
+        ...(peakPercent === undefined ? {} : { peakPercent }),
+      });
+    }
+    return merge();
+  }
 
   async read(): Promise<TelemetrySnapshot> {
     const now = Date.now();

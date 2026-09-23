@@ -2,7 +2,11 @@
  * The inspector's history of one task: what happened, in order. Assembled by
  * the core on request (`taskTimeline`); this only lays it out.
  */
-import type { TaskTimelineDto, TaskTimelineEventDto } from "@daedalus/protocol";
+import type {
+  TaskCostDto,
+  TaskTimelineDto,
+  TaskTimelineEventDto,
+} from "@daedalus/protocol";
 
 const MONTHS = [
   "Jan",
@@ -108,6 +112,47 @@ export function TaskTimeline({
           ))}
         </ol>
       )}
+    </section>
+  );
+}
+
+const durationLabel = (milliseconds: number) => {
+  const minutes = Math.max(0, Math.floor(milliseconds / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
+};
+
+/**
+ * "2 sessions · 3h 12m · peak 64% ctx · opus 5.5, gpt-5". Wall time runs from
+ * the first spawn to the last stop, and to now while anything is live.
+ */
+export function taskCostText(cost: TaskCostDto, now: number): string {
+  if (cost.sessions === 0) return "No sessions yet";
+  const parts = [`${cost.sessions} session${cost.sessions === 1 ? "" : "s"}`];
+  if (cost.firstStartedAt) {
+    const end = cost.lastEndedAt ? Date.parse(cost.lastEndedAt) : now;
+    parts.push(
+      `${durationLabel(end - Date.parse(cost.firstStartedAt))}${cost.running ? " so far" : ""}`,
+    );
+  }
+  if (cost.peakContextPercent !== undefined)
+    parts.push(`peak ${Math.round(cost.peakContextPercent)}% ctx`);
+  if (cost.models.length > 0) parts.push(cost.models.join(", "));
+  return parts.join(" · ");
+}
+
+export function TaskCostLine({
+  cost,
+  now,
+}: {
+  cost: TaskCostDto;
+  now: number;
+}) {
+  return (
+    <section aria-label="Cost" className="task-inspector-section task-cost">
+      <h3>Cost</h3>
+      <p>{taskCostText(cost, now)}</p>
     </section>
   );
 }

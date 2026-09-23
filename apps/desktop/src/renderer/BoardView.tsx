@@ -21,6 +21,7 @@ import {
   BOARD_LANES,
   boardLanes,
   LANE_LABEL,
+  sessionWaitingSince,
   taskRelations,
   taskSessions,
   taskWaitingSince,
@@ -86,6 +87,14 @@ export interface BoardViewProps {
   onDraftBrief: (task: TaskDto) => void;
   onOpenLink: (url: string) => void;
   onSetInProgress: (task: TaskDto) => void;
+  /** Starts the top of Queued with the workspace's default provider. */
+  onStartNext: (task: TaskDto) => void;
+  /** Starts another provider on a task that already has a session. */
+  onSecondOpinion: (task: TaskDto, provider: BoardProvider) => void;
+  /** Types a short answer into a waiting session. Resolves false on failure. */
+  onAnswer: (session: AgentSessionDto, text: string) => Promise<boolean>;
+  onOpenWorktree: (worktree: SessionWorktreeDto) => void;
+  onMarkDone: (task: TaskDto) => void;
   onUpdateSettings: (changes: {
     startSetsInProgress?: boolean;
     defaultProvider?: BoardProvider | null;
@@ -319,6 +328,61 @@ function BoardSessionRow({
   );
 }
 
+/**
+ * The Needs me lane's reply box. Short answers only: it types the text and
+ * presses Enter through `agent send`, exactly as the CLI does. Anything longer
+ * belongs in the terminal, which is one click away beside it.
+ */
+function AnswerBox({
+  onAnswer,
+  onOpenTerminal,
+  session,
+}: {
+  onAnswer: (text: string) => Promise<boolean>;
+  onOpenTerminal: () => void;
+  session: AgentSessionDto;
+}) {
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const live = session.status === "running" || session.status === "starting";
+  const send = async () => {
+    const answer = text.trim();
+    if (!answer || sending) return;
+    setSending(true);
+    try {
+      if (await onAnswer(answer)) setText("");
+    } finally {
+      setSending(false);
+    }
+  };
+  return (
+    <div
+      className="board-answer"
+      onClick={(event) => event.stopPropagation()}
+      role="group"
+    >
+      {live && (
+        <input
+          aria-label={`Answer ${session.name}`}
+          disabled={sending}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              void send();
+            } else if (event.key === "Escape") setText("");
+          }}
+          placeholder="answer…"
+          value={text}
+        />
+      )}
+      <button className="quiet" onClick={onOpenTerminal} type="button">
+        Terminal
+      </button>
+    </div>
+  );
+}
+
 function BoardSettings({
   availableProviders,
   modelCatalogs,
@@ -507,6 +571,53 @@ export function BoardView(props: BoardViewProps) {
     const startable = (lane === "queued" || lane === "parked") && !liveAgent;
     const starting = launches.some((launch) => launch.status === "starting");
     const waitingOn = unfinishedDependencies(task, tasksById);
+    // The session that has waited longest is the one the reply box answers.
+    const answerTarget =
+      lane === "needs_me"
+        ? linked
+            .map((session) => ({
+              session,
+              since: sessionWaitingSince(session, inputs),
+            }))
+            .filter((item) => item.since)
+            .sort((left, right) => left.since!.localeCompare(right.since!))[0]
+            ?.session
+        : undefined;
+    const lastAgent = [...linked]
+      .filter((session) => session.kind === "agent")
+      .sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0];
+    const otherProvider = lastAgent
+      ? props.availableProviders.find(
+          (provider) => provider !== lastAgent.provider,
+        )
+      : undefined;
+    const offersSecondOpinion =
+      Boolean(lastAgent) &&
+      (lane === "needs_me" || lane === "running" || lane === "review");
+    const secondOpinion = offersSecondOpinion && (
+      <button
+        className="quiet"
+        disabled={!props.tmuxAvailable || !otherProvider || starting}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (otherProvider) props.onSecondOpinion(task, otherProvider);
+        }}
+        title={
+          otherProvider
+            ? `Start ${providerLabel(otherProvider)} on this task beside ${providerLabel(lastAgent!.provider)}`
+            : "Needs a second provider installed"
+        }
+        type="button"
+      >
+        Second opinion
+      </button>
+    );
+    const reviewWorktree = output.find(
+      (worktree) => (worktree.gitStatus?.ahead ?? 0) > 0,
+    );
+    const reviewPullRequest = output.find(
+      (worktree) => worktree.pullRequest,
+    )?.pullRequest;
     const references = (task.references ?? []).flatMap((reference) => {
       const target = tasksById.get(reference.taskId);
       return target ? [{ reference, target }] : [];
@@ -622,8 +733,60 @@ export function BoardView(props: BoardViewProps) {
             )}
           </div>
         ))}
-        {(startable || (lane === "running" && task.status === "todo")) && (
+        {answerTarget && (
+          <AnswerBox
+            onAnswer={(text) => props.onAnswer(answerTarget, text)}
+            onOpenTerminal={() => props.onOpenSession(answerTarget)}
+            session={answerTarget}
+          />
+        )}
+        {lane === "review" && (
+          <div className="board-card-actions board-review-actions">
+            {reviewWorktree && (
+              <button
+                className="quiet"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  props.onOpenWorktree(reviewWorktree);
+                }}
+                title={reviewWorktree.path}
+                type="button"
+              >
+                Open worktree
+              </button>
+            )}
+            {reviewPullRequest && (
+              <button
+                className="quiet"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  props.onOpenLink(reviewPullRequest.url);
+                }}
+                title={reviewPullRequest.url}
+                type="button"
+              >
+                Open PR
+              </button>
+            )}
+            <button
+              disabled={props.busy}
+              onClick={(event) => {
+                event.stopPropagation();
+                props.onMarkDone(task);
+              }}
+              title="Merging stays yours; this only records the verdict"
+              type="button"
+            >
+              Mark done
+            </button>
+            {secondOpinion}
+          </div>
+        )}
+        {(startable ||
+          (offersSecondOpinion && lane !== "review") ||
+          (lane === "running" && task.status === "todo")) && (
           <div className="board-card-actions">
+            {secondOpinion}
             {lane === "running" && task.status === "todo" && (
               <button
                 className="quiet"
@@ -768,6 +931,29 @@ export function BoardView(props: BoardViewProps) {
                     {LANE_LABEL[lane]}
                     <span className="board-lane-count">{laneTasks.length}</span>
                   </button>
+                  {lane === "queued" && laneTasks[0] && (
+                    <button
+                      className="quiet board-start-next"
+                      disabled={
+                        !props.tmuxAvailable ||
+                        props.availableProviders.length === 0
+                      }
+                      onClick={() => {
+                        const next = laneTasks[0]!;
+                        if (
+                          confirmStartDespite(
+                            next,
+                            unfinishedDependencies(next, tasksById),
+                          )
+                        )
+                          props.onStartNext(next);
+                      }}
+                      title={`Start #${laneTasks[0].number} ${laneTasks[0].title} with ${providerLabel(workspace.defaultProvider ?? props.availableProviders[0] ?? "claude")}`}
+                      type="button"
+                    >
+                      Start next
+                    </button>
+                  )}
                 </header>
                 {open && (
                   <div className="board-lane-cards">

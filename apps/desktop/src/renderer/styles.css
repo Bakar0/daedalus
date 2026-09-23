@@ -4438,3 +4438,33 @@ dd {
   font-size: 11px !important;
   padding: 5px 10px !important;
 }
+
+/* Dispatcher actions (#25, section 4). */
+.board-start-next {
+  font-size: 10px !important;
+  padding: 3px 9px !important;
+}
+.board-answer {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+.board-answer > input {
+  flex: 1;
+  font-size: 11px;
+  min-width: 0;
+  padding: 5px 8px;
+}
+.board-answer > button {
+  font-size: 11px !important;
+  padding: 4px 9px !important;
+}
+.board-review-actions {
+  justify-content: flex-start;
+}
+.task-cost > p {
+  color: var(--secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+}

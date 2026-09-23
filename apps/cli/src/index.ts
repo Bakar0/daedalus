@@ -14,6 +14,7 @@ import {
   type ActivityObservation,
   type AgentActivityState,
   type ApplicationContext,
+  type TaskCost,
   type ManagedSkillStatus,
 } from "@daedalus/core";
 import {
@@ -255,6 +256,7 @@ it was cleared, journal entries whose heading names the task, and done.`,
   daedal repo detach <attachment-id>
   daedal repo worktree create --session <agent-id> --repository <name-or-id>
   daedal repo worktree list [--workspace <workspace>] [--session <agent-id>]
+  daedal repo worktree open --session <agent-id> --repository <name-or-id>
   daedal repo worktree push --session <agent-id> --repository <name-or-id>
   daedal repo worktree remove --session <agent-id> --repository <name-or-id> [--force]`,
   agent: `Agent commands:
@@ -399,6 +401,29 @@ function parseArguments(
     index += 1;
   }
   return { positionals, values, flags };
+}
+
+const durationLabel = (milliseconds: number) => {
+  const minutes = Math.max(0, Math.floor(milliseconds / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
+};
+
+/** "2 sessions · 3h 12m · peak 64% ctx · opus, gpt-5", as the board shows it. */
+function taskCostLine(cost: TaskCost): string {
+  if (cost.sessions === 0) return "No sessions yet";
+  const parts = [`${cost.sessions} session${cost.sessions === 1 ? "" : "s"}`];
+  if (cost.firstStartedAt) {
+    const end = cost.lastEndedAt ? Date.parse(cost.lastEndedAt) : Date.now();
+    parts.push(
+      `${durationLabel(end - Date.parse(cost.firstStartedAt))}${cost.running ? " so far" : ""}`,
+    );
+  }
+  if (cost.peakContextPercent !== undefined)
+    parts.push(`peak ${Math.round(cost.peakContextPercent)}% ctx`);
+  if (cost.models.length) parts.push(cost.models.join(", "));
+  return parts.join(" · ");
 }
 
 /**
@@ -874,9 +899,10 @@ async function taskCommand(
       parsed.positionals[0]!,
       parsed.values.workspace,
     );
-    const events = await context.taskHistory.timeline(task.id);
-    printResult({ taskId: task.id, events }, json, () => {
+    const { events, cost } = await context.taskHistory.report(task.id);
+    printResult({ taskId: task.id, events, cost }, json, () => {
       console.log(`#${task.number} ${task.title}`);
+      console.log(taskCostLine(cost));
       for (const event of events) {
         const when =
           event.at === null
@@ -1756,10 +1782,26 @@ async function repositoryCommand(
       );
       return 0;
     }
+    if (worktreeAction === "open") {
+      const parsed = parseArguments(args, ["session", "repository"]);
+      expectPositionals(
+        parsed.positionals,
+        0,
+        "daedal repo worktree open --session <agent-id> --repository <name-or-id>",
+      );
+      const result = await context.workspaceContent.openSessionWorktree({
+        session: required(parsed.values.session, "--session"),
+        repository: required(parsed.values.repository, "--repository"),
+      });
+      printResult(result, json, () =>
+        console.log(`Opened ${result.path} in ${result.openedWith}`),
+      );
+      return 0;
+    }
     if (worktreeAction !== "create")
       throw new DaedalusError(
         "VALIDATION",
-        "Usage: daedal repo worktree <create|list|push|remove> ...",
+        "Usage: daedal repo worktree <create|list|open|push|remove> ...",
       );
     const parsed = parseArguments(args, ["session", "repository"]);
     expectPositionals(

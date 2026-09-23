@@ -11,7 +11,7 @@ import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import { sessionLaunchModel } from "./providers";
 import { parseTaskReferences } from "./task-references";
-import type { TelemetryService } from "./telemetry";
+import type { SessionUsageHistory, TelemetryService } from "./telemetry";
 import type { WorkspaceService } from "./workspaces";
 
 /**
@@ -245,6 +245,63 @@ export function buildTaskTimeline(
 }
 
 /**
+ * What a task cost, across every session it had. A small number that
+ * changes behaviour: a task that took four sessions and hit 90% context
+ * twice had a brief that needed more work.
+ */
+export interface TaskCost {
+  /** Agent sessions, archived ones included; terminals do not count. */
+  sessions: number;
+  firstStartedAt: string | null;
+  /** When the last one stopped; null while any is still live. */
+  lastEndedAt: string | null;
+  running: boolean;
+  /** The fullest any session's context got, where it can be known. */
+  peakContextPercent?: number;
+  models: string[];
+}
+
+export interface TaskReport {
+  events: TaskTimelineEvent[];
+  cost: TaskCost;
+}
+
+const isLive = (session: AgentSession) =>
+  session.status === "running" || session.status === "starting";
+
+/** Pure, so the arithmetic is testable without transcripts on disk. */
+export function summarizeTaskCost(
+  sessions: readonly AgentSession[],
+  usage: ReadonlyMap<string, SessionUsageHistory>,
+): TaskCost {
+  const agents = sessions.filter((session) => session.kind === "agent");
+  const started = agents.map((session) => session.startedAt).sort();
+  const running = agents.some(isLive);
+  const ended = agents
+    .map((session) => session.endedAt ?? session.archivedAt)
+    .filter((value): value is string => Boolean(value))
+    .sort();
+  const models: string[] = [];
+  let peak: number | undefined;
+  for (const session of agents) {
+    const history = usage.get(session.id);
+    for (const model of history?.models ?? [])
+      if (!models.some((known) => known.toLowerCase() === model.toLowerCase()))
+        models.push(model);
+    if (history?.peakPercent !== undefined)
+      peak = Math.max(peak ?? 0, history.peakPercent);
+  }
+  return {
+    sessions: agents.length,
+    firstStartedAt: started[0] ?? null,
+    lastEndedAt: running ? null : (ended.at(-1) ?? null),
+    running,
+    ...(peak === undefined ? {} : { peakContextPercent: peak }),
+    models,
+  };
+}
+
+/**
  * Reads a task's history. Nothing here is written; the timeline is assembled
  * on demand from the sessions table, the worktrees table, the badge, its
  * history, and `JOURNAL.md`.
@@ -280,9 +337,33 @@ export class TaskHistoryService {
   }
 
   async timeline(taskId: string): Promise<TaskTimelineEvent[]> {
+    return (await this.report(taskId)).events;
+  }
+
+  /**
+   * The timeline and the cost together, because both want every session's
+   * usage and reading a transcript twice is the expensive part.
+   */
+  async report(taskId: string): Promise<TaskReport> {
     const task = this.task(taskId);
-    const models = await this.liveModels();
     const sessions = this.sessionsFor(task);
+    const [live, usage] = await Promise.all([
+      this.liveModels(),
+      Promise.all(
+        sessions.map(
+          async (session) =>
+            [session.id, await this.telemetry.sessionUsage(session)] as const,
+        ),
+      ).then((entries) => new Map(entries)),
+    ]);
+    // Live telemetry names the model a session runs now; otherwise the first
+    // model its transcript mentions, which is the one it started on.
+    const models = new Map(
+      sessions.flatMap((session) => {
+        const model = live.get(session.id) ?? usage.get(session.id)?.models[0];
+        return model ? [[session.id, model] as const] : [];
+      }),
+    );
     const ids = sessions.map((session) => session.id);
     let journal = "";
     try {
@@ -292,7 +373,7 @@ export class TaskHistoryService {
       // A workspace whose directory is missing still has a history in the
       // database; it just has no journal to read.
     }
-    return buildTaskTimeline({
+    const events = buildTaskTimeline({
       task,
       sessions,
       worktrees: ids.flatMap((sessionId) =>
@@ -305,5 +386,6 @@ export class TaskHistoryService {
       journal,
       models,
     });
+    return { events, cost: summarizeTaskCost(sessions, usage) };
   }
 }

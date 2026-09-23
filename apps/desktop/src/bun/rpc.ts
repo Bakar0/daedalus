@@ -384,6 +384,10 @@ export function createDesktopRequestHandlers(
       mutate(async () => ({
         ...(await context.workspaceContent.removeSessionWorktree(params)),
       })),
+    // Opening a folder changes nothing Daedalus stores, so it announces
+    // nothing either.
+    sessionWorktreeOpen: (params) =>
+      result(() => context.workspaceContent.openSessionWorktree(params)),
     sessionWorktreePush: (params) =>
       mutate(async () => {
         const pushed =
@@ -440,12 +444,14 @@ export function createDesktopRequestHandlers(
     taskSetStatus: ({ id, status }) =>
       mutate(() => taskDto(context.tasks.setStatus(id, status))),
     taskTimeline: ({ id }) =>
-      result(async () => ({
-        taskId: id,
-        events: (await context.taskHistory.timeline(id)).map((event) => ({
-          ...event,
-        })),
-      })),
+      result(async () => {
+        const report = await context.taskHistory.report(id);
+        return {
+          taskId: id,
+          events: report.events.map((event) => ({ ...event })),
+          cost: { ...report.cost, models: [...report.cost.models] },
+        };
+      }),
     taskRemove: ({ id, force }) =>
       mutate(async () => taskDto(await context.tasks.remove(id, force))),
     agentGet: ({ id }) =>

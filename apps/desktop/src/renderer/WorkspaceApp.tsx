@@ -52,7 +52,7 @@ import { repositoryFuzzyScore } from "./repository-search";
 import { useListReorder } from "./use-list-reorder";
 import { BoardView, TaskRelationsBlock, type BoardProvider } from "./BoardView";
 import { laneFor } from "./board-lanes";
-import { TaskTimeline } from "./TaskTimeline";
+import { TaskCostLine, TaskTimeline } from "./TaskTimeline";
 import {
   AgentStatusDot,
   compactTokenLabel,
@@ -3776,6 +3776,9 @@ export function WorkspaceApp({
           taskTimeline?.taskId === selectedTask.id ? taskTimeline : undefined
         }
       />
+      {taskTimeline?.taskId === selectedTask.id && (
+        <TaskCostLine cost={taskTimeline.cost} now={now} />
+      )}
       <div className="task-inspector-actions">
         <button
           className="quiet"
@@ -4923,6 +4926,30 @@ export function WorkspaceApp({
                 void startTaskSession(task, { draftBrief: true })
               }
               onQuickCapture={quickCaptureTask}
+              onAnswer={async (session, text) =>
+                Boolean(
+                  await perform(
+                    client.request.agentSend({ id: session.id, text }),
+                  ),
+                )
+              }
+              onMarkDone={(task) =>
+                void perform(
+                  client.request.taskSetStatus({ id: task.id, status: "done" }),
+                )
+              }
+              onOpenWorktree={(worktree) =>
+                void perform(
+                  client.request.sessionWorktreeOpen({
+                    session: worktree.sessionId,
+                    repository: worktree.repositoryId,
+                  }),
+                )
+              }
+              onSecondOpinion={(task, provider) =>
+                void startTaskSession(task, { provider })
+              }
+              onStartNext={(task) => void startTaskSession(task)}
               onNeedModels={ensureModelCatalog}
               onOpenLink={openTerminalLink}
               onOpenSession={(session) => {

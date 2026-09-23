@@ -5,12 +5,15 @@ import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
   buildAgentPrompt,
   buildTaskTimeline,
+  claudeUsageHistory,
+  codexUsageHistory,
   createApplicationContext,
   journalEntriesForTask,
   mentionsTaskNumber,
   parsePullRequestView,
   parseTaskReferences,
   resolveTaskReferences,
+  summarizeTaskCost,
   type ApplicationContext,
 } from "../index";
 
@@ -534,5 +537,138 @@ describe("task references", () => {
     expect(resolveTaskReferences(eleven, [ten, eleven, elsewhere])).toEqual([
       { number: 10, hard: true, taskId: "ten" },
     ]);
+  });
+});
+
+describe("task cost", () => {
+  test("reads the peak and every model from a whole Codex rollout", () => {
+    const line = (value: unknown) => JSON.stringify(value);
+    const rollout = [
+      line({ type: "turn_context", payload: { model: "gpt-5" } }),
+      line({
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: { total_tokens: 80_000 },
+            model_context_window: 200_000,
+          },
+        },
+      }),
+      line({
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: { total_tokens: 30_000 },
+            model_context_window: 200_000,
+          },
+        },
+      }),
+      line({ type: "turn_context", payload: { model: "gpt-5-codex" } }),
+      '{"truncated',
+    ].join("\n");
+    expect(codexUsageHistory(rollout)).toEqual({
+      models: ["gpt-5", "gpt-5-codex"],
+      peakTokens: 80_000,
+      peakPercent: 40,
+    });
+  });
+
+  test("reads a Claude transcript, and needs a window for a percentage", () => {
+    const turn = (model: string, input: number) =>
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          model,
+          usage: {
+            input_tokens: input,
+            cache_read_input_tokens: 1_000,
+            output_tokens: 500,
+          },
+        },
+      });
+    const transcript = [
+      turn("claude-opus-5-5", 100_000),
+      turn("<synthetic>", 0),
+      turn("claude-opus-5-5", 20_000),
+    ].join("\n");
+    expect(claudeUsageHistory(transcript)).toEqual({
+      models: ["claude-opus-5-5"],
+      peakTokens: 101_500,
+    });
+    expect(claudeUsageHistory(transcript, 1_000_000).peakPercent).toBeCloseTo(
+      10.15,
+    );
+  });
+
+  test("summarizes sessions, wall time, peak and models, terminals excluded", () => {
+    const base = {
+      workspaceId: "w",
+      taskId: "t",
+      name: "n",
+      tmuxSession: "x",
+      command: "c",
+      args: [],
+      workingDirectory: "/tmp",
+      exitCode: null,
+      providerSessionId: null,
+      archivedAt: null,
+      resumeCount: 0,
+      lostReason: null,
+      resumeOnStart: false,
+      position: 0,
+    };
+    const stopped = {
+      ...base,
+      id: "a",
+      provider: "claude" as const,
+      kind: "agent" as const,
+      status: "exited" as const,
+      startedAt: "2026-09-23T10:00:00.000Z",
+      endedAt: "2026-09-23T11:00:00.000Z",
+    };
+    const second = {
+      ...base,
+      id: "b",
+      provider: "codex" as const,
+      kind: "agent" as const,
+      status: "exited" as const,
+      startedAt: "2026-09-23T10:30:00.000Z",
+      endedAt: "2026-09-23T13:12:00.000Z",
+    };
+    const terminal = {
+      ...base,
+      id: "c",
+      provider: "custom" as const,
+      kind: "terminal" as const,
+      status: "running" as const,
+      startedAt: "2026-09-23T09:00:00.000Z",
+      endedAt: null,
+    };
+    const usage = new Map([
+      ["a", { models: ["Opus 5.5"], peakPercent: 64 }],
+      ["b", { models: ["gpt-5", "opus 5.5"], peakPercent: 91 }],
+    ]);
+    expect(summarizeTaskCost([stopped, second, terminal], usage)).toEqual({
+      sessions: 2,
+      firstStartedAt: "2026-09-23T10:00:00.000Z",
+      lastEndedAt: "2026-09-23T13:12:00.000Z",
+      running: false,
+      peakContextPercent: 91,
+      models: ["Opus 5.5", "gpt-5"],
+    });
+    const live = { ...second, status: "running" as const, endedAt: null };
+    expect(summarizeTaskCost([stopped, live], usage)).toMatchObject({
+      running: true,
+      lastEndedAt: null,
+    });
+    expect(summarizeTaskCost([], new Map())).toEqual({
+      sessions: 0,
+      firstStartedAt: null,
+      lastEndedAt: null,
+      running: false,
+      models: [],
+    });
   });
 });

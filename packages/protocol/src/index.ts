@@ -435,9 +435,21 @@ export interface TaskTimelineEventDto {
   open?: boolean;
 }
 
+/** Sessions, wall time, peak context and models across a task's sessions. */
+export interface TaskCostDto {
+  sessions: number;
+  firstStartedAt: string | null;
+  /** Null while any session is still live; wall time then runs to now. */
+  lastEndedAt: string | null;
+  running: boolean;
+  peakContextPercent?: number;
+  models: string[];
+}
+
 export interface TaskTimelineDto {
   taskId: string;
   events: TaskTimelineEventDto[];
+  cost: TaskCostDto;
 }
 
 export interface DesktopSnapshotDto {
@@ -675,6 +687,14 @@ export interface DesktopRpcSchema {
       sessionWorktreeRemove: Request<
         { session: string; repository: string; force?: boolean },
         SessionWorktreeDto
+      >;
+      /**
+       * Opens the worktree in the first editor installed (VS Code, Cursor,
+       * Zed), or in Finder. The path comes from the registry, not the caller.
+       */
+      sessionWorktreeOpen: Request<
+        { session: string; repository: string },
+        { path: string; openedWith: string }
       >;
       /** Publishes an agent's branch. Never implicit: only this call pushes. */
       sessionWorktreePush: Request<

@@ -664,6 +664,42 @@ async function gitStatusAt(
   };
 }
 
+/**
+ * Editors that install a command-line launcher, in the order to try them. A
+ * packaged app inherits no shell PATH, so each also names where its app
+ * bundle keeps the launcher when the user never put it on PATH.
+ */
+const EDITOR_LAUNCHERS: Array<{
+  name: string;
+  command: string;
+  fallbacks: string[];
+}> = [
+  {
+    name: "VS Code",
+    command: "code",
+    fallbacks: [
+      ...standardExecutableFallbacks("code"),
+      "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+    ],
+  },
+  {
+    name: "Cursor",
+    command: "cursor",
+    fallbacks: [
+      ...standardExecutableFallbacks("cursor"),
+      "/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
+    ],
+  },
+  {
+    name: "Zed",
+    command: "zed",
+    fallbacks: [
+      ...standardExecutableFallbacks("zed"),
+      "/Applications/Zed.app/Contents/MacOS/cli",
+    ],
+  },
+];
+
 /** How often one branch is asked about. `gh` is a network round trip. */
 const PULL_REQUEST_REFRESH_MS = 60_000;
 
@@ -1377,6 +1413,63 @@ export class WorkspaceContentService {
       worktree: measured,
       alreadyUpToDate: /Everything up-to-date/i.test(output),
     };
+  }
+
+  /**
+   * Opens a session's worktree for review: in the first editor found on this
+   * machine (VS Code, Cursor, Zed, by their command-line launchers), or in
+   * Finder when there is none. The path comes from the worktree registry,
+   * never from the caller, so this cannot be pointed at anything else.
+   */
+  async openSessionWorktree(input: {
+    session: string;
+    repository: string;
+  }): Promise<{ path: string; openedWith: string }> {
+    const session = this.repositories.findAgent(input.session);
+    if (!session)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Agent session '${input.session}' was not found`,
+      );
+    const worktree = this.repositories
+      .listSessionWorktrees({ sessionId: session.id })
+      .find((item) => {
+        if (item.repositoryId === input.repository) return true;
+        const repository = this.repositories
+          .listWorkspaceRepositories(session.workspaceId)
+          .find((candidate) => candidate.id === item.repositoryId);
+        return repository?.name === input.repository;
+      });
+    if (!worktree)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Session '${session.id}' has no '${input.repository}' working tree`,
+      );
+    if (!(await pathExists(worktree.path)))
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `The working tree at '${worktree.path}' no longer exists`,
+      );
+    for (const editor of EDITOR_LAUNCHERS) {
+      const executable = findExecutable(editor.command, editor.fallbacks);
+      if (!executable) continue;
+      const result = await runCommand(executable, [worktree.path]);
+      if (result.exitCode === 0)
+        return { path: worktree.path, openedWith: editor.name };
+    }
+    const open = findExecutable("open", standardExecutableFallbacks("open"));
+    if (!open)
+      throw new DaedalusError(
+        "DEPENDENCY",
+        "Nothing on this machine can open a folder",
+      );
+    const result = await runCommand(open, [worktree.path]);
+    if (result.exitCode !== 0)
+      throw new DaedalusError(
+        "INTERNAL",
+        `Could not open ${worktree.path}: ${result.stderr.trim()}`,
+      );
+    return { path: worktree.path, openedWith: "Finder" };
   }
 
   // Removing a working tree destroys whatever is only in it, so the guard is

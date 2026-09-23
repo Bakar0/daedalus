@@ -912,6 +912,146 @@ describe("desktop application shell", () => {
     );
   });
 
+  test("gives each lane its dispatcher actions", () => {
+    const workspace = {
+      id: "w-dispatch",
+      slug: "dispatch",
+      name: "Dispatch",
+      path: "/tmp/dispatch",
+      createdAt: "2026-09-20T00:00:00.000Z",
+      updatedAt: "2026-09-20T00:00:00.000Z",
+      archivedAt: null,
+      available: true,
+      position: 1,
+      startSetsInProgress: true,
+      defaultProvider: "codex" as const,
+      defaultModel: null,
+    };
+    const task = (
+      id: string,
+      number: number,
+      title: string,
+      status: "todo" | "in_progress",
+    ) => ({
+      id,
+      workspaceId: workspace.id,
+      number,
+      title,
+      description: "Brief",
+      status,
+      priority: "normal" as const,
+      createdAt: "2026-09-20T00:00:00.000Z",
+      updatedAt: "2026-09-20T00:00:00.000Z",
+      completedAt: null,
+      briefUpdatedAt: null,
+      references: [],
+    });
+    const session = (id: string, taskId: string) => ({
+      id,
+      workspaceId: workspace.id,
+      taskId,
+      name: `Session ${id}`,
+      provider: "claude" as const,
+      kind: "agent" as const,
+      tmuxSession: `daedalus_${id}`,
+      command: "claude",
+      args: [],
+      workingDirectory: "/tmp/dispatch",
+      status: "running" as const,
+      exitCode: null,
+      startedAt: "2026-09-23T10:00:00.000Z",
+      endedAt: null,
+      providerSessionId: null,
+      archivedAt: null,
+      resumeCount: 0,
+      lostReason: null,
+      position: 0,
+    });
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialSnapshot={{
+          ...base,
+          workspaces: [workspace],
+          tasks: [
+            task("t24", 24, "Asks a question", "in_progress"),
+            task("t20", 20, "Finished", "in_progress"),
+            task("t26", 26, "Next up", "todo"),
+          ],
+          agents: [session("s24", "t24"), session("s20", "t20")],
+          sessionActivity: [
+            {
+              sessionId: "s24",
+              activity: "needs_permission",
+              detail: "Bash(git push)",
+              since: "2026-09-23T10:05:00.000Z",
+              observedAt: "2026-09-23T10:05:00.000Z",
+              source: "hook",
+            },
+            {
+              sessionId: "s20",
+              activity: "idle",
+              detail: null,
+              since: "2026-09-23T11:00:00.000Z",
+              observedAt: "2026-09-23T11:00:00.000Z",
+              source: "hook",
+            },
+          ],
+          worktrees: [
+            {
+              sessionId: "s20",
+              repositoryId: "r",
+              path: "/tmp/dispatch/worktrees/s20/repo",
+              branchName: "daedalus/finished",
+              createdAt: "2026-09-23T10:00:00.000Z",
+              gitStatus: {
+                state: "ahead",
+                changedFiles: 0,
+                ahead: 4,
+                behind: 0,
+                filesAhead: 9,
+              },
+              pullRequest: {
+                number: 20,
+                url: "https://github.com/o/r/pull/20",
+                state: "OPEN",
+                isDraft: false,
+              },
+            },
+          ],
+          settings: {
+            ...base.settings,
+            tmuxAvailable: true,
+            providers: [
+              { name: "codex", executable: "codex", available: true },
+              { name: "claude", executable: "claude", available: true },
+            ],
+          },
+        }}
+        initialWorkspaceView="board"
+      />,
+    );
+    // Needs me: the wait, the detail, a reply box and the terminal.
+    expect(html).toContain('aria-label="Needs me, 1 task"');
+    expect(html).toContain("needs permission");
+    expect(html).toContain("Bash(git push)");
+    expect(html).toContain('aria-label="Answer Session s24"');
+    expect(html).toContain(">Terminal</button>");
+    // Ready for review: the delta, the PR, and the three review actions.
+    expect(html).toContain('aria-label="Ready for review, 1 task"');
+    expect(html).toContain("+4 commits, 9 files");
+    expect(html).toContain(">PR #20</button>");
+    expect(html).toContain(">Open worktree</button>");
+    expect(html).toContain(">Open PR</button>");
+    expect(html).toContain(">Mark done</button>");
+    // Both live cards offer the other provider.
+    expect(html.match(/>Second opinion</g)).toHaveLength(2);
+    expect(html).toContain("Start Codex on this task beside Claude");
+    // Queued offers Start next.
+    expect(html).toContain(">Start next</button>");
+    expect(html).toContain("Start #26 Next up with Codex");
+  });
+
   test("renders GitHub-flavored Markdown task briefs safely", () => {
     const html = renderToStaticMarkup(
       <MarkdownPreview
