@@ -7,6 +7,8 @@
 import { cp, mkdir, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { STABLE_IDENTIFIER } from "../electrobun.config";
+import { LSREGISTER, staleRegistrations } from "./launch-services";
 
 const SOURCE = resolve(
   import.meta.dir,
@@ -53,3 +55,25 @@ await mkdir(join(homedir(), "Applications"), { recursive: true });
 await rm(DESTINATION, { recursive: true, force: true });
 await cp(SOURCE, DESTINATION, { recursive: true });
 console.log(`Installed ${DESTINATION}`);
+
+// Unregistering only forgets a path; no file is touched, and opening one of
+// those builds again registers it again. A failure here leaves the install
+// good and the alerts possibly wrong, so it warns instead of failing.
+const dump = Bun.spawnSync([LSREGISTER, "-dump"]);
+if (dump.exitCode === 0) {
+  const stale = staleRegistrations(
+    dump.stdout.toString(),
+    STABLE_IDENTIFIER,
+    DESTINATION,
+  );
+  for (const path of stale) Bun.spawnSync([LSREGISTER, "-u", path]);
+  Bun.spawnSync([LSREGISTER, "-f", DESTINATION]);
+  if (stale.length)
+    console.log(
+      `Unregistered ${stale.length} other ${STABLE_IDENTIFIER} bundle(s) from Launch Services`,
+    );
+} else {
+  console.warn(
+    "Could not read Launch Services; older builds may still be registered.",
+  );
+}

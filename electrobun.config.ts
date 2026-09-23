@@ -14,8 +14,10 @@ const channel = (() => {
   return flag === "stable" || flag === "canary" ? flag : "dev";
 })();
 
+export const STABLE_IDENTIFIER = "dev.daedalus.app";
+
 export const APP_IDENTIFIER =
-  channel === "stable" ? "dev.daedalus.app" : `dev.daedalus.app.${channel}`;
+  channel === "stable" ? STABLE_IDENTIFIER : `${STABLE_IDENTIFIER}.${channel}`;
 
 export default {
   app: {
@@ -37,6 +39,11 @@ export default {
     copy: {
       "apps/desktop/dist/index.html": "views/mainview/index.html",
       "apps/desktop/dist/assets": "views/mainview/assets",
+      // Vite copies `src/renderer/public` to the top of `dist`, beside
+      // `index.html` rather than under `assets`, so each public file needs its
+      // own entry or the page asks for it and gets nothing.
+      "apps/desktop/dist/daedalus-app-icon.png":
+        "views/mainview/daedalus-app-icon.png",
       "apps/desktop/dist/cli.js": "cli/daedal.js",
       migrations: "migrations",
     },
