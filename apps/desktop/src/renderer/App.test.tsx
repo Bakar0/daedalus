@@ -390,6 +390,8 @@ describe("desktop application shell", () => {
     expect(html).toContain('aria-label="Create workspace"');
     expect(html).toContain('class="create-button"');
     expect(html).toContain('aria-label="Open settings"');
+    expect(html).toContain('src="/daedalus-app-icon.png"');
+    expect(html).not.toContain('class="brand-mark">D');
     expect(html).not.toContain(">Refresh</button>");
   });
 
