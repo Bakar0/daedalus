@@ -6,4 +6,8 @@ describe("desktop build configuration", () => {
     expect(config.build.copy.migrations).toBe("migrations");
     expect(config.build.copy["apps/desktop/dist/cli.js"]).toBe("cli/daedal.js");
   });
+
+  test("packages the Daedalus macOS app icon", () => {
+    expect(config.build.mac.icons).toBe("assets/icon.iconset");
+  });
 });

@@ -41,7 +41,10 @@ export default {
       migrations: "migrations",
     },
     watchIgnore: ["apps/desktop/dist/**"],
-    mac: { bundleCEF: false },
+    mac: {
+      bundleCEF: false,
+      icons: "assets/icon.iconset",
+    },
     linux: { bundleCEF: false },
     win: { bundleCEF: false },
   },

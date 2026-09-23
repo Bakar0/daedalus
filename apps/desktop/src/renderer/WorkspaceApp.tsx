@@ -3983,9 +3983,12 @@ export function WorkspaceApp({
       />
       <header className="topbar">
         <div className="brand">
-          <span aria-hidden="true" className="brand-mark">
-            D
-          </span>
+          <img
+            alt=""
+            aria-hidden="true"
+            className="brand-mark"
+            src="/daedalus-app-icon.png"
+          />
           <span className="brand-copy">
             <strong>Daedalus</strong>
             <small>Agent workspace</small>
