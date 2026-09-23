@@ -833,6 +833,85 @@ describe("desktop application shell", () => {
     expect(html).not.toContain("Priority");
   });
 
+  test("shows dependency chips, a warning Start, capture, and both directions in the inspector", () => {
+    const workspace = {
+      id: "w-deps",
+      slug: "deps",
+      name: "Deps",
+      path: "/tmp/deps",
+      createdAt: "2026-09-20T00:00:00.000Z",
+      updatedAt: "2026-09-20T00:00:00.000Z",
+      archivedAt: null,
+      available: true,
+      position: 1,
+      startSetsInProgress: true,
+      defaultProvider: null,
+      defaultModel: null,
+    };
+    const task = (
+      id: string,
+      number: number,
+      title: string,
+      status: "todo" | "in_progress" | "done",
+      references: Array<{ taskId: string; number: number; hard: boolean }>,
+    ) => ({
+      id,
+      workspaceId: workspace.id,
+      number,
+      title,
+      description: "",
+      status,
+      priority: "normal" as const,
+      createdAt: "2026-09-20T00:00:00.000Z",
+      updatedAt: "2026-09-20T00:00:00.000Z",
+      completedAt: null,
+      briefUpdatedAt: null,
+      references,
+    });
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialSelectedTaskId="t10"
+        initialSnapshot={{
+          ...base,
+          workspaces: [workspace],
+          tasks: [
+            task("t10", 10, "Foundation", "todo", []),
+            task("t11", 11, "Builds on it", "todo", [
+              { taskId: "t10", number: 10, hard: true },
+            ]),
+            task("t12", 12, "Mentions it", "todo", [
+              { taskId: "t10", number: 10, hard: false },
+            ]),
+          ],
+          settings: { ...base.settings, tmuxAvailable: true },
+        }}
+        initialWorkspaceView="board"
+      />,
+    );
+    expect(html).toContain(
+      'aria-label="Quick capture: type a task title and press Enter"',
+    );
+    // #11 waits on #10, which is queued: the chip says so and Start warns.
+    expect(html).toContain('aria-label="waiting on #10 Foundation, queued"');
+    expect(html).toContain('aria-label="Start Builds on it, waiting on #10"');
+    expect(html).toContain("Start ⚠");
+    // A plain mention links without blocking.
+    expect(html).toContain('aria-label="#10 Foundation, queued"');
+    expect(html).toContain('aria-label="Start Mentions it"');
+    // #10's own brief says nothing, and still shows what it unblocks.
+    expect(html).toContain("Depends on / Unblocks");
+    expect(html).toContain("<dt>Unblocks</dt>");
+    expect(html).toContain("<dt>Mentioned by</dt>");
+    expect(html).toContain("Draft brief with agent");
+    // An empty brief offers the draft on the card too.
+    expect(html).toContain(">Draft brief</button>");
+    // The waiting task sinks below the ready ones in Queued.
+    expect(html.indexOf('data-task-number="12"')).toBeLessThan(
+      html.indexOf('data-task-number="11"'),
+    );
+  });
+
   test("renders GitHub-flavored Markdown task briefs safely", () => {
     const html = renderToStaticMarkup(
       <MarkdownPreview

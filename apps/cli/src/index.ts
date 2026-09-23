@@ -22,7 +22,7 @@ import {
   TMUX_EXECUTABLE_FALLBACKS,
 } from "@daedalus/platform";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { DoctorCheck } from "@daedalus/protocol";
 import packageJson from "../../../package.json";
 
@@ -229,14 +229,21 @@ moves a todo or blocked task to in_progress when a session is started on it,
 from the board or from 'agent spawn --task'. --default-provider and
 --default-model are what the board's Start and Start next launch with.`,
   task: `Task commands:
-  daedal task create --workspace <workspace> --title <title> [--description <text>] [--priority <priority>]
+  daedal task create --workspace <workspace> --title <title> [--description <text> | --description-file <path|->] [--priority <priority>]
   daedal task list [--workspace <workspace>] [--status <status>]
   daedal task get <task-ref> [--workspace <workspace>]
   daedal task current
-  daedal task update <task-ref> [--workspace <workspace>] [--title <title>] [--description <text>] [--priority <priority>]
+  daedal task update <task-ref> [--workspace <workspace>] [--title <title>] [--description <text> | --description-file <path|->] [--priority <priority>]
   daedal task status <task-ref> <status> [--workspace <workspace>]
   daedal task timeline <task-ref> [--workspace <workspace>]
-  daedal task remove <task-ref> [--workspace <workspace>] --force`,
+  daedal task remove <task-ref> [--workspace <workspace>] --force
+
+--description-file reads the brief from a file, or from standard input when
+the path is '-', so a long Markdown brief needs no shell quoting.
+
+'task timeline' lists what happened to a task in order: created, brief
+edited, sessions started and stopped, worktrees, what agents asked and when
+it was cleared, journal entries whose heading names the task, and done.`,
   repo: `Repository commands:
   daedal repo library list
   daedal repo library add <url-or-absolute-path> [--name <name>]
@@ -252,7 +259,7 @@ from the board or from 'agent spawn --task'. --default-provider and
   daedal repo worktree remove --session <agent-id> --repository <name-or-id> [--force]`,
   agent: `Agent commands:
   daedal agent models <codex|claude>
-  daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>]
+  daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>] [--draft-brief]
   daedal agent list [--workspace <workspace>] [--running|--archived]
   daedal agent reorder --workspace <workspace> <agent-id> [<agent-id>...]
   daedal agent get <agent-id>
@@ -275,6 +282,12 @@ is a real answer, not a failure.
 Mac reboot leaves behind. Each one comes back idle at its prompt with its
 conversation loaded; nothing is sent to the agent, so no work restarts on its
 own. The app runs the same sweep at startup unless it is turned off.
+
+'agent spawn --task' moves a todo or blocked task to in_progress when the
+workspace's --start-sets-in-progress setting is on, which is the default.
+--draft-brief links the session to the task but asks it to write the brief
+back with 'task update --description-file -' instead of doing the task, and
+leaves the status alone.
 
 'agent wait' blocks until a session reaches a state and then exits 0, so the
 same signal drives a shell notifier, a Slack ping or a tmux bell with no
@@ -386,6 +399,31 @@ function parseArguments(
     index += 1;
   }
   return { positionals, values, flags };
+}
+
+/**
+ * `--description` or `--description-file`, never both. A file path of `-`
+ * reads standard input, which is how an agent hands over a long brief
+ * without quoting it through a shell.
+ */
+async function descriptionOption(
+  values: Record<string, string>,
+): Promise<string | undefined> {
+  const file = values["description-file"];
+  if (file === undefined) return values.description;
+  if (values.description !== undefined)
+    throw new DaedalusError(
+      "VALIDATION",
+      "Use either --description or --description-file, not both",
+    );
+  if (file === "-") return Bun.stdin.text();
+  const source = Bun.file(resolve(file));
+  if (!(await source.exists()))
+    throw new DaedalusError(
+      "NOT_FOUND",
+      `Description file '${file}' was not found`,
+    );
+  return source.text();
 }
 
 function required(value: string | undefined, description: string): string {
@@ -727,6 +765,7 @@ async function taskCommand(
       "workspace",
       "title",
       "description",
+      "description-file",
       "priority",
     ]);
     expectPositionals(
@@ -737,7 +776,7 @@ async function taskCommand(
     const result = await context.tasks.create({
       workspace: required(parsed.values.workspace, "--workspace"),
       title: required(parsed.values.title, "--title"),
-      description: parsed.values.description,
+      description: await descriptionOption(parsed.values),
       priority: parsed.values.priority,
     });
     printResult(result, json, () =>
@@ -800,6 +839,7 @@ async function taskCommand(
       "workspace",
       "title",
       "description",
+      "description-file",
       "priority",
     ]);
     expectPositionals(
@@ -814,7 +854,7 @@ async function taskCommand(
     );
     const result = context.tasks.update(task.id, {
       title: parsed.values.title,
-      description: parsed.values.description,
+      description: await descriptionOption(parsed.values),
       priority: parsed.values.priority,
     });
     printResult(result, json, () =>
@@ -930,15 +970,11 @@ async function agentCommand(
     return 0;
   }
   if (action === "spawn") {
-    const parsed = parseArguments(args, [
-      "workspace",
-      "provider",
-      "command",
-      "task",
-      "name",
-      "model",
-      "message",
-    ]);
+    const parsed = parseArguments(
+      args,
+      ["workspace", "provider", "command", "task", "name", "model", "message"],
+      ["draft-brief"],
+    );
     expectPositionals(
       parsed.positionals,
       0,
@@ -956,6 +992,7 @@ async function agentCommand(
       name: parsed.values.name,
       model: parsed.values.model,
       message: parsed.values.message,
+      draftBrief: parsed.flags.has("draft-brief") || undefined,
     });
     printResult(result, json, () =>
       console.log(

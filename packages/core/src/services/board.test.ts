@@ -9,6 +9,8 @@ import {
   journalEntriesForTask,
   mentionsTaskNumber,
   parsePullRequestView,
+  parseTaskReferences,
+  resolveTaskReferences,
   type ApplicationContext,
 } from "../index";
 
@@ -449,5 +451,88 @@ describe("attention history", () => {
         timeline.filter((event) => event.kind === "attention_raised"),
       ).toHaveLength(5);
     });
+  });
+});
+
+describe("task references", () => {
+  test("classify depends on, after and blocked by as hard, anything else as plain", () => {
+    expect(
+      parseTaskReferences(
+        "Depends on #10, #11 and #12. Follow-on to #21, after #3 & #4.\nBLOCKED BY #5",
+      ),
+    ).toEqual([
+      { number: 10, hard: true },
+      { number: 11, hard: true },
+      { number: 12, hard: true },
+      { number: 21, hard: false },
+      { number: 3, hard: true },
+      { number: 4, hard: true },
+      { number: 5, hard: true },
+    ]);
+  });
+
+  test("a number named twice keeps its first position and the hard reading", () => {
+    expect(parseTaskReferences("See #7 first. This depends on #7.")).toEqual([
+      { number: 7, hard: true },
+    ]);
+  });
+
+  test("code, pull requests and qualified numbers are not references", () => {
+    const brief = [
+      "Show `after #23` on the card and `depends on #9` in the docs.",
+      "Shipped as PR #22, see pull request #30.",
+      "Also other-workspace#40 and https://example.com/issues#41.",
+      "",
+      "    #24 Explorer that does not go stale",
+      "    waiting on #25",
+      "",
+      "```",
+      "after #26",
+      "```",
+      "- a list item that mentions #8",
+      "    continued text, still prose, mentions #6",
+    ].join("\n");
+    expect(parseTaskReferences(brief)).toEqual([
+      { number: 8, hard: false },
+      { number: 6, hard: false },
+    ]);
+  });
+
+  test("resolve only against real tasks in the same workspace, never the task itself", () => {
+    const base = {
+      description: "",
+      status: "todo" as const,
+      priority: "normal" as const,
+      createdAt: "now",
+      updatedAt: "now",
+      completedAt: null,
+      briefUpdatedAt: null,
+    };
+    const ten = {
+      ...base,
+      id: "ten",
+      workspaceId: "w",
+      number: 10,
+      title: "Ten",
+    };
+    const eleven = {
+      ...base,
+      id: "eleven",
+      workspaceId: "w",
+      number: 11,
+      title: "Eleven",
+      description:
+        "Depends on #10. Unlike #11, which is me, and #99, missing, and #12.",
+    };
+    const elsewhere = {
+      ...base,
+      id: "twelve-elsewhere",
+      workspaceId: "other",
+      number: 12,
+      title: "Twelve",
+    };
+    expect(resolveTaskReferences(eleven, [ten, eleven, elsewhere])).toEqual([
+      { number: 10, hard: true, taskId: "ten" },
+    ]);
   });
 });

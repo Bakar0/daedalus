@@ -9,7 +9,9 @@ import type {
 import {
   boardLanes,
   laneFor,
+  taskRelations,
   taskWaitingSince,
+  unfinishedDependencies,
   type LaneInputs,
 } from "./board-lanes";
 
@@ -352,5 +354,42 @@ describe("boardLanes", () => {
     });
     const done = boardLanes([first, second], inputs({})).at(-1)!;
     expect(done.tasks.map((item) => item.number)).toEqual([2, 1]);
+  });
+});
+
+describe("dependencies", () => {
+  const ten = task(10, { status: "done" });
+  const twentyThree = task(23, { status: "in_progress" });
+  const cancelled = task(5, { status: "cancelled" });
+  const eleven = task(11, {
+    references: [
+      { taskId: ten.id, number: 10, hard: true },
+      { taskId: twentyThree.id, number: 23, hard: true },
+      { taskId: cancelled.id, number: 5, hard: true },
+      { taskId: "task-21", number: 21, hard: false },
+    ],
+  });
+  const twentyOne = task(21);
+  const all = [ten, eleven, twentyThree, cancelled, twentyOne];
+
+  test("only done finishes a hard dependency; mentions never block", () => {
+    expect(
+      unfinishedDependencies(eleven, new Map(all.map((t) => [t.id, t]))).map(
+        (item) => item.number,
+      ),
+    ).toEqual([23, 5]);
+  });
+
+  test("the reverse direction comes from every other brief", () => {
+    expect(taskRelations(ten, all)).toMatchObject({
+      dependsOn: [],
+      unblocks: [{ number: 11 }],
+    });
+    expect(taskRelations(twentyOne, all).mentionedBy).toMatchObject([
+      { number: 11 },
+    ]);
+    const forward = taskRelations(eleven, all);
+    expect(forward.dependsOn.map((item) => item.number)).toEqual([10, 23, 5]);
+    expect(forward.mentions.map((item) => item.number)).toEqual([21]);
   });
 });

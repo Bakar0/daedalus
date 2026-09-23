@@ -4346,3 +4346,95 @@ dd {
     outline: 1px solid var(--accent);
   }
 }
+
+/* Capture, chips and relations (#25, section 3). */
+.board-capture {
+  background: var(--raised);
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  flex: 0 0 auto;
+  font-size: 12px;
+  margin-bottom: 6px;
+  padding: 8px 11px;
+}
+.board-capture:focus {
+  border-style: solid;
+}
+.board-card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.board-chip {
+  align-items: center;
+  background: var(--elevated) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 999px !important;
+  color: var(--secondary) !important;
+  display: inline-flex;
+  font-size: 10px !important;
+  font-variant-numeric: tabular-nums;
+  gap: 6px;
+  padding: 1px 8px 1px 6px !important;
+}
+.board-chip:hover {
+  border-color: rgb(69 150 254 / 0.5) !important;
+}
+.board-chip .board-lane-glyph {
+  transform: scale(0.8);
+}
+.board-chip .board-lane-glyph.lane-done {
+  transform: translateY(-2px) rotate(-45deg) scale(0.8);
+}
+.board-start.waiting {
+  background: rgb(255 180 84 / 0.16) !important;
+  border: 1px solid rgb(255 180 84 / 0.5) !important;
+  color: #ffcf8f !important;
+}
+.app[data-theme="light"] .board-start.waiting {
+  color: #8a5100 !important;
+}
+.task-relations dl {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+.task-relations dl > div {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 88px minmax(0, 1fr);
+}
+.task-relations dt {
+  color: var(--muted);
+  font-size: 11px;
+  padding-top: 2px;
+}
+.task-relations dd {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+.task-relation {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+  min-width: 0;
+}
+.task-relation-title {
+  color: var(--secondary);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-inspector-actions {
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 12px;
+}
+.task-inspector-actions > button {
+  font-size: 11px !important;
+  padding: 5px 10px !important;
+}

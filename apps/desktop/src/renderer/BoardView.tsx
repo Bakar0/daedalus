@@ -21,9 +21,11 @@ import {
   BOARD_LANES,
   boardLanes,
   LANE_LABEL,
+  taskRelations,
   taskSessions,
   taskWaitingSince,
   taskWorktrees,
+  unfinishedDependencies,
   type BoardLane,
   type LaneInputs,
 } from "./board-lanes";
@@ -78,6 +80,10 @@ export interface BoardViewProps {
   onStartWith: (task: TaskDto) => void;
   onDismissLaunch: (key: string) => void;
   onCreateTask: () => void;
+  /** Creates a `todo` with only a title. Resolves false when it failed. */
+  onQuickCapture: (title: string) => Promise<boolean>;
+  /** Spawns a session whose only job is to write this task's brief. */
+  onDraftBrief: (task: TaskDto) => void;
   onOpenLink: (url: string) => void;
   onSetInProgress: (task: TaskDto) => void;
   onUpdateSettings: (changes: {
@@ -136,6 +142,104 @@ export function worktreeDeltaLabel(worktree: SessionWorktreeDto): string {
 
 const worktreeShortName = (worktree: SessionWorktreeDto) =>
   worktree.sessionId.slice(0, 8);
+
+/**
+ * Warns, never locks. Starting a task whose hard dependency is unfinished is
+ * sometimes exactly right, so the only thing asked is that it be deliberate.
+ */
+export function confirmStartDespite(task: TaskDto, waiting: TaskDto[]) {
+  if (waiting.length === 0) return true;
+  const names = waiting.map((item) => `#${item.number} ${item.title}`);
+  return window.confirm(
+    `${names.join(", ")} ${waiting.length === 1 ? "is" : "are"} not done yet. Start #${task.number} anyway?`,
+  );
+}
+
+/**
+ * A chip names the referenced task and carries its lane, so `after #10`
+ * reads as done, running or queued at a glance. The lane is in the glyph's
+ * shape and the label, never the colour alone.
+ */
+export function TaskChip({
+  lane,
+  onSelect,
+  prefix,
+  task,
+}: {
+  lane: BoardLane;
+  onSelect: (task: TaskDto) => void;
+  prefix?: string;
+  task: TaskDto;
+}) {
+  return (
+    <button
+      aria-label={`${prefix ? `${prefix} ` : ""}#${task.number} ${task.title}, ${LANE_GLYPH_LABEL[lane]}`}
+      className={`board-chip lane-${lane}`}
+      onClick={(event) => {
+        event.stopPropagation();
+        onSelect(task);
+      }}
+      title={`#${task.number} ${task.title} · ${LANE_LABEL[lane]}`}
+      type="button"
+    >
+      <span aria-hidden="true" className={`board-lane-glyph lane-${lane}`} />
+      {prefix ? `${prefix} ` : ""}#{task.number}
+    </button>
+  );
+}
+
+/**
+ * The inspector's "Depends on / Unblocks" block. Both directions, the reverse
+ * computed from every other brief.
+ */
+export function TaskRelationsBlock({
+  laneOf,
+  onSelect,
+  task,
+  tasks,
+}: {
+  laneOf: (task: TaskDto) => BoardLane;
+  onSelect: (task: TaskDto) => void;
+  task: TaskDto;
+  tasks: TaskDto[];
+}) {
+  const relations = taskRelations(task, tasks);
+  const rows: Array<[string, TaskDto[]]> = [
+    ["Depends on", relations.dependsOn],
+    ["Unblocks", relations.unblocks],
+    ["Mentions", relations.mentions],
+    ["Mentioned by", relations.mentionedBy],
+  ];
+  const shown = rows.filter(([, items]) => items.length > 0);
+  if (shown.length === 0) return null;
+  return (
+    <section
+      aria-label="Dependencies"
+      className="task-inspector-section task-relations"
+    >
+      <h3>Depends on / Unblocks</h3>
+      <dl>
+        {shown.map(([label, items]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>
+              {items.map((item) => (
+                <span className="task-relation" key={item.id}>
+                  <TaskChip
+                    lane={laneOf(item)}
+                    onSelect={onSelect}
+                    task={item}
+                  />
+                  <span className="task-relation-title">{item.title}</span>
+                </span>
+              ))}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
 
 const LANE_GLYPH_LABEL: Record<BoardLane, string> = {
   needs_me: "needs you",
@@ -354,8 +458,28 @@ export function BoardView(props: BoardViewProps) {
       return next;
     });
 
+  const [capture, setCapture] = useState("");
+  const [capturing, setCapturing] = useState(false);
   const inputs: LaneInputs = { sessions, activity, attention, worktrees };
-  const groups = boardLanes(tasks, inputs);
+  const tasksById = new Map(tasks.map((task) => [task.id, task]));
+  const groups = boardLanes(tasks, inputs, {
+    isWaiting: (task) => unfinishedDependencies(task, tasksById).length > 0,
+  });
+  const laneById = new Map(
+    groups.flatMap((group) =>
+      group.tasks.map((task) => [task.id, group.lane] as const),
+    ),
+  );
+  const submitCapture = async () => {
+    const title = capture.trim();
+    if (!title || capturing) return;
+    setCapturing(true);
+    try {
+      if (await props.onQuickCapture(title)) setCapture("");
+    } finally {
+      setCapturing(false);
+    }
+  };
 
   const renderCard = (task: TaskDto, lane: BoardLane) => {
     const linked = taskSessions(task, sessions);
@@ -382,6 +506,11 @@ export function BoardView(props: BoardViewProps) {
     );
     const startable = (lane === "queued" || lane === "parked") && !liveAgent;
     const starting = launches.some((launch) => launch.status === "starting");
+    const waitingOn = unfinishedDependencies(task, tasksById);
+    const references = (task.references ?? []).flatMap((reference) => {
+      const target = tasksById.get(reference.taskId);
+      return target ? [{ reference, target }] : [];
+    });
     return (
       <article
         aria-label={cardLabel}
@@ -399,6 +528,25 @@ export function BoardView(props: BoardViewProps) {
             </span>
           )}
         </div>
+        {references.length > 0 && (
+          <div aria-label="Referenced tasks" className="board-card-chips">
+            {references.map(({ reference, target }) => (
+              <TaskChip
+                key={target.id}
+                lane={laneById.get(target.id) ?? "queued"}
+                onSelect={props.onSelectTask}
+                prefix={
+                  !reference.hard
+                    ? undefined
+                    : target.status === "done"
+                      ? "after"
+                      : "waiting on"
+                }
+                task={target}
+              />
+            ))}
+          </div>
+        )}
         {linked.length > 0 && (
           <div className="board-card-sessions">
             {linked.map((session) => (
@@ -490,19 +638,43 @@ export function BoardView(props: BoardViewProps) {
                 Set in progress
               </button>
             )}
+            {startable && !task.description.trim() && (
+              <button
+                className="quiet"
+                disabled={!props.tmuxAvailable || starting}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  props.onDraftBrief(task);
+                }}
+                title="Start a session that reads the workspace and writes this brief"
+                type="button"
+              >
+                Draft brief
+              </button>
+            )}
             {startable && (
               <span className="board-start-group">
                 <button
-                  aria-label={`Start ${task.title}`}
-                  className="board-start"
+                  aria-label={
+                    waitingOn.length
+                      ? `Start ${task.title}, waiting on ${waitingOn.map((item) => `#${item.number}`).join(", ")}`
+                      : `Start ${task.title}`
+                  }
+                  className={`board-start${waitingOn.length ? " waiting" : ""}`}
                   disabled={!props.tmuxAvailable || starting}
                   onClick={(event) => {
                     event.stopPropagation();
-                    props.onStart(task);
+                    if (confirmStartDespite(task, waitingOn))
+                      props.onStart(task);
                   }}
+                  title={
+                    waitingOn.length
+                      ? `Waiting on ${waitingOn.map((item) => `#${item.number}`).join(", ")}`
+                      : undefined
+                  }
                   type="button"
                 >
-                  Start
+                  Start{waitingOn.length ? " ⚠" : ""}
                 </button>
                 <button
                   aria-label={`Choose how to start ${task.title}`}
@@ -510,7 +682,8 @@ export function BoardView(props: BoardViewProps) {
                   disabled={!props.tmuxAvailable || starting}
                   onClick={(event) => {
                     event.stopPropagation();
-                    props.onStartWith(task);
+                    if (confirmStartDespite(task, waitingOn))
+                      props.onStartWith(task);
                   }}
                   title="Choose provider and model"
                   type="button"
@@ -544,6 +717,22 @@ export function BoardView(props: BoardViewProps) {
         </div>
       </div>
       <div className="board-lanes">
+        {/* Deliberately not a <form>: Enter submitting through the browser's
+            implicit-submission path is what wedged the explorer's renderer. */}
+        <input
+          aria-label="Quick capture: type a task title and press Enter"
+          className="board-capture"
+          disabled={capturing}
+          onChange={(event) => setCapture(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              void submitCapture();
+            } else if (event.key === "Escape") setCapture("");
+          }}
+          placeholder="Capture a task… (Enter to add)"
+          value={capture}
+        />
         {tasks.length === 0 && (
           <div className="empty large">
             <strong>No tasks yet</strong>

@@ -268,3 +268,59 @@ export function boardLanes(
     tasks: [...byLane.get(lane)!].sort(sorters[lane]),
   }));
 }
+
+/**
+ * Hard dependencies that are not done yet. `references` comes resolved from
+ * the core, so a missing task or one in another workspace never appears.
+ * Only `done` finishes a dependency: a cancelled one still says the work it
+ * was meant to do was not done, which is worth a warning.
+ */
+export function unfinishedDependencies(
+  task: TaskDto,
+  tasksById: ReadonlyMap<string, TaskDto>,
+): TaskDto[] {
+  return (task.references ?? []).flatMap((reference) => {
+    const target = reference.hard ? tasksById.get(reference.taskId) : undefined;
+    return target && target.status !== "done" ? [target] : [];
+  });
+}
+
+export interface TaskRelations {
+  /** Hard dependencies this brief names. */
+  dependsOn: TaskDto[];
+  /** Plain `#N` mentions in this brief. */
+  mentions: TaskDto[];
+  /** Tasks whose briefs depend on this one. */
+  unblocks: TaskDto[];
+  /** Tasks whose briefs mention this one without depending on it. */
+  mentionedBy: TaskDto[];
+}
+
+/**
+ * Both directions. The reverse is computed from every other task's brief, so
+ * #10 shows that it unblocks #11 without its own brief having to say so.
+ */
+export function taskRelations(
+  task: TaskDto,
+  tasks: readonly TaskDto[],
+): TaskRelations {
+  const byId = new Map(tasks.map((item) => [item.id, item]));
+  const forward = (hard: boolean) =>
+    (task.references ?? []).flatMap((reference) => {
+      const target =
+        reference.hard === hard ? byId.get(reference.taskId) : undefined;
+      return target ? [target] : [];
+    });
+  const backward = (hard: boolean) =>
+    tasks.filter((other) =>
+      (other.references ?? []).some(
+        (reference) => reference.taskId === task.id && reference.hard === hard,
+      ),
+    );
+  return {
+    dependsOn: forward(true),
+    mentions: forward(false),
+    unblocks: backward(true),
+    mentionedBy: backward(false),
+  };
+}

@@ -38,8 +38,10 @@ list`, `repo list`, or `agent list`.
   returned task number for human-facing references.
 - Valid task statuses are `todo`, `in_progress`, `blocked`, `done`, and
   `cancelled`; priorities are `low`, `normal`, and `high`.
-- Agent lifecycle does not update task status. Change task status explicitly
-  when the user's workflow calls for it.
+- Agent lifecycle does not update task status, and neither should you. The
+  board derives each task's lane (Needs me, Ready for review, Running, Queued,
+  Parked, Done) from status plus session and worktree state; change status
+  only when the user asks.
 
 ## Repositories and worktrees
 
@@ -74,8 +76,14 @@ list`, `repo list`, or `agent list`.
   model name. `data.defaultModel` reports the provider default when available;
   omit `--model` to use that default. Custom `--command` agents do not have a
   discoverable model catalog.
-- After successfully spawning a task-backed session, move the task to
-  `in_progress` unless the user asked to leave it queued or in another status.
+- Do not change the task's status after spawning. Starting a task-backed
+  session moves a `todo` or `blocked` task to `in_progress` on its own when the
+  workspace's `--start-sets-in-progress` setting is on, which is the default.
+  Everything else about status is the user's call.
+- To have an agent write a task's brief rather than do the task, spawn with
+  `--draft-brief`. Hand long briefs over with `task update <ref>
+--description-file <path>`, or `-` for stdin, rather than quoting them into
+  `--description`.
 - Use `agent send` for literal follow-up text. `agent attach` is interactive and
   is unsuitable for machine-readable automation.
 - Prefer `agent archive` over `stop` plus `remove` when preserving the provider

@@ -555,6 +555,48 @@ export class TelemetryService {
     const now = Date.now();
     if (this.sessionCache && this.sessionCache.expiresAt > now)
       return this.sessionCache.value;
+    const results = await this.readLiveSessions();
+    if (!this.providerCache || this.providerCache.expiresAt <= now) {
+      this.providerCache = {
+        expiresAt: now + PROVIDER_CACHE_MS,
+        value: await readCodexUsage(this.config),
+      };
+    }
+    const newestClaudeUsage = results
+      .map((result) => result.usage)
+      .filter((item): item is ProviderUsage => Boolean(item))
+      .filter(
+        (item) => now - Date.parse(item.observedAt) <= CLAUDE_USAGE_MAX_AGE_MS,
+      )
+      .sort((left, right) =>
+        right.observedAt.localeCompare(left.observedAt),
+      )[0];
+    const value = {
+      providerUsage: [this.providerCache.value, newestClaudeUsage].filter(
+        (item): item is ProviderUsage => Boolean(item),
+      ),
+      sessionTelemetry: results
+        .map((result) => result.session)
+        .filter((item): item is SessionTelemetry => Boolean(item)),
+    };
+    this.sessionCache = { expiresAt: now + SESSION_CACHE_MS, value };
+    return value;
+  }
+
+  /**
+   * Model and context for every live agent session, without the provider's
+   * rate-limit windows. Those take a provider round trip, and a caller that
+   * only wants to know which model a session runs should not wait on it.
+   */
+  async sessionTelemetry(): Promise<SessionTelemetry[]> {
+    return (await this.readLiveSessions())
+      .map((result) => result.session)
+      .filter((item): item is SessionTelemetry => Boolean(item));
+  }
+
+  private async readLiveSessions(): Promise<
+    Array<{ session?: SessionTelemetry; usage?: ProviderUsage }>
+  > {
     const agents = this.repositories
       .listAgents()
       .filter(
@@ -562,7 +604,7 @@ export class TelemetryService {
           agent.kind === "agent" &&
           (agent.status === "running" || agent.status === "starting"),
       );
-    const results = await Promise.all(
+    return Promise.all(
       agents.map(async (agent) => {
         if (agent.provider === "codex")
           return { session: await readCodexSession(this.config, agent) };
@@ -596,30 +638,5 @@ export class TelemetryService {
         return {};
       }),
     );
-    if (!this.providerCache || this.providerCache.expiresAt <= now) {
-      this.providerCache = {
-        expiresAt: now + PROVIDER_CACHE_MS,
-        value: await readCodexUsage(this.config),
-      };
-    }
-    const newestClaudeUsage = results
-      .map((result) => result.usage)
-      .filter((item): item is ProviderUsage => Boolean(item))
-      .filter(
-        (item) => now - Date.parse(item.observedAt) <= CLAUDE_USAGE_MAX_AGE_MS,
-      )
-      .sort((left, right) =>
-        right.observedAt.localeCompare(left.observedAt),
-      )[0];
-    const value = {
-      providerUsage: [this.providerCache.value, newestClaudeUsage].filter(
-        (item): item is ProviderUsage => Boolean(item),
-      ),
-      sessionTelemetry: results
-        .map((result) => result.session)
-        .filter((item): item is SessionTelemetry => Boolean(item)),
-    };
-    this.sessionCache = { expiresAt: now + SESSION_CACHE_MS, value };
-    return value;
   }
 }

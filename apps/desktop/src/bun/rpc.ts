@@ -148,11 +148,17 @@ export async function desktopSnapshot(
       context.agents.capabilities(),
       context.telemetry.read(),
     ]);
+  const references = context.tasks.references(tasks);
   return {
     workspaces: workspaces.map(({ workspace, available }) =>
       workspaceDto(workspace, available),
     ),
-    tasks: tasks.map(taskDto),
+    tasks: tasks.map((task) => ({
+      ...taskDto(task),
+      references: (references.get(task.id) ?? []).map((item) => ({
+        ...item,
+      })),
+    })),
     agents: agents.map(agentDto),
     terminals: terminals.map(integratedTerminalDto),
     repositories: context.workspaceContent

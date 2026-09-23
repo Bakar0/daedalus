@@ -50,7 +50,8 @@ import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import { runWithConcurrency } from "./concurrency";
 import { repositoryFuzzyScore } from "./repository-search";
 import { useListReorder } from "./use-list-reorder";
-import { BoardView, type BoardProvider } from "./BoardView";
+import { BoardView, TaskRelationsBlock, type BoardProvider } from "./BoardView";
+import { laneFor } from "./board-lanes";
 import { TaskTimeline } from "./TaskTimeline";
 import {
   AgentStatusDot,
@@ -2993,6 +2994,18 @@ export function WorkspaceApp({
     }
   }
 
+  /**
+   * The board's capture line: a title, a `todo`, nothing else. Most tasks in
+   * a workspace start as a line typed fast, and a modal is a reason not to.
+   */
+  async function quickCaptureTask(title: string): Promise<boolean> {
+    if (!workspace) return false;
+    const created = await perform(
+      client.request.taskCreate({ workspace: workspace.id, title }),
+    );
+    return Boolean(created);
+  }
+
   async function createTask(event: React.FormEvent) {
     event.preventDefault();
     if (!workspace) return;
@@ -3737,6 +3750,22 @@ export function WorkspaceApp({
           </select>
         </label>
       </div>
+      <TaskRelationsBlock
+        laneOf={(task) =>
+          laneFor(task, {
+            sessions: workspaceSessions,
+            activity: activityById,
+            attention: attentionById,
+            worktrees: workspaceWorktrees,
+          })
+        }
+        onSelect={(task) => {
+          setSelectedTaskId(task.id);
+          setEditingTask(false);
+        }}
+        task={selectedTask}
+        tasks={allTasks}
+      />
       <TaskTimeline
         loading={taskTimelineLoading}
         onOpenJournal={(heading) => {
@@ -3747,6 +3776,19 @@ export function WorkspaceApp({
           taskTimeline?.taskId === selectedTask.id ? taskTimeline : undefined
         }
       />
+      <div className="task-inspector-actions">
+        <button
+          className="quiet"
+          disabled={!snapshot?.settings.tmuxAvailable}
+          onClick={() =>
+            void startTaskSession(selectedTask, { draftBrief: true })
+          }
+          title="Start a session that reads the workspace and writes this brief back. It does not start the task."
+          type="button"
+        >
+          Draft brief with agent
+        </button>
+      </div>
       <button
         className="danger-link brief-delete"
         onClick={() =>
@@ -4877,6 +4919,10 @@ export function WorkspaceApp({
               now={now}
               onCreateTask={() => setModal("task")}
               onDismissLaunch={dismissSessionLaunch}
+              onDraftBrief={(task) =>
+                void startTaskSession(task, { draftBrief: true })
+              }
+              onQuickCapture={quickCaptureTask}
               onNeedModels={ensureModelCatalog}
               onOpenLink={openTerminalLink}
               onOpenSession={(session) => {

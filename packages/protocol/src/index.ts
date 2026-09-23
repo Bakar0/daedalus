@@ -40,6 +40,18 @@ export interface TaskDto {
   completedAt: string | null;
   /** When the title or brief last changed; null if never since creation. */
   briefUpdatedAt: string | null;
+  /**
+   * Other tasks in the same workspace this brief names as `#N`, resolved.
+   * `hard` is "depends on", "after" or "blocked by". Present on snapshot
+   * tasks; single-task responses leave it out.
+   */
+  references?: TaskReferenceDto[];
+}
+
+export interface TaskReferenceDto {
+  taskId: string;
+  number: number;
+  hard: boolean;
 }
 
 export interface AgentSessionDto {

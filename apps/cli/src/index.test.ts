@@ -16,12 +16,14 @@ async function cli(
   home: string,
   args: string[],
   env: Record<string, string> = {},
+  stdin?: string,
 ): Promise<CliResult> {
   const child = Bun.spawn(
     [process.execPath, "run", join(import.meta.dir, "index.ts"), ...args],
     {
       cwd: join(import.meta.dir, "../../.."),
       env: { ...process.env, DAEDALUS_HOME: home, ...env },
+      stdin: stdin === undefined ? "ignore" : new Blob([stdin]),
       stdout: "pipe",
       stderr: "pipe",
     },
@@ -185,6 +187,130 @@ describe("daedal CLI contract", () => {
         "--json",
       ]);
       expect(JSON.parse(restored.stdout).data.archivedAt).toBeNull();
+    });
+  });
+
+  test("reads a long brief from a file or standard input, and lists a timeline", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const json = (result: CliResult) => {
+        expect(result.stderr).toBe("");
+        return JSON.parse(result.stdout).data;
+      };
+      json(await cli(home, ["workspace", "create", "Briefs", "--json"]));
+      // Quotes, dollars and backticks: exactly what shell quoting mangles.
+      const brief = "## Goal\n\nDon't `echo $HOME`; depends on #1.\n";
+      const file = join(home, "brief.md");
+      await Bun.write(file, brief);
+      const created = json(
+        await cli(home, [
+          "task",
+          "create",
+          "--workspace",
+          "briefs",
+          "--title",
+          "From a file",
+          "--description-file",
+          file,
+          "--json",
+        ]),
+      );
+      expect(created.description).toBe(brief);
+
+      const replaced = 'Rewritten from stdin, with "quotes".';
+      const updated = json(
+        await cli(
+          home,
+          [
+            "task",
+            "update",
+            String(created.number),
+            "--workspace",
+            "briefs",
+            "--description-file",
+            "-",
+            "--json",
+          ],
+          {},
+          replaced,
+        ),
+      );
+      expect(updated.description).toBe(replaced);
+      expect(updated.briefUpdatedAt).not.toBeNull();
+
+      const both = await cli(home, [
+        "task",
+        "update",
+        String(created.number),
+        "--workspace",
+        "briefs",
+        "--description",
+        "x",
+        "--description-file",
+        file,
+      ]);
+      expect(both.exitCode).toBe(2);
+      const missing = await cli(home, [
+        "task",
+        "update",
+        String(created.number),
+        "--workspace",
+        "briefs",
+        "--description-file",
+        join(home, "nope.md"),
+      ]);
+      expect(missing.exitCode).toBe(3);
+
+      const timeline = json(
+        await cli(home, [
+          "task",
+          "timeline",
+          String(created.number),
+          "--workspace",
+          "briefs",
+          "--json",
+        ]),
+      );
+      expect(
+        timeline.events.map((event: { kind: string }) => event.kind),
+      ).toEqual(["created", "brief_edited"]);
+      const human = await cli(home, [
+        "task",
+        "timeline",
+        String(created.number),
+        "--workspace",
+        "briefs",
+      ]);
+      expect(human.stdout).toContain("From a file");
+      expect(human.stdout).toContain("Brief edited");
+
+      const settings = json(
+        await cli(home, [
+          "workspace",
+          "update",
+          "briefs",
+          "--start-sets-in-progress",
+          "off",
+          "--default-provider",
+          "codex",
+          "--json",
+        ]),
+      );
+      expect(settings).toMatchObject({
+        startSetsInProgress: false,
+        defaultProvider: "codex",
+        defaultModel: null,
+      });
+      expect(
+        (
+          await cli(home, [
+            "workspace",
+            "update",
+            "briefs",
+            "--start-sets-in-progress",
+            "maybe",
+          ])
+        ).exitCode,
+      ).toBe(2);
     });
   });
 

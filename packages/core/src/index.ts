@@ -19,6 +19,7 @@ export * from "./services/providers";
 export * from "./services/shutdown";
 export * from "./services/tasks";
 export * from "./services/task-history";
+export * from "./services/task-references";
 export * from "./services/telemetry";
 export * from "./services/workspaces";
 export * from "./services/workspace-content";

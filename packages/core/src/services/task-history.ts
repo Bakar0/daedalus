@@ -10,6 +10,7 @@ import type {
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import { sessionLaunchModel } from "./providers";
+import { parseTaskReferences } from "./task-references";
 import type { TelemetryService } from "./telemetry";
 import type { WorkspaceService } from "./workspaces";
 
@@ -58,15 +59,14 @@ export interface JournalEntryRef {
 }
 
 /**
- * Whether `text` names task `number` as `#N`. A number glued to a word or a
- * path (`other#3`, `pull/3`) is someone else's, and `PR #22` is a pull
- * request, not task 22, which this journal says often.
+ * Whether `text` names task `number` as `#N`, by the same rule the board
+ * uses for dependencies: `PR #22` is a pull request, not task 22, which this
+ * journal says often.
  */
 export function mentionsTaskNumber(text: string, number: number): boolean {
-  return new RegExp(
-    `(?<![\\w#/.-])(?<!\\b(?:PRs?|pull requests?|issues?)\\s)#${number}(?!\\d)`,
-    "i",
-  ).test(text);
+  return parseTaskReferences(text).some(
+    (reference) => reference.number === number,
+  );
 }
 
 /**
@@ -272,9 +272,8 @@ export class TaskHistoryService {
 
   /** What each live session reports as its model, which beats `--model`. */
   private async liveModels(): Promise<Map<string, string>> {
-    const { sessionTelemetry } = await this.telemetry.read();
     return new Map(
-      sessionTelemetry.flatMap((item) =>
+      (await this.telemetry.sessionTelemetry()).flatMap((item) =>
         item.model ? [[item.sessionId, item.model] as const] : [],
       ),
     );
