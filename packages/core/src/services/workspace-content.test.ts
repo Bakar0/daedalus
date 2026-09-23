@@ -1340,7 +1340,22 @@ Before working in this workspace:
           changedFiles: 1,
           ahead: 1,
           behind: 0,
+          // The committed file only: SCRATCH.md is not part of the diff a
+          // reviewer would read.
+          filesAhead: 1,
         });
+
+        // The board reads the same measurement for every workspace at once,
+        // without the workspace view having been opened.
+        context.workspaceContent.listWorktrees();
+        await context.workspaceContent.settleGitStatus(null);
+        expect(context.workspaceContent.listWorktrees()).toMatchObject([
+          {
+            sessionId: session.id,
+            path: worktree.path,
+            gitStatus: { ahead: 1, filesAhead: 1 },
+          },
+        ]);
 
         // The read-only planning checkout is unaffected by the agent's work.
         await context.workspaceContent.settleGitStatus(workspace.id);

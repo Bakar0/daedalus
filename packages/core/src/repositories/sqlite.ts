@@ -5,6 +5,7 @@ import type {
   AgentSession,
   AgentSessionStatus,
   AttentionReason,
+  ClearedAttentionReason,
   IntegratedTerminal,
   NotificationLevel,
   PendingNotification,
@@ -30,6 +31,9 @@ interface WorkspaceRow {
   updated_at: string;
   archived_at: string | null;
   position: number;
+  start_sets_in_progress: number;
+  default_provider: "claude" | "codex" | null;
+  default_model: string | null;
 }
 
 interface TaskIdRow {
@@ -47,6 +51,7 @@ interface TaskRow {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  brief_updated_at: string | null;
 }
 
 interface AgentRow {
@@ -129,6 +134,9 @@ const workspaceFromRow = (row: WorkspaceRow): Workspace => ({
   updatedAt: row.updated_at,
   archivedAt: row.archived_at,
   position: row.position,
+  startSetsInProgress: row.start_sets_in_progress !== 0,
+  defaultProvider: row.default_provider,
+  defaultModel: row.default_model,
 });
 
 const taskFromRow = (row: TaskRow): Task => ({
@@ -142,6 +150,7 @@ const taskFromRow = (row: TaskRow): Task => ({
   createdAt: row.created_at,
   updatedAt: row.updated_at,
   completedAt: row.completed_at,
+  briefUpdatedAt: row.brief_updated_at,
 });
 
 const agentFromRow = (row: AgentRow): AgentSession => ({
@@ -240,6 +249,16 @@ interface SessionAttentionRow {
   updated_at: string;
 }
 
+interface AttentionHistoryRow {
+  id: string;
+  session_id: string;
+  workspace_id: string;
+  text: string;
+  source: AgentActivitySource;
+  raised_at: string;
+  cleared_at: string;
+}
+
 interface PendingNotificationRow {
   id: string;
   session_id: string | null;
@@ -316,8 +335,9 @@ export class SqliteRepositories {
       .query(
         `INSERT INTO workspaces
          (id, slug, name, path, created_at, updated_at, archived_at,
-          task_id_prefix, position)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          task_id_prefix, position, start_sets_in_progress, default_provider,
+          default_model)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         workspace.id,
@@ -329,6 +349,9 @@ export class SqliteRepositories {
         workspace.archivedAt,
         workspace.slug,
         workspace.position,
+        workspace.startSetsInProgress ? 1 : 0,
+        workspace.defaultProvider,
+        workspace.defaultModel,
       );
   }
 
@@ -380,7 +403,9 @@ export class SqliteRepositories {
   updateWorkspace(workspace: Workspace): void {
     this.database
       .query(
-        "UPDATE workspaces SET slug = ?, name = ?, path = ?, updated_at = ?, archived_at = ? WHERE id = ?",
+        `UPDATE workspaces SET slug = ?, name = ?, path = ?, updated_at = ?,
+         archived_at = ?, start_sets_in_progress = ?, default_provider = ?,
+         default_model = ? WHERE id = ?`,
       )
       .run(
         workspace.slug,
@@ -388,6 +413,9 @@ export class SqliteRepositories {
         workspace.path,
         workspace.updatedAt,
         workspace.archivedAt,
+        workspace.startSetsInProgress ? 1 : 0,
+        workspace.defaultProvider,
+        workspace.defaultModel,
         workspace.id,
       );
   }
@@ -584,8 +612,8 @@ export class SqliteRepositories {
       .query(
         `INSERT INTO tasks
          (id, workspace_id, number, title, description, status, priority,
-          created_at, updated_at, completed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          created_at, updated_at, completed_at, brief_updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         task.id,
@@ -598,6 +626,7 @@ export class SqliteRepositories {
         task.createdAt,
         task.updatedAt,
         task.completedAt,
+        task.briefUpdatedAt,
       );
   }
 
@@ -665,7 +694,7 @@ export class SqliteRepositories {
     this.database
       .query(
         `UPDATE tasks SET title = ?, description = ?, status = ?, priority = ?,
-         updated_at = ?, completed_at = ? WHERE id = ?`,
+         updated_at = ?, completed_at = ?, brief_updated_at = ? WHERE id = ?`,
       )
       .run(
         task.title,
@@ -674,6 +703,7 @@ export class SqliteRepositories {
         task.priority,
         task.updatedAt,
         task.completedAt,
+        task.briefUpdatedAt,
         task.id,
       );
   }
@@ -954,6 +984,64 @@ export class SqliteRepositories {
     this.database
       .query("DELETE FROM session_attention WHERE session_id = ?")
       .run(sessionId);
+  }
+
+  /**
+   * Files cleared reasons and trims the session to its newest `keep`, in one
+   * transaction so a reader never sees six.
+   */
+  appendAttentionHistory(
+    entries: readonly ClearedAttentionReason[],
+    keep: number,
+  ): void {
+    if (entries.length === 0) return;
+    const insert = this.database.query(
+      `INSERT OR REPLACE INTO attention_history
+       (id, session_id, workspace_id, text, source, raised_at, cleared_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const trim = this.database.query(
+      `DELETE FROM attention_history WHERE session_id = ? AND id NOT IN (
+         SELECT id FROM attention_history WHERE session_id = ?
+         ORDER BY cleared_at DESC, raised_at DESC, id DESC LIMIT ?
+       )`,
+    );
+    this.database.transaction(() => {
+      for (const entry of entries)
+        insert.run(
+          entry.id,
+          entry.sessionId,
+          entry.workspaceId,
+          entry.text,
+          entry.source,
+          entry.raisedAt,
+          entry.clearedAt,
+        );
+      for (const sessionId of new Set(entries.map((item) => item.sessionId)))
+        trim.run(sessionId, sessionId, keep);
+    })();
+  }
+
+  listAttentionHistory(
+    sessionIds: readonly string[],
+  ): ClearedAttentionReason[] {
+    if (sessionIds.length === 0) return [];
+    return this.database
+      .query<AttentionHistoryRow, string[]>(
+        `SELECT * FROM attention_history WHERE session_id IN (${sessionIds
+          .map(() => "?")
+          .join(", ")}) ORDER BY raised_at, id`,
+      )
+      .all(...sessionIds)
+      .map((row) => ({
+        id: row.id,
+        sessionId: row.session_id,
+        workspaceId: row.workspace_id,
+        text: row.text,
+        source: row.source,
+        raisedAt: row.raised_at,
+        clearedAt: row.cleared_at,
+      }));
   }
 
   createPendingNotification(notification: PendingNotification): void {

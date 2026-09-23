@@ -77,6 +77,7 @@ export class TaskService {
       createdAt: now,
       updatedAt: now,
       completedAt: null,
+      briefUpdatedAt: null,
     });
     return task;
   }
@@ -125,18 +126,28 @@ export class TaskService {
         "VALIDATION",
         "At least one task field is required",
       );
+    const now = new Date().toISOString();
+    const nextTitle =
+      changes.title === undefined ? task.title : title(changes.title);
+    const nextDescription =
+      changes.description === undefined
+        ? task.description
+        : description(changes.description);
     const updated: Task = {
       ...task,
-      title: changes.title === undefined ? task.title : title(changes.title),
-      description:
-        changes.description === undefined
-          ? task.description
-          : description(changes.description),
+      title: nextTitle,
+      description: nextDescription,
       priority:
         changes.priority === undefined
           ? task.priority
           : taskPriority(changes.priority),
-      updatedAt: new Date().toISOString(),
+      updatedAt: now,
+      // Only a real change counts. The editor saves title and brief together,
+      // so a save that touched neither must not claim the brief was edited.
+      briefUpdatedAt:
+        nextTitle !== task.title || nextDescription !== task.description
+          ? now
+          : task.briefUpdatedAt,
     };
     this.repositories.updateTask(updated);
     return updated;

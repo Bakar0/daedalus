@@ -160,6 +160,9 @@ export async function desktopSnapshot(
       .map(repositoryLibraryDto),
     ...telemetry,
     sessionActivity: context.activity.list().map(agentActivityDto),
+    worktrees: context.workspaceContent
+      .listWorktrees()
+      .map((worktree) => ({ ...worktree })),
     attention: context.activity.listAttention().map(sessionAttentionDto),
     toasts: context.notifications.pending("toast").map(toastDto),
     settings: {

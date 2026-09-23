@@ -17,6 +17,9 @@ const snapshot: DesktopSnapshotDto = {
       archivedAt: null,
       available: true,
       position: 1,
+      startSetsInProgress: true,
+      defaultProvider: null,
+      defaultModel: null,
     },
   ],
   tasks: [],
@@ -144,6 +147,7 @@ const snapshot: DesktopSnapshotDto = {
       observedAt: "2026-09-14T00:00:00.000Z",
     },
   ],
+  worktrees: [],
   sessionActivity: [
     {
       sessionId: "panel-test-agent",

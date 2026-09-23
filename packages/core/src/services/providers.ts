@@ -625,10 +625,14 @@ export function resolveProvider(
 export function buildAgentPrompt(input: {
   taskNumber?: number;
   message?: string;
+  /** `draft-brief` asks for the brief to be written back, not the work done. */
+  mode?: "execute" | "draft-brief";
 }): string | undefined {
-  const taskInstruction = input.taskNumber
-    ? `Execute task #${input.taskNumber}. Do not merely summarize or restate it; complete the task.`
-    : undefined;
+  const taskInstruction = !input.taskNumber
+    ? undefined
+    : input.mode === "draft-brief"
+      ? `Draft the brief for task #${input.taskNumber}. Read the workspace, then write the brief back with \`daedal task update ${input.taskNumber} --description-file -\`. Do not start the task itself.`
+      : `Execute task #${input.taskNumber}. Do not merely summarize or restate it; complete the task.`;
   const message = input.message?.trim() || undefined;
   return [taskInstruction, message].filter(Boolean).join("\n\n") || undefined;
 }

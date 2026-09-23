@@ -218,9 +218,16 @@ const commandHelp: Record<string, string> = {
   daedal workspace reorder <workspace> [<workspace>...]
   daedal workspace get <workspace>
   daedal workspace update <workspace> [--name <name>] [--slug <slug>]
+      [--start-sets-in-progress on|off] [--default-provider claude|codex|none]
+      [--default-model <model>|none]
   daedal workspace archive <workspace>
   daedal workspace restore <workspace>
-  daedal workspace remove <workspace> [--delete-files] --force`,
+  daedal workspace remove <workspace> [--delete-files] --force
+
+The board settings are per workspace. --start-sets-in-progress (on by default)
+moves a todo or blocked task to in_progress when a session is started on it,
+from the board or from 'agent spawn --task'. --default-provider and
+--default-model are what the board's Start and Start next launch with.`,
   task: `Task commands:
   daedal task create --workspace <workspace> --title <title> [--description <text>] [--priority <priority>]
   daedal task list [--workspace <workspace>] [--status <status>]
@@ -563,15 +570,41 @@ async function workspaceCommand(
     return 0;
   }
   if (action === "update") {
-    const parsed = parseArguments(args, ["name", "slug"]);
+    const parsed = parseArguments(args, [
+      "name",
+      "slug",
+      "start-sets-in-progress",
+      "default-provider",
+      "default-model",
+    ]);
     expectPositionals(
       parsed.positionals,
       1,
-      "daedal workspace update <workspace> [--name <name>] [--slug <slug>]",
+      "daedal workspace update <workspace> [--name <name>] [--slug <slug>] [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--default-model <model>|none]",
     );
+    const startSetting = parsed.values["start-sets-in-progress"];
+    if (
+      startSetting !== undefined &&
+      startSetting !== "on" &&
+      startSetting !== "off"
+    )
+      throw new DaedalusError(
+        "VALIDATION",
+        "--start-sets-in-progress must be 'on' or 'off'",
+      );
+    const defaultModel = parsed.values["default-model"];
     const result = await context.workspaces.update(parsed.positionals[0]!, {
       name: parsed.values.name,
       slug: parsed.values.slug,
+      startSetsInProgress:
+        startSetting === undefined ? undefined : startSetting === "on",
+      defaultProvider: parsed.values["default-provider"],
+      defaultModel:
+        defaultModel === undefined
+          ? undefined
+          : defaultModel === "none"
+            ? null
+            : defaultModel,
     });
     printResult(result, json, () =>
       console.log(`Updated workspace ${result.slug} (${result.id})`),

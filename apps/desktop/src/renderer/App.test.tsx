@@ -48,6 +48,7 @@ const base: DesktopSnapshotDto = {
   sessionTelemetry: [],
   sessionActivity: [],
   attention: [],
+  worktrees: [],
   toasts: [],
   settings: {
     version: "0.3.0",
@@ -463,6 +464,9 @@ describe("desktop application shell", () => {
               archivedAt: null,
               available: true,
               position: 1,
+              startSetsInProgress: true,
+              defaultProvider: null,
+              defaultModel: null,
             },
           ],
           settings: {
@@ -500,6 +504,9 @@ describe("desktop application shell", () => {
               archivedAt: null,
               available: true,
               position: 1,
+              startSetsInProgress: true,
+              defaultProvider: null,
+              defaultModel: null,
             },
           ],
           repositories: [
@@ -549,6 +556,9 @@ describe("desktop application shell", () => {
           archivedAt: null,
           available: true,
           position: 1,
+          startSetsInProgress: true,
+          defaultProvider: null,
+          defaultModel: null,
         },
       ],
     };
@@ -596,6 +606,9 @@ describe("desktop application shell", () => {
           archivedAt: null,
           available: true,
           position: 1,
+          startSetsInProgress: true,
+          defaultProvider: null,
+          defaultModel: null,
         },
       ],
     };
@@ -706,6 +719,9 @@ describe("desktop application shell", () => {
           archivedAt: null,
           available: true,
           position: 1,
+          startSetsInProgress: true,
+          defaultProvider: null,
+          defaultModel: null,
         },
       ],
       tasks: [
@@ -721,6 +737,7 @@ describe("desktop application shell", () => {
           createdAt: "now",
           updatedAt: "now",
           completedAt: null,
+          briefUpdatedAt: null,
         },
       ],
       agents: [
@@ -785,8 +802,13 @@ describe("desktop application shell", () => {
     expect(html).toContain("Ship desktop");
     expect(html).toContain("#1");
     expect(html).toContain("in progress");
-    expect(html).toContain('aria-label="Open Ship desktop session"');
-    expect(html).toContain("task-session-link tool-codex running");
+    // The card is a run summary: a row per linked session, in the lane the
+    // session's state puts it in, rather than a status pill and a date.
+    expect(html).toContain('aria-label="Open Ship desktop: running"');
+    expect(html).toContain("board-session-row tone-idle");
+    expect(html).toContain('aria-label="Running, 1 task"');
+    expect(html).toContain("board-card lane-running selected");
+    expect(html).not.toContain('aria-label="Filter tasks by status"');
     expect(html).toContain(
       'aria-label="2 sessions in Demo: 1 live, 1 need you"',
     );
@@ -794,7 +816,9 @@ describe("desktop application shell", () => {
     expect(html).toContain("1 needs you");
     expect(html).toContain('aria-label="Archive Demo workspace"');
     expect(html).toContain('class="archive-icon"');
-    expect(html).toContain("Start session…");
+    // A running task is not offered Start again; a second session is the
+    // dispatcher's "second opinion", not a second click on the same button.
+    expect(html).not.toContain('aria-label="Start Ship desktop"');
     expect(html).toContain("Sessions");
     expect(html).toContain("Acceptance criteria");
     expect(html).toContain("Edit");
@@ -837,6 +861,9 @@ describe("desktop application shell", () => {
           archivedAt: null,
           available: false,
           position: 1,
+          startSetsInProgress: true,
+          defaultProvider: null,
+          defaultModel: null,
         },
       ],
     };
@@ -882,6 +909,9 @@ describe("desktop application shell", () => {
           archivedAt: null,
           available: true,
           position: 1,
+          startSetsInProgress: true,
+          defaultProvider: null,
+          defaultModel: null,
         },
       ],
       tasks: [
@@ -896,6 +926,7 @@ describe("desktop application shell", () => {
           createdAt: "now",
           updatedAt: "now",
           completedAt: null,
+          briefUpdatedAt: null,
         },
       ],
       agents: [
@@ -944,6 +975,9 @@ describe("desktop application shell", () => {
           archivedAt: null,
           available: true,
           position: 1,
+          startSetsInProgress: true,
+          defaultProvider: null,
+          defaultModel: null,
         },
       ],
       agents: [
@@ -1010,6 +1044,9 @@ describe("desktop application shell", () => {
           archivedAt: null,
           available: true,
           position: 1,
+          startSetsInProgress: true,
+          defaultProvider: null,
+          defaultModel: null,
         },
       ],
       agents: [
@@ -1065,6 +1102,9 @@ describe("desktop application shell", () => {
       archivedAt: null,
       available: true,
       position,
+      startSetsInProgress: true,
+      defaultProvider: null,
+      defaultModel: null,
     });
     // Deliberately not alphabetical, not by creation, and not by position
     // value either: the array order is what the service already applied, and
@@ -1101,6 +1141,9 @@ describe("desktop application shell", () => {
           archivedAt: null,
           available: true,
           position: 1,
+          startSetsInProgress: true,
+          defaultProvider: null,
+          defaultModel: null,
         },
         {
           id: "w2",
@@ -1112,6 +1155,9 @@ describe("desktop application shell", () => {
           archivedAt,
           available: true,
           position: 1,
+          startSetsInProgress: true,
+          defaultProvider: null,
+          defaultModel: null,
         },
       ],
       agents: [
@@ -1168,6 +1214,9 @@ describe("desktop application shell", () => {
           archivedAt: null,
           available: true,
           position: 1,
+          startSetsInProgress: true,
+          defaultProvider: null,
+          defaultModel: null,
         },
       ],
       terminals: [
@@ -1219,6 +1268,9 @@ describe("desktop application shell", () => {
       archivedAt: null,
       available: true,
       position: 1,
+      startSetsInProgress: true,
+      defaultProvider: null,
+      defaultModel: null,
     };
     const html = renderToStaticMarkup(
       <App
@@ -1434,6 +1486,9 @@ describe("session status indicators", () => {
       archivedAt: null,
       available: true,
       position: 1,
+      startSetsInProgress: true,
+      defaultProvider: null,
+      defaultModel: null,
     };
     const blocked: AgentSessionDto = {
       ...liveSession,

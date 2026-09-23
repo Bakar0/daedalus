@@ -19,6 +19,12 @@ export interface WorkspaceDto {
   available: boolean;
   /** Manual list order, ascending. Lists arrive already sorted by it. */
   position: number;
+  /** Start on a board card moves a `todo` or `blocked` task to `in_progress`. */
+  startSetsInProgress: boolean;
+  /** What Start and Start next launch with; null leaves it to the app. */
+  defaultProvider: "claude" | "codex" | null;
+  /** A provider model id, or null for that provider's default. */
+  defaultModel: string | null;
 }
 
 export interface TaskDto {
@@ -32,6 +38,8 @@ export interface TaskDto {
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
+  /** When the title or brief last changed; null if never since creation. */
+  briefUpdatedAt: string | null;
 }
 
 export interface AgentSessionDto {
@@ -118,9 +126,20 @@ export interface WorkspaceRepositoryDto {
 
 export interface GitStatusDto {
   state: "clean" | "modified" | "ahead" | "behind" | "diverged" | "unavailable";
+  /** Uncommitted paths. */
   changedFiles: number;
   ahead: number;
   behind: number;
+  /** Files the commits ahead of base touch; present only when `ahead > 0`. */
+  filesAhead?: number;
+}
+
+/** A link `gh` found for a branch. Visibility only; nothing merges from it. */
+export interface PullRequestRefDto {
+  number: number;
+  url: string;
+  state: "OPEN" | "CLOSED" | "MERGED";
+  isDraft: boolean;
 }
 
 export interface SessionWorktreeDto {
@@ -130,6 +149,8 @@ export interface SessionWorktreeDto {
   branchName: string;
   createdAt: string;
   gitStatus?: GitStatusDto;
+  /** Absent when `gh` is missing, signed out, or found nothing. */
+  pullRequest?: PullRequestRefDto;
 }
 
 export interface WorkspaceContentDto {
@@ -387,6 +408,12 @@ export interface DesktopSnapshotDto {
   sessionTelemetry: SessionTelemetryDto[];
   sessionActivity: AgentActivityDto[];
   attention: SessionAttentionDto[];
+  /**
+   * Every session worktree across every workspace, with cached git status. It
+   * rides on the snapshot so the board can show a task's output without the
+   * workspace view ever having been opened.
+   */
+  worktrees: SessionWorktreeDto[];
   toasts: ToastDto[];
   settings: DesktopSettingsDto;
 }
@@ -425,7 +452,14 @@ export interface DesktopRpcSchema {
       >;
       workspaceGet: Request<{ reference: string }, WorkspaceDto>;
       workspaceUpdate: Request<
-        { reference: string; name?: string; slug?: string },
+        {
+          reference: string;
+          name?: string;
+          slug?: string;
+          startSetsInProgress?: boolean;
+          defaultProvider?: "claude" | "codex" | null;
+          defaultModel?: string | null;
+        },
         WorkspaceDto
       >;
       workspaceRemove: Request<
