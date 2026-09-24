@@ -22,6 +22,7 @@ import {
   discoverProviderModels,
   HANDOFF_FILE,
   HANDOFF_SKILL,
+  handoffSessionName,
   modelArgument,
   type ProviderModelCatalog,
   resolveAgentExecutable,
@@ -1022,7 +1023,7 @@ export class AgentService {
     const session = await this.spawn({
       workspace: predecessor.workspaceId,
       taskId: predecessor.taskId ?? undefined,
-      name: predecessor.name,
+      name: handoffSessionName(predecessor.name),
       provider,
       // A different provider would not understand the old one's model name.
       model:

@@ -6,6 +6,7 @@ import {
   buildAgentPrompt,
   buildHandoffRequest,
   createApplicationContext,
+  handoffSessionName,
   type ApplicationContext,
 } from "../index";
 
@@ -130,7 +131,7 @@ describe("continuing a session in a fresh one", () => {
       const next = result.session;
       expect(next.id).not.toBe(first.id);
       expect(next.taskId).toBe(task.id);
-      expect(next.name).toBe(first.name);
+      expect(next.name).toBe(`${first.name} · 2`);
       expect(next.workingDirectory).toBe(first.workingDirectory);
       expect(tmux.launches.at(-1)!.cwd).toBe(first.workingDirectory);
       expect(next.args).toContain("gpt-5.5");
@@ -229,6 +230,12 @@ describe("continuing a session in a fresh one", () => {
         requested.handoffRequestedAt,
       );
     });
+  });
+
+  test("a successor's name counts generations instead of stacking suffixes", () => {
+    expect(handoffSessionName("Long job")).toBe("Long job · 2");
+    expect(handoffSessionName("Long job · 2")).toBe("Long job · 3");
+    expect(handoffSessionName("Long job · 9")).toBe("Long job · 10");
   });
 
   test("the continuation prompt keeps an extra message", () => {

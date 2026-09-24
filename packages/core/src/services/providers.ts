@@ -673,6 +673,16 @@ export function sessionLaunchModel(
 /** Where a handoff note lives: the working directory both sessions share. */
 export const HANDOFF_FILE = "HANDOFF.md";
 
+/**
+ * The name a handoff's successor takes: the same name with a generation
+ * counter, so the two cards are told apart and a third handoff reads `· 3`
+ * rather than growing a second suffix.
+ */
+export function handoffSessionName(name: string): string {
+  const match = /^(.*) · (\d+)$/.exec(name);
+  return match ? `${match[1]} · ${Number(match[2]) + 1}` : `${name} · 2`;
+}
+
 /** The skill every handoff runs, whoever asks for it. */
 export const HANDOFF_SKILL = "daedalus-handoff";
 
