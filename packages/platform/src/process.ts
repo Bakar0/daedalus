@@ -10,6 +10,11 @@ export interface CommandResult {
 export interface CommandOptions {
   cwd?: string;
   env?: Record<string, string | undefined>;
+  /**
+   * Treat `env` as the child's whole environment instead of overlaying it on
+   * this process's. The only way to keep an inherited variable out of a child.
+   */
+  replaceEnvironment?: boolean;
   stdin?: "ignore" | "inherit" | string;
   stdout?: "pipe" | "inherit";
   stderr?: "pipe" | "inherit";
@@ -22,7 +27,11 @@ export async function runCommand(
 ): Promise<CommandResult> {
   const process = Bun.spawn([executable, ...args], {
     cwd: options.cwd,
-    env: options.env ? { ...Bun.env, ...options.env } : undefined,
+    env: options.env
+      ? options.replaceEnvironment
+        ? options.env
+        : { ...Bun.env, ...options.env }
+      : undefined,
     stdin:
       typeof options.stdin === "string" ? "pipe" : (options.stdin ?? "ignore"),
     stdout: options.stdout ?? "pipe",

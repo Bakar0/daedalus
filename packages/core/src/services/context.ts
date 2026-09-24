@@ -104,6 +104,7 @@ export async function createApplicationContext(
       findExecutable("tmux", TMUX_EXECUTABLE_FALLBACKS) ?? "tmux",
       runCommand,
       config.home,
+      options.env ?? process.env,
     );
   let agents!: AgentService;
   let activity!: ActivityService;

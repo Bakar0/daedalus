@@ -65,10 +65,53 @@ export const tmuxPtyArguments = (target: TmuxTerminalTarget): string[] =>
     target.session,
   );
 
+/**
+ * Variables that describe whoever launched Daedalus rather than the machine.
+ * Opening the app from an agent's shell hands it that agent's whole
+ * environment, and tmux copies its server's environment into every session it
+ * starts: `NO_COLOR` and `TERM=dumb` from a tool shell turned every agent
+ * terminal plain white, and another session's `DAEDALUS_SESSION_ID` made a new
+ * agent report as that one. A session gets its own `DAEDALUS_*` values at
+ * launch, so dropping the inherited ones loses nothing.
+ */
+export const INHERITED_SESSION_VARIABLES: readonly string[] = [
+  "NO_COLOR",
+  "FORCE_COLOR",
+  "TERM",
+  "COLORTERM",
+  "TMUX",
+  "TMUX_PANE",
+  "CLAUDECODE",
+  "AI_AGENT",
+  "DAEDALUS_SESSION_ID",
+  "DAEDALUS_TASK_ID",
+  "DAEDALUS_TASK_NUMBER",
+  "DAEDALUS_WORKSPACE_ID",
+];
+
+export const INHERITED_SESSION_VARIABLE_PREFIXES: readonly string[] = [
+  "CLAUDE_CODE_",
+];
+
+export const isInheritedSessionVariable = (key: string): boolean =>
+  INHERITED_SESSION_VARIABLES.includes(key) ||
+  INHERITED_SESSION_VARIABLE_PREFIXES.some((prefix) => key.startsWith(prefix));
+
+/** A copy of `environment` without anything `isInheritedSessionVariable` names. */
+export const withoutInheritedSessionVariables = (
+  environment: NodeJS.ProcessEnv,
+): Record<string, string> =>
+  Object.fromEntries(
+    Object.entries(environment).filter(
+      (entry): entry is [string, string] =>
+        entry[1] !== undefined && !isInheritedSessionVariable(entry[0]),
+    ),
+  );
+
 export const tmuxPtyEnvironment = (
   environment: NodeJS.ProcessEnv = process.env,
 ) => ({
-  ...environment,
+  ...withoutInheritedSessionVariables(environment),
   // Finder and Spotlight launch GUI apps without locale variables. tmux uses
   // the client locale when calculating Unicode cell widths, so an unset or
   // non-UTF-8 locale corrupts wide glyphs and leaves the cursor out of place.
@@ -89,10 +132,58 @@ export class CommandTmuxClient implements TmuxClient {
       options?: CommandOptions,
     ) => Promise<CommandResult> = runCommand,
     private readonly serverWorkingDirectory?: string,
-  ) {}
+    environment: NodeJS.ProcessEnv = process.env,
+  ) {
+    this.environment = withoutInheritedSessionVariables(environment);
+  }
+
+  /**
+   * What every tmux command runs with. Any command can be the one that starts
+   * the server, and the server hands its environment to every session after.
+   */
+  private readonly environment: Record<string, string>;
 
   private args(...args: string[]): string[] {
     return ["-L", this.socketName, ...args];
+  }
+
+  private run(
+    args: string[],
+    options: Omit<CommandOptions, "env" | "replaceEnvironment"> = {},
+  ): Promise<CommandResult> {
+    return this.command(this.executable, this.args(...args), {
+      ...options,
+      env: this.environment,
+      replaceEnvironment: true,
+    });
+  }
+
+  /**
+   * A server started before this build, or by a client that did not clean its
+   * environment, still holds the variables in its global environment and
+   * copies them into every new session. Unsetting them there repairs such a
+   * server in place, without killing the sessions already running on it.
+   */
+  private async scrubServerEnvironment(): Promise<void> {
+    const shown = await this.run(["show-environment", "-g"]);
+    // No server yet: the new session starts one from the clean environment.
+    if (shown.exitCode !== 0) return;
+    const inherited = shown.stdout
+      .split(/\r?\n/)
+      .map((line) => line.split("=", 1)[0]!)
+      .filter((key) => key && isInheritedSessionVariable(key));
+    if (inherited.length === 0) return;
+    // Best effort: a server that refuses still gets the new session, which
+    // sets its own DAEDALUS_* values over any stale ones.
+    await this.run(
+      inherited.flatMap((key, index) => [
+        ...(index > 0 ? [";"] : []),
+        "set-environment",
+        "-g",
+        "-u",
+        key,
+      ]),
+    );
   }
 
   async probe(): Promise<string | undefined> {
@@ -107,11 +198,12 @@ export class CommandTmuxClient implements TmuxClient {
   }
 
   async createSession(launch: TmuxLaunch): Promise<void> {
+    await this.scrubServerEnvironment();
     const environment = Object.entries({
       ...launch.env,
       PWD: launch.cwd,
     }).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
-    const args = this.args(
+    const args = [
       "new-session",
       "-d",
       "-s",
@@ -122,29 +214,22 @@ export class CommandTmuxClient implements TmuxClient {
       "--",
       launch.executable,
       ...launch.args,
+    ];
+    const result = await this.run(
+      args,
+      this.serverWorkingDirectory ? { cwd: this.serverWorkingDirectory } : {},
     );
-    const result = this.serverWorkingDirectory
-      ? await this.command(this.executable, args, {
-          cwd: this.serverWorkingDirectory,
-        })
-      : await this.command(this.executable, args);
     if (result.exitCode !== 0)
       throw new Error(result.stderr.trim() || "tmux session creation failed");
   }
 
   async hasSession(session: string): Promise<boolean> {
-    const result = await this.command(
-      this.executable,
-      this.args("has-session", "-t", session),
-    );
+    const result = await this.run(["has-session", "-t", session]);
     return result.exitCode === 0;
   }
 
   async listSessions(): Promise<string[]> {
-    const result = await this.command(
-      this.executable,
-      this.args("list-sessions", "-F", "#{session_name}"),
-    );
+    const result = await this.run(["list-sessions", "-F", "#{session_name}"]);
     if (result.exitCode !== 0) return [];
     return result.stdout
       .split(/\r?\n/)
@@ -153,6 +238,9 @@ export class CommandTmuxClient implements TmuxClient {
   }
 
   async attach(session: string): Promise<number> {
+    // The one command that keeps the caller's environment: it draws in the
+    // caller's own terminal, so it needs that terminal's TERM, and it cannot
+    // start a server for anything to leak into.
     const result = await this.command(
       this.executable,
       this.args("attach-session", "-t", session),
@@ -162,10 +250,7 @@ export class CommandTmuxClient implements TmuxClient {
   }
 
   async capture(session: string): Promise<string> {
-    const result = await this.command(
-      this.executable,
-      this.args("capture-pane", "-p", "-J", "-t", session),
-    );
+    const result = await this.run(["capture-pane", "-p", "-J", "-t", session]);
     if (result.exitCode !== 0)
       throw new Error(result.stderr.trim() || "tmux capture failed");
     return result.stdout;
@@ -173,58 +258,47 @@ export class CommandTmuxClient implements TmuxClient {
 
   async sendKeys(session: string, keys: string[]): Promise<void> {
     if (keys.length === 0) return;
-    const result = await this.command(
-      this.executable,
-      this.args("send-keys", "-t", session, ...keys),
-    );
+    const result = await this.run(["send-keys", "-t", session, ...keys]);
     if (result.exitCode !== 0)
       throw new Error(result.stderr.trim() || "tmux key input failed");
   }
 
   async send(session: string, text: string): Promise<void> {
-    const literal = await this.command(
-      this.executable,
-      this.args("send-keys", "-t", session, "-l", "--", text),
-    );
+    const literal = await this.run([
+      "send-keys",
+      "-t",
+      session,
+      "-l",
+      "--",
+      text,
+    ]);
     if (literal.exitCode !== 0)
       throw new Error(literal.stderr.trim() || "tmux input failed");
     // Codex treats keystrokes that arrive within a few milliseconds of each
     // other as a paste, and an Enter inside that burst becomes a newline in
     // the composer rather than a submit. The pause ends the burst first.
     await Bun.sleep(SEND_ENTER_DELAY_MS);
-    const enter = await this.command(
-      this.executable,
-      this.args("send-keys", "-t", session, "Enter"),
-    );
+    const enter = await this.run(["send-keys", "-t", session, "Enter"]);
     if (enter.exitCode !== 0)
       throw new Error(enter.stderr.trim() || "tmux Enter input failed");
   }
 
   async stop(session: string, force = false): Promise<void> {
     if (!force) {
-      const interrupt = await this.command(
-        this.executable,
-        this.args("send-keys", "-t", session, "C-c"),
-      );
+      const interrupt = await this.run(["send-keys", "-t", session, "C-c"]);
       if (interrupt.exitCode !== 0)
         throw new Error(interrupt.stderr.trim() || "tmux interrupt failed");
       await Bun.sleep(100);
     }
     if (await this.hasSession(session)) {
-      const killed = await this.command(
-        this.executable,
-        this.args("kill-session", "-t", session),
-      );
+      const killed = await this.run(["kill-session", "-t", session]);
       if (killed.exitCode !== 0)
         throw new Error(killed.stderr.trim() || "tmux stop failed");
     }
   }
 
   async killServer(): Promise<boolean> {
-    const result = await this.command(
-      this.executable,
-      this.args("kill-server"),
-    );
+    const result = await this.run(["kill-server"]);
     if (result.exitCode === 0) return true;
     // Already down is the goal, not a failure: tmux exits on its own once the
     // last session in it ends, so a sweep that stopped everything may well
