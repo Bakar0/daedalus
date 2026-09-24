@@ -2619,7 +2619,9 @@ export function WorkspaceApp({
       ? modelCatalogs[sessionType]
       : undefined;
   const sessionDefaultModel = sessionModelCatalog?.models.find(
-    (model) => model.id === sessionModelCatalog.defaultModel,
+    (model) =>
+      model.id === sessionModelCatalog.defaultModel ||
+      model.resolvedModel === sessionModelCatalog.defaultModel,
   );
   const selectedSessionModel = sessionModelCatalog?.models.find(
     (model) => model.id === sessionModel,
@@ -5884,9 +5886,11 @@ export function WorkspaceApp({
                           ? `${providerLabel(sessionType)} no longer offers ${workspaceDefaultModel}. Pick a model here, or change the default in board settings; until then a session started without one refuses.`
                           : workspaceDefaultModel
                             ? "Set in board settings. Every new session of this provider in this workspace starts with it unless one is picked here."
-                            : sessionModelCatalog?.defaultModel
-                              ? "The provider's own setting, which its last session may have changed"
-                              : "The provider chooses its current default"))}
+                            : sessionType === "claude"
+                              ? "Claude's recommended model, asked for by name, so a /model change made inside a session does not carry into new ones."
+                              : sessionModelCatalog?.defaultModel
+                                ? "The model Codex is configured with"
+                                : "The provider chooses its current default"))}
                 </small>
                 {modelCatalogError && (
                   <small className="session-model-error">

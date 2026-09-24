@@ -398,10 +398,14 @@ describe("AgentService", () => {
       expect(tmux.sessions.has(session.tmuxSession)).toBe(false);
       const restored = await context.agents.restore(session.id);
       expect(restored.providerSessionId).toBe(recoveredId);
+      // The launch asked Claude for its recommended model by name, and a
+      // restore repeats the launch model as it does for an explicit one.
       expect(tmux.launches[1]?.args).toEqual([
         "run",
         "--settings",
         expect.stringContaining('"agent","event","Notification"'),
+        "--model",
+        "default",
         "--resume",
         recoveredId,
       ]);
@@ -1206,6 +1210,64 @@ describe("workspace default model", () => {
         provider: "claude",
       });
       expect(resolved.args.slice(0, 2)).toEqual(["--model", "claude-sonnet-5"]);
+      context.close();
+    });
+  });
+
+  test("asks Claude for its recommended model by name when nothing else names one", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: {
+            claude: { executable: process.execPath, args: [] },
+            codex: { executable: process.execPath, args: [] },
+          },
+        }),
+      );
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux: new FakeTmux(),
+      });
+      const workspace = await context.workspaces.create({ name: "Plain" });
+      // No `--model` at all would let Claude read the last /model pick from
+      // its settings file; `default` is its own name for the recommended
+      // model. Codex has no such drift and is left to its configuration.
+      const claude = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "claude",
+      });
+      expect(claude.args.slice(0, 2)).toEqual(["--model", "default"]);
+      const codex = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      expect(codex.args).not.toContain("--model");
+      context.close();
+    });
+  });
+
+  test("a model in the Daedalus agent arguments stays the last word", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: {
+            claude: { executable: process.execPath, args: ["--model", "opus"] },
+          },
+        }),
+      );
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux: new FakeTmux(),
+      });
+      const workspace = await context.workspaces.create({ name: "Pinned" });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "claude",
+      });
+      expect(session.args.filter((arg) => arg === "--model")).toHaveLength(1);
+      expect(session.args.slice(0, 2)).toEqual(["--model", "opus"]);
       context.close();
     });
   });

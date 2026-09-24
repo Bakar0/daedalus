@@ -14,6 +14,7 @@ import type { SqliteRepositories } from "../repositories";
 import {
   buildAgentPrompt,
   catalogOffersModel,
+  CLAUDE_DEFAULT_MODEL,
   claudeDaedalusSettingsArgs,
   ensureCodexHooks,
   CODEX_DAEDALUS_TUI_ARGS,
@@ -650,19 +651,29 @@ export class AgentService {
     if (explicit) return explicit;
     const defaultModel = workspace.defaultModel;
     if (
-      !defaultModel ||
-      provider === "custom" ||
-      workspace.defaultProvider !== provider
+      defaultModel &&
+      provider !== "custom" &&
+      workspace.defaultProvider === provider
+    ) {
+      const catalog = await this.knownModels(provider);
+      if (catalog && !catalogOffersModel(catalog, defaultModel))
+        throw new DaedalusError(
+          "VALIDATION",
+          `Workspace default model '${defaultModel}' is not offered by ${provider === "claude" ? "Claude" : "Codex"} any more. Choose another with 'daedal workspace update ${workspace.slug} --default-model <model>|none' or pass --model.`,
+          { workspaceId: workspace.id, provider, defaultModel },
+        );
+      return defaultModel;
+    }
+    // Claude with nothing chosen is asked for its recommended model by name
+    // rather than launched with no `--model`, which would hand it the last
+    // `/model` pick from its settings file. A model in the Daedalus agent
+    // arguments is already in the launch and has to stay the last one.
+    if (
+      provider === "claude" &&
+      !modelArgument(this.config.agents.claude?.args ?? [])
     )
-      return undefined;
-    const catalog = await this.knownModels(provider);
-    if (catalog && !catalogOffersModel(catalog, defaultModel))
-      throw new DaedalusError(
-        "VALIDATION",
-        `Workspace default model '${defaultModel}' is not offered by ${provider === "claude" ? "Claude" : "Codex"} any more. Choose another with 'daedal workspace update ${workspace.slug} --default-model <model>|none' or pass --model.`,
-        { workspaceId: workspace.id, provider, defaultModel },
-      );
-    return defaultModel;
+      return CLAUDE_DEFAULT_MODEL;
+    return undefined;
   }
 
   async spawn(input: {

@@ -297,9 +297,10 @@ back with 'task update --description-file -' instead of doing the task, and
 leaves the status alone.
 
 'agent spawn' without --model starts with the workspace's default model when
---provider is the workspace's default provider, and with the provider's own
-default otherwise. Claude's own default is the last '/model' choice made in
-any session, which is what the workspace default exists to pin down.
+--provider is the workspace's default provider. Otherwise Claude is asked for
+its recommended model by name ('--model default'), because with no model at
+all it would reuse the last '/model' choice made in any session; Codex uses
+its own configuration.
 
 'agent wait' blocks until a session reaches a state and then exits 0, so the
 same signal drives a shell notifier, a Slack ping or a tmux bell with no
