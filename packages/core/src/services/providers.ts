@@ -673,19 +673,22 @@ export function sessionLaunchModel(
 /** Where a handoff note lives: the working directory both sessions share. */
 export const HANDOFF_FILE = "HANDOFF.md";
 
+/** The skill every handoff runs, whoever asks for it. */
+export const HANDOFF_SKILL = "daedalus-handoff";
+
 /**
- * What a running agent is sent when the user asks to move its work to a fresh
- * session. The agent writes the note because only it knows what is in its
- * context; `daedal agent continue` then does the rest from inside it.
+ * What a running agent is sent to start a handoff: its provider's way of
+ * invoking the handoff skill, and nothing else. The instructions live in the
+ * skill alone, so the button, the automatic threshold and a typed
+ * `/daedalus-handoff` all do the same thing.
+ *
+ * `skillName` carries the channel suffix a dev build installs it under.
  */
-export function buildHandoffRequest(workingDirectory: string): string {
-  const path = join(workingDirectory, HANDOFF_FILE);
-  return [
-    "Your context is nearly full, so this work is moving to a fresh session that runs in this same working directory with the same worktrees.",
-    `Stop where you are and write a handoff note to ${path} for that session. Cover the goal, what is done (commits, files changed), what is half-done, the next steps in order, decisions made and why, and anything that failed or is still unverified. Name files and commands exactly. Keep it under 150 lines.`,
-    `Then run \`daedal agent continue --handoff-file ${path}\`. It starts the new session and archives this one, so make it your last action.`,
-    "If you have the daedalus-handoff skill, use it; it says the same thing in more detail.",
-  ].join(" ");
+export function buildHandoffRequest(
+  provider: "claude" | "codex",
+  skillName: string,
+): string {
+  return provider === "claude" ? `/${skillName}` : `$${skillName}`;
 }
 
 export function buildAgentPrompt(input: {

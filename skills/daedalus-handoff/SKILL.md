@@ -17,9 +17,11 @@ $ARGUMENTS
 
 ## Resolve the CLI once
 
-Use `daedal` when `command -v daedal` succeeds. Otherwise use
-`${DAEDALUS_HOME:-$HOME/.daedalus}/bin/daedal`. Use the same executable for
-every command below.
+Use `"$DAEDALUS_HOME/bin/daedal"`. Daedalus sets `DAEDALUS_HOME` in every
+session it starts, and the `daedal` on `PATH` can belong to a different
+Daedalus build, one that does not know this session. Only when `DAEDALUS_HOME`
+is unset, use `daedal` from `PATH`. Use the same executable for every command
+below.
 
 ## 1. Stop
 
@@ -30,9 +32,10 @@ a build only to report on it; say what was last verified and when.
 ## 2. Write the note
 
 Write `HANDOFF.md` in your working directory (the directory you started in,
-`$PWD` unless you changed it). Under 150 lines. Name files, commands, branches
-and commits exactly; the next agent has none of your context and will act on
-what you write.
+`$PWD` unless you changed it). Be concise: every line should be something the
+next agent needs to act on, and nothing it can read from the brief, the code or
+git. Name files, commands, branches and commits exactly; the next agent has
+none of your context and will act on what you write.
 
 Cover, in this order:
 
@@ -56,7 +59,7 @@ Do not restate the task brief; the next agent reads it. Do not paste output.
 Run, as your last action:
 
 ```sh
-daedal agent continue --handoff-file "$PWD/HANDOFF.md"
+"$DAEDALUS_HOME/bin/daedal" agent continue --handoff-file "$PWD/HANDOFF.md"
 ```
 
 Pass the user's extra instructions with `--message "<text>"` as well, so they
@@ -65,6 +68,3 @@ reach the next agent in its launch prompt, not only in the note.
 The command starts the new session on your task and archives this one as soon
 as the command exits, so do nothing after it. If it fails, report the error and
 stop; do not try to work around it by starting a session another way.
-
-If the command reports `Unknown agent command 'continue'`, the `daedal` you
-found is an older build. Use the one under `$DAEDALUS_HOME/bin` instead.

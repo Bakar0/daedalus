@@ -32,7 +32,10 @@ class FakeTmux implements TmuxClient {
   async capture() {
     return "Ask Codex to do anything\nshift+tab to cycle";
   }
-  async sendKeys() {}
+  readonly keys: Array<{ session: string; keys: string[] }> = [];
+  async sendKeys(session: string, keys: string[]) {
+    this.keys.push({ session, keys });
+  }
   async send(session: string, text: string) {
     this.sent.push({ session, text });
   }
@@ -57,10 +60,19 @@ async function withHandoffContext(
     );
     const tmux = new FakeTmux();
     const context = await createApplicationContext({
-      env: { DAEDALUS_HOME: home, CODEX_HOME: join(home, "codex") },
+      // Provider homes inside the temporary home, so installing the handoff
+      // skill never touches the real ~/.claude or ~/.agents.
+      env: {
+        DAEDALUS_HOME: home,
+        CODEX_HOME: join(home, "codex"),
+        CLAUDE_CONFIG_DIR: join(home, "claude"),
+        DAEDALUS_AGENTS_HOME: join(home, "agents"),
+        DAEDALUS_CURSOR_HOME: join(home, "cursor"),
+      },
       tmux,
     });
     try {
+      await context.skills.sync();
       await run(context, tmux);
     } finally {
       context.close();
@@ -179,18 +191,31 @@ describe("continuing a session in a fresh one", () => {
     });
   });
 
-  test("a handoff request asks the agent to write the note and continue", async () => {
+  test("a handoff request invokes the skill, and needs it installed", async () => {
     await withHandoffContext(async (context, tmux) => {
       const { first } = await startedTask(context);
       await context.agents.requestHandoff(first.id);
       const request = tmux.sent.at(-1)!;
       expect(request.session).toBe(first.tmuxSession);
-      const note = join(first.workingDirectory, "HANDOFF.md");
-      expect(request.text).toContain(note);
-      expect(request.text).toContain(
-        `daedal agent continue --handoff-file ${note}`,
+      // The instructions live in the skill alone; the request only names it.
+      expect(request.text).toBe("$daedalus-handoff");
+      // Codex needs a second Enter: the first only picks the skill.
+      expect(tmux.keys.at(-1)).toEqual({
+        session: first.tmuxSession,
+        keys: ["Enter"],
+      });
+      expect(buildHandoffRequest("claude", "daedalus-handoff-dev")).toBe(
+        "/daedalus-handoff-dev",
       );
-      expect(request.text).toBe(buildHandoffRequest(first.workingDirectory));
+      await context.skills.setEnabled("daedalus-handoff", false);
+      await expect(
+        context.agents.requestHandoff(first.id),
+      ).rejects.toMatchObject({
+        code: "CONFLICT",
+        message: expect.stringContaining(
+          "daedal skill enable daedalus-handoff",
+        ),
+      });
     });
   });
 
@@ -265,7 +290,7 @@ describe("automatic handoff", () => {
       expect(requested.map((item) => item.id)).toEqual([first.id]);
       expect(tmux.sent).toHaveLength(1);
       expect(tmux.sent[0]!.session).toBe(first.tmuxSession);
-      expect(tmux.sent[0]!.text).toContain("daedal agent continue");
+      expect(tmux.sent[0]!.text).toBe("$daedalus-handoff");
       // Already asked: the next tick does not ask again.
       expect(await context.agents.sweepAutoHandoffs(at(95))).toEqual([]);
       expect(tmux.sent).toHaveLength(1);

@@ -21,12 +21,18 @@ import {
   CODEX_DAEDALUS_TUI_ARGS,
   discoverProviderModels,
   HANDOFF_FILE,
+  HANDOFF_SKILL,
   modelArgument,
   type ProviderModelCatalog,
   resolveAgentExecutable,
   resolveProvider,
   sessionLaunchModel,
 } from "./providers";
+import {
+  channelArtifactName,
+  skillLinkPaths,
+  type SkillProvider,
+} from "./skills";
 import { applyManualOrder } from "./ordering";
 import type { TaskService } from "./tasks";
 import type { WorkspaceService } from "./workspaces";
@@ -44,6 +50,9 @@ const SESSION_RECOVERY_WINDOW_MS = 60_000;
 const SESSION_RECOVERY_UNIQUENESS_MS = 2_000;
 const PROVIDER_STARTUP_TIMEOUT_MS = 30_000;
 const PROVIDER_STARTUP_POLL_MS = 150;
+// How long Codex takes to turn a picked `$skill` mention into a chip before
+// a second Enter can submit it.
+const CODEX_MENTION_SETTLE_MS = 400;
 // Upper bound on synthetic Enter presses per startup prompt. Daedalus answers
 // the trust prompts for directories it created itself; it must never keep
 // typing into a session the user has taken over.
@@ -886,7 +895,28 @@ export class AgentService {
    */
   async requestHandoff(id: string): Promise<AgentSession> {
     const agent = await this.requireContinuable(id);
-    await this.send(agent.id, buildHandoffRequest(agent.workingDirectory));
+    if (agent.provider !== "claude" && agent.provider !== "codex")
+      throw new DaedalusError(
+        "CONFLICT",
+        "Only Claude and Codex sessions can run the handoff skill",
+      );
+    const skillName = channelArtifactName(this.config, HANDOFF_SKILL);
+    const installed = skillLinkPaths(this.config, skillName).find((link) =>
+      link.providers.includes(agent.provider as SkillProvider),
+    );
+    if (!installed || !(await pathExists(join(installed.path, "SKILL.md"))))
+      throw new DaedalusError(
+        "CONFLICT",
+        `The ${HANDOFF_SKILL} skill is not installed for ${agent.provider}. Turn it on in Settings, Skills, or with 'daedal skill enable ${HANDOFF_SKILL}'.`,
+      );
+    await this.send(agent.id, buildHandoffRequest(agent.provider, skillName));
+    // In Codex, `$name` opens the skill mention popup, and the first Enter
+    // only picks the skill from it. The second one submits. On an empty
+    // composer an Enter does nothing, so this is safe if the popup changes.
+    if (agent.provider === "codex") {
+      await Bun.sleep(CODEX_MENTION_SETTLE_MS);
+      await this.tmux.sendKeys(agent.tmuxSession, ["Enter"]);
+    }
     const requested = {
       ...agent,
       handoffRequestedAt: new Date().toISOString(),
