@@ -338,6 +338,21 @@ export function parseClaudeModelCatalog(
   );
 }
 
+/**
+ * Whether a catalog lists `model`, by id or by the model an alias resolves
+ * to. A workspace default is stored as whichever of the two the user chose,
+ * and the board picks ids while the CLI is as likely to be handed a resolved
+ * name, so both count.
+ */
+export function catalogOffersModel(
+  catalog: ProviderModelCatalog,
+  model: string,
+): boolean {
+  return catalog.models.some(
+    (entry) => entry.id === model || entry.resolvedModel === model,
+  );
+}
+
 export function modelArgument(args: string[]): string | undefined {
   for (let index = args.length - 1; index >= 0; index--) {
     const value = args[index]!;

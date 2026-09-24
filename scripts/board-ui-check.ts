@@ -371,11 +371,85 @@ try {
     "document.querySelector('.board-settings summary').textContent.includes('sonnet')",
     "the summary to name the new default model",
   );
+  // Picking a model pins the provider it was picked for, so the update
+  // carries both even though the provider select was not touched.
   const settingsCalls = await calls("workspaceUpdate");
   check(
-    settingsCalls.at(-1)?.defaultModel === "sonnet",
+    settingsCalls.at(-1)?.defaultModel === "sonnet" &&
+      settingsCalls.at(-1)?.defaultProvider === "claude",
     `workspaceUpdate got ${JSON.stringify(settingsCalls.at(-1))}`,
   );
+
+  step = "session dialog default";
+  // #26: the dialog opens on the workspace's default provider with its
+  // default model as the first option, and a different pick can be
+  // remembered as the new default on the way out. #29 is a queued card no
+  // later step touches.
+  await evaluate(`${card(29)}.querySelector('.board-start-choose').click()`);
+  await waitFor(
+    `document.querySelector('.session-model-picker select option[value=""]')?.textContent.includes('Workspace default · Sonnet')`,
+    "the session dialog to open on the workspace default",
+  );
+  check(
+    (await evaluate<string>(
+      `document.querySelector('.session-tool[aria-checked="true"] strong').textContent`,
+    )) === "Claude",
+    "the dialog did not open on the workspace's default provider",
+  );
+  check(
+    !(await evaluate<boolean>(
+      "Boolean(document.querySelector('.session-model-remember'))",
+    )),
+    "the remember checkbox shows while the choice already is the default",
+  );
+  await evaluate(`(() => {
+    const select = document.querySelector('.session-model-picker select');
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+    setter.call(select, 'opus');
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  await waitFor(
+    "document.querySelector('.session-model-remember')",
+    "the remember checkbox after picking Opus",
+  );
+  check(
+    (
+      await evaluate<string>(
+        "document.querySelector('.session-model-remember').textContent",
+      )
+    ).includes("Claude · Opus"),
+    "the remember checkbox does not name Claude · Opus",
+  );
+  const sessionDefaultShot = await screenshot("session-default");
+  await evaluate(
+    "document.querySelector('.session-model-remember input').click()",
+  );
+  const beforeRemember = (await calls("agentSpawn")).length;
+  await evaluate(
+    `[...document.querySelectorAll('.modal-form button[type="submit"]')].find((b) => b.textContent.trim() === 'Create session').click()`,
+  );
+  await waitFor(
+    `window.__boardCalls.filter((call) => call.name === 'agentSpawn').length > ${beforeRemember}`,
+    "the dialog to spawn",
+  );
+  const remembered = (await calls("workspaceUpdate")).at(-1);
+  check(
+    remembered?.defaultProvider === "claude" &&
+      remembered?.defaultModel === "opus",
+    `remembering sent ${JSON.stringify(remembered)}`,
+  );
+  const chosen = (await calls("agentSpawn"))[beforeRemember];
+  check(
+    chosen?.taskId === "task-29" &&
+      chosen?.provider === "claude" &&
+      chosen?.model === "opus",
+    `the dialog spawned ${JSON.stringify(chosen)}`,
+  );
+  // A spawn from the dialog opens the new session; the rest is board work.
+  await evaluate(
+    "[...document.querySelectorAll('.app-mode-switcher button')].find((b) => b.textContent === 'Board').click()",
+  );
+  await waitFor("document.querySelector('.board-lanes')", "the board again");
 
   step = "quick capture";
   await typeInto(".board-capture", "Write the release notes");
@@ -396,13 +470,17 @@ try {
 
   step = "waiting start, declined";
   acceptDialogs = false;
+  const spawnsBeforeStart = (await calls("agentSpawn")).length;
   await clickInCard(27, "Start ⚠");
   await Bun.sleep(200);
   check(
     dialogs.at(-1)?.includes("#25 Board rework is not done yet") ?? false,
     `the confirmation said "${dialogs.at(-1)}"`,
   );
-  check((await calls("agentSpawn")).length === 0, "a declined Start spawned");
+  check(
+    (await calls("agentSpawn")).length === spawnsBeforeStart,
+    "a declined Start spawned",
+  );
 
   step = "waiting start, accepted";
   acceptDialogs = true;
@@ -411,11 +489,14 @@ try {
     `document.querySelector('.board-lane[data-lane="running"] .board-card[data-task-number="27"]')`,
     "#27 to move to Running",
   );
-  const firstSpawn = (await calls("agentSpawn"))[0];
+  // No model travels with Start: the workspace default set above is applied
+  // by the core to every spawn of its provider that names none (#26), so the
+  // renderer holds no copy of that rule. Only an explicit pick would appear.
+  const firstSpawn = (await calls("agentSpawn"))[spawnsBeforeStart];
   check(
     firstSpawn?.taskId === "task-27" &&
       firstSpawn?.provider === "claude" &&
-      firstSpawn?.model === "sonnet",
+      firstSpawn?.model === undefined,
     `Start spawned ${JSON.stringify(firstSpawn)}`,
   );
 
@@ -990,6 +1071,7 @@ try {
     [
       wide,
       settingsShot,
+      sessionDefaultShot,
       inspector,
       journal,
       drawerShot,

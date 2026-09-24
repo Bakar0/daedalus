@@ -411,6 +411,16 @@ function BoardSettings({
     if (open && effective && !modelCatalogs[effective]) onNeedModels(effective);
   }, [effective, modelCatalogs, onNeedModels, open]);
   const catalog = effective ? modelCatalogs[effective] : undefined;
+  // Matched by id or by the model an alias resolves to, the same test the
+  // core applies before a spawn. Undefined until the catalog has loaded.
+  const defaultOffered =
+    workspace.defaultModel && catalog
+      ? catalog.models.some(
+          (model) =>
+            model.id === workspace.defaultModel ||
+            model.resolvedModel === workspace.defaultModel,
+        )
+      : undefined;
   return (
     <details
       className="board-settings"
@@ -461,19 +471,26 @@ function BoardSettings({
             aria-label="Default model for Start"
             disabled={!effective}
             onChange={(event) =>
-              onUpdate({ defaultModel: event.target.value || null })
+              // A model belongs to a provider, so picking one while the
+              // provider is still "first installed" pins that provider.
+              onUpdate(
+                event.target.value
+                  ? {
+                      defaultProvider: effective ?? null,
+                      defaultModel: event.target.value,
+                    }
+                  : { defaultModel: null },
+              )
             }
             value={workspace.defaultModel ?? ""}
           >
             <option value="">Provider default</option>
-            {workspace.defaultModel &&
-              !catalog?.models.some(
-                (model) => model.id === workspace.defaultModel,
-              ) && (
-                <option value={workspace.defaultModel}>
-                  {workspace.defaultModel}
-                </option>
-              )}
+            {workspace.defaultModel && !defaultOffered && (
+              <option value={workspace.defaultModel}>
+                {workspace.defaultModel}
+                {catalog ? " · not offered any more" : ""}
+              </option>
+            )}
             {catalog?.models.map((model) => (
               <option key={model.id} value={model.id}>
                 {model.label}
@@ -481,6 +498,13 @@ function BoardSettings({
             ))}
           </select>
         </label>
+        {workspace.defaultModel && catalog && !defaultOffered && (
+          <small className="board-settings-warning" role="alert">
+            {providerLabel(effective ?? "provider")} no longer offers{" "}
+            {workspace.defaultModel}. Start and new sessions of it refuse until
+            another model is picked or the default is cleared.
+          </small>
+        )}
         <label className="board-settings-toggle">
           <input
             checked={workspace.startSetsInProgress}

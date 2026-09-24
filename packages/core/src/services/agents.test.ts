@@ -1051,3 +1051,190 @@ describe("reboot recovery", () => {
     });
   });
 });
+
+describe("workspace default model", () => {
+  /**
+   * A stand-in `claude` that answers the model-catalog handshake with the
+   * models given and records each time it was asked, so a test can tell a
+   * cached catalog from a fresh probe. As a spawn target it is never run: the
+   * fake tmux records launches instead of starting them.
+   */
+  async function claudeCatalog(
+    home: string,
+    models: Array<{ id: string; resolvedModel: string }>,
+    options: { fail?: boolean } = {},
+  ): Promise<{ path: string; probes: () => Promise<number> }> {
+    const path = join(home, "claude-catalog");
+    const log = join(home, "claude-catalog.log");
+    const catalog = JSON.stringify({
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: "REQUEST_ID",
+        response: {
+          models: [
+            {
+              value: "default",
+              resolvedModel: "claude-opus-5",
+              displayName: "Default (recommended)",
+            },
+            ...models.map((model) => ({
+              value: model.id,
+              resolvedModel: model.resolvedModel,
+              displayName: model.id,
+            })),
+          ],
+        },
+      },
+    });
+    await Bun.write(
+      path,
+      [
+        "#!/bin/sh",
+        `printf 'probe\\n' >> ${JSON.stringify(log)}`,
+        options.fail ? "exit 1" : "",
+        "read -r line",
+        `id=$(printf '%s' "$line" | sed -E 's/.*"request_id":"([^"]+)".*/\\1/')`,
+        `printf '%s\\n' ${JSON.stringify(catalog)} | sed "s/REQUEST_ID/$id/"`,
+        "",
+      ].join("\n"),
+    );
+    await chmod(path, 0o755);
+    return {
+      path,
+      probes: async () => {
+        const file = Bun.file(log);
+        if (!(await file.exists())) return 0;
+        return (await file.text()).split("\n").filter(Boolean).length;
+      },
+    };
+  }
+
+  test("applies to spawns of its provider that name no model, and to nothing else", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const claude = await claudeCatalog(home, [
+        { id: "sonnet", resolvedModel: "claude-sonnet-5" },
+      ]);
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: {
+            claude: { executable: claude.path, args: [] },
+            codex: { executable: process.execPath, args: [] },
+          },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Defaults" });
+      await context.workspaces.update(workspace.id, {
+        defaultProvider: "claude",
+        defaultModel: "sonnet",
+      });
+      const defaulted = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "claude",
+      });
+      expect(defaulted.args.slice(0, 2)).toEqual(["--model", "sonnet"]);
+      // An explicit choice wins and is not checked against the catalog: the
+      // catalog lists aliases, not every id the provider accepts.
+      const explicit = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "claude",
+        model: "claude-opus-4-1-20250805",
+      });
+      expect(explicit.args.slice(0, 2)).toEqual([
+        "--model",
+        "claude-opus-4-1-20250805",
+      ]);
+      // The other provider gets its own default, never a Claude id.
+      const other = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      expect(other.args).not.toContain("--model");
+      // One probe served both Claude spawns: the catalog is cached.
+      expect(await claude.probes()).toBe(1);
+      context.close();
+    });
+  });
+
+  test("refuses a default the provider no longer offers, before touching disk", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const claude = await claudeCatalog(home, [
+        { id: "sonnet", resolvedModel: "claude-sonnet-5" },
+      ]);
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { claude: { executable: claude.path, args: [] } },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Stale" });
+      await context.workspaces.update(workspace.id, {
+        defaultProvider: "claude",
+        defaultModel: "opus-3",
+      });
+      await expect(
+        context.agents.spawn({ workspace: workspace.id, provider: "claude" }),
+      ).rejects.toMatchObject({
+        code: "VALIDATION",
+        message: expect.stringContaining(
+          "Workspace default model 'opus-3' is not offered by Claude any more",
+        ),
+        details: { defaultModel: "opus-3", provider: "claude" },
+      });
+      expect(tmux.launches).toHaveLength(0);
+      expect(await context.agents.list({ workspace: workspace.id })).toEqual(
+        [],
+      );
+      // The model an alias resolves to counts as offered: the CLI is as
+      // likely to be handed one as the alias itself.
+      await context.workspaces.update(workspace.id, {
+        defaultModel: "claude-sonnet-5",
+      });
+      const resolved = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "claude",
+      });
+      expect(resolved.args.slice(0, 2)).toEqual(["--model", "claude-sonnet-5"]);
+      context.close();
+    });
+  });
+
+  test("launches the default when the catalog cannot be read", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const claude = await claudeCatalog(home, [], { fail: true });
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { claude: { executable: claude.path, args: [] } },
+        }),
+      );
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux: new FakeTmux(),
+      });
+      const workspace = await context.workspaces.create({ name: "Offline" });
+      await context.workspaces.update(workspace.id, {
+        defaultProvider: "claude",
+        defaultModel: "sonnet",
+      });
+      // An unverifiable default is not a stale one.
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "claude",
+      });
+      expect(session.args.slice(0, 2)).toEqual(["--model", "sonnet"]);
+      context.close();
+    });
+  });
+});

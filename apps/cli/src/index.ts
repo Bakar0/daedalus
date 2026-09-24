@@ -227,8 +227,13 @@ const commandHelp: Record<string, string> = {
 
 The board settings are per workspace. --start-sets-in-progress (on by default)
 moves a todo or blocked task to in_progress when a session is started on it,
-from the board or from 'agent spawn --task'. --default-provider and
---default-model are what the board's Start and Start next launch with.`,
+from the board or from 'agent spawn --task'. --default-provider is what the
+board's Start and Start next launch. --default-model is what every session of
+that provider starts with when nothing names a model: Start, the session
+dialog, and 'agent spawn' without --model. It belongs to the provider, so it
+needs --default-provider and is cleared with it. A default the provider no
+longer offers makes those spawns fail, naming the fix, rather than start a
+session that cannot answer.`,
   task: `Task commands:
   daedal task create --workspace <workspace> --title <title> [--description <text> | --description-file <path|->] [--priority <priority>]
   daedal task list [--workspace <workspace>] [--status <status>]
@@ -290,6 +295,11 @@ workspace's --start-sets-in-progress setting is on, which is the default.
 --draft-brief links the session to the task but asks it to write the brief
 back with 'task update --description-file -' instead of doing the task, and
 leaves the status alone.
+
+'agent spawn' without --model starts with the workspace's default model when
+--provider is the workspace's default provider, and with the provider's own
+default otherwise. Claude's own default is the last '/model' choice made in
+any session, which is what the workspace default exists to pin down.
 
 'agent wait' blocks until a session reaches a state and then exits 0, so the
 same signal drives a shell notifier, a Slack ping or a tmux bell with no

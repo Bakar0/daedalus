@@ -13,11 +13,13 @@ import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import {
   buildAgentPrompt,
+  catalogOffersModel,
   claudeDaedalusSettingsArgs,
   ensureCodexHooks,
   CODEX_DAEDALUS_TUI_ARGS,
   discoverProviderModels,
   modelArgument,
+  type ProviderModelCatalog,
   resolveAgentExecutable,
   resolveProvider,
 } from "./providers";
@@ -58,6 +60,10 @@ const REVIVE_LOCK_STALE_MS = 10 * 60_000;
 // for the provider's own sentence — "No conversation found with session ID" is
 // the whole answer — without pasting a terminal onto a session card.
 const LOST_REASON_OUTPUT_LIMIT = 200;
+// How long a provider's model catalog is trusted before a spawn asks for it
+// again. Discovery is a provider subprocess, about a second for Claude, and
+// the catalog only changes when the account or the provider build does.
+const MODEL_CATALOG_TTL_MS = 10 * 60_000;
 
 /**
  * What to put on the card when a revive failed. A provider that refused to
@@ -589,8 +595,74 @@ export class AgentService {
     };
   }
 
-  async models(provider: "codex" | "claude") {
-    return discoverProviderModels(this.config, provider);
+  private readonly modelCatalogs = new Map<
+    "codex" | "claude",
+    { fetchedAt: number; catalog: ProviderModelCatalog }
+  >();
+
+  async models(provider: "codex" | "claude"): Promise<ProviderModelCatalog> {
+    const catalog = await discoverProviderModels(this.config, provider);
+    this.modelCatalogs.set(provider, { fetchedAt: Date.now(), catalog });
+    return catalog;
+  }
+
+  /**
+   * The provider's catalog for checking a default against, reusing the one
+   * the app loaded for its picker when it is recent enough. A catalog that
+   * cannot be read at all resolves to undefined: an unverifiable default is
+   * not a stale one.
+   */
+  private async knownModels(
+    provider: "codex" | "claude",
+  ): Promise<ProviderModelCatalog | undefined> {
+    const cached = this.modelCatalogs.get(provider);
+    if (cached && Date.now() - cached.fetchedAt < MODEL_CATALOG_TTL_MS)
+      return cached.catalog;
+    try {
+      return await this.models(provider);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * The `--model` a new session starts with.
+   *
+   * An explicit choice wins. Otherwise the workspace's default model applies
+   * when this is the provider it was set for, and nothing is passed for any
+   * other provider, which then uses its own default. The workspace default
+   * exists because a provider's own default drifts: Claude writes the last
+   * `/model` choice from any session into the user's settings, so "default"
+   * there means "whatever the previous session ended on".
+   *
+   * A stored default outlives the catalog it was picked from, so it is
+   * checked against the live catalog before launch and refused, with the way
+   * to fix it, rather than starting a session whose every turn would fail.
+   * An explicit model is never checked: the user typed it, and the catalog
+   * lists aliases, not every id the provider accepts.
+   */
+  private async launchModel(
+    workspace: Workspace,
+    provider: "claude" | "codex" | "custom",
+    requested: string | undefined,
+  ): Promise<string | undefined> {
+    const explicit = requested?.trim();
+    if (explicit) return explicit;
+    const defaultModel = workspace.defaultModel;
+    if (
+      !defaultModel ||
+      provider === "custom" ||
+      workspace.defaultProvider !== provider
+    )
+      return undefined;
+    const catalog = await this.knownModels(provider);
+    if (catalog && !catalogOffersModel(catalog, defaultModel))
+      throw new DaedalusError(
+        "VALIDATION",
+        `Workspace default model '${defaultModel}' is not offered by ${provider === "claude" ? "Claude" : "Codex"} any more. Choose another with 'daedal workspace update ${workspace.slug} --default-model <model>|none' or pass --model.`,
+        { workspaceId: workspace.id, provider, defaultModel },
+      );
+    return defaultModel;
   }
 
   async spawn(input: {
@@ -648,6 +720,11 @@ export class AgentService {
           `Agent executable '${availability.executable}' is not available on PATH`,
         );
     }
+    // Resolved before anything is prepared on disk, so a default the
+    // provider no longer offers refuses here and leaves no worktree behind.
+    const model = provider
+      ? await this.launchModel(workspace, provider.name, input.model)
+      : undefined;
     const id = crypto.randomUUID();
     const defaultName = input.terminal
       ? "Terminal"
@@ -677,7 +754,7 @@ export class AgentService {
           sessionId: id,
           sessionName: name,
           prompt: launchPrompt,
-          model: input.model,
+          model,
           additionalDirectories: prepared.references.map(
             (repository) =>
               repository.referencePath ?? repository.canonicalPath,

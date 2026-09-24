@@ -1555,6 +1555,22 @@ button:not(
   grid-column: 1 / -1;
   line-height: 1.35;
 }
+.session-model-remember {
+  align-items: center;
+  color: var(--muted);
+  display: flex !important;
+  flex-direction: row !important;
+  font-size: 11px;
+  gap: 8px;
+  margin-top: 8px;
+}
+.session-model-remember input {
+  margin: 0;
+}
+.session-model-remember strong {
+  color: var(--secondary);
+  font-weight: 600;
+}
 .session-tool-icon.tool-claude {
   color: #d97757;
 }
@@ -4091,6 +4107,11 @@ dd {
   color: var(--secondary);
   display: flex;
   gap: 7px;
+}
+.board-settings-warning {
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 /* Compact width hides the detail line, which is the one thing on a session

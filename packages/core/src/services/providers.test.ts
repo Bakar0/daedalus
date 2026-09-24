@@ -5,6 +5,7 @@ import { loadConfig } from "../config";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { saveSkillOverride } from "../config";
 import {
+  catalogOffersModel,
   claudeDaedalusSettingsArgs,
   ensureCodexHooks,
   isValidModelName,
@@ -103,6 +104,24 @@ describe("modelArgument", () => {
     expect(modelArgument(["--model", "opus"])).toBe("opus");
     expect(modelArgument(["-m", "first", "--model=second"])).toBe("second");
     expect(modelArgument([])).toBeUndefined();
+  });
+});
+
+describe("catalogOffersModel", () => {
+  test("matches a catalog id or the model an alias resolves to", () => {
+    const catalog = {
+      provider: "claude" as const,
+      source: "provider" as const,
+      models: [
+        { id: "sonnet", label: "Sonnet", resolvedModel: "claude-sonnet-5" },
+        { id: "gpt-5-codex", label: "GPT-5 Codex" },
+      ],
+    };
+    expect(catalogOffersModel(catalog, "sonnet")).toBe(true);
+    expect(catalogOffersModel(catalog, "claude-sonnet-5")).toBe(true);
+    expect(catalogOffersModel(catalog, "gpt-5-codex")).toBe(true);
+    expect(catalogOffersModel(catalog, "opus")).toBe(false);
+    expect(catalogOffersModel(catalog, "Sonnet")).toBe(false);
   });
 });
 
