@@ -476,6 +476,12 @@ export function createDesktopRequestHandlers(
       mutate(async () => agentDto(await context.agents.restore(id))),
     agentRevive: ({ id }) =>
       mutate(async () => agentDto(await context.agents.reviveLost(id))),
+    agentRequestHandoff: ({ id }) =>
+      mutate(async () => agentDto(await context.agents.requestHandoff(id))),
+    agentContinue: ({ id }) =>
+      mutate(async () =>
+        agentDto((await context.agents.continueSession({ id })).session),
+      ),
     terminalCreate: (params) =>
       mutate(async () =>
         integratedTerminalDto(await context.terminals.create(params)),

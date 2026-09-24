@@ -21,6 +21,8 @@ export interface WorkspaceDto {
   position: number;
   /** Start on a board card moves a `todo` or `blocked` task to `in_progress`. */
   startSetsInProgress: boolean;
+  /** Context percent that triggers an automatic handoff; null is off. */
+  autoHandoffPercent: number | null;
   /** What Start and Start next launch with; null leaves it to the app. */
   defaultProvider: "claude" | "codex" | null;
   /** A provider model id, or null for that provider's default. */
@@ -78,6 +80,8 @@ export interface AgentSessionDto {
    * come back have to say what is wrong rather than look like the rest.
    */
   lostReason: string | null;
+  /** Set once a handoff was requested, by the user or the automatic sweep. */
+  handoffRequestedAt: string | null;
   /** Manual list order within the workspace, ascending. */
   position: number;
 }
@@ -511,6 +515,8 @@ export interface DesktopRpcSchema {
           name?: string;
           slug?: string;
           startSetsInProgress?: boolean;
+          /** 10 to 100, or null to turn automatic handoff off. */
+          autoHandoffPercent?: number | null;
           defaultProvider?: "claude" | "codex" | null;
           defaultModel?: string | null;
         },
@@ -791,6 +797,17 @@ export interface DesktopRpcSchema {
        * prompt with its history loaded.
        */
       agentRevive: Request<{ id: string }, AgentSessionDto>;
+      /**
+       * Asks a running agent to write a handoff note and continue its work
+       * in a fresh session. The agent does the rest, so the new session
+       * appears once it has written the note.
+       */
+      agentRequestHandoff: Request<{ id: string }, AgentSessionDto>;
+      /**
+       * Continues a session's work in a fresh one without a handoff note, for
+       * an agent too far gone to write one. Returns the new session.
+       */
+      agentContinue: Request<{ id: string }, AgentSessionDto>;
       terminalCreate: Request<
         { workspace?: string; name?: string; workingDirectory?: string },
         IntegratedTerminalDto

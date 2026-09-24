@@ -86,6 +86,7 @@ function addSession(
     archivedAt: null,
     resumeCount: 0,
     lostReason: null,
+    handoffRequestedAt: null,
     resumeOnStart: false,
     position: context.repositories.nextAgentPosition(input.workspaceId),
   };

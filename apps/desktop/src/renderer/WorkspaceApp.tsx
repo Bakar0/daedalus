@@ -416,6 +416,26 @@ function PanelCollapseButton({
   );
 }
 
+/** A baton passing forward: the work continues with someone new. */
+function HandoffIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="handoff-icon"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <path d="M3 12h9" />
+      <path d="M9 8l4 4-4 4" />
+      <rect height="14" rx="2.5" width="6" x="15" y="5" />
+    </svg>
+  );
+}
+
 function ArchiveIcon() {
   return (
     <svg
@@ -2604,6 +2624,25 @@ export function WorkspaceApp({
   const activeSession = activeSessions.find(
     (item) => item.id === activeSessionId,
   );
+  // A session that was asked to hand off, by a click or by the automatic
+  // sweep, is followed to its successor: the fresh session in the same
+  // working directory that started after the request. Looked up across the
+  // archived sessions too, because the successor arrives and the
+  // predecessor is archived within the same second.
+  const viewedHandoff = workspaceSessions.find(
+    (item) => item.id === activeSessionId && item.handoffRequestedAt,
+  );
+  const handoffSuccessor = viewedHandoff
+    ? activeSessions.find(
+        (item) =>
+          item.id !== viewedHandoff.id &&
+          item.workingDirectory === viewedHandoff.workingDirectory &&
+          item.startedAt >= viewedHandoff.handoffRequestedAt!,
+      )
+    : undefined;
+  useEffect(() => {
+    if (handoffSuccessor) openSession(handoffSuccessor.id);
+  }, [handoffSuccessor, openSession]);
   const activeSessionTelemetry = snapshot?.sessionTelemetry.find(
     (item) => item.sessionId === activeSession?.id,
   );
@@ -3588,6 +3627,20 @@ export function WorkspaceApp({
       if (activeSessionId === session.id) setActiveSessionId(undefined);
       setSessionAction(undefined);
     }
+  }
+
+  // The button runs the same thing as `/daedalus-handoff`: a running agent
+  // is asked to write its note and continue itself; a session that cannot
+  // answer gets its successor straight away, working from brief and git.
+  async function continueInNewAgent(session: AgentSessionDto) {
+    if (session.status === "running") {
+      await perform(client.request.agentRequestHandoff({ id: session.id }));
+      return;
+    }
+    const successor = await perform(
+      client.request.agentContinue({ id: session.id }),
+    );
+    if (successor) openSession(successor.id);
   }
 
   async function restoreSession(session: AgentSessionDto) {
@@ -5137,15 +5190,40 @@ export function WorkspaceApp({
                           ↻
                         </button>
                       )}
-                      <button
-                        aria-label={`Archive ${sessionName(session)} session`}
-                        className="session-card-action"
-                        data-no-drag
-                        onClick={() => setSessionAction({ session })}
-                        title="Archive session"
-                      >
-                        <ArchiveIcon />
-                      </button>
+                      <span className="workspace-card-actions" data-no-drag>
+                        {session.kind === "agent" &&
+                          (session.provider === "claude" ||
+                            session.provider === "codex") && (
+                            <button
+                              aria-label={`Continue ${sessionName(session)} in a new agent`}
+                              className="session-card-action session-handoff-action"
+                              data-handoff-requested={
+                                session.handoffRequestedAt ? "true" : undefined
+                              }
+                              disabled={busy}
+                              onClick={() => void continueInNewAgent(session)}
+                              title={
+                                session.handoffRequestedAt
+                                  ? "Handoff requested; the agent is writing its note. Click to ask again."
+                                  : session.status === "running"
+                                    ? "Continue in a new agent: this one writes a handoff note, then a fresh agent with an empty context takes over in the same working directory"
+                                    : "Continue in a new agent: a fresh agent takes over in the same working directory, working from the brief, the journal and git"
+                              }
+                              type="button"
+                            >
+                              <HandoffIcon />
+                            </button>
+                          )}
+                        <button
+                          aria-label={`Archive ${sessionName(session)} session`}
+                          className="session-card-action"
+                          onClick={() => setSessionAction({ session })}
+                          title="Archive session"
+                          type="button"
+                        >
+                          <ArchiveIcon />
+                        </button>
+                      </span>
                     </div>
                   );
                 })}

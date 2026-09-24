@@ -1,4 +1,8 @@
-import { ensureDirectory, findExecutable } from "@daedalus/platform";
+import {
+  ensureDirectory,
+  findExecutable,
+  standardExecutableFallbacks,
+} from "@daedalus/platform";
 import { runCommand } from "@daedalus/platform";
 import { rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -512,10 +516,16 @@ const STANDARD_CODEX_EXECUTABLES = new Set([
   "/usr/local/bin/codex",
 ]);
 
+// The app is launched by Launch Services with no Homebrew on PATH, which is
+// where `claude` lives. Codex has the ChatGPT bundle to fall back on; a bare
+// name for any other provider is looked up in the standard directories too.
+const findProviderExecutable = (value: string): string | undefined =>
+  findExecutable(value, standardExecutableFallbacks(value));
+
 export function resolveAgentExecutable(
   name: string,
   executable: string,
-  finder: (value: string) => string | undefined = findExecutable,
+  finder: (value: string) => string | undefined = findProviderExecutable,
   platform = process.platform,
 ): string | undefined {
   if (
@@ -566,6 +576,12 @@ class ConfiguredProvider implements AgentProvider {
       );
     if (this.promptArgument && this.name === "codex") {
       args.push(...CODEX_DAEDALUS_TUI_ARGS);
+      // Codex's sandbox lets a session write only inside its working
+      // directory. Every `daedal` command that changes state writes the
+      // SQLite database under the Daedalus home, so without this one
+      // `daedal attention` or `agent continue` fails with "attempt to write a
+      // readonly database" whenever the reviewer keeps it sandboxed.
+      if (this.config) args.push("--add-dir", this.config.home);
       if (this.config)
         args.push(
           ...(await ensureCodexHooks(
@@ -660,12 +676,60 @@ export function sessionLaunchModel(
   return undefined;
 }
 
+/** Where a handoff note lives: the working directory both sessions share. */
+export const HANDOFF_FILE = "HANDOFF.md";
+
+/**
+ * The name a handoff's successor takes: the same name with a generation
+ * counter, so the two cards are told apart and a third handoff reads `· 3`
+ * rather than growing a second suffix.
+ */
+export function handoffSessionName(name: string): string {
+  const match = /^(.*) · (\d+)$/.exec(name);
+  return match ? `${match[1]} · ${Number(match[2]) + 1}` : `${name} · 2`;
+}
+
+/** The skill every handoff runs, whoever asks for it. */
+export const HANDOFF_SKILL = "daedalus-handoff";
+
+/**
+ * What a running agent is sent to start a handoff: its provider's way of
+ * invoking the handoff skill, and nothing else. The instructions live in the
+ * skill alone, so the button, the automatic threshold and a typed
+ * `/daedalus-handoff` all do the same thing.
+ *
+ * `skillName` carries the channel suffix a dev build installs it under.
+ */
+export function buildHandoffRequest(
+  provider: "claude" | "codex",
+  skillName: string,
+): string {
+  return provider === "claude" ? `/${skillName}` : `$${skillName}`;
+}
+
 export function buildAgentPrompt(input: {
   taskNumber?: number;
   message?: string;
-  /** `draft-brief` asks for the brief to be written back, not the work done. */
-  mode?: "execute" | "draft-brief";
+  /**
+   * `draft-brief` asks for the brief to be written back, not the work done.
+   * `continue` starts a session that picks up where an earlier one stopped,
+   * in the same working directory; `daedalus-handoff` says whether it left a note.
+   */
+  mode?: "execute" | "draft-brief" | "continue";
+  handoff?: boolean;
 }): string | undefined {
+  if (input.mode === "continue") {
+    const work = input.taskNumber ? `task #${input.taskNumber}` : "the work";
+    const source = input.handoff
+      ? `It left a handoff note in ${HANDOFF_FILE} in your working directory. Read that first, then check the worktree's actual state with git before relying on it.`
+      : "It left no handoff note, so rebuild the picture from the task brief, JOURNAL.md and the worktree's git state and history.";
+    return [
+      `Continue ${work}. An earlier session worked on it in this same working directory and stopped because its context was full. ${source} Do not redo finished work; carry on to completion.`,
+      input.message?.trim() || undefined,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+  }
   const taskInstruction = !input.taskNumber
     ? undefined
     : input.mode === "draft-brief"

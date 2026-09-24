@@ -89,6 +89,7 @@ export interface BoardViewProps {
   onMarkDone: (task: TaskDto) => void;
   onUpdateSettings: (changes: {
     startSetsInProgress?: boolean;
+    autoHandoffPercent?: number | null;
     defaultProvider?: BoardProvider | null;
     defaultModel?: string | null;
   }) => void;
@@ -383,6 +384,11 @@ function AnswerBox({
   );
 }
 
+/** Where the checkbox lands when first ticked. Late enough to get real work
+ * out of a session, early enough that the note is written before the window
+ * fills. */
+const DEFAULT_AUTO_HANDOFF_PERCENT = 85;
+
 function BoardSettings({
   availableProviders,
   modelCatalogs,
@@ -506,6 +512,36 @@ function BoardSettings({
             type="checkbox"
           />
           Start moves the task to in progress
+        </label>
+        <label className="board-settings-toggle">
+          <input
+            checked={workspace.autoHandoffPercent !== null}
+            onChange={(event) =>
+              onUpdate({
+                autoHandoffPercent: event.target.checked
+                  ? DEFAULT_AUTO_HANDOFF_PERCENT
+                  : null,
+              })
+            }
+            type="checkbox"
+          />
+          Hand off to a new agent at
+          <input
+            aria-label="Context percent that triggers a handoff"
+            className="board-settings-percent"
+            disabled={workspace.autoHandoffPercent === null}
+            max={100}
+            min={10}
+            onChange={(event) => {
+              const value = Number(event.target.value);
+              if (Number.isInteger(value) && value >= 10 && value <= 100)
+                onUpdate({ autoHandoffPercent: value });
+            }}
+            step={5}
+            type="number"
+            value={workspace.autoHandoffPercent ?? DEFAULT_AUTO_HANDOFF_PERCENT}
+          />
+          % context
         </label>
       </div>
     </details>

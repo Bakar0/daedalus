@@ -47,6 +47,7 @@ const snapshot: DesktopSnapshotDto = {
       available: true,
       position: 1,
       startSetsInProgress: true,
+      autoHandoffPercent: null,
       defaultProvider: null,
       defaultModel: null,
     },

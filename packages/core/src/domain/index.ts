@@ -24,6 +24,11 @@ export interface Workspace {
    * one status change the app makes for them; on by default.
    */
   startSetsInProgress: boolean;
+  /**
+   * Context share, in percent, at which a session is asked to hand off to a
+   * fresh one. Null is off.
+   */
+  autoHandoffPercent: number | null;
   /** What Start and Start next launch when the user does not choose. */
   defaultProvider: "claude" | "codex" | null;
   /**
@@ -86,6 +91,8 @@ export interface AgentSession {
    * that a pause rather than a farewell: see `migrations/014_quit_resume.sql`.
    */
   resumeOnStart: boolean;
+  /** When this session was last asked to hand its work to a fresh one. */
+  handoffRequestedAt: string | null;
   /** Where the user put this session within its workspace. See `Workspace`. */
   position: number;
 }

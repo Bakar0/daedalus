@@ -2540,6 +2540,12 @@ export class WorkspaceContentService {
     workspace: Workspace;
     task?: Task;
     sessionId: string;
+    /**
+     * An existing directory to reuse instead of a new one. A session that
+     * continues another's work runs where its predecessor did, so the
+     * worktrees already in that directory stay where they are.
+     */
+    workingDirectory?: string;
   }): Promise<{
     workingDirectory: string;
     worktrees: SessionWorktree[];
@@ -2556,12 +2562,9 @@ export class WorkspaceContentService {
     const group = input.task
       ? `${pathSegment(input.task.id, "task").slice(0, 12)}-${pathSegment(input.task.title, "task")}`
       : "unassigned";
-    const workingDirectory = join(
-      input.workspace.path,
-      "worktrees",
-      group,
-      input.sessionId,
-    );
+    const workingDirectory =
+      input.workingDirectory ??
+      join(input.workspace.path, "worktrees", group, input.sessionId);
     await ensureDirectory(workingDirectory);
     await ensureSessionInstructionFiles(
       workingDirectory,

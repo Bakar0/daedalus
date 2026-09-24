@@ -468,6 +468,12 @@ button:not(
 .workspace-terminal-action:focus-visible {
   opacity: 1;
 }
+/* A requested handoff stays visible on the button until the successor takes
+   over and this card is archived. */
+.session-handoff-action[data-handoff-requested] {
+  color: var(--accent) !important;
+}
+.session-handoff-action svg,
 .workspace-terminal-action svg {
   display: block;
   height: 16px;
@@ -4112,6 +4118,9 @@ dd {
   color: var(--danger);
   font-size: 11px;
   line-height: 1.35;
+}
+.board-settings-percent {
+  width: 52px;
 }
 
 /* Compact width hides the detail line, which is the one thing on a session

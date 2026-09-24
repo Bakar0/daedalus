@@ -294,6 +294,24 @@ describe("buildLaunch permission mode", () => {
     });
   });
 
+  test("a Codex session can write the Daedalus home, and a Claude one is not sandboxed", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await isolated(home);
+      const codex = await resolveProvider(config, {
+        provider: "codex",
+      }).adapter.buildLaunch({});
+      // Without it every `daedal` write from inside the sandbox fails with
+      // "attempt to write a readonly database".
+      const at = codex.args.lastIndexOf(config.home);
+      expect(at).toBeGreaterThan(-1);
+      expect(codex.args[at - 1]).toBe("--add-dir");
+      const claude = await resolveProvider(config, {
+        provider: "claude",
+      }).adapter.buildLaunch({});
+      expect(claude.args).not.toContain(config.home);
+    });
+  });
+
   test("inherit spawns neither provider with a mode argument", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const config = await isolated(home);

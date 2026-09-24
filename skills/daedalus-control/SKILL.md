@@ -86,6 +86,10 @@ list`, `repo list`, or `agent list`.
   `--draft-brief`. Hand long briefs over with `task update <ref>
 --description-file <path>`, or `-` for stdin, rather than quoting them into
   `--description`.
+- When your context is nearly full, or you are asked to hand off, use the
+  handoff skill (`/daedalus-handoff`). It writes the note and runs `daedal agent
+continue`, which starts a fresh session on the same task, working directory
+  and worktrees and archives yours once the command exits.
 - Use `agent send` for literal follow-up text. `agent attach` is interactive and
   is unsuitable for machine-readable automation.
 - Prefer `agent archive` over `stop` plus `remove` when preserving the provider

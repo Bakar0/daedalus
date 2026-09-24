@@ -53,6 +53,7 @@ const session = (
   archivedAt: null,
   resumeCount: 0,
   lostReason: null,
+  handoffRequestedAt: null,
   position: 0,
   ...overrides,
 });
