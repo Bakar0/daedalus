@@ -621,6 +621,53 @@ try {
     "!document.querySelector('.task-drawer')",
     "the close button to close the drawer",
   );
+  // A press outside the drawer and the cards closes it; one on a card, or
+  // inside the drawer, does not.
+  const pressAt = async (x: number, y: number) => {
+    for (const type of ["mousePressed", "mouseReleased"])
+      await send("Input.dispatchMouseEvent", {
+        type,
+        button: "left",
+        buttons: type === "mousePressed" ? 1 : 0,
+        clickCount: 1,
+        x,
+        y,
+      });
+    await Bun.sleep(120);
+  };
+  const pointIn = (selector: string) =>
+    evaluate<{ x: number; y: number }>(
+      `(() => { const box = ${selector}.getBoundingClientRect(); return { x: box.left + box.width / 2, y: box.top + 12 }; })()`,
+    );
+  await evaluate(`${card(24)}.click()`);
+  await waitFor("document.querySelector('.task-drawer')", "the drawer to open");
+  await Bun.sleep(300);
+  const insideDrawer = await pointIn(
+    "document.querySelector('.task-drawer .task-brief h2')",
+  );
+  await pressAt(insideDrawer.x, insideDrawer.y);
+  check(
+    await evaluate<boolean>("Boolean(document.querySelector('.task-drawer'))"),
+    "a press inside the drawer closed it",
+  );
+  const onCard = await pointIn(
+    `${card(25)}.querySelector('.board-card-title')`,
+  );
+  await pressAt(onCard.x, onCard.y);
+  check(
+    await evaluate<boolean>(
+      "document.querySelector('.task-drawer h2')?.textContent.includes('#25') ?? false",
+    ),
+    "a click on another card did not swap the drawer to it",
+  );
+  const header = await pointIn(
+    "document.querySelector('.workspace-main-header h1')",
+  );
+  await pressAt(header.x, header.y);
+  await waitFor(
+    "!document.querySelector('.task-drawer')",
+    "a press outside the drawer to close it",
+  );
 
   step = "repositories";
   // The right column is the workspace's: the repositories with the working

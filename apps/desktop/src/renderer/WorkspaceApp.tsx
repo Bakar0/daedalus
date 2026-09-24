@@ -2030,8 +2030,10 @@ export function WorkspaceApp({
     };
   }, [client, dataRevision, view, workspaceId]);
 
-  // Escape closes the task drawer, unless it is being edited, a dialog is on
-  // top of it, or the key belongs to a field.
+  // Escape, or a press anywhere outside the drawer, closes the task drawer,
+  // unless it is being edited (an unsaved brief is not lost to a stray click)
+  // or a dialog is on top of it. A press on a card leaves it open, because
+  // the card's own click swaps the drawer to that task.
   useEffect(() => {
     if (view !== "board" || !selectedTaskId || editingTask || modal) return;
     const onKey = (event: KeyboardEvent) => {
@@ -2040,8 +2042,19 @@ export function WorkspaceApp({
       if (target?.closest("input, textarea, select, [contenteditable]")) return;
       setSelectedTaskId(undefined);
     };
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      const target = event.target as Element | null;
+      if (!target?.isConnected) return;
+      if (target.closest(".task-drawer, .board-card, .modal-backdrop")) return;
+      setSelectedTaskId(undefined);
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("pointerdown", onPointerDown);
+    };
   }, [editingTask, modal, selectedTaskId, view]);
 
   const clearAttention = useCallback(
