@@ -64,6 +64,14 @@ async function withBoardContext(
     const context = await createApplicationContext({
       env: { DAEDALUS_HOME: home, CODEX_HOME: join(home, "codex") },
       tmux,
+      // A raised badge alerts, and with no app running that would reach the
+      // real notifier: a notification on screen per raise, and on a CI runner
+      // an `osascript` call that can outlast the test's timeout.
+      sendNativeNotification: async () => ({
+        delivered: true,
+        backend: "terminal-notifier" as const,
+        degraded: false,
+      }),
     });
     try {
       await run(context, tmux);

@@ -767,6 +767,14 @@ describe("reboot recovery", () => {
       const context = await createApplicationContext({
         env: { DAEDALUS_HOME: home },
         tmux,
+        // Raising the badge also alerts, and with no app running that goes to
+        // the real notifier. `osascript` on a CI runner can take longer than
+        // the whole test budget, and locally it pops a notification.
+        sendNativeNotification: async () => ({
+          delivered: true,
+          backend: "terminal-notifier" as const,
+          degraded: false,
+        }),
       });
       const workspace = await context.workspaces.create({ name: "Blocked" });
       const session = await context.agents.spawn({
