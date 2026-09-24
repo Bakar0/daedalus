@@ -175,7 +175,15 @@ minimised or occluded window, so the host checks on every tick and, once the
 window has been quiet for five seconds, publishes in its place as a running app
 in the background. That keeps a CLI handing alerts to the app rather than
 reading silence as "no app" and shouting them through AppleScript under Script
-Editor's name; only a quit or crashed app goes silent. Routing:
+Editor's name; only a quit or crashed app goes silent.
+
+The heartbeat also needs the host's timers to run at all. macOS App Nap
+throttles a backgrounded app's timers once its window is hidden, occluded or
+behind a sleeping display; the host's 1.2 s timers were observed firing once
+every one to two minutes in that state, which read as "no app" for the whole
+gap. The bundle opts out with `LSAppNapIsDisabled` in its Info.plist. Electrobun
+writes that file from a fixed template, so `scripts/bundle-plist.ts` adds the
+key after every build. Routing:
 
 | Where the user is                        | Channel                                     |
 | ---------------------------------------- | ------------------------------------------- |

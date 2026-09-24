@@ -120,7 +120,8 @@ export class PresenceService {
   }
 
   /**
-   * The host's own heartbeat, called on every change-check tick.
+   * The host's own heartbeat, called by the host every 1.2 s on a timer of
+   * its own.
    *
    * Only the window knows where the user is looking, but only the host knows
    * whether the app is up. Leaving the heartbeat to the window conflated the

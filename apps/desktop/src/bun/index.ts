@@ -521,16 +521,23 @@ if (nativeStatusProbePath) {
     })();
   });
 }
+// The window's heartbeat stops with its timers, whether it is closed,
+// minimised or throttled. A CLI that reads that silence as "no app" falls
+// back to AppleScript, which macOS attributes to Script Editor. The host
+// stands in so alerts keep being handed over and delivered as Daedalus.
+//
+// This runs on its own timer, not inside the change check below: that check
+// skips a tick while the previous one is still running, so one slow tmux call
+// there would silence the heartbeat for exactly as long as it took.
+setInterval(() => {
+  void context.presence.keepAlive().catch(() => undefined);
+}, 1_200);
+
 let checkingForExternalChanges = false;
 setInterval(async () => {
   if (checkingForExternalChanges) return;
   checkingForExternalChanges = true;
   try {
-    // The window's heartbeat stops with its timers, whether it is closed,
-    // minimised or throttled. A CLI that reads that silence as "no app" falls
-    // back to AppleScript, which macOS attributes to Script Editor. The host
-    // stands in so alerts keep being handed over and delivered as Daedalus.
-    await context.presence.keepAlive();
     // Reconciliation updates stale sessions; SQLite fingerprinting also catches
     // mutations performed by another process such as the CLI.
     await Promise.all([
