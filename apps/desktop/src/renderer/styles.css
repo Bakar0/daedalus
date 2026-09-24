@@ -4592,6 +4592,40 @@ dd {
   background: var(--raised-hover);
 }
 
+/* The drawer's action bar (#34): under the pills, above the brief. The
+   primary action comes first and reads in the accent; the rest are quiet.
+   Buttons are a step larger than the card's, since the drawer has the room. */
+.task-action-bar {
+  display: grid;
+  gap: 8px;
+  margin: -6px 0 18px;
+}
+.task-action-buttons {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.task-action-buttons > button,
+.task-action-buttons > .board-start-group > button {
+  font-size: 12px !important;
+  padding: 5px 11px !important;
+}
+.task-action-buttons > .quiet {
+  border-color: var(--line);
+}
+.task-action-buttons > .quiet:hover:not(:disabled) {
+  border-color: var(--line-strong);
+}
+.task-action-buttons > .board-start-group > .board-start-choose {
+  padding-left: 7px !important;
+  padding-right: 7px !important;
+}
+.task-action-bar > .board-launch-row {
+  font-size: 12px;
+  padding: 0 2px;
+}
+
 /* The overflow trigger matches the close button beside it. */
 .task-actions-trigger {
   align-items: center;

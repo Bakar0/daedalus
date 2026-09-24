@@ -811,6 +811,115 @@ try {
     todoLane === "queued",
     `#${queuedNumber} is in ${todoLane} after To do, not queued`,
   );
+  step = "drawer action bar";
+  // #34: the row under the pills does what the card does. #29 is queued with
+  // an empty brief and no dependencies, so it offers Start and Draft brief;
+  // Start spawns with the workspace default, the drawer stays on the task,
+  // and the bar turns into the running agent's actions.
+  const bar = `document.querySelector('.task-drawer .task-action-bar')`;
+  const barButtons = () =>
+    evaluate<string[]>(
+      `[...(${bar}?.querySelectorAll('button') ?? [])].map((button) => button.textContent.trim())`,
+    );
+  await evaluate(`${card(29)}.click()`);
+  await waitFor(
+    "document.querySelector('.task-drawer h2')?.textContent.includes('#29')",
+    "the drawer to swap to #29",
+  );
+  const queuedBar = await evaluate<{
+    present: boolean;
+    belowPills: boolean;
+    aboveBrief: boolean;
+  }>(`(() => {
+    const drawer = document.querySelector('.task-drawer');
+    const bar = ${bar};
+    const pills = drawer.querySelector('.task-meta').getBoundingClientRect();
+    const brief = drawer.querySelector('.task-brief .brief-placeholder').getBoundingClientRect();
+    const box = bar?.getBoundingClientRect();
+    return {
+      present: Boolean(bar),
+      belowPills: box ? box.top >= pills.bottom : false,
+      aboveBrief: box ? box.bottom <= brief.top : false,
+    };
+  })()`);
+  check(queuedBar.present, "the drawer has no action bar");
+  check(queuedBar.belowPills, "the action bar is not under the pills");
+  check(queuedBar.aboveBrief, "the action bar is not above the brief");
+  const queuedButtons = await barButtons();
+  check(
+    queuedButtons.join(",") === "Start,▾,Draft brief",
+    `the queued task's bar lists ${queuedButtons.join(", ")}`,
+  );
+  const queuedBarShot = await screenshot("drawer-action-bar-queued");
+  const spawnsBefore = (await calls("agentSpawn")).length;
+  await evaluate(`${bar}.querySelector('.board-start').click()`);
+  await waitFor(
+    `window.__boardCalls.filter((call) => call.name === 'agentSpawn').length > ${spawnsBefore}`,
+    "Start in the drawer to spawn",
+  );
+  const drawerSpawn = (await calls("agentSpawn")).at(-1);
+  check(
+    drawerSpawn?.taskId === "task-29" && drawerSpawn?.provider === "claude",
+    `Start in the drawer spawned ${JSON.stringify(drawerSpawn)}`,
+  );
+  check(
+    await evaluate<boolean>(
+      "document.querySelector('.task-drawer h2')?.textContent.includes('#29') ?? false",
+    ),
+    "Start in the drawer closed or swapped the drawer",
+  );
+  await waitFor(
+    `${statusPill}.textContent.trim() === 'In progress'`,
+    "the status pill to follow the start",
+  );
+  await waitFor(
+    `${bar}?.querySelector('button')?.textContent.trim() === 'Open terminal'`,
+    "the bar to offer the running agent's terminal",
+  );
+  const runningButtons = await barButtons();
+  check(
+    runningButtons.join(",") === "Open terminal,Second opinion",
+    `the running task's bar lists ${runningButtons.join(", ")}`,
+  );
+  const startedLane = await laneOf(29);
+  check(
+    startedLane === "running",
+    `#29 is in ${startedLane} after Start, not running`,
+  );
+  const actionBarShot = await screenshot("drawer-action-bar");
+
+  // #20 was marked done above and sits in collapsed Done. Its worktree and
+  // PR are still its output, so the bar keeps offering them; Mark done and a
+  // second opinion are gone with the review.
+  const doneToggle = `document.querySelector('.board-lane[data-lane="done"] .board-lane-toggle')`;
+  await evaluate(`${doneToggle}.click()`);
+  await waitFor(card(20), "Done to expand");
+  await evaluate(`${card(20)}.click()`);
+  await waitFor(
+    "document.querySelector('.task-drawer h2')?.textContent.includes('#20')",
+    "the drawer to swap to #20",
+  );
+  const doneButtons = await barButtons();
+  check(
+    doneButtons.join(",") === "Open worktree,Open PR #20",
+    `the done task's bar lists ${doneButtons.join(", ")}`,
+  );
+  const outputBefore = (await calls("sessionWorktreeOpen")).length;
+  await evaluate(
+    `[...${bar}.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Open worktree').click()`,
+  );
+  await waitFor(
+    `window.__boardCalls.filter((call) => call.name === 'sessionWorktreeOpen').length > ${outputBefore}`,
+    "Open worktree in the drawer to call through",
+  );
+  check(
+    (await calls("sessionWorktreeOpen")).at(-1)?.session === "s-20",
+    "Open worktree in the drawer did not ask for #20's worktree",
+  );
+  const doneBarShot = await screenshot("drawer-action-bar-done");
+  await evaluate(`${doneToggle}.click()`);
+  await waitFor(`!${card(20)}`, "Done to collapse again");
+
   await evaluate(`${card(24)}.click()`);
   await waitFor(
     "document.querySelector('.task-drawer h2')?.textContent.includes('#24')",
@@ -995,6 +1104,9 @@ try {
       drawerShot,
       statusMenuShot,
       actionsMenuShot,
+      queuedBarShot,
+      actionBarShot,
+      doneBarShot,
       repositoriesShot,
       compactShot,
       light,

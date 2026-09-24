@@ -51,7 +51,9 @@ import { repositoryFuzzyScore } from "./repository-search";
 import { useListReorder } from "./use-list-reorder";
 import { BoardView, TaskRelationsBlock, type BoardProvider } from "./BoardView";
 import { laneFor } from "./board-lanes";
+import { taskActions } from "./task-actions";
 import { TaskCostLine, TaskTimeline } from "./TaskTimeline";
+import { TaskActionBar } from "./TaskActionBar";
 import { TaskActionsMenu } from "./TaskActionsMenu";
 import { TaskPriorityMenu, TaskStatusMenu } from "./TaskStatusMenu";
 import {
@@ -3859,6 +3861,23 @@ export function WorkspaceApp({
     setEditingTask(false);
   }
 
+  // The drawer's action bar reads the same lane inputs the board does, so
+  // what it offers is what the task's card offers (#34).
+  const laneInputs = {
+    sessions: workspaceSessions,
+    activity: activityById,
+    attention: attentionById,
+    worktrees: workspaceWorktrees,
+  };
+  const selectedTaskActions = selectedTask
+    ? taskActions(selectedTask, laneFor(selectedTask, laneInputs), {
+        ...laneInputs,
+        launches: workspaceSessionLaunches,
+        availableProviders: availableBoardProviders,
+        tasksById: new Map(allTasks.map((task) => [task.id, task])),
+      })
+    : undefined;
+
   const taskInspector = !selectedTask ? (
     <div className="empty large">
       <strong>Select a task</strong>
@@ -3920,16 +3939,55 @@ export function WorkspaceApp({
           priority={selectedTask.priority}
         />
       </div>
+      {selectedTaskActions && (
+        <TaskActionBar
+          actions={selectedTaskActions}
+          busy={busy}
+          onDismissLaunch={dismissSessionLaunch}
+          onDraftBrief={() =>
+            void startTaskSession(selectedTask, { draftBrief: true })
+          }
+          onMarkDone={() =>
+            void perform(
+              client.request.taskSetStatus({
+                id: selectedTask.id,
+                status: "done",
+              }),
+            )
+          }
+          onOpenLink={openTerminalLink}
+          onOpenSession={(session) => {
+            openSession(session.id);
+            setView("sessions");
+          }}
+          onOpenWorktree={(worktree) =>
+            void perform(
+              client.request.sessionWorktreeOpen({
+                session: worktree.sessionId,
+                repository: worktree.repositoryId,
+              }),
+            )
+          }
+          onSecondOpinion={(provider) =>
+            void startTaskSession(selectedTask, { provider })
+          }
+          onSetInProgress={() =>
+            void perform(
+              client.request.taskSetStatus({
+                id: selectedTask.id,
+                status: "in_progress",
+              }),
+            )
+          }
+          onStart={() => void startTaskSession(selectedTask)}
+          onStartWith={() => openSessionModal(selectedTask)}
+          task={selectedTask}
+          tmuxAvailable={Boolean(snapshot?.settings.tmuxAvailable)}
+        />
+      )}
       <MarkdownPreview source={selectedTask.description} />
       <TaskRelationsBlock
-        laneOf={(task) =>
-          laneFor(task, {
-            sessions: workspaceSessions,
-            activity: activityById,
-            attention: attentionById,
-            worktrees: workspaceWorktrees,
-          })
-        }
+        laneOf={(task) => laneFor(task, laneInputs)}
         onSelect={(task) => {
           setSelectedTaskId(task.id);
           setEditingTask(false);
