@@ -15,10 +15,11 @@
  * Draft brief is always there, at the end of the lane's actions: on a card
  * it shows only while the brief is empty, but a person reading a brief in
  * the drawer is exactly the one who might want an agent to redo it. The
- * right end holds Edit and an overflow menu with Delete. They were in the
- * drawer's heading beside Close, which left a person looking in two places
- * for one kind of thing; the heading is now the drawer's own, title and
- * Close only.
+ * right end holds Edit and Delete, the latter in the danger colour and
+ * behind its confirm. They were in the drawer's heading beside Close, then
+ * behind an overflow menu; both left a person looking in two places for one
+ * kind of thing. Every button carries an icon beside its label, so the bar
+ * scans without being read.
  */
 import type { ReactNode } from "react";
 import type {
@@ -28,7 +29,7 @@ import type {
 } from "@daedalus/protocol";
 import { confirmStartDespite } from "./BoardView";
 import { providerLabel, sessionName } from "./session-view";
-import { TaskActionsMenu } from "./TaskActionsMenu";
+import { TaskActionIcon } from "./task-action-icons";
 import type { BoardProvider, TaskActions } from "./task-actions";
 
 export interface TaskActionBarProps {
@@ -80,6 +81,7 @@ export function TaskActionBar(props: TaskActionBarProps) {
           }
           type="button"
         >
+          <TaskActionIcon name="start" />
           Start{actions.waitingOn.length ? " ⚠" : ""}
         </button>
         <button
@@ -106,6 +108,7 @@ export function TaskActionBar(props: TaskActionBarProps) {
         title="The agent is running; the status still says to do"
         type="button"
       >
+        <TaskActionIcon name="in-progress" />
         Set in progress
       </button>,
     );
@@ -118,6 +121,7 @@ export function TaskActionBar(props: TaskActionBarProps) {
         title="Merging stays yours; this only records the verdict"
         type="button"
       >
+        <TaskActionIcon name="done" />
         Mark done
       </button>,
     );
@@ -131,6 +135,7 @@ export function TaskActionBar(props: TaskActionBarProps) {
         title={`Open the terminal of ${sessionName(live)}`}
         type="button"
       >
+        <TaskActionIcon name="terminal" />
         Open terminal
       </button>,
     );
@@ -145,6 +150,7 @@ export function TaskActionBar(props: TaskActionBarProps) {
         title={worktree.path}
         type="button"
       >
+        <TaskActionIcon name="worktree" />
         Open worktree
       </button>,
     );
@@ -159,6 +165,7 @@ export function TaskActionBar(props: TaskActionBarProps) {
         title={pullRequest.url}
         type="button"
       >
+        <TaskActionIcon name="pull-request" />
         Open PR #{pullRequest.number}
       </button>,
     );
@@ -180,6 +187,7 @@ export function TaskActionBar(props: TaskActionBarProps) {
         }
         type="button"
       >
+        <TaskActionIcon name="second-opinion" />
         Second opinion
       </button>,
     );
@@ -197,6 +205,7 @@ export function TaskActionBar(props: TaskActionBarProps) {
       }
       type="button"
     >
+      <TaskActionIcon name="draft" />
       Draft brief
     </button>,
   );
@@ -217,9 +226,18 @@ export function TaskActionBar(props: TaskActionBarProps) {
             title="Edit the title and brief"
             type="button"
           >
+            <TaskActionIcon name="edit" />
             Edit
           </button>
-          <TaskActionsMenu onDelete={props.onDelete} />
+          <button
+            className="danger-link"
+            onClick={props.onDelete}
+            title="Delete this task. It asks first."
+            type="button"
+          >
+            <TaskActionIcon name="delete" />
+            Delete
+          </button>
         </div>
       </div>
       {actions.launches.map((launch) => (

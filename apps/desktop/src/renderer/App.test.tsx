@@ -912,16 +912,30 @@ describe("desktop application shell", () => {
     );
     expect(headingHtml).toContain('aria-label="Close task"');
     expect(headingHtml).not.toContain(">Edit<");
-    expect(headingHtml).not.toContain('aria-label="More task actions"');
+    expect(headingHtml).not.toContain("Delete");
     const barHtml = drawerHtml.slice(
       drawerHtml.indexOf('class="task-action-bar"'),
     );
-    expect(barHtml).toContain(">Edit</button>");
-    expect(barHtml).toContain('aria-label="More task actions"');
+    expect(barHtml).toContain("Edit</button>");
+    expect(barHtml).toContain('class="danger-link"');
+    expect(barHtml).toContain("Delete</button>");
+    expect(barHtml).not.toContain("Delete task");
     expect(html.indexOf('aria-label="Task status"')).toBeLessThan(
-      html.indexOf('aria-label="More task actions"'),
+      html.indexOf("Delete</button>"),
     );
-    expect(html).toContain("Delete task");
+    // Every bar button has an icon beside its label.
+    const barEnd = Math.min(
+      ...["brief-placeholder", "markdown-body"]
+        .map((marker) => barHtml.indexOf(marker))
+        .filter((index) => index >= 0),
+    );
+    const barButtons = barHtml
+      .slice(0, barEnd)
+      .match(/<button[^>]*>[\s\S]*?<\/button>/g)!;
+    expect(barButtons.length).toBeGreaterThan(3);
+    for (const button of barButtons)
+      if (!button.includes(">▾<"))
+        expect(button).toContain('class="task-action-icon"');
     expect(html).not.toContain("task-inspector-actions");
     expect(html).not.toContain("brief-delete");
     expect(html).toContain('aria-label="Timeline"');
@@ -1007,7 +1021,7 @@ describe("desktop application shell", () => {
     expect(html).not.toContain("Draft brief with agent");
     expect(html).toContain(">Draft brief</button>");
     expect(html.slice(html.indexOf('class="task-drawer"'))).toContain(
-      ">Draft brief</button>",
+      "Draft brief</button>",
     );
     // The waiting task sinks below the ready ones in Queued.
     expect(html.indexOf('data-task-number="12"')).toBeLessThan(

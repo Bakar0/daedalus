@@ -616,7 +616,7 @@ try {
   };
   const statusPill = `document.querySelector('.task-drawer [aria-label="Task status"]')`;
   const priorityPill = `document.querySelector('.task-drawer [aria-label="Task priority"]')`;
-  const moreButton = `document.querySelector('.task-drawer [aria-label="More task actions"]')`;
+  const deleteButton = `document.querySelector('.task-drawer .task-action-tail .danger-link')`;
   const bar = `document.querySelector('.task-drawer .task-action-bar')`;
   const openMenu = `document.querySelector('.task-drawer details.menu[open]')`;
   const visibleItems = (menu: string) =>
@@ -635,7 +635,7 @@ try {
     aboveBrief: boolean;
     selects: number;
     oldRows: number;
-    moreInBar: boolean;
+    deleteInBar: string;
     headingButtons: string;
   }>(`(() => {
     const drawer = document.querySelector('.task-drawer');
@@ -650,7 +650,7 @@ try {
       aboveBrief: box ? box.bottom <= brief.top : false,
       selects: drawer.querySelectorAll('select').length,
       oldRows: drawer.querySelectorAll('.task-status-row, .task-inspector-actions, .brief-delete').length,
-      moreInBar: Boolean(drawer.querySelector('.task-action-bar [aria-label="More task actions"]')),
+      deleteInBar: (${deleteButton})?.textContent.trim() ?? '',
       headingButtons: [...drawer.querySelectorAll('.section-heading button, .section-heading summary')].map((item) => item.getAttribute('aria-label') ?? item.textContent.trim()).join(','),
     };
   })()`);
@@ -669,7 +669,10 @@ try {
     controls.oldRows === 0,
     "the single-control rows are still in the drawer",
   );
-  check(controls.moreInBar, "the overflow menu is not in the action bar");
+  check(
+    controls.deleteInBar === "Delete",
+    `the bar's tail has "${controls.deleteInBar}" where Delete should be`,
+  );
   check(
     controls.headingButtons === "Close task",
     `the heading still has ${controls.headingButtons}, not only Close`,
@@ -741,41 +744,33 @@ try {
     "picking a priority left the menu open",
   );
 
-  // The overflow menu holds the two actions, Delete last and in danger.
-  await evaluate(`${moreButton}.click()`);
-  await waitFor(openMenu, "the overflow menu to open");
-  const actions = await visibleItems(moreButton);
+  // Delete is a plain button beside Edit, in the danger colour, and asks
+  // before doing anything. Every bar button carries an icon.
+  acceptDialogs = false;
+  const removesBefore = (await calls("taskRemove")).length;
+  await evaluate(`${deleteButton}.click()`);
+  await Bun.sleep(200);
   check(
-    actions.map((item) => item.text).join(",") === "Delete task",
-    `the overflow menu lists ${actions.map((item) => item.text).join(", ")}`,
-  );
-  check(actions[0]?.danger === true, "Delete task is not in the danger colour");
-  check(
-    (
-      await evaluate<string>(
-        `[...${bar}.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Draft brief')?.title ?? ''`,
-      )
-    ).includes("does not start the task"),
-    "Draft brief in the bar lost its explanation",
-  );
-  const actionsPopover = await evaluate<{ left: number; right: number }>(
-    `(() => { const box = ${openMenu}.querySelector('.menu-popover').getBoundingClientRect(); return { left: box.left, right: box.right }; })()`,
+    dialogs.at(-1)?.includes("Permanently delete task") ?? false,
+    `Delete asked "${dialogs.at(-1)}"`,
   );
   check(
-    actionsPopover.right <= drawer.windowWidth + 1 &&
-      actionsPopover.left >= drawer.drawerLeft,
-    `the overflow menu sits at ${actionsPopover.left}-${actionsPopover.right}, outside the drawer`,
-  );
-  const actionsMenuShot = await screenshot("drawer-actions-menu");
-  await pressKey("Escape", "Escape", 27);
-  check(
-    !(await evaluate<boolean>(`Boolean(${openMenu})`)),
-    "Escape did not close the overflow menu",
+    (await calls("taskRemove")).length === removesBefore,
+    "a declined Delete removed the task",
   );
   check(
     await evaluate<boolean>("Boolean(document.querySelector('.task-drawer'))"),
-    "Escape inside the overflow menu closed the drawer",
+    "a declined Delete closed the drawer",
   );
+  acceptDialogs = true;
+  const iconless = await evaluate<string[]>(
+    `[...${bar}.querySelectorAll('button')].filter((button) => !button.querySelector('.task-action-icon') && button.textContent.trim() !== '▾').map((button) => button.textContent.trim())`,
+  );
+  check(
+    iconless.length === 0,
+    `bar buttons without an icon: ${iconless.join(", ")}`,
+  );
+  const barShot = await screenshot("drawer-action-bar-wide");
 
   // Picking a status calls through and moves the card. #24 has a working
   // session, so its lane cannot move; a queued task has no live agent, so
@@ -856,7 +851,7 @@ try {
   check(queuedBar.aboveBrief, "the action bar is not above the brief");
   const queuedButtons = await barButtons();
   check(
-    queuedButtons.join(",") === "Start,▾,Draft brief,Edit",
+    queuedButtons.join(",") === "Start,▾,Draft brief,Edit,Delete",
     `the queued task's bar lists ${queuedButtons.join(", ")}`,
   );
   const queuedBarShot = await screenshot("drawer-action-bar-queued");
@@ -888,7 +883,7 @@ try {
   const runningButtons = await barButtons();
   check(
     runningButtons.join(",") ===
-      "Open terminal,Second opinion,Draft brief,Edit",
+      "Open terminal,Second opinion,Draft brief,Edit,Delete",
     `the running task's bar lists ${runningButtons.join(", ")}`,
   );
   const startedLane = await laneOf(29);
@@ -911,7 +906,8 @@ try {
   );
   const doneButtons = await barButtons();
   check(
-    doneButtons.join(",") === "Open worktree,Open PR #20,Draft brief,Edit",
+    doneButtons.join(",") ===
+      "Open worktree,Open PR #20,Draft brief,Edit,Delete",
     `the done task's bar lists ${doneButtons.join(", ")}`,
   );
   const outputBefore = (await calls("sessionWorktreeOpen")).length;
@@ -1113,7 +1109,7 @@ try {
       journal,
       drawerShot,
       statusMenuShot,
-      actionsMenuShot,
+      barShot,
       queuedBarShot,
       actionBarShot,
       doneBarShot,
