@@ -271,8 +271,9 @@ try {
     ["needs_me", "Needs me, 1 task", ["24"]],
     ["review", "Ready for review, 1 task", ["20"]],
     ["running", "Running, 1 task", ["25"]],
-    // #26 is high and its dependency is done; #29 is ready; #27 waits on #25.
-    ["queued", "Queued, 3 tasks", ["26", "29", "27"]],
+    // #26 is high and its dependency is done; #29 and #30 are ready; #27
+    // waits on #25.
+    ["queued", "Queued, 4 tasks", ["26", "29", "30", "27"]],
     ["parked", "Parked, 1 task", ["28"]],
     // Collapsed by default: counted, not drawn.
     ["done", "Done, 7 tasks", []],
@@ -898,18 +899,19 @@ try {
     `#${queuedNumber} is in ${todoLane} after To do, not queued`,
   );
   step = "drawer action bar";
-  // #34: the row under the pills does what the card does. #29 is queued with
-  // an empty brief and no dependencies, so it offers Start and Draft brief;
+  // #34: the row under the pills does what the card does. #30 is queued with
+  // an empty brief and no dependencies, so it offers Start and Draft brief.
+  // It is its own fixture because the session dialog step starts #29;
   // Start spawns with the workspace default, the drawer stays on the task,
   // and the bar turns into the running agent's actions.
   const barButtons = () =>
     evaluate<string[]>(
       `[...(${bar}?.querySelectorAll('button:not(.menu-item)') ?? [])].map((button) => button.textContent.trim())`,
     );
-  await evaluate(`${card(29)}.click()`);
+  await evaluate(`${card(30)}.click()`);
   await waitFor(
-    "document.querySelector('.task-drawer h2')?.textContent.includes('#29')",
-    "the drawer to swap to #29",
+    "document.querySelector('.task-drawer h2')?.textContent.includes('#30')",
+    "the drawer to swap to #30",
   );
   const queuedBar = await evaluate<{
     present: boolean;
@@ -944,12 +946,12 @@ try {
   );
   const drawerSpawn = (await calls("agentSpawn")).at(-1);
   check(
-    drawerSpawn?.taskId === "task-29" && drawerSpawn?.provider === "claude",
+    drawerSpawn?.taskId === "task-30" && drawerSpawn?.provider === "claude",
     `Start in the drawer spawned ${JSON.stringify(drawerSpawn)}`,
   );
   check(
     await evaluate<boolean>(
-      "document.querySelector('.task-drawer h2')?.textContent.includes('#29') ?? false",
+      "document.querySelector('.task-drawer h2')?.textContent.includes('#30') ?? false",
     ),
     "Start in the drawer closed or swapped the drawer",
   );
@@ -967,10 +969,10 @@ try {
       "Open terminal,Second opinion,Draft brief,Edit,Delete",
     `the running task's bar lists ${runningButtons.join(", ")}`,
   );
-  const startedLane = await laneOf(29);
+  const startedLane = await laneOf(30);
   check(
     startedLane === "running",
-    `#29 is in ${startedLane} after Start, not running`,
+    `#30 is in ${startedLane} after Start, not running`,
   );
   const actionBarShot = await screenshot("drawer-action-bar");
 
