@@ -86,10 +86,22 @@ describe("skill frontmatter", () => {
 });
 
 describe("SkillService", () => {
-  test("a fresh install arrives with both shipped capabilities on", async () => {
+  test("a fresh install arrives with every shipped capability on", async () => {
     await withSkillHomes(
       async ({ context, home, claudeHome, agentsHome, codexHome }) => {
         await context.skills.sync();
+        // The handoff skill is a slash command with an argument slot, and it
+        // is what the automatic handoff and `agent handoff` refer to.
+        const handoff = await readFile(
+          join(claudeHome, "skills", "daedalus-handoff", "SKILL.md"),
+          "utf8",
+        );
+        expect(handoff).toContain("name: daedalus-handoff");
+        expect(handoff).toContain("$ARGUMENTS");
+        expect(handoff).toContain("daedal agent continue --handoff-file");
+        expect(
+          await readlink(join(agentsHome, "skills", "daedalus-handoff")),
+        ).toBe(join(home, "skills", "daedalus-handoff"));
         expect(
           await readFile(
             join(claudeHome, "skills", "daedalus-control", "SKILL.md"),

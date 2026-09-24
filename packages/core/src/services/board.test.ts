@@ -343,6 +343,7 @@ describe("task timeline", () => {
     archivedAt: null,
     resumeCount: 0,
     lostReason: null,
+    handoffRequestedAt: null,
     resumeOnStart: false,
     position: 0,
   };
@@ -616,6 +617,7 @@ describe("task cost", () => {
       archivedAt: null,
       resumeCount: 0,
       lostReason: null,
+      handoffRequestedAt: null,
       resumeOnStart: false,
       position: 0,
     };

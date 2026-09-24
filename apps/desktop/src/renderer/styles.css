@@ -4113,6 +4113,9 @@ dd {
   font-size: 11px;
   line-height: 1.35;
 }
+.board-settings-percent {
+  width: 52px;
+}
 
 /* Compact width hides the detail line, which is the one thing on a session
    row that can be long; the activity and the wait stay. */

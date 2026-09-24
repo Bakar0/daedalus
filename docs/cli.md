@@ -37,7 +37,7 @@ daedal workspace create <name> [--slug <slug>] [--path <path>]
 daedal workspace list [--json]
 daedal workspace get <workspace> [--json]
 daedal workspace update <workspace> [--name <name>] [--slug <slug>]
-    [--start-sets-in-progress on|off] [--default-provider claude|codex|none]
+    [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--auto-handoff <percent>|off]
     [--default-model <model>|none]
 daedal workspace reorder <workspace> [<workspace>...]
 daedal workspace archive <workspace>
@@ -48,6 +48,8 @@ daedal workspace remove <workspace> [--delete-files] --force
 Create makes a real directory and identity marker before committing metadata. Slugs contain lowercase ASCII letters, digits, and hyphens. Updating a slug changes the lookup alias, not the directory path.
 
 The three board settings are per workspace. `--start-sets-in-progress` (on by default) decides whether starting a task-backed session moves a `todo` or `blocked` task to `in_progress`. `--default-provider` is what the board's Start and Start next launch; `none` clears it, and the board then uses the first installed provider. `--default-model` is what every session of that provider starts with when nothing names a model: Start, the app's session dialog, and `agent spawn` without `--model`. When no workspace default applies, a Claude session is launched with `--model default`, Claude's own name for its recommended model, rather than with no model at all: with none, Claude reads the last `/model` choice made in any session from the user's settings file, so a new session would get whatever the previous one ended on. A `--model` in the Daedalus agent arguments still wins. Codex is launched with no model and uses its `config.toml`. A model belongs to a provider, so `--default-model` needs a default provider, and changing or clearing the provider without naming a model clears the model, so Codex is never launched with a Claude model id. Before a spawn uses the default, it is checked against the provider's current catalog (`agent models`); a default the provider no longer offers fails the spawn with exit code 2 and a message naming this command, rather than starting a session whose every turn would fail. When the catalog cannot be read, the default is used unchecked.
+
+`--auto-handoff <percent>` (off by default) asks a running Claude or Codex session to hand its work to a fresh agent once its context reaches that share of the window; `off` turns it back off, and the value must be a whole number from 10 to 100. The check runs on the desktop app's one-second tick against the same context telemetry the usage footer shows, so it does nothing while the app is closed. Each session is asked once; the request is recorded as `handoffRequestedAt` on the session and stands until the successor archives it. What the agent is asked to do is exactly what `agent handoff` sends.
 
 Removal requires `--force`. Without `--delete-files`, it unregisters the workspace and preserves every file. With `--delete-files`, it only removes a canonical, non-root, non-symlink directory carrying the exact registered workspace ID marker. Live agents block removal.
 
@@ -89,6 +91,8 @@ daedal agent wait [--session <agent-id>] [--workspace <workspace>] [--for attent
 daedal agent attach <agent-id>
 daedal agent send <agent-id> <text>
 daedal agent archive <agent-id> [--force]
+daedal agent handoff <agent-id>
+daedal agent continue [<agent-id>] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--message <text>]
 daedal agent restore <agent-id>
 daedal agent revive <agent-id> | --all | --workspace <workspace>
 daedal agent stop <agent-id> [--force]
@@ -98,6 +102,12 @@ daedal agent remove <agent-id>
 Built-in provider definitions come from `config.json`. Named custom definitions use `--command`. Executables and arguments are always passed as arrays. A task-backed launch receives only `Execute task #<number>` plus optional `--message` guidance; the installed skill supplies the workflow, so task content and CLI instructions are not duplicated in the prompt. Claude and Codex receive the prompt through their native initial-prompt argument, while custom launches receive it in `DAEDALUS_TASK_PROMPT`. Daedalus never types the initial prompt into the terminal. Agent processes receive their current session, workspace, internal task ID, and task number through `DAEDALUS_SESSION_ID`, `DAEDALUS_WORKSPACE_ID`, `DAEDALUS_TASK_ID`, and `DAEDALUS_TASK_NUMBER`. These variables are restored when a session resumes.
 
 `--draft-brief` links the session to the task but asks it to write the brief instead of doing the work: its one instruction is to read the workspace and send the brief back with `task update <number> --description-file -`. It leaves the task's status alone.
+
+`agent continue` hands a session's work to a fresh session with an empty context. The new session gets the same task and runs in the old one's working directory, and the old session's worktree rows move to it before the provider starts, so it never tries to create them again. It keeps the provider and the `--model` the old session launched with unless `--provider` or `--model` say otherwise. `--handoff-file` (or `-` for stdin) is written to `HANDOFF.md` in that directory, and the launch prompt tells the new agent to read it and check git before relying on it. Without a note the prompt points it at the brief, `JOURNAL.md` and git instead. The old session is then archived, so its conversation stays restorable, and it leaves the task's status alone.
+
+With no id, `agent continue` means the session named by `DAEDALUS_SESSION_ID`. An agent cannot archive itself from inside its own tmux session: `stop` sends Ctrl-C, which interrupts the very command doing the archiving. So in that case the command starts a detached `agent archive <id>` that waits for the command to exit before it runs, and the JSON result reports the old session as not yet archived.
+
+`agent handoff <agent-id>` is the one-click path. It sends a running agent a request to write the note to `HANDOFF.md` in its working directory and then run `agent continue --handoff-file` on itself. The desktop app's "Continue in new agent" button in the terminal heading sends it and switches the terminal to the new session once it appears. The same dialog's "Start fresh" continues without a note, for an agent that can no longer answer or a session that is not running.
 
 Each launch gets a durable `daedalus_<uuid>` tmux session on a Daedalus server isolated by `DAEDALUS_HOME`. `attach` hands the terminal to tmux and therefore rejects `--json`; every non-interactive command supports the JSON envelope. `send` sends literal text followed by Enter. `stop` first sends Ctrl-C unless `--force` is used, then closes the session. A running session must be stopped before its history row can be removed.
 

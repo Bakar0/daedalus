@@ -8,7 +8,7 @@ Add `--json` anywhere on a non-interactive command for a compact result envelope
 daedal workspace create <name> [--slug <slug>] [--path <path>]
 daedal workspace list [--archived]
 daedal workspace get <workspace>
-daedal workspace update <workspace> [--name <name>] [--slug <slug>] [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--default-model <model>|none]
+daedal workspace update <workspace> [--name <name>] [--slug <slug>] [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--default-model <model>|none] [--auto-handoff <percent>|off]
 daedal workspace archive <workspace>
 daedal workspace restore <workspace>
 daedal workspace remove <workspace> [--delete-files] --force
@@ -63,6 +63,8 @@ daedal agent get <agent-id>
 daedal agent attach <agent-id>
 daedal agent send <agent-id> <text>
 daedal agent archive <agent-id> [--force]
+daedal agent handoff <agent-id>
+daedal agent continue [<agent-id>] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--message <text>]
 daedal agent restore <agent-id>
 daedal agent stop <agent-id> [--force]
 daedal agent remove <agent-id>
@@ -72,6 +74,16 @@ daedal agent remove <agent-id>
 workspace's `--start-sets-in-progress` setting is on (the default); do not set
 it again yourself. `--draft-brief` links the session to the task but asks it to
 write the brief rather than do the work, and leaves the status alone.
+
+`agent continue` moves a session's work to a fresh one with an empty context:
+the same task, working directory and worktrees, and the same provider and model
+unless you pass others. The note from `--handoff-file` is written to
+`HANDOFF.md` in that directory and the new session reads it first. With no id
+it continues the session it runs in, and archives that session just after the
+command exits. `agent handoff` asks a running agent to write the note and run
+`agent continue` itself; it is what the app's "Continue in new agent" sends.
+With `workspace update --auto-handoff <percent>`, the app sends the same
+request on its own once a session's context passes that share of its window.
 
 `agent models` does not require a workspace. With `--json`, pass an exact
 `data.models[].id` to `agent spawn --model`; omit `--model` to use the

@@ -32,6 +32,7 @@ interface WorkspaceRow {
   archived_at: string | null;
   position: number;
   start_sets_in_progress: number;
+  auto_handoff_percent: number | null;
   default_provider: "claude" | "codex" | null;
   default_model: string | null;
 }
@@ -74,6 +75,7 @@ interface AgentRow {
   resume_count: number;
   lost_reason: string | null;
   resume_on_start: number;
+  handoff_requested_at: string | null;
   position: number;
 }
 
@@ -135,6 +137,7 @@ const workspaceFromRow = (row: WorkspaceRow): Workspace => ({
   archivedAt: row.archived_at,
   position: row.position,
   startSetsInProgress: row.start_sets_in_progress !== 0,
+  autoHandoffPercent: row.auto_handoff_percent,
   defaultProvider: row.default_provider,
   defaultModel: row.default_model,
 });
@@ -173,6 +176,7 @@ const agentFromRow = (row: AgentRow): AgentSession => ({
   resumeCount: row.resume_count,
   lostReason: row.lost_reason,
   resumeOnStart: row.resume_on_start === 1,
+  handoffRequestedAt: row.handoff_requested_at,
   position: row.position,
 });
 
@@ -336,8 +340,8 @@ export class SqliteRepositories {
         `INSERT INTO workspaces
          (id, slug, name, path, created_at, updated_at, archived_at,
           task_id_prefix, position, start_sets_in_progress, default_provider,
-          default_model)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          default_model, auto_handoff_percent)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         workspace.id,
@@ -352,6 +356,7 @@ export class SqliteRepositories {
         workspace.startSetsInProgress ? 1 : 0,
         workspace.defaultProvider,
         workspace.defaultModel,
+        workspace.autoHandoffPercent,
       );
   }
 
@@ -405,7 +410,7 @@ export class SqliteRepositories {
       .query(
         `UPDATE workspaces SET slug = ?, name = ?, path = ?, updated_at = ?,
          archived_at = ?, start_sets_in_progress = ?, default_provider = ?,
-         default_model = ? WHERE id = ?`,
+         default_model = ?, auto_handoff_percent = ? WHERE id = ?`,
       )
       .run(
         workspace.slug,
@@ -416,6 +421,7 @@ export class SqliteRepositories {
         workspace.startSetsInProgress ? 1 : 0,
         workspace.defaultProvider,
         workspace.defaultModel,
+        workspace.autoHandoffPercent,
         workspace.id,
       );
   }
@@ -580,6 +586,13 @@ export class SqliteRepositories {
       .run(sessionId, repositoryId);
   }
 
+  /** Hands every worktree one session holds to another, for a handoff. */
+  reassignSessionWorktrees(fromSessionId: string, toSessionId: string): void {
+    this.database
+      .query("UPDATE session_worktrees SET session_id = ? WHERE session_id = ?")
+      .run(toSessionId, fromSessionId);
+  }
+
   listSessionWorktrees(
     filters: {
       sessionId?: string;
@@ -719,8 +732,8 @@ export class SqliteRepositories {
          (id, workspace_id, task_id, name, provider, kind, tmux_session, command, args,
           working_directory, status, exit_code, started_at, ended_at,
           provider_session_id, archived_at, resume_count, lost_reason,
-          resume_on_start, position)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          resume_on_start, handoff_requested_at, position)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         agent.id,
@@ -742,6 +755,7 @@ export class SqliteRepositories {
         agent.resumeCount,
         agent.lostReason,
         agent.resumeOnStart ? 1 : 0,
+        agent.handoffRequestedAt,
         agent.position,
       );
   }
@@ -802,7 +816,8 @@ export class SqliteRepositories {
         `UPDATE agent_sessions SET tmux_session = ?, command = ?, args = ?,
          status = ?, exit_code = ?, started_at = ?, ended_at = ?,
          provider_session_id = ?, archived_at = ?, resume_count = ?,
-         lost_reason = ?, resume_on_start = ? WHERE id = ?`,
+         lost_reason = ?, resume_on_start = ?, handoff_requested_at = ?
+         WHERE id = ?`,
       )
       .run(
         agent.tmuxSession,
@@ -817,6 +832,7 @@ export class SqliteRepositories {
         agent.resumeCount,
         agent.lostReason,
         agent.resumeOnStart ? 1 : 0,
+        agent.handoffRequestedAt,
         agent.id,
       );
   }

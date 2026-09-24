@@ -76,6 +76,7 @@ const session = (
   archivedAt: null,
   resumeCount: 0,
   lostReason: null,
+  handoffRequestedAt: null,
   position: sequence++,
   ...overrides,
 });
@@ -103,6 +104,7 @@ const snapshot: DesktopSnapshotDto = {
       available: true,
       position: 1,
       startSetsInProgress: true,
+      autoHandoffPercent: null,
       defaultProvider: "claude",
       defaultModel: null,
     },

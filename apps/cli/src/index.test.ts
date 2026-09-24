@@ -545,6 +545,92 @@ describe("daedal CLI contract", () => {
     });
   });
 
+  test("an agent continues itself and is archived once the command exits", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      // Stands in for Codex: shows its ready screen, then sits on stdin.
+      const fakeCodex = join(home, "fake-codex");
+      await Bun.write(
+        fakeCodex,
+        "#!/bin/sh\necho 'Ask Codex to do anything'\nexec cat\n",
+      );
+      await runCommand("chmod", ["+x", fakeCodex]);
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { codex: { executable: fakeCodex, args: [] } },
+        }),
+      );
+      const env = { CODEX_HOME: join(home, "codex") };
+      const workspace = await cli(
+        home,
+        ["workspace", "create", "Handoff", "--json"],
+        env,
+      );
+      const workspaceId = JSON.parse(workspace.stdout).data.id as string;
+      const task = await cli(
+        home,
+        ["task", "create", "--workspace", workspaceId, "--title", "Big job"],
+        env,
+      );
+      expect(task.exitCode).toBe(0);
+      const spawned = await cli(
+        home,
+        [
+          "agent",
+          "spawn",
+          "--workspace",
+          workspaceId,
+          "--provider",
+          "codex",
+          "--task",
+          "1",
+          "--json",
+        ],
+        env,
+      );
+      expect(spawned.exitCode).toBe(0);
+      const first = JSON.parse(spawned.stdout).data as {
+        id: string;
+        workingDirectory: string;
+      };
+
+      const continued = await cli(
+        home,
+        ["agent", "continue", "--handoff-file", "-", "--json"],
+        { ...env, DAEDALUS_SESSION_ID: first.id },
+        "Next: finish step 2.",
+      );
+      expect(continued.stderr).toBe("");
+      expect(continued.exitCode).toBe(0);
+      const result = JSON.parse(continued.stdout).data as {
+        session: { id: string; workingDirectory: string };
+        predecessor: { archivedAt: string | null };
+      };
+      expect(result.session.workingDirectory).toBe(first.workingDirectory);
+      // Still live when the command answered: it cannot archive itself.
+      expect(result.predecessor.archivedAt).toBeNull();
+      expect(
+        await Bun.file(join(first.workingDirectory, "HANDOFF.md")).text(),
+      ).toBe("Next: finish step 2.\n");
+
+      let archivedAt: string | null = null;
+      for (let attempt = 0; attempt < 100 && !archivedAt; attempt += 1) {
+        await Bun.sleep(100);
+        const current = await cli(home, ["agent", "get", first.id, "--json"]);
+        archivedAt = JSON.parse(current.stdout).data.archivedAt;
+      }
+      expect(archivedAt).not.toBeNull();
+      const successor = await cli(home, [
+        "agent",
+        "get",
+        result.session.id,
+        "--json",
+      ]);
+      expect(JSON.parse(successor.stdout).data.status).toBe("running");
+      await cli(home, ["shutdown", "--json"]);
+    });
+  }, 30_000);
+
   test("reports presence so an agent can pick its own channel", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const result = await cli(home, ["ui", "state", "--json"]);

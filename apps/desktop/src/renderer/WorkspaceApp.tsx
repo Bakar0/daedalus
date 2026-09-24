@@ -2604,6 +2604,25 @@ export function WorkspaceApp({
   const activeSession = activeSessions.find(
     (item) => item.id === activeSessionId,
   );
+  // A session that was asked to hand off, by a click or by the automatic
+  // sweep, is followed to its successor: the fresh session in the same
+  // working directory that started after the request. Looked up across the
+  // archived sessions too, because the successor arrives and the
+  // predecessor is archived within the same second.
+  const viewedHandoff = workspaceSessions.find(
+    (item) => item.id === activeSessionId && item.handoffRequestedAt,
+  );
+  const handoffSuccessor = viewedHandoff
+    ? activeSessions.find(
+        (item) =>
+          item.id !== viewedHandoff.id &&
+          item.workingDirectory === viewedHandoff.workingDirectory &&
+          item.startedAt >= viewedHandoff.handoffRequestedAt!,
+      )
+    : undefined;
+  useEffect(() => {
+    if (handoffSuccessor) openSession(handoffSuccessor.id);
+  }, [handoffSuccessor, openSession]);
   const activeSessionTelemetry = snapshot?.sessionTelemetry.find(
     (item) => item.sessionId === activeSession?.id,
   );

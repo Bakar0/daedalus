@@ -59,6 +59,8 @@ import daedalusControlSkillTemplate from "../../../../skills/daedalus-control/SK
 import daedalusControlCliReference from "../../../../skills/daedalus-control/references/cli.md" with { type: "text" };
 import daedalusControlOpenAiMetadata from "../../../../skills/daedalus-control/agents/openai.yaml" with { type: "text" };
 import unslopSkillTemplate from "../../../../skills/unslop/SKILL.md" with { type: "text" };
+import handoffSkillTemplate from "../../../../skills/daedalus-handoff/SKILL.md" with { type: "text" };
+import handoffOpenAiMetadata from "../../../../skills/daedalus-handoff/agents/openai.yaml" with { type: "text" };
 import unslopStyleTemplate from "../../../../styles/Unslop.md" with { type: "text" };
 
 export type SkillProvider = "claude" | "codex" | "cursor";
@@ -124,6 +126,19 @@ export const MANAGED_SKILLS: readonly ManagedSkillDefinition[] = [
       { path: "SKILL.md", contents: daedalusControlSkillTemplate },
       { path: "references/cli.md", contents: daedalusControlCliReference },
       { path: "agents/openai.yaml", contents: daedalusControlOpenAiMetadata },
+    ],
+  },
+  {
+    id: "daedalus-handoff",
+    title: "Handoff",
+    summary:
+      "Adds /daedalus-handoff: the agent writes a handoff note and continues its work in a fresh session with an empty context, in the same working directory. Extra words after the command go to the next agent.",
+    supportsAlways: false,
+    defaultEnabled: true,
+    defaultMode: "on-demand",
+    skillFiles: [
+      { path: "SKILL.md", contents: handoffSkillTemplate },
+      { path: "agents/openai.yaml", contents: handoffOpenAiMetadata },
     ],
   },
   {

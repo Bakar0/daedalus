@@ -13,16 +13,19 @@ import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import {
   buildAgentPrompt,
+  buildHandoffRequest,
   catalogOffersModel,
   CLAUDE_DEFAULT_MODEL,
   claudeDaedalusSettingsArgs,
   ensureCodexHooks,
   CODEX_DAEDALUS_TUI_ARGS,
   discoverProviderModels,
+  HANDOFF_FILE,
   modelArgument,
   type ProviderModelCatalog,
   resolveAgentExecutable,
   resolveProvider,
+  sessionLaunchModel,
 } from "./providers";
 import { applyManualOrder } from "./ordering";
 import type { TaskService } from "./tasks";
@@ -691,6 +694,12 @@ export class AgentService {
      * count as starting the work and leaves the status alone.
      */
     draftBrief?: boolean;
+    /**
+     * Internal to `continueSession`: run in this session's working directory,
+     * take over its worktrees, and launch with the continuation prompt.
+     */
+    continueFrom?: AgentSession;
+    handoff?: boolean;
   }): Promise<AgentSession> {
     const workspace = await this.workspaces.getActive(input.workspace);
     const task = input.taskId ? this.tasks.get(input.taskId) : undefined;
@@ -746,6 +755,7 @@ export class AgentService {
           workspace,
           task,
           sessionId: id,
+          workingDirectory: input.continueFrom?.workingDirectory,
         })
       : { workingDirectory: workspace.path, worktrees: [], references: [] };
     if (input.draftBrief && !task)
@@ -756,7 +766,12 @@ export class AgentService {
     const launchPrompt = buildAgentPrompt({
       taskNumber: task?.number,
       message: input.message,
-      mode: input.draftBrief ? "draft-brief" : "execute",
+      mode: input.continueFrom
+        ? "continue"
+        : input.draftBrief
+          ? "draft-brief"
+          : "execute",
+      handoff: input.handoff,
     });
     const launch = input.terminal
       ? { executable: shell!, args: ["-l"], env: {} }
@@ -790,11 +805,19 @@ export class AgentService {
       archivedAt: null,
       resumeCount: 0,
       lostReason: null,
+      handoffRequestedAt: null,
       resumeOnStart: false,
       // Top of its workspace's list, leaving any manual order below it intact.
       position: this.repositories.nextAgentPosition(workspace.id),
     };
     this.repositories.createAgent(session);
+    // Moved before the provider starts, so the new agent never sees a
+    // worktree directory that no row claims and tries to create it again.
+    if (input.continueFrom)
+      this.repositories.reassignSessionWorktrees(
+        input.continueFrom.id,
+        session.id,
+      );
     try {
       await this.tmux.createSession({
         session: session.tmuxSession,
@@ -830,10 +853,15 @@ export class AgentService {
       }
       const running = { ...runningSession, status: "running" as const };
       this.repositories.updateAgent(running);
-      if (task && !input.terminal && !input.draftBrief)
+      if (task && !input.terminal && !input.draftBrief && !input.continueFrom)
         this.markTaskStarted(workspace, task.id);
       return running;
     } catch (error) {
+      if (input.continueFrom)
+        this.repositories.reassignSessionWorktrees(
+          session.id,
+          input.continueFrom.id,
+        );
       if (await this.tmux.hasSession(session.tmuxSession))
         await this.tmux.stop(session.tmuxSession, true).catch(() => undefined);
       this.repositories.updateAgent({
@@ -850,6 +878,167 @@ export class AgentService {
         },
       );
     }
+  }
+
+  /**
+   * The one-click half of a handoff: asks a running agent to write a note for
+   * its successor and then run `daedal agent continue` itself.
+   */
+  async requestHandoff(id: string): Promise<AgentSession> {
+    const agent = await this.requireContinuable(id);
+    await this.send(agent.id, buildHandoffRequest(agent.workingDirectory));
+    const requested = {
+      ...agent,
+      handoffRequestedAt: new Date().toISOString(),
+    };
+    this.repositories.updateAgent(requested);
+    return requested;
+  }
+
+  /**
+   * Asks every running session whose context has passed its workspace's
+   * threshold to hand off. Once per session: a request already made stands
+   * until the successor archives it, so the agent is not nagged every tick
+   * while it writes the note.
+   */
+  async sweepAutoHandoffs(
+    telemetry: ReadonlyArray<{
+      sessionId: string;
+      context?: { usedPercent?: number };
+    }>,
+  ): Promise<AgentSession[]> {
+    const thresholds = new Map(
+      this.repositories
+        .listWorkspaces()
+        .filter((workspace) => workspace.autoHandoffPercent !== null)
+        .map((workspace) => [workspace.id, workspace.autoHandoffPercent!]),
+    );
+    if (thresholds.size === 0) return [];
+    const usage = new Map(
+      telemetry.map((item) => [item.sessionId, item.context?.usedPercent]),
+    );
+    const requested: AgentSession[] = [];
+    for (const agent of this.repositories.listAgents()) {
+      const threshold = thresholds.get(agent.workspaceId);
+      const percent = usage.get(agent.id);
+      if (
+        threshold === undefined ||
+        percent === undefined ||
+        percent < threshold ||
+        agent.kind !== "agent" ||
+        agent.status !== "running" ||
+        agent.archivedAt ||
+        agent.handoffRequestedAt ||
+        (agent.provider !== "claude" && agent.provider !== "codex")
+      )
+        continue;
+      try {
+        requested.push(await this.requestHandoff(agent.id));
+      } catch {
+        // A session that vanished between the list and the send is the
+        // reconcile pass's business, not this one's.
+      }
+    }
+    return requested;
+  }
+
+  /**
+   * Moves a session's work to a fresh one with an empty context: same task,
+   * same working directory, same worktrees. The handoff note, when there is
+   * one, is written to `HANDOFF.md` there and the successor is told to read
+   * it. The predecessor is archived, which keeps its conversation restorable.
+   *
+   * `archive: "later"` leaves that to the caller. An agent that runs this on
+   * itself cannot be archived from inside the same process: stopping its tmux
+   * session interrupts the command that is doing the stopping.
+   */
+  async continueSession(input: {
+    id: string;
+    handoff?: string;
+    provider?: "codex" | "claude";
+    model?: string;
+    message?: string;
+    archive?: "now" | "later";
+  }): Promise<{
+    session: AgentSession;
+    predecessor: AgentSession;
+    archiveError?: string;
+  }> {
+    const predecessor = await this.requireContinuable(input.id);
+    const provider =
+      input.provider ??
+      (predecessor.provider === "codex" || predecessor.provider === "claude"
+        ? predecessor.provider
+        : undefined);
+    if (!provider)
+      throw new DaedalusError(
+        "VALIDATION",
+        "A custom session has no provider to continue with; pass --provider",
+      );
+    // Marked whether the request came from Daedalus or the agent decided on
+    // its own, so the app can follow this session to its successor either way.
+    if (!predecessor.handoffRequestedAt)
+      this.repositories.updateAgent({
+        ...predecessor,
+        handoffRequestedAt: new Date().toISOString(),
+      });
+    const handoff = input.handoff?.trim();
+    if (handoff)
+      await writeFile(
+        join(predecessor.workingDirectory, HANDOFF_FILE),
+        `${handoff}\n`,
+        "utf8",
+      );
+    const session = await this.spawn({
+      workspace: predecessor.workspaceId,
+      taskId: predecessor.taskId ?? undefined,
+      name: predecessor.name,
+      provider,
+      // A different provider would not understand the old one's model name.
+      model:
+        input.model ??
+        (provider === predecessor.provider
+          ? sessionLaunchModel(predecessor.args)
+          : undefined),
+      message: input.message,
+      continueFrom: predecessor,
+      handoff: Boolean(handoff),
+    });
+    if (input.archive === "later") return { session, predecessor };
+    try {
+      return {
+        session,
+        predecessor: await this.archive(predecessor.id),
+      };
+    } catch (error) {
+      // The successor is already running and holds the worktrees, so a
+      // predecessor that will not archive is reported, not rolled back.
+      return {
+        session,
+        predecessor: await this.get(predecessor.id),
+        archiveError: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  private async requireContinuable(id: string): Promise<AgentSession> {
+    const agent = await this.get(id);
+    if (agent.kind !== "agent")
+      throw new DaedalusError(
+        "CONFLICT",
+        "Only agent sessions can hand their work to a new session",
+      );
+    if (agent.archivedAt)
+      throw new DaedalusError(
+        "CONFLICT",
+        "An archived session cannot hand off its work; restore it first",
+      );
+    if (!(await pathExists(agent.workingDirectory)))
+      throw new DaedalusError(
+        "CONFLICT",
+        `Working directory ${agent.workingDirectory} no longer exists`,
+      );
+    return agent;
   }
 
   /**
@@ -878,6 +1067,7 @@ export class AgentService {
             status: "lost",
             endedAt: now,
             lostReason: null,
+            handoffRequestedAt: null,
           });
         } else if (agent.status === "starting" && live.has(agent.tmuxSession)) {
           this.repositories.updateAgent({ ...agent, status: "running" });
@@ -1263,6 +1453,7 @@ export class AgentService {
       endedAt: null,
       exitCode: null,
       lostReason: null,
+      handoffRequestedAt: null,
     };
     // Last thing before the launch, because the window between the sweep's own
     // check and this one is where a racing CLI would put a second runtime on
@@ -1379,6 +1570,7 @@ export class AgentService {
               status: "running",
               endedAt: null,
               lostReason: null,
+              handoffRequestedAt: null,
             });
             continue;
           }

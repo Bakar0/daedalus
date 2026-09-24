@@ -22,6 +22,7 @@ import {
   probeVersion,
   TMUX_EXECUTABLE_FALLBACKS,
 } from "@daedalus/platform";
+import { spawn as spawnProcess } from "node:child_process";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { DoctorCheck } from "@daedalus/protocol";
@@ -220,7 +221,7 @@ const commandHelp: Record<string, string> = {
   daedal workspace get <workspace>
   daedal workspace update <workspace> [--name <name>] [--slug <slug>]
       [--start-sets-in-progress on|off] [--default-provider claude|codex|none]
-      [--default-model <model>|none]
+      [--default-model <model>|none] [--auto-handoff <percent>|off]
   daedal workspace archive <workspace>
   daedal workspace restore <workspace>
   daedal workspace remove <workspace> [--delete-files] --force
@@ -233,7 +234,10 @@ that provider starts with when nothing names a model: Start, the session
 dialog, and 'agent spawn' without --model. It belongs to the provider, so it
 needs --default-provider and is cleared with it. A default the provider no
 longer offers makes those spawns fail, naming the fix, rather than start a
-session that cannot answer.`,
+session that cannot answer.
+--auto-handoff (off by default) asks a session to hand its work to a fresh
+agent once its context passes that percent of the window; see 'agent
+continue'. The desktop app runs the check about once a second.`,
   task: `Task commands:
   daedal task create --workspace <workspace> --title <title> [--description <text> | --description-file <path|->] [--priority <priority>]
   daedal task list [--workspace <workspace>] [--status <status>]
@@ -274,6 +278,8 @@ it was cleared, journal entries whose heading names the task, and done.`,
   daedal agent attach <agent-id>
   daedal agent send <agent-id> <text>
   daedal agent archive <agent-id> [--force]
+  daedal agent handoff <agent-id>
+  daedal agent continue [<agent-id>] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--message <text>]
   daedal agent restore <agent-id>
   daedal agent revive <agent-id> | --all | --workspace <workspace>
   daedal agent stop <agent-id> [--force]
@@ -301,6 +307,15 @@ leaves the status alone.
 its recommended model by name ('--model default'), because with no model at
 all it would reuse the last '/model' choice made in any session; Codex uses
 its own configuration.
+
+'agent continue' moves a session's work to a fresh one with an empty context:
+same task, same working directory, same worktrees. The note from
+--handoff-file is written to HANDOFF.md there and the new session is told to
+read it first. The old session is archived, so its conversation can still be
+restored. Run inside a session with no id, it continues that session; the
+archive then happens just after the command exits, because archiving stops the
+very agent that is running it. 'agent handoff' is the one-click version: it
+asks a running agent to write the note and run 'agent continue' itself.
 
 'agent wait' blocks until a session reaches a state and then exits 0, so the
 same signal drives a shell notifier, a Slack ping or a tmux bell with no
@@ -651,12 +666,23 @@ async function workspaceCommand(
       "start-sets-in-progress",
       "default-provider",
       "default-model",
+      "auto-handoff",
     ]);
     expectPositionals(
       parsed.positionals,
       1,
-      "daedal workspace update <workspace> [--name <name>] [--slug <slug>] [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--default-model <model>|none]",
+      "daedal workspace update <workspace> [--name <name>] [--slug <slug>] [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--default-model <model>|none] [--auto-handoff <percent>|off]",
     );
+    const autoHandoff = parsed.values["auto-handoff"];
+    if (
+      autoHandoff !== undefined &&
+      autoHandoff !== "off" &&
+      !/^\d+$/.test(autoHandoff)
+    )
+      throw new DaedalusError(
+        "VALIDATION",
+        "--auto-handoff must be a percent from 10 to 100, or 'off'",
+      );
     const startSetting = parsed.values["start-sets-in-progress"];
     if (
       startSetting !== undefined &&
@@ -673,6 +699,12 @@ async function workspaceCommand(
       slug: parsed.values.slug,
       startSetsInProgress:
         startSetting === undefined ? undefined : startSetting === "on",
+      autoHandoffPercent:
+        autoHandoff === undefined
+          ? undefined
+          : autoHandoff === "off"
+            ? null
+            : Number(autoHandoff),
       defaultProvider: parsed.values["default-provider"],
       defaultModel:
         defaultModel === undefined
@@ -975,6 +1007,7 @@ async function agentCommand(
   context: ApplicationContext,
   args: string[],
   json: boolean,
+  options: CliOptions,
 ): Promise<number> {
   const action = args.shift();
   if (!action || action === "help") {
@@ -1098,11 +1131,13 @@ async function agentCommand(
     });
     return 0;
   }
+  if (action === "continue")
+    return agentContinueCommand(context, args, json, options);
   if (action === "wait") return agentWaitCommand(context, args, json);
   if (action === "revive") return agentReviveCommand(context, args, json);
   const parsed = parseArguments(
     args,
-    [],
+    action === "archive" ? ["after-pid"] : [],
     action === "stop" || action === "archive" ? ["force"] : [],
   );
   if (action === "get") {
@@ -1169,11 +1204,23 @@ async function agentCommand(
       1,
       "daedal agent archive <agent-id> [--force]",
     );
+    // Undocumented: how `agent continue` archives the session it runs in
+    // once it has exited. See `archiveAfterExit`.
+    if (parsed.values["after-pid"])
+      await waitForExit(Number(parsed.values["after-pid"]));
     const result = await context.agents.archive(
       parsed.positionals[0]!,
       parsed.flags.has("force"),
     );
     printResult(result, json, () => console.log(`Archived agent ${result.id}`));
+    return 0;
+  }
+  if (action === "handoff") {
+    expectPositionals(parsed.positionals, 1, "daedal agent handoff <agent-id>");
+    const result = await context.agents.requestHandoff(parsed.positionals[0]!);
+    printResult(result, json, () =>
+      console.log(`Asked agent ${result.id} to hand off its work`),
+    );
     return 0;
   }
   if (action === "restore") {
@@ -1191,6 +1238,104 @@ async function agentCommand(
     return 0;
   }
   throw new DaedalusError("VALIDATION", `Unknown agent command '${action}'`);
+}
+
+/**
+ * `agent continue` — hands a session's work to a fresh one in the same
+ * working directory. With no id it means the session it is running in.
+ */
+async function agentContinueCommand(
+  context: ApplicationContext,
+  args: string[],
+  json: boolean,
+  options: CliOptions,
+): Promise<number> {
+  const parsed = parseArguments(args, [
+    "handoff-file",
+    "provider",
+    "model",
+    "message",
+  ]);
+  const usage =
+    "daedal agent continue [<agent-id>] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--message <text>]";
+  if (parsed.positionals.length > 1)
+    throw new DaedalusError("VALIDATION", `Usage: ${usage}`);
+  const id = parsed.positionals[0] ?? process.env.DAEDALUS_SESSION_ID;
+  if (!id)
+    throw new DaedalusError(
+      "VALIDATION",
+      "Pass the session to continue, or run this inside a Daedalus session",
+    );
+  const provider = parsed.values.provider;
+  if (provider !== undefined && provider !== "codex" && provider !== "claude")
+    throw new DaedalusError(
+      "VALIDATION",
+      "Provider must be 'codex' or 'claude'",
+    );
+  const file = parsed.values["handoff-file"];
+  let handoff: string | undefined;
+  if (file === "-") handoff = await Bun.stdin.text();
+  else if (file !== undefined) {
+    const source = Bun.file(resolve(file));
+    if (!(await source.exists()))
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Handoff file '${file}' was not found`,
+      );
+    handoff = await source.text();
+  }
+  const predecessor = await context.agents.get(id);
+  const self = predecessor.id === process.env.DAEDALUS_SESSION_ID;
+  const result = await context.agents.continueSession({
+    id: predecessor.id,
+    handoff,
+    provider,
+    model: parsed.values.model,
+    message: parsed.values.message,
+    archive: self ? "later" : "now",
+  });
+  if (self) (options.archiveAfterExit ?? archiveAfterExit)(predecessor.id);
+  printResult(result, json, () => {
+    console.log(
+      `Continued ${predecessor.name} in session ${result.session.id} (${result.session.provider})`,
+    );
+    if (self)
+      console.log("This session is archived as soon as this command exits.");
+    else if (result.archiveError)
+      console.log(`The old session was not archived: ${result.archiveError}`);
+  });
+  return 0;
+}
+
+/**
+ * Archives the calling session once this process has exited. It has to be a
+ * separate process in a session of its own: archiving sends the agent an
+ * interrupt and ends its tmux session, which would kill this command halfway
+ * through if it did the archiving itself.
+ */
+function archiveAfterExit(id: string): void {
+  const entrypoint = Bun.argv[1];
+  if (!entrypoint) return;
+  spawnProcess(
+    process.execPath,
+    [entrypoint, "agent", "archive", id, "--after-pid", String(process.pid)],
+    { detached: true, stdio: "ignore" },
+  ).unref();
+}
+
+// Bounded, so a pid that never goes away cannot leave a process behind.
+async function waitForExit(pid: number, timeoutMs = 60_000): Promise<void> {
+  if (!Number.isInteger(pid) || pid <= 0)
+    throw new DaedalusError("VALIDATION", "--after-pid must be a process id");
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    await Bun.sleep(100);
+  }
 }
 
 /**
@@ -2135,9 +2280,15 @@ async function skillCommand(
   throw new DaedalusError("VALIDATION", `Unknown skill command '${action}'`);
 }
 
+export interface CliOptions {
+  migrationsDirectory?: string;
+  /** Replaces the detached archiver `agent continue` starts; for tests. */
+  archiveAfterExit?: (sessionId: string) => void;
+}
+
 export async function runCli(
   inputArgs: string[],
-  options: { migrationsDirectory?: string } = {},
+  options: CliOptions = {},
 ): Promise<number> {
   const json = inputArgs.includes("--json");
   const args = inputArgs.filter((argument) => argument !== "--json");
@@ -2201,7 +2352,7 @@ export async function runCli(
       return await focusCommand(context, args.slice(1), json);
     if (args[0] === "shutdown")
       return await shutdownCommand(context, args.slice(1), json);
-    return await agentCommand(context, args.slice(1), json);
+    return await agentCommand(context, args.slice(1), json, options);
   } finally {
     context.close();
   }

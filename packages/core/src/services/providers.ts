@@ -1,4 +1,8 @@
-import { ensureDirectory, findExecutable } from "@daedalus/platform";
+import {
+  ensureDirectory,
+  findExecutable,
+  standardExecutableFallbacks,
+} from "@daedalus/platform";
 import { runCommand } from "@daedalus/platform";
 import { rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -512,10 +516,16 @@ const STANDARD_CODEX_EXECUTABLES = new Set([
   "/usr/local/bin/codex",
 ]);
 
+// The app is launched by Launch Services with no Homebrew on PATH, which is
+// where `claude` lives. Codex has the ChatGPT bundle to fall back on; a bare
+// name for any other provider is looked up in the standard directories too.
+const findProviderExecutable = (value: string): string | undefined =>
+  findExecutable(value, standardExecutableFallbacks(value));
+
 export function resolveAgentExecutable(
   name: string,
   executable: string,
-  finder: (value: string) => string | undefined = findExecutable,
+  finder: (value: string) => string | undefined = findProviderExecutable,
   platform = process.platform,
 ): string | undefined {
   if (
@@ -660,12 +670,47 @@ export function sessionLaunchModel(
   return undefined;
 }
 
+/** Where a handoff note lives: the working directory both sessions share. */
+export const HANDOFF_FILE = "HANDOFF.md";
+
+/**
+ * What a running agent is sent when the user asks to move its work to a fresh
+ * session. The agent writes the note because only it knows what is in its
+ * context; `daedal agent continue` then does the rest from inside it.
+ */
+export function buildHandoffRequest(workingDirectory: string): string {
+  const path = join(workingDirectory, HANDOFF_FILE);
+  return [
+    "Your context is nearly full, so this work is moving to a fresh session that runs in this same working directory with the same worktrees.",
+    `Stop where you are and write a handoff note to ${path} for that session. Cover the goal, what is done (commits, files changed), what is half-done, the next steps in order, decisions made and why, and anything that failed or is still unverified. Name files and commands exactly. Keep it under 150 lines.`,
+    `Then run \`daedal agent continue --handoff-file ${path}\`. It starts the new session and archives this one, so make it your last action.`,
+    "If you have the daedalus-handoff skill, use it; it says the same thing in more detail.",
+  ].join(" ");
+}
+
 export function buildAgentPrompt(input: {
   taskNumber?: number;
   message?: string;
-  /** `draft-brief` asks for the brief to be written back, not the work done. */
-  mode?: "execute" | "draft-brief";
+  /**
+   * `draft-brief` asks for the brief to be written back, not the work done.
+   * `continue` starts a session that picks up where an earlier one stopped,
+   * in the same working directory; `daedalus-handoff` says whether it left a note.
+   */
+  mode?: "execute" | "draft-brief" | "continue";
+  handoff?: boolean;
 }): string | undefined {
+  if (input.mode === "continue") {
+    const work = input.taskNumber ? `task #${input.taskNumber}` : "the work";
+    const source = input.handoff
+      ? `It left a handoff note in ${HANDOFF_FILE} in your working directory. Read that first, then check the worktree's actual state with git before relying on it.`
+      : "It left no handoff note, so rebuild the picture from the task brief, JOURNAL.md and the worktree's git state and history.";
+    return [
+      `Continue ${work}. An earlier session worked on it in this same working directory and stopped because its context was full. ${source} Do not redo finished work; carry on to completion.`,
+      input.message?.trim() || undefined,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+  }
   const taskInstruction = !input.taskNumber
     ? undefined
     : input.mode === "draft-brief"

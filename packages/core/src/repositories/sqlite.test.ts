@@ -24,6 +24,7 @@ describe("SqliteRepositories", () => {
         archivedAt: null,
         position: 1,
         startSetsInProgress: true,
+        autoHandoffPercent: null,
         defaultProvider: null,
         defaultModel: null,
       });
@@ -59,6 +60,7 @@ describe("SqliteRepositories", () => {
         archivedAt: null,
         resumeCount: 0,
         lostReason: null,
+        handoffRequestedAt: null,
         resumeOnStart: false,
         position: 1,
       });

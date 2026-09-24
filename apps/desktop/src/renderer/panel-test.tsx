@@ -18,6 +18,7 @@ const snapshot: DesktopSnapshotDto = {
       available: true,
       position: 1,
       startSetsInProgress: true,
+      autoHandoffPercent: null,
       defaultProvider: null,
       defaultModel: null,
     },
@@ -43,6 +44,7 @@ const snapshot: DesktopSnapshotDto = {
       archivedAt: null,
       resumeCount: 0,
       lostReason: null,
+      handoffRequestedAt: null,
       position: 1,
     },
     {
@@ -64,6 +66,7 @@ const snapshot: DesktopSnapshotDto = {
       archivedAt: null,
       resumeCount: 0,
       lostReason: null,
+      handoffRequestedAt: null,
       position: 1,
     },
     // A fourth card, still starting. Opening a session that has not finished
@@ -89,6 +92,7 @@ const snapshot: DesktopSnapshotDto = {
       archivedAt: null,
       resumeCount: 0,
       lostReason: null,
+      handoffRequestedAt: null,
       position: 4,
     },
     // A third card, so a drag has somewhere to travel and the reorder check
@@ -112,6 +116,7 @@ const snapshot: DesktopSnapshotDto = {
       archivedAt: null,
       resumeCount: 0,
       lostReason: null,
+      handoffRequestedAt: null,
       position: 3,
     },
   ],

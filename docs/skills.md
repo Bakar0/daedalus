@@ -10,13 +10,14 @@ Design notes and the research behind the choices are in
 
 ## What Daedalus ships
 
-| Capability         | Default      | What it is                                                      |
-| ------------------ | ------------ | --------------------------------------------------------------- |
-| `daedalus-control` | on           | Drives Daedalus through the `daedal` CLI                        |
-| `unslop`           | on, `always` | Writing rules that cut AI tells, from `cursor/plugins` `pstack` |
+| Capability         | Default      | What it is                                                               |
+| ------------------ | ------------ | ------------------------------------------------------------------------ |
+| `daedalus-control` | on           | Drives Daedalus through the `daedal` CLI                                 |
+| `daedalus-handoff` | on           | `/daedalus-handoff`: note, then `daedal agent continue` in a fresh agent |
+| `unslop`           | on, `always` | Writing rules that cut AI tells, from `cursor/plugins` `pstack`          |
 
-Both are on out of the box, both are listed in Settings and in
-`daedal skill list` with the exact paths they write, and either can be turned
+All three are on out of the box, all are listed in Settings and in
+`daedal skill list` with the exact paths they write, and any can be turned
 off. `unslop` ships in its `always` form because the point of it is that the
 rules hold for every response; shipping it `on-demand` would install a command
 nobody asked for and change no writing at all.
@@ -26,6 +27,22 @@ Everything it writes is on the row in the panel, and
 `daedal skill disable unslop` takes all of it back. An existing install keeps
 whatever is already in its `config.json`, so this default only reaches a
 machine that has never set it.
+
+### The daedalus-handoff skill
+
+`/daedalus-handoff` in Claude Code, or `$daedalus-handoff` in a Codex message, makes the agent
+finish the edit it is in, write `HANDOFF.md` in its working directory in a
+fixed order (goal, done, in progress, next, decisions, unverified, and the
+user's own words), and run `daedal agent continue --handoff-file` as its last
+action. Words after the command reach the skill as `$ARGUMENTS` in Claude and
+as the rest of the message in Codex; the skill puts them in the note and
+passes them with `--message`, so the next agent sees them in its launch
+prompt too. A dev build installs it as `/daedalus-handoff-dev`.
+
+The same words are what `daedal agent handoff` and the automatic threshold
+(`workspace update --auto-handoff`) send into a running session, so a handoff
+looks the same whether the user typed it, the app asked for it, or the agent
+decided on its own.
 
 ## Layout on disk
 
@@ -176,8 +193,8 @@ appears in the panel like any other, with a Remove button.
 
 ## Authoring
 
-`skills/daedalus-control/` and `skills/unslop/` are the canonical authoring
-packages, in the Agent Skills `SKILL.md` format, with `styles/Unslop.md` beside
+`skills/daedalus-control/`, `skills/daedalus-handoff/` and `skills/unslop/` are the
+canonical authoring packages, in the Agent Skills `SKILL.md` format, with `styles/Unslop.md` beside
 them. They are compiled into the binary as text, so a Daedalus upgrade ships new
 skill text without the user reinstalling anything.
 

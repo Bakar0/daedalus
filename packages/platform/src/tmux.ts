@@ -188,6 +188,10 @@ export class CommandTmuxClient implements TmuxClient {
     );
     if (literal.exitCode !== 0)
       throw new Error(literal.stderr.trim() || "tmux input failed");
+    // Codex treats keystrokes that arrive within a few milliseconds of each
+    // other as a paste, and an Enter inside that burst becomes a newline in
+    // the composer rather than a submit. The pause ends the burst first.
+    await Bun.sleep(SEND_ENTER_DELAY_MS);
     const enter = await this.command(
       this.executable,
       this.args("send-keys", "-t", session, "Enter"),
@@ -233,6 +237,7 @@ export class CommandTmuxClient implements TmuxClient {
   }
 }
 
+export const SEND_ENTER_DELAY_MS = 300;
 export const SPIKE_SOCKET = "daedalus-spike";
 export const SPIKE_SESSION = "daedalus_spike";
 

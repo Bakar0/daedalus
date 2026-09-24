@@ -1,0 +1,4 @@
+interface:
+  display_name: "Handoff"
+  short_description: "Hand this work to a fresh agent in the same worktree"
+  default_prompt: "Use $daedalus-handoff to write a handoff note and continue this work in a new session."
