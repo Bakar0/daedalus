@@ -13,6 +13,7 @@ import {
 } from "@daedalus/platform";
 import type { Workspace } from "../domain";
 import { DaedalusError } from "../errors";
+import { isValidModelName } from "./providers";
 import type { SqliteRepositories } from "../repositories";
 import { applyManualOrder } from "./ordering";
 import { ensureWorkspaceContentFiles } from "./workspace-content";
@@ -238,6 +239,8 @@ export class WorkspaceService {
       changes.defaultModel === undefined
         ? workspace.defaultModel
         : changes.defaultModel?.trim() || null;
+    if (defaultModel !== null && !isValidModelName(defaultModel))
+      throw new DaedalusError("VALIDATION", "Default model name is invalid");
     const slug =
       changes.slug === undefined ? workspace.slug : workspaceSlug(changes.slug);
     const collision = this.repositories.findWorkspace(slug);
@@ -263,6 +266,14 @@ export class WorkspaceService {
           : defaultModel,
       updatedAt: new Date().toISOString(),
     };
+    // The same rule from the other side: a model with no provider to belong
+    // to would apply to whichever provider happened to be installed first,
+    // which is the drift this setting exists to stop.
+    if (updated.defaultModel && !updated.defaultProvider)
+      throw new DaedalusError(
+        "VALIDATION",
+        "A default model belongs to a provider; set the default provider as well",
+      );
     try {
       this.repositories.updateWorkspace(updated);
     } catch (error) {

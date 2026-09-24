@@ -1644,6 +1644,7 @@ export function WorkspaceApp({
   const [taskForm, setTaskForm] = useState({ title: "", description: "" });
   const [sessionType, setSessionType] = useState("codex");
   const [sessionModel, setSessionModel] = useState("");
+  const [rememberSessionModel, setRememberSessionModel] = useState(false);
   const [modelCatalogs, setModelCatalogs] = useState<
     Partial<Record<"codex" | "claude", ProviderModelCatalogDto>>
   >({});
@@ -2618,10 +2619,38 @@ export function WorkspaceApp({
       ? modelCatalogs[sessionType]
       : undefined;
   const sessionDefaultModel = sessionModelCatalog?.models.find(
-    (model) => model.id === sessionModelCatalog.defaultModel,
+    (model) =>
+      model.id === sessionModelCatalog.defaultModel ||
+      model.resolvedModel === sessionModelCatalog.defaultModel,
   );
   const selectedSessionModel = sessionModelCatalog?.models.find(
     (model) => model.id === sessionModel,
+  );
+  // The workspace default applies to this dialog's provider only when it is
+  // the provider the default was set for; a Claude default says nothing
+  // about a Codex session. Leaving the picker on its first option starts
+  // with it, because the core applies the same rule to every spawn.
+  const workspaceDefaultModel =
+    workspace && workspace.defaultProvider === sessionType
+      ? workspace.defaultModel
+      : null;
+  const workspaceDefaultModelEntry = workspaceDefaultModel
+    ? sessionModelCatalog?.models.find(
+        (model) =>
+          model.id === workspaceDefaultModel ||
+          model.resolvedModel === workspaceDefaultModel,
+      )
+    : undefined;
+  // Only a loaded catalog can call a default stale.
+  const workspaceDefaultModelStale = Boolean(
+    workspaceDefaultModel && sessionModelCatalog && !workspaceDefaultModelEntry,
+  );
+  // The first option already means the workspace default, so only another
+  // provider or an explicit model is a choice worth remembering.
+  const sessionChoiceIsWorkspaceDefault = Boolean(
+    workspace &&
+    workspace.defaultProvider === sessionType &&
+    (sessionModel === "" || sessionModel === workspace.defaultModel),
   );
   const sessionModelCatalogPending =
     sessionType !== "terminal" && !sessionModelCatalog && !modelCatalogError;
@@ -2847,11 +2876,11 @@ export function WorkspaceApp({
       setError("No agent provider is installed");
       return;
     }
-    const model =
-      options.model ??
-      (!options.provider || options.provider === workspace.defaultProvider
-        ? (workspace.defaultModel ?? undefined)
-        : undefined);
+    // Only an explicit pick travels. The core starts a spawn that names no
+    // model with the workspace default when the provider is the one it was
+    // set for, so Start, the dialog and the CLI all agree without the
+    // renderer holding a copy of the rule.
+    const model = options.model;
     const launch: SessionLaunchState = {
       key: crypto.randomUUID(),
       workspaceId: workspace.id,
@@ -2908,7 +2937,15 @@ export function WorkspaceApp({
 
   function openSessionModal(task?: TaskDto) {
     setSessionForm({ name: task?.title ?? "", taskId: task?.id });
+    // The dialog opens on what Start would launch, so "default" means the
+    // same thing here and on the board.
+    if (
+      workspace?.defaultProvider &&
+      availableBoardProviders.includes(workspace.defaultProvider)
+    )
+      setSessionType(workspace.defaultProvider);
     setSessionModel("");
+    setRememberSessionModel(false);
     setModelCatalogError(undefined);
     setModal("session");
   }
@@ -2929,6 +2966,7 @@ export function WorkspaceApp({
   function closeSessionModal() {
     setSessionForm({ name: "" });
     setSessionModel("");
+    setRememberSessionModel(false);
     setModal(undefined);
   }
 
@@ -2992,9 +3030,21 @@ export function WorkspaceApp({
     };
     setSessionLaunches((current) => [launch, ...current]);
     setSessionForm({ name: "" });
+    setRememberSessionModel(false);
     setModal(undefined);
     setView("sessions");
     try {
+      // Remembered before the spawn, so a session that fails to start still
+      // leaves the default the user asked for. An empty model is a real
+      // choice too: it records "this provider, its own default".
+      if (rememberSessionModel && !isTerminal)
+        await perform(
+          client.request.workspaceUpdate({
+            reference: workspace.id,
+            defaultProvider: sessionType as BoardProvider,
+            defaultModel: sessionModel || null,
+          }),
+        );
       const response = await client.request.agentSpawn({
         workspace: workspace.id,
         taskId: launch.taskId,
@@ -5767,6 +5817,7 @@ export function WorkspaceApp({
                       onClick={() => {
                         setSessionType(tool.id);
                         setSessionModel("");
+                        setRememberSessionModel(false);
                         setModelCatalogError(undefined);
                       }}
                       role="radio"
@@ -5803,10 +5854,13 @@ export function WorkspaceApp({
                     <option value="">Loading models…</option>
                   ) : (
                     <option value="">
-                      Provider default
-                      {sessionModelCatalog?.defaultModel
-                        ? ` · ${sessionDefaultModel?.label ?? sessionModelCatalog.defaultModel}`
-                        : " · Automatic"}
+                      {workspaceDefaultModel
+                        ? `Workspace default · ${workspaceDefaultModelEntry?.label ?? workspaceDefaultModel}${workspaceDefaultModelStale ? " (not offered any more)" : ""}`
+                        : `Provider default${
+                            sessionModelCatalog?.defaultModel
+                              ? ` · ${sessionDefaultModel?.label ?? sessionModelCatalog.defaultModel}`
+                              : " · Automatic"
+                          }`}
                     </option>
                   )}
                   {sessionModelCatalog?.models.map((model) => (
@@ -5816,21 +5870,53 @@ export function WorkspaceApp({
                     </option>
                   ))}
                 </select>
-                <small className="session-model-description">
+                <small
+                  className={
+                    workspaceDefaultModelStale && !sessionModel
+                      ? "session-model-error"
+                      : "session-model-description"
+                  }
+                >
                   {sessionModelCatalogPending || modelCatalogLoading
                     ? "Reading the models available to your account"
                     : (selectedSessionModel?.description ??
                       (sessionModel
                         ? `Use ${sessionModel} for this session`
-                        : sessionModelCatalog?.defaultModel
-                          ? "Follows your provider configuration"
-                          : "The provider chooses its current default"))}
+                        : workspaceDefaultModelStale
+                          ? `${providerLabel(sessionType)} no longer offers ${workspaceDefaultModel}. Pick a model here, or change the default in board settings; until then a session started without one refuses.`
+                          : workspaceDefaultModel
+                            ? "Set in board settings. Every new session of this provider in this workspace starts with it unless one is picked here."
+                            : sessionType === "claude"
+                              ? "Claude's recommended model, asked for by name, so a /model change made inside a session does not carry into new ones."
+                              : sessionModelCatalog?.defaultModel
+                                ? "The model Codex is configured with"
+                                : "The provider chooses its current default"))}
                 </small>
                 {modelCatalogError && (
                   <small className="session-model-error">
                     Model list unavailable: {modelCatalogError}
                   </small>
                 )}
+              </label>
+            )}
+            {sessionType !== "terminal" && !sessionChoiceIsWorkspaceDefault && (
+              <label className="session-model-remember">
+                <input
+                  checked={rememberSessionModel}
+                  onChange={(event) =>
+                    setRememberSessionModel(event.target.checked)
+                  }
+                  type="checkbox"
+                />
+                <span>
+                  Remember{" "}
+                  <strong>
+                    {providerLabel(sessionType)} ·{" "}
+                    {selectedSessionModel?.label ??
+                      (sessionModel || "provider default")}
+                  </strong>{" "}
+                  as this workspace&apos;s default
+                </span>
               </label>
             )}
             <div className="session-workspace-note">

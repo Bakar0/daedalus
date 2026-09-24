@@ -74,8 +74,11 @@ it again yourself. `--draft-brief` links the session to the task but asks it to
 write the brief rather than do the work, and leaves the status alone.
 
 `agent models` does not require a workspace. With `--json`, pass an exact
-`data.models[].id` to `agent spawn --model`; omit `--model` to use
-`data.defaultModel`. Display labels are descriptive and are not model IDs.
+`data.models[].id` to `agent spawn --model`; omit `--model` to use the
+workspace's `defaultModel` when `--provider` is its `defaultProvider`, and
+`data.defaultModel` otherwise. A workspace default the provider no longer
+lists fails the spawn with exit code 2; fix it with `workspace update
+--default-model`. Display labels are descriptive and are not model IDs.
 
 ## Attention and notifications
 

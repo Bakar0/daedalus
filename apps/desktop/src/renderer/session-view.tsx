@@ -26,12 +26,19 @@ export const providerLabel = (provider: string) =>
 export const compactTokenLabel = (tokens: number) =>
   tokens >= 1_000 ? `${Math.round(tokens / 1_000)}k` : String(tokens);
 
+/**
+ * The model a session was launched with, when that names one. Claude's
+ * `default` is a request for whatever it recommends, not a model, so it
+ * reads as nothing until telemetry reports what actually answered.
+ */
 export const sessionConfiguredModel = (session?: AgentSessionDto) => {
   if (!session) return undefined;
+  const named = (value: string | undefined) =>
+    value === "default" ? undefined : value;
   for (let index = session.args.length - 1; index >= 0; index -= 1) {
     const argument = session.args[index]!;
-    if (argument.startsWith("--model=")) return argument.slice(8);
-    if (argument === "--model") return session.args[index + 1];
+    if (argument.startsWith("--model=")) return named(argument.slice(8));
+    if (argument === "--model") return named(session.args[index + 1]);
   }
   return undefined;
 };

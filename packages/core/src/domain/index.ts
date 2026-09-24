@@ -26,7 +26,11 @@ export interface Workspace {
   startSetsInProgress: boolean;
   /** What Start and Start next launch when the user does not choose. */
   defaultProvider: "claude" | "codex" | null;
-  /** A provider model id, or null for the provider's own default. */
+  /**
+   * What every session of `defaultProvider` starts with when nothing names a
+   * model, or null for the provider's own default. Never set without a
+   * provider: a model belongs to one, and clearing the provider clears it.
+   */
   defaultModel: string | null;
 }
 

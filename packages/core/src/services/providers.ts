@@ -338,6 +338,30 @@ export function parseClaudeModelCatalog(
   );
 }
 
+/**
+ * Whether a catalog lists `model`, by id or by the model an alias resolves
+ * to. A workspace default is stored as whichever of the two the user chose,
+ * and the board picks ids while the CLI is as likely to be handed a resolved
+ * name, so both count.
+ */
+export function catalogOffersModel(
+  catalog: ProviderModelCatalog,
+  model: string,
+): boolean {
+  return catalog.models.some(
+    (entry) => entry.id === model || entry.resolvedModel === model,
+  );
+}
+
+/**
+ * Claude's own name for its recommended model, accepted by `--model` and
+ * resolved when the session starts. Daedalus passes it whenever a Claude
+ * session is launched with nothing else naming a model, because passing no
+ * `--model` at all lets Claude read the last `/model` pick from the user's
+ * settings file, which is where every session's in-flight choice ends up.
+ */
+export const CLAUDE_DEFAULT_MODEL = "default";
+
 export function modelArgument(args: string[]): string | undefined {
   for (let index = args.length - 1; index >= 0; index--) {
     const value = args[index]!;
@@ -355,28 +379,30 @@ export function isValidModelName(model: string): boolean {
   );
 }
 
+/**
+ * The model a provider starts with when Daedalus names none, as far as it
+ * can be read without launching one. A `--model` in the Daedalus agent
+ * arguments wins for either provider. Codex's own `config.toml` is read
+ * because a session with no `--model` uses it. Claude's `settings.json` is
+ * deliberately not: its `model` key is where `/model` picks land, and a
+ * Claude session Daedalus starts is asked for the recommended model by name
+ * instead, so that file no longer describes what will launch.
+ */
 const configuredModel = async (
   config: DaedalusConfig,
   provider: "codex" | "claude",
 ): Promise<string | undefined> => {
   const fromArgs = modelArgument(config.agents[provider]?.args ?? []);
   if (fromArgs) return fromArgs;
+  if (provider === "claude") return undefined;
   try {
-    if (provider === "codex") {
-      const file = Bun.file(
-        join(dirname(config.codexSessionsDirectory), "config.toml"),
-      );
-      if (!(await file.exists())) return undefined;
-      const parsed = Bun.TOML.parse(await file.text()) as {
-        model?: unknown;
-      };
-      return typeof parsed.model === "string" ? parsed.model : undefined;
-    }
     const file = Bun.file(
-      join(dirname(config.claudeProjectsDirectory), "settings.json"),
+      join(dirname(config.codexSessionsDirectory), "config.toml"),
     );
     if (!(await file.exists())) return undefined;
-    const parsed = (await file.json()) as { model?: unknown };
+    const parsed = Bun.TOML.parse(await file.text()) as {
+      model?: unknown;
+    };
     return typeof parsed.model === "string" ? parsed.model : undefined;
   } catch {
     return undefined;

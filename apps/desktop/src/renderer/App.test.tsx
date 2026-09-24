@@ -486,6 +486,52 @@ describe("desktop application shell", () => {
     expect(html).not.toContain("Provider default · Automatic");
   });
 
+  test("offers to remember a session's model as the workspace default, unless it already is", () => {
+    const render = (defaultProvider: "claude" | "codex") =>
+      renderToStaticMarkup(
+        <App
+          injectedClient={client}
+          initialModal="session"
+          initialSnapshot={{
+            ...base,
+            workspaces: [
+              {
+                id: "w1",
+                slug: "demo",
+                name: "Demo",
+                path: "/tmp/demo",
+                createdAt: "now",
+                updatedAt: "now",
+                archivedAt: null,
+                available: true,
+                position: 1,
+                startSetsInProgress: true,
+                defaultProvider,
+                defaultModel: "sonnet",
+              },
+            ],
+            settings: {
+              ...base.settings,
+              providers: [
+                { name: "codex", executable: "codex", available: true },
+              ],
+            },
+          }}
+        />,
+      );
+    // The dialog opens on Codex with the picker on its first option. Against
+    // a Claude default that is a different choice, so the checkbox offers to
+    // make it the default; against a Codex default the first option already
+    // means that default, and there is nothing to remember.
+    const differs = render("claude");
+    expect(differs).toContain('class="session-model-remember"');
+    expect(differs).toContain("Codex · provider default");
+    expect(differs).toContain("as this workspace");
+    const same = render("codex");
+    expect(same).not.toContain('class="session-model-remember"');
+    expect(same).toContain("Loading Codex models");
+  });
+
   test("renders the unified repository finder and clone action", () => {
     const html = renderToStaticMarkup(
       <App

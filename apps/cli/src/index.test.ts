@@ -301,6 +301,37 @@ describe("daedal CLI contract", () => {
         defaultModel: null,
       });
       expect(
+        json(
+          await cli(home, [
+            "workspace",
+            "update",
+            "briefs",
+            "--default-model",
+            "gpt-5-codex",
+            "--json",
+          ]),
+        ),
+      ).toMatchObject({
+        defaultProvider: "codex",
+        defaultModel: "gpt-5-codex",
+      });
+      // A model belongs to a provider; with none set it is refused rather
+      // than left to apply to whichever provider is installed first.
+      const orphan = await cli(home, [
+        "workspace",
+        "update",
+        "briefs",
+        "--default-provider",
+        "none",
+        "--default-model",
+        "sonnet",
+        "--json",
+      ]);
+      expect(orphan.exitCode).toBe(2);
+      expect(JSON.parse(orphan.stderr).error.message).toContain(
+        "belongs to a provider",
+      );
+      expect(
         (
           await cli(home, [
             "workspace",

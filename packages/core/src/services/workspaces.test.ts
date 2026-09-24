@@ -79,6 +79,45 @@ describe("WorkspaceService", () => {
     });
   });
 
+  test("a default model needs a provider and a valid name", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux: new FakeTmux(),
+      });
+      const workspace = await context.workspaces.create({ name: "Defaults" });
+      // On its own the model would apply to whichever provider happened to be
+      // installed first, which is the drift the setting exists to stop.
+      await expect(
+        context.workspaces.update(workspace.id, { defaultModel: "sonnet" }),
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+      await expect(
+        context.workspaces.update(workspace.id, {
+          defaultProvider: "claude",
+          defaultModel: "not a model",
+        }),
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+      const set = await context.workspaces.update(workspace.id, {
+        defaultProvider: "claude",
+        defaultModel: " sonnet ",
+      });
+      expect(set).toMatchObject({
+        defaultProvider: "claude",
+        defaultModel: "sonnet",
+      });
+      // Clearing the provider takes the model with it rather than leaving a
+      // Claude id to be handed to Codex later.
+      const cleared = await context.workspaces.update(workspace.id, {
+        defaultProvider: null,
+      });
+      expect(cleared).toMatchObject({
+        defaultProvider: null,
+        defaultModel: null,
+      });
+      context.close();
+    });
+  });
+
   test("requires force and a matching marker before deleting files", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const context = await createApplicationContext({

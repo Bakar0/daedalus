@@ -73,8 +73,10 @@ list`, `repo list`, or `agent list`.
   the task by number.
 - Before filling `--model`, run `daedal agent models <codex|claude> --json`.
   Use an exact `data.models[].id` value, not its display label or a guessed
-  model name. `data.defaultModel` reports the provider default when available;
-  omit `--model` to use that default. Custom `--command` agents do not have a
+  model name. Omit `--model` to use the workspace's default model when the
+  provider is the workspace's default provider (`workspace get` shows both),
+  and the provider's recommended default otherwise; `data.defaultModel`
+  reports that default when available. Custom `--command` agents do not have a
   discoverable model catalog.
 - Do not change the task's status after spawning. Starting a task-backed
   session moves a `todo` or `blocked` task to `in_progress` on its own when the
