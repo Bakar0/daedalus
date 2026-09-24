@@ -468,6 +468,12 @@ button:not(
 .workspace-terminal-action:focus-visible {
   opacity: 1;
 }
+/* A requested handoff stays visible on the button until the successor takes
+   over and this card is archived. */
+.session-handoff-action[data-handoff-requested] {
+  color: var(--accent) !important;
+}
+.session-handoff-action svg,
 .workspace-terminal-action svg {
   display: block;
   height: 16px;
