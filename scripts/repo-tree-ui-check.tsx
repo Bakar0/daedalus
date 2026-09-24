@@ -1,8 +1,7 @@
 /**
- * Checks the repository rows against a real browser. Since #27 each repository
- * is a chip beside the workspace name whose popover holds the row the explorer
- * used to draw, so the rows are measured inside their popovers, all opened at
- * once; the rows and buttons are the ones the explorer used to hold.
+ * Checks the repository rows against a real browser. Since #27 they are in the
+ * board's right column, which belongs to the workspace, so that is where they
+ * are measured; the rows and buttons are the ones the explorer used to hold.
  *
  * Two bugs shipped through a green suite here, and both were invisible to
  * assertions about markup because both were purely about geometry:
@@ -14,7 +13,7 @@
  *      its edge, because `.workspace-repository-group` is a grid item and a
  *      grid item's default `min-width: auto` means min-content.
  *
- * So this measures rather than reads: every row fits inside its popover, and
+ * So this measures rather than reads: every row fits inside the column, and
  * every action button is actually clickable. Both assertions were
  * run against the two broken stylesheets and seen to fail before being trusted.
  *
@@ -305,20 +304,10 @@ try {
       break;
     await Bun.sleep(50);
   }
-  // A closed popover has no geometry, so every chip is opened first.
-  await evaluate(
-    "document.querySelectorAll('.repository-chip').forEach((chip) => { chip.open = true; })",
-  );
 
   const measurements = await evaluate<{
-    chips: number;
-    rows: Array<{
-      label: string;
-      left: number;
-      right: number;
-      popoverLeft: number;
-      popoverRight: number;
-    }>;
+    column: { left: number; right: number } | null;
+    rows: Array<{ label: string; left: number; right: number }>;
     buttons: Array<{
       label: string;
       width: number;
@@ -327,11 +316,11 @@ try {
       iconOverflow: number;
     }>;
   }>(`(() => {
-    const chips = document.querySelectorAll('.repository-chip').length;
+    const columnElement = document.querySelector('.board-detail-column .workspace-repositories');
+    const box = columnElement && columnElement.getBoundingClientRect();
     const rows = [...document.querySelectorAll('.workspace-resource-row, .workspace-worktree-row:not(.empty)')].map((row) => {
       const rect = row.getBoundingClientRect();
-      const popover = row.closest('.repository-popover').getBoundingClientRect();
-      return { label: (row.textContent || '').trim().slice(0, 40), left: rect.left, right: rect.right, popoverLeft: popover.left, popoverRight: popover.right };
+      return { label: (row.textContent || '').trim().slice(0, 40), left: rect.left, right: rect.right };
     });
     const buttons = [...document.querySelectorAll('.workspace-resource-actions button, .workspace-worktree-row button')].map((button) => {
       const rect = button.getBoundingClientRect();
@@ -347,18 +336,19 @@ try {
           : 0,
       };
     });
-    return { chips, rows, buttons };
+    return { column: box ? { left: box.left, right: box.right } : null, rows, buttons };
   })()`);
 
-  if (measurements.chips !== populated.repositories.length)
-    failures.push(
-      `Expected ${populated.repositories.length} repository chips, found ${measurements.chips}`,
-    );
-  for (const row of measurements.rows)
-    if (row.right > row.popoverRight + 0.5 || row.left < row.popoverLeft - 0.5)
-      failures.push(
-        `Row "${row.label}" spans ${row.left.toFixed(0)}–${row.right.toFixed(0)}, outside its popover's ${row.popoverLeft.toFixed(0)}–${row.popoverRight.toFixed(0)}; its actions are unreachable`,
-      );
+  if (!measurements.column)
+    failures.push("The board's repository list did not render");
+  else {
+    const { left, right } = measurements.column;
+    for (const row of measurements.rows)
+      if (row.right > right + 0.5 || row.left < left - 0.5)
+        failures.push(
+          `Row "${row.label}" spans ${row.left.toFixed(0)}–${row.right.toFixed(0)}, outside the column's ${left.toFixed(0)}–${right.toFixed(0)}; its actions are unreachable`,
+        );
+  }
   const expectedRows =
     populated.repositories.length + populated.worktrees.length;
   if (measurements.rows.length !== expectedRows)
@@ -403,5 +393,5 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log(
-  "Repository rows check passed: every row fits its chip's popover and every action is pressable.",
+  "Repository rows check passed: every row fits the board's workspace column and every action is pressable.",
 );

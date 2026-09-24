@@ -2030,6 +2030,20 @@ export function WorkspaceApp({
     };
   }, [client, dataRevision, view, workspaceId]);
 
+  // Escape closes the task drawer, unless it is being edited, a dialog is on
+  // top of it, or the key belongs to a field.
+  useEffect(() => {
+    if (view !== "board" || !selectedTaskId || editingTask || modal) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable]")) return;
+      setSelectedTaskId(undefined);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [editingTask, modal, selectedTaskId, view]);
+
   const clearAttention = useCallback(
     async (sessionId: string) => {
       const response = await client.request.attentionClear({ sessionId });
@@ -3810,66 +3824,34 @@ export function WorkspaceApp({
   const repositoriesReady =
     workspaceContent !== undefined &&
     workspaceContent.workspaceId === workspace?.id;
-  const repositoryChips = workspace && (
-    <div aria-label="Repositories" className="workspace-repository-chips">
-      {repositoriesReady &&
-        workspaceContent.repositories.map((repository) => {
-          const preparing = repository.status === "preparing";
-          const failed = repository.status === "failed";
-          const status = failed
-            ? (repository.statusError ?? "Failed")
-            : preparing
-              ? "Preparing…"
-              : repositoryStatusText(repository.gitStatus);
-          return (
-            <details
-              className={`repository-chip repository-status-${repository.gitStatus?.state ?? "unavailable"} ${preparing ? "repository-preparing" : ""} ${failed ? "repository-failed" : ""}`}
-              key={repository.id}
-            >
-              <summary
-                aria-label={`${repository.name}, ${repository.baseBranch ?? "local"}, ${status}`}
-                title={repository.referencePath ?? repository.canonicalPath}
-              >
-                <strong>{repository.name}</strong>
-                <small>{repository.baseBranch ?? "Local"}</small>
-                <span
-                  className={`repository-git-status ${failed ? "repository-failed-reason" : ""}`}
-                >
-                  {preparing ? (
-                    <i className="repository-preparing-spinner" />
-                  ) : (
-                    <i />
-                  )}
-                  {status}
-                </span>
-              </summary>
-              <div className="repository-popover">
-                {renderRepositoryGroup(repository)}
-              </div>
-            </details>
-          );
-        })}
-      {repositoriesReady && workspaceContent.repositories.length === 0 && (
-        <button
-          className="workspace-repository-invite"
-          onClick={() => openRepositoryModal()}
-          type="button"
-        >
-          <strong>No repositories yet</strong>
-          <span>Add a repository</span>
-        </button>
-      )}
-      <button
-        aria-label="Add repository"
-        className="repository-chip-add"
-        onClick={() => openRepositoryModal()}
-        title="Add repository"
-        type="button"
-      >
-        +
+  // The board's right column is the workspace's, not the selected task's
+  // (#27): the repositories with the working trees cut from each, as the
+  // explorer used to draw them. The task's detail floats over it in a drawer.
+  const workspaceRepositories = !repositoriesReady ? (
+    <div className="empty">Loading repositories…</div>
+  ) : workspaceContent.repositories.length === 0 ? (
+    <div className="workspace-repository-invite">
+      <strong>No repositories yet</strong>
+      <span>
+        Attach one and Daedalus keeps a read-only checkout here for planning,
+        then gives each agent its own working tree off the latest base branch.
+      </span>
+      <button onClick={() => openRepositoryModal()} type="button">
+        Add a repository
       </button>
     </div>
+  ) : (
+    <div className="workspace-repositories workspace-resource-list">
+      {workspaceContent.repositories.map((repository) =>
+        renderRepositoryGroup(repository),
+      )}
+    </div>
   );
+
+  function closeTaskDrawer() {
+    setSelectedTaskId(undefined);
+    setEditingTask(false);
+  }
 
   const taskInspector = !selectedTask ? (
     <div className="empty large">
@@ -4418,7 +4400,6 @@ export function WorkspaceApp({
               </span>
               <h1>{workspace?.name ?? "Workspace"}</h1>
             </div>
-            {repositoryChips}
           </div>
           {!workspace ? (
             <div className="empty large">
@@ -5155,28 +5136,67 @@ export function WorkspaceApp({
           >
             <div className="section-heading">
               <div>
-                <span className="eyebrow">Inspector</span>
-                <h1>Task brief</h1>
+                <span className="eyebrow">Workspace</span>
+                <h1>Repositories</h1>
               </div>
               <div className="panel-heading-actions">
-                {selectedTask && (
-                  <button
-                    className="quiet"
-                    onClick={() => setEditingTask((current) => !current)}
-                  >
-                    {editingTask ? "Cancel" : "Edit"}
-                  </button>
+                {repositoriesReady && (
+                  <small className="count-badge">
+                    {workspaceContent.repositories.length}
+                  </small>
                 )}
+                <button
+                  aria-label="Add repository"
+                  className="quiet"
+                  onClick={() => openRepositoryModal()}
+                  title="Add repository"
+                  type="button"
+                >
+                  + Add
+                </button>
                 <PanelCollapseButton
                   collapsed={boardDetailPanelWidth < PANEL_COMPACT_THRESHOLD}
-                  label="task inspector"
+                  label="workspace"
                   onClick={toggleBoardDetailPanel}
                   side="right"
                 />
               </div>
             </div>
-            {taskInspector}
+            {workspaceRepositories}
           </aside>
+        )}
+
+        {view === "board" && workspace && selectedTask && (
+          <section
+            aria-label={`Task #${selectedTask.number}`}
+            className="task-drawer"
+            role="dialog"
+          >
+            <div className="section-heading">
+              <div>
+                <span className="eyebrow">Task #{selectedTask.number}</span>
+                <h1>Task brief</h1>
+              </div>
+              <div className="panel-heading-actions">
+                <button
+                  className="quiet"
+                  onClick={() => setEditingTask((current) => !current)}
+                >
+                  {editingTask ? "Cancel" : "Edit"}
+                </button>
+                <button
+                  aria-label="Close task"
+                  className="quiet task-drawer-close"
+                  onClick={closeTaskDrawer}
+                  title="Close (Esc)"
+                  type="button"
+                >
+                  <DismissIcon />
+                </button>
+              </div>
+            </div>
+            {taskInspector}
+          </section>
         )}
 
         {view === "sessions" && workspace && (

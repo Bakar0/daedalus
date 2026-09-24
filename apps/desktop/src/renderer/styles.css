@@ -1704,6 +1704,8 @@ dd {
   display: grid;
   grid-row: 3;
   min-height: 0;
+  /* The task drawer is positioned against the shell. */
+  position: relative;
 }
 
 .column-resize-handle {
@@ -2034,94 +2036,6 @@ dd {
   border-bottom: 1px solid var(--line);
   gap: 16px;
   padding-bottom: 14px;
-}
-/* Repository chips beside the workspace name (#27). Repositories belong to the
-   workspace, so they sit in the one header that names it and shows on every
-   tab, rather than under a task's brief. Each chip opens the row the explorer
-   used to draw, actions and working trees included. */
-.workspace-repository-chips {
-  align-items: center;
-  display: flex;
-  flex: 1;
-  flex-wrap: wrap;
-  gap: 6px;
-  justify-content: flex-end;
-  min-width: 0;
-}
-.repository-chip {
-  position: relative;
-}
-.repository-chip > summary {
-  align-items: center;
-  background: var(--raised);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  cursor: pointer;
-  display: flex;
-  font-size: 11px;
-  gap: 7px;
-  list-style: none;
-  padding: 4px 11px;
-  white-space: nowrap;
-}
-.repository-chip > summary::-webkit-details-marker {
-  display: none;
-}
-.repository-chip > summary:hover,
-.repository-chip[open] > summary {
-  background: var(--raised-hover);
-  border-color: var(--line-strong);
-}
-.repository-chip > summary strong {
-  color: var(--text);
-  font-weight: 600;
-}
-.repository-chip > summary small {
-  color: var(--muted);
-}
-.repository-chip > summary .repository-git-status {
-  color: var(--secondary);
-  font-size: 10px;
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.repository-chip.repository-preparing > summary strong,
-.repository-chip.repository-failed > summary strong {
-  color: var(--secondary);
-}
-.repository-popover {
-  background: var(--overlay);
-  border: 1px solid var(--line-strong);
-  border-radius: 11px;
-  box-shadow: 0 18px 50px rgb(0 0 0 / 0.45);
-  padding: 6px;
-  position: absolute;
-  right: 0;
-  top: calc(100% + 6px);
-  width: 340px;
-  z-index: 20;
-}
-.repository-popover .workspace-resource-list {
-  padding: 0;
-}
-.repository-chip-add {
-  align-items: center;
-  background: var(--raised) !important;
-  border: 1px solid var(--line) !important;
-  border-radius: 999px !important;
-  color: var(--muted) !important;
-  display: flex;
-  font-size: 15px !important;
-  height: 26px;
-  justify-content: center;
-  line-height: 1;
-  padding: 0 !important;
-  width: 26px;
-}
-.repository-chip-add:hover {
-  background: var(--raised-hover) !important;
-  color: var(--text) !important;
 }
 .workspace-tabs {
   background: var(--raised);
@@ -2498,33 +2412,35 @@ dd {
 /* A workspace with no repositories cannot do the thing it exists for, so the
    empty state is an instruction rather than a shrug. */
 .workspace-repository-invite {
-  align-items: center;
-  background: var(--accent-wash) !important;
-  border: 1px dashed var(--line-strong) !important;
-  border-radius: 999px !important;
-  color: var(--text) !important;
   display: flex;
-  font-size: 11px !important;
-  gap: 8px;
-  padding: 4px 12px !important;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 2px;
 }
 .workspace-repository-invite strong {
-  font-weight: 600;
+  font-size: 12px;
 }
 .workspace-repository-invite span {
-  color: var(--secondary);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
 }
-.repository-popover .workspace-resource-list {
+.workspace-repository-invite button {
+  align-self: flex-start;
+  font-size: 11px;
+  padding: 5px 10px;
+}
+.workspace-repositories .workspace-resource-list {
   padding: 0 4px 5px;
 }
-.repository-popover .workspace-resource-row {
+.workspace-repositories .workspace-resource-row {
   padding: 6px;
 }
-.repository-popover .workspace-resource-row strong,
-.repository-popover .workspace-resource-row small {
+.workspace-repositories .workspace-resource-row strong,
+.workspace-repositories .workspace-resource-row small {
   font-size: 9px;
 }
-.repository-popover .access-badge {
+.workspace-repositories .access-badge {
   font-size: 8px;
   padding: 3px 5px;
 }
@@ -3375,7 +3291,7 @@ dd {
 }
 .board-detail-column.panel-compact::before {
   color: var(--muted);
-  content: "Inspector";
+  content: "Workspace";
   font-size: 10px;
   font-weight: 650;
   letter-spacing: 0.12em;
@@ -4446,4 +4362,69 @@ dd {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   margin: 0;
+}
+
+/* The board's right column is the workspace's (#27). Its repository list
+   scrolls inside the column rather than growing it. */
+.board-detail-column .workspace-repositories {
+  /* A grid stretches its rows to fill by default, which spread two
+     repositories across the whole column. */
+  align-content: start;
+  flex: 1;
+  margin: 0 -8px;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 4px 8px;
+}
+
+/* The selected task's detail, floating over the workspace column from the
+   right edge. Wide enough that the brief, the timeline and the cost line read
+   without wrapping; no backdrop, so the lanes stay readable beside it. */
+.task-drawer {
+  animation: task-drawer-in 160ms ease-out;
+  background: var(--overlay);
+  border-left: 1px solid var(--line-strong);
+  bottom: 0;
+  box-shadow: -24px 0 60px rgb(0 0 0 / 0.4);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 20px 18px 14px;
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: min(560px, 48%);
+  z-index: 15;
+}
+.task-drawer > .task-brief,
+.task-drawer > .brief-editor {
+  flex: 1;
+}
+.task-drawer-close {
+  align-items: center;
+  display: flex;
+  height: 28px;
+  justify-content: center;
+  padding: 0 !important;
+  width: 28px;
+}
+.task-drawer-close svg {
+  height: 14px;
+  width: 14px;
+}
+@keyframes task-drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .task-drawer {
+    animation: none;
+  }
+}
+@media (max-width: 820px) {
+  .task-drawer {
+    width: 100%;
+  }
 }

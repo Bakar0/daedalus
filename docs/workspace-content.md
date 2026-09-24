@@ -166,11 +166,11 @@ The editor rejects traversal, internal `.daedalus` paths, symbolic links,
 binary content, and files larger than 1 MB. Saves are atomic and use the
 previously read content as an optimistic concurrency check so an agent's
 external edit cannot be silently overwritten. Repository attachments and
-working trees are chips beside the workspace name in the main header, one per
-repository, each opening a popover with its actions and working trees (#27);
-the explorer shows their checkouts as ordinary folders.
+working trees are the board's right column, which belongs to the workspace;
+the selected task opens in a drawer over it (#27). The explorer shows their
+checkouts as ordinary folders.
 
-The chip row ends in an add button. Its modal is a
+The column's heading has an add button. Its modal is a
 multi-select fuzzy-search over the global library. A separate remote URL input
 clones a missing repository into the library and selects it; one final action
 attaches every selected repository. Repository updating, worktree comparison,

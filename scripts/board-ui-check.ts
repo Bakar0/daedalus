@@ -482,8 +482,8 @@ try {
   step = "chip selects";
   await evaluate(`${card(27)}.querySelector('.board-chip').click()`);
   await waitFor(
-    "document.querySelector('.board-detail-column h2')?.textContent.includes('#25')",
-    "the inspector to show #25",
+    "document.querySelector('.task-drawer h2')?.textContent.includes('#25')",
+    "the task drawer to swap to #25",
   );
 
   step = "timeline";
@@ -540,81 +540,126 @@ try {
   );
   const journal = await screenshot("journal");
 
-  step = "repositories";
-  // Since #27 the repositories are chips beside the workspace name, in the
-  // header every tab shares, so a workspace with nothing attached is fixed
-  // from wherever the app lands. A chip opens the row the explorer used to
-  // draw: actions and working trees. The journal link above left the app on
-  // the Workspace tab, where the chips must show as well.
-  await waitFor(
-    "document.querySelectorAll('.workspace-repository-chips .repository-chip').length === 2",
-    "two repository chips on the Workspace tab",
-  );
+  step = "task drawer";
+  // Since #27 the task's detail floats over the right column in a drawer, and
+  // the column underneath is the workspace's. The journal link above left the
+  // app on the Workspace tab.
   await evaluate(
     "[...document.querySelectorAll('.app-mode-switcher button')].find((b) => b.textContent === 'Board').click()",
   );
+  await waitFor("document.querySelector('.board-lanes')", "the board again");
+  await evaluate(`${card(24)}.click()`);
   await waitFor(
-    "document.querySelectorAll('.workspace-repository-chips .repository-chip').length === 2",
-    "two repository chips on the board",
+    "document.querySelector('.task-drawer h2')?.textContent.includes('#24')",
+    "the drawer to open on #24",
   );
-  const chipText = await evaluate<string[]>(
-    "[...document.querySelectorAll('.repository-chip > summary')].map((s) => s.innerText.replace(/\\s+/g, ' ').trim())",
-  );
-  check(
-    chipText[0] === "daedalus main Clean" &&
-      chipText[1] === "hive main ↓3 behind",
-    `the chips read ${JSON.stringify(chipText)}`,
-  );
-  check(
-    await evaluate<boolean>(
-      `Boolean(document.querySelector('.workspace-repository-chips [aria-label="Add repository"]'))`,
-    ),
-    "the chips row has no add button",
-  );
-  check(
-    !(await evaluate<boolean>(
-      "Boolean(document.querySelector('.board-detail-column .workspace-repository-group'))",
-    )),
-    "the task inspector still holds a repository group",
-  );
-  await evaluate("document.querySelector('.repository-chip').open = true");
-  await Bun.sleep(100);
-  const repositoryPopover = await evaluate<{
-    worktrees: number;
-    actions: number;
-    right: number;
-    bottom: number;
-    width: number;
-    height: number;
+  // Past the 160ms slide-in, which starts 24px to the right.
+  await Bun.sleep(300);
+  const drawer = await evaluate<{
+    drawerLeft: number;
+    drawerRight: number;
+    drawerWidth: number;
+    columnLeft: number;
+    windowWidth: number;
+    lanesRight: number;
+    selected: boolean;
   }>(`(() => {
-    const popover = document.querySelector('.repository-chip[open] .repository-popover');
-    const box = popover.getBoundingClientRect();
+    const drawer = document.querySelector('.task-drawer').getBoundingClientRect();
+    const column = document.querySelector('.board-detail-column').getBoundingClientRect();
     return {
-      worktrees: popover.querySelectorAll('.workspace-worktree-row:not(.empty)').length,
-      actions: popover.querySelectorAll('button').length,
-      right: box.right,
-      bottom: box.bottom,
-      width: innerWidth,
-      height: innerHeight,
+      drawerLeft: drawer.left,
+      drawerRight: drawer.right,
+      drawerWidth: drawer.width,
+      columnLeft: column.left,
+      windowWidth: innerWidth,
+      lanesRight: document.querySelector('.board-lanes').getBoundingClientRect().right,
+      selected: ${card(24)}.classList.contains('selected'),
     };
   })()`);
   check(
-    repositoryPopover.worktrees === 3,
-    `the daedalus popover lists ${repositoryPopover.worktrees} working trees, not 3`,
-  );
-  // Terminal, fetch and pull on the repository; terminal, push and remove on
-  // each of its three working trees.
-  check(
-    repositoryPopover.actions === 3 + 3 * 3,
-    `the daedalus popover has ${repositoryPopover.actions} actions, not 12`,
+    Math.abs(drawer.drawerRight - drawer.windowWidth) <= 1,
+    `the drawer ends at ${drawer.drawerRight}, not the window's right edge ${drawer.windowWidth}`,
   );
   check(
-    repositoryPopover.right <= repositoryPopover.width &&
-      repositoryPopover.bottom <= repositoryPopover.height,
-    `the popover runs off the window (${repositoryPopover.right}x${repositoryPopover.bottom} in ${repositoryPopover.width}x${repositoryPopover.height})`,
+    drawer.drawerLeft < drawer.columnLeft,
+    `the drawer (${drawer.drawerWidth}px) is no wider than the column it covers`,
+  );
+  check(
+    drawer.drawerLeft > drawer.lanesRight - drawer.drawerWidth,
+    "the drawer covers the whole board",
+  );
+  check(
+    drawer.selected,
+    "#24's card is not highlighted while its drawer is open",
+  );
+  const drawerShot = await screenshot("drawer");
+  await send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key: "Escape",
+    code: "Escape",
+    windowsVirtualKeyCode: 27,
+  });
+  await send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key: "Escape",
+    code: "Escape",
+    windowsVirtualKeyCode: 27,
+  });
+  await waitFor(
+    "!document.querySelector('.task-drawer')",
+    "Escape to close the drawer",
+  );
+  await evaluate(`${card(24)}.click()`);
+  await waitFor(
+    "document.querySelector('.task-drawer')",
+    "the drawer to reopen",
+  );
+  await evaluate(
+    "document.querySelector('.task-drawer [aria-label=\"Close task\"]').click()",
+  );
+  await waitFor(
+    "!document.querySelector('.task-drawer')",
+    "the close button to close the drawer",
+  );
+
+  step = "repositories";
+  // The right column is the workspace's: the repositories with the working
+  // trees cut from each, and the add button, whatever task is or is not open.
+  const workspaceColumn = await evaluate<{
+    heading: string;
+    repositories: number;
+    worktrees: number;
+    add: boolean;
+    overflow: number;
+  }>(`(() => {
+    const column = document.querySelector('.board-detail-column');
+    const list = column.querySelector('.workspace-repositories');
+    return {
+      heading: column.querySelector('.section-heading h1')?.textContent ?? '',
+      repositories: column.querySelectorAll('.workspace-resource-row').length,
+      worktrees: column.querySelectorAll('.workspace-worktree-row:not(.empty)').length,
+      add: Boolean(column.querySelector('[aria-label="Add repository"]')),
+      overflow: list ? list.scrollWidth - list.clientWidth : -1,
+    };
+  })()`);
+  check(
+    workspaceColumn.heading === "Repositories",
+    `the right column is headed "${workspaceColumn.heading}"`,
+  );
+  check(
+    workspaceColumn.repositories === 2,
+    `the workspace column lists ${workspaceColumn.repositories} repositories, not 2`,
+  );
+  check(
+    workspaceColumn.worktrees === 3,
+    `the workspace column lists ${workspaceColumn.worktrees} working trees, not 3`,
+  );
+  check(workspaceColumn.add, "the workspace column has no add button");
+  check(
+    workspaceColumn.overflow >= 0 && workspaceColumn.overflow <= 1,
+    `the repository list scrolls sideways by ${workspaceColumn.overflow}px`,
   );
   const repositoriesShot = await screenshot("repositories");
-  await evaluate("document.querySelector('.repository-chip').open = false");
 
   step = "compact width";
   await evaluate(
@@ -675,6 +720,7 @@ try {
       settingsShot,
       inspector,
       journal,
+      drawerShot,
       repositoriesShot,
       compactShot,
       light,

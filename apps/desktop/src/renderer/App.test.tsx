@@ -690,22 +690,21 @@ describe("desktop application shell", () => {
     expect(html).toContain("Preview");
     expect(html).toContain('aria-label="New file"');
     expect(html).toContain('aria-label="New folder"');
-    // Since #27 the explorer is the file tree alone; the repositories are
-    // chips in the header, which this tab shares with the others.
+    // Since #27 the explorer is the file tree alone; the repositories are in
+    // the board's workspace column.
     const explorer = html.slice(
       html.indexOf('class="workspace-explorer"'),
       html.indexOf('class="workspace-viewer'),
     );
     expect(explorer).not.toContain("workspace-repository-group");
     expect(explorer).not.toContain("Repositories");
-    expect(html).toContain("workspace-repository-chips");
     // The explorer's border is grabbable, and carries the size it is
     // currently set to so a keyboard can move it too.
     expect(html).toContain('aria-label="Resize explorer"');
     expect(html).toContain("--explorer-width:");
   });
 
-  test("renders repositories as header chips whose popovers hold the worktrees", () => {
+  test("renders the repositories in the board's workspace column, with no task open", () => {
     const html = renderToStaticMarkup(
       <App
         injectedClient={client}
@@ -715,16 +714,14 @@ describe("desktop application shell", () => {
       />,
     );
     expect(html).toContain("mode-board");
-    expect(html).toContain("Task brief");
-    expect(html).toContain("Select a task");
-    // The chip names the repository, its base branch and its state, and sits
-    // in the header beside the workspace name, not in the task inspector.
-    expect(html).toContain('aria-label="Repositories"');
-    expect(html).toContain('aria-label="daedalus, main, ↓2 behind"');
-    expect(html.indexOf("workspace-repository-chips")).toBeLessThan(
-      html.indexOf("board-detail-column"),
-    );
-    expect(html).toContain("repository-popover");
+    // The right column is the workspace's, and with no task selected there
+    // is no drawer over it.
+    const column = html.slice(html.indexOf("board-detail-column"));
+    expect(column).toContain(">Workspace<");
+    expect(column).toContain(">Repositories<");
+    expect(html).not.toContain("task-drawer");
+    expect(html).not.toContain("Select a task");
+    expect(html).toContain("main ·");
     expect(html).toContain("↓2 behind");
     expect(html).toContain('aria-label="Fetch daedalus"');
     expect(html).toContain('aria-label="Pull daedalus"');
@@ -735,9 +732,48 @@ describe("desktop application shell", () => {
     expect(html).toContain("workspace-worktree-row");
     expect(html).toContain("daedalus/demo/task/session");
     expect(html).toContain('aria-label="Push daedalus/demo/task/session"');
-    // The inspector column is the task's alone.
-    const inspector = html.slice(html.indexOf("board-detail-column"));
-    expect(inspector).not.toContain("workspace-repository-group");
+    expect(column).toContain("workspace-repository-group");
+  });
+
+  test("opens the selected task in a drawer over the workspace column", () => {
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialSnapshot={{
+          ...demoSnapshot,
+          tasks: [
+            {
+              id: "t1",
+              workspaceId: "w1",
+              number: 1,
+              title: "Drawer task",
+              description: "The brief.",
+              status: "todo",
+              priority: "normal",
+              createdAt: "now",
+              updatedAt: "now",
+              completedAt: null,
+              briefUpdatedAt: null,
+              references: [],
+            },
+          ] as unknown as DesktopSnapshotDto["tasks"],
+        }}
+        initialSelectedTaskId="t1"
+        initialWorkspaceView="board"
+        initialWorkspaceContent={demoContent}
+      />,
+    );
+    const drawer = html.slice(html.indexOf('class="task-drawer"'));
+    expect(html).toContain('class="task-drawer"');
+    expect(html).toContain('aria-label="Task #1"');
+    expect(drawer).toContain("<h2>#1 Drawer task</h2>");
+    expect(drawer).toContain('aria-label="Close task"');
+    expect(drawer).toContain("Edit");
+    // The drawer covers the column; the repositories are still rendered
+    // underneath it.
+    expect(html.indexOf("workspace-repository-group")).toBeLessThan(
+      html.indexOf('class="task-drawer"'),
+    );
   });
   test("renders workspace, task, and session lifecycle state", () => {
     const snapshot: DesktopSnapshotDto = {
