@@ -54,7 +54,6 @@ import { laneFor } from "./board-lanes";
 import { taskActions } from "./task-actions";
 import { TaskCostLine, TaskTimeline } from "./TaskTimeline";
 import { TaskActionBar } from "./TaskActionBar";
-import { TaskActionsMenu } from "./TaskActionsMenu";
 import { TaskPriorityMenu, TaskStatusMenu } from "./TaskStatusMenu";
 import {
   AgentStatusDot,
@@ -3944,9 +3943,11 @@ export function WorkspaceApp({
           actions={selectedTaskActions}
           busy={busy}
           onDismissLaunch={dismissSessionLaunch}
+          onDelete={() => void deleteTask(selectedTask)}
           onDraftBrief={() =>
             void startTaskSession(selectedTask, { draftBrief: true })
           }
+          onEdit={() => setEditingTask(true)}
           onMarkDone={() =>
             void perform(
               client.request.taskSetStatus({
@@ -5211,19 +5212,6 @@ export function WorkspaceApp({
                 <h1>Task brief</h1>
               </div>
               <div className="panel-heading-actions">
-                <button
-                  className="quiet"
-                  onClick={() => setEditingTask((current) => !current)}
-                >
-                  {editingTask ? "Cancel" : "Edit"}
-                </button>
-                <TaskActionsMenu
-                  canDraftBrief={Boolean(snapshot?.settings.tmuxAvailable)}
-                  onDelete={() => void deleteTask(selectedTask)}
-                  onDraftBrief={() =>
-                    void startTaskSession(selectedTask, { draftBrief: true })
-                  }
-                />
                 <button
                   aria-label="Close task"
                   className="quiet task-drawer-close"

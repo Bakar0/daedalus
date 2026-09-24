@@ -634,7 +634,8 @@ try {
     aboveBrief: boolean;
     selects: number;
     oldRows: number;
-    moreInHeading: boolean;
+    moreInBar: boolean;
+    headingButtons: string;
   }>(`(() => {
     const drawer = document.querySelector('.task-drawer');
     const pill = ${statusPill};
@@ -648,7 +649,8 @@ try {
       aboveBrief: box ? box.bottom <= brief.top : false,
       selects: drawer.querySelectorAll('select').length,
       oldRows: drawer.querySelectorAll('.task-status-row, .task-inspector-actions, .brief-delete').length,
-      moreInHeading: Boolean(drawer.querySelector('.section-heading [aria-label="More task actions"]')),
+      moreInBar: Boolean(drawer.querySelector('.task-action-bar [aria-label="More task actions"]')),
+      headingButtons: [...drawer.querySelectorAll('.section-heading button, .section-heading summary')].map((item) => item.getAttribute('aria-label') ?? item.textContent.trim()).join(','),
     };
   })()`);
   check(controls.pill, "the drawer has no status pill");
@@ -666,7 +668,11 @@ try {
     controls.oldRows === 0,
     "the single-control rows are still in the drawer",
   );
-  check(controls.moreInHeading, "the overflow menu is not in the heading");
+  check(controls.moreInBar, "the overflow menu is not in the action bar");
+  check(
+    controls.headingButtons === "Close task",
+    `the heading still has ${controls.headingButtons}, not only Close`,
+  );
 
   // Keyboard: Enter opens the menu on the checked item, the arrows move,
   // and Escape closes the menu and leaves the drawer open.
@@ -819,7 +825,7 @@ try {
   const bar = `document.querySelector('.task-drawer .task-action-bar')`;
   const barButtons = () =>
     evaluate<string[]>(
-      `[...(${bar}?.querySelectorAll('button') ?? [])].map((button) => button.textContent.trim())`,
+      `[...(${bar}?.querySelectorAll('button:not(.menu-item)') ?? [])].map((button) => button.textContent.trim())`,
     );
   await evaluate(`${card(29)}.click()`);
   await waitFor(
@@ -847,9 +853,17 @@ try {
   check(queuedBar.aboveBrief, "the action bar is not above the brief");
   const queuedButtons = await barButtons();
   check(
-    queuedButtons.join(",") === "Start,▾,Draft brief",
+    queuedButtons.join(",") === "Start,▾,Draft brief,Edit",
     `the queued task's bar lists ${queuedButtons.join(", ")}`,
   );
+  await evaluate(`${moreButton}.click()`);
+  await waitFor(openMenu, "the overflow menu to open in the bar");
+  const emptyBriefActions = await visibleItems(moreButton);
+  check(
+    emptyBriefActions.map((item) => item.text).join(",") === "Delete task",
+    `with Draft brief in the bar the menu lists ${emptyBriefActions.map((item) => item.text).join(", ")}`,
+  );
+  await pressKey("Escape", "Escape", 27);
   const queuedBarShot = await screenshot("drawer-action-bar-queued");
   const spawnsBefore = (await calls("agentSpawn")).length;
   await evaluate(`${bar}.querySelector('.board-start').click()`);
@@ -878,7 +892,7 @@ try {
   );
   const runningButtons = await barButtons();
   check(
-    runningButtons.join(",") === "Open terminal,Second opinion",
+    runningButtons.join(",") === "Open terminal,Second opinion,Edit",
     `the running task's bar lists ${runningButtons.join(", ")}`,
   );
   const startedLane = await laneOf(29);
@@ -901,7 +915,7 @@ try {
   );
   const doneButtons = await barButtons();
   check(
-    doneButtons.join(",") === "Open worktree,Open PR #20",
+    doneButtons.join(",") === "Open worktree,Open PR #20,Edit",
     `the done task's bar lists ${doneButtons.join(", ")}`,
   );
   const outputBefore = (await calls("sessionWorktreeOpen")).length;

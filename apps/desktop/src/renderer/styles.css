@@ -4601,25 +4601,45 @@ dd {
   margin: -6px 0 18px;
 }
 .task-action-buttons {
-  align-items: center;
+  align-items: flex-start;
   display: flex;
-  flex-wrap: wrap;
   gap: 6px;
 }
-.task-action-buttons > button,
-.task-action-buttons > .board-start-group > button {
+.task-action-lead {
+  align-items: center;
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.task-action-tail {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  margin-left: auto;
+}
+.task-action-lead > button,
+.task-action-lead > .board-start-group > button,
+.task-action-tail > button {
   font-size: 12px !important;
   padding: 5px 11px !important;
 }
-.task-action-buttons > .quiet {
+.task-action-lead > .quiet,
+.task-action-tail > .quiet {
   border-color: var(--line);
 }
-.task-action-buttons > .quiet:hover:not(:disabled) {
+.task-action-lead > .quiet:hover:not(:disabled),
+.task-action-tail > .quiet:hover:not(:disabled) {
   border-color: var(--line-strong);
 }
-.task-action-buttons > .board-start-group > .board-start-choose {
+.task-action-lead > .board-start-group > .board-start-choose {
   padding-left: 7px !important;
   padding-right: 7px !important;
+}
+.task-action-tail > .task-actions-menu {
+  display: flex;
 }
 .task-action-bar > .board-launch-row {
   font-size: 12px;

@@ -11,6 +11,11 @@
  * What applies comes from `taskActions`, the same derivation the card uses,
  * so the two cannot disagree. Starts in flight and failed ones are listed
  * under the buttons, as the card lists them.
+ *
+ * The right end holds what applies to every task: Edit, and an overflow
+ * menu with Draft brief with agent and Delete. They were in the drawer's
+ * heading beside Close, which left a person looking in two places for one
+ * kind of thing; the heading is now the drawer's own, title and Close only.
  */
 import type { ReactNode } from "react";
 import type {
@@ -20,6 +25,7 @@ import type {
 } from "@daedalus/protocol";
 import { confirmStartDespite } from "./BoardView";
 import { providerLabel, sessionName } from "./session-view";
+import { TaskActionsMenu } from "./TaskActionsMenu";
 import type { BoardProvider, TaskActions } from "./task-actions";
 
 export interface TaskActionBarProps {
@@ -31,6 +37,8 @@ export interface TaskActionBarProps {
   /** Start with a provider and model chosen in the session dialog. */
   onStartWith: () => void;
   onDraftBrief: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
   onSecondOpinion: (provider: BoardProvider) => void;
   onSetInProgress: () => void;
   onMarkDone: () => void;
@@ -186,16 +194,33 @@ export function TaskActionBar(props: TaskActionBarProps) {
       </button>,
     );
   }
-  if (buttons.length === 0 && actions.launches.length === 0) return null;
   return (
     <div
       aria-label={`Actions for #${task.number}`}
       className="task-action-bar"
       role="group"
     >
-      {buttons.length > 0 && (
-        <div className="task-action-buttons">{buttons}</div>
-      )}
+      <div className="task-action-buttons">
+        {/* The lead wraps as the drawer narrows; the tail keeps its place at
+            the right end, so the menu's popover never opens off the drawer. */}
+        <div className="task-action-lead">{buttons}</div>
+        <div className="task-action-tail">
+          <button
+            className="quiet"
+            onClick={props.onEdit}
+            title="Edit the title and brief"
+            type="button"
+          >
+            Edit
+          </button>
+          <TaskActionsMenu
+            canDraftBrief={tmuxAvailable && !actions.starting}
+            onDelete={props.onDelete}
+            onDraftBrief={props.onDraftBrief}
+            showDraftBrief={!actions.canDraftBrief}
+          />
+        </div>
+      </div>
       {actions.launches.map((launch) => (
         <div
           aria-busy={launch.status === "starting"}
