@@ -576,6 +576,12 @@ class ConfiguredProvider implements AgentProvider {
       );
     if (this.promptArgument && this.name === "codex") {
       args.push(...CODEX_DAEDALUS_TUI_ARGS);
+      // Codex's sandbox lets a session write only inside its working
+      // directory. Every `daedal` command that changes state writes the
+      // SQLite database under the Daedalus home, so without this one
+      // `daedal attention` or `agent continue` fails with "attempt to write a
+      // readonly database" whenever the reviewer keeps it sandboxed.
+      if (this.config) args.push("--add-dir", this.config.home);
       if (this.config)
         args.push(
           ...(await ensureCodexHooks(

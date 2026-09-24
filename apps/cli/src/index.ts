@@ -22,7 +22,6 @@ import {
   probeVersion,
   TMUX_EXECUTABLE_FALLBACKS,
 } from "@daedalus/platform";
-import { spawn as spawnProcess } from "node:child_process";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { DoctorCheck } from "@daedalus/protocol";
@@ -1294,7 +1293,11 @@ async function agentContinueCommand(
     message: parsed.values.message,
     archive: self ? "later" : "now",
   });
-  if (self) (options.archiveAfterExit ?? archiveAfterExit)(predecessor.id);
+  if (self)
+    await (options.archiveAfterExit ?? archiveAfterExit)(
+      context,
+      predecessor.id,
+    );
   printResult(result, json, () => {
     console.log(
       `Continued ${predecessor.name} in session ${result.session.id} (${result.session.provider})`,
@@ -1308,19 +1311,39 @@ async function agentContinueCommand(
 }
 
 /**
- * Archives the calling session once this process has exited. It has to be a
- * separate process in a session of its own: archiving sends the agent an
- * interrupt and ends its tmux session, which would kill this command halfway
- * through if it did the archiving itself.
+ * Archives the calling session once this process has exited.
+ *
+ * It cannot be this process: archiving sends the agent an interrupt and ends
+ * its tmux session, which would kill this command halfway through. Nor a
+ * child of it: under Codex this command runs in Codex's sandbox, every child
+ * inherits it, and archiving runs `codex archive`, which writes outside it.
+ * So the archive runs in a short tmux session of its own. The tmux server
+ * starts it, outside any agent's sandbox, the same way it starts the
+ * successor.
  */
-function archiveAfterExit(id: string): void {
+async function archiveAfterExit(
+  context: ApplicationContext,
+  id: string,
+): Promise<void> {
   const entrypoint = Bun.argv[1];
   if (!entrypoint) return;
-  spawnProcess(
-    process.execPath,
-    [entrypoint, "agent", "archive", id, "--after-pid", String(process.pid)],
-    { detached: true, stdio: "ignore" },
-  ).unref();
+  await context.tmux.createSession({
+    session: `daedalus-handoff-${id.replaceAll("-", "")}`,
+    cwd: context.config.home,
+    executable: process.execPath,
+    args: [
+      entrypoint,
+      "agent",
+      "archive",
+      id,
+      "--after-pid",
+      String(process.pid),
+    ],
+    env: {
+      DAEDALUS_HOME: context.config.home,
+      ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
+    },
+  });
 }
 
 // Bounded, so a pid that never goes away cannot leave a process behind.
@@ -2283,7 +2306,10 @@ async function skillCommand(
 export interface CliOptions {
   migrationsDirectory?: string;
   /** Replaces the detached archiver `agent continue` starts; for tests. */
-  archiveAfterExit?: (sessionId: string) => void;
+  archiveAfterExit?: (
+    context: ApplicationContext,
+    sessionId: string,
+  ) => Promise<void>;
 }
 
 export async function runCli(

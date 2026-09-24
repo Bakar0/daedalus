@@ -211,6 +211,9 @@ describe("AgentService", () => {
           "--no-alt-screen",
           "-c",
           "tui.disable_mouse_capture=true",
+          // So `daedal` can write its database from inside the sandbox.
+          "--add-dir",
+          home,
           launchPrompt,
         ],
         cwd: agent.workingDirectory,
