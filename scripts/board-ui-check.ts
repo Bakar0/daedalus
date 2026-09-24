@@ -593,6 +593,231 @@ try {
     "#24's card is not highlighted while its drawer is open",
   );
   const drawerShot = await screenshot("drawer");
+
+  step = "drawer controls";
+  // #32: status and priority are pills on the line under the title, above
+  // the brief, and Draft brief and Delete sit in the heading's overflow menu
+  // rather than in bordered rows under the timeline.
+  const pressKey = async (key: string, code: string, keyCode: number) => {
+    await send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key,
+      code,
+      windowsVirtualKeyCode: keyCode,
+      ...(key === "Enter" ? { text: "\r" } : key === " " ? { text: " " } : {}),
+    });
+    await send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key,
+      code,
+      windowsVirtualKeyCode: keyCode,
+    });
+    await Bun.sleep(80);
+  };
+  const statusPill = `document.querySelector('.task-drawer [aria-label="Task status"]')`;
+  const priorityPill = `document.querySelector('.task-drawer [aria-label="Task priority"]')`;
+  const moreButton = `document.querySelector('.task-drawer [aria-label="More task actions"]')`;
+  const openMenu = `document.querySelector('.task-drawer details.menu[open]')`;
+  const visibleItems = (menu: string) =>
+    evaluate<Array<{ text: string; danger: boolean; title: string }>>(`
+      [...(${menu}?.parentElement.querySelectorAll('[role^="menuitem"]') ?? [])]
+        .filter((item) => item.getBoundingClientRect().height > 0)
+        .map((item) => ({
+          text: item.textContent.trim(),
+          danger: item.classList.contains('menu-item-danger'),
+          title: item.title,
+        }))`);
+  const controls = await evaluate<{
+    pill: boolean;
+    pillText: string;
+    belowTitle: boolean;
+    aboveBrief: boolean;
+    selects: number;
+    oldRows: number;
+    moreInHeading: boolean;
+  }>(`(() => {
+    const drawer = document.querySelector('.task-drawer');
+    const pill = ${statusPill};
+    const title = drawer.querySelector('.task-brief h2').getBoundingClientRect();
+    const brief = drawer.querySelector('.task-brief .markdown-body').getBoundingClientRect();
+    const box = pill?.getBoundingClientRect();
+    return {
+      pill: Boolean(pill),
+      pillText: pill?.textContent.trim() ?? '',
+      belowTitle: box ? box.top >= title.bottom : false,
+      aboveBrief: box ? box.bottom <= brief.top : false,
+      selects: drawer.querySelectorAll('select').length,
+      oldRows: drawer.querySelectorAll('.task-status-row, .task-inspector-actions, .brief-delete').length,
+      moreInHeading: Boolean(drawer.querySelector('.section-heading [aria-label="More task actions"]')),
+    };
+  })()`);
+  check(controls.pill, "the drawer has no status pill");
+  check(
+    controls.pillText === "In progress",
+    `the status pill reads "${controls.pillText}"`,
+  );
+  check(controls.belowTitle, "the status pill is not under the title");
+  check(controls.aboveBrief, "the status pill is not above the brief");
+  check(
+    controls.selects === 0,
+    `the drawer has ${controls.selects} native selects`,
+  );
+  check(
+    controls.oldRows === 0,
+    "the single-control rows are still in the drawer",
+  );
+  check(controls.moreInHeading, "the overflow menu is not in the heading");
+
+  // Keyboard: Enter opens the menu on the checked item, the arrows move,
+  // and Escape closes the menu and leaves the drawer open.
+  await evaluate(`${statusPill}.focus()`);
+  await pressKey("Enter", "Enter", 13);
+  await waitFor(openMenu, "Enter to open the status menu");
+  const statusItems = await visibleItems(statusPill);
+  check(
+    statusItems.map((item) => item.text).join(",") ===
+      "To do,In progress,Blocked,Done,Cancelled",
+    `the status menu lists ${statusItems.map((item) => item.text).join(", ")}`,
+  );
+  check(
+    (await evaluate<string>("document.activeElement.textContent.trim()")) ===
+      "In progress",
+    "the open status menu does not focus the current status",
+  );
+  await pressKey("ArrowDown", "ArrowDown", 40);
+  check(
+    (await evaluate<string>("document.activeElement.textContent.trim()")) ===
+      "Blocked",
+    "ArrowDown does not move to the next status",
+  );
+  const statusPopover = await evaluate<{ right: number; bottom: number }>(
+    `(() => { const box = ${openMenu}.querySelector('.menu-popover').getBoundingClientRect(); return { right: box.right, bottom: box.bottom }; })()`,
+  );
+  check(
+    statusPopover.right <= drawer.windowWidth &&
+      statusPopover.bottom <= (await evaluate<number>("innerHeight")),
+    `the status menu spills out of the window at ${statusPopover.right},${statusPopover.bottom}`,
+  );
+  const statusMenuShot = await screenshot("drawer-status-menu");
+  await pressKey("Escape", "Escape", 27);
+  check(
+    !(await evaluate<boolean>(`Boolean(${openMenu})`)),
+    "Escape did not close the status menu",
+  );
+  check(
+    await evaluate<boolean>("Boolean(document.querySelector('.task-drawer'))"),
+    "Escape inside the status menu closed the drawer",
+  );
+  check(
+    await evaluate<boolean>(`document.activeElement === ${statusPill}`),
+    "Escape did not return focus to the status pill",
+  );
+
+  // Priority is the same pill, calling taskUpdate.
+  await evaluate(`${priorityPill}.click()`);
+  await waitFor(openMenu, "the priority menu to open");
+  await evaluate(
+    `[...${openMenu}.querySelectorAll('[role="menuitemradio"]')].find((item) => item.textContent.trim() === 'High').click()`,
+  );
+  await waitFor(
+    `${priorityPill}.textContent.trim() === 'High priority'`,
+    "the priority pill to read High",
+  );
+  check(
+    (await calls("taskUpdate")).some(
+      (params) => params.id === "task-24" && params.priority === "high",
+    ),
+    "picking High did not call taskUpdate with the priority",
+  );
+  check(
+    !(await evaluate<boolean>(`Boolean(${openMenu})`)),
+    "picking a priority left the menu open",
+  );
+
+  // The overflow menu holds the two actions, Delete last and in danger.
+  await evaluate(`${moreButton}.click()`);
+  await waitFor(openMenu, "the overflow menu to open");
+  const actions = await visibleItems(moreButton);
+  check(
+    actions.map((item) => item.text).join(",") ===
+      "Draft brief with agent,Delete task",
+    `the overflow menu lists ${actions.map((item) => item.text).join(", ")}`,
+  );
+  check(actions[1]?.danger === true, "Delete task is not in the danger colour");
+  check(
+    actions[0]?.title.includes("does not start the task") === true,
+    "Draft brief lost its explanation",
+  );
+  const actionsPopover = await evaluate<{ left: number; right: number }>(
+    `(() => { const box = ${openMenu}.querySelector('.menu-popover').getBoundingClientRect(); return { left: box.left, right: box.right }; })()`,
+  );
+  check(
+    actionsPopover.right <= drawer.windowWidth + 1 &&
+      actionsPopover.left >= drawer.drawerLeft,
+    `the overflow menu sits at ${actionsPopover.left}-${actionsPopover.right}, outside the drawer`,
+  );
+  const actionsMenuShot = await screenshot("drawer-actions-menu");
+  await pressKey("Escape", "Escape", 27);
+  check(
+    !(await evaluate<boolean>(`Boolean(${openMenu})`)),
+    "Escape did not close the overflow menu",
+  );
+  check(
+    await evaluate<boolean>("Boolean(document.querySelector('.task-drawer'))"),
+    "Escape inside the overflow menu closed the drawer",
+  );
+
+  // Picking a status calls through and moves the card. #24 has a working
+  // session, so its lane cannot move; a queued task has no live agent, so
+  // its lane follows its status alone.
+  const laneOf = async (number: number) =>
+    (await lanes()).find((lane) => lane.cards.includes(String(number)))?.lane;
+  const queuedNumber = Number(
+    (await lanes()).find((lane) => lane.lane === "queued")?.cards[0],
+  );
+  if (!queuedNumber) throw new Error(`${step}: no queued task to move`);
+  await evaluate(`${card(queuedNumber)}.click()`);
+  await waitFor(
+    `document.querySelector('.task-drawer h2')?.textContent.includes('#${queuedNumber}')`,
+    `the drawer to swap to #${queuedNumber}`,
+  );
+  const pickStatus = async (label: string) => {
+    await evaluate(`${statusPill}.click()`);
+    await waitFor(openMenu, "the status menu to open");
+    await evaluate(
+      `[...${openMenu}.querySelectorAll('[role="menuitemradio"]')].find((item) => item.textContent.trim() === ${JSON.stringify(label)}).click()`,
+    );
+    await waitFor(
+      `${statusPill}.textContent.trim() === ${JSON.stringify(label)}`,
+      `the status pill to read ${label}`,
+    );
+  };
+  await pickStatus("Blocked");
+  check(
+    (await calls("taskSetStatus")).some(
+      (params) =>
+        params.id === `task-${queuedNumber}` && params.status === "blocked",
+    ),
+    "picking Blocked did not call taskSetStatus",
+  );
+  const blockedLane = await laneOf(queuedNumber);
+  check(
+    blockedLane === "parked",
+    `#${queuedNumber} is in ${blockedLane} after Blocked, not parked`,
+  );
+  await pickStatus("To do");
+  const todoLane = await laneOf(queuedNumber);
+  check(
+    todoLane === "queued",
+    `#${queuedNumber} is in ${todoLane} after To do, not queued`,
+  );
+  await evaluate(`${card(24)}.click()`);
+  await waitFor(
+    "document.querySelector('.task-drawer h2')?.textContent.includes('#24')",
+    "the drawer to swap back to #24",
+  );
+
+  step = "task drawer";
   await send("Input.dispatchKeyEvent", {
     type: "keyDown",
     key: "Escape",
@@ -768,6 +993,8 @@ try {
       inspector,
       journal,
       drawerShot,
+      statusMenuShot,
+      actionsMenuShot,
       repositoriesShot,
       compactShot,
       light,

@@ -473,6 +473,15 @@ const client = {
         return ok(target);
       },
     ),
+    taskUpdate: record(
+      "taskUpdate",
+      (params: { id: string; priority?: TaskDto["priority"] }) => {
+        const target = snapshot.tasks.find((item) => item.id === params.id)!;
+        if (params.priority) target.priority = params.priority;
+        announce();
+        return ok(target);
+      },
+    ),
     workspaceUpdate: record(
       "workspaceUpdate",
       (params: Record<string, unknown> & { reference: string }) => {

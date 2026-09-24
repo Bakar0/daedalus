@@ -891,10 +891,27 @@ describe("desktop application shell", () => {
     expect(html).not.toContain('aria-label="Start Ship desktop"');
     expect(html).toContain("Sessions");
     expect(html).toContain("Acceptance criteria");
-    // Status sits below the brief now, followed by the task's history.
-    expect(html.indexOf("Acceptance criteria")).toBeLessThan(
+    // Status is a pill on the line under the title, above the brief, and the
+    // native select it replaced is gone.
+    expect(html).toContain('aria-label="Task status"');
+    expect(html.indexOf('aria-label="Task status"')).toBeLessThan(
+      html.indexOf("Acceptance criteria"),
+    );
+    expect(html).toContain("task-pill status-in_progress");
+    expect(html).toContain(">In progress</span>");
+    expect(html).toContain('aria-label="Task priority"');
+    const drawerHtml = html.slice(html.indexOf('class="task-drawer"'));
+    expect(drawerHtml).toContain('aria-label="Task status"');
+    expect(drawerHtml).not.toContain("<select");
+    // Draft brief and Delete live in the heading's overflow menu, not in
+    // bordered rows under the timeline.
+    expect(html).toContain('aria-label="More task actions"');
+    expect(html.indexOf('aria-label="More task actions"')).toBeLessThan(
       html.indexOf('aria-label="Task status"'),
     );
+    expect(html).toContain("Delete task");
+    expect(html).not.toContain("task-inspector-actions");
+    expect(html).not.toContain("brief-delete");
     expect(html).toContain('aria-label="Timeline"');
     expect(html).toContain("Edit");
     expect(html).toContain("board-detail-column");

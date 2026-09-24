@@ -37,7 +37,6 @@ import type {
   SessionAttentionDto,
   ShutdownPlanDto,
   TaskDto,
-  TaskStatus,
   WorkspaceContentDto,
   WorkspaceFileChangeDto,
   WorkspaceFileDto,
@@ -53,6 +52,8 @@ import { useListReorder } from "./use-list-reorder";
 import { BoardView, TaskRelationsBlock, type BoardProvider } from "./BoardView";
 import { laneFor } from "./board-lanes";
 import { TaskCostLine, TaskTimeline } from "./TaskTimeline";
+import { TaskActionsMenu } from "./TaskActionsMenu";
+import { TaskPriorityMenu, TaskStatusMenu } from "./TaskStatusMenu";
 import {
   AgentStatusDot,
   compactTokenLabel,
@@ -81,14 +82,6 @@ export {
   type SessionStatusView,
   type SessionTone,
 } from "./session-view";
-
-const STATUSES: TaskStatus[] = [
-  "todo",
-  "in_progress",
-  "blocked",
-  "done",
-  "cancelled",
-];
 
 export const PANEL_RAIL_WIDTH = 68;
 export const TERMINAL_PANEL_MIN_HEIGHT = 120;
@@ -3909,30 +3902,25 @@ export function WorkspaceApp({
       <h2>
         #{selectedTask.number} {selectedTask.title}
       </h2>
-      <MarkdownPreview source={selectedTask.description} />
-      <div className="task-inspector-section task-status-row">
-        <label>
-          Status
-          <select
-            aria-label="Task status"
-            value={selectedTask.status}
-            onChange={(event) =>
-              void perform(
-                client.request.taskSetStatus({
-                  id: selectedTask.id,
-                  status: event.target.value as TaskStatus,
-                }),
-              )
-            }
-          >
-            {STATUSES.map((status) => (
-              <option key={status} value={status}>
-                {status.replace("_", " ")}
-              </option>
-            ))}
-          </select>
-        </label>
+      <div className="task-meta">
+        <TaskStatusMenu
+          onChange={(status) =>
+            void perform(
+              client.request.taskSetStatus({ id: selectedTask.id, status }),
+            )
+          }
+          status={selectedTask.status}
+        />
+        <TaskPriorityMenu
+          onChange={(priority) =>
+            void perform(
+              client.request.taskUpdate({ id: selectedTask.id, priority }),
+            )
+          }
+          priority={selectedTask.priority}
+        />
       </div>
+      <MarkdownPreview source={selectedTask.description} />
       <TaskRelationsBlock
         laneOf={(task) =>
           laneFor(task, {
@@ -3962,40 +3950,14 @@ export function WorkspaceApp({
       {taskTimeline?.taskId === selectedTask.id && (
         <TaskCostLine cost={taskTimeline.cost} now={now} />
       )}
-      <div className="task-inspector-actions">
-        <button
-          className="quiet"
-          disabled={!snapshot?.settings.tmuxAvailable}
-          onClick={() =>
-            void startTaskSession(selectedTask, { draftBrief: true })
-          }
-          title="Start a session that reads the workspace and writes this brief back. It does not start the task."
-          type="button"
-        >
-          Draft brief with agent
-        </button>
-      </div>
-      <button
-        className="danger-link brief-delete"
-        onClick={() =>
-          void (async () => {
-            if (
-              !window.confirm(
-                `Permanently delete task “${selectedTask.title}”?`,
-              )
-            )
-              return;
-            await perform(
-              client.request.taskRemove({ id: selectedTask.id, force: true }),
-            );
-            setSelectedTaskId(undefined);
-          })()
-        }
-      >
-        Delete task
-      </button>
     </div>
   );
+
+  async function deleteTask(task: TaskDto) {
+    if (!window.confirm(`Permanently delete task “${task.title}”?`)) return;
+    await perform(client.request.taskRemove({ id: task.id, force: true }));
+    setSelectedTaskId(undefined);
+  }
 
   /**
    * Entries Daedalus keeps pointing at by path. The service refuses these too
@@ -5197,6 +5159,13 @@ export function WorkspaceApp({
                 >
                   {editingTask ? "Cancel" : "Edit"}
                 </button>
+                <TaskActionsMenu
+                  canDraftBrief={Boolean(snapshot?.settings.tmuxAvailable)}
+                  onDelete={() => void deleteTask(selectedTask)}
+                  onDraftBrief={() =>
+                    void startTaskSession(selectedTask, { draftBrief: true })
+                  }
+                />
                 <button
                   aria-label="Close task"
                   className="quiet task-drawer-close"
