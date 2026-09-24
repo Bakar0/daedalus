@@ -98,7 +98,9 @@ describe("SkillService", () => {
         );
         expect(handoff).toContain("name: daedalus-handoff");
         expect(handoff).toContain("$ARGUMENTS");
-        expect(handoff).toContain("daedal agent continue --handoff-file");
+        expect(handoff).toContain(
+          '"$DAEDALUS_HOME/bin/daedal" agent continue --handoff-file',
+        );
         expect(
           await readlink(join(agentsHome, "skills", "daedalus-handoff")),
         ).toBe(join(home, "skills", "daedalus-handoff"));
