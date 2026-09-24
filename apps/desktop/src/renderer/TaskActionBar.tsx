@@ -12,10 +12,13 @@
  * so the two cannot disagree. Starts in flight and failed ones are listed
  * under the buttons, as the card lists them.
  *
- * The right end holds what applies to every task: Edit, and an overflow
- * menu with Draft brief with agent and Delete. They were in the drawer's
- * heading beside Close, which left a person looking in two places for one
- * kind of thing; the heading is now the drawer's own, title and Close only.
+ * Draft brief is always there, at the end of the lane's actions: on a card
+ * it shows only while the brief is empty, but a person reading a brief in
+ * the drawer is exactly the one who might want an agent to redo it. The
+ * right end holds Edit and an overflow menu with Delete. They were in the
+ * drawer's heading beside Close, which left a person looking in two places
+ * for one kind of thing; the heading is now the drawer's own, title and
+ * Close only.
  */
 import type { ReactNode } from "react";
 import type {
@@ -160,19 +163,6 @@ export function TaskActionBar(props: TaskActionBarProps) {
       </button>,
     );
   }
-  if (actions.canDraftBrief)
-    buttons.push(
-      <button
-        className="quiet"
-        disabled={!tmuxAvailable || actions.starting}
-        key="draft"
-        onClick={props.onDraftBrief}
-        title="Start a session that reads the workspace and writes this brief"
-        type="button"
-      >
-        Draft brief
-      </button>,
-    );
   if (actions.offersSecondOpinion) {
     const other = actions.otherProvider;
     buttons.push(
@@ -194,6 +184,22 @@ export function TaskActionBar(props: TaskActionBarProps) {
       </button>,
     );
   }
+  buttons.push(
+    <button
+      className="quiet"
+      disabled={!tmuxAvailable || actions.starting}
+      key="draft"
+      onClick={props.onDraftBrief}
+      title={
+        task.description.trim()
+          ? "Start a session that reads the workspace and rewrites this brief. It does not start the task."
+          : "Start a session that reads the workspace and writes this brief. It does not start the task."
+      }
+      type="button"
+    >
+      Draft brief
+    </button>,
+  );
   return (
     <div
       aria-label={`Actions for #${task.number}`}
@@ -213,12 +219,7 @@ export function TaskActionBar(props: TaskActionBarProps) {
           >
             Edit
           </button>
-          <TaskActionsMenu
-            canDraftBrief={tmuxAvailable && !actions.starting}
-            onDelete={props.onDelete}
-            onDraftBrief={props.onDraftBrief}
-            showDraftBrief={!actions.canDraftBrief}
-          />
+          <TaskActionsMenu onDelete={props.onDelete} />
         </div>
       </div>
       {actions.launches.map((launch) => (

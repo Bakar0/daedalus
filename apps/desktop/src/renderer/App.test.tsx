@@ -1002,8 +1002,8 @@ describe("desktop application shell", () => {
     expect(html).toContain("Depends on / Unblocks");
     expect(html).toContain("<dt>Unblocks</dt>");
     expect(html).toContain("<dt>Mentioned by</dt>");
-    // An empty brief offers Draft brief on the card and in the drawer's
-    // action bar, so the overflow menu does not say it a third time.
+    // Draft brief is a bar button for every task and the card's only while
+    // the brief is empty; the overflow menu holds Delete alone.
     expect(html).not.toContain("Draft brief with agent");
     expect(html).toContain(">Draft brief</button>");
     expect(html.slice(html.indexOf('class="task-drawer"'))).toContain(

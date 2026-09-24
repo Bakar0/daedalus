@@ -1,25 +1,12 @@
 /**
  * The task drawer's overflow menu, at the right end of its action bar (#34)
- * beside Edit. It holds the two actions that apply to every task whatever
- * its lane: drafting the brief with an agent, and deleting the task, last
- * and in the danger colour. When the bar itself offers Draft brief, because
- * the brief is empty, the menu leaves it out rather than say it twice.
+ * beside Edit. It holds the one action that is never routine: deleting the
+ * task, in the danger colour and behind its confirm. Everything a person
+ * does often, drafting the brief included, is a button in the bar.
  */
 import { Menu } from "./Menu";
 
-export function TaskActionsMenu({
-  canDraftBrief,
-  onDelete,
-  onDraftBrief,
-  showDraftBrief = true,
-}: {
-  /** False when tmux is missing, so no session can start. */
-  canDraftBrief: boolean;
-  onDelete: () => void;
-  onDraftBrief: () => void;
-  /** False when the action bar already offers Draft brief. */
-  showDraftBrief?: boolean;
-}) {
+export function TaskActionsMenu({ onDelete }: { onDelete: () => void }) {
   return (
     <Menu
       align="end"
@@ -36,21 +23,6 @@ export function TaskActionsMenu({
       summaryClassName="task-actions-trigger"
       title="More actions"
     >
-      {showDraftBrief && (
-        <>
-          <button
-            className="quiet menu-item"
-            disabled={!canDraftBrief}
-            onClick={onDraftBrief}
-            role="menuitem"
-            title="Start a session that reads the workspace and writes this brief back. It does not start the task."
-            type="button"
-          >
-            <span className="menu-item-label">Draft brief with agent</span>
-          </button>
-          <hr className="menu-separator" />
-        </>
-      )}
       <button
         className="quiet menu-item menu-item-danger"
         onClick={onDelete}

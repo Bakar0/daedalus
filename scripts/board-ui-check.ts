@@ -617,6 +617,7 @@ try {
   const statusPill = `document.querySelector('.task-drawer [aria-label="Task status"]')`;
   const priorityPill = `document.querySelector('.task-drawer [aria-label="Task priority"]')`;
   const moreButton = `document.querySelector('.task-drawer [aria-label="More task actions"]')`;
+  const bar = `document.querySelector('.task-drawer .task-action-bar')`;
   const openMenu = `document.querySelector('.task-drawer details.menu[open]')`;
   const visibleItems = (menu: string) =>
     evaluate<Array<{ text: string; danger: boolean; title: string }>>(`
@@ -745,14 +746,17 @@ try {
   await waitFor(openMenu, "the overflow menu to open");
   const actions = await visibleItems(moreButton);
   check(
-    actions.map((item) => item.text).join(",") ===
-      "Draft brief with agent,Delete task",
+    actions.map((item) => item.text).join(",") === "Delete task",
     `the overflow menu lists ${actions.map((item) => item.text).join(", ")}`,
   );
-  check(actions[1]?.danger === true, "Delete task is not in the danger colour");
+  check(actions[0]?.danger === true, "Delete task is not in the danger colour");
   check(
-    actions[0]?.title.includes("does not start the task") === true,
-    "Draft brief lost its explanation",
+    (
+      await evaluate<string>(
+        `[...${bar}.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Draft brief')?.title ?? ''`,
+      )
+    ).includes("does not start the task"),
+    "Draft brief in the bar lost its explanation",
   );
   const actionsPopover = await evaluate<{ left: number; right: number }>(
     `(() => { const box = ${openMenu}.querySelector('.menu-popover').getBoundingClientRect(); return { left: box.left, right: box.right }; })()`,
@@ -822,7 +826,6 @@ try {
   // an empty brief and no dependencies, so it offers Start and Draft brief;
   // Start spawns with the workspace default, the drawer stays on the task,
   // and the bar turns into the running agent's actions.
-  const bar = `document.querySelector('.task-drawer .task-action-bar')`;
   const barButtons = () =>
     evaluate<string[]>(
       `[...(${bar}?.querySelectorAll('button:not(.menu-item)') ?? [])].map((button) => button.textContent.trim())`,
@@ -856,14 +859,6 @@ try {
     queuedButtons.join(",") === "Start,▾,Draft brief,Edit",
     `the queued task's bar lists ${queuedButtons.join(", ")}`,
   );
-  await evaluate(`${moreButton}.click()`);
-  await waitFor(openMenu, "the overflow menu to open in the bar");
-  const emptyBriefActions = await visibleItems(moreButton);
-  check(
-    emptyBriefActions.map((item) => item.text).join(",") === "Delete task",
-    `with Draft brief in the bar the menu lists ${emptyBriefActions.map((item) => item.text).join(", ")}`,
-  );
-  await pressKey("Escape", "Escape", 27);
   const queuedBarShot = await screenshot("drawer-action-bar-queued");
   const spawnsBefore = (await calls("agentSpawn")).length;
   await evaluate(`${bar}.querySelector('.board-start').click()`);
@@ -892,7 +887,8 @@ try {
   );
   const runningButtons = await barButtons();
   check(
-    runningButtons.join(",") === "Open terminal,Second opinion,Edit",
+    runningButtons.join(",") ===
+      "Open terminal,Second opinion,Draft brief,Edit",
     `the running task's bar lists ${runningButtons.join(", ")}`,
   );
   const startedLane = await laneOf(29);
@@ -915,7 +911,7 @@ try {
   );
   const doneButtons = await barButtons();
   check(
-    doneButtons.join(",") === "Open worktree,Open PR #20,Edit",
+    doneButtons.join(",") === "Open worktree,Open PR #20,Draft brief,Edit",
     `the done task's bar lists ${doneButtons.join(", ")}`,
   );
   const outputBefore = (await calls("sessionWorktreeOpen")).length;
