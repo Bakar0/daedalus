@@ -2239,8 +2239,8 @@ dd {
   overflow: auto;
   padding: 5px 0;
 }
-/* The explorer's own two borders are draggable. The column handle above divides
-   the whole shell; these divide what is inside the explorer, so they answer to
+/* The explorer's right border is draggable. The column handle above divides
+   the whole shell; this divides what is inside the explorer, so it answers to
    the explorer's own minimums rather than the shell's.
 
    The explorer keeps its right border, so this track carries the viewer's
@@ -2248,7 +2248,9 @@ dd {
 .explorer-resize-handle {
   background: rgb(7 10 17 / 0.28);
 }
-.explorer-section-resize-handle {
+/* A horizontal border between two stacked sections of one column, draggable.
+   Used between the task brief and the repositories in the board's inspector. */
+.section-resize-handle {
   cursor: row-resize;
   /* Wider than the border it sits on, and pulled back over its neighbours so
      the extra grab area costs no layout. */
@@ -2260,7 +2262,7 @@ dd {
   touch-action: none;
   z-index: 5;
 }
-.explorer-section-resize-handle::after {
+.section-resize-handle::after {
   background: transparent;
   content: "";
   height: 2px;
@@ -2270,14 +2272,14 @@ dd {
   top: 2px;
   transition: background 120ms ease;
 }
-.explorer-section-resize-handle:hover::after,
-.explorer-section-resize-handle:focus-visible::after,
-.explorer-section-resize-handle.dragging::after,
-.resizing-explorer-section .explorer-section-resize-handle::after {
+.section-resize-handle:hover::after,
+.section-resize-handle:focus-visible::after,
+.section-resize-handle.dragging::after,
+.resizing-section .section-resize-handle::after {
   background: var(--accent);
 }
-.resizing-explorer-section,
-.resizing-explorer-section * {
+.resizing-section,
+.resizing-section * {
   cursor: row-resize !important;
   user-select: none !important;
 }
@@ -2328,17 +2330,33 @@ dd {
   height: 10px;
   width: 8px;
 }
-.workspace-explorer-secondary {
+/* The task brief above the repositories. It takes whatever the repositories
+   leave, and scrolls inside that rather than pushing them off the column. The
+   zero basis matters: with `auto` the brief's content height would compete
+   with the section's dragged height and squeeze it back, as measured. The
+   min-height is the hard floor for a short window; the drag's own floor is
+   `INSPECTOR_MIN_HEIGHT`, enforced when the height is set. */
+.board-inspector {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 120px;
+}
+.board-inspector > .empty.large {
+  flex: 1;
+}
+/* Repositories, under the brief in the board's inspector column (#27). */
+.repositories-section {
   border-top: 1px solid var(--line);
   /* Its height is the user's, dragged on the border above. Shrink stays on so a
      short window takes the space back from this section rather than from the
-     file tree, which has a floor and would otherwise overflow the explorer. */
+     brief, which has a floor and would otherwise overflow the column. */
   flex: 0 1 auto;
-  height: var(--explorer-secondary-height, 240px);
+  height: var(--repositories-height, 240px);
   min-height: 0;
   overflow: auto;
 }
-.workspace-explorer-secondary .workspace-resource-heading {
+.repositories-section .workspace-resource-heading {
   align-items: center;
   color: var(--secondary);
   display: flex;
@@ -2349,13 +2367,13 @@ dd {
   padding: 8px 10px;
   text-transform: uppercase;
 }
-.workspace-explorer-secondary .workspace-resource-heading > span:first-child {
+.repositories-section .workspace-resource-heading > span:first-child {
   flex: 1;
 }
-.workspace-explorer-secondary .workspace-resource-heading small {
+.repositories-section .workspace-resource-heading small {
   color: var(--muted);
 }
-.workspace-explorer-secondary .workspace-resource-heading > button {
+.repositories-section .workspace-resource-heading > button {
   background: transparent;
   border: 0;
   border-radius: 4px;
@@ -2365,7 +2383,7 @@ dd {
   padding: 0;
   width: 20px;
 }
-.workspace-explorer-secondary .workspace-resource-heading > button:hover {
+.repositories-section .workspace-resource-heading > button:hover {
   background: var(--raised-hover);
   color: var(--text);
 }
@@ -2502,7 +2520,7 @@ dd {
   font-size: 10px;
   padding: 5px 10px;
 }
-.workspace-explorer-secondary summary {
+.repositories-section summary {
   align-items: center;
   color: var(--secondary);
   cursor: pointer;
@@ -2514,20 +2532,20 @@ dd {
   padding: 8px 10px;
   text-transform: uppercase;
 }
-.workspace-explorer-secondary summary::before {
+.repositories-section summary::before {
   content: "›";
   margin-right: 5px;
 }
-.workspace-explorer-secondary details[open] summary::before {
+.repositories-section details[open] summary::before {
   content: "⌄";
 }
-.workspace-explorer-secondary summary > span {
+.repositories-section summary > span {
   flex: 1;
 }
-.workspace-explorer-secondary summary small {
+.repositories-section summary small {
   color: var(--muted);
 }
-.workspace-explorer-secondary summary > button {
+.repositories-section summary > button {
   background: transparent !important;
   border: 0 !important;
   border-radius: 4px !important;
@@ -2538,21 +2556,21 @@ dd {
   padding: 0 !important;
   width: 20px;
 }
-.workspace-explorer-secondary summary > button:hover {
+.repositories-section summary > button:hover {
   background: var(--raised-hover) !important;
   color: var(--text) !important;
 }
-.workspace-explorer-secondary .workspace-resource-list {
+.repositories-section .workspace-resource-list {
   padding: 0 4px 5px;
 }
-.workspace-explorer-secondary .workspace-resource-row {
+.repositories-section .workspace-resource-row {
   padding: 6px;
 }
-.workspace-explorer-secondary .workspace-resource-row strong,
-.workspace-explorer-secondary .workspace-resource-row small {
+.repositories-section .workspace-resource-row strong,
+.repositories-section .workspace-resource-row small {
   font-size: 9px;
 }
-.workspace-explorer-secondary .access-badge {
+.repositories-section .access-badge {
   font-size: 8px;
   padding: 3px 5px;
 }

@@ -540,6 +540,122 @@ try {
   );
   const journal = await screenshot("journal");
 
+  step = "repositories";
+  // Since #27 the repositories sit under the brief in the inspector column,
+  // add button included, so a workspace with nothing attached is fixed from
+  // where the app opens. The border between them drags, with a floor under
+  // the brief and a minimum for the section; both were the explorer's before.
+  // The journal link above left the app on the Workspace tab.
+  await evaluate(
+    "[...document.querySelectorAll('.app-mode-switcher button')].find((b) => b.textContent === 'Board').click()",
+  );
+  await waitFor(
+    "document.querySelector('.repositories-section .workspace-repository-group')",
+    "the repositories section",
+  );
+  const repositoryRows = await evaluate<number>(
+    "document.querySelectorAll('.repositories-section .workspace-resource-row').length",
+  );
+  check(
+    repositoryRows === 2,
+    `the repositories section lists ${repositoryRows} repositories, not 2`,
+  );
+  const worktreeRows = await evaluate<number>(
+    "document.querySelectorAll('.repositories-section .workspace-worktree-row:not(.empty)').length",
+  );
+  check(
+    worktreeRows === 3,
+    `the repositories section lists ${worktreeRows} working trees, not 3`,
+  );
+  check(
+    await evaluate<boolean>(
+      `Boolean(document.querySelector('.repositories-section [aria-label="Add repository"]'))`,
+    ),
+    "the repositories section has no add button",
+  );
+  const inspectorGeometry = () =>
+    evaluate<{
+      section: number;
+      inspector: number;
+      sectionBottom: number;
+      columnBottom: number;
+    }>(`(() => {
+      const box = (selector) => document.querySelector(selector).getBoundingClientRect();
+      const section = box('.repositories-section');
+      return {
+        section: section.height,
+        inspector: box('.board-inspector').height,
+        sectionBottom: section.bottom,
+        columnBottom: box('.board-detail-column').bottom,
+      };
+    })()`);
+  const dragHandle = async (deltaY: number) => {
+    const at = await evaluate<{ x: number; y: number }>(
+      "(() => { const box = document.querySelector('.section-resize-handle').getBoundingClientRect(); return { x: box.left + box.width / 2, y: box.top + box.height / 2 }; })()",
+    );
+    await send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+      x: at.x,
+      y: at.y,
+    });
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      button: "left",
+      buttons: 1,
+      x: at.x,
+      y: at.y + deltaY,
+    });
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      button: "left",
+      buttons: 0,
+      clickCount: 1,
+      x: at.x,
+      y: at.y + deltaY,
+    });
+    await Bun.sleep(120);
+  };
+  const beforeDrag = await inspectorGeometry();
+  await dragHandle(-120);
+  const taller = await inspectorGeometry();
+  check(
+    taller.section - beforeDrag.section >= 100,
+    `dragging the repositories border up 120px grew it by only ${(taller.section - beforeDrag.section).toFixed(0)}px (before ${JSON.stringify(beforeDrag)}, after ${JSON.stringify(taller)})`,
+  );
+  await dragHandle(-2000);
+  const pinned = await inspectorGeometry();
+  check(
+    pinned.inspector >= 139,
+    `dragging the repositories border to the top crushed the brief to ${pinned.inspector.toFixed(0)}px, under its 140px floor`,
+  );
+  check(
+    pinned.sectionBottom <= pinned.columnBottom + 0.5,
+    `the repositories section overflows the inspector column by ${(pinned.sectionBottom - pinned.columnBottom).toFixed(0)}px`,
+  );
+  await dragHandle(2000);
+  const shortest = await inspectorGeometry();
+  check(
+    shortest.section >= 40,
+    `dragging the repositories border to the bottom collapsed it to ${shortest.section.toFixed(0)}px instead of stopping at its minimum`,
+  );
+  // Shrunk to its floor, the separator must say how far it could still travel.
+  const reported = await evaluate<{ now: number; max: number }>(`(() => {
+    const handle = document.querySelector('.section-resize-handle');
+    return {
+      now: Number(handle.getAttribute('aria-valuenow')),
+      max: Number(handle.getAttribute('aria-valuemax')),
+    };
+  })()`);
+  check(
+    reported.max > reported.now + 100,
+    `at its floor the separator reports max ${reported.max} against now ${reported.now}; the room the brief is holding is not being reported`,
+  );
+  await dragHandle(-120);
+  const repositoriesShot = await screenshot("repositories");
+
   step = "compact width";
   await evaluate(
     "[...document.querySelectorAll('.app-mode-switcher button')].find((b) => b.textContent === 'Board').click()",
@@ -594,7 +710,15 @@ try {
     failures.push(`renderer errors:\n${rendererErrors.join("\n")}`);
   socket.close();
   console.log(
-    [wide, settingsShot, inspector, journal, compactShot, light]
+    [
+      wide,
+      settingsShot,
+      inspector,
+      journal,
+      repositoriesShot,
+      compactShot,
+      light,
+    ]
       .map((path) => `Screenshot: ${path}`)
       .join("\n"),
   );

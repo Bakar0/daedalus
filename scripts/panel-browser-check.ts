@@ -146,9 +146,10 @@ try {
     await Bun.sleep(50);
   }
 
-  // The secondary panel only exists beside the board and the sessions, and the
-  // app now opens on the workspace, so the view under test is chosen rather
-  // than inherited from whichever tab happens to be first.
+  // The secondary panel only exists beside the board and the sessions. The
+  // view under test is chosen rather than inherited from whichever tab happens
+  // to be first, so a change to the default (#27 made it the board) does not
+  // silently change what this checks.
   // Waiting for the tab itself rather than for something rendered near it:
   // the loop above breaks on success but simply falls through on timeout, so a
   // page that never rendered used to surface as a confusing failure later.
