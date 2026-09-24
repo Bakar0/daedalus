@@ -10,12 +10,10 @@ import type { DesktopClient } from "./client-types";
 import {
   agentMultilineSequence,
   clampExplorerWidth,
-  clampRepositoriesHeight,
   clampPanelSize,
   EXPLORER_DEFAULT_WIDTH,
   EXPLORER_MAX_WIDTH,
   EXPLORER_MIN_WIDTH,
-  INSPECTOR_MIN_HEIGHT,
   lifecycleTone,
   parseRememberedDirectories,
   planExplorerRefresh,
@@ -29,7 +27,6 @@ import {
   preferredSessionId,
   preferredWorkspaceView,
   quitDisclosure,
-  REPOSITORIES_MIN_HEIGHT,
   type SessionLaunchState,
   shouldFocusSession,
   TERMINAL_FONT_SIZE,
@@ -140,16 +137,6 @@ describe("desktop application shell", () => {
     expect(clampExplorerWidth(400, 40)).toBe(EXPLORER_MIN_WIDTH);
     expect(EXPLORER_MIN_WIDTH).toBeLessThan(EXPLORER_DEFAULT_WIDTH);
     expect(EXPLORER_DEFAULT_WIDTH).toBeLessThan(EXPLORER_MAX_WIDTH);
-  });
-
-  test("stops the repositories section before it eats the task brief", () => {
-    // `available` is the section's own height plus whatever the brief can give
-    // up above its floor, so the brief always keeps something to read.
-    expect(clampRepositoriesHeight(10, 600)).toBe(REPOSITORIES_MIN_HEIGHT);
-    expect(clampRepositoriesHeight(240.4, 600)).toBe(240);
-    expect(clampRepositoriesHeight(600, 380)).toBe(380);
-    expect(clampRepositoriesHeight(600, 20)).toBe(REPOSITORIES_MIN_HEIGHT);
-    expect(INSPECTOR_MIN_HEIGHT).toBeGreaterThan(0);
   });
 
   test("restores remembered folders parents first, and survives junk", () => {
@@ -598,12 +585,13 @@ describe("desktop application shell", () => {
       />,
     );
     // An instruction, not a shrug: the empty state names the next action and
-    // carries a control that performs it. It lives on the board (#27), which
-    // is where the app opens, so a new workspace is fixed from where it lands.
+    // carries a control that performs it. It is a chip in the header (#27),
+    // so a new workspace is fixed from wherever the app lands.
     expect(html).toContain("mode-board");
     expect(html).toContain("No repositories yet");
     expect(html).toContain("workspace-repository-invite");
     expect(html).toContain("Add a repository");
+    expect(html).toContain('aria-label="Add repository"');
     expect(html).not.toContain("workspace-repository-group");
   });
 
@@ -702,18 +690,22 @@ describe("desktop application shell", () => {
     expect(html).toContain("Preview");
     expect(html).toContain('aria-label="New file"');
     expect(html).toContain('aria-label="New folder"');
-    // Since #27 the explorer is the file tree alone; the repositories and
-    // their add button are on the board.
-    expect(html).not.toContain("workspace-repository-group");
-    expect(html).not.toContain('aria-label="Add repository"');
-    expect(html).not.toContain('aria-label="Resize repositories section"');
+    // Since #27 the explorer is the file tree alone; the repositories are
+    // chips in the header, which this tab shares with the others.
+    const explorer = html.slice(
+      html.indexOf('class="workspace-explorer"'),
+      html.indexOf('class="workspace-viewer'),
+    );
+    expect(explorer).not.toContain("workspace-repository-group");
+    expect(explorer).not.toContain("Repositories");
+    expect(html).toContain("workspace-repository-chips");
     // The explorer's border is grabbable, and carries the size it is
     // currently set to so a keyboard can move it too.
     expect(html).toContain('aria-label="Resize explorer"');
     expect(html).toContain("--explorer-width:");
   });
 
-  test("renders repositories and worktrees under the task brief on the board", () => {
+  test("renders repositories as header chips whose popovers hold the worktrees", () => {
     const html = renderToStaticMarkup(
       <App
         injectedClient={client}
@@ -725,8 +717,14 @@ describe("desktop application shell", () => {
     expect(html).toContain("mode-board");
     expect(html).toContain("Task brief");
     expect(html).toContain("Select a task");
-    expect(html).toContain("Repositories");
-    expect(html).toContain("main ·");
+    // The chip names the repository, its base branch and its state, and sits
+    // in the header beside the workspace name, not in the task inspector.
+    expect(html).toContain('aria-label="Repositories"');
+    expect(html).toContain('aria-label="daedalus, main, ↓2 behind"');
+    expect(html.indexOf("workspace-repository-chips")).toBeLessThan(
+      html.indexOf("board-detail-column"),
+    );
+    expect(html).toContain("repository-popover");
     expect(html).toContain("↓2 behind");
     expect(html).toContain('aria-label="Fetch daedalus"');
     expect(html).toContain('aria-label="Pull daedalus"');
@@ -737,14 +735,9 @@ describe("desktop application shell", () => {
     expect(html).toContain("workspace-worktree-row");
     expect(html).toContain("daedalus/demo/task/session");
     expect(html).toContain('aria-label="Push daedalus/demo/task/session"');
-    // The brief sits above the repositories, and the border between them is
-    // grabbable and reports its size so a keyboard can move it too.
-    expect(html.indexOf("board-inspector")).toBeGreaterThan(-1);
-    expect(html.indexOf("board-inspector")).toBeLessThan(
-      html.indexOf("repositories-section"),
-    );
-    expect(html).toContain('aria-label="Resize repositories section"');
-    expect(html).toContain("--repositories-height:");
+    // The inspector column is the task's alone.
+    const inspector = html.slice(html.indexOf("board-detail-column"));
+    expect(inspector).not.toContain("workspace-repository-group");
   });
   test("renders workspace, task, and session lifecycle state", () => {
     const snapshot: DesktopSnapshotDto = {

@@ -2035,6 +2035,94 @@ dd {
   gap: 16px;
   padding-bottom: 14px;
 }
+/* Repository chips beside the workspace name (#27). Repositories belong to the
+   workspace, so they sit in the one header that names it and shows on every
+   tab, rather than under a task's brief. Each chip opens the row the explorer
+   used to draw, actions and working trees included. */
+.workspace-repository-chips {
+  align-items: center;
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+  min-width: 0;
+}
+.repository-chip {
+  position: relative;
+}
+.repository-chip > summary {
+  align-items: center;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+  display: flex;
+  font-size: 11px;
+  gap: 7px;
+  list-style: none;
+  padding: 4px 11px;
+  white-space: nowrap;
+}
+.repository-chip > summary::-webkit-details-marker {
+  display: none;
+}
+.repository-chip > summary:hover,
+.repository-chip[open] > summary {
+  background: var(--raised-hover);
+  border-color: var(--line-strong);
+}
+.repository-chip > summary strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.repository-chip > summary small {
+  color: var(--muted);
+}
+.repository-chip > summary .repository-git-status {
+  color: var(--secondary);
+  font-size: 10px;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.repository-chip.repository-preparing > summary strong,
+.repository-chip.repository-failed > summary strong {
+  color: var(--secondary);
+}
+.repository-popover {
+  background: var(--overlay);
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  box-shadow: 0 18px 50px rgb(0 0 0 / 0.45);
+  padding: 6px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  width: 340px;
+  z-index: 20;
+}
+.repository-popover .workspace-resource-list {
+  padding: 0;
+}
+.repository-chip-add {
+  align-items: center;
+  background: var(--raised) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 999px !important;
+  color: var(--muted) !important;
+  display: flex;
+  font-size: 15px !important;
+  height: 26px;
+  justify-content: center;
+  line-height: 1;
+  padding: 0 !important;
+  width: 26px;
+}
+.repository-chip-add:hover {
+  background: var(--raised-hover) !important;
+  color: var(--text) !important;
+}
 .workspace-tabs {
   background: var(--raised);
   border-radius: 9px;
@@ -2248,41 +2336,6 @@ dd {
 .explorer-resize-handle {
   background: rgb(7 10 17 / 0.28);
 }
-/* A horizontal border between two stacked sections of one column, draggable.
-   Used between the task brief and the repositories in the board's inspector. */
-.section-resize-handle {
-  cursor: row-resize;
-  /* Wider than the border it sits on, and pulled back over its neighbours so
-     the extra grab area costs no layout. */
-  flex: 0 0 7px;
-  margin-bottom: -3px;
-  margin-top: -3px;
-  outline: none;
-  position: relative;
-  touch-action: none;
-  z-index: 5;
-}
-.section-resize-handle::after {
-  background: transparent;
-  content: "";
-  height: 2px;
-  left: 0;
-  position: absolute;
-  right: 0;
-  top: 2px;
-  transition: background 120ms ease;
-}
-.section-resize-handle:hover::after,
-.section-resize-handle:focus-visible::after,
-.section-resize-handle.dragging::after,
-.resizing-section .section-resize-handle::after {
-  background: var(--accent);
-}
-.resizing-section,
-.resizing-section * {
-  cursor: row-resize !important;
-  user-select: none !important;
-}
 .workspace-tree-entry > button {
   align-items: center;
   background: transparent !important;
@@ -2329,63 +2382,6 @@ dd {
   display: inline-block;
   height: 10px;
   width: 8px;
-}
-/* The task brief above the repositories. It takes whatever the repositories
-   leave, and scrolls inside that rather than pushing them off the column. The
-   zero basis matters: with `auto` the brief's content height would compete
-   with the section's dragged height and squeeze it back, as measured. The
-   min-height is the hard floor for a short window; the drag's own floor is
-   `INSPECTOR_MIN_HEIGHT`, enforced when the height is set. */
-.board-inspector {
-  display: flex;
-  flex: 1 1 0;
-  flex-direction: column;
-  min-height: 120px;
-}
-.board-inspector > .empty.large {
-  flex: 1;
-}
-/* Repositories, under the brief in the board's inspector column (#27). */
-.repositories-section {
-  border-top: 1px solid var(--line);
-  /* Its height is the user's, dragged on the border above. Shrink stays on so a
-     short window takes the space back from this section rather than from the
-     brief, which has a floor and would otherwise overflow the column. */
-  flex: 0 1 auto;
-  height: var(--repositories-height, 240px);
-  min-height: 0;
-  overflow: auto;
-}
-.repositories-section .workspace-resource-heading {
-  align-items: center;
-  color: var(--secondary);
-  display: flex;
-  font-size: 10px;
-  font-weight: 600;
-  gap: 5px;
-  justify-content: space-between;
-  padding: 8px 10px;
-  text-transform: uppercase;
-}
-.repositories-section .workspace-resource-heading > span:first-child {
-  flex: 1;
-}
-.repositories-section .workspace-resource-heading small {
-  color: var(--muted);
-}
-.repositories-section .workspace-resource-heading > button {
-  background: transparent;
-  border: 0;
-  border-radius: 4px;
-  color: var(--muted);
-  font-size: 15px;
-  line-height: 18px;
-  padding: 0;
-  width: 20px;
-}
-.repositories-section .workspace-resource-heading > button:hover {
-  background: var(--raised-hover);
-  color: var(--text);
 }
 
 /* A repository and the working trees cut from it are one unit: the question is
@@ -2502,75 +2498,33 @@ dd {
 /* A workspace with no repositories cannot do the thing it exists for, so the
    empty state is an instruction rather than a shrug. */
 .workspace-repository-invite {
+  align-items: center;
+  background: var(--accent-wash) !important;
+  border: 1px dashed var(--line-strong) !important;
+  border-radius: 999px !important;
+  color: var(--text) !important;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 2px 10px 12px;
+  font-size: 11px !important;
+  gap: 8px;
+  padding: 4px 12px !important;
 }
 .workspace-repository-invite strong {
-  font-size: 11px;
+  font-weight: 600;
 }
 .workspace-repository-invite span {
-  color: var(--muted);
-  font-size: 10px;
-  line-height: 1.5;
-}
-.workspace-repository-invite button {
-  align-self: flex-start;
-  font-size: 10px;
-  padding: 5px 10px;
-}
-.repositories-section summary {
-  align-items: center;
   color: var(--secondary);
-  cursor: pointer;
-  display: flex;
-  font-size: 10px;
-  font-weight: 600;
-  justify-content: space-between;
-  list-style: none;
-  padding: 8px 10px;
-  text-transform: uppercase;
 }
-.repositories-section summary::before {
-  content: "›";
-  margin-right: 5px;
-}
-.repositories-section details[open] summary::before {
-  content: "⌄";
-}
-.repositories-section summary > span {
-  flex: 1;
-}
-.repositories-section summary small {
-  color: var(--muted);
-}
-.repositories-section summary > button {
-  background: transparent !important;
-  border: 0 !important;
-  border-radius: 4px !important;
-  color: var(--muted) !important;
-  font-size: 15px !important;
-  line-height: 18px;
-  margin-left: 5px;
-  padding: 0 !important;
-  width: 20px;
-}
-.repositories-section summary > button:hover {
-  background: var(--raised-hover) !important;
-  color: var(--text) !important;
-}
-.repositories-section .workspace-resource-list {
+.repository-popover .workspace-resource-list {
   padding: 0 4px 5px;
 }
-.repositories-section .workspace-resource-row {
+.repository-popover .workspace-resource-row {
   padding: 6px;
 }
-.repositories-section .workspace-resource-row strong,
-.repositories-section .workspace-resource-row small {
+.repository-popover .workspace-resource-row strong,
+.repository-popover .workspace-resource-row small {
   font-size: 9px;
 }
-.repositories-section .access-badge {
+.repository-popover .access-badge {
   font-size: 8px;
   padding: 3px 5px;
 }

@@ -541,120 +541,80 @@ try {
   const journal = await screenshot("journal");
 
   step = "repositories";
-  // Since #27 the repositories sit under the brief in the inspector column,
-  // add button included, so a workspace with nothing attached is fixed from
-  // where the app opens. The border between them drags, with a floor under
-  // the brief and a minimum for the section; both were the explorer's before.
-  // The journal link above left the app on the Workspace tab.
+  // Since #27 the repositories are chips beside the workspace name, in the
+  // header every tab shares, so a workspace with nothing attached is fixed
+  // from wherever the app lands. A chip opens the row the explorer used to
+  // draw: actions and working trees. The journal link above left the app on
+  // the Workspace tab, where the chips must show as well.
+  await waitFor(
+    "document.querySelectorAll('.workspace-repository-chips .repository-chip').length === 2",
+    "two repository chips on the Workspace tab",
+  );
   await evaluate(
     "[...document.querySelectorAll('.app-mode-switcher button')].find((b) => b.textContent === 'Board').click()",
   );
   await waitFor(
-    "document.querySelector('.repositories-section .workspace-repository-group')",
-    "the repositories section",
+    "document.querySelectorAll('.workspace-repository-chips .repository-chip').length === 2",
+    "two repository chips on the board",
   );
-  const repositoryRows = await evaluate<number>(
-    "document.querySelectorAll('.repositories-section .workspace-resource-row').length",
-  );
-  check(
-    repositoryRows === 2,
-    `the repositories section lists ${repositoryRows} repositories, not 2`,
-  );
-  const worktreeRows = await evaluate<number>(
-    "document.querySelectorAll('.repositories-section .workspace-worktree-row:not(.empty)').length",
+  const chipText = await evaluate<string[]>(
+    "[...document.querySelectorAll('.repository-chip > summary')].map((s) => s.innerText.replace(/\\s+/g, ' ').trim())",
   );
   check(
-    worktreeRows === 3,
-    `the repositories section lists ${worktreeRows} working trees, not 3`,
+    chipText[0] === "daedalus main Clean" &&
+      chipText[1] === "hive main ↓3 behind",
+    `the chips read ${JSON.stringify(chipText)}`,
   );
   check(
     await evaluate<boolean>(
-      `Boolean(document.querySelector('.repositories-section [aria-label="Add repository"]'))`,
+      `Boolean(document.querySelector('.workspace-repository-chips [aria-label="Add repository"]'))`,
     ),
-    "the repositories section has no add button",
-  );
-  const inspectorGeometry = () =>
-    evaluate<{
-      section: number;
-      inspector: number;
-      sectionBottom: number;
-      columnBottom: number;
-    }>(`(() => {
-      const box = (selector) => document.querySelector(selector).getBoundingClientRect();
-      const section = box('.repositories-section');
-      return {
-        section: section.height,
-        inspector: box('.board-inspector').height,
-        sectionBottom: section.bottom,
-        columnBottom: box('.board-detail-column').bottom,
-      };
-    })()`);
-  const dragHandle = async (deltaY: number) => {
-    const at = await evaluate<{ x: number; y: number }>(
-      "(() => { const box = document.querySelector('.section-resize-handle').getBoundingClientRect(); return { x: box.left + box.width / 2, y: box.top + box.height / 2 }; })()",
-    );
-    await send("Input.dispatchMouseEvent", {
-      type: "mousePressed",
-      button: "left",
-      buttons: 1,
-      clickCount: 1,
-      x: at.x,
-      y: at.y,
-    });
-    await send("Input.dispatchMouseEvent", {
-      type: "mouseMoved",
-      button: "left",
-      buttons: 1,
-      x: at.x,
-      y: at.y + deltaY,
-    });
-    await send("Input.dispatchMouseEvent", {
-      type: "mouseReleased",
-      button: "left",
-      buttons: 0,
-      clickCount: 1,
-      x: at.x,
-      y: at.y + deltaY,
-    });
-    await Bun.sleep(120);
-  };
-  const beforeDrag = await inspectorGeometry();
-  await dragHandle(-120);
-  const taller = await inspectorGeometry();
-  check(
-    taller.section - beforeDrag.section >= 100,
-    `dragging the repositories border up 120px grew it by only ${(taller.section - beforeDrag.section).toFixed(0)}px (before ${JSON.stringify(beforeDrag)}, after ${JSON.stringify(taller)})`,
-  );
-  await dragHandle(-2000);
-  const pinned = await inspectorGeometry();
-  check(
-    pinned.inspector >= 139,
-    `dragging the repositories border to the top crushed the brief to ${pinned.inspector.toFixed(0)}px, under its 140px floor`,
+    "the chips row has no add button",
   );
   check(
-    pinned.sectionBottom <= pinned.columnBottom + 0.5,
-    `the repositories section overflows the inspector column by ${(pinned.sectionBottom - pinned.columnBottom).toFixed(0)}px`,
+    !(await evaluate<boolean>(
+      "Boolean(document.querySelector('.board-detail-column .workspace-repository-group'))",
+    )),
+    "the task inspector still holds a repository group",
   );
-  await dragHandle(2000);
-  const shortest = await inspectorGeometry();
-  check(
-    shortest.section >= 40,
-    `dragging the repositories border to the bottom collapsed it to ${shortest.section.toFixed(0)}px instead of stopping at its minimum`,
-  );
-  // Shrunk to its floor, the separator must say how far it could still travel.
-  const reported = await evaluate<{ now: number; max: number }>(`(() => {
-    const handle = document.querySelector('.section-resize-handle');
+  await evaluate("document.querySelector('.repository-chip').open = true");
+  await Bun.sleep(100);
+  const repositoryPopover = await evaluate<{
+    worktrees: number;
+    actions: number;
+    right: number;
+    bottom: number;
+    width: number;
+    height: number;
+  }>(`(() => {
+    const popover = document.querySelector('.repository-chip[open] .repository-popover');
+    const box = popover.getBoundingClientRect();
     return {
-      now: Number(handle.getAttribute('aria-valuenow')),
-      max: Number(handle.getAttribute('aria-valuemax')),
+      worktrees: popover.querySelectorAll('.workspace-worktree-row:not(.empty)').length,
+      actions: popover.querySelectorAll('button').length,
+      right: box.right,
+      bottom: box.bottom,
+      width: innerWidth,
+      height: innerHeight,
     };
   })()`);
   check(
-    reported.max > reported.now + 100,
-    `at its floor the separator reports max ${reported.max} against now ${reported.now}; the room the brief is holding is not being reported`,
+    repositoryPopover.worktrees === 3,
+    `the daedalus popover lists ${repositoryPopover.worktrees} working trees, not 3`,
   );
-  await dragHandle(-120);
+  // Terminal, fetch and pull on the repository; terminal, push and remove on
+  // each of its three working trees.
+  check(
+    repositoryPopover.actions === 3 + 3 * 3,
+    `the daedalus popover has ${repositoryPopover.actions} actions, not 12`,
+  );
+  check(
+    repositoryPopover.right <= repositoryPopover.width &&
+      repositoryPopover.bottom <= repositoryPopover.height,
+    `the popover runs off the window (${repositoryPopover.right}x${repositoryPopover.bottom} in ${repositoryPopover.width}x${repositoryPopover.height})`,
+  );
   const repositoriesShot = await screenshot("repositories");
+  await evaluate("document.querySelector('.repository-chip').open = false");
 
   step = "compact width";
   await evaluate(
