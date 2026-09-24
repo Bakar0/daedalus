@@ -23,6 +23,15 @@ import type { PresenceState } from "../domain";
 export const PRESENCE_MAX_AGE_MS = 8_000;
 
 /**
+ * How long the host trusts the window to be publishing before it publishes
+ * on the window's behalf. The window reports every three seconds while its
+ * timers run; WebKit throttles those timers once the window is minimised or
+ * occluded, and a closed window has no timers at all. Well under
+ * `PRESENCE_MAX_AGE_MS`, so a CLI never sees the gap.
+ */
+export const WINDOW_HEARTBEAT_GRACE_MS = 5_000;
+
+/**
  * Past this, assume an in-app toast will go unseen and prefer a desktop
  * notification. Borrowed from dev-3.0, which treats five minutes of idleness
  * as the point where the screen stops being a delivery channel.
@@ -65,6 +74,10 @@ interface StoredPresence extends PresenceReport {
  * make every `daedal attention` call look like a data change to the app.
  */
 export class PresenceService {
+  /** When the window last reported, so the host knows whether to stand in. */
+  private windowReportedAt = 0;
+  private lastReport: PresenceReport | null = null;
+
   constructor(private readonly config: DaedalusConfig) {}
 
   private get path(): string {
@@ -96,13 +109,50 @@ export class PresenceService {
     }
   }
 
-  /** Called by the desktop app on every change-check tick. */
-  async publish(report: PresenceReport): Promise<PresenceState> {
+  /** Called by the window every few seconds and on every focus change. */
+  async publish(
+    report: PresenceReport,
+    now = Date.now(),
+  ): Promise<PresenceState> {
+    this.windowReportedAt = now;
+    this.lastReport = report;
+    return this.write(report, now);
+  }
+
+  /**
+   * The host's own heartbeat, called on every change-check tick.
+   *
+   * Only the window knows where the user is looking, but only the host knows
+   * whether the app is up. Leaving the heartbeat to the window conflated the
+   * two. Close the window, minimise it, or let WebKit throttle its timers,
+   * and every CLI read "no app" and shouted its alerts through AppleScript
+   * under Script Editor's name, when the app was right there to deliver them
+   * as Daedalus. So when the window has gone quiet the host publishes in its
+   * place, as a running app nobody is looking at. Returns `undefined` when
+   * the window's own heartbeat is still fresh and nothing was written.
+   */
+  async keepAlive(now = Date.now()): Promise<PresenceState | undefined> {
+    if (now - this.windowReportedAt < WINDOW_HEARTBEAT_GRACE_MS)
+      return undefined;
+    return this.write(
+      {
+        appForeground: false,
+        workspaceId: this.lastReport?.workspaceId ?? null,
+        sessionId: null,
+      },
+      now,
+    );
+  }
+
+  private async write(
+    report: PresenceReport,
+    now: number,
+  ): Promise<PresenceState> {
     const state: PresenceState = {
       appRunning: true,
       ...report,
       userIdleSeconds: await systemIdleSeconds(),
-      observedAt: new Date().toISOString(),
+      observedAt: new Date(now).toISOString(),
     };
     await ensureDirectory(this.config.home);
     const temporaryPath = join(

@@ -169,9 +169,13 @@ Three distinct channels, never two at once for the same event:
 The channel is chosen by **presence**, not by suppressing on focus. The window
 publishes `{ appForeground, workspaceId, sessionId }` every three seconds and
 the host samples system idle time alongside it, into `presence.json` under
-`DAEDALUS_HOME`. A heartbeat older than eight seconds reads as "no app", so a
-closed window stops absorbing alerts within a few seconds rather than
-swallowing them indefinitely. Routing:
+`DAEDALUS_HOME`. A heartbeat older than eight seconds reads as "no app". The
+window's timers stop when it is closed and slow down when WebKit throttles a
+minimised or occluded window, so the host checks on every tick and, once the
+window has been quiet for five seconds, publishes in its place as a running app
+in the background. That keeps a CLI handing alerts to the app rather than
+reading silence as "no app" and shouting them through AppleScript under Script
+Editor's name; only a quit or crashed app goes silent. Routing:
 
 | Where the user is                        | Channel                                     |
 | ---------------------------------------- | ------------------------------------------- |

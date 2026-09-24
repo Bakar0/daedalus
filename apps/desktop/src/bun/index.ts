@@ -526,6 +526,11 @@ setInterval(async () => {
   if (checkingForExternalChanges) return;
   checkingForExternalChanges = true;
   try {
+    // The window's heartbeat stops with its timers, whether it is closed,
+    // minimised or throttled. A CLI that reads that silence as "no app" falls
+    // back to AppleScript, which macOS attributes to Script Editor. The host
+    // stands in so alerts keep being handed over and delivered as Daedalus.
+    await context.presence.keepAlive();
     // Reconciliation updates stale sessions; SQLite fingerprinting also catches
     // mutations performed by another process such as the CLI.
     await Promise.all([
