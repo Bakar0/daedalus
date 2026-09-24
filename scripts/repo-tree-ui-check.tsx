@@ -1,5 +1,7 @@
 /**
- * Checks the repository tree in the workspace explorer against a real browser.
+ * Checks the repository rows against a real browser. Since #27 they are in the
+ * board's right column, which belongs to the workspace, so that is where they
+ * are measured; the rows and buttons are the ones the explorer used to hold.
  *
  * Two bugs shipped through a green suite here, and both were invisible to
  * assertions about markup because both were purely about geometry:
@@ -7,13 +9,13 @@
  *   1. The fetch/pull/push buttons rendered unpressable, because the rule that
  *      gives those icon buttons their box was named for the single sync button
  *      that used to be the only one, and the new buttons never carried it.
- *   2. The rows overflowed the explorer and pushed their action buttons past
+ *   2. The rows overflowed their column and pushed their action buttons past
  *      its edge, because `.workspace-repository-group` is a grid item and a
  *      grid item's default `min-width: auto` means min-content.
  *
- * So this measures rather than reads: every row fits inside the explorer, and
- * every action button is actually clickable. Both assertions were run against
- * the two broken stylesheets and seen to fail before being trusted.
+ * So this measures rather than reads: every row fits inside the column, and
+ * every action button is actually clickable. Both assertions were
+ * run against the two broken stylesheets and seen to fail before being trusted.
  *
  * Gated like the other browser checks: `bun run test:repo-tree-ui`.
  */
@@ -92,6 +94,10 @@ const snapshot = {
   },
   repositories: [],
   providerModels: [],
+  // The board reads these too, now that the tree is drawn on it.
+  worktrees: [],
+  sessionActivity: [],
+  attention: [],
   settings: {
     home: "/tmp/daedalus",
     repositoryRoot: "/tmp/daedalus/repos",
@@ -99,6 +105,7 @@ const snapshot = {
     tmuxVersion: "tmux 3.7c",
     workspaceInstructionFilesEnabled: true,
     theme: "dark",
+    providers: [],
   },
 } as unknown as DesktopSnapshotDto;
 
@@ -194,7 +201,7 @@ body{margin:0;background:#060916}
   <WorkspaceApp
     injectedClient={client}
     initialSnapshot={snapshot}
-    initialWorkspaceView="workspace"
+    initialWorkspaceView="board"
     initialWorkspaceContent={populated}
   />,
 )}</div></body></html>`;
@@ -299,7 +306,7 @@ try {
   }
 
   const measurements = await evaluate<{
-    explorer: { left: number; right: number } | null;
+    column: { left: number; right: number } | null;
     rows: Array<{ label: string; left: number; right: number }>;
     buttons: Array<{
       label: string;
@@ -309,8 +316,8 @@ try {
       iconOverflow: number;
     }>;
   }>(`(() => {
-    const explorerElement = document.querySelector('.workspace-explorer');
-    const box = explorerElement && explorerElement.getBoundingClientRect();
+    const columnElement = document.querySelector('.board-detail-column .workspace-repositories');
+    const box = columnElement && columnElement.getBoundingClientRect();
     const rows = [...document.querySelectorAll('.workspace-resource-row, .workspace-worktree-row:not(.empty)')].map((row) => {
       const rect = row.getBoundingClientRect();
       return { label: (row.textContent || '').trim().slice(0, 40), left: rect.left, right: rect.right };
@@ -329,17 +336,17 @@ try {
           : 0,
       };
     });
-    return { explorer: box ? { left: box.left, right: box.right } : null, rows, buttons };
+    return { column: box ? { left: box.left, right: box.right } : null, rows, buttons };
   })()`);
 
-  if (!measurements.explorer)
-    failures.push("The workspace explorer did not render");
+  if (!measurements.column)
+    failures.push("The board's repository list did not render");
   else {
-    const { left, right } = measurements.explorer;
+    const { left, right } = measurements.column;
     for (const row of measurements.rows)
       if (row.right > right + 0.5 || row.left < left - 0.5)
         failures.push(
-          `Row "${row.label}" spans ${row.left.toFixed(0)}–${row.right.toFixed(0)}, outside the explorer's ${left.toFixed(0)}–${right.toFixed(0)}; its actions are unreachable`,
+          `Row "${row.label}" spans ${row.left.toFixed(0)}–${row.right.toFixed(0)}, outside the column's ${left.toFixed(0)}–${right.toFixed(0)}; its actions are unreachable`,
         );
   }
   const expectedRows =
@@ -386,5 +393,5 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log(
-  "Repository tree check passed: every row fits the explorer and every action is pressable.",
+  "Repository rows check passed: every row fits the board's workspace column and every action is pressable.",
 );

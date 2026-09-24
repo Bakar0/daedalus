@@ -1704,6 +1704,8 @@ dd {
   display: grid;
   grid-row: 3;
   min-height: 0;
+  /* The task drawer is positioned against the shell. */
+  position: relative;
 }
 
 .column-resize-handle {
@@ -2239,47 +2241,14 @@ dd {
   overflow: auto;
   padding: 5px 0;
 }
-/* The explorer's own two borders are draggable. The column handle above divides
-   the whole shell; these divide what is inside the explorer, so they answer to
+/* The explorer's right border is draggable. The column handle above divides
+   the whole shell; this divides what is inside the explorer, so it answers to
    the explorer's own minimums rather than the shell's.
 
    The explorer keeps its right border, so this track carries the viewer's
    background instead of a second line of its own. */
 .explorer-resize-handle {
   background: rgb(7 10 17 / 0.28);
-}
-.explorer-section-resize-handle {
-  cursor: row-resize;
-  /* Wider than the border it sits on, and pulled back over its neighbours so
-     the extra grab area costs no layout. */
-  flex: 0 0 7px;
-  margin-bottom: -3px;
-  margin-top: -3px;
-  outline: none;
-  position: relative;
-  touch-action: none;
-  z-index: 5;
-}
-.explorer-section-resize-handle::after {
-  background: transparent;
-  content: "";
-  height: 2px;
-  left: 0;
-  position: absolute;
-  right: 0;
-  top: 2px;
-  transition: background 120ms ease;
-}
-.explorer-section-resize-handle:hover::after,
-.explorer-section-resize-handle:focus-visible::after,
-.explorer-section-resize-handle.dragging::after,
-.resizing-explorer-section .explorer-section-resize-handle::after {
-  background: var(--accent);
-}
-.resizing-explorer-section,
-.resizing-explorer-section * {
-  cursor: row-resize !important;
-  user-select: none !important;
 }
 .workspace-tree-entry > button {
   align-items: center;
@@ -2327,47 +2296,6 @@ dd {
   display: inline-block;
   height: 10px;
   width: 8px;
-}
-.workspace-explorer-secondary {
-  border-top: 1px solid var(--line);
-  /* Its height is the user's, dragged on the border above. Shrink stays on so a
-     short window takes the space back from this section rather than from the
-     file tree, which has a floor and would otherwise overflow the explorer. */
-  flex: 0 1 auto;
-  height: var(--explorer-secondary-height, 240px);
-  min-height: 0;
-  overflow: auto;
-}
-.workspace-explorer-secondary .workspace-resource-heading {
-  align-items: center;
-  color: var(--secondary);
-  display: flex;
-  font-size: 10px;
-  font-weight: 600;
-  gap: 5px;
-  justify-content: space-between;
-  padding: 8px 10px;
-  text-transform: uppercase;
-}
-.workspace-explorer-secondary .workspace-resource-heading > span:first-child {
-  flex: 1;
-}
-.workspace-explorer-secondary .workspace-resource-heading small {
-  color: var(--muted);
-}
-.workspace-explorer-secondary .workspace-resource-heading > button {
-  background: transparent;
-  border: 0;
-  border-radius: 4px;
-  color: var(--muted);
-  font-size: 15px;
-  line-height: 18px;
-  padding: 0;
-  width: 20px;
-}
-.workspace-explorer-secondary .workspace-resource-heading > button:hover {
-  background: var(--raised-hover);
-  color: var(--text);
 }
 
 /* A repository and the working trees cut from it are one unit: the question is
@@ -2487,72 +2415,32 @@ dd {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 2px 10px 12px;
+  padding: 10px 2px;
 }
 .workspace-repository-invite strong {
-  font-size: 11px;
+  font-size: 12px;
 }
 .workspace-repository-invite span {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.5;
 }
 .workspace-repository-invite button {
   align-self: flex-start;
-  font-size: 10px;
+  font-size: 11px;
   padding: 5px 10px;
 }
-.workspace-explorer-secondary summary {
-  align-items: center;
-  color: var(--secondary);
-  cursor: pointer;
-  display: flex;
-  font-size: 10px;
-  font-weight: 600;
-  justify-content: space-between;
-  list-style: none;
-  padding: 8px 10px;
-  text-transform: uppercase;
-}
-.workspace-explorer-secondary summary::before {
-  content: "›";
-  margin-right: 5px;
-}
-.workspace-explorer-secondary details[open] summary::before {
-  content: "⌄";
-}
-.workspace-explorer-secondary summary > span {
-  flex: 1;
-}
-.workspace-explorer-secondary summary small {
-  color: var(--muted);
-}
-.workspace-explorer-secondary summary > button {
-  background: transparent !important;
-  border: 0 !important;
-  border-radius: 4px !important;
-  color: var(--muted) !important;
-  font-size: 15px !important;
-  line-height: 18px;
-  margin-left: 5px;
-  padding: 0 !important;
-  width: 20px;
-}
-.workspace-explorer-secondary summary > button:hover {
-  background: var(--raised-hover) !important;
-  color: var(--text) !important;
-}
-.workspace-explorer-secondary .workspace-resource-list {
+.workspace-repositories .workspace-resource-list {
   padding: 0 4px 5px;
 }
-.workspace-explorer-secondary .workspace-resource-row {
+.workspace-repositories .workspace-resource-row {
   padding: 6px;
 }
-.workspace-explorer-secondary .workspace-resource-row strong,
-.workspace-explorer-secondary .workspace-resource-row small {
+.workspace-repositories .workspace-resource-row strong,
+.workspace-repositories .workspace-resource-row small {
   font-size: 9px;
 }
-.workspace-explorer-secondary .access-badge {
+.workspace-repositories .access-badge {
   font-size: 8px;
   padding: 3px 5px;
 }
@@ -3403,7 +3291,7 @@ dd {
 }
 .board-detail-column.panel-compact::before {
   color: var(--muted);
-  content: "Inspector";
+  content: "Workspace";
   font-size: 10px;
   font-weight: 650;
   letter-spacing: 0.12em;
@@ -4474,4 +4362,69 @@ dd {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   margin: 0;
+}
+
+/* The board's right column is the workspace's (#27). Its repository list
+   scrolls inside the column rather than growing it. */
+.board-detail-column .workspace-repositories {
+  /* A grid stretches its rows to fill by default, which spread two
+     repositories across the whole column. */
+  align-content: start;
+  flex: 1;
+  margin: 0 -8px;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 4px 8px;
+}
+
+/* The selected task's detail, floating over the workspace column from the
+   right edge. Wide enough that the brief, the timeline and the cost line read
+   without wrapping; no backdrop, so the lanes stay readable beside it. */
+.task-drawer {
+  animation: task-drawer-in 160ms ease-out;
+  background: var(--overlay);
+  border-left: 1px solid var(--line-strong);
+  bottom: 0;
+  box-shadow: -24px 0 60px rgb(0 0 0 / 0.4);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 20px 18px 14px;
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: min(560px, 48%);
+  z-index: 15;
+}
+.task-drawer > .task-brief,
+.task-drawer > .brief-editor {
+  flex: 1;
+}
+.task-drawer-close {
+  align-items: center;
+  display: flex;
+  height: 28px;
+  justify-content: center;
+  padding: 0 !important;
+  width: 28px;
+}
+.task-drawer-close svg {
+  height: 14px;
+  width: 14px;
+}
+@keyframes task-drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .task-drawer {
+    animation: none;
+  }
+}
+@media (max-width: 820px) {
+  .task-drawer {
+    width: 100%;
+  }
 }

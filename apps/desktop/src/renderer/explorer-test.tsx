@@ -98,9 +98,9 @@ const repository = (id: string, name: string) => ({
   },
 });
 
-// The repositories section needs more than fits its default height, so a drag
-// that makes it taller is visible as more of the list rather than only as a
-// number.
+// Repositories and working trees, so the content has the shape of a real
+// workspace's. The explorer itself no longer shows them (#27, they are on the
+// board); the file tree lists their checkouts under `repos/` and `worktrees/`.
 const fabricated = {
   repositories: [
     repository("r1", "daedalus"),

@@ -1,18 +1,19 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
-import type { AgentSessionDto, DesktopSnapshotDto } from "@daedalus/protocol";
+import type {
+  AgentSessionDto,
+  DesktopSnapshotDto,
+  WorkspaceContentDto,
+} from "@daedalus/protocol";
 import { App, MarkdownPreview } from "./App";
 import type { DesktopClient } from "./client-types";
 import {
   agentMultilineSequence,
-  clampExplorerSecondaryHeight,
   clampExplorerWidth,
   clampPanelSize,
   EXPLORER_DEFAULT_WIDTH,
   EXPLORER_MAX_WIDTH,
   EXPLORER_MIN_WIDTH,
-  EXPLORER_SECONDARY_MIN_HEIGHT,
-  EXPLORER_TREE_MIN_HEIGHT,
   lifecycleTone,
   parseRememberedDirectories,
   planExplorerRefresh,
@@ -136,20 +137,6 @@ describe("desktop application shell", () => {
     expect(clampExplorerWidth(400, 40)).toBe(EXPLORER_MIN_WIDTH);
     expect(EXPLORER_MIN_WIDTH).toBeLessThan(EXPLORER_DEFAULT_WIDTH);
     expect(EXPLORER_DEFAULT_WIDTH).toBeLessThan(EXPLORER_MAX_WIDTH);
-  });
-
-  test("stops the repositories section before it eats the file tree", () => {
-    // `available` is the section's own height plus whatever the tree can give
-    // up above its floor, so the tree always keeps something to scroll.
-    expect(clampExplorerSecondaryHeight(10, 600)).toBe(
-      EXPLORER_SECONDARY_MIN_HEIGHT,
-    );
-    expect(clampExplorerSecondaryHeight(240.4, 600)).toBe(240);
-    expect(clampExplorerSecondaryHeight(600, 380)).toBe(380);
-    expect(clampExplorerSecondaryHeight(600, 20)).toBe(
-      EXPLORER_SECONDARY_MIN_HEIGHT,
-    );
-    expect(EXPLORER_TREE_MIN_HEIGHT).toBeGreaterThan(0);
   });
 
   test("restores remembered folders parents first, and survives junk", () => {
@@ -362,13 +349,13 @@ describe("desktop application shell", () => {
     expect(shouldFocusSession(undefined, undefined)).toBe(false);
   });
 
-  test("restores a remembered workspace mode and ignores unusable values", () => {
+  test("restores a remembered workspace mode and opens on the board otherwise", () => {
     expect(preferredWorkspaceView("sessions")).toBe("sessions");
     expect(preferredWorkspaceView("workspace")).toBe("workspace");
     expect(preferredWorkspaceView("board")).toBe("board");
-    expect(preferredWorkspaceView("retired-mode")).toBe("workspace");
-    expect(preferredWorkspaceView(null)).toBe("workspace");
-    expect(preferredWorkspaceView()).toBe("workspace");
+    expect(preferredWorkspaceView("retired-mode")).toBe("board");
+    expect(preferredWorkspaceView(null)).toBe("board");
+    expect(preferredWorkspaceView()).toBe("board");
   });
 
   test("renders Board, Sessions, and Workspace as complete workspace modes", () => {
@@ -385,6 +372,19 @@ describe("desktop application shell", () => {
     expect(html).toContain("Workspace");
     expect(html).not.toContain("Activity");
     expect(html).toContain('aria-label="Workspace mode"');
+    // Board first (#27): the switcher reads Board, Sessions, Workspace.
+    const switcherStart = html.indexOf('aria-label="Workspace mode"');
+    const switcher = html.slice(
+      switcherStart,
+      html.indexOf("</nav>", switcherStart),
+    );
+    expect(switcher.indexOf(">Board<")).toBeGreaterThan(-1);
+    expect(switcher.indexOf(">Board<")).toBeLessThan(
+      switcher.indexOf(">Sessions<"),
+    );
+    expect(switcher.indexOf(">Sessions<")).toBeLessThan(
+      switcher.indexOf(">Workspace<"),
+    );
     expect(html).toContain("mode-board");
     expect(html).not.toContain("No session selected");
     expect(html).toContain("No workspaces yet");
@@ -566,7 +566,7 @@ describe("desktop application shell", () => {
       <App
         injectedClient={client}
         initialSnapshot={snapshot}
-        initialWorkspaceView="workspace"
+        initialWorkspaceView="board"
         initialWorkspaceContent={{
           workspaceId: "w1",
           brief: "# Objective",
@@ -585,95 +585,100 @@ describe("desktop application shell", () => {
       />,
     );
     // An instruction, not a shrug: the empty state names the next action and
-    // carries a control that performs it.
+    // carries a control that performs it. It is a chip in the header (#27),
+    // so a new workspace is fixed from wherever the app lands.
+    expect(html).toContain("mode-board");
     expect(html).toContain("No repositories yet");
     expect(html).toContain("workspace-repository-invite");
     expect(html).toContain("Add a repository");
+    expect(html).toContain('aria-label="Add repository"');
     expect(html).not.toContain("workspace-repository-group");
   });
 
-  test("renders workspace files, context, repositories, and worktrees", () => {
-    const snapshot: DesktopSnapshotDto = {
-      ...base,
-      workspaces: [
-        {
-          id: "w1",
-          slug: "demo",
-          name: "Demo",
-          path: "/tmp/demo",
-          createdAt: "now",
-          updatedAt: "now",
-          archivedAt: null,
-          available: true,
-          position: 1,
-          startSetsInProgress: true,
-          defaultProvider: null,
-          defaultModel: null,
+  const demoSnapshot: DesktopSnapshotDto = {
+    ...base,
+    workspaces: [
+      {
+        id: "w1",
+        slug: "demo",
+        name: "Demo",
+        path: "/tmp/demo",
+        createdAt: "now",
+        updatedAt: "now",
+        archivedAt: null,
+        available: true,
+        position: 1,
+        startSetsInProgress: true,
+        defaultProvider: null,
+        defaultModel: null,
+      },
+    ],
+  };
+  const demoContent: WorkspaceContentDto = {
+    workspaceId: "w1",
+    brief: "# Objective\n\nBuild the workspace view.",
+    journal: "# Journal\n\n## progress\n\nStarted.",
+    files: [
+      {
+        name: "worktrees",
+        path: "worktrees",
+        kind: "directory",
+        mutable: false,
+      },
+      {
+        name: "BRIEF.md",
+        path: "BRIEF.md",
+        kind: "file",
+        mutable: false,
+      },
+      {
+        name: "JOURNAL.md",
+        path: "JOURNAL.md",
+        kind: "file",
+        mutable: false,
+      },
+    ],
+    repositories: [
+      {
+        id: "r1",
+        workspaceId: "w1",
+        name: "daedalus",
+        canonicalPath: "/code/daedalus",
+        access: "write",
+        libraryRepositoryId: "library-r1",
+        referencePath: "/tmp/demo/repos/daedalus",
+        baseBranch: "main",
+        baseCommit: "1234567890abcdef1234567890abcdef12345678",
+        fetchedAt: "now",
+        createdAt: "now",
+        status: "ready" as const,
+        statusError: null,
+        gitStatus: {
+          state: "behind",
+          changedFiles: 0,
+          ahead: 0,
+          behind: 2,
         },
-      ],
-    };
+      },
+    ],
+    worktrees: [
+      {
+        sessionId: "session-12345678",
+        repositoryId: "r1",
+        path: "/tmp/demo/worktrees/task/session/daedalus",
+        branchName: "daedalus/demo/task/session",
+        createdAt: "now",
+      },
+    ],
+  };
+
+  test("renders workspace files and context, with the repositories gone to the board", () => {
     const html = renderToStaticMarkup(
       <App
         injectedClient={client}
-        initialSnapshot={snapshot}
+        initialSnapshot={demoSnapshot}
         initialWorkspaceView="workspace"
-        initialWorkspaceContent={{
-          workspaceId: "w1",
-          brief: "# Objective\n\nBuild the workspace view.",
-          journal: "# Journal\n\n## progress\n\nStarted.",
-          files: [
-            {
-              name: "worktrees",
-              path: "worktrees",
-              kind: "directory",
-              mutable: false,
-            },
-            {
-              name: "BRIEF.md",
-              path: "BRIEF.md",
-              kind: "file",
-              mutable: false,
-            },
-            {
-              name: "JOURNAL.md",
-              path: "JOURNAL.md",
-              kind: "file",
-              mutable: false,
-            },
-          ],
-          repositories: [
-            {
-              id: "r1",
-              workspaceId: "w1",
-              name: "daedalus",
-              canonicalPath: "/code/daedalus",
-              access: "write",
-              libraryRepositoryId: "library-r1",
-              referencePath: "/tmp/demo/repos/daedalus",
-              baseBranch: "main",
-              baseCommit: "1234567890abcdef1234567890abcdef12345678",
-              fetchedAt: "now",
-              createdAt: "now",
-              status: "ready" as const,
-              statusError: null,
-              gitStatus: {
-                state: "behind",
-                changedFiles: 0,
-                ahead: 0,
-                behind: 2,
-              },
-            },
-          ],
-          worktrees: [
-            {
-              sessionId: "session-12345678",
-              repositoryId: "r1",
-              path: "/tmp/demo/worktrees/task/session/daedalus",
-              branchName: "daedalus/demo/task/session",
-              createdAt: "now",
-            },
-          ],
-        }}
+        initialWorkspaceContent={demoContent}
       />,
     );
     expect(html).toContain("mode-workspace");
@@ -685,7 +690,37 @@ describe("desktop application shell", () => {
     expect(html).toContain("Preview");
     expect(html).toContain('aria-label="New file"');
     expect(html).toContain('aria-label="New folder"');
-    expect(html).toContain("Repositories");
+    // Since #27 the explorer is the file tree alone; the repositories are in
+    // the board's workspace column.
+    const explorer = html.slice(
+      html.indexOf('class="workspace-explorer"'),
+      html.indexOf('class="workspace-viewer'),
+    );
+    expect(explorer).not.toContain("workspace-repository-group");
+    expect(explorer).not.toContain("Repositories");
+    // The explorer's border is grabbable, and carries the size it is
+    // currently set to so a keyboard can move it too.
+    expect(html).toContain('aria-label="Resize explorer"');
+    expect(html).toContain("--explorer-width:");
+  });
+
+  test("renders the repositories in the board's workspace column, with no task open", () => {
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialSnapshot={demoSnapshot}
+        initialWorkspaceView="board"
+        initialWorkspaceContent={demoContent}
+      />,
+    );
+    expect(html).toContain("mode-board");
+    // The right column is the workspace's, and with no task selected there
+    // is no drawer over it.
+    const column = html.slice(html.indexOf("board-detail-column"));
+    expect(column).toContain(">Workspace<");
+    expect(column).toContain(">Repositories<");
+    expect(html).not.toContain("task-drawer");
+    expect(html).not.toContain("Select a task");
     expect(html).toContain("main ·");
     expect(html).toContain("↓2 behind");
     expect(html).toContain('aria-label="Fetch daedalus"');
@@ -697,14 +732,49 @@ describe("desktop application shell", () => {
     expect(html).toContain("workspace-worktree-row");
     expect(html).toContain("daedalus/demo/task/session");
     expect(html).toContain('aria-label="Push daedalus/demo/task/session"');
-    // Both of the explorer's own borders are grabbable, and both carry the
-    // size they are currently set to so a keyboard can move them too.
-    expect(html).toContain('aria-label="Resize explorer"');
-    expect(html).toContain('aria-label="Resize repositories section"');
-    expect(html).toContain("--explorer-width:");
-    expect(html).toContain("--explorer-secondary-height:");
+    expect(column).toContain("workspace-repository-group");
   });
 
+  test("opens the selected task in a drawer over the workspace column", () => {
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialSnapshot={{
+          ...demoSnapshot,
+          tasks: [
+            {
+              id: "t1",
+              workspaceId: "w1",
+              number: 1,
+              title: "Drawer task",
+              description: "The brief.",
+              status: "todo",
+              priority: "normal",
+              createdAt: "now",
+              updatedAt: "now",
+              completedAt: null,
+              briefUpdatedAt: null,
+              references: [],
+            },
+          ] as unknown as DesktopSnapshotDto["tasks"],
+        }}
+        initialSelectedTaskId="t1"
+        initialWorkspaceView="board"
+        initialWorkspaceContent={demoContent}
+      />,
+    );
+    const drawer = html.slice(html.indexOf('class="task-drawer"'));
+    expect(html).toContain('class="task-drawer"');
+    expect(html).toContain('aria-label="Task #1"');
+    expect(drawer).toContain("<h2>#1 Drawer task</h2>");
+    expect(drawer).toContain('aria-label="Close task"');
+    expect(drawer).toContain("Edit");
+    // The drawer covers the column; the repositories are still rendered
+    // underneath it.
+    expect(html.indexOf("workspace-repository-group")).toBeLessThan(
+      html.indexOf('class="task-drawer"'),
+    );
+  });
   test("renders workspace, task, and session lifecycle state", () => {
     const snapshot: DesktopSnapshotDto = {
       ...base,

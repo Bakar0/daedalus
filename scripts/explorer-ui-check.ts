@@ -44,8 +44,9 @@ const bridgePort = freePort();
  * this check worthless: the coalescing, the debounce and the reconciliation
  * would all have been proven against a fixture written to agree with them.
  * What is *not* real is Electrobun's RPC transport, which this replaces, and
- * the repositories list, which the page fabricates so the geometry assertions
- * have more rows than fit.
+ * the repositories list, which the page fabricates so the content has the
+ * shape of a real workspace's. (Since #27 the explorer no longer shows it;
+ * the repositories are on the board.)
  */
 const home = await mkdtemp(join(tmpdir(), "daedalus-explorer-check-"));
 const context = await createApplicationContext({
@@ -197,9 +198,8 @@ const profile = await mkdtemp(
   join(artifactsDirectory, ".explorer-check-profile-"),
 );
 
-// Mirrors the renderer's own floors. A drag that pushed past either of these
-// would be reported here rather than silently accepted.
-const EXPLORER_TREE_MIN_HEIGHT = 140;
+// Mirrors the renderer's own floor. A drag that pushed past it would be
+// reported here rather than silently accepted.
 const EXPLORER_VIEWER_MIN_WIDTH = 300;
 
 const vite = Bun.spawn(
@@ -661,32 +661,25 @@ try {
       explorerWidth: number;
       viewerWidth: number;
       treeHeight: number;
-      secondaryHeight: number;
-      secondaryBottom: number;
-      explorerBottom: number;
       explorerRight: number;
-      widestRowRight: number;
+      widestEntryRight: number;
     }>(`(() => {
       const box = (selector) => document.querySelector(selector).getBoundingClientRect();
       const explorer = box('.workspace-explorer');
-      const secondary = box('.workspace-explorer-secondary');
-      const rows = [...document.querySelectorAll('.workspace-resource-row, .workspace-worktree-row:not(.empty)')];
+      const entries = [...document.querySelectorAll('.workspace-tree-entry > button')];
       return {
         explorerWidth: explorer.width,
         viewerWidth: box('.workspace-viewer').width,
         treeHeight: box('.workspace-tree').height,
-        secondaryHeight: secondary.height,
-        secondaryBottom: secondary.bottom,
-        explorerBottom: explorer.bottom,
         explorerRight: explorer.right,
-        widestRowRight: rows.reduce((widest, row) => Math.max(widest, row.getBoundingClientRect().right), 0),
+        widestEntryRight: entries.reduce((widest, entry) => Math.max(widest, entry.getBoundingClientRect().right), 0),
       };
     })()`);
 
   const reload = async () => {
     await send("Page.reload", { ignoreCache: false });
     await waitFor(
-      "document.querySelector('.workspace-explorer-secondary')",
+      "document.querySelector('.workspace-tree')",
       "the explorer after a reload",
     );
     // The restore fires a directory listing per remembered folder after the
@@ -705,7 +698,7 @@ try {
   };
 
   await waitFor(
-    "document.querySelector('.explorer-section-resize-handle')",
+    "document.querySelector('.workspace-tree')",
     "the explorer to mount",
   );
   await waitFor(
@@ -761,55 +754,7 @@ try {
       "Reopening a folder restored a subfolder the user had closed inside it",
     );
 
-  // 4. The repositories section drags taller, and stops before the file tree
-  //    loses its floor.
-  const before = await geometry();
-  await drag(".explorer-section-resize-handle", 0, -120);
-  const taller = await geometry();
-  if (taller.secondaryHeight - before.secondaryHeight < 100)
-    failures.push(
-      `Dragging the repositories border up 120px grew it by only ${(taller.secondaryHeight - before.secondaryHeight).toFixed(0)}px (${before.secondaryHeight.toFixed(0)} -> ${taller.secondaryHeight.toFixed(0)})`,
-    );
-  await drag(".explorer-section-resize-handle", 0, -2000);
-  const pinned = await geometry();
-  if (pinned.treeHeight < EXPLORER_TREE_MIN_HEIGHT - 1)
-    failures.push(
-      `Dragging the repositories border to the top crushed the file tree to ${pinned.treeHeight.toFixed(0)}px, under its ${EXPLORER_TREE_MIN_HEIGHT}px floor`,
-    );
-  if (pinned.secondaryBottom > pinned.explorerBottom + 0.5)
-    failures.push(
-      `The repositories section overflows the explorer by ${(pinned.secondaryBottom - pinned.explorerBottom).toFixed(0)}px`,
-    );
-  await drag(".explorer-section-resize-handle", 0, 2000);
-  // Shrunk to its floor, the separator must say how far it could still travel.
-  // A focusable separator reporting only `aria-valuenow` is read against the
-  // implicit 0–100, which would describe an 84px section as "over maximum".
-  const reported = await evaluate<{ now: number; max: number }>(`(() => {
-    const handle = document.querySelector('.explorer-section-resize-handle');
-    return {
-      now: Number(handle.getAttribute('aria-valuenow')),
-      max: Number(handle.getAttribute('aria-valuemax')),
-    };
-  })()`);
-  if (!(reported.max > reported.now + 100))
-    failures.push(
-      `With the repositories section at its floor the separator reports max ${reported.max} against now ${reported.now}; the room the tree is holding is not being reported`,
-    );
-  const shortest = await geometry();
-  if (shortest.secondaryHeight < 40)
-    failures.push(
-      `Dragging the repositories border to the bottom collapsed it to ${shortest.secondaryHeight.toFixed(0)}px instead of stopping at its minimum`,
-    );
-  await drag(".explorer-section-resize-handle", 0, -120);
-  const restoredHeight = (await geometry()).secondaryHeight;
-  await reload();
-  const afterReloadHeight = (await geometry()).secondaryHeight;
-  if (Math.abs(afterReloadHeight - restoredHeight) > 2)
-    failures.push(
-      `The repositories height did not survive a reload: ${restoredHeight.toFixed(0)}px -> ${afterReloadHeight.toFixed(0)}px`,
-    );
-
-  // 5. The explorer itself drags wider, and never at the viewer's expense.
+  // 4. The explorer drags wider, and never at the viewer's expense.
   const beforeWidth = await geometry();
   await drag(".explorer-resize-handle", 140, 0);
   const wider = await geometry();
@@ -817,9 +762,9 @@ try {
     failures.push(
       `Dragging the explorer border right 140px widened it by only ${(wider.explorerWidth - beforeWidth.explorerWidth).toFixed(0)}px (${beforeWidth.explorerWidth.toFixed(0)} -> ${wider.explorerWidth.toFixed(0)})`,
     );
-  if (wider.widestRowRight > wider.explorerRight + 0.5)
+  if (wider.widestEntryRight > wider.explorerRight + 0.5)
     failures.push(
-      `A repository row spills ${(wider.widestRowRight - wider.explorerRight).toFixed(0)}px past the widened explorer`,
+      `A tree entry spills ${(wider.widestEntryRight - wider.explorerRight).toFixed(0)}px past the widened explorer`,
     );
   await drag(".explorer-resize-handle", 2000, 0);
   const widest = await geometry();
@@ -1112,10 +1057,6 @@ try {
   //      menu item looked broken while the service was doing exactly what it
   //      was told. Refusing is the honest answer, and the menu says so first.
   at("the generated-file context menu");
-  // The drags above left the file tree at its floor, so most of the root is
-  // scrolled out of it. Give the tree its room back before asking for rows.
-  at("generated: restoring tree height");
-  await drag(".explorer-section-resize-handle", 0, 2000);
   // One file, not the whole list. Which entries count as generated is a pure
   // predicate asserted in `bun test`; what needs a browser is that the menu is
   // actually wired to it, and one file proves that. Driving three menus in a
