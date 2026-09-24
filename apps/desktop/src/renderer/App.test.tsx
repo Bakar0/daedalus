@@ -949,13 +949,39 @@ describe("desktop application shell", () => {
     const drawerHtml = html.slice(html.indexOf('class="task-drawer"'));
     expect(drawerHtml).toContain('aria-label="Task status"');
     expect(drawerHtml).not.toContain("<select");
-    // Draft brief and Delete live in the heading's overflow menu, not in
-    // bordered rows under the timeline.
-    expect(html).toContain('aria-label="More task actions"');
-    expect(html.indexOf('aria-label="More task actions"')).toBeLessThan(
-      html.indexOf('aria-label="Task status"'),
+    // Edit, Draft brief and Delete live in the action bar under the pills
+    // (#34), not in the heading and not in bordered rows under the timeline.
+    // The heading keeps only Close.
+    const headingHtml = drawerHtml.slice(
+      0,
+      drawerHtml.indexOf('class="task-brief"'),
     );
-    expect(html).toContain("Delete task");
+    expect(headingHtml).toContain('aria-label="Close task"');
+    expect(headingHtml).not.toContain(">Edit<");
+    expect(headingHtml).not.toContain("Delete");
+    const barHtml = drawerHtml.slice(
+      drawerHtml.indexOf('class="task-action-bar"'),
+    );
+    expect(barHtml).toContain("Edit</button>");
+    expect(barHtml).toContain('class="danger-link"');
+    expect(barHtml).toContain("Delete</button>");
+    expect(barHtml).not.toContain("Delete task");
+    expect(html.indexOf('aria-label="Task status"')).toBeLessThan(
+      html.indexOf("Delete</button>"),
+    );
+    // Every bar button has an icon beside its label.
+    const barEnd = Math.min(
+      ...["brief-placeholder", "markdown-body"]
+        .map((marker) => barHtml.indexOf(marker))
+        .filter((index) => index >= 0),
+    );
+    const barButtons = barHtml
+      .slice(0, barEnd)
+      .match(/<button[^>]*>[\s\S]*?<\/button>/g)!;
+    expect(barButtons.length).toBeGreaterThan(3);
+    for (const button of barButtons)
+      if (!button.includes(">▾<"))
+        expect(button).toContain('class="task-action-icon"');
     expect(html).not.toContain("task-inspector-actions");
     expect(html).not.toContain("brief-delete");
     expect(html).toContain('aria-label="Timeline"');
@@ -1036,9 +1062,13 @@ describe("desktop application shell", () => {
     expect(html).toContain("Depends on / Unblocks");
     expect(html).toContain("<dt>Unblocks</dt>");
     expect(html).toContain("<dt>Mentioned by</dt>");
-    expect(html).toContain("Draft brief with agent");
-    // An empty brief offers the draft on the card too.
+    // Draft brief is a bar button for every task and the card's only while
+    // the brief is empty; the overflow menu holds Delete alone.
+    expect(html).not.toContain("Draft brief with agent");
     expect(html).toContain(">Draft brief</button>");
+    expect(html.slice(html.indexOf('class="task-drawer"'))).toContain(
+      "Draft brief</button>",
+    );
     // The waiting task sinks below the ready ones in Queued.
     expect(html.indexOf('data-task-number="12"')).toBeLessThan(
       html.indexOf('data-task-number="11"'),

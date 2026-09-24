@@ -21,15 +21,17 @@ import {
   BOARD_LANES,
   boardLanes,
   LANE_LABEL,
-  sessionWaitingSince,
   taskRelations,
-  taskSessions,
   taskWaitingSince,
-  taskWorktrees,
   unfinishedDependencies,
   type BoardLane,
   type LaneInputs,
 } from "./board-lanes";
+import {
+  taskActions,
+  type BoardLaunch,
+  type BoardProvider,
+} from "./task-actions";
 import {
   AgentStatusDot,
   CreateButton,
@@ -42,17 +44,7 @@ import {
   waitingLabel,
 } from "./session-view";
 
-export type BoardProvider = "claude" | "codex";
-
-/** A Start the user clicked that has not become a session yet. */
-export interface BoardLaunch {
-  key: string;
-  taskId?: string;
-  tool: "codex" | "claude" | "terminal";
-  status: "starting" | "error";
-  error?: string;
-  sessionId?: string;
-}
+export type { BoardLaunch, BoardProvider } from "./task-actions";
 
 export interface BoardViewProps {
   workspace: WorkspaceDto;
@@ -578,14 +570,25 @@ export function BoardView(props: BoardViewProps) {
   };
 
   const renderCard = (task: TaskDto, lane: BoardLane) => {
-    const linked = taskSessions(task, sessions);
-    const output = taskWorktrees(task, inputs);
-    const launches = props.launches.filter(
-      (launch) =>
-        launch.taskId === task.id &&
-        (launch.status === "error" ||
-          !linked.some((session) => session.id === launch.sessionId)),
-    );
+    const {
+      answerTarget,
+      lastAgent,
+      launches,
+      linked,
+      offersSecondOpinion,
+      otherProvider,
+      output,
+      reviewPullRequest,
+      reviewWorktree,
+      startable,
+      starting,
+      waitingOn,
+    } = taskActions(task, lane, {
+      ...inputs,
+      launches: props.launches,
+      availableProviders: props.availableProviders,
+      tasksById,
+    });
     const waiting =
       lane === "needs_me" ? taskWaitingSince(task, inputs) : undefined;
     const cardLabel = [
@@ -595,37 +598,6 @@ export function BoardView(props: BoardViewProps) {
     ]
       .filter(Boolean)
       .join(", ");
-    const liveAgent = linked.some(
-      (session) =>
-        session.kind === "agent" &&
-        (session.status === "running" || session.status === "starting"),
-    );
-    const startable = (lane === "queued" || lane === "parked") && !liveAgent;
-    const starting = launches.some((launch) => launch.status === "starting");
-    const waitingOn = unfinishedDependencies(task, tasksById);
-    // The session that has waited longest is the one the reply box answers.
-    const answerTarget =
-      lane === "needs_me"
-        ? linked
-            .map((session) => ({
-              session,
-              since: sessionWaitingSince(session, inputs),
-            }))
-            .filter((item) => item.since)
-            .sort((left, right) => left.since!.localeCompare(right.since!))[0]
-            ?.session
-        : undefined;
-    const lastAgent = [...linked]
-      .filter((session) => session.kind === "agent")
-      .sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0];
-    const otherProvider = lastAgent
-      ? props.availableProviders.find(
-          (provider) => provider !== lastAgent.provider,
-        )
-      : undefined;
-    const offersSecondOpinion =
-      Boolean(lastAgent) &&
-      (lane === "needs_me" || lane === "running" || lane === "review");
     const secondOpinion = offersSecondOpinion && (
       <button
         className="quiet"
@@ -644,12 +616,6 @@ export function BoardView(props: BoardViewProps) {
         Second opinion
       </button>
     );
-    const reviewWorktree = output.find(
-      (worktree) => (worktree.gitStatus?.ahead ?? 0) > 0,
-    );
-    const reviewPullRequest = output.find(
-      (worktree) => worktree.pullRequest,
-    )?.pullRequest;
     const references = (task.references ?? []).flatMap((reference) => {
       const target = tasksById.get(reference.taskId);
       return target ? [{ reference, target }] : [];

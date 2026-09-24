@@ -4613,25 +4613,72 @@ dd {
   background: var(--raised-hover);
 }
 
-/* The overflow trigger matches the close button beside it. */
-.task-actions-trigger {
-  align-items: center;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  color: var(--secondary);
+/* The drawer's action bar (#34): under the pills, above the brief. The
+   primary action comes first and reads in the accent; the rest are quiet.
+   Buttons are a step larger than the card's, since the drawer has the room. */
+.task-action-bar {
+  display: grid;
+  gap: 8px;
+  margin: -6px 0 18px;
+}
+.task-action-buttons {
+  align-items: flex-start;
   display: flex;
-  height: 28px;
-  justify-content: center;
-  transition: background 140ms ease;
-  width: 28px;
+  gap: 6px;
 }
-.task-actions-trigger:hover,
-.menu[open] > .task-actions-trigger {
-  background: var(--raised-hover);
-  color: var(--text);
+.task-action-lead {
+  align-items: center;
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
 }
-.menu-more {
-  fill: currentColor;
-  height: 15px;
-  width: 15px;
+.task-action-tail {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  margin-left: auto;
+}
+.task-action-lead > button,
+.task-action-lead > .board-start-group > button,
+.task-action-tail > button {
+  font-size: 12px !important;
+  padding: 5px 11px !important;
+}
+.task-action-lead > .quiet,
+.task-action-tail > .quiet {
+  border-color: var(--line);
+}
+.task-action-lead > .quiet:hover:not(:disabled),
+.task-action-tail > .quiet:hover:not(:disabled) {
+  border-color: var(--line-strong);
+}
+.task-action-lead > .board-start-group > .board-start-choose {
+  padding-left: 7px !important;
+  padding-right: 7px !important;
+}
+.task-action-lead > button,
+.task-action-lead > .board-start-group > .board-start,
+.task-action-tail > button {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+}
+.task-action-icon {
+  flex: 0 0 auto;
+  height: 14px;
+  margin-left: -2px;
+  width: 14px;
+}
+.task-action-tail > .danger-link {
+  border-color: rgb(255 137 135 / 0.3);
+}
+.task-action-tail > .danger-link:hover:not(:disabled) {
+  border-color: rgb(255 137 135 / 0.6);
+}
+.task-action-bar > .board-launch-row {
+  font-size: 12px;
+  padding: 0 2px;
 }
