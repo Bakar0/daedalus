@@ -1131,6 +1131,178 @@ try {
   );
   const repositoriesShot = await screenshot("repositories");
 
+  step = "all workspaces";
+  // The card above the workspaces shows every workspace's board (#35). The
+  // right column, capture and settings go, because each is one workspace's;
+  // every card names its workspace, since #24 and #26 exist in both; and
+  // Start on Atlas's card spawns in Atlas with Atlas's default provider.
+  await evaluate(
+    "document.querySelector('.all-workspaces-card .workspace-item').click()",
+  );
+  await waitFor(
+    "document.querySelector('.workspace-main-header h1')?.textContent === 'All workspaces'",
+    "the all-workspaces heading",
+  );
+  const cardIn = (workspace: string, number: number) =>
+    `document.querySelector('.board-card[data-workspace-id="${workspace}"][data-task-number="${number}"]')`;
+  const everywhere = await evaluate<{
+    unlabelled: number;
+    daedalus24: string | null;
+    atlas24: string | null;
+    atlas24Lane: string | null;
+    atlas26Lane: string | null;
+    column: boolean;
+    capture: boolean;
+    settings: boolean;
+    create: boolean;
+    workspaceMode: boolean;
+    badge: string | null;
+    selected: string[];
+    eyebrow: string;
+  }>(`(() => {
+    const laneOf = (card) => card?.closest('.board-lane')?.dataset.lane ?? null;
+    return {
+      unlabelled: [...document.querySelectorAll('.board-card')].filter((card) => !card.querySelector('.board-card-workspace')).length,
+      daedalus24: ${cardIn("deadalus", 24)}?.getAttribute('aria-label') ?? null,
+      atlas24: ${cardIn("atlas", 24)}?.getAttribute('aria-label') ?? null,
+      atlas24Lane: laneOf(${cardIn("atlas", 24)}),
+      atlas26Lane: laneOf(${cardIn("atlas", 26)}),
+      column: Boolean(document.querySelector('.board-detail-column')),
+      capture: Boolean(document.querySelector('.board-capture')),
+      settings: Boolean(document.querySelector('.board-settings')),
+      create: Boolean(document.querySelector('[aria-label="Create task"]')),
+      workspaceMode: [...document.querySelectorAll('.app-mode-switcher button')].find((b) => b.textContent === 'Workspace').disabled,
+      badge: document.querySelector('.all-workspaces-card .workspace-attention-badge')?.textContent ?? null,
+      selected: [...document.querySelectorAll('.workspace-card.selected')].map((card) => card.className),
+      eyebrow: document.querySelector('.workspace-main-header .eyebrow')?.textContent ?? '',
+    };
+  })()`);
+  check(
+    everywhere.unlabelled === 0,
+    `${everywhere.unlabelled} cards on the all-workspaces board name no workspace`,
+  );
+  check(
+    everywhere.daedalus24?.startsWith("deadalus#24 ") === true,
+    `Daedalus's #24 reads "${everywhere.daedalus24}"`,
+  );
+  check(
+    everywhere.atlas24 ===
+      "atlas#24 Index the star catalogue, Needs me, waiting 6m",
+    `Atlas's #24 reads "${everywhere.atlas24}"`,
+  );
+  check(
+    everywhere.atlas24Lane === "needs_me",
+    `Atlas's waiting task is in ${everywhere.atlas24Lane}, not Needs me`,
+  );
+  check(
+    everywhere.atlas26Lane === "queued",
+    `Atlas's todo is in ${everywhere.atlas26Lane}, not Queued`,
+  );
+  check(
+    !everywhere.column,
+    "the repositories column shows for every workspace",
+  );
+  check(!everywhere.capture, "the capture line shows for every workspace");
+  check(!everywhere.settings, "board settings show for every workspace");
+  check(!everywhere.create, "the create-task button shows for every workspace");
+  check(everywhere.workspaceMode, "the Workspace mode is not disabled");
+  check(
+    Number(everywhere.badge) >= 2,
+    `the all-workspaces card's badge says ${everywhere.badge}, expected at least the two waiting sessions`,
+  );
+  check(
+    everywhere.selected.length === 1 &&
+      everywhere.selected[0]!.includes("all-workspaces-card"),
+    `selected cards: ${JSON.stringify(everywhere.selected)}`,
+  );
+  check(
+    everywhere.eyebrow === "2 workspaces",
+    `the heading's eyebrow reads "${everywhere.eyebrow}"`,
+  );
+  const allShot = await screenshot("all-workspaces");
+
+  const atlasSpawnsBefore = (await calls("agentSpawn")).length;
+  const startedAtlas = await evaluate<boolean>(`(() => {
+    const button = [...(${cardIn("atlas", 26)}?.querySelectorAll('button') ?? [])]
+      .find((item) => item.textContent.trim() === 'Start');
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`);
+  check(startedAtlas, "Atlas's queued card offers no Start");
+  await waitFor(
+    `window.__boardCalls.filter((call) => call.name === 'agentSpawn').length > ${atlasSpawnsBefore}`,
+    "the Atlas spawn",
+  );
+  const atlasSpawn = (await calls("agentSpawn")).at(-1);
+  check(
+    atlasSpawn?.workspace === "atlas",
+    `the spawn went to ${String(atlasSpawn?.workspace)}, not atlas`,
+  );
+  check(
+    atlasSpawn?.provider === "codex",
+    `the spawn used ${String(atlasSpawn?.provider)}, not Atlas's default codex`,
+  );
+  check(
+    atlasSpawn?.taskId === "atlas-26",
+    `the spawn named ${String(atlasSpawn?.taskId)}`,
+  );
+  await waitFor(
+    `${cardIn("atlas", 26)}?.closest('.board-lane')?.dataset.lane === 'running'`,
+    "Atlas's task to reach Running",
+  );
+
+  // The Sessions view keeps the scope: every workspace's sessions, each
+  // naming its workspace, with no reorder and no New (a session needs one
+  // workspace to open in).
+  await evaluate(
+    "[...document.querySelectorAll('.app-mode-switcher button')].find((b) => b.textContent === 'Sessions').click()",
+  );
+  await waitFor("document.querySelector('.session-card')", "session cards");
+  const everySession = await evaluate<{
+    cards: number;
+    unlabelled: number;
+    atlasLabels: number;
+    heading: string;
+    create: boolean;
+  }>(`(() => {
+    const cards = [...document.querySelectorAll('.session-card:not(.session-card-starting):not(.session-card-error)')];
+    return {
+      cards: cards.length,
+      unlabelled: cards.filter((card) => !card.querySelector('.session-card-workspace')).length,
+      atlasLabels: cards.filter((card) => card.querySelector('.session-card-workspace')?.textContent.startsWith('atlas')).length,
+      heading: document.querySelector('.workspace-main-header h1')?.textContent ?? '',
+      create: document.querySelector('[aria-label="Create session"]')?.disabled ?? false,
+    };
+  })()`);
+  check(
+    everySession.heading === "All workspaces",
+    `the Sessions view is headed "${everySession.heading}"`,
+  );
+  check(
+    everySession.unlabelled === 0,
+    `${everySession.unlabelled} session cards name no workspace`,
+  );
+  check(
+    everySession.atlasLabels === 2,
+    `${everySession.atlasLabels} session cards are Atlas's, expected 2`,
+  );
+  check(everySession.cards > 2, `only ${everySession.cards} session cards`);
+  check(everySession.create, "New session is not disabled for every workspace");
+  const allSessionsShot = await screenshot("all-sessions");
+
+  // Back to the Daedalus board, where the steps below expect the column.
+  await evaluate(
+    "document.querySelector('.workspace-card:not(.all-workspaces-card) .workspace-item').click()",
+  );
+  await evaluate(
+    "[...document.querySelectorAll('.app-mode-switcher button')].find((b) => b.textContent === 'Board').click()",
+  );
+  await waitFor(
+    "document.querySelector('.board-detail-column') && document.querySelector('.workspace-main-header h1')?.textContent === 'Daedalus'",
+    "the Daedalus board again",
+  );
+
   step = "compact width";
   await evaluate(
     "[...document.querySelectorAll('.app-mode-switcher button')].find((b) => b.textContent === 'Board').click()",
@@ -1198,6 +1370,8 @@ try {
       actionBarShot,
       doneBarShot,
       repositoriesShot,
+      allShot,
+      allSessionsShot,
       compactShot,
       light,
     ]

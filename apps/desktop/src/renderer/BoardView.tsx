@@ -47,10 +47,18 @@ import {
 export type { BoardLaunch, BoardProvider } from "./task-actions";
 
 export interface BoardViewProps {
-  workspace: WorkspaceDto;
-  /** The workspace's tasks, in service order. */
+  /**
+   * The workspace whose board this is, or none when it is every workspace's
+   * at once (#35). Without one, capture, the settings and the create button
+   * are gone, because each belongs to one workspace, and every card names
+   * its workspace beside its number.
+   */
+  workspace?: WorkspaceDto;
+  /** Every active workspace, for the labels and defaults cards read. */
+  workspaces: readonly WorkspaceDto[];
+  /** The scope's tasks, in service order. */
   tasks: TaskDto[];
-  /** The workspace's sessions, archived ones included. */
+  /** The scope's sessions, archived ones included. */
   sessions: AgentSessionDto[];
   activity: ReadonlyMap<string, AgentActivityDto>;
   attention: ReadonlyMap<string, SessionAttentionDto>;
@@ -96,6 +104,9 @@ export interface BoardViewProps {
 }
 
 const COLLAPSED_BY_DEFAULT: ReadonlySet<BoardLane> = new Set(["done"]);
+
+/** Collapsed lanes are remembered per workspace, and once for all of them. */
+export const ALL_WORKSPACES_BOARD_KEY = "all";
 
 const collapsedStorageKey = (workspaceId: string) =>
   `daedalus.board.collapsed.${workspaceId}`;
@@ -557,15 +568,18 @@ export function BoardView(props: BoardViewProps) {
     tasks,
     telemetry,
     workspace,
+    workspaces,
     worktrees,
   } = props;
+  const boardKey = workspace?.id ?? ALL_WORKSPACES_BOARD_KEY;
+  const workspaceById = new Map(workspaces.map((item) => [item.id, item]));
+  /** A card's workspace: the board's own, or looked up when it has none. */
+  const workspaceOf = (task: TaskDto) =>
+    workspace ?? workspaceById.get(task.workspaceId);
   const [collapsed, setCollapsed] = useState(() =>
-    rememberedCollapsed(workspace.id),
+    rememberedCollapsed(boardKey),
   );
-  useEffect(
-    () => setCollapsed(rememberedCollapsed(workspace.id)),
-    [workspace.id],
-  );
+  useEffect(() => setCollapsed(rememberedCollapsed(boardKey)), [boardKey]);
   const toggleLane = (lane: BoardLane) =>
     setCollapsed((current) => {
       const next = new Set(current);
@@ -573,7 +587,7 @@ export function BoardView(props: BoardViewProps) {
       else next.add(lane);
       try {
         window.localStorage.setItem(
-          collapsedStorageKey(workspace.id),
+          collapsedStorageKey(boardKey),
           JSON.stringify([...next]),
         );
       } catch {
@@ -627,8 +641,13 @@ export function BoardView(props: BoardViewProps) {
     });
     const waiting =
       lane === "needs_me" ? taskWaitingSince(task, inputs) : undefined;
+    // With every workspace on one board, `#12` is ambiguous: the number is
+    // per workspace. The slug goes in front, as the CLI writes it.
+    const workspaceLabel = workspace
+      ? undefined
+      : (workspaceById.get(task.workspaceId)?.slug ?? task.workspaceId);
     const cardLabel = [
-      `#${task.number} ${task.title}`,
+      `${workspaceLabel ?? ""}#${task.number} ${task.title}`,
       LANE_LABEL[lane],
       waiting ? `waiting ${waitingLabel(waiting, now)}` : undefined,
     ]
@@ -661,10 +680,16 @@ export function BoardView(props: BoardViewProps) {
         aria-label={cardLabel}
         className={`board-card lane-${lane} ${task.id === props.selectedTaskId ? "selected" : ""}`}
         data-task-number={task.number}
+        data-workspace-id={task.workspaceId}
         key={task.id}
         onClick={() => props.onSelectTask(task)}
       >
         <div className="board-card-title">
+          {workspaceLabel !== undefined && (
+            <span className="board-card-workspace" title="Workspace">
+              {workspaceLabel}
+            </span>
+          )}
           <span className="board-card-number">#{task.number}</span>
           <strong>{task.title}</strong>
           {task.priority !== "normal" && (
@@ -904,38 +929,54 @@ export function BoardView(props: BoardViewProps) {
           <strong>Tasks</strong>
           <span className="count-badge">{tasks.length}</span>
         </div>
-        <div className="heading-actions">
-          <BoardSettings
-            availableProviders={props.availableProviders}
-            modelCatalogs={props.modelCatalogs}
-            onNeedModels={props.onNeedModels}
-            onUpdate={props.onUpdateSettings}
-            workspace={workspace}
-          />
-          <CreateButton label="Create task" onClick={props.onCreateTask} />
-        </div>
+        {/* Settings, the create button and capture each write to one
+            workspace, so the all-workspaces board has none of them: a task
+            is captured on the board of the workspace it belongs to. */}
+        {workspace ? (
+          <div className="heading-actions">
+            <BoardSettings
+              availableProviders={props.availableProviders}
+              modelCatalogs={props.modelCatalogs}
+              onNeedModels={props.onNeedModels}
+              onUpdate={props.onUpdateSettings}
+              workspace={workspace}
+            />
+            <CreateButton label="Create task" onClick={props.onCreateTask} />
+          </div>
+        ) : (
+          <small className="board-scope-note">
+            {plural(workspaces.length, "workspace")} · capture and settings are
+            on each workspace&apos;s own board
+          </small>
+        )}
       </div>
       <div className="board-lanes">
         {/* Deliberately not a <form>: Enter submitting through the browser's
             implicit-submission path is what wedged the explorer's renderer. */}
-        <input
-          aria-label="Quick capture: type a task title and press Enter"
-          className="board-capture"
-          disabled={capturing}
-          onChange={(event) => setCapture(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              void submitCapture();
-            } else if (event.key === "Escape") setCapture("");
-          }}
-          placeholder="Capture a task… (Enter to add)"
-          value={capture}
-        />
+        {workspace && (
+          <input
+            aria-label="Quick capture: type a task title and press Enter"
+            className="board-capture"
+            disabled={capturing}
+            onChange={(event) => setCapture(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void submitCapture();
+              } else if (event.key === "Escape") setCapture("");
+            }}
+            placeholder="Capture a task… (Enter to add)"
+            value={capture}
+          />
+        )}
         {tasks.length === 0 && (
           <div className="empty large">
-            <strong>No tasks yet</strong>
-            <span>Use New to create a task.</span>
+            <strong>{workspace ? "No tasks yet" : "No tasks anywhere"}</strong>
+            <span>
+              {workspace
+                ? "Use New to create a task."
+                : "Pick a workspace and capture one."}
+            </span>
           </div>
         )}
         {tasks.length > 0 &&
@@ -984,7 +1025,7 @@ export function BoardView(props: BoardViewProps) {
                         )
                           props.onStartNext(next);
                       }}
-                      title={`Start #${laneTasks[0].number} ${laneTasks[0].title} with ${providerLabel(workspace.defaultProvider ?? props.availableProviders[0] ?? "claude")}`}
+                      title={`Start ${workspace ? "" : (workspaceOf(laneTasks[0])?.slug ?? "")}#${laneTasks[0].number} ${laneTasks[0].title} with ${providerLabel(workspaceOf(laneTasks[0])?.defaultProvider ?? props.availableProviders[0] ?? "claude")}`}
                       type="button"
                     >
                       Start next

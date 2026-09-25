@@ -24,6 +24,7 @@ import {
   launchMatchesSession,
   PANEL_RAIL_WIDTH,
   pendingSessionLaunches,
+  preferredScopeView,
   preferredSessionId,
   preferredWorkspaceView,
   quitDisclosure,
@@ -395,6 +396,191 @@ describe("desktop application shell", () => {
     expect(html).toContain('src="/daedalus-app-icon.png"');
     expect(html).not.toContain('class="brand-mark">D');
     expect(html).not.toContain(">Refresh</button>");
+  });
+
+  describe("all workspaces (#35)", () => {
+    const workspace = (id: string, name: string) => ({
+      id,
+      slug: id,
+      name,
+      path: `/tmp/${id}`,
+      createdAt: "2026-09-01T00:00:00.000Z",
+      updatedAt: "2026-09-01T00:00:00.000Z",
+      archivedAt: null,
+      available: true,
+      position: 1,
+      startSetsInProgress: true,
+      autoHandoffPercent: null,
+      defaultProvider: "claude" as const,
+      defaultModel: null,
+    });
+    const task = (id: string, workspaceId: string, number: number) => ({
+      id,
+      workspaceId,
+      number,
+      title: `${workspaceId} task ${number}`,
+      description: "",
+      status: "todo" as const,
+      priority: "normal" as const,
+      createdAt: "2026-09-02T00:00:00.000Z",
+      updatedAt: "2026-09-02T00:00:00.000Z",
+      completedAt: null,
+      briefUpdatedAt: null,
+      references: [],
+    });
+    const session = (
+      id: string,
+      workspaceId: string,
+      taskId: string,
+    ): AgentSessionDto => ({
+      id,
+      workspaceId,
+      taskId,
+      name: `Session ${id}`,
+      provider: "claude",
+      kind: "agent",
+      tmuxSession: `daedalus_${id}`,
+      command: "claude",
+      args: [],
+      workingDirectory: `/tmp/${workspaceId}`,
+      status: "running",
+      exitCode: null,
+      startedAt: "2026-09-02T01:00:00.000Z",
+      endedAt: null,
+      providerSessionId: null,
+      archivedAt: null,
+      resumeCount: 0,
+      lostReason: null,
+      handoffRequestedAt: null,
+      position: 0,
+    });
+    const two: DesktopSnapshotDto = {
+      ...base,
+      workspaces: [
+        workspace("alpha", "Alpha"),
+        workspace("beta", "Beta"),
+        {
+          ...workspace("gamma", "Gamma"),
+          archivedAt: "2026-09-03T00:00:00.000Z",
+        },
+      ],
+      tasks: [
+        task("a-1", "alpha", 1),
+        task("b-1", "beta", 1),
+        task("g-1", "gamma", 1),
+      ],
+      agents: [
+        session("s-a", "alpha", "a-1"),
+        session("s-b", "beta", "b-1"),
+        session("s-g", "gamma", "g-1"),
+      ],
+    };
+
+    test("the column offers every workspace above the workspaces", () => {
+      const html = renderToStaticMarkup(
+        <App
+          injectedClient={client}
+          initialSnapshot={two}
+          initialWorkspaceView="board"
+        />,
+      );
+      expect(html).toContain("all-workspaces-card");
+      expect(html).toContain(">All workspaces<");
+      expect(html).toContain('title="2 workspaces · 2 sessions · 2 live');
+      expect(html).not.toContain("every task and session");
+      // Above the first workspace card, and not the selected one.
+      expect(html.indexOf("all-workspaces-card")).toBeLessThan(
+        html.indexOf(">Alpha<"),
+      );
+      expect(html).not.toContain("all-workspaces-card selected");
+      expect(html).toContain('class="workspace-card selected"');
+      // A single workspace's board keeps its own capture line and column.
+      expect(html).toContain('class="board-capture"');
+      expect(html).toContain("board-detail-column");
+      expect(html).not.toContain("board-card-workspace");
+    });
+
+    test("the board shows every active workspace's tasks, each named", () => {
+      const html = renderToStaticMarkup(
+        <App
+          injectedClient={client}
+          initialSnapshot={two}
+          initialScope="all"
+          initialWorkspaceView="board"
+        />,
+      );
+      expect(html).toContain("<h1>All workspaces</h1>");
+      expect(html).toContain(">2 workspaces<");
+      expect(html).toContain("all-workspaces-card selected");
+      expect(html).toContain('data-workspace-id="alpha"');
+      expect(html).toContain('data-workspace-id="beta"');
+      // Archived workspaces stay out, as their cards do.
+      expect(html).not.toContain('data-workspace-id="gamma"');
+      expect(html).toContain('aria-label="alpha#1 alpha task 1, Running"');
+      expect(html).toContain('aria-label="beta#1 beta task 1, Running"');
+      expect(html).toContain('class="board-card-workspace"');
+      // One workspace's things are gone: capture, settings, New, the column.
+      expect(html).not.toContain('class="board-capture"');
+      expect(html).not.toContain('class="board-settings"');
+      expect(html).not.toContain('aria-label="Create task"');
+      expect(html).not.toContain("board-detail-column");
+      expect(html).toContain("capture and settings are on each workspace");
+      // The Workspace mode needs one workspace.
+      const switcherStart = html.indexOf('aria-label="Workspace mode"');
+      const switcher = html.slice(
+        switcherStart,
+        html.indexOf("</nav>", switcherStart),
+      );
+      expect(switcher).toContain(
+        'title="Pick a workspace to browse its files">Workspace</button>',
+      );
+      expect(switcher).toMatch(/disabled=""[^>]*>Workspace</);
+      expect(switcher).not.toMatch(/disabled=""[^>]*>Board</);
+    });
+
+    test("the Sessions view lists every session, named by workspace", () => {
+      const html = renderToStaticMarkup(
+        <App
+          injectedClient={client}
+          initialSnapshot={two}
+          initialScope="all"
+          initialWorkspaceView="sessions"
+        />,
+      );
+      expect(html).toContain('data-session-id="s-a"');
+      expect(html).toContain('data-session-id="s-b"');
+      expect(html).not.toContain('data-session-id="s-g"');
+      expect(html).toContain(
+        '<span class="session-card-workspace">alpha · </span>alpha task 1',
+      );
+      expect(html).toContain(
+        '<span class="session-card-workspace">beta · </span>beta task 1',
+      );
+      // New needs a workspace to open in.
+      expect(html).toMatch(
+        /aria-label="Create session"[^>]*disabled=""[^>]*title="Pick a workspace to start a session in/,
+      );
+    });
+
+    test("a workspace's own view names no workspace on its cards", () => {
+      const html = renderToStaticMarkup(
+        <App
+          injectedClient={client}
+          initialSnapshot={two}
+          initialWorkspaceView="sessions"
+        />,
+      );
+      expect(html).toContain('data-session-id="s-a"');
+      expect(html).not.toContain('data-session-id="s-b"');
+      expect(html).not.toContain("session-card-workspace");
+    });
+
+    test("the scope's views fall back from Workspace to Board", () => {
+      expect(preferredScopeView("all", "workspace")).toBe("board");
+      expect(preferredScopeView("all", "sessions")).toBe("sessions");
+      expect(preferredScopeView("workspace", "workspace")).toBe("workspace");
+      expect(preferredScopeView("all", null)).toBe("board");
+    });
   });
 
   test("labels every provider in the app-wide usage footer", () => {

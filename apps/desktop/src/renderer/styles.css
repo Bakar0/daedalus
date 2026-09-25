@@ -449,6 +449,37 @@ button:not(
   background: linear-gradient(145deg, #e5edfa, #d7e2f4);
   color: #2d548a;
 }
+/* The row above the workspaces: every workspace at once (#35). One line,
+   quieter than a workspace card, with a rule under it where the list begins.
+   It is not in the reorder list. */
+.all-workspaces-card {
+  border-bottom: 1px solid var(--line);
+  border-radius: 7px 7px 0 0;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+}
+.all-workspaces-item {
+  gap: 8px;
+  padding: 5px 8px;
+}
+.all-workspaces-item .workspace-card-name {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 560;
+}
+.all-workspaces-icon {
+  color: var(--muted);
+  display: flex;
+  flex: 0 0 auto;
+}
+.all-workspaces-icon svg {
+  height: 13px;
+  width: 13px;
+}
+.all-workspaces-card.selected .all-workspaces-icon,
+.all-workspaces-card.selected .workspace-card-name {
+  color: inherit;
+}
 .workspace-card-actions {
   display: flex;
   flex: 0 0 30px;
@@ -3141,6 +3172,11 @@ dd {
 .session-card-main strong {
   font-size: 11px;
 }
+/* The session's workspace, only in the all-workspaces list (#35). */
+.session-card-workspace {
+  color: var(--secondary);
+  font-weight: 600;
+}
 .session-card-main em {
   align-items: center;
   color: var(--muted);
@@ -3921,6 +3957,24 @@ dd {
   color: var(--muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+/* The card's workspace, only on the all-workspaces board (#35). It reads as
+   the CLI writes a task reference: slug, then #number. */
+.board-card-workspace {
+  color: var(--secondary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  margin-right: -5px;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.board-scope-note {
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
 }
 .board-card-priority {
   border: 1px solid var(--line-strong);

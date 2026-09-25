@@ -88,10 +88,13 @@ export function CreateButton({
   disabled,
   label,
   onClick,
+  title,
 }: {
   disabled?: boolean;
   label: string;
   onClick: () => void;
+  /** Replaces the label as the tooltip, to say why the button is off. */
+  title?: string;
 }) {
   return (
     <button
@@ -99,7 +102,7 @@ export function CreateButton({
       className="create-button"
       disabled={disabled}
       onClick={onClick}
-      title={label}
+      title={title ?? label}
       type="button"
     >
       <svg
