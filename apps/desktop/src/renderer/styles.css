@@ -449,17 +449,36 @@ button:not(
   background: linear-gradient(145deg, #e5edfa, #d7e2f4);
   color: #2d548a;
 }
-/* The card above the workspaces: every workspace at once (#35). It is not in
-   the reorder list, and a rule under it marks where the list begins. */
+/* The row above the workspaces: every workspace at once (#35). One line,
+   quieter than a workspace card, with a rule under it where the list begins.
+   It is not in the reorder list. */
 .all-workspaces-card {
   border-bottom: 1px solid var(--line);
-  border-radius: 9px 9px 0 0;
+  border-radius: 7px 7px 0 0;
   margin-bottom: 6px;
   padding-bottom: 4px;
 }
+.all-workspaces-item {
+  gap: 8px;
+  padding: 5px 8px;
+}
+.all-workspaces-item .workspace-card-name {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 560;
+}
+.all-workspaces-icon {
+  color: var(--muted);
+  display: flex;
+  flex: 0 0 auto;
+}
 .all-workspaces-icon svg {
-  height: 15px;
-  width: 15px;
+  height: 13px;
+  width: 13px;
+}
+.all-workspaces-card.selected .all-workspaces-icon,
+.all-workspaces-card.selected .workspace-card-name {
+  color: inherit;
 }
 .workspace-card-actions {
   display: flex;

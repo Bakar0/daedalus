@@ -486,7 +486,8 @@ describe("desktop application shell", () => {
       );
       expect(html).toContain("all-workspaces-card");
       expect(html).toContain(">All workspaces<");
-      expect(html).toContain("2 workspaces, every task and session");
+      expect(html).toContain('title="2 workspaces · 2 sessions · 2 live');
+      expect(html).not.toContain("every task and session");
       // Above the first workspace card, and not the selected one.
       expect(html.indexOf("all-workspaces-card")).toBeLessThan(
         html.indexOf(">Alpha<"),

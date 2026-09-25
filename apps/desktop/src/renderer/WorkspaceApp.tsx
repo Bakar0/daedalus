@@ -4131,45 +4131,24 @@ export function WorkspaceApp({
       <button
         aria-current={showingAll ? "true" : undefined}
         aria-label={`All workspaces: ${everySessionLabel}, ${everyLiveCount} live, ${everyAttentionCount} need you`}
-        className="workspace-item"
+        className="workspace-item all-workspaces-item"
         onClick={selectAllWorkspaces}
+        title={`${activeWorkspaces.length} ${activeWorkspaces.length === 1 ? "workspace" : "workspaces"} · ${everySessionLabel} · ${everyLiveCount} live · ${everyAttentionCount} need you`}
       >
-        <span aria-hidden="true" className="workspace-icon all-workspaces-icon">
+        <span aria-hidden="true" className="all-workspaces-icon">
           <AllWorkspacesIcon />
         </span>
-        <span className="workspace-card-content">
-          <strong className="workspace-card-name">
-            <span>All workspaces</span>
-            {everyAttentionCount > 0 && (
-              <span
-                className="workspace-attention-badge"
-                title={`${everyAttentionCount} ${everyAttentionCount === 1 ? "session needs" : "sessions need"} you`}
-              >
-                {everyAttentionCount}
-              </span>
-            )}
-          </strong>
-          <small>
-            {activeWorkspaces.length}{" "}
-            {activeWorkspaces.length === 1 ? "workspace" : "workspaces"}, every
-            task and session
-          </small>
-          <span className="workspace-session-insights">
-            <small
-              className={
-                everyAttentionCount > 0
-                  ? "workspace-insight-copy needs-attention"
-                  : "workspace-insight-copy"
-              }
+        <strong className="workspace-card-name">
+          <span>All workspaces</span>
+          {everyAttentionCount > 0 && (
+            <span
+              className="workspace-attention-badge"
+              title={`${everyAttentionCount} ${everyAttentionCount === 1 ? "session needs" : "sessions need"} you`}
             >
-              {everyAttentionCount > 0
-                ? `${everyAttentionCount} need${everyAttentionCount === 1 ? "s" : ""} you`
-                : everySession.length > 0
-                  ? `${everyLiveCount} live · ${everySessionLabel}`
-                  : "No sessions"}
-            </small>
-          </span>
-        </span>
+              {everyAttentionCount}
+            </span>
+          )}
+        </strong>
       </button>
     </div>
   );
