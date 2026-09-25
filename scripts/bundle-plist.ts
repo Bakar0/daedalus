@@ -1,4 +1,5 @@
-// Adds the Info.plist keys Electrobun's template has no slot for.
+// Electrobun's `postBuild` script: adds the Info.plist keys its template has
+// no slot for.
 //
 // The one that matters is `LSAppNapIsDisabled`. Without it macOS puts the host
 // into App Nap once its window is hidden, occluded or behind a sleeping display:
@@ -9,36 +10,50 @@
 // A napping Daedalus therefore produced Script Editor notifications for every
 // permission prompt while it sat right there in the Dock.
 //
-// Electrobun writes Info.plist from a fixed template with no hook for extra
-// keys, so this runs after `electrobun build` and edits the bundle in place.
-// It takes the same `--env=<channel>` flag as the build.
-import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+// It has to run here and not after the build. A stable build is a
+// self-extracting wrapper: the real bundle is archived into
+// `Resources/<hash>.tar.zst`, and the launcher unpacks it over the wrapper on
+// first run, Info.plist included. Patching the wrapper's plist after the build
+// therefore lasted exactly until the first launch. `postBuild` runs after
+// Electrobun writes the real bundle and before it archives it, so the key
+// ships inside the archive. Electrobun passes the build folder and app name in
+// the environment.
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 
-const channel = (() => {
-  const flag = process.argv
-    .find((argument) => argument.startsWith("--env="))
-    ?.slice("--env=".length);
-  return flag === "stable" || flag === "canary" ? flag : "dev";
-})();
-
-const arch = process.arch === "x64" ? "x64" : "arm64";
-const bundleName =
-  channel === "stable" ? "Daedalus.app" : `Daedalus-${channel}.app`;
-const plist = resolve(
-  import.meta.dir,
-  "..",
-  "build",
-  `${channel}-macos-${arch}`,
-  bundleName,
-  "Contents",
-  "Info.plist",
-);
-
-if (!existsSync(plist)) {
-  console.error(`No Info.plist at ${plist}. Run the ${channel} build first.`);
+// As `postWrap` it receives the wrapper's path and patches that instead, so a
+// stable bundle reads the same before and after its first launch.
+const wrapper = process.env.ELECTROBUN_WRAPPER_BUNDLE_PATH;
+const buildDir = process.env.ELECTROBUN_BUILD_DIR;
+const appName = process.env.ELECTROBUN_APP_NAME;
+if (!wrapper && (!buildDir || !appName)) {
+  console.error(
+    "bundle-plist runs as Electrobun's postBuild or postWrap script; ELECTROBUN_BUILD_DIR and ELECTROBUN_APP_NAME are missing.",
+  );
   process.exit(1);
 }
+
+// The app name Electrobun exports is sanitised for file names, which for
+// "Daedalus" and "Daedalus-dev" is the bundle name itself. Should they ever
+// differ, a build folder holds exactly one bundle at this point.
+const candidates = wrapper
+  ? [wrapper]
+  : [
+      join(buildDir!, `${appName}.app`),
+      ...readdirSync(buildDir!)
+        .filter((entry) => entry.endsWith(".app"))
+        .map((entry) => join(buildDir!, entry)),
+    ];
+const bundle = candidates.find((path) =>
+  existsSync(join(path, "Contents", "Info.plist")),
+);
+if (!bundle) {
+  console.error(
+    `No app bundle with an Info.plist under ${wrapper ?? buildDir}.`,
+  );
+  process.exit(1);
+}
+const plist = join(bundle, "Contents", "Info.plist");
 
 const PLIST_BUDDY = "/usr/libexec/PlistBuddy";
 const keys: Array<{ key: string; type: "bool"; value: string }> = [
@@ -63,6 +78,4 @@ for (const { key, type, value } of keys) {
   }
 }
 
-console.log(
-  `Patched ${join(bundleName, "Contents", "Info.plist")}: ${keys.map((it) => it.key).join(", ")}`,
-);
+console.log(`Patched ${plist}: ${keys.map((it) => it.key).join(", ")}`);

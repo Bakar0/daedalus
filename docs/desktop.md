@@ -183,7 +183,10 @@ behind a sleeping display; the host's 1.2 s timers were observed firing once
 every one to two minutes in that state, which read as "no app" for the whole
 gap. The bundle opts out with `LSAppNapIsDisabled` in its Info.plist. Electrobun
 writes that file from a fixed template, so `scripts/bundle-plist.ts` adds the
-key after every build. Routing:
+key as Electrobun's `postBuild` script. That timing matters: a stable build is a
+self-extracting wrapper whose launcher unpacks the real bundle, Info.plist
+included, on first run, so a key added to the wrapper after the build lasted
+only until then. Routing:
 
 | Where the user is                        | Channel                                     |
 | ---------------------------------------- | ------------------------------------------- |
