@@ -11,6 +11,7 @@ export type TaskActionIconName =
   | "start"
   | "in-progress"
   | "done"
+  | "park"
   | "terminal"
   | "worktree"
   | "pull-request"
@@ -28,6 +29,7 @@ const PATHS: Record<TaskActionIconName, ReactNode> = {
     </>
   ),
   done: <path d="M5 12.5l4.5 4.5L19 7.5" />,
+  park: <path d="M9 5.5v13M15 5.5v13" />,
   terminal: (
     <>
       <rect height="15" rx="2.5" width="18" x="3" y="4.5" />

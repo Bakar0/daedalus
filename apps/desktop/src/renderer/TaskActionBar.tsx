@@ -46,6 +46,8 @@ export interface TaskActionBarProps {
   onSecondOpinion: (provider: BoardProvider) => void;
   onSetInProgress: () => void;
   onMarkDone: () => void;
+  /** Sets the task blocked, which moves it to Parked. */
+  onPark: () => void;
   onOpenSession: (session: AgentSessionDto) => void;
   onOpenWorktree: (worktree: SessionWorktreeDto) => void;
   onOpenLink: (url: string) => void;
@@ -118,11 +120,29 @@ export function TaskActionBar(props: TaskActionBarProps) {
         disabled={props.busy}
         key="done"
         onClick={props.onMarkDone}
-        title="Merging stays yours; this only records the verdict"
+        title={
+          actions.noAgent
+            ? "No agent is running on this task; record it as done"
+            : "Merging stays yours; this only records the verdict"
+        }
         type="button"
       >
         <TaskActionIcon name="done" />
         Mark done
+      </button>,
+    );
+  if (actions.canPark)
+    buttons.push(
+      <button
+        className="quiet"
+        disabled={props.busy}
+        key="park"
+        onClick={props.onPark}
+        title="Set the task blocked, which moves it to Parked"
+        type="button"
+      >
+        <TaskActionIcon name="park" />
+        Park
       </button>,
     );
   if (actions.liveSession) {

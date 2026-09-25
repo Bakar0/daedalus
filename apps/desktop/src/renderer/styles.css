@@ -3997,6 +3997,11 @@ dd {
   display: grid;
   gap: 3px;
 }
+.board-card-no-agent {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
 .board-session-row {
   background: transparent !important;
   border: 0 !important;

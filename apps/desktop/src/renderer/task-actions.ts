@@ -53,6 +53,15 @@ export interface TaskActions {
   launches: BoardLaunch[];
   /** A linked agent is running or starting. */
   liveAgent: boolean;
+  /**
+   * The task is in progress and in Running, but no agent is alive on it:
+   * every agent it had ended or was archived. Without this the card had no
+   * actions and the task sat in Running until someone opened the drawer to
+   * change its status. It is offered Start, Mark done and Park instead.
+   */
+  noAgent: boolean;
+  /** When the task's last agent ended or was archived, if it had one. */
+  agentEndedAt?: string;
   /** A Start is in flight, so another one must wait. */
   starting: boolean;
   /** Start and its provider chooser apply. */
@@ -63,8 +72,10 @@ export interface TaskActions {
   canDraftBrief: boolean;
   /** The agent runs but the status still says to do. */
   canSetInProgress: boolean;
-  /** The task is ready for review, so its verdict can be recorded. */
+  /** Ready for review, or in progress with no agent: the verdict can be recorded. */
   canMarkDone: boolean;
+  /** In progress with no agent: it can be set blocked, which parks it. */
+  canPark: boolean;
   /** The most recently started linked agent, whatever its state. */
   lastAgent?: AgentSessionDto;
   /** The most recently started linked agent that is still alive. */
@@ -105,7 +116,10 @@ export function taskActions(
     .filter((session) => session.kind === "agent")
     .sort(byStartedDescending);
   const liveAgent = agents.some(isLive);
-  const startable = (lane === "queued" || lane === "parked") && !liveAgent;
+  const noAgent =
+    lane === "running" && task.status === "in_progress" && !liveAgent;
+  const startable =
+    (lane === "queued" || lane === "parked" || noAgent) && !liveAgent;
   const starting = launches.some((launch) => launch.status === "starting");
   const waitingOn = unfinishedDependencies(task, inputs.tasksById);
   // The session that has waited longest is the one a reply box answers.
@@ -127,9 +141,24 @@ export function taskActions(
         (provider) => provider !== lastAgent.provider,
       )
     : undefined;
+  // With no agent alive, Start is the way to put one on it; a second
+  // opinion beside nothing would only be a Start with another name.
   const offersSecondOpinion =
     Boolean(lastAgent) &&
+    !noAgent &&
     (lane === "needs_me" || lane === "running" || lane === "review");
+  // Archived sessions count: archiving is the usual way the last agent goes.
+  const agentEndedAt = noAgent
+    ? inputs.sessions
+        .filter(
+          (session) => session.taskId === task.id && session.kind === "agent",
+        )
+        .map((session) => session.archivedAt ?? session.endedAt)
+        .reduce<string | undefined>(
+          (best, value) => (value && (!best || value > best) ? value : best),
+          undefined,
+        )
+    : undefined;
   const reviewWorktree = output.find(
     (worktree) => (worktree.gitStatus?.ahead ?? 0) > 0,
   );
@@ -141,12 +170,15 @@ export function taskActions(
     output,
     launches,
     liveAgent,
+    noAgent,
+    agentEndedAt,
     starting,
     startable,
     waitingOn,
     canDraftBrief: startable && !task.description.trim(),
     canSetInProgress: lane === "running" && task.status === "todo",
-    canMarkDone: lane === "review",
+    canMarkDone: lane === "review" || noAgent,
+    canPark: noAgent,
     lastAgent,
     liveSession,
     otherProvider,

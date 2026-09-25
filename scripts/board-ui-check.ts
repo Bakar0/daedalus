@@ -270,7 +270,8 @@ try {
   const expected = [
     ["needs_me", "Needs me, 1 task", ["24"]],
     ["review", "Ready for review, 1 task", ["20"]],
-    ["running", "Running, 1 task", ["25"]],
+    // #31's agent was archived; it sorts below the one that is working.
+    ["running", "Running, 2 tasks", ["25", "31"]],
     // #26 is high and its dependency is done; #29 and #30 are ready; #27
     // waits on #25.
     ["queued", "Queued, 4 tasks", ["26", "29", "30", "27"]],
@@ -547,6 +548,36 @@ try {
     (await lanes()).find((group) => group.lane === "done")?.label ===
       "Done, 8 tasks",
     "Done did not count #20",
+  );
+
+  step = "no agent";
+  const noAgent = await evaluate<string>(`${card(31)}.innerText`);
+  check(
+    noAgent.includes("No agent running · last one stopped 1h 30m ago"),
+    `#31 does not say its agent is gone: ${noAgent}`,
+  );
+  for (const label of ["Start", "Mark done", "Park"])
+    check(
+      await evaluate<boolean>(
+        `[...${card(31)}.querySelectorAll('button')].some((b) => b.textContent.trim() === ${JSON.stringify(label)})`,
+      ),
+      `#31 has no ${label} button`,
+    );
+  check(
+    !noAgent.includes("Second opinion"),
+    "#31 offers a second opinion beside no agent",
+  );
+  await evaluate(`${card(31)}.scrollIntoView({ block: "center" })`);
+  const noAgentShot = await screenshot("no-agent");
+  await clickInCard(31, "Park");
+  await waitFor(
+    `document.querySelector('.board-lane[data-lane="parked"] .board-card[data-task-number="31"]')`,
+    "#31 to move to Parked",
+  );
+  const park = (await calls("taskSetStatus")).at(-1);
+  check(
+    park?.id === "task-31" && park?.status === "blocked",
+    `Park sent ${JSON.stringify(park)}`,
   );
 
   step = "second opinion";
@@ -1361,6 +1392,7 @@ try {
       wide,
       settingsShot,
       sessionDefaultShot,
+      noAgentShot,
       inspector,
       journal,
       drawerShot,

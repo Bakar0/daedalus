@@ -4238,6 +4238,14 @@ export function WorkspaceApp({
             openSession(session.id);
             setView("sessions");
           }}
+          onPark={() =>
+            void perform(
+              client.request.taskSetStatus({
+                id: selectedTask.id,
+                status: "blocked",
+              }),
+            )
+          }
           onOpenWorktree={(worktree) =>
             void perform(
               client.request.sessionWorktreeOpen({
@@ -5128,6 +5136,14 @@ export function WorkspaceApp({
                   client.request.sessionWorktreeOpen({
                     session: worktree.sessionId,
                     repository: worktree.repositoryId,
+                  }),
+                )
+              }
+              onPark={(task) =>
+                void perform(
+                  client.request.taskSetStatus({
+                    id: task.id,
+                    status: "blocked",
                   }),
                 )
               }
