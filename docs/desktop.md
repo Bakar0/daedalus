@@ -177,26 +177,26 @@ Three distinct channels, never two at once for the same event:
 - **Native OS notification** — for when the app is backgrounded.
 
 The channel is chosen by **presence**, not by suppressing on focus. The window
-publishes `{ appForeground, workspaceId, sessionId }` every three seconds and
-the host samples system idle time alongside it, into `presence.json` under
-`DAEDALUS_HOME`. A heartbeat older than eight seconds reads as "no app". The
-window's timers stop when it is closed and slow down when WebKit throttles a
-minimised or occluded window, so the host checks on every tick and, once the
-window has been quiet for five seconds, publishes in its place as a running app
-in the background. That keeps a CLI handing alerts to the app rather than
-reading silence as "no app" and shouting them through AppleScript under Script
-Editor's name; only a quit or crashed app goes silent.
+publishes `{ appForeground, workspaceId, sessionId }` every three seconds into
+`presence.json` under `DAEDALUS_HOME`, and the host stands in with "running,
+not in front" once the window has been quiet for five seconds, so a closed or
+throttled window still reads as a running app. The file also carries the
+host's pid, and that pid, not the heartbeat's age, decides whether the app is
+running: a heartbeat older than eight seconds from a live process is a busy app
+in the background, and a `daedal` hook hands its alert to that app rather than
+shouting it through AppleScript under Script Editor's name. Only a dead pid, or
+no file, is "no app". The host was observed frozen for minutes on a loaded
+machine, its one thread blocked inside child launches, and every alert in
+that time went out as Script Editor because the silence was read as absence.
+The system idle time is sampled in the background every five seconds and
+never awaited by a heartbeat write, for the same reason.
 
-The heartbeat also needs the host's timers to run at all. macOS App Nap
-throttles a backgrounded app's timers once its window is hidden, occluded or
-behind a sleeping display; the host's 1.2 s timers were observed firing once
-every one to two minutes in that state, which read as "no app" for the whole
-gap. The bundle opts out with `LSAppNapIsDisabled` in its Info.plist. Electrobun
-writes that file from a fixed template, so `scripts/bundle-plist.ts` adds the
-key as Electrobun's `postBuild` script. That timing matters: a stable build is a
-self-extracting wrapper whose launcher unpacks the real bundle, Info.plist
-included, on first run, so a key added to the wrapper after the build lasted
-only until then. Routing:
+The host's change-check tick is held to a fixed budget of child launches for
+the same reason: one `tmux list-sessions` shared by agents and terminals, a
+version probe the client remembers after its first success, and pane captures
+only for sessions the cheaper tiers could not place, at most every five
+seconds each. Every tmux command is killed after ten seconds rather than left
+to hold the thread. Routing:
 
 | Where the user is                        | Channel                                     |
 | ---------------------------------------- | ------------------------------------------- |

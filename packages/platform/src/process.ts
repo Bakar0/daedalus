@@ -5,7 +5,12 @@ export interface CommandResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+  /** Set when `timeoutMs` elapsed and the child was killed; `exitCode` is 124. */
+  timedOut?: boolean;
 }
+
+/** The exit code a timed-out command reports, as `timeout(1)` does. */
+export const TIMED_OUT_EXIT_CODE = 124;
 
 export interface CommandOptions {
   cwd?: string;
@@ -18,6 +23,12 @@ export interface CommandOptions {
   stdin?: "ignore" | "inherit" | string;
   stdout?: "pipe" | "inherit";
   stderr?: "pipe" | "inherit";
+  /**
+   * Kill the child and give up after this long. A child that never exits
+   * otherwise holds its caller's promise forever, and in the desktop host
+   * that caller is the one thread everything else runs on.
+   */
+  timeoutMs?: number;
 }
 
 export async function runCommand(
@@ -45,16 +56,48 @@ export async function runCommand(
     process.stdin.write(options.stdin);
     process.stdin.end();
   }
-  const [stdout, stderr, exitCode] = await Promise.all([
-    process.stdout === undefined || typeof process.stdout === "number"
-      ? ""
-      : new Response(process.stdout).text(),
-    process.stderr === undefined || typeof process.stderr === "number"
-      ? ""
-      : new Response(process.stderr).text(),
-    process.exited,
-  ]);
-  return { exitCode, stdout, stderr };
+  let timedOut = false;
+  const timer =
+    options.timeoutMs === undefined
+      ? undefined
+      : setTimeout(() => {
+          timedOut = true;
+          process.kill();
+        }, options.timeoutMs);
+  try {
+    const [stdout, stderr, exited] = await Promise.all([
+      process.stdout === undefined || typeof process.stdout === "number"
+        ? ""
+        : new Response(process.stdout).text(),
+      process.stderr === undefined || typeof process.stderr === "number"
+        ? ""
+        : new Response(process.stderr).text(),
+      process.exited,
+    ]);
+    if (timedOut)
+      return { exitCode: TIMED_OUT_EXIT_CODE, stdout, stderr, timedOut: true };
+    // A child ended by a signal has no exit code; that is still a failure.
+    return {
+      exitCode: typeof exited === "number" ? exited : 1,
+      stdout,
+      stderr,
+    };
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/**
+ * Whether a process exists. `kill(pid, 0)` delivers nothing and fails only
+ * when there is no such process; EPERM means it exists but is someone else's.
+ */
+export function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 // A packaged macOS app is launched by Launch Services, not by a login shell, so

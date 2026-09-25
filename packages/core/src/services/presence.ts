@@ -3,6 +3,7 @@ import { join } from "node:path";
 import {
   ensureDirectory,
   findExecutable,
+  processIsAlive,
   runCommand,
   standardExecutableFallbacks,
   systemIdleSeconds,
@@ -15,12 +16,15 @@ import {
 import type { PresenceState } from "../domain";
 
 /**
- * A presence sample older than this is treated as "the app is not running".
- * The desktop host republishes every 1.2 s alongside its change check, so the
- * window is wide enough to survive a slow tick and short enough that a crashed
- * app stops absorbing notifications within a few seconds.
+ * A presence sample older than this no longer says where the user is looking.
+ * Whether the app is *running* is a separate question, answered by the pid in
+ * the file (see `read`): a stale heartbeat from a live process means a busy
+ * app in the background, not a missing one.
  */
 export const PRESENCE_MAX_AGE_MS = 8_000;
+
+/** How often the system idle time is sampled; see `cachedIdleSampler`. */
+export const IDLE_SAMPLE_INTERVAL_MS = 5_000;
 
 /**
  * How long the host trusts the window to be publishing before it publishes
@@ -64,6 +68,45 @@ const OFFLINE: PresenceState = {
 interface StoredPresence extends PresenceReport {
   userIdleSeconds: number;
   observedAt: string;
+  /** The desktop host that wrote this, so a reader can tell busy from gone. */
+  pid?: number;
+}
+
+/**
+ * Samples the idle time in the background and answers from the last value.
+ * The probe spawns `ioreg`, and a spawn blocks the calling thread until the
+ * child has started, which on a loaded machine was observed taking seconds.
+ * The heartbeat must never wait on that. Until the first sample lands the
+ * answer is 0, "present", which `systemIdleSeconds` explains is the safe side.
+ */
+export function cachedIdleSampler(
+  sample: () => Promise<number> = () => systemIdleSeconds(),
+  intervalMs = IDLE_SAMPLE_INTERVAL_MS,
+  now: () => number = Date.now,
+): () => Promise<number> {
+  let value = 0;
+  let sampledAt = Number.NEGATIVE_INFINITY;
+  let inFlight: Promise<void> | null = null;
+  return async () => {
+    if (!inFlight && now() - sampledAt >= intervalMs)
+      inFlight = sample()
+        .then((seconds) => {
+          value = seconds;
+          sampledAt = now();
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          inFlight = null;
+        });
+    return value;
+  };
+}
+
+export interface PresenceServiceOptions {
+  /** Seconds since the user last touched the machine; injected by tests. */
+  idleSeconds?: () => Promise<number>;
+  /** Whether a pid is a live process; injected by tests. */
+  isAlive?: (pid: number) => boolean;
 }
 
 /**
@@ -77,8 +120,16 @@ export class PresenceService {
   /** When the window last reported, so the host knows whether to stand in. */
   private windowReportedAt = 0;
   private lastReport: PresenceReport | null = null;
+  private readonly idleSeconds: () => Promise<number>;
+  private readonly isAlive: (pid: number) => boolean;
 
-  constructor(private readonly config: DaedalusConfig) {}
+  constructor(
+    private readonly config: DaedalusConfig,
+    options: PresenceServiceOptions = {},
+  ) {
+    this.idleSeconds = options.idleSeconds ?? cachedIdleSampler();
+    this.isAlive = options.isAlive ?? processIsAlive;
+  }
 
   private get path(): string {
     return join(this.config.home, "presence.json");
@@ -89,11 +140,27 @@ export class PresenceService {
       const stored = (await Bun.file(this.path).json()) as StoredPresence;
       const observedAt = Date.parse(stored.observedAt);
       if (!Number.isFinite(observedAt)) return OFFLINE;
-      // A stale heartbeat is not "the user is away from a running app"; it is
-      // "there is no app", which routes to desktop rather than to a toast that
-      // nothing would ever draw.
-      if (now - observedAt > PRESENCE_MAX_AGE_MS)
+      if (now - observedAt > PRESENCE_MAX_AGE_MS) {
+        // Stale, so nothing here says where the user is looking. Whether the
+        // app is up is decided by its process, not by how recently it wrote:
+        // the host's one thread was observed frozen for minutes inside child
+        // launches on a loaded machine, and every alert in that time was
+        // shouted through AppleScript as Script Editor because the silence
+        // was read as "no app". A live pid is a running app in the
+        // background: alerts queue for it and it delivers them when it can.
+        // A dead pid, or a file from before pids were recorded, is no app,
+        // which routes to desktop rather than to a toast nothing would draw.
+        if (typeof stored.pid === "number" && this.isAlive(stored.pid))
+          return {
+            appRunning: true,
+            appForeground: false,
+            workspaceId: stored.workspaceId ?? null,
+            sessionId: null,
+            userIdleSeconds: 0,
+            observedAt: stored.observedAt,
+          };
         return { ...OFFLINE, observedAt: stored.observedAt };
+      }
       return {
         appRunning: true,
         appForeground: stored.appForeground === true,
@@ -152,16 +219,17 @@ export class PresenceService {
     const state: PresenceState = {
       appRunning: true,
       ...report,
-      userIdleSeconds: await systemIdleSeconds(),
+      userIdleSeconds: await this.idleSeconds(),
       observedAt: new Date(now).toISOString(),
     };
+    const stored: StoredPresence = { ...state, pid: process.pid };
     await ensureDirectory(this.config.home);
     const temporaryPath = join(
       this.config.home,
       `presence.${crypto.randomUUID()}.tmp`,
     );
     try {
-      await writeFile(temporaryPath, JSON.stringify(state), { flag: "wx" });
+      await writeFile(temporaryPath, JSON.stringify(stored), { flag: "wx" });
       await rename(temporaryPath, this.path);
     } finally {
       await rm(temporaryPath, { force: true });

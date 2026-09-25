@@ -1,8 +1,10 @@
 import { describe, expect, test, vi } from "vitest";
 import {
   findExecutable,
+  processIsAlive,
   runCommand,
   standardExecutableFallbacks,
+  TIMED_OUT_EXIT_CODE,
 } from "./process";
 
 describe("findExecutable", () => {
@@ -64,5 +66,27 @@ describe("runCommand", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("MODEL CATALOG");
+  });
+
+  test("kills a child that outlives its timeout and says so", async () => {
+    const started = Date.now();
+    const result = await runCommand("sleep", ["30"], { timeoutMs: 150 });
+    expect(result.timedOut).toBe(true);
+    expect(result.exitCode).toBe(TIMED_OUT_EXIT_CODE);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  test("a child that finishes in time is not marked as timed out", async () => {
+    const result = await runCommand("true", [], { timeoutMs: 5_000 });
+    expect(result.exitCode).toBe(0);
+    expect(result.timedOut).toBeUndefined();
+  });
+});
+
+describe("processIsAlive", () => {
+  test("sees this process and not a pid nothing holds", () => {
+    expect(processIsAlive(process.pid)).toBe(true);
+    // The maximum pid on macOS is 99998; nothing can hold this one.
+    expect(processIsAlive(2_147_000_000)).toBe(false);
   });
 });
