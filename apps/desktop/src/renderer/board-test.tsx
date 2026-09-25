@@ -132,6 +132,9 @@ const snapshot: DesktopSnapshotDto = {
     }),
     task(28, "Packaging and notarization", "blocked"),
     task(29, "Tidy the settings copy", "todo", { description: "" }),
+    // The drawer action bar's own queued card. #29 is started by the session
+    // dialog step, so the bar step needs one that nothing starts before it.
+    task(30, "Reword the empty-board hint", "todo", { description: "" }),
   ],
   agents: [
     session("s-24", 24, "codex"),
