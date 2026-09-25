@@ -73,12 +73,60 @@ interface StoredPresence extends PresenceReport {
  * alert has anywhere to land. Putting it in SQLite would churn the WAL and
  * make every `daedal attention` call look like a data change to the app.
  */
+export interface PresenceServiceOptions {
+  /**
+   * Seconds since the user last touched the machine. The default spawns
+   * `ioreg`, which blocks the calling thread until the child has started; a
+   * process whose job is to keep the heartbeat regular passes a cached
+   * sampler instead.
+   */
+  idleSeconds?: () => Promise<number>;
+}
+
+/** Where the heartbeat is written from once a sidecar has taken it over. */
+interface HeartbeatSidecar {
+  send: (report: PresenceReport) => void;
+  stop: () => void;
+}
+
 export class PresenceService {
   /** When the window last reported, so the host knows whether to stand in. */
   private windowReportedAt = 0;
   private lastReport: PresenceReport | null = null;
+  private readonly idleSeconds: () => Promise<number>;
+  private sidecar: HeartbeatSidecar | null = null;
 
-  constructor(private readonly config: DaedalusConfig) {}
+  constructor(
+    private readonly config: DaedalusConfig,
+    options: PresenceServiceOptions = {},
+  ) {
+    this.idleSeconds = options.idleSeconds ?? (() => systemIdleSeconds());
+  }
+
+  /**
+   * Hands the heartbeat to another process.
+   *
+   * The host's one JavaScript thread blocks inside every `posix_spawn` until
+   * the child has started, and a tick launches tmux and ioreg many times. On a
+   * loaded machine, or once macOS has clamped a backgrounded app, a single
+   * launch was observed taking seconds and a tick minutes, and every timer in
+   * the process, the heartbeat's included, waited with it. A CLI that then
+   * read a heartbeat minutes old concluded there was no app and sent its alert
+   * through AppleScript under Script Editor's name.
+   *
+   * So the heartbeat runs in a sidecar with nothing else to do (`daedal
+   * presence heartbeat`). After this, `publish` forwards the window's reports
+   * there instead of writing, `keepAlive` does nothing, and `retire` stops the
+   * sidecar before removing the file. Called again with `null`, for example
+   * when the sidecar dies, the service writes for itself once more.
+   */
+  attachHeartbeat(sidecar: HeartbeatSidecar | null): void {
+    this.sidecar = sidecar;
+  }
+
+  get heartbeatAttached(): boolean {
+    return this.sidecar !== null;
+  }
 
   private get path(): string {
     return join(this.config.home, "presence.json");
@@ -116,6 +164,16 @@ export class PresenceService {
   ): Promise<PresenceState> {
     this.windowReportedAt = now;
     this.lastReport = report;
+    if (this.sidecar) {
+      this.sidecar.send(report);
+      // The window ignores the answer; this is what the sidecar will write.
+      return {
+        appRunning: true,
+        ...report,
+        userIdleSeconds: 0,
+        observedAt: new Date(now).toISOString(),
+      };
+    }
     return this.write(report, now);
   }
 
@@ -133,6 +191,7 @@ export class PresenceService {
    * the window's own heartbeat is still fresh and nothing was written.
    */
   async keepAlive(now = Date.now()): Promise<PresenceState | undefined> {
+    if (this.sidecar) return undefined;
     if (now - this.windowReportedAt < WINDOW_HEARTBEAT_GRACE_MS)
       return undefined;
     return this.write(
@@ -152,7 +211,7 @@ export class PresenceService {
     const state: PresenceState = {
       appRunning: true,
       ...report,
-      userIdleSeconds: await systemIdleSeconds(),
+      userIdleSeconds: await this.idleSeconds(),
       observedAt: new Date(now).toISOString(),
     };
     await ensureDirectory(this.config.home);
@@ -171,6 +230,9 @@ export class PresenceService {
 
   /** Clears the heartbeat so the next reader sees the app as gone. */
   async retire(): Promise<void> {
+    // The sidecar goes first, or it would write the file straight back.
+    this.sidecar?.stop();
+    this.sidecar = null;
     await rm(this.path, { force: true });
   }
 

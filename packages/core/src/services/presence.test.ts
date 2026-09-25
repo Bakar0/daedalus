@@ -83,6 +83,39 @@ describe("PresenceService", () => {
     });
   });
 
+  test("with a sidecar attached, publish forwards and nothing is written here", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const presence = new PresenceService(
+        await loadConfig({ DAEDALUS_HOME: home }),
+      );
+      const sent: unknown[] = [];
+      let stopped = 0;
+      presence.attachHeartbeat({
+        send: (report) => sent.push(report),
+        stop: () => {
+          stopped += 1;
+        },
+      });
+      const report = {
+        appForeground: true,
+        workspaceId: "w",
+        sessionId: "s",
+      };
+      const state = await presence.publish(report);
+      expect(state.appRunning).toBe(true);
+      expect(sent).toEqual([report]);
+      // The sidecar owns the file now.
+      expect((await presence.read()).appRunning).toBe(false);
+      expect(await presence.keepAlive(Date.now() + 60_000)).toBeUndefined();
+      await presence.retire();
+      expect(stopped).toBe(1);
+      expect(presence.heartbeatAttached).toBe(false);
+      // Detached, it writes for itself again.
+      await presence.publish(report);
+      expect((await presence.read()).appRunning).toBe(true);
+    });
+  });
+
   test("reads as offline when the app has never run", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const presence = new PresenceService(

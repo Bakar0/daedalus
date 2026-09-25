@@ -135,8 +135,9 @@ if (revivedSessions)
   });
 
 const cliEntrypoint = resolve(PATHS.RESOURCES_FOLDER, "app/cli/daedal.js");
+const cliEntrypointExists = await pathExists(cliEntrypoint);
 const bunExecutable = findExecutable("bun", standardExecutableFallbacks("bun"));
-if ((await pathExists(cliEntrypoint)) && bunExecutable)
+if (cliEntrypointExists && bunExecutable)
   await installCliShim({
     path: join(context.config.home, "bin", "daedal"),
     bunExecutable,
@@ -528,14 +529,67 @@ if (nativeStatusProbePath) {
     })();
   });
 }
-// The window's heartbeat stops with its timers, whether it is closed,
-// minimised or throttled. A CLI that reads that silence as "no app" falls
-// back to AppleScript, which macOS attributes to Script Editor. The host
-// stands in so alerts keep being handed over and delivered as Daedalus.
+// The heartbeat runs in a sidecar process, not here. This process has one
+// JavaScript thread, and it blocks inside every `posix_spawn` until the child
+// has started; a tick launches tmux and ioreg many times, and on a loaded
+// machine, or once macOS has clamped the backgrounded app, that froze every
+// timer here for minutes. A CLI reading a heartbeat that old concluded there
+// was no app and sent its alerts through AppleScript as Script Editor. The
+// sidecar has nothing to spawn and nothing to wait on. See
+// `PresenceService.attachHeartbeat`.
 //
-// This runs on its own timer, not inside the change check below: that check
-// skips a tick while the previous one is still running, so one slow tmux call
-// there would silence the heartbeat for exactly as long as it took.
+// Should it die, the service writes for itself again on the timer below,
+// which is the arrangement this replaced: late under load, but never silent.
+const startHeartbeatSidecar = (): void => {
+  if (!cliEntrypointExists) return;
+  // The bun this process runs on, so a dev build never picks up another one.
+  const sidecar = Bun.spawn(
+    [
+      process.execPath,
+      cliEntrypoint,
+      "presence",
+      "heartbeat",
+      "--host-pid",
+      String(process.pid),
+    ],
+    {
+      stdin: "pipe",
+      stdout: "ignore",
+      stderr: "ignore",
+      env: { ...process.env, DAEDALUS_HOME: context.config.home },
+    },
+  );
+  const send = (report: {
+    appForeground: boolean;
+    workspaceId: string | null;
+    sessionId: string | null;
+  }) => {
+    try {
+      sidecar.stdin.write(`${JSON.stringify(report)}\n`);
+      sidecar.stdin.flush();
+    } catch {
+      // A closed pipe is reported by `exited` below.
+    }
+  };
+  context.presence.attachHeartbeat({
+    send,
+    stop: () => {
+      try {
+        sidecar.stdin.end();
+      } catch {
+        // Already gone.
+      }
+      sidecar.kill();
+    },
+  });
+  void sidecar.exited.then((code) => {
+    if (!context.presence.heartbeatAttached) return;
+    context.presence.attachHeartbeat(null);
+    void context.logger.write("error", "presence_sidecar_exited", { code });
+  });
+};
+startHeartbeatSidecar();
+
 setInterval(() => {
   void context.presence.keepAlive().catch(() => undefined);
 }, 1_200);
@@ -591,7 +645,10 @@ setInterval(async () => {
     // Alerts a CLI handed over are delivered as Daedalus, not Script Editor.
     // Only fresh ones: an alert parked while the app was down is already late,
     // and a queue that shouts a week of history is worse than a dropped ping.
-    await context.notifications.flushDesktop(5, 60_000);
+    // Five minutes rather than one, because this tick itself can run minutes
+    // late on a loaded machine (see the heartbeat sidecar above), and an
+    // alert that arrives late still beats one that never arrives.
+    await context.notifications.flushDesktop(5, 300_000);
     await recordAttentionCount(
       context.repositories.listSessionAttention().length,
     );

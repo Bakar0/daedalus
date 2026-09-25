@@ -177,16 +177,22 @@ in the background. That keeps a CLI handing alerts to the app rather than
 reading silence as "no app" and shouting them through AppleScript under Script
 Editor's name; only a quit or crashed app goes silent.
 
-The heartbeat also needs the host's timers to run at all. macOS App Nap
-throttles a backgrounded app's timers once its window is hidden, occluded or
-behind a sleeping display; the host's 1.2 s timers were observed firing once
-every one to two minutes in that state, which read as "no app" for the whole
-gap. The bundle opts out with `LSAppNapIsDisabled` in its Info.plist. Electrobun
-writes that file from a fixed template, so `scripts/bundle-plist.ts` adds the
-key as Electrobun's `postBuild` script. That timing matters: a stable build is a
-self-extracting wrapper whose launcher unpacks the real bundle, Info.plist
-included, on first run, so a key added to the wrapper after the build lasted
-only until then. Routing:
+The heartbeat also needs a thread that is free to write it, and the host's one
+JavaScript thread is not. It blocks inside every `posix_spawn` until the child
+has started, a tick launches tmux and ioreg many times, and on a loaded machine
+or once macOS has clamped the backgrounded app a single launch was observed
+taking seconds and a tick minutes. Every timer in the process waited with it,
+so the heartbeat fell minutes behind while the app sat in the Dock. The
+heartbeat therefore runs in a sidecar, `daedal presence heartbeat --host-pid
+<pid>`, started by the host from its own bun and bundled CLI. The host forwards
+the window's reports to it over stdin; the sidecar writes them, stands in for a
+quiet window on its own timer, samples idle time in the background so it never
+waits on `ioreg`, and exits when the host is gone or closes the pipe. If it
+dies the host writes for itself again, late under load but never silent. The
+bundle also opts out of App Nap with `LSAppNapIsDisabled`, added to the real
+bundle's Info.plist by `scripts/bundle-plist.ts` as Electrobun's `postBuild`
+script, before a stable build archives it into its self-extracting wrapper.
+Routing:
 
 | Where the user is                        | Channel                                     |
 | ---------------------------------------- | ------------------------------------------- |

@@ -1,14 +1,19 @@
 #!/usr/bin/env bun
 import {
+  cachedIdleSampler,
   createApplicationContext,
   DaedalusError,
+  loadConfig,
   normalizeError,
   channelName,
   codexActivityTier,
   codexConfigPath,
   observeClaudeHook,
   observeCodexHook,
+  PresenceService,
+  readLines,
   resolveAgentExecutable,
+  runPresenceHeartbeat,
   sweepProviderActivity,
   writeActivityRecord,
   type ActivityObservation,
@@ -2303,6 +2308,41 @@ async function skillCommand(
   throw new DaedalusError("VALIDATION", `Unknown skill command '${action}'`);
 }
 
+/**
+ * The desktop host's heartbeat sidecar, `daedal presence heartbeat --host-pid
+ * <pid>`. It is started by the host and nothing else; see
+ * `PresenceService.attachHeartbeat` for why the heartbeat cannot live in the
+ * host itself. It reads forwarded presence reports on stdin, writes the
+ * heartbeat on a timer, and exits when the host is gone or closes the pipe.
+ * Like the hooks it must never fail loudly: it has no user to talk to.
+ */
+async function presenceHeartbeat(args: string[]): Promise<number> {
+  const flag = args.indexOf("--host-pid");
+  const hostPid = flag === -1 ? Number.NaN : Number(args[flag + 1]);
+  if (!Number.isInteger(hostPid) || hostPid <= 0) {
+    console.error("Usage: daedal presence heartbeat --host-pid <pid>");
+    return 2;
+  }
+  try {
+    const config = await loadConfig(process.env);
+    const presence = new PresenceService(config, {
+      idleSeconds: cachedIdleSampler(),
+    });
+    await runPresenceHeartbeat({
+      presence,
+      hostPid,
+      reports: readLines(Bun.stdin.stream()),
+    });
+  } catch {
+    // A sidecar that cannot write leaves the heartbeat stale, which reads as
+    // "no app": the same outcome as having no sidecar, and the honest one.
+  }
+  // The loop ends only when the host is gone or has closed the pipe, and a
+  // still-open stdin would otherwise keep the process alive after that: a
+  // dead host's sidecar must not linger, and it has nothing left to flush.
+  process.exit(0);
+}
+
 export interface CliOptions {
   migrationsDirectory?: string;
   /** Replaces the detached archiver `agent continue` starts; for tests. */
@@ -2322,6 +2362,8 @@ export async function runCli(
     return captureClaudeTelemetry();
   if (args[0] === "agent" && args[1] === "event" && args[2])
     return captureAgentEvent(args[2], options.migrationsDirectory);
+  if (args[0] === "presence" && args[1] === "heartbeat")
+    return presenceHeartbeat(args.slice(2));
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
     console.log(help);
     return 0;

@@ -15,6 +15,7 @@ export * from "./services/integrated-terminals";
 export * from "./services/notifications";
 export * from "./services/ordering";
 export * from "./services/presence";
+export * from "./services/presence-heartbeat";
 export * from "./services/providers";
 export * from "./services/shutdown";
 export * from "./services/tasks";
