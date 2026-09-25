@@ -283,6 +283,65 @@ describe("taskActions", () => {
     expect(actions.startable).toBe(false);
   });
 
+  test("an in-progress task whose agent was archived can be restarted, finished or parked", () => {
+    const target = task(1, { status: "in_progress" });
+    const archived = session("s1", "task-1", {
+      status: "exited",
+      endedAt: "2026-09-23T11:00:00.000Z",
+      archivedAt: "2026-09-23T12:00:00.000Z",
+    });
+    const actions = actionsFor(target, inputs({ sessions: [archived] }));
+    expect(actions.lane).toBe("running");
+    expect(actions.linked).toEqual([]);
+    expect(actions.noAgent).toBe(true);
+    expect(actions.agentEndedAt).toBe("2026-09-23T12:00:00.000Z");
+    expect(actions.startable).toBe(true);
+    expect(actions.canMarkDone).toBe(true);
+    expect(actions.canPark).toBe(true);
+    expect(actions.offersSecondOpinion).toBe(false);
+  });
+
+  test("an in-progress task whose agent exited counts as having no agent", () => {
+    const target = task(1, { status: "in_progress" });
+    const stopped = session("s1", "task-1", {
+      status: "exited",
+      endedAt: "2026-09-23T11:00:00.000Z",
+    });
+    const actions = actionsFor(target, inputs({ sessions: [stopped] }));
+    expect(actions.noAgent).toBe(true);
+    expect(actions.agentEndedAt).toBe("2026-09-23T11:00:00.000Z");
+    expect(actions.startable).toBe(true);
+  });
+
+  test("an in-progress task set by hand with no agent ever has no end time", () => {
+    const actions = actionsFor(task(1, { status: "in_progress" }), inputs({}));
+    expect(actions.noAgent).toBe(true);
+    expect(actions.agentEndedAt).toBeUndefined();
+  });
+
+  test("an idle live agent is still an agent", () => {
+    const target = task(1, { status: "in_progress" });
+    const idle = session("s1", "task-1");
+    const actions = actionsFor(target, inputs({ sessions: [idle] }));
+    expect(actions.lane).toBe("running");
+    expect(actions.noAgent).toBe(false);
+    expect(actions.startable).toBe(false);
+    expect(actions.canMarkDone).toBe(false);
+    expect(actions.canPark).toBe(false);
+  });
+
+  test("a task ready for review is not a no-agent task", () => {
+    const target = task(1, { status: "in_progress" });
+    const stopped = session("s1", "task-1", { status: "exited" });
+    const actions = actionsFor(
+      target,
+      inputs({ sessions: [stopped], worktrees: [worktree("s1", 1)] }),
+    );
+    expect(actions.lane).toBe("review");
+    expect(actions.noAgent).toBe(false);
+    expect(actions.canPark).toBe(false);
+  });
+
   test("Start warns about unfinished hard dependencies", () => {
     const blocker = task(2);
     const target = task(1, {

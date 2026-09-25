@@ -95,6 +95,8 @@ export interface BoardViewProps {
   onAnswer: (session: AgentSessionDto, text: string) => Promise<boolean>;
   onOpenWorktree: (worktree: SessionWorktreeDto) => void;
   onMarkDone: (task: TaskDto) => void;
+  /** Sets the task blocked, which moves it to Parked. */
+  onPark: (task: TaskDto) => void;
   onUpdateSettings: (changes: {
     startSetsInProgress?: boolean;
     autoHandoffPercent?: number | null;
@@ -160,6 +162,13 @@ const worktreeShortName = (worktree: SessionWorktreeDto) =>
  * Warns, never locks. Starting a task whose hard dependency is unfinished is
  * sometimes exactly right, so the only thing asked is that it be deliberate.
  */
+/** "No agent running · last one stopped 3h ago", for a card with no agent. */
+export function noAgentLabel(endedAt: string | undefined, now: number) {
+  if (!endedAt) return "No agent running";
+  const age = waitingLabel(endedAt, now);
+  return `No agent running · last one stopped ${age === "just now" ? age : `${age} ago`}`;
+}
+
 export function confirmStartDespite(task: TaskDto, waiting: TaskDto[]) {
   if (waiting.length === 0) return true;
   const names = waiting.map((item) => `#${item.number} ${item.title}`);
@@ -621,10 +630,13 @@ export function BoardView(props: BoardViewProps) {
 
   const renderCard = (task: TaskDto, lane: BoardLane) => {
     const {
+      agentEndedAt,
       answerTarget,
+      canPark,
       lastAgent,
       launches,
       linked,
+      noAgent,
       offersSecondOpinion,
       otherProvider,
       output,
@@ -650,6 +662,7 @@ export function BoardView(props: BoardViewProps) {
       `${workspaceLabel ?? ""}#${task.number} ${task.title}`,
       LANE_LABEL[lane],
       waiting ? `waiting ${waitingLabel(waiting, now)}` : undefined,
+      noAgent ? "no agent running" : undefined,
     ]
       .filter(Boolean)
       .join(", ");
@@ -730,6 +743,11 @@ export function BoardView(props: BoardViewProps) {
                 telemetry={telemetry.get(session.id)}
               />
             ))}
+          </div>
+        )}
+        {noAgent && (
+          <div className="board-card-no-agent">
+            {noAgentLabel(agentEndedAt, now)}
           </div>
         )}
         {launches.map((launch) => (
@@ -848,6 +866,34 @@ export function BoardView(props: BoardViewProps) {
           (lane === "running" && task.status === "todo")) && (
           <div className="board-card-actions">
             {!answerTarget && secondOpinion}
+            {noAgent && (
+              <button
+                className="quiet"
+                disabled={props.busy}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  props.onMarkDone(task);
+                }}
+                title="No agent is running on this task; record it as done"
+                type="button"
+              >
+                Mark done
+              </button>
+            )}
+            {canPark && (
+              <button
+                className="quiet"
+                disabled={props.busy}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  props.onPark(task);
+                }}
+                title="Set the task blocked, which moves it to Parked"
+                type="button"
+              >
+                Park
+              </button>
+            )}
             {lane === "running" && task.status === "todo" && (
               <button
                 className="quiet"

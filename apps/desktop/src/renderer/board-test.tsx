@@ -155,6 +155,9 @@ const snapshot: DesktopSnapshotDto = {
     // The drawer action bar's own queued card. #29 is started by the session
     // dialog step, so the bar step needs one that nothing starts before it.
     task(30, "Reword the empty-board hint", "todo", { description: "" }),
+    // In progress, and its only agent was archived: Running with no agent,
+    // which the no-agent step parks.
+    task(31, "Continue work on a new agent", "in_progress"),
     // Atlas: one task waiting on its agent, one queued. Their numbers repeat
     // Daedalus's on purpose; the all-workspaces board has to tell them apart.
     task(24, "Index the star catalogue", "in_progress", {
@@ -174,6 +177,12 @@ const snapshot: DesktopSnapshotDto = {
       endedAt: ago(120),
     }),
     session("s-25", 25, "claude"),
+    session("s-31", 31, "claude", {
+      status: "exited",
+      startedAt: ago(200),
+      endedAt: ago(95),
+      archivedAt: ago(90),
+    }),
     session("s-atlas-24", 24, "claude", {
       workspaceId: OTHER_WORKSPACE,
       taskId: "atlas-24",

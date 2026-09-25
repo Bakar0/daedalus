@@ -123,6 +123,9 @@ const sessionIsWorking = (
  * agent is alive but idle. Both go to Running, sorted after the tasks that
  * really are working. Somebody started them, and "is it still making
  * progress?" is the question Running answers; its card says "idle 2h".
+ * An `in_progress` task whose agents all ended or were archived lands here
+ * too; `taskActions` marks it `noAgent` so its card offers Start, Mark done
+ * and Park instead of nothing.
  */
 export function laneFor(task: TaskDto, inputs: LaneInputs): BoardLane {
   const linked = taskSessions(task, inputs.sessions);
