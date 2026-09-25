@@ -1080,9 +1080,11 @@ export class AgentService {
    * `daedal agent list` resurrecting agents. Revival is an explicit call —
    * `reviveLostSessions`.
    */
-  async reconcile(): Promise<void> {
-    if (!(await this.tmux.probe())) return;
-    const live = new Set(await this.tmux.listSessions());
+  async reconcile(liveSessions?: ReadonlySet<string>): Promise<void> {
+    // The host asks tmux once per tick and shares the answer with the
+    // terminals; anyone else asks here.
+    if (liveSessions === undefined && !(await this.tmux.probe())) return;
+    const live = liveSessions ?? new Set(await this.tmux.listSessions());
     const now = new Date().toISOString();
     this.repositories.transaction(() => {
       for (const agent of this.repositories.listAgents()) {

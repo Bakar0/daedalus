@@ -3,10 +3,13 @@ import { describe, expect, test } from "vitest";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { loadConfig } from "../config";
 import {
+  cachedIdleSampler,
   PresenceService,
   PRESENCE_MAX_AGE_MS,
   WINDOW_HEARTBEAT_GRACE_MS,
 } from "./presence";
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("PresenceService", () => {
   test("publishes a heartbeat that later readers can see", async () => {
@@ -26,10 +29,10 @@ describe("PresenceService", () => {
     });
   });
 
-  test("a stale heartbeat means no app, not an app in the background", async () => {
+  test("a stale heartbeat from a dead process means no app", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const config = await loadConfig({ DAEDALUS_HOME: home });
-      const presence = new PresenceService(config);
+      const presence = new PresenceService(config, { isAlive: () => false });
       await presence.publish({
         appForeground: true,
         workspaceId: null,
@@ -39,6 +42,73 @@ describe("PresenceService", () => {
       expect(state.appRunning).toBe(false);
       expect(state.appForeground).toBe(false);
     });
+  });
+
+  test("a stale heartbeat from a live process means a busy app in the background", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await loadConfig({ DAEDALUS_HOME: home });
+      const seen: number[] = [];
+      const presence = new PresenceService(config, {
+        isAlive: (pid) => {
+          seen.push(pid);
+          return true;
+        },
+      });
+      await presence.publish({
+        appForeground: true,
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+      });
+      const state = await presence.read(Date.now() + PRESENCE_MAX_AGE_MS + 1);
+      expect(seen).toEqual([process.pid]);
+      expect(state.appRunning).toBe(true);
+      // Nothing that old says where the user is looking.
+      expect(state.appForeground).toBe(false);
+      expect(state.sessionId).toBeNull();
+      expect(state.workspaceId).toBe("workspace-1");
+    });
+  });
+
+  test("a file from before pids were recorded still reads as no app once stale", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await loadConfig({ DAEDALUS_HOME: home });
+      await Bun.write(
+        join(home, "presence.json"),
+        JSON.stringify({
+          appForeground: true,
+          workspaceId: null,
+          sessionId: null,
+          userIdleSeconds: 0,
+          observedAt: new Date(Date.now() - 60_000).toISOString(),
+        }),
+      );
+      const presence = new PresenceService(config, { isAlive: () => true });
+      expect((await presence.read()).appRunning).toBe(false);
+    });
+  });
+
+  test("the idle sampler answers at once and refreshes in the background", async () => {
+    let calls = 0;
+    let clock = 0;
+    const sampler = cachedIdleSampler(
+      async () => {
+        calls += 1;
+        return 42;
+      },
+      1_000,
+      () => clock,
+    );
+    expect(await sampler()).toBe(0);
+    await sleep(5);
+    expect(await sampler()).toBe(42);
+    expect(calls).toBe(1);
+    clock = 999;
+    await sampler();
+    expect(calls).toBe(1);
+    clock = 1_000;
+    await sampler();
+    await sleep(5);
+    expect(calls).toBe(2);
   });
 
   test("the host stands in for a window that has gone quiet", async () => {

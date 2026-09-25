@@ -32,14 +32,6 @@ export default {
   // the one exit that never said what it left running. Cmd+Q is the quit now,
   // and it always has a window to ask in.
   runtime: { exitOnLastWindowClosed: false },
-  // `postBuild` runs after the real bundle is written and before a stable
-  // build archives it into the self-extracting wrapper, so the keys it adds
-  // survive the launcher's first-run extraction; `postWrap` gives the wrapper
-  // the same keys for the launch that does the extracting. See the script.
-  scripts: {
-    postBuild: "scripts/bundle-plist.ts",
-    postWrap: "scripts/bundle-plist.ts",
-  },
   build: {
     bun: {
       entrypoint: "apps/desktop/src/bun/index.ts",

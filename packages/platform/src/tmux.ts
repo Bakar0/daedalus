@@ -122,7 +122,18 @@ export const tmuxPtyEnvironment = (
   COLORTERM: "truecolor",
 });
 
+/**
+ * How long any tmux command may take before it is killed and reported as
+ * failed. The server answers in milliseconds; a client still waiting after
+ * this is talking to a wedged server, and the desktop host's one thread must
+ * not wait with it.
+ */
+export const TMUX_COMMAND_TIMEOUT_MS = 10_000;
+
 export class CommandTmuxClient implements TmuxClient {
+  /** The version the executable reported, once it has: see `probe`. */
+  private probed: string | undefined;
+
   constructor(
     readonly socketName = "daedalus",
     readonly executable = resolveTmuxExecutable(),
@@ -152,6 +163,7 @@ export class CommandTmuxClient implements TmuxClient {
     options: Omit<CommandOptions, "env" | "replaceEnvironment"> = {},
   ): Promise<CommandResult> {
     return this.command(this.executable, this.args(...args), {
+      timeoutMs: TMUX_COMMAND_TIMEOUT_MS,
       ...options,
       env: this.environment,
       replaceEnvironment: true,
@@ -186,12 +198,25 @@ export class CommandTmuxClient implements TmuxClient {
     );
   }
 
+  /**
+   * The tmux version, or `undefined` when there is no usable tmux. A success
+   * is remembered: the executable does not change under a running process,
+   * and the desktop host asked this on every tick, which under load was one
+   * more blocking spawn per tick for an answer it already had. A failure is
+   * asked again, since tmux may be installed later.
+   */
   async probe(): Promise<string | undefined> {
+    if (this.probed !== undefined) return this.probed;
     try {
-      const result = await this.command(this.executable, ["-V"]);
-      return result.exitCode === 0
-        ? result.stdout.trim() || result.stderr.trim()
-        : undefined;
+      const result = await this.command(this.executable, ["-V"], {
+        timeoutMs: TMUX_COMMAND_TIMEOUT_MS,
+      });
+      const version =
+        result.exitCode === 0
+          ? result.stdout.trim() || result.stderr.trim()
+          : undefined;
+      if (version) this.probed = version;
+      return version;
     } catch {
       return undefined;
     }

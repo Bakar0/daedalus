@@ -5,6 +5,7 @@ import {
   isInheritedSessionVariable,
   tmuxPtyArguments,
   tmuxPtyEnvironment,
+  TMUX_COMMAND_TIMEOUT_MS,
 } from "./tmux";
 
 test("terminal captures preserve recent complete UTF-8 within a byte bound", () => {
@@ -108,6 +109,38 @@ test("tmux PTYs use native mouse scrolling", () => {
 });
 
 describe("CommandTmuxClient", () => {
+  test("remembers a successful version probe and asks again after a failure", async () => {
+    let installed = false;
+    const command = vi.fn(async () => ({
+      exitCode: installed ? 0 : 1,
+      stdout: installed ? "tmux 3.5a\n" : "",
+      stderr: installed ? "" : "not found",
+    }));
+    const tmux = new CommandTmuxClient("isolated", "tmux", command);
+    expect(await tmux.probe()).toBeUndefined();
+    expect(await tmux.probe()).toBeUndefined();
+    expect(command).toHaveBeenCalledTimes(2);
+    installed = true;
+    expect(await tmux.probe()).toBe("tmux 3.5a");
+    expect(await tmux.probe()).toBe("tmux 3.5a");
+    expect(command).toHaveBeenCalledTimes(3);
+  });
+
+  test("gives every tmux command a timeout", async () => {
+    const command = vi.fn(async () => ({
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    }));
+    const tmux = new CommandTmuxClient("isolated", "tmux", command);
+    await tmux.listSessions();
+    expect(command).toHaveBeenCalledWith(
+      "tmux",
+      ["-L", "isolated", "list-sessions", "-F", "#{session_name}"],
+      expect.objectContaining({ timeoutMs: TMUX_COMMAND_TIMEOUT_MS }),
+    );
+  });
+
   test("passes executable, arguments, environment, cwd, and input as distinct argv", async () => {
     const command = vi.fn(async () => ({
       exitCode: 0,

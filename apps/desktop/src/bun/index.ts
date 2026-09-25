@@ -529,9 +529,10 @@ if (nativeStatusProbePath) {
   });
 }
 // The window's heartbeat stops with its timers, whether it is closed,
-// minimised or throttled. A CLI that reads that silence as "no app" falls
-// back to AppleScript, which macOS attributes to Script Editor. The host
-// stands in so alerts keep being handed over and delivered as Daedalus.
+// minimised or throttled, and the host stands in so the file keeps saying
+// where the user is (not looking). Whether the app is running is carried by
+// the pid in the same file, so a heartbeat this process is too busy to write
+// costs a stale foreground reading, never a Script Editor alert.
 //
 // This runs on its own timer, not inside the change check below: that check
 // skips a tick while the previous one is still running, so one slow tmux call
@@ -547,10 +548,19 @@ setInterval(async () => {
   try {
     // Reconciliation updates stale sessions; SQLite fingerprinting also catches
     // mutations performed by another process such as the CLI.
-    await Promise.all([
-      context.agents.reconcile(),
-      context.terminals.reconcile(),
-    ]);
+    //
+    // Every child launched here blocks this thread inside `posix_spawn` until
+    // the child has started, and on a loaded machine that was observed taking
+    // seconds per launch. So a tick asks tmux exactly once and shares the
+    // answer; the version probe is remembered by the client after its first
+    // success. Anything more is a bug, not a cost to absorb.
+    if (await context.tmux.probe()) {
+      const live = new Set(await context.tmux.listSessions());
+      await Promise.all([
+        context.agents.reconcile(live),
+        context.terminals.reconcile(live),
+      ]);
+    }
     // Polled detection and staleness decay ride the reconcile tick. Both are
     // cheap — the rollout read is gated on file mtime and decay only touches
     // rows that are already too old to believe — and neither deserves a timer
@@ -591,7 +601,9 @@ setInterval(async () => {
     // Alerts a CLI handed over are delivered as Daedalus, not Script Editor.
     // Only fresh ones: an alert parked while the app was down is already late,
     // and a queue that shouts a week of history is worse than a dropped ping.
-    await context.notifications.flushDesktop(5, 60_000);
+    // Five minutes rather than one: a CLI hands over whenever this process is
+    // alive, and this tick is what runs late when the machine is loaded.
+    await context.notifications.flushDesktop(5, 300_000);
     await recordAttentionCount(
       context.repositories.listSessionAttention().length,
     );

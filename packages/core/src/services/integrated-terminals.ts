@@ -137,9 +137,10 @@ export class IntegratedTerminalService {
     };
   }
 
-  async reconcile(): Promise<void> {
-    if (!(await this.tmux.probe())) return;
-    const live = new Set(await this.tmux.listSessions());
+  async reconcile(liveSessions?: ReadonlySet<string>): Promise<void> {
+    // See `AgentService.reconcile`: the host passes one shared answer.
+    if (liveSessions === undefined && !(await this.tmux.probe())) return;
+    const live = liveSessions ?? new Set(await this.tmux.listSessions());
     const now = new Date().toISOString();
     for (const terminal of this.repositories.listIntegratedTerminals()) {
       if (

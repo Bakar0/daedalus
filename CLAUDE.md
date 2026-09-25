@@ -15,10 +15,6 @@ bun run build                    # packages the dev channel
 
 `bun run build` produces `build/dev-macos-arm64/Daedalus-dev.app`. It works
 headlessly, so an agent can and should run it to prove a change still packages.
-`scripts/bundle-plist.ts` runs as Electrobun's `postBuild` script and adds the
-Info.plist keys the template cannot (the App Nap opt-out) to the real bundle
-before a stable build archives it; the wrapper's own plist is replaced on first
-launch, so patching it afterwards does nothing.
 
 An agent **can** launch it with `open build/dev-macos-arm64/Daedalus-dev.app`.
 `open` hands the bundle to Launch Services, which starts it in the user's GUI
