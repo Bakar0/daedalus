@@ -18,6 +18,7 @@ import {
 import {
   CommandTmuxClient,
   findExecutable,
+  isInheritedSessionVariable,
   pathExists,
   standardExecutableFallbacks,
   TmuxPtyBridge,
@@ -59,6 +60,12 @@ process.env.DAEDALUS_HOME = channelHome(
   appChannel,
   process.env.DAEDALUS_HOME ?? join(homedir(), ".daedalus"),
 );
+
+// Opened from an agent's shell, the app inherits that agent's terminal state
+// and session identity. The tmux client already keeps them out of every
+// session; dropping them here keeps them out of everything else the host runs.
+for (const key of Object.keys(process.env))
+  if (isInheritedSessionVariable(key)) delete process.env[key];
 
 // The window is the only surface that can draw a toast, so the host is the
 // only adapter that may claim it; everywhere else a toast waits in the queue.
