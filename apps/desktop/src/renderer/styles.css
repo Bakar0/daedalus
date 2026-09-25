@@ -449,6 +449,18 @@ button:not(
   background: linear-gradient(145deg, #e5edfa, #d7e2f4);
   color: #2d548a;
 }
+/* The card above the workspaces: every workspace at once (#35). It is not in
+   the reorder list, and a rule under it marks where the list begins. */
+.all-workspaces-card {
+  border-bottom: 1px solid var(--line);
+  border-radius: 9px 9px 0 0;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+}
+.all-workspaces-icon svg {
+  height: 15px;
+  width: 15px;
+}
 .workspace-card-actions {
   display: flex;
   flex: 0 0 30px;
@@ -3141,6 +3153,11 @@ dd {
 .session-card-main strong {
   font-size: 11px;
 }
+/* The session's workspace, only in the all-workspaces list (#35). */
+.session-card-workspace {
+  color: var(--secondary);
+  font-weight: 600;
+}
 .session-card-main em {
   align-items: center;
   color: var(--muted);
@@ -3921,6 +3938,24 @@ dd {
   color: var(--muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+/* The card's workspace, only on the all-workspaces board (#35). It reads as
+   the CLI writes a task reference: slug, then #number. */
+.board-card-workspace {
+  color: var(--secondary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  margin-right: -5px;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.board-scope-note {
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
 }
 .board-card-priority {
   border: 1px solid var(--line-strong);

@@ -27,6 +27,9 @@ declare global {
 window.__boardCalls = [];
 
 const WORKSPACE = "deadalus";
+// A second workspace, seen only from the all-workspaces card (#35): its own
+// board is never opened, so the per-workspace steps above it are unchanged.
+const OTHER_WORKSPACE = "atlas";
 const now = Date.now();
 const ago = (minutes: number) => new Date(now - minutes * 60_000).toISOString();
 
@@ -108,6 +111,23 @@ const snapshot: DesktopSnapshotDto = {
       defaultProvider: "claude",
       defaultModel: null,
     },
+    {
+      id: OTHER_WORKSPACE,
+      slug: "atlas",
+      name: "Atlas",
+      path: "/tmp/atlas",
+      createdAt: ago(7000),
+      updatedAt: ago(30),
+      archivedAt: null,
+      available: true,
+      position: 2,
+      startSetsInProgress: true,
+      autoHandoffPercent: null,
+      // Codex by default, so a Start from the all-workspaces board proves
+      // the task's own workspace chose the provider, not the selected one.
+      defaultProvider: "codex",
+      defaultModel: null,
+    },
   ],
   tasks: [
     ...done.map(([number, title]) => task(number, title, "done")),
@@ -135,6 +155,16 @@ const snapshot: DesktopSnapshotDto = {
     // The drawer action bar's own queued card. #29 is started by the session
     // dialog step, so the bar step needs one that nothing starts before it.
     task(30, "Reword the empty-board hint", "todo", { description: "" }),
+    // Atlas: one task waiting on its agent, one queued. Their numbers repeat
+    // Daedalus's on purpose; the all-workspaces board has to tell them apart.
+    task(24, "Index the star catalogue", "in_progress", {
+      id: "atlas-24",
+      workspaceId: OTHER_WORKSPACE,
+    }),
+    task(26, "Chart the southern sky", "todo", {
+      id: "atlas-26",
+      workspaceId: OTHER_WORKSPACE,
+    }),
   ],
   agents: [
     session("s-24", 24, "codex"),
@@ -144,6 +174,12 @@ const snapshot: DesktopSnapshotDto = {
       endedAt: ago(120),
     }),
     session("s-25", 25, "claude"),
+    session("s-atlas-24", 24, "claude", {
+      workspaceId: OTHER_WORKSPACE,
+      taskId: "atlas-24",
+      name: "Session for atlas#24",
+      workingDirectory: "/tmp/atlas/worktrees/s-atlas-24",
+    }),
   ],
   terminals: [],
   repositories: [],
@@ -179,6 +215,14 @@ const snapshot: DesktopSnapshotDto = {
       observedAt: ago(0.2),
       source: "hook",
     },
+    {
+      sessionId: "s-atlas-24",
+      activity: "needs_input",
+      detail: "Which epoch should the catalogue use?",
+      since: ago(6),
+      observedAt: ago(6),
+      source: "hook",
+    },
   ],
   attention: [
     {
@@ -195,6 +239,21 @@ const snapshot: DesktopSnapshotDto = {
       ],
       raisedAt: ago(14),
       updatedAt: ago(14),
+    },
+    {
+      sessionId: "s-atlas-24",
+      workspaceId: OTHER_WORKSPACE,
+      reasons: [
+        {
+          id: "r-atlas-24",
+          text: "Which epoch should the catalogue use?",
+          raisedAt: ago(6),
+          source: "hook",
+          generated: false,
+        },
+      ],
+      raisedAt: ago(6),
+      updatedAt: ago(6),
     },
   ],
   worktrees: [
@@ -490,23 +549,32 @@ const client = {
     workspaceUpdate: record(
       "workspaceUpdate",
       (params: Record<string, unknown> & { reference: string }) => {
-        const { reference: _reference, ...changes } = params;
-        Object.assign(snapshot.workspaces[0]!, changes);
+        const { reference, ...changes } = params;
+        const target =
+          snapshot.workspaces.find((item) => item.id === reference) ??
+          snapshot.workspaces[0]!;
+        Object.assign(target, changes);
         announce();
-        return ok(snapshot.workspaces[0]!);
+        return ok(target);
       },
     ),
     agentSpawn: record(
       "agentSpawn",
       (params: {
+        workspace: string;
         taskId?: string;
         provider?: "claude" | "codex";
         draftBrief?: boolean;
       }) => {
         const target = snapshot.tasks.find((item) => item.id === params.taskId);
+        const workspace =
+          snapshot.workspaces.find((item) => item.id === params.workspace) ??
+          snapshot.workspaces[0]!;
         const id = `s-new-${window.__boardCalls.length}`;
         const created = session(id, target?.number ?? 0, params.provider!, {
           startedAt: new Date().toISOString(),
+          workspaceId: workspace.id,
+          taskId: target?.id,
         });
         snapshot.agents.unshift(created);
         snapshot.sessionActivity.push({
@@ -521,7 +589,7 @@ const client = {
         if (
           target &&
           !params.draftBrief &&
-          snapshot.workspaces[0]!.startSetsInProgress &&
+          workspace.startSetsInProgress &&
           (target.status === "todo" || target.status === "blocked")
         )
           target.status = "in_progress";

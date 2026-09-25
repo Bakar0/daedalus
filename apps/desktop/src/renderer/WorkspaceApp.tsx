@@ -171,6 +171,29 @@ const lastViewStorageKey = (workspaceId: string) =>
 
 export type WorkspaceView = "board" | "sessions" | "workspace";
 
+/**
+ * What the main column shows: one workspace, or every active workspace at
+ * once (#35). The board and the Sessions list read the same snapshot either
+ * way; "all" only stops filtering it. Files, repositories and settings stay
+ * per workspace, because none of them has a meaning across several.
+ */
+export type WorkspaceScope = "workspace" | "all";
+
+/**
+ * The key remembered views and sessions are filed under when every workspace
+ * is showing. A real id can never collide with it: ids are UUIDs.
+ */
+export const ALL_WORKSPACES_SCOPE_KEY = "all";
+
+/** The views that exist when every workspace is showing. */
+export function preferredScopeView(
+  scope: WorkspaceScope,
+  rememberedView?: string | null,
+): WorkspaceView {
+  const preferred = preferredWorkspaceView(rememberedView);
+  return scope === "all" && preferred === "workspace" ? "board" : preferred;
+}
+
 export function preferredWorkspaceView(
   rememberedView?: string | null,
 ): WorkspaceView {
@@ -432,6 +455,26 @@ function HandoffIcon() {
       <path d="M3 12h9" />
       <path d="M9 8l4 4-4 4" />
       <rect height="14" rx="2.5" width="6" x="15" y="5" />
+    </svg>
+  );
+}
+
+/** Four tiles: every workspace at once. */
+function AllWorkspacesIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <rect height="7" rx="1.5" width="7" x="3" y="3" />
+      <rect height="7" rx="1.5" width="7" x="14" y="3" />
+      <rect height="7" rx="1.5" width="7" x="3" y="14" />
+      <rect height="7" rx="1.5" width="7" x="14" y="14" />
     </svg>
   );
 }
@@ -1451,6 +1494,7 @@ export function WorkspaceApp({
   initialWorkspaceContent,
   initialModal,
   initialSessionLaunches = [],
+  initialScope = "workspace",
 }: {
   injectedClient?: DesktopClient;
   initialSnapshot?: DesktopSnapshotDto;
@@ -1460,6 +1504,7 @@ export function WorkspaceApp({
   initialTerminalPanelOpen?: boolean;
   initialDetailView?: "brief" | "terminal";
   initialWorkspaceView?: WorkspaceView;
+  initialScope?: WorkspaceScope;
   initialWorkspaceContent?: WorkspaceContentDto;
   initialModal?: "workspace" | "task" | "session" | "repository" | "settings";
   initialSessionLaunches?: SessionLaunchState[];
@@ -1491,6 +1536,15 @@ export function WorkspaceApp({
   const [workspaceId, setWorkspaceId] = useState(
     initialSnapshot?.workspaces.find((item) => !item.archivedAt)?.id,
   );
+  // "all" shows every workspace's tasks and sessions in the main column.
+  // `workspaceId` stays set underneath it: it is the workspace the session
+  // dialog, the terminal heading and the content loaders fall back to, and
+  // the one the column returns to when a card is clicked.
+  const [scope, setScope] = useState<WorkspaceScope>(initialScope);
+  const showingAll = scope === "all";
+  // Remembered views and sessions are filed per workspace, and once more for
+  // the all-workspaces scope, so leaving it and coming back restores it.
+  const scopeKey = showingAll ? ALL_WORKSPACES_SCOPE_KEY : workspaceId;
   const [selectedTaskId, setSelectedTaskId] = useState(initialSelectedTaskId);
   const [activeSessionId, setActiveSessionId] = useState(initialActiveAgentId);
   // Keyboard focus follows explicit intent, never mere selection. Only a
@@ -1525,9 +1579,9 @@ export function WorkspaceApp({
   const [view, setView] = useState<WorkspaceView>(
     () =>
       initialWorkspaceView ??
-      preferredWorkspaceView(rememberedWorkspaceView(workspaceId)),
+      preferredScopeView(scope, rememberedWorkspaceView(scopeKey)),
   );
-  const viewWorkspaceId = useRef(workspaceId);
+  const viewWorkspaceId = useRef(scopeKey);
   const [workspaceContent, setWorkspaceContent] = useState(
     initialWorkspaceContent,
   );
@@ -2165,7 +2219,9 @@ export function WorkspaceApp({
         void client.request.presencePublish?.({
           appForeground:
             document.visibilityState === "visible" && document.hasFocus(),
-          workspaceId: workspaceId ?? null,
+          // With every workspace showing, no single one is "the one on
+          // screen". Routing only reads the session anyway.
+          workspaceId: showingAll ? null : (workspaceId ?? null),
           sessionId: activeSessionId ?? null,
         });
       } catch {
@@ -2184,17 +2240,17 @@ export function WorkspaceApp({
       window.removeEventListener("blur", publish);
       document.removeEventListener("visibilitychange", publish);
     };
-  }, [activeSessionId, client, workspaceId]);
+  }, [activeSessionId, client, showingAll, workspaceId]);
   const runDesktopCommand = useCallback(
     (command: DesktopCommand) => {
       if (command === "view-board") setView("board");
       else if (command === "view-sessions" && workspaceId) setView("sessions");
-      else if (command === "view-workspace" && workspaceId)
+      else if (command === "view-workspace" && workspaceId && !showingAll)
         setView("workspace");
       else if (command === "toggle-terminal")
         setTerminalPanelOpen((current) => !current);
     },
-    [workspaceId],
+    [showingAll, workspaceId],
   );
   useEffect(
     () => client.subscribeCommands(runDesktopCommand),
@@ -2549,16 +2605,34 @@ export function WorkspaceApp({
   const orderedWorkspaces = workspaceReorder.order.flatMap(
     (id) => activeWorkspaces.find((item) => item.id === id) ?? [],
   );
-  const allTasks = (snapshot?.tasks ?? []).filter(
-    (item) => item.workspaceId === workspaceId,
+  const workspaceById = new Map(
+    (snapshot?.workspaces ?? []).map((item) => [item.id, item]),
+  );
+  // The scope's workspaces: the selected one, or every active one. An
+  // archived workspace's tasks and sessions stay out of the all-workspaces
+  // view the same way its card stays out of the column.
+  const inScope = (id: string) =>
+    showingAll
+      ? activeWorkspaces.some((item) => item.id === id)
+      : id === workspaceId;
+  const allTasks = (snapshot?.tasks ?? []).filter((item) =>
+    inScope(item.workspaceId),
   );
   // Order is the user's, kept in the database and applied by the query that
   // built this snapshot. The renderer filters it but never re-sorts it: a list
   // the user arranged by hand is the one thing an adapter has no business
-  // second-guessing.
-  const workspaceSessions = (snapshot?.agents ?? []).filter(
-    (item) => item.workspaceId === workspaceId,
-  );
+  // second-guessing. Across every workspace the order is the column's: each
+  // workspace's sessions together, in that workspace's own order, because the
+  // snapshot's positions are only meaningful within one workspace.
+  const workspaceSessions = showingAll
+    ? orderedWorkspaces.flatMap((item) =>
+        (snapshot?.agents ?? []).filter(
+          (session) => session.workspaceId === item.id,
+        ),
+      )
+    : (snapshot?.agents ?? []).filter(
+        (item) => item.workspaceId === workspaceId,
+      );
   const activeSessions = workspaceSessions.filter((item) => !item.archivedAt);
   const attentionSessionIds = new Set(
     activeSessions
@@ -2574,6 +2648,10 @@ export function WorkspaceApp({
   );
   const sessionReorder = useListReorder({
     ids: sessions.map((item) => item.id),
+    // A position is an order within one workspace, so the all-workspaces
+    // list is read-only: there is no one list on the server for a drag
+    // across it to write.
+    disabled: showingAll,
     // Only the visible sessions are named, so a drag inside the "Needs me"
     // filter leaves the sessions it is hiding exactly where they were.
     onCommit: (sessionIds) =>
@@ -2587,8 +2665,8 @@ export function WorkspaceApp({
   const orderedSessions = sessionReorder.order.flatMap(
     (id) => sessions.find((item) => item.id === id) ?? [],
   );
-  const workspaceSessionLaunches = sessionLaunches.filter(
-    (item) => item.workspaceId === workspaceId,
+  const workspaceSessionLaunches = sessionLaunches.filter((item) =>
+    inScope(item.workspaceId),
   );
   const visibleSessionLaunches = pendingSessionLaunches(
     workspaceSessionLaunches,
@@ -2646,12 +2724,20 @@ export function WorkspaceApp({
   const activeSessionTelemetry = snapshot?.sessionTelemetry.find(
     (item) => item.sessionId === activeSession?.id,
   );
-  const activeSessionWorktree = workspaceContent?.worktrees.find(
-    (item) => item.sessionId === activeSession?.id,
-  );
+  // The workspace content only describes the selected workspace, and with
+  // every workspace showing the active session can belong to another one.
+  // The snapshot carries every worktree, so that is the fallback.
+  const activeSessionWorktree =
+    workspaceContent?.worktrees.find(
+      (item) => item.sessionId === activeSession?.id,
+    ) ??
+    snapshot?.worktrees.find((item) => item.sessionId === activeSession?.id);
   const activeSessionRepository = workspaceContent?.repositories.find(
     (item) => item.id === activeSessionWorktree?.repositoryId,
   );
+  const activeSessionWorkspace = activeSession
+    ? workspaceById.get(activeSession.workspaceId)
+    : undefined;
   const activeSessionModel =
     activeSessionTelemetry?.model ?? sessionConfiguredModel(activeSession);
   const sessionModelCatalog =
@@ -2670,9 +2756,19 @@ export function WorkspaceApp({
   // the provider the default was set for; a Claude default says nothing
   // about a Codex session. Leaving the picker on its first option starts
   // with it, because the core applies the same rule to every spawn.
+  // The session dialog's workspace. A dialog opened from a task belongs to
+  // that task's workspace, which with every workspace showing need not be the
+  // selected one; opened from the Sessions toolbar it is the selected one,
+  // and that toolbar's button is off while every workspace is showing.
+  const sessionFormTask = snapshot?.tasks.find(
+    (item) => item.id === sessionForm.taskId,
+  );
+  const sessionWorkspace =
+    (sessionFormTask && workspaceById.get(sessionFormTask.workspaceId)) ??
+    (showingAll ? undefined : workspace);
   const workspaceDefaultModel =
-    workspace && workspace.defaultProvider === sessionType
-      ? workspace.defaultModel
+    sessionWorkspace && sessionWorkspace.defaultProvider === sessionType
+      ? sessionWorkspace.defaultModel
       : null;
   const workspaceDefaultModelEntry = workspaceDefaultModel
     ? sessionModelCatalog?.models.find(
@@ -2688,9 +2784,9 @@ export function WorkspaceApp({
   // The first option already means the workspace default, so only another
   // provider or an explicit model is a choice worth remembering.
   const sessionChoiceIsWorkspaceDefault = Boolean(
-    workspace &&
-    workspace.defaultProvider === sessionType &&
-    (sessionModel === "" || sessionModel === workspace.defaultModel),
+    sessionWorkspace &&
+    sessionWorkspace.defaultProvider === sessionType &&
+    (sessionModel === "" || sessionModel === sessionWorkspace.defaultModel),
   );
   const sessionModelCatalogPending =
     sessionType !== "terminal" && !sessionModelCatalog && !modelCatalogError;
@@ -2700,32 +2796,32 @@ export function WorkspaceApp({
     integratedTerminals.at(-1);
 
   useEffect(() => {
-    if (viewWorkspaceId.current !== workspaceId) {
-      viewWorkspaceId.current = workspaceId;
-      setView(preferredWorkspaceView(rememberedWorkspaceView(workspaceId)));
+    if (viewWorkspaceId.current !== scopeKey) {
+      viewWorkspaceId.current = scopeKey;
+      setView(preferredScopeView(scope, rememberedWorkspaceView(scopeKey)));
       return;
     }
-    if (workspaceId)
-      window.localStorage.setItem(lastViewStorageKey(workspaceId), view);
-  }, [view, workspaceId]);
+    if (scopeKey)
+      window.localStorage.setItem(lastViewStorageKey(scopeKey), view);
+  }, [scope, scopeKey, view]);
 
   useEffect(() => {
-    if (view !== "sessions" || !workspaceId) return;
+    if (view !== "sessions" || !scopeKey) return;
     const remembered = window.localStorage.getItem(
-      lastSessionStorageKey(workspaceId),
+      lastSessionStorageKey(scopeKey),
     );
     const preferred = preferredSessionId(sessions, activeSessionId, remembered);
     if (preferred !== activeSessionId) setActiveSessionId(preferred);
-  }, [activeSessionId, sessions, view, workspaceId]);
+  }, [activeSessionId, sessions, view, scopeKey]);
 
   useEffect(() => {
-    if (!workspaceId || !activeSessionId) return;
+    if (!scopeKey || !activeSessionId) return;
     if (!sessions.some((session) => session.id === activeSessionId)) return;
     window.localStorage.setItem(
-      lastSessionStorageKey(workspaceId),
+      lastSessionStorageKey(scopeKey),
       activeSessionId,
     );
-  }, [activeSessionId, sessions, workspaceId]);
+  }, [activeSessionId, sessions, scopeKey]);
   const attachedLibraryRepositoryIds = new Set(
     (workspaceContent?.repositories ?? [])
       .map((item) => item.libraryRepositoryId)
@@ -2907,11 +3003,12 @@ export function WorkspaceApp({
       draftBrief?: boolean;
     } = {},
   ) {
-    if (!workspace) return;
+    // The task's own workspace, never the selected one: with every workspace
+    // showing they differ, and the core refuses a task spawned elsewhere.
+    const target = workspaceById.get(task.workspaceId);
+    if (!target) return;
     const provider =
-      options.provider ??
-      workspace.defaultProvider ??
-      availableBoardProviders[0];
+      options.provider ?? target.defaultProvider ?? availableBoardProviders[0];
     if (!provider) {
       setError("No agent provider is installed");
       return;
@@ -2923,7 +3020,7 @@ export function WorkspaceApp({
     const model = options.model;
     const launch: SessionLaunchState = {
       key: crypto.randomUUID(),
-      workspaceId: workspace.id,
+      workspaceId: target.id,
       taskId: task.id,
       name: task.title,
       tool: provider,
@@ -2933,7 +3030,7 @@ export function WorkspaceApp({
     setSessionLaunches((current) => [launch, ...current]);
     try {
       const response = await client.request.agentSpawn({
-        workspace: workspace.id,
+        workspace: target.id,
         taskId: task.id,
         provider,
         ...(model ? { model } : {}),
@@ -2979,11 +3076,12 @@ export function WorkspaceApp({
     setSessionForm({ name: task?.title ?? "", taskId: task?.id });
     // The dialog opens on what Start would launch, so "default" means the
     // same thing here and on the board.
+    const target = task ? workspaceById.get(task.workspaceId) : workspace;
     if (
-      workspace?.defaultProvider &&
-      availableBoardProviders.includes(workspace.defaultProvider)
+      target?.defaultProvider &&
+      availableBoardProviders.includes(target.defaultProvider)
     )
-      setSessionType(workspace.defaultProvider);
+      setSessionType(target.defaultProvider);
     setSessionModel("");
     setRememberSessionModel(false);
     setModelCatalogError(undefined);
@@ -3020,6 +3118,7 @@ export function WorkspaceApp({
       }),
     );
     if (created) {
+      setScope("workspace");
       setWorkspaceId(created.id);
       setWorkspaceForm({ name: "", slug: "", path: "" });
       setModal(undefined);
@@ -3031,7 +3130,9 @@ export function WorkspaceApp({
    * a workspace start as a line typed fast, and a modal is a reason not to.
    */
   async function quickCaptureTask(title: string): Promise<boolean> {
-    if (!workspace) return false;
+    // A task belongs to one workspace, and the board hides the capture line
+    // while every workspace is showing; this is the guard behind it.
+    if (!workspace || showingAll) return false;
     const created = await perform(
       client.request.taskCreate({ workspace: workspace.id, title }),
     );
@@ -3040,7 +3141,7 @@ export function WorkspaceApp({
 
   async function createTask(event: React.FormEvent) {
     event.preventDefault();
-    if (!workspace) return;
+    if (!workspace || showingAll) return;
     const created = await perform(
       client.request.taskCreate({
         workspace: workspace.id,
@@ -3057,11 +3158,11 @@ export function WorkspaceApp({
 
   async function createSession(event: React.FormEvent) {
     event.preventDefault();
-    if (!workspace) return;
+    if (!sessionWorkspace) return;
     const isTerminal = sessionType === "terminal";
     const launch: SessionLaunchState = {
       key: crypto.randomUUID(),
-      workspaceId: workspace.id,
+      workspaceId: sessionWorkspace.id,
       taskId: sessionForm.taskId,
       name: sessionForm.name,
       tool: isTerminal ? "terminal" : (sessionType as "codex" | "claude"),
@@ -3080,13 +3181,13 @@ export function WorkspaceApp({
       if (rememberSessionModel && !isTerminal)
         await perform(
           client.request.workspaceUpdate({
-            reference: workspace.id,
+            reference: sessionWorkspace.id,
             defaultProvider: sessionType as BoardProvider,
             defaultModel: sessionModel || null,
           }),
         );
       const response = await client.request.agentSpawn({
-        workspace: workspace.id,
+        workspace: sessionWorkspace.id,
         taskId: launch.taskId,
         name: launch.name,
         terminal: isTerminal || undefined,
@@ -3683,7 +3784,10 @@ export function WorkspaceApp({
     const restored = await perform(
       client.request.workspaceRestore({ reference: item.id }),
     );
-    if (restored) setWorkspaceId(restored.id);
+    if (restored) {
+      setScope("workspace");
+      setWorkspaceId(restored.id);
+    }
   }
 
   async function createIntegratedTerminal(
@@ -3730,6 +3834,7 @@ export function WorkspaceApp({
   }
 
   function selectWorkspace(id: string) {
+    setScope("workspace");
     setWorkspaceId(id);
     setSelectedTaskId(undefined);
     setActiveSessionId(undefined);
@@ -3739,6 +3844,33 @@ export function WorkspaceApp({
     // not an intent to type into whatever is restored.
     clearSessionFocusRequest();
     setView(preferredWorkspaceView(rememberedWorkspaceView(id)));
+  }
+
+  /** The card above the workspaces: every workspace's board and sessions. */
+  function selectAllWorkspaces() {
+    setScope("all");
+    setSelectedTaskId(undefined);
+    setActiveSessionId(undefined);
+    clearSessionFocusRequest();
+    setView(
+      preferredScopeView(
+        "all",
+        rememberedWorkspaceView(ALL_WORKSPACES_SCOPE_KEY),
+      ),
+    );
+  }
+
+  /**
+   * Leaves the all-workspaces scope for one workspace and lands on a view of
+   * it. The scope effect restores that workspace's remembered view when the
+   * scope key changes, so the ref is moved first: this is a deliberate
+   * destination, not a return visit.
+   */
+  function enterWorkspace(id: string, nextView: WorkspaceView) {
+    setScope("workspace");
+    setWorkspaceId(id);
+    viewWorkspaceId.current = id;
+    setView(nextView);
   }
 
   // One repository with the working trees cut from it: the row the explorer
@@ -3980,6 +4112,68 @@ export function WorkspaceApp({
       })
     : undefined;
 
+  // The card above the workspaces (#35). Its roll-up is the workspace cards'
+  // summed: what a dispatcher wants to know before choosing where to look.
+  const everySession = (snapshot?.agents ?? []).filter(
+    (session) =>
+      !session.archivedAt &&
+      activeWorkspaces.some((item) => item.id === session.workspaceId),
+  );
+  const everyLiveCount = everySession.filter(sessionIsLive).length;
+  const everyAttentionCount = everySession.filter((session) =>
+    sessionNeedsAttention(statusViewFor(session)),
+  ).length;
+  const everySessionLabel = `${everySession.length} ${everySession.length === 1 ? "session" : "sessions"}`;
+  const allWorkspacesCard = activeWorkspaces.length > 0 && (
+    <div
+      className={`workspace-card all-workspaces-card ${showingAll ? "selected" : ""}`}
+    >
+      <button
+        aria-current={showingAll ? "true" : undefined}
+        aria-label={`All workspaces: ${everySessionLabel}, ${everyLiveCount} live, ${everyAttentionCount} need you`}
+        className="workspace-item"
+        onClick={selectAllWorkspaces}
+      >
+        <span aria-hidden="true" className="workspace-icon all-workspaces-icon">
+          <AllWorkspacesIcon />
+        </span>
+        <span className="workspace-card-content">
+          <strong className="workspace-card-name">
+            <span>All workspaces</span>
+            {everyAttentionCount > 0 && (
+              <span
+                className="workspace-attention-badge"
+                title={`${everyAttentionCount} ${everyAttentionCount === 1 ? "session needs" : "sessions need"} you`}
+              >
+                {everyAttentionCount}
+              </span>
+            )}
+          </strong>
+          <small>
+            {activeWorkspaces.length}{" "}
+            {activeWorkspaces.length === 1 ? "workspace" : "workspaces"}, every
+            task and session
+          </small>
+          <span className="workspace-session-insights">
+            <small
+              className={
+                everyAttentionCount > 0
+                  ? "workspace-insight-copy needs-attention"
+                  : "workspace-insight-copy"
+              }
+            >
+              {everyAttentionCount > 0
+                ? `${everyAttentionCount} need${everyAttentionCount === 1 ? "s" : ""} you`
+                : everySession.length > 0
+                  ? `${everyLiveCount} live · ${everySessionLabel}`
+                  : "No sessions"}
+            </small>
+          </span>
+        </span>
+      </button>
+    </div>
+  );
+
   const taskInspector = !selectedTask ? (
     <div className="empty large">
       <strong>Select a task</strong>
@@ -4061,6 +4255,7 @@ export function WorkspaceApp({
           }
           onOpenLink={openTerminalLink}
           onOpenSession={(session) => {
+            setWorkspaceId(session.workspaceId);
             openSession(session.id);
             setView("sessions");
           }}
@@ -4103,7 +4298,10 @@ export function WorkspaceApp({
         loading={taskTimelineLoading}
         onOpenJournal={(heading) => {
           setJournalTarget(heading);
-          setView("workspace");
+          // The journal is a file of the task's workspace, and the Workspace
+          // view shows one workspace's files.
+          if (showingAll) enterWorkspace(selectedTask.workspaceId, "workspace");
+          else setView("workspace");
         }}
         timeline={
           taskTimeline?.taskId === selectedTask.id ? taskTimeline : undefined
@@ -4286,8 +4484,11 @@ export function WorkspaceApp({
           <button
             aria-current={view === "workspace" ? "page" : undefined}
             className={view === "workspace" ? "active" : ""}
-            disabled={!workspace}
+            disabled={!workspace || showingAll}
             onClick={() => setView("workspace")}
+            title={
+              showingAll ? "Pick a workspace to browse its files" : undefined
+            }
           >
             Workspace
           </button>
@@ -4340,6 +4541,7 @@ export function WorkspaceApp({
                   <span>Use New to create one.</span>
                 </div>
               )}
+            {allWorkspacesCard}
             {orderedWorkspaces.map((item) => {
               const itemSessions = (snapshot?.agents ?? []).filter(
                 (session) =>
@@ -4362,7 +4564,7 @@ export function WorkspaceApp({
 
               return (
                 <div
-                  className={`workspace-card ${item.id === workspaceId ? "selected" : ""}`}
+                  className={`workspace-card ${!showingAll && item.id === workspaceId ? "selected" : ""}`}
                   data-dragging={
                     workspaceReorder.draggingId === item.id ? "true" : undefined
                   }
@@ -4533,9 +4735,15 @@ export function WorkspaceApp({
           <div className="workspace-main-header">
             <div>
               <span className="eyebrow">
-                {workspace?.slug ?? "Select a workspace"}
+                {showingAll && workspace
+                  ? `${activeWorkspaces.length} ${activeWorkspaces.length === 1 ? "workspace" : "workspaces"}`
+                  : (workspace?.slug ?? "Select a workspace")}
               </span>
-              <h1>{workspace?.name ?? "Workspace"}</h1>
+              <h1>
+                {showingAll && workspace
+                  ? "All workspaces"
+                  : (workspace?.name ?? "Workspace")}
+              </h1>
             </div>
           </div>
           {!workspace ? (
@@ -4951,6 +5159,10 @@ export function WorkspaceApp({
               onNeedModels={ensureModelCatalog}
               onOpenLink={openTerminalLink}
               onOpenSession={(session) => {
+                // The Sessions view lists this scope's sessions, so the
+                // scope stays; the workspace underneath follows the session
+                // so the terminal heading and the content loaders agree.
+                setWorkspaceId(session.workspaceId);
                 openSession(session.id);
                 setView("sessions");
               }}
@@ -4981,7 +5193,8 @@ export function WorkspaceApp({
               tasks={allTasks}
               telemetry={telemetryById}
               tmuxAvailable={Boolean(snapshot?.settings.tmuxAvailable)}
-              workspace={workspace}
+              workspace={showingAll ? undefined : workspace}
+              workspaces={activeWorkspaces}
               worktrees={workspaceWorktrees}
             />
           ) : (
@@ -5016,9 +5229,14 @@ export function WorkspaceApp({
                 </div>
                 <div className="panel-heading-actions">
                   <CreateButton
-                    disabled={!snapshot?.settings.tmuxAvailable}
+                    disabled={!snapshot?.settings.tmuxAvailable || showingAll}
                     label="Create session"
                     onClick={() => openSessionModal()}
+                    title={
+                      showingAll
+                        ? "Pick a workspace to start a session in, or Start a task from the board"
+                        : undefined
+                    }
                   />
                   <PanelCollapseButton
                     collapsed={sessionsPanelWidth < PANEL_COMPACT_THRESHOLD}
@@ -5139,7 +5357,16 @@ export function WorkspaceApp({
                         </span>
                         <span>
                           <strong>{sessionName(session)}</strong>
-                          <small>{task?.title ?? "Workspace session"}</small>
+                          <small>
+                            {showingAll && (
+                              <span className="session-card-workspace">
+                                {workspaceById.get(session.workspaceId)?.slug ??
+                                  session.workspaceId}
+                                {" · "}
+                              </span>
+                            )}
+                            {task?.title ?? "Workspace session"}
+                          </small>
                           <em>
                             <AgentStatusDot
                               count={view.reasons.length}
@@ -5258,41 +5485,44 @@ export function WorkspaceApp({
           )}
         </section>
 
-        {workspace && (view === "board" || view === "sessions") && (
-          <div
-            aria-label={`Resize ${view === "board" ? "task inspector" : "sessions"} panel`}
-            aria-orientation="vertical"
-            aria-valuemax={720}
-            aria-valuemin={PANEL_RAIL_WIDTH}
-            aria-valuenow={
-              view === "board" ? boardDetailPanelWidth : sessionsPanelWidth
-            }
-            className="column-resize-handle secondary-panel-resize-handle"
-            onDoubleClick={
-              view === "board" ? toggleBoardDetailPanel : toggleSessionsPanel
-            }
-            onKeyDown={(event) => {
-              if (event.key !== "ArrowLeft" && event.key !== "ArrowRight")
-                return;
-              event.preventDefault();
-              const movement =
-                event.key === "ArrowRight" ? PANEL_STEP : -PANEL_STEP;
-              if (view === "board")
-                setBoardDetailPanelWidth((width) =>
-                  clampPanelSize(width - movement, 720),
-                );
-              else
-                setSessionsPanelWidth((width) =>
-                  clampPanelSize(width + movement, 720),
-                );
-            }}
-            onPointerDown={(event) => startColumnResize(event, "secondary")}
-            role="separator"
-            tabIndex={0}
-          />
-        )}
+        {workspace &&
+          (view === "sessions" || (view === "board" && !showingAll)) && (
+            <div
+              aria-label={`Resize ${view === "board" ? "task inspector" : "sessions"} panel`}
+              aria-orientation="vertical"
+              aria-valuemax={720}
+              aria-valuemin={PANEL_RAIL_WIDTH}
+              aria-valuenow={
+                view === "board" ? boardDetailPanelWidth : sessionsPanelWidth
+              }
+              className="column-resize-handle secondary-panel-resize-handle"
+              onDoubleClick={
+                view === "board" ? toggleBoardDetailPanel : toggleSessionsPanel
+              }
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight")
+                  return;
+                event.preventDefault();
+                const movement =
+                  event.key === "ArrowRight" ? PANEL_STEP : -PANEL_STEP;
+                if (view === "board")
+                  setBoardDetailPanelWidth((width) =>
+                    clampPanelSize(width - movement, 720),
+                  );
+                else
+                  setSessionsPanelWidth((width) =>
+                    clampPanelSize(width + movement, 720),
+                  );
+              }}
+              onPointerDown={(event) => startColumnResize(event, "secondary")}
+              role="separator"
+              tabIndex={0}
+            />
+          )}
 
-        {view === "board" && workspace && (
+        {/* The column is one workspace's repositories, so with every
+            workspace showing there is none; the board takes the width. */}
+        {view === "board" && workspace && !showingAll && (
           <aside
             className={`board-detail-column ${boardDetailPanelWidth < PANEL_COMPACT_THRESHOLD ? "panel-compact" : ""}`}
           >
@@ -5387,7 +5617,11 @@ export function WorkspaceApp({
                 id={activeSession.id}
                 key={`${activeSession.id}:${terminalMountRevision}`}
                 label={sessionName(activeSession)}
-                locationLabel={activeSessionRepository?.name ?? workspace.name}
+                locationLabel={
+                  activeSessionRepository?.name ??
+                  activeSessionWorkspace?.name ??
+                  workspace.name
+                }
                 onClearAttention={() => void clearAttention(activeSession.id)}
                 onFocused={clearSessionFocusRequest}
                 onOpenLink={openTerminalLink}
@@ -5895,7 +6129,7 @@ export function WorkspaceApp({
         </Modal>
       )}
 
-      {modal === "session" && workspace && snapshot && (
+      {modal === "session" && sessionWorkspace && snapshot && (
         <Modal dismissible onClose={closeSessionModal} title="Create session">
           <form className="modal-form" onSubmit={createSession}>
             <label>
@@ -6045,11 +6279,11 @@ export function WorkspaceApp({
             )}
             <div className="session-workspace-note">
               <span className="workspace-icon">
-                {workspace.name.slice(0, 1).toUpperCase()}
+                {sessionWorkspace.name.slice(0, 1).toUpperCase()}
               </span>
               <span>
-                <strong>{workspace.name}</strong>
-                <small>Opens in {workspace.path}</small>
+                <strong>{sessionWorkspace.name}</strong>
+                <small>Opens in {sessionWorkspace.path}</small>
               </span>
             </div>
             <div className="modal-actions">
