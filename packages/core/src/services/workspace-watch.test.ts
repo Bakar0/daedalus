@@ -9,17 +9,40 @@ import {
 } from "./workspace-watch";
 
 /**
- * Asserting that something was published waits for it, not for a duration.
+ * Writes a file and waits for the change to be published, writing it again
+ * every half second until it is.
  *
- * A fixed wait failed about one run in five on a loaded machine: the 150ms
- * debounce plus a classification round trip is usually well inside it and
- * occasionally is not, which is a flake rather than a finding.
+ * The rewrite is what fixes the flake; a longer wait would not. `fs.watch`
+ * returns before macOS's FSEvents stream is live, so a write made in the
+ * first moments after watching can be dropped outright. Probed under load, 3
+ * writes in 40 never arrived within 8 seconds, while a second write to the
+ * same file arrived in about 150ms. The retry keeps the change an addition:
+ * classification is by birth time, and the file was still born after the
+ * watch started.
+ *
+ * It gives up at 4 seconds, inside bun's 5 second test timeout, so a watcher
+ * that really is broken fails here with the path rather than as a timeout.
  */
-const until = async (ready: () => boolean) => {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (ready()) return;
+const writeUntilPublished = async (
+  workspacePath: string,
+  path: string,
+  published: WorkspaceFilesChanged[],
+) => {
+  const seen = () =>
+    published.some((batch) =>
+      batch.changes.some((change) => change.path === path),
+    );
+  const deadline = Date.now() + 4_000;
+  let rewriteAt = 0;
+  while (Date.now() < deadline) {
+    if (Date.now() >= rewriteAt) {
+      await writeFile(join(workspacePath, path), "hello");
+      rewriteAt = Date.now() + 500;
+    }
+    if (seen()) return;
     await new Promise((done) => setTimeout(done, 50));
   }
+  if (!seen()) throw new Error(`No change to ${path} was published`);
 };
 
 /**
@@ -64,12 +87,7 @@ describe("WorkspaceWatchService", () => {
     await withWatchedWorkspace(
       async ({ context, workspaceId, workspacePath, published }) => {
         await context.workspaceWatch.watchOnly([workspaceId]);
-        await writeFile(join(workspacePath, "note.md"), "hello");
-        await until(() =>
-          published.some((batch) =>
-            batch.changes.some((change) => change.path === "note.md"),
-          ),
-        );
+        await writeUntilPublished(workspacePath, "note.md", published);
         const changes = published.flatMap((batch) => batch.changes);
         expect(
           published.every((batch) => batch.workspaceId === workspaceId),
@@ -138,12 +156,7 @@ describe("WorkspaceWatchService", () => {
         // Something visible, written last, so there is an event to wait for
         // rather than a duration to hope is long enough — and the ignored
         // paths have had at least as long to arrive as this one did.
-        await writeFile(join(workspacePath, "visible.md"), "x");
-        await until(() =>
-          published.some((batch) =>
-            batch.changes.some((change) => change.path === "visible.md"),
-          ),
-        );
+        await writeUntilPublished(workspacePath, "visible.md", published);
         await quietFor();
         const paths = published
           .flatMap((batch) => batch.changes)

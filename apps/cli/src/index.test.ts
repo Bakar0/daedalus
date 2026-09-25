@@ -690,6 +690,9 @@ describe("daedal CLI contract", () => {
     });
   });
 
+  // Six CLI processes and the Git work behind them. About 0.7s alone, and past
+  // bun's 5s default on a loaded runner, so it carries its own budget rather
+  // than raising the default for every test.
   test("adds, attaches, syncs, and detaches repository library entries", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const source = join(home, "source");
@@ -743,7 +746,7 @@ describe("daedal CLI contract", () => {
         (await cli(home, ["repo", "detach", attachment.id, "--json"])).exitCode,
       ).toBe(0);
     });
-  });
+  }, 30_000);
   test("manages skills globally, and holds the documented exit codes", async () => {
     await withTemporaryDaedalusHome(async (root) => {
       const home = join(root, "daedalus");
