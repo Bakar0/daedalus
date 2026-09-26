@@ -141,6 +141,49 @@ describe("CommandTmuxClient", () => {
     );
   });
 
+  test("starts a session from a client carrying the session's PATH", async () => {
+    // tmux hands the new command its client's PATH and ignores `-e PATH=`, so
+    // the PATH has to travel on the client or the agent never sees it.
+    const command = vi.fn(
+      async (
+        _executable: string,
+        _args: string[],
+        _options?: { env?: Record<string, string | undefined> },
+      ) => ({ exitCode: 0, stdout: "", stderr: "" }),
+    );
+    const tmux = new CommandTmuxClient("isolated", "tmux", command, undefined, {
+      PATH: "/usr/bin:/bin",
+      HOME: "/Users/someone",
+    });
+    await tmux.createSession({
+      session: "daedalus_path",
+      cwd: "/tmp",
+      executable: "agent",
+      args: [],
+      env: { PATH: "/home/bin:/opt/homebrew/bin:/usr/bin:/bin" },
+    });
+    const created = command.mock.calls.find(([, args]) =>
+      args.includes("new-session"),
+    );
+    expect(created?.[2]?.env).toMatchObject({
+      PATH: "/home/bin:/opt/homebrew/bin:/usr/bin:/bin",
+      HOME: "/Users/someone",
+    });
+
+    // A session that names no PATH keeps the client's own.
+    command.mockClear();
+    await tmux.createSession({
+      session: "daedalus_plain",
+      cwd: "/tmp",
+      executable: "shell",
+      args: [],
+    });
+    expect(
+      command.mock.calls.find(([, args]) => args.includes("new-session"))?.[2]
+        ?.env,
+    ).toMatchObject({ PATH: "/usr/bin:/bin" });
+  });
+
   test("passes executable, arguments, environment, cwd, and input as distinct argv", async () => {
     const command = vi.fn(async () => ({
       exitCode: 0,

@@ -160,12 +160,15 @@ export class CommandTmuxClient implements TmuxClient {
 
   private run(
     args: string[],
-    options: Omit<CommandOptions, "env" | "replaceEnvironment"> = {},
+    options: Omit<CommandOptions, "env" | "replaceEnvironment"> & {
+      /** Overlaid on the clean environment for this one command. */
+      env?: Record<string, string>;
+    } = {},
   ): Promise<CommandResult> {
     return this.command(this.executable, this.args(...args), {
       timeoutMs: TMUX_COMMAND_TIMEOUT_MS,
       ...options,
-      env: this.environment,
+      env: { ...this.environment, ...options.env },
       replaceEnvironment: true,
     });
   }
@@ -240,10 +243,16 @@ export class CommandTmuxClient implements TmuxClient {
       launch.executable,
       ...launch.args,
     ];
-    const result = await this.run(
-      args,
-      this.serverWorkingDirectory ? { cwd: this.serverWorkingDirectory } : {},
-    );
+    // tmux gives a new session's command the PATH of the client that asked
+    // for it, not the `-e PATH=` above: measured on tmux 3.7c, a client with
+    // PATH=/a and `-e PATH=/b` starts a command that sees /a. So the client
+    // itself carries the session's PATH, or the command gets this process's.
+    const result = await this.run(args, {
+      ...(this.serverWorkingDirectory
+        ? { cwd: this.serverWorkingDirectory }
+        : {}),
+      ...(launch.env?.PATH ? { env: { PATH: launch.env.PATH } } : {}),
+    });
     if (result.exitCode !== 0)
       throw new Error(result.stderr.trim() || "tmux session creation failed");
   }
