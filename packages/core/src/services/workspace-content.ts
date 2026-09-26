@@ -42,6 +42,7 @@ import type {
   WorkspaceFile,
   WorkspaceFileEntry,
   WorkspaceRepository,
+  RepositoryFetchOutcome,
   RepositoryLibraryEntry,
 } from "../domain";
 import {
@@ -838,18 +839,35 @@ async function gitStatusAt(
   // The size of the diff a reviewer would read. Three-dot, so work that
   // landed on the base branch since this tree branched is not counted as its.
   let filesAhead: number | undefined;
+  let unpushed: number | undefined;
   if (ahead > 0) {
-    const diff = await runCommand(git, [
-      "--no-optional-locks",
-      "-C",
-      path,
-      "diff",
-      "--name-only",
-      "-z",
-      `refs/remotes/origin/${baseBranch}...HEAD`,
+    // "Ahead" says how far the agent moved from the base branch, which stays
+    // true after a push and after a merge. What is waiting to be pushed is
+    // the commits no branch on `origin` holds.
+    const [diff, local] = await Promise.all([
+      runCommand(git, [
+        "--no-optional-locks",
+        "-C",
+        path,
+        "diff",
+        "--name-only",
+        "-z",
+        `refs/remotes/origin/${baseBranch}...HEAD`,
+      ]),
+      runCommand(git, [
+        "-C",
+        path,
+        "rev-list",
+        "--count",
+        "HEAD",
+        "--not",
+        "--remotes=origin",
+      ]),
     ]);
     if (diff.exitCode === 0)
       filesAhead = diff.stdout.split("\0").filter(Boolean).length;
+    if (local.exitCode === 0)
+      unpushed = Number.parseInt(local.stdout.trim(), 10) || 0;
   }
   const state = changedFiles
     ? ("modified" as const)
@@ -866,6 +884,7 @@ async function gitStatusAt(
     ahead,
     behind,
     ...(filesAhead === undefined ? {} : { filesAhead }),
+    ...(unpushed === undefined ? {} : { unpushed }),
   };
 }
 
@@ -962,7 +981,15 @@ export class WorkspaceContentService {
    */
   private readonly pullRequestCache = new Map<
     string,
-    { checkedAt: number; value?: PullRequestRef }
+    {
+      checkedAt: number;
+      value?: PullRequestRef;
+      /**
+       * The HEAD a merged pull request was found to hold. Merged is final, so
+       * while HEAD stays put there is nothing more to ask `gh`.
+       */
+      landedHead?: string;
+    }
   >();
   private statusRefresh?: Promise<void>;
   /**
@@ -1032,10 +1059,7 @@ export class WorkspaceContentService {
           : undefined;
         return { ...repository, ...(status ? { gitStatus: status } : {}) };
       }),
-      worktrees: worktrees.map((worktree) => {
-        const status = this.gitStatusCache.get(statusKey(worktree.path));
-        return { ...worktree, ...(status ? { gitStatus: status } : {}) };
-      }),
+      worktrees: worktrees.map((worktree) => this.withMeasurements(worktree)),
     };
     // Scheduled after the answer is built, not before. Starting it first let
     // this call race a refresh it had started itself: the three file reads
@@ -1058,16 +1082,20 @@ export class WorkspaceContentService {
   listWorktrees(): SessionWorktree[] {
     const worktrees = this.repositories.listSessionWorktrees({});
     this.scheduleGitStatusRefresh(null);
-    return worktrees.map((worktree) => {
-      const key = statusKey(worktree.path);
-      const status = this.gitStatusCache.get(key);
-      const pullRequest = this.pullRequestCache.get(key)?.value;
-      return {
-        ...worktree,
-        ...(status ? { gitStatus: status } : {}),
-        ...(pullRequest ? { pullRequest } : {}),
-      };
-    });
+    return worktrees.map((worktree) => this.withMeasurements(worktree));
+  }
+
+  /** A worktree with whatever status and pull request the cache holds. */
+  private withMeasurements(worktree: SessionWorktree): SessionWorktree {
+    const key = statusKey(worktree.path);
+    const status = this.gitStatusCache.get(key);
+    const cached = this.pullRequestCache.get(key);
+    return {
+      ...worktree,
+      ...(status ? { gitStatus: status } : {}),
+      ...(cached?.value ? { pullRequest: cached.value } : {}),
+      ...(cached?.landedHead ? { landed: true } : {}),
+    };
   }
 
   /**
@@ -1170,12 +1198,16 @@ export class WorkspaceContentService {
         // request for, so it costs no `gh` call. One that had a link keeps
         // being checked, so a closed or merged state still arrives. It is
         // asked about by the name it publishes under, which is the name its
-        // pull request carries.
+        // pull request carries. Commits that exist only here are asked about
+        // whatever the task's state: after a squash merge that is what a
+        // landed branch looks like, and only the pull request can tell the
+        // two apart.
         if (
           git &&
           current &&
-          target.wantsPullRequest &&
-          (status.ahead > 0 || this.pullRequestCache.get(key)?.value) &&
+          ((target.wantsPullRequest &&
+            (status.ahead > 0 || this.pullRequestCache.get(key)?.value)) ||
+            (status.unpushed ?? 0) > 0) &&
           (await this.refreshPullRequest(
             key,
             target.path,
@@ -1194,7 +1226,8 @@ export class WorkspaceContentService {
           previous.changedFiles === status.changedFiles &&
           previous.ahead === status.ahead &&
           previous.behind === status.behind &&
-          previous.filesAhead === status.filesAhead
+          previous.filesAhead === status.filesAhead &&
+          previous.unpushed === status.unpushed
         )
           return;
         this.gitStatusCache.set(key, status);
@@ -1234,27 +1267,43 @@ export class WorkspaceContentService {
     branchName: string,
   ): Promise<boolean> {
     const cached = this.pullRequestCache.get(key);
+    const git = findExecutable("git");
+    const head = git
+      ? (await runCommand(git, ["-C", path, "rev-parse", "HEAD"])).stdout.trim()
+      : "";
+    if (cached?.landedHead && cached.landedHead === head) return false;
     if (cached && Date.now() - cached.checkedAt < PULL_REQUEST_REFRESH_MS)
       return false;
     const gh = findExecutable("gh", GH_EXECUTABLE_FALLBACKS);
     if (!gh || !(await pathExists(path))) {
       this.pullRequestCache.set(key, { checkedAt: Date.now() });
-      return cached?.value !== undefined;
+      return cached?.value !== undefined || cached?.landedHead !== undefined;
     }
     const response = await runCommand(
       gh,
-      ["pr", "view", branchName, "--json", "number,url,state,isDraft"],
+      [
+        "pr",
+        "view",
+        branchName,
+        "--json",
+        "number,url,state,isDraft,headRefOid",
+      ],
       { cwd: path, env: { GH_PROMPT_DISABLED: "1" } },
     ).catch(() => undefined);
-    const value =
-      response && response.exitCode === 0
-        ? parsePullRequestView(response.stdout)
-        : undefined;
+    const answered = response && response.exitCode === 0;
+    const value = answered ? parsePullRequestView(response.stdout) : undefined;
+    const landed =
+      Boolean(git && head && value?.state === "MERGED") &&
+      (await pullRequestAnswerHoldsHead(git!, path, response!.stdout));
     this.pullRequestCache.set(key, {
       checkedAt: Date.now(),
       ...(value ? { value } : {}),
+      ...(landed ? { landedHead: head } : {}),
     });
-    return !samePullRequest(cached?.value, value);
+    return (
+      !samePullRequest(cached?.value, value) ||
+      Boolean(cached?.landedHead) !== landed
+    );
   }
 
   async setInstructionFilesEnabled(enabled: boolean): Promise<void> {
@@ -1642,6 +1691,91 @@ export class WorkspaceContentService {
     };
     this.repositories.updateWorkspaceRepository(updated);
     return this.measureAndCache(updated);
+  }
+
+  /**
+   * Fetches the workspace's repositories (all of them, or the ones named) at
+   * once, and reports what each checkout took: the commits it moved forward
+   * by, or why it stayed behind. A repository that fails to fetch reports
+   * its error without stopping the others.
+   */
+  async fetchRepositories(input: {
+    workspace: string;
+    ids?: string[];
+  }): Promise<RepositoryFetchOutcome[]> {
+    const workspace = await this.workspaces.get(input.workspace);
+    const wanted = input.ids ? new Set(input.ids) : undefined;
+    const repositories = this.repositories
+      .listWorkspaceRepositories(workspace.id)
+      .filter(
+        (item) =>
+          item.status === "ready" &&
+          item.libraryRepositoryId &&
+          (!wanted || wanted.has(item.id)),
+      );
+    const git = findExecutable("git");
+    const headOf = async (path: string | null) => {
+      if (!git || !path) return null;
+      const result = await runCommand(git, ["-C", path, "rev-parse", "HEAD"]);
+      return result.exitCode === 0 ? result.stdout.trim() || null : null;
+    };
+    return Promise.all(
+      repositories.map(async (repository) => {
+        const from = await headOf(repository.referencePath);
+        const outcome: RepositoryFetchOutcome = {
+          repositoryId: repository.id,
+          name: repository.name,
+          from,
+          to: from,
+          newCommits: 0,
+          commits: [],
+          behind: 0,
+        };
+        let fetched: WorkspaceRepository;
+        try {
+          fetched = await this.fetchRepository(repository.id);
+        } catch (error) {
+          return { ...outcome, error: normalizeError(error).message };
+        }
+        const to = await headOf(repository.referencePath);
+        outcome.to = to;
+        outcome.behind = fetched.gitStatus?.behind ?? 0;
+        if (outcome.behind > 0)
+          outcome.heldBack =
+            (fetched.gitStatus?.changedFiles ?? 0) > 0
+              ? "local-changes"
+              : "diverged";
+        if (git && from && to && from !== to && repository.referencePath) {
+          const [count, log] = await Promise.all([
+            runCommand(git, [
+              "-C",
+              repository.referencePath,
+              "rev-list",
+              "--count",
+              `${from}..${to}`,
+            ]),
+            runCommand(git, [
+              "-C",
+              repository.referencePath,
+              "log",
+              "-n",
+              "20",
+              "--format=%H%x00%s",
+              `${from}..${to}`,
+            ]),
+          ]);
+          outcome.newCommits = Number.parseInt(count.stdout.trim(), 10) || 0;
+          outcome.commits = log.stdout
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => {
+              const [hash = "", subject = ""] = line.split("\0");
+              return { hash, subject };
+            });
+        }
+        return outcome;
+      }),
+    );
   }
 
   // Pushing publishes an agent's branch, so it is never implicit: nothing in

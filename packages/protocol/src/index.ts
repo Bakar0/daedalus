@@ -148,6 +148,22 @@ export interface GitStatusDto {
   behind: number;
   /** Files the commits ahead of base touch; present only when `ahead > 0`. */
   filesAhead?: number;
+  /** Commits no branch on `origin` holds; present only when `ahead > 0`. */
+  unpushed?: number;
+}
+
+/** What one fetch did to one workspace checkout. */
+export interface RepositoryFetchOutcomeDto {
+  repositoryId: string;
+  name: string;
+  from: string | null;
+  to: string | null;
+  newCommits: number;
+  /** At most 20, newest first. */
+  commits: Array<{ hash: string; subject: string }>;
+  behind: number;
+  heldBack?: "local-changes" | "diverged";
+  error?: string;
 }
 
 /** A link `gh` found for a branch. Visibility only; nothing merges from it. */
@@ -167,6 +183,8 @@ export interface SessionWorktreeDto {
   gitStatus?: GitStatusDto;
   /** Absent when `gh` is missing, signed out, or found nothing. */
   pullRequest?: PullRequestRefDto;
+  /** The merged pull request holds this tree's HEAD: nothing here to push. */
+  landed?: boolean;
 }
 
 export interface WorkspaceContentDto {
@@ -684,8 +702,16 @@ export interface DesktopRpcSchema {
         WorkspaceRepositoryDto
       >;
       workspaceRepositorySync: Request<{ id: string }, WorkspaceRepositoryDto>;
-      /** Updates the shared clone only; no working tree is touched. */
+      /** Fetches, and moves the workspace checkout to the fetched tip. */
       workspaceRepositoryFetch: Request<{ id: string }, WorkspaceRepositoryDto>;
+      /**
+       * Fetches every repository in a workspace, or the ones named, and says
+       * what each checkout took.
+       */
+      workspaceRepositoriesFetch: Request<
+        { workspace: string; ids?: string[] },
+        RepositoryFetchOutcomeDto[]
+      >;
       /**
        * Removing a working tree destroys whatever is only in it, so without
        * `force` it succeeds only when nothing can be lost.

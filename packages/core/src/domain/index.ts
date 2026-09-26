@@ -147,12 +147,37 @@ export interface GitStatus {
    * the diff a reviewer would read. Measured only when `ahead` is non-zero.
    */
   filesAhead?: number;
+  /**
+   * Commits here that no branch on `origin` holds: work that exists only on
+   * this machine. Measured only when `ahead` is non-zero. A pushed branch has
+   * none, however far ahead of the base branch it is.
+   */
+  unpushed?: number;
 }
 
 /**
  * A pull request `gh` found for a worktree's branch. Visibility only: nothing
  * in Daedalus reviews or merges from it.
  */
+/** What one fetch did to one workspace checkout. */
+export interface RepositoryFetchOutcome {
+  repositoryId: UUID;
+  name: string;
+  /** The checkout's commit before the fetch and after it. */
+  from: string | null;
+  to: string | null;
+  /** How many commits the checkout moved forward by. */
+  newCommits: number;
+  /** The newest of those, at most 20, newest first. */
+  commits: Array<{ hash: string; subject: string }>;
+  /** Commits the remote has that the checkout did not take, when it stayed. */
+  behind: number;
+  /** Why it stayed behind: its own changes, or history that diverged. */
+  heldBack?: "local-changes" | "diverged";
+  /** The fetch itself failed, for instance offline. */
+  error?: string;
+}
+
 export interface PullRequestRef {
   number: number;
   url: string;
@@ -190,6 +215,12 @@ export interface SessionWorktree {
   gitStatus?: GitStatus;
   /** Absent when `gh` is missing, signed out, or found nothing. */
   pullRequest?: PullRequestRef;
+  /**
+   * The branch's pull request is merged and its head holds this tree's HEAD,
+   * so the work is on the base branch even when a squash merge left none of
+   * these commits there.
+   */
+  landed?: boolean;
 }
 
 export interface WorkspaceFileEntry {

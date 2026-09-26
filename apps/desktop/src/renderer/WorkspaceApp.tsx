@@ -27,6 +27,7 @@ import type {
   DesktopCommand,
   DesktopSnapshotDto,
   GitStatusDto,
+  RepositoryFetchOutcomeDto,
   IntegratedTerminalDto,
   ProviderModelCatalogDto,
   SessionTelemetryDto,
@@ -579,25 +580,100 @@ function repositoryStatusText(
   return "Clean";
 }
 
-// The diff shape, in the order it reads: what is uncommitted here, then how
-// far this tree has moved from the branch it started on.
-function gitStatusParts(status: GitStatusDto | undefined) {
+// What a working tree holds, in the order it reads: what is uncommitted here,
+// then whether its commits still need anything. "↑" counts only commits no
+// branch on origin has, which is what is waiting to be pushed. Counting every
+// commit ahead of the base branch showed work that was pushed and merged
+// long ago as if it were still to push.
+export function gitStatusParts(
+  status: GitStatusDto | undefined,
+  landed = false,
+) {
   if (!status || status.state === "unavailable") return [];
-  const parts: Array<{ key: string; tone: string; text: string }> = [];
+  const parts: Array<{
+    key: string;
+    tone: string;
+    text: string;
+    title?: string;
+  }> = [];
   if (status.changedFiles)
     parts.push({
       key: "changed",
       tone: "modified",
       text: `~${status.changedFiles}`,
+      title: `${status.changedFiles} uncommitted ${status.changedFiles === 1 ? "change" : "changes"}`,
     });
-  if (status.ahead)
-    parts.push({ key: "ahead", tone: "ahead", text: `↑${status.ahead}` });
-  if (status.behind)
-    parts.push({ key: "behind", tone: "behind", text: `↓${status.behind}` });
+  const unpushed = status.unpushed ?? status.ahead;
+  if (landed)
+    parts.push({
+      key: "merged",
+      tone: "merged",
+      text: "merged",
+      title:
+        "Its pull request is merged, so these commits are on the base branch",
+    });
+  else if (unpushed > 0)
+    parts.push({
+      key: "ahead",
+      tone: "ahead",
+      text: `↑${unpushed}`,
+      title: `${unpushed} ${unpushed === 1 ? "commit" : "commits"} not on origin yet`,
+    });
+  else if (status.ahead > 0)
+    parts.push({
+      key: "pushed",
+      tone: "clean",
+      text: "pushed",
+      title: `${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} ahead of the base branch, all on origin`,
+    });
+  if (status.behind && !landed)
+    parts.push({
+      key: "behind",
+      tone: "behind",
+      text: `↓${status.behind}`,
+      title: `${status.behind} ${status.behind === 1 ? "commit" : "commits"} on the base branch since this tree branched`,
+    });
   if (parts.length === 0)
     parts.push({ key: "clean", tone: "clean", text: "clean" });
   return parts;
 }
+
+/**
+ * What the last fetch did to a checkout, in a few words, with the commits it
+ * brought in for the tooltip.
+ */
+export function fetchOutcomeNote(outcome: RepositoryFetchOutcomeDto): {
+  tone: string;
+  text: string;
+  title: string;
+} {
+  if (outcome.error)
+    return { tone: "error", text: "fetch failed", title: outcome.error };
+  if (outcome.newCommits > 0) {
+    const listed = outcome.commits
+      .map((commit) => `${commit.hash.slice(0, 7)} ${commit.subject}`)
+      .join("\n");
+    const more = outcome.newCommits - outcome.commits.length;
+    return {
+      tone: "new",
+      text: `+${outcome.newCommits} new`,
+      title: more > 0 ? `${listed}\n…and ${more} more` : listed,
+    };
+  }
+  if (outcome.heldBack)
+    return {
+      tone: "held",
+      text: "not moved",
+      title:
+        outcome.heldBack === "local-changes"
+          ? `${outcome.behind} new on origin; this checkout has local changes, so it stayed`
+          : `${outcome.behind} new on origin; this checkout has diverged, so it stayed`,
+    };
+  return { tone: "none", text: "up to date", title: "Nothing new on origin" };
+}
+
+/** How long a row keeps saying what its last fetch did. */
+const FETCH_OUTCOME_VISIBLE_MS = 120_000;
 
 const sessionNeedsAttention = (view: SessionStatusView) => view.attention;
 
@@ -1735,6 +1811,11 @@ export function WorkspaceApp({
   const [pendingRepositoryActions, setPendingRepositoryActions] = useState<
     ReadonlySet<string>
   >(() => new Set());
+  // What each checkout's last fetch did, shown on its row for a while so a
+  // fetch that brought something in says so, and what.
+  const [fetchOutcomes, setFetchOutcomes] = useState<
+    Readonly<Record<string, RepositoryFetchOutcomeDto>>
+  >({});
   const [journalForm, setJournalForm] = useState<{
     kind:
       | "decision"
@@ -3265,16 +3346,18 @@ export function WorkspaceApp({
 
   // Fetch, pull and push are the same shape: run one request, then re-read the
   // workspace so every status in the tree reflects what just happened.
-  async function runRepositoryAction(
+  async function runRepositoryAction<T>(
     key: string,
-    request: () => Promise<RpcResult<unknown>>,
-  ) {
-    if (!workspace || pendingRepositoryActions.has(key)) return;
+    request: () => Promise<RpcResult<T>>,
+  ): Promise<T | undefined> {
+    if (!workspace || pendingRepositoryActions.has(key)) return undefined;
     setPendingRepositoryActions((current) => new Set(current).add(key));
     setError(undefined);
+    let data: T | undefined;
     try {
       const response = await request();
       if (!response.ok) throw new Error(response.error.message);
+      data = response.data;
       const content = await client.request.workspaceContentGet({
         workspace: workspace.id,
       });
@@ -3294,6 +3377,7 @@ export function WorkspaceApp({
         return next;
       });
     }
+    return data;
   }
 
   async function detachWorkspaceRepository(repositoryId: string) {
@@ -3302,9 +3386,34 @@ export function WorkspaceApp({
     );
   }
 
-  async function fetchWorkspaceRepository(repositoryId: string) {
-    await runRepositoryAction(`fetch:${repositoryId}`, () =>
-      client.request.workspaceRepositoryFetch({ id: repositoryId }),
+  // One repository, or every one in the workspace when `repositoryId` is
+  // absent. Each row then says what its checkout took.
+  async function fetchWorkspaceRepositories(repositoryId?: string) {
+    if (!workspace) return;
+    const outcomes = await runRepositoryAction(
+      repositoryId ? `fetch:${repositoryId}` : "fetch:all",
+      () =>
+        client.request.workspaceRepositoriesFetch({
+          workspace: workspace.id,
+          ...(repositoryId ? { ids: [repositoryId] } : {}),
+        }),
+    );
+    if (!outcomes) return;
+    setFetchOutcomes((current) => {
+      const next = { ...current };
+      for (const outcome of outcomes) next[outcome.repositoryId] = outcome;
+      return next;
+    });
+    window.setTimeout(
+      () =>
+        setFetchOutcomes((current) => {
+          const next = { ...current };
+          for (const outcome of outcomes)
+            if (next[outcome.repositoryId] === outcome)
+              delete next[outcome.repositoryId];
+          return next;
+        }),
+      FETCH_OUTCOME_VISIBLE_MS,
     );
   }
 
@@ -3896,6 +4005,21 @@ export function WorkspaceApp({
                   <i aria-hidden="true" />
                   {repositoryStatusText(repository.gitStatus)}
                 </span>
+                {fetchOutcomes[repository.id] &&
+                  (() => {
+                    const note = fetchOutcomeNote(
+                      fetchOutcomes[repository.id]!,
+                    );
+                    return (
+                      <span
+                        className={`repository-fetch-note tone-${note.tone}`}
+                        title={note.title}
+                      >
+                        {" · "}
+                        {note.text}
+                      </span>
+                    );
+                  })()}
               </small>
             )}
           </span>
@@ -3932,12 +4056,13 @@ export function WorkspaceApp({
             </button>
             <button
               aria-label={`Fetch ${repository.name}`}
-              className={`quiet repository-action ${pendingRepositoryActions.has(`fetch:${repository.id}`) ? "syncing" : ""}`}
+              className={`quiet repository-action ${pendingRepositoryActions.has(`fetch:${repository.id}`) || pendingRepositoryActions.has("fetch:all") ? "syncing" : ""}`}
               disabled={
                 repository.status !== "ready" ||
-                pendingRepositoryActions.has(`fetch:${repository.id}`)
+                pendingRepositoryActions.has(`fetch:${repository.id}`) ||
+                pendingRepositoryActions.has("fetch:all")
               }
-              onClick={() => void fetchWorkspaceRepository(repository.id)}
+              onClick={() => void fetchWorkspaceRepositories(repository.id)}
               title={`Fetch, and move this checkout to the latest ${repository.baseBranch ?? "default branch"}`}
               type="button"
             >
@@ -3969,14 +4094,17 @@ export function WorkspaceApp({
                     <small title={worktree.path}>{worktree.branchName}</small>
                   </span>
                   <span className="workspace-worktree-status">
-                    {gitStatusParts(worktree.gitStatus).map((part) => (
-                      <em
-                        className={`git-part tone-${part.tone}`}
-                        key={part.key}
-                      >
-                        {part.text}
-                      </em>
-                    ))}
+                    {gitStatusParts(worktree.gitStatus, worktree.landed).map(
+                      (part) => (
+                        <em
+                          className={`git-part tone-${part.tone}`}
+                          key={part.key}
+                          title={part.title}
+                        >
+                          {part.text}
+                        </em>
+                      ),
+                    )}
                   </span>
                   <button
                     aria-label={`Open ${worktree.branchName} in integrated terminal`}
@@ -5500,6 +5628,20 @@ export function WorkspaceApp({
                   </small>
                 )}
                 <button
+                  aria-label="Fetch all repositories"
+                  className={`quiet repository-action ${pendingRepositoryActions.has("fetch:all") ? "syncing" : ""}`}
+                  disabled={
+                    !workspaceContent?.repositories.some(
+                      (item) => item.status === "ready",
+                    ) || pendingRepositoryActions.has("fetch:all")
+                  }
+                  onClick={() => void fetchWorkspaceRepositories()}
+                  title="Fetch every repository, and move each checkout to the latest default branch"
+                  type="button"
+                >
+                  <RepositoryFetchIcon />
+                </button>
+                <button
                   aria-label="Add repository"
                   className="quiet"
                   onClick={() => openRepositoryModal()}
@@ -6288,7 +6430,11 @@ export function WorkspaceApp({
         (() => {
           const status = worktreeAction.worktree.gitStatus;
           const unsaved = status?.changedFiles ?? 0;
-          const unpushed = status?.ahead ?? 0;
+          // The same two facts the removal guard checks: a merged pull
+          // request holding HEAD means the commits are on the base branch.
+          const unpushed = worktreeAction.worktree.landed
+            ? 0
+            : (status?.unpushed ?? status?.ahead ?? 0);
           const holdsWork = unsaved > 0 || unpushed > 0;
           return (
             <Modal
