@@ -509,7 +509,89 @@ async function seedRemoteTrackingRefs(
       "DEPENDENCY",
       `Could not record the remote default branch: ${symbolic.stderr.trim() || symbolic.stdout.trim()}`,
     );
+  await dropClonedBranchCopies(git, gitDirectory, defaultBranch);
   return defaultBranch;
+}
+
+// `git clone --bare` copies every remote branch into `refs/heads/*`, and with
+// the remote-tracking refspec in place nothing ever moves those copies again.
+// Left alone, `main` falls behind `origin/main`, and `git checkout topic` in
+// any worktree gets the copy from the day of the clone rather than the
+// remote's branch, because git only creates a branch from `origin/topic`
+// when no local one of that name exists. Straight after the clone every copy
+// is on the remote and nothing has any of them checked out, so all but the
+// default branch go.
+async function dropClonedBranchCopies(
+  git: string,
+  gitDirectory: string,
+  defaultBranch: string,
+): Promise<void> {
+  const heads = await runCommand(git, [
+    "--git-dir",
+    gitDirectory,
+    "for-each-ref",
+    "--format=%(refname:lstrip=2)",
+    "refs/heads",
+  ]);
+  const copies = heads.stdout
+    .split("\n")
+    .filter((branch) => branch && branch !== defaultBranch);
+  // `git branch -D` also drops each branch's configuration. Batched, because
+  // a large repository has more names than one argument list should carry.
+  for (let start = 0; start < copies.length; start += 200)
+    await runCommand(git, [
+      "--git-dir",
+      gitDirectory,
+      "branch",
+      "-D",
+      ...copies.slice(start, start + 200),
+    ]);
+}
+
+// Moves the local default branch to the remote's after a fetch, so `main`
+// means what people and agents expect it to. It is created when missing, and
+// left alone while a working tree has it checked out (moving a branch under a
+// tree makes its files look changed) or when it has commits the remote lacks.
+async function fastForwardDefaultBranch(
+  git: string,
+  gitDirectory: string,
+  defaultBranch: string,
+): Promise<void> {
+  const run = (args: string[]) =>
+    runCommand(git, ["--git-dir", gitDirectory, ...args]);
+  const remote = await run([
+    "rev-parse",
+    "--verify",
+    "--quiet",
+    `refs/remotes/origin/${defaultBranch}^{commit}`,
+  ]);
+  const target = remote.stdout.trim();
+  if (remote.exitCode !== 0 || !target) return;
+  const local = await run([
+    "rev-parse",
+    "--verify",
+    "--quiet",
+    `refs/heads/${defaultBranch}^{commit}`,
+  ]);
+  const current = local.stdout.trim();
+  if (local.exitCode !== 0 || !current) {
+    await run([
+      "branch",
+      "--track",
+      defaultBranch,
+      `refs/remotes/origin/${defaultBranch}`,
+    ]);
+    return;
+  }
+  if (current === target) return;
+  const listed = await run(["worktree", "list", "--porcelain"]);
+  if (
+    listed.exitCode !== 0 ||
+    listed.stdout.split("\n").includes(`branch refs/heads/${defaultBranch}`) ||
+    (await run(["merge-base", "--is-ancestor", current, target])).exitCode !== 0
+  )
+    return;
+  await run(["update-ref", `refs/heads/${defaultBranch}`, target, current]);
 }
 
 // What a working tree is holding that exists nowhere else — the only thing
@@ -541,12 +623,21 @@ async function worktreeHeldWork(
   ]);
   if (status.exitCode !== 0)
     return { uncommittedFiles: 0, unreachableCommits: 0 };
+  const branch =
+    (await checkedOutBranch(git, worktree.path)) ?? worktree.branchName;
+  const published = await publishedBranchName(
+    git,
+    worktree.path,
+    branch,
+    repository.baseBranch,
+  );
   const elsewhere: string[] = [];
-  for (const reference of [
+  for (const reference of new Set([
     repository.baseBranch ? `refs/remotes/origin/${repository.baseBranch}` : "",
     repository.baseBranch ? `refs/heads/${repository.baseBranch}` : "",
-    `refs/remotes/origin/${worktree.branchName}`,
-  ]) {
+    `refs/remotes/origin/${branch}`,
+    published ? `refs/remotes/origin/${published}` : "",
+  ])) {
     if (!reference) continue;
     const resolved = await run(["rev-parse", "--verify", "--quiet", reference]);
     if (resolved.exitCode === 0) elsewhere.push(reference);
@@ -564,13 +655,118 @@ async function worktreeHeldWork(
     "--not",
     ...elsewhere,
   ]);
-  return {
-    uncommittedFiles,
-    unreachableCommits:
-      unique.exitCode === 0
-        ? Number.parseInt(unique.stdout.trim(), 10) || 0
-        : 0,
-  };
+  const unreachableCommits =
+    unique.exitCode === 0 ? Number.parseInt(unique.stdout.trim(), 10) || 0 : 0;
+  // A squash merge lands the work as one new commit, so the branch's own
+  // commits never become ancestors of the base branch, and GitHub then
+  // deletes the remote branch, which `fetch --prune` follows. Git alone ends
+  // up calling merged work unique. The pull request is the one record that
+  // says the work landed, so a merged one whose head holds this tree's HEAD
+  // counts as the work being elsewhere.
+  if (
+    unreachableCommits > 0 &&
+    (await mergedPullRequestHolds(git, worktree.path, published ?? branch))
+  )
+    return { uncommittedFiles, unreachableCommits: 0 };
+  return { uncommittedFiles, unreachableCommits };
+}
+
+// The branch a working tree is on now, or `null` on a detached HEAD. Daedalus
+// names a branch when it creates the tree, but an agent is free to switch to
+// another one, and every operation that trusted the recorded name then pushed,
+// checked and deleted a branch the work had already left.
+async function checkedOutBranch(
+  git: string,
+  path: string,
+): Promise<string | null> {
+  const result = await runCommand(git, [
+    "--no-optional-locks",
+    "-C",
+    path,
+    "branch",
+    "--show-current",
+  ]);
+  const branch = result.stdout.trim();
+  return result.exitCode === 0 && branch ? branch : null;
+}
+
+// The name a branch already publishes under on `origin`, when its upstream
+// says so. A branch an agent created with `git checkout -b topic origin/main`
+// has the base branch as its upstream; that is where it started, not where it
+// publishes, so it is never an answer here.
+async function publishedBranchName(
+  git: string,
+  path: string,
+  branch: string,
+  baseBranch: string | null,
+): Promise<string | null> {
+  const result = await runCommand(git, [
+    "--no-optional-locks",
+    "-C",
+    path,
+    "for-each-ref",
+    "--format=%(upstream:remotename)%00%(upstream:remoteref)",
+    `refs/heads/${branch}`,
+  ]);
+  const [remote, reference = ""] = result.stdout.trim().split("\0");
+  const name = reference.replace(/^refs\/heads\//, "");
+  return result.exitCode === 0 &&
+    remote === "origin" &&
+    name &&
+    name !== baseBranch
+    ? name
+    : null;
+}
+
+// Whether `branch` has a merged pull request whose head contains this tree's
+// HEAD. Any failure, including no `gh`, is `false`: the guard then keeps the
+// tree, which is the answer that cannot lose work.
+async function mergedPullRequestHolds(
+  git: string,
+  path: string,
+  branch: string,
+): Promise<boolean> {
+  const gh = findExecutable("gh", GH_EXECUTABLE_FALLBACKS);
+  if (!gh) return false;
+  const response = await runCommand(
+    gh,
+    ["pr", "view", branch, "--json", "state,headRefOid"],
+    { cwd: path, env: { GH_PROMPT_DISABLED: "1" } },
+  ).catch(() => undefined);
+  if (!response || response.exitCode !== 0) return false;
+  return pullRequestAnswerHoldsHead(git, path, response.stdout);
+}
+
+/**
+ * Reads `gh pr view --json state,headRefOid` and says whether it proves the
+ * work at `path` landed: the pull request is merged, and its head is this
+ * tree's HEAD or a descendant of it. A merged pull request whose head is some
+ * other commit proves nothing about the commits here.
+ */
+export async function pullRequestAnswerHoldsHead(
+  git: string,
+  path: string,
+  stdout: string,
+): Promise<boolean> {
+  let head: unknown;
+  try {
+    const value = JSON.parse(stdout) as Partial<Record<string, unknown>>;
+    if (value.state !== "MERGED") return false;
+    head = value.headRefOid;
+  } catch {
+    return false;
+  }
+  if (typeof head !== "string" || !/^[0-9a-f]{40,64}$/i.test(head))
+    return false;
+  const contained = await runCommand(git, [
+    "-C",
+    path,
+    "merge-base",
+    "--is-ancestor",
+    "HEAD",
+    head,
+  ]);
+  return contained.exitCode === 0;
 }
 
 // Long enough that a burst of changes does not start a pass each, short enough
@@ -933,7 +1129,7 @@ export class WorkspaceContentService {
     const targets: Array<{
       path: string | null;
       baseBranch: string | null;
-      branchName?: string;
+      worktree?: SessionWorktree;
       wantsPullRequest?: boolean;
     }> = [
       ...(workspaceId === null
@@ -947,7 +1143,7 @@ export class WorkspaceContentService {
         .map((item) => ({
           path: item.path,
           baseBranch: baseBranches.get(item.repositoryId) ?? null,
-          branchName: item.branchName,
+          worktree: item,
           wantsPullRequest: this.worktreeWantsPullRequest(item.sessionId),
         })),
     ];
@@ -958,14 +1154,38 @@ export class WorkspaceContentService {
         const status = await gitStatusAt(target.path, target.baseBranch);
         const key = statusKey(target.path);
         const previous = this.gitStatusCache.get(key);
+        const git = findExecutable("git");
+        const current =
+          target.worktree && git
+            ? await checkedOutBranch(git, target.path)
+            : null;
+        if (
+          git &&
+          target.worktree &&
+          (await this.recordBranch(git, target.worktree, current)) !==
+            target.worktree
+        )
+          changed = true;
         // A branch with no commits of its own has nothing to open a pull
         // request for, so it costs no `gh` call. One that had a link keeps
-        // being checked, so a closed or merged state still arrives.
+        // being checked, so a closed or merged state still arrives. It is
+        // asked about by the name it publishes under, which is the name its
+        // pull request carries.
         if (
-          target.branchName &&
+          git &&
+          current &&
           target.wantsPullRequest &&
           (status.ahead > 0 || this.pullRequestCache.get(key)?.value) &&
-          (await this.refreshPullRequest(key, target.path, target.branchName))
+          (await this.refreshPullRequest(
+            key,
+            target.path,
+            (await publishedBranchName(
+              git,
+              target.path,
+              current,
+              target.baseBranch,
+            )) ?? current,
+          ))
         )
           changed = true;
         if (
@@ -1292,8 +1512,44 @@ export class WorkspaceContentService {
       defaultBranch: branch.stdout.trim().replace(/^origin\//, ""),
       lastFetchedAt: new Date().toISOString(),
     };
-    if (persist) this.repositories.updateRepositoryLibraryEntry(refreshed);
+    await fastForwardDefaultBranch(
+      git,
+      repository.gitDirectory,
+      refreshed.defaultBranch,
+    );
+    if (persist) {
+      this.repositories.updateRepositoryLibraryEntry(refreshed);
+      await this.followRemote(refreshed);
+    }
     return refreshed;
+  }
+
+  // Every workspace checkout of this clone moves to what was just fetched.
+  // They are read-only and detached, so there is nothing of anyone's to
+  // protect by leaving them behind, and a checkout that trails the remote is
+  // one an agent plans against while its worktree starts from newer code.
+  // One that cannot move quietly stays where it is; its row says behind, and
+  // an explicit sync says why.
+  private async followRemote(refreshed: RepositoryLibraryEntry): Promise<void> {
+    const checkouts = this.repositories
+      .listWorkspaceRepositories()
+      .filter(
+        (item) =>
+          item.libraryRepositoryId === refreshed.id &&
+          item.status === "ready" &&
+          item.referencePath,
+      );
+    for (const repository of checkouts) {
+      try {
+        const moved = await this.moveReferenceCheckout(repository, refreshed);
+        if (moved !== repository) {
+          this.gitStatusCache.delete(statusKey(repository.referencePath!));
+          this.onRepositoriesChanged();
+        }
+      } catch {
+        // Left behind on purpose; see above.
+      }
+    }
   }
 
   /**
@@ -1378,8 +1634,10 @@ export class WorkspaceContentService {
         "The shared repository clone is no longer available",
       );
     const refreshed = await this.refreshRepository(libraryRepository);
+    // Read again: the fetch may have moved this checkout and recorded it.
     const updated: WorkspaceRepository = {
-      ...repository,
+      ...(this.repositories.findWorkspaceRepository(repository.id) ??
+        repository),
       fetchedAt: refreshed.lastFetchedAt,
     };
     this.repositories.updateWorkspaceRepository(updated);
@@ -1425,6 +1683,29 @@ export class WorkspaceContentService {
     const git = findExecutable("git");
     if (!git)
       throw new DaedalusError("DEPENDENCY", "git is not available on PATH");
+    // The branch the work is on now, which is not always the one Daedalus
+    // named: pushing the recorded name would publish a branch the agent left.
+    const branch = await checkedOutBranch(git, worktree.path);
+    if (!branch)
+      throw new DaedalusError(
+        "CONFLICT",
+        `The ${repository.name} working tree is on a detached HEAD; there is no branch to push`,
+      );
+    if (branch === repository.baseBranch)
+      throw new DaedalusError(
+        "CONFLICT",
+        `The ${repository.name} working tree is on ${branch}; Daedalus only pushes a session's own branch`,
+      );
+    // A branch that already publishes under another name, typically one with
+    // an open pull request, keeps publishing there rather than starting a
+    // second remote branch beside it.
+    const destination =
+      (await publishedBranchName(
+        git,
+        worktree.path,
+        branch,
+        repository.baseBranch,
+      )) ?? branch;
     const result = await runCommand(
       git,
       [
@@ -1433,7 +1714,7 @@ export class WorkspaceContentService {
         "push",
         "--set-upstream",
         "origin",
-        `${worktree.branchName}:${worktree.branchName}`,
+        `${branch}:${destination}`,
       ],
       { env: GIT_NETWORK_ENVIRONMENT },
     );
@@ -1441,10 +1722,11 @@ export class WorkspaceContentService {
     if (result.exitCode !== 0)
       throw new DaedalusError(
         "CONFLICT",
-        `Could not push ${worktree.branchName}: ${result.stderr.trim() || result.stdout.trim()}`,
+        `Could not push ${branch}: ${result.stderr.trim() || result.stdout.trim()}`,
       );
+    const current = await this.recordBranch(git, worktree, branch);
     const measured = await this.worktreeWithGitStatus(
-      worktree,
+      current,
       new Map([[repository.id, repository.baseBranch]]),
     );
     if (measured.gitStatus)
@@ -1563,6 +1845,49 @@ export class WorkspaceContentService {
     return worktree;
   }
 
+  // Keeps the registry's branch name on the branch the tree is really on, so
+  // the board, the CLI and the pull-request lookup all name the same branch.
+  // The branch Daedalus named is then deleted when everything on it is in the
+  // tree's history, which is the usual case: the agent branched off it before
+  // committing anything. Otherwise it would outlive the tree, because
+  // removal only knows the name recorded last.
+  private async recordBranch(
+    git: string,
+    worktree: SessionWorktree,
+    branch: string | null,
+  ): Promise<SessionWorktree> {
+    if (!branch || branch === worktree.branchName) return worktree;
+    this.repositories.updateSessionWorktreeBranch(
+      worktree.sessionId,
+      worktree.repositoryId,
+      branch,
+    );
+    const baseBranch = this.repositories.findWorkspaceRepository(
+      worktree.repositoryId,
+    )?.baseBranch;
+    if (
+      worktree.branchName !== baseBranch &&
+      (
+        await runCommand(git, [
+          "-C",
+          worktree.path,
+          "merge-base",
+          "--is-ancestor",
+          `refs/heads/${worktree.branchName}`,
+          "HEAD",
+        ])
+      ).exitCode === 0
+    )
+      await runCommand(git, [
+        "-C",
+        worktree.path,
+        "branch",
+        "-D",
+        worktree.branchName,
+      ]);
+    return { ...worktree, branchName: branch };
+  }
+
   // The filesystem removal, with no opinion about whether it is safe: callers
   // own that. Registration is cleared even when the directory is already gone,
   // because a row pointing at nothing is exactly what used to make a
@@ -1577,6 +1902,11 @@ export class WorkspaceContentService {
     const sourceArguments = repository.libraryRepositoryId
       ? ["--git-dir", repository.canonicalPath]
       : ["-C", repository.canonicalPath];
+    // Read before the tree goes: an agent may have moved the work to a
+    // branch of its own, and that branch is the one left holding it.
+    const current = (await pathExists(worktree.path))
+      ? await checkedOutBranch(git, worktree.path)
+      : null;
     const removed = await runCommand(git, [
       ...sourceArguments,
       "worktree",
@@ -1590,13 +1920,13 @@ export class WorkspaceContentService {
         `Could not remove the ${repository.name} working tree: ${removed.stderr.trim() || removed.stdout.trim()}`,
       );
     await runCommand(git, [...sourceArguments, "worktree", "prune"]);
-    // The branch only ever existed to carry this tree's work.
-    await runCommand(git, [
-      ...sourceArguments,
-      "branch",
-      "-D",
-      worktree.branchName,
-    ]);
+    // The branches only ever existed to carry this tree's work. The base
+    // branch is never one of them, even when the tree had it checked out.
+    const branches = [
+      ...new Set([worktree.branchName, current ?? worktree.branchName]),
+    ].filter((branch) => branch !== repository.baseBranch);
+    if (branches.length > 0)
+      await runCommand(git, [...sourceArguments, "branch", "-D", ...branches]);
     this.gitStatusCache.delete(statusKey(worktree.path));
     this.repositories.deleteSessionWorktree(worktree.sessionId, repository.id);
   }
@@ -1640,12 +1970,6 @@ export class WorkspaceContentService {
         "CONFLICT",
         "Only managed workspace repository checkouts can be synchronized",
       );
-    const currentStatus = await this.repositoryWithGitStatus(repository);
-    if ((currentStatus.gitStatus?.changedFiles ?? 0) > 0)
-      throw new DaedalusError(
-        "CONFLICT",
-        `Repository '${repository.name}' has local changes; preserve or discard them before synchronizing`,
-      );
     const libraryRepository = this.repositories.findRepositoryLibraryEntry(
       repository.libraryRepositoryId,
     );
@@ -1655,14 +1979,44 @@ export class WorkspaceContentService {
         "The shared repository clone is no longer available",
       );
     const refreshed = await this.refreshRepository(libraryRepository);
+    // The fetch has already moved this checkout if it could; moving it again
+    // is how a checkout that could not says why.
+    const current =
+      this.repositories.findWorkspaceRepository(repository.id) ?? repository;
+    return this.measureAndCache(
+      await this.moveReferenceCheckout(current, refreshed),
+    );
+  }
+
+  // Moves one workspace checkout to the fetched tip of its base branch, by
+  // fast-forward only, and records where it now is. Checked out by the
+  // remote branch's name rather than by hash, so `git status` and
+  // `git branch` in it say "HEAD detached at origin/main" instead of a bare
+  // hash. Returns the same object when there was nothing to move.
+  private async moveReferenceCheckout(
+    repository: WorkspaceRepository,
+    refreshed: RepositoryLibraryEntry,
+  ): Promise<WorkspaceRepository> {
+    if (!repository.referencePath)
+      throw new DaedalusError(
+        "CONFLICT",
+        "Only managed workspace repository checkouts can be synchronized",
+      );
+    const currentStatus = await this.repositoryWithGitStatus(repository);
+    if ((currentStatus.gitStatus?.changedFiles ?? 0) > 0)
+      throw new DaedalusError(
+        "CONFLICT",
+        `Repository '${repository.name}' has local changes; preserve or discard them before synchronizing`,
+      );
     const git = findExecutable("git");
     if (!git)
       throw new DaedalusError("DEPENDENCY", "git is not available on PATH");
+    const branchReference = `refs/remotes/origin/${refreshed.defaultBranch}`;
     const target = await runCommand(git, [
       "--git-dir",
       refreshed.gitDirectory,
       "rev-parse",
-      `refs/remotes/origin/${refreshed.defaultBranch}^{commit}`,
+      `${branchReference}^{commit}`,
     ]);
     const targetCommit = target.stdout.trim();
     if (target.exitCode !== 0 || !/^[0-9a-f]{40,64}$/i.test(targetCommit))
@@ -1682,7 +2036,14 @@ export class WorkspaceContentService {
         "DEPENDENCY",
         `Could not read the current ${repository.name} commit`,
       );
-    if (currentCommit !== targetCommit) {
+    if (currentCommit === targetCommit) {
+      if (
+        repository.baseCommit === targetCommit &&
+        repository.baseBranch === refreshed.defaultBranch &&
+        repository.fetchedAt === refreshed.lastFetchedAt
+      )
+        return repository;
+    } else {
       const fastForward = await runCommand(git, [
         "--git-dir",
         refreshed.gitDirectory,
@@ -1700,8 +2061,9 @@ export class WorkspaceContentService {
         "-C",
         repository.referencePath,
         "checkout",
+        "--quiet",
         "--detach",
-        targetCommit,
+        branchReference,
       ]);
       if (checkout.exitCode !== 0)
         throw new DaedalusError(
@@ -1709,14 +2071,25 @@ export class WorkspaceContentService {
           `Could not update '${repository.name}': ${checkout.stderr.trim() || checkout.stdout.trim()}`,
         );
     }
+    // Read back rather than assumed: a fetch landing between the two reads
+    // above moves the branch, and the checkout follows the name.
+    const landed = await runCommand(git, [
+      "-C",
+      repository.referencePath,
+      "rev-parse",
+      "HEAD",
+    ]);
     const updated: WorkspaceRepository = {
       ...repository,
       baseBranch: refreshed.defaultBranch,
-      baseCommit: targetCommit,
+      baseCommit:
+        landed.exitCode === 0 && landed.stdout.trim()
+          ? landed.stdout.trim()
+          : targetCommit,
       fetchedAt: refreshed.lastFetchedAt,
     };
     this.repositories.updateWorkspaceRepository(updated);
-    return this.measureAndCache(updated);
+    return updated;
   }
 
   async listDirectory(
@@ -2425,6 +2798,17 @@ export class WorkspaceContentService {
         "CONFLICT",
         `Could not create the workspace repository checkout: ${checkout.stderr.trim() || checkout.stdout.trim()}`,
       );
+    // Same commit, now reached by name: `git worktree add` records none, so
+    // `git branch` there would say "(no branch)" rather than "HEAD detached at
+    // origin/main". Cosmetic, so a failure changes nothing.
+    await runCommand(git, [
+      "-C",
+      referencePath,
+      "checkout",
+      "--quiet",
+      "--detach",
+      branchReference,
+    ]);
     const item: WorkspaceRepository = {
       id: pending?.id ?? crypto.randomUUID(),
       workspaceId: workspace.id,
@@ -2602,6 +2986,7 @@ export class WorkspaceContentService {
       "origin",
     ]);
     if (fetched.exitCode !== 0) return pinned;
+    await this.afterWorktreeFetch(git, repository);
     const resolved = await runCommand(git, [
       ...sourceArguments,
       "rev-parse",
@@ -2612,6 +2997,30 @@ export class WorkspaceContentService {
     return resolved.exitCode === 0 && /^[0-9a-f]{40,64}$/i.test(commit)
       ? commit
       : pinned;
+  }
+
+  // The fetch a new worktree makes is as good as any other, so the shared
+  // clone and every workspace checkout of it catch up on it too.
+  private async afterWorktreeFetch(
+    git: string,
+    repository: WorkspaceRepository,
+  ): Promise<void> {
+    if (!repository.libraryRepositoryId) return;
+    const library = this.repositories.findRepositoryLibraryEntry(
+      repository.libraryRepositoryId,
+    );
+    if (!library?.defaultBranch) return;
+    const refreshed: RepositoryLibraryEntry = {
+      ...library,
+      lastFetchedAt: new Date().toISOString(),
+    };
+    this.repositories.updateRepositoryLibraryEntry(refreshed);
+    await fastForwardDefaultBranch(
+      git,
+      library.gitDirectory,
+      library.defaultBranch,
+    );
+    await this.followRemote(refreshed);
   }
 
   async createSessionWorktree(input: {
@@ -2657,8 +3066,6 @@ export class WorkspaceContentService {
         "CONFLICT",
         "The session working directory is outside its workspace",
       );
-    const branchScope = session.taskId ?? "unassigned";
-    const branchName = `daedalus/${pathSegment(workspace.slug, "workspace")}/${pathSegment(branchScope, "task").slice(0, 16)}/${pathSegment(session.id, "session").slice(0, 24)}`;
     const git = findExecutable("git");
     if (!git)
       throw new DaedalusError("DEPENDENCY", "git is not available on PATH");
@@ -2666,6 +3073,27 @@ export class WorkspaceContentService {
     const sourceArguments = repository.libraryRepositoryId
       ? ["--git-dir", repository.canonicalPath]
       : ["-C", repository.canonicalPath];
+    // Named for what the work is, because this is the name a pull request
+    // carries and a reviewer reads. The session's short id keeps two
+    // attempts at one task apart; the full id is the fallback for the rare
+    // prefix that is already taken.
+    const task = session.taskId
+      ? this.repositories.findTask(session.taskId)
+      : undefined;
+    const topic = task
+      ? pathSegment(task.title, "task").slice(0, 40).replace(/-+$/, "")
+      : "session";
+    const sessionSegment = pathSegment(session.id, "session");
+    let branchName = `daedalus/${topic}-${sessionSegment.slice(0, 8)}`;
+    const taken = await runCommand(git, [
+      ...sourceArguments,
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      `refs/heads/${branchName}`,
+    ]);
+    if (taken.exitCode === 0)
+      branchName = `daedalus/${topic}-${sessionSegment}`;
     const result = await runCommand(git, [
       ...sourceArguments,
       "worktree",

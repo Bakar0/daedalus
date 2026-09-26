@@ -392,11 +392,14 @@ daedal repo worktree open --session <agent-id> --repository <name-or-id>
 Library entries are bare clones shared across workspaces. `library add` accepts
 a remote URL or full local path and refreshes an existing entry with the same
 remote. `attach` fetches the library entry and creates a read-only planning
-checkout under the workspace's `repos/` directory. `sync` refreshes that
-checkout when it can advance safely. `detach` refuses while session worktrees
-depend on the attachment.
+checkout under the workspace's `repos/` directory. Every fetch of a library
+entry, including `repo fetch` and the one `worktree create` makes, moves each
+workspace checkout of it to the fetched tip by fast-forward, unless the
+checkout has local changes. `sync` does the same for one checkout and reports
+why when it cannot. `detach` refuses while session worktrees depend on the
+attachment.
 
-Agent sessions receive `DAEDALUS_SESSION_ID`, `DAEDALUS_HOME`, and a PATH containing Daedalus's bundled CLI. They start in an isolated session folder without eagerly creating a worktree for every attached repository. The worktree command creates the selected repository's writable worktree from the attachment's pinned base commit and prints its path; repeating it returns the existing worktree.
+Agent sessions receive `DAEDALUS_SESSION_ID`, `DAEDALUS_HOME`, and a PATH containing Daedalus's bundled CLI. They start in an isolated session folder without eagerly creating a worktree for every attached repository. The worktree command fetches, creates the selected repository's writable worktree from the newest commit on its base branch on a branch named `daedalus/<task-slug>-<session-id-prefix>`, and prints its path; repeating it returns the existing worktree.
 
 ## Skills
 

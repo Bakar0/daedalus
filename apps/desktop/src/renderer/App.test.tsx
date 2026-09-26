@@ -962,7 +962,8 @@ describe("desktop application shell", () => {
     expect(html).toContain("main ·");
     expect(html).toContain("↓2 behind");
     expect(html).toContain('aria-label="Fetch daedalus"');
-    expect(html).toContain('aria-label="Pull daedalus"');
+    // Fetching moves the checkout too, so there is no separate pull.
+    expect(html).not.toContain('aria-label="Pull daedalus"');
     expect(html).toContain('aria-label="Add repository"');
     // The working tree is nested under the repository it was cut from, and
     // carries the branch it is on rather than only the session's name.

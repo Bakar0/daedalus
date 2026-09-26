@@ -356,10 +356,10 @@ try {
       `Expected ${expectedRows} repository and working-tree rows, found ${measurements.rows.length}`,
     );
 
-  // Terminal, fetch and pull on each repository, plus a dismiss on one that
+  // Terminal and fetch on each repository, plus a dismiss on one that
   // failed; terminal, push and remove on each working tree.
   const expectedActions =
-    populated.repositories.length * 3 +
+    populated.repositories.length * 2 +
     populated.repositories.filter((item) => item.status === "failed").length +
     populated.worktrees.length * 3;
   if (measurements.buttons.length !== expectedActions)

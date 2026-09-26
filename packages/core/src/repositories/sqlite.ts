@@ -578,6 +578,18 @@ export class SqliteRepositories {
       );
   }
 
+  updateSessionWorktreeBranch(
+    sessionId: string,
+    repositoryId: string,
+    branchName: string,
+  ): void {
+    this.database
+      .query(
+        "UPDATE session_worktrees SET branch_name = ? WHERE session_id = ? AND repository_id = ?",
+      )
+      .run(branchName, sessionId, repositoryId);
+  }
+
   deleteSessionWorktree(sessionId: string, repositoryId: string): void {
     this.database
       .query(
