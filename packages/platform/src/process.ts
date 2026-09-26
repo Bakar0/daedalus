@@ -151,3 +151,59 @@ export async function probeVersion(
     return undefined;
   }
 }
+
+const SHELL_PATH_MARKER = "__DAEDALUS_SHELL_PATH__";
+
+/**
+ * How long a login shell may take to report its PATH. An interactive
+ * configuration that loads a plugin manager takes a second or so; one that
+ * waits for input would otherwise hold the launch forever.
+ */
+export const SHELL_PATH_TIMEOUT_MS = 10_000;
+
+/**
+ * The PATH the user's own terminal would have. A packaged app gets
+ * `/usr/bin:/bin:/usr/sbin:/sbin` from Launch Services, so everything Homebrew,
+ * nvm, pipx or a `.zshrc` adds is missing from whatever the app starts. The
+ * shell runs as a login shell, which is what applies `/etc/paths.d` through
+ * `path_helper`, and as an interactive one, which is what reads `.zshrc`. That
+ * is how editors resolve the same thing. The value is printed between markers
+ * because an interactive configuration may print its own output around it.
+ *
+ * `undefined` when there is no shell or it does not answer; callers keep the
+ * PATH they had.
+ */
+export async function readLoginShellPath(
+  shell: string | undefined,
+  run: typeof runCommand = runCommand,
+): Promise<string | undefined> {
+  if (!shell || !isAbsolute(shell)) return undefined;
+  const result = await run(
+    shell,
+    [
+      "-i",
+      "-l",
+      "-c",
+      `printf '\\n%s%s%s\\n' ${SHELL_PATH_MARKER} "$PATH" ${SHELL_PATH_MARKER}`,
+    ],
+    { stdin: "ignore", timeoutMs: SHELL_PATH_TIMEOUT_MS },
+  ).catch(() => undefined);
+  if (!result || result.exitCode !== 0) return undefined;
+  const start = result.stdout.lastIndexOf(`\n${SHELL_PATH_MARKER}`);
+  if (start < 0) return undefined;
+  const value = result.stdout.slice(start + SHELL_PATH_MARKER.length + 1);
+  const end = value.indexOf(SHELL_PATH_MARKER);
+  const path = end < 0 ? "" : value.slice(0, end);
+  return path.includes("/") && !path.includes("\n") ? path : undefined;
+}
+
+let loginShellPathOnce: Promise<string | undefined> | undefined;
+
+/**
+ * `readLoginShellPath` for `$SHELL`, asked once per process. A change to the
+ * user's shell configuration reaches sessions started after the app restarts.
+ */
+export function loginShellPath(): Promise<string | undefined> {
+  loginShellPathOnce ??= readLoginShellPath(process.env.SHELL);
+  return loginShellPathOnce;
+}

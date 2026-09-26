@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import {
   findExecutable,
+  loginShellPath,
   pathExists,
   runCommand,
   type TmuxClient,
@@ -415,20 +416,28 @@ export class AgentService {
     private readonly onSessionEnded: (sessionId: string) => void = () => {},
   ) {}
 
-  private agentEnvironment(
+  private async agentEnvironment(
     session: AgentSession,
     environment: Record<string, string> = {},
-  ): Record<string, string> {
+  ): Promise<Record<string, string>> {
     const task = session.taskId
       ? this.repositories.findTask(session.taskId)
       : undefined;
+    // An agent runs what the user's terminal would: Homebrew, nvm and the
+    // rest come from the login shell, not from the app's Launch Services
+    // PATH, which has none of them. The bundled `daedal` comes first.
     const path = [
-      join(this.config.home, "bin"),
-      environment.PATH,
-      process.env.PATH,
-    ]
-      .filter(Boolean)
-      .join(":");
+      ...new Set(
+        [
+          join(this.config.home, "bin"),
+          environment.PATH,
+          (await loginShellPath()) ?? process.env.PATH,
+        ]
+          .filter(Boolean)
+          .flatMap((value) => value!.split(":"))
+          .filter(Boolean),
+      ),
+    ].join(":");
     return {
       ...environment,
       PATH: path,
@@ -836,7 +845,7 @@ export class AgentService {
         args: launch.args,
         env: input.terminal
           ? launch.env
-          : this.agentEnvironment(session, launch.env),
+          : await this.agentEnvironment(session, launch.env),
       });
       if (!input.terminal)
         await this.confirmOwnedWorkspaceTrust(
@@ -1503,7 +1512,9 @@ export class AgentService {
         executable,
         args,
         env:
-          agent.kind === "agent" ? this.agentEnvironment(restoring) : undefined,
+          agent.kind === "agent"
+            ? await this.agentEnvironment(restoring)
+            : undefined,
       });
       if (agent.kind === "agent")
         await this.confirmOwnedWorkspaceTrust(
