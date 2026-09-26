@@ -1784,55 +1784,6 @@ Before working in this workspace:
       });
     });
 
-    test("an older clone loses its stale branch copies once, and keeps work of its own", async () => {
-      await withTemporaryDaedalusHome(async (home) => {
-        const source = join(home, "source", "product");
-        await createRepository(source);
-        const context = await createApplicationContext({
-          env: { DAEDALUS_HOME: home },
-          reconcile: false,
-        });
-        const workspace = await context.workspaces.create({ name: "Heads" });
-        const attached = await context.workspaceContent.addAndAttachRepository({
-          workspace: workspace.id,
-          remoteUrl: source,
-        });
-        const bare = attached.canonicalPath;
-        // What a clone made before the tidy looked like: a stale copy of a
-        // remote branch, and a branch holding a commit nowhere else.
-        await git(["--git-dir", bare, "branch", "stale-copy", "main"]);
-        const unique = await git([
-          "--git-dir",
-          bare,
-          "commit-tree",
-          "main^{tree}",
-          "-p",
-          "main",
-          "-m",
-          "only here",
-        ]);
-        await git(["--git-dir", bare, "branch", "keep-me", unique]);
-        await git([
-          "--git-dir",
-          bare,
-          "config",
-          "--unset",
-          "daedalus.clonedBranchesTidied",
-        ]);
-
-        await context.workspaceContent.fetchRepository(attached.id);
-        expect(await branchExists(bare, "stale-copy")).toBe(false);
-        expect(await branchExists(bare, "keep-me")).toBe(true);
-        expect(await branchExists(bare, "main")).toBe(true);
-
-        // Once only: a branch made afterwards is the maker's to keep.
-        await git(["--git-dir", bare, "branch", "made-later", "main"]);
-        await context.workspaceContent.fetchRepository(attached.id);
-        expect(await branchExists(bare, "made-later")).toBe(true);
-        context.close();
-      });
-    });
-
     test("names a task's branch after the task, and follows a branch the agent switched to", async () => {
       await withTemporaryDaedalusHome(async (home) => {
         const source = join(home, "source", "product");

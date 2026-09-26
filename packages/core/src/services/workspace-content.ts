@@ -509,103 +509,56 @@ async function seedRemoteTrackingRefs(
       "DEPENDENCY",
       `Could not record the remote default branch: ${symbolic.stderr.trim() || symbolic.stdout.trim()}`,
     );
-  await tidyLocalBranches(git, gitDirectory, defaultBranch);
+  await dropClonedBranchCopies(git, gitDirectory, defaultBranch);
   return defaultBranch;
 }
 
-const CLONED_BRANCHES_TIDIED = "daedalus.clonedBranchesTidied";
-
 // `git clone --bare` copies every remote branch into `refs/heads/*`, and with
 // the remote-tracking refspec in place nothing ever moves those copies again.
-// They were not harmless: `main` sat weeks behind `origin/main`, and an agent
-// running `git checkout some-branch` got the copy from the day of the clone
-// rather than the branch on the remote, because git only creates a branch
-// from `origin/some-branch` when no local one of that name exists. A large
-// repository carried well over a thousand of them.
-//
-// So once per clone, every local branch that no working tree has checked out
-// and whose tip the remote already holds is deleted. That loses nothing: its
-// commits are on `origin`, and checking it out again recreates it from
-// there. Anything with commits of its own stays. It runs once, not on every
-// fetch, so a branch someone makes later is theirs to keep.
-//
-// The default branch is the exception. It stays, and every fetch
-// fast-forwards it to the remote, so `main` means what people expect it to.
-// It is left alone while a working tree has it checked out, because moving
-// the branch under a tree would make that tree's files look changed, and
-// when it has commits the remote lacks.
-async function tidyLocalBranches(
+// Left alone, `main` falls behind `origin/main`, and `git checkout topic` in
+// any worktree gets the copy from the day of the clone rather than the
+// remote's branch, because git only creates a branch from `origin/topic`
+// when no local one of that name exists. Straight after the clone every copy
+// is on the remote and nothing has any of them checked out, so all but the
+// default branch go.
+async function dropClonedBranchCopies(
+  git: string,
+  gitDirectory: string,
+  defaultBranch: string,
+): Promise<void> {
+  const heads = await runCommand(git, [
+    "--git-dir",
+    gitDirectory,
+    "for-each-ref",
+    "--format=%(refname:lstrip=2)",
+    "refs/heads",
+  ]);
+  const copies = heads.stdout
+    .split("\n")
+    .filter((branch) => branch && branch !== defaultBranch);
+  // `git branch -D` also drops each branch's configuration. Batched, because
+  // a large repository has more names than one argument list should carry.
+  for (let start = 0; start < copies.length; start += 200)
+    await runCommand(git, [
+      "--git-dir",
+      gitDirectory,
+      "branch",
+      "-D",
+      ...copies.slice(start, start + 200),
+    ]);
+}
+
+// Moves the local default branch to the remote's after a fetch, so `main`
+// means what people and agents expect it to. It is created when missing, and
+// left alone while a working tree has it checked out (moving a branch under a
+// tree makes its files look changed) or when it has commits the remote lacks.
+async function fastForwardDefaultBranch(
   git: string,
   gitDirectory: string,
   defaultBranch: string,
 ): Promise<void> {
   const run = (args: string[]) =>
     runCommand(git, ["--git-dir", gitDirectory, ...args]);
-  const listed = await run(["worktree", "list", "--porcelain"]);
-  if (listed.exitCode !== 0) return;
-  const checkedOut = new Set(
-    listed.stdout
-      .split("\n")
-      .filter((line) => line.startsWith("branch "))
-      .map((line) => line.slice("branch ".length)),
-  );
-  const tidied = await run(["config", "--get", CLONED_BRANCHES_TIDIED]);
-  if (tidied.stdout.trim() !== "true") {
-    const heads = await run([
-      "for-each-ref",
-      "--format=%(refname)%00%(objectname)",
-      "refs/heads",
-    ]);
-    const candidates = heads.stdout
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        const [reference = "", commit = ""] = line.split("\0");
-        return { reference, commit };
-      })
-      .filter(
-        ({ reference, commit }) =>
-          reference &&
-          commit &&
-          reference !== `refs/heads/${defaultBranch}` &&
-          !checkedOut.has(reference),
-      );
-    // One walk answers every branch at once: the commits no remote branch
-    // reaches. A branch whose tip is among them holds work of its own.
-    const walk = candidates.length
-      ? await runCommand(
-          git,
-          [
-            "--git-dir",
-            gitDirectory,
-            "rev-list",
-            "--stdin",
-            "--not",
-            "--remotes=origin",
-          ],
-          { stdin: `${candidates.map(({ commit }) => commit).join("\n")}\n` },
-        )
-      : undefined;
-    if (heads.exitCode === 0 && (!walk || walk.exitCode === 0)) {
-      const held = new Set(walk?.stdout.split("\n").filter(Boolean) ?? []);
-      const removable = candidates
-        .filter(({ commit }) => !held.has(commit))
-        .map(({ reference }) => reference.slice("refs/heads/".length));
-      let removed = true;
-      // `git branch -D` also drops each branch's configuration, which
-      // deleting the ref alone would leave behind. Batched, because a large
-      // repository has more names than one argument list should carry.
-      for (let start = 0; start < removable.length; start += 200) {
-        const result = await run([
-          "branch",
-          "-D",
-          ...removable.slice(start, start + 200),
-        ]);
-        if (result.exitCode !== 0) removed = false;
-      }
-      if (removed) await run(["config", CLONED_BRANCHES_TIDIED, "true"]);
-    }
-  }
   const remote = await run([
     "rev-parse",
     "--verify",
@@ -630,9 +583,11 @@ async function tidyLocalBranches(
     ]);
     return;
   }
+  if (current === target) return;
+  const listed = await run(["worktree", "list", "--porcelain"]);
   if (
-    current === target ||
-    checkedOut.has(`refs/heads/${defaultBranch}`) ||
+    listed.exitCode !== 0 ||
+    listed.stdout.split("\n").includes(`branch refs/heads/${defaultBranch}`) ||
     (await run(["merge-base", "--is-ancestor", current, target])).exitCode !== 0
   )
     return;
@@ -1557,7 +1512,7 @@ export class WorkspaceContentService {
       defaultBranch: branch.stdout.trim().replace(/^origin\//, ""),
       lastFetchedAt: new Date().toISOString(),
     };
-    await tidyLocalBranches(
+    await fastForwardDefaultBranch(
       git,
       repository.gitDirectory,
       refreshed.defaultBranch,
@@ -3060,7 +3015,11 @@ export class WorkspaceContentService {
       lastFetchedAt: new Date().toISOString(),
     };
     this.repositories.updateRepositoryLibraryEntry(refreshed);
-    await tidyLocalBranches(git, library.gitDirectory, library.defaultBranch);
+    await fastForwardDefaultBranch(
+      git,
+      library.gitDirectory,
+      library.defaultBranch,
+    );
     await this.followRemote(refreshed);
   }
 

@@ -53,13 +53,14 @@ Daedalus keeps one global repository library under
 Git objects and remote refs without pretending to be editable project
 checkouts.
 
+The repository picker fuzzy-searches this indexed library and can clone another
+remote into it.
+
 `git clone --bare` copies every remote branch into `refs/heads/*`, and nothing
-would move those copies again. Daedalus removes them, once per clone, keeping
-any branch that a working tree has checked out or that holds commits the
-remote lacks. The default branch stays, and every fetch fast-forwards it to
+would move those copies again. Daedalus deletes all of them except the default
+branch right after cloning. Every fetch fast-forwards the default branch to
 `origin`, so `main` in any checkout means the remote's `main` as of the last
-fetch. It is left alone while a working tree has it checked out. The repository picker fuzzy-searches this indexed library and can
-clone another remote into it.
+fetch. It is left alone while a working tree has it checked out.
 
 Attaching a library repository is intentionally freshness-sensitive. Daedalus
 must successfully fetch `origin`, resolve the remote-advertised default branch
