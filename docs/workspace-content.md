@@ -51,7 +51,14 @@ never replaced.
 Daedalus keeps one global repository library under
 `<DAEDALUS_HOME>/repos/<repository-id>.git`. These are bare clones: they share
 Git objects and remote refs without pretending to be editable project
-checkouts. The repository picker fuzzy-searches this indexed library and can
+checkouts.
+
+`git clone --bare` copies every remote branch into `refs/heads/*`, and nothing
+would move those copies again. Daedalus removes them, once per clone, keeping
+any branch that a working tree has checked out or that holds commits the
+remote lacks. The default branch stays, and every fetch fast-forwards it to
+`origin`, so `main` in any checkout means the remote's `main` as of the last
+fetch. It is left alone while a working tree has it checked out. The repository picker fuzzy-searches this indexed library and can
 clone another remote into it.
 
 Attaching a library repository is intentionally freshness-sensitive. Daedalus
@@ -66,8 +73,20 @@ planning checkout at:
 It never derives this checkout from the bare repository's local `HEAD`.
 Failure to fetch or resolve the remote default branch fails the attachment
 rather than silently using stale code. The attachment records the branch,
-commit, and fetch timestamp so later session worktrees use the same reproducible
-base.
+commit, and fetch timestamp.
+
+The checkout follows the remote. Every fetch of the library clone, whether from
+the fetch button, `daedal repo fetch`, or a new session worktree, moves every
+workspace checkout of that clone to the fetched tip by fast-forward and
+records the new commit. It is checked out by name, so `git status` and
+`git branch` there read `HEAD detached at origin/main`. A checkout with local
+changes, or one that has somehow diverged, stays where it is and reports how
+far behind it is; `daedal repo sync` then says why. The checkout stays
+detached because git allows a branch in only one working tree at a time, and
+one library clone can be attached to many workspaces.
+
+This is the place to run the latest merged code: open a terminal in
+`<workspace>/repos/<repository-name>` after a fetch.
 
 Every attachment has one behavior: the workspace receives a read-only planning
 checkout, and task sessions receive independent writable Git worktrees when
@@ -97,26 +116,37 @@ daedal repo worktree create --session "$DAEDALUS_SESSION_ID" --repository <name>
 The command prints the writable path and is idempotent. The task ID and session
 ID are immutable, while the task slug is a creation-time hint; renaming a task
 never moves an existing session folder. A requested repository is created below
-the session folder and uses a unique branch derived from the workspace, task,
-and session. Consequently:
+the session folder on a branch named `daedalus/<task-slug>-<session-id-prefix>`
+(`daedalus/session-<session-id-prefix>` without a task), which is readable on
+a pull request and unique per session. Consequently:
 
 - different tasks can modify the same repository concurrently;
 - multiple sessions or models can attempt the same task independently;
 - one session can change several repositories as one logical attempt.
 
-Every session worktree branches from the attachment's captured `base_commit`,
-not from a mutable local branch or the global clone's `HEAD`. Thus parallel
-models attached at the same workspace revision start from identical code even
-if the remote advances afterward.
+Every session worktree branches from the newest commit on the remote base
+branch, fetched just before, not from a local branch or the global clone's
+`HEAD`. Without a reachable remote it falls back to the attachment's recorded
+commit.
+
+An agent may switch its worktree to a branch of its own. Daedalus reads the
+branch a worktree is on whenever it acts, rather than trusting the name it
+recorded: pushing publishes that branch (to its existing upstream name, if it
+has one other than the base branch), the pull-request lookup asks about it,
+and the registry is updated to it.
 
 Sessions without a task have the same lazy behavior and create no worktree until
 the user or agent identifies a repository that needs modification. Integrated
 terminal sessions continue to open at their explicitly selected path and do not
 participate in agent worktree creation.
 
-Archiving or restoring a session or workspace never removes worktrees. Cleanup
-is a separate future operation and must refuse to remove dirty or otherwise
-unsafe work unless the user explicitly resolves it.
+Removing a worktree refuses, unless forced, while it holds uncommitted changes
+or commits that exist nowhere else. A commit counts as existing elsewhere when
+the remote base branch, the local base branch, or the worktree's branch on
+`origin` reaches it, or when `gh` reports a merged pull request for the branch
+whose head contains the worktree's `HEAD`. The last case is what recognizes a
+squash merge, whose commits never become ancestors of the base branch.
+Archiving a session removes only the worktrees that pass this check.
 
 ## Agent context
 

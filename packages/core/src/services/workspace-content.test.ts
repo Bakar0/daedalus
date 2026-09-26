@@ -18,6 +18,7 @@ import {
 } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { createApplicationContext, parseGitHubRepositoryPages } from "../index";
+import { pullRequestAnswerHoldsHead } from "./workspace-content";
 
 test("parses every paginated GitHub repository and removes duplicates", () => {
   expect(
@@ -689,13 +690,16 @@ Before working in this workspace:
         ).stdout.trim(),
       ).toBe(landedCommit);
 
-      // The attachment pin is untouched: the read-only planning checkout under
-      // repos/ still sits where the workspace put it.
+      // The fetch that fed the new worktree also moved the read-only planning
+      // checkout, so planning and implementing see the same code.
       expect(
         (await context.workspaceContent.get(workspace.id)).repositories.find(
           (item) => item.name === "app",
         )?.baseCommit,
-      ).toBe(attachedCommit);
+      ).toBe(landedCommit);
+      expect(
+        await readFile(join(repository.referencePath!, "SHIPPED.md"), "utf8"),
+      ).toBe("# Landed later\n");
       context.close();
     });
   });
@@ -1463,7 +1467,7 @@ Before working in this workspace:
       });
     });
 
-    test("fetching updates the shared clone without touching the checkout", async () => {
+    test("fetching moves the workspace checkout to the remote tip", async () => {
       await withTemporaryDaedalusHome(async (home) => {
         const source = join(home, "source", "product");
         await createRepository(source);
@@ -1476,43 +1480,31 @@ Before working in this workspace:
           workspace: workspace.id,
           remoteUrl: source,
         });
-        const checkedOut = (
-          await runCommand("git", [
-            "-C",
-            attached.referencePath!,
-            "rev-parse",
-            "HEAD",
-          ])
-        ).stdout.trim();
-
-        await Bun.write(join(source, "SHIPPED.md"), "# Shipped\n");
-        expect(
-          (await runCommand("git", ["-C", source, "add", "SHIPPED.md"]))
-            .exitCode,
-        ).toBe(0);
-        expect(
-          (
-            await runCommand("git", [
-              "-C",
-              source,
-              "-c",
-              "user.name=Daedalus Test",
-              "-c",
-              "user.email=test@daedalus.local",
-              "commit",
-              "-qm",
-              "landed upstream",
-            ])
-          ).exitCode,
-        ).toBe(0);
-
-        const fetched = await context.workspaceContent.fetchRepository(
-          attached.id,
-        );
-        // The status is now true again...
-        expect(fetched.gitStatus).toMatchObject({ state: "behind", behind: 1 });
-        // ...without the working tree having moved.
-        expect(
+        const land = async (file: string, message: string) => {
+          await Bun.write(join(source, file), `# ${message}\n`);
+          expect(
+            (await runCommand("git", ["-C", source, "add", file])).exitCode,
+          ).toBe(0);
+          expect(
+            (
+              await runCommand("git", [
+                "-C",
+                source,
+                "-c",
+                "user.name=Daedalus Test",
+                "-c",
+                "user.email=test@daedalus.local",
+                "commit",
+                "-qm",
+                message,
+              ])
+            ).exitCode,
+          ).toBe(0);
+          return (
+            await runCommand("git", ["-C", source, "rev-parse", "HEAD"])
+          ).stdout.trim();
+        };
+        const head = async () =>
           (
             await runCommand("git", [
               "-C",
@@ -1520,8 +1512,40 @@ Before working in this workspace:
               "rev-parse",
               "HEAD",
             ])
-          ).stdout.trim(),
-        ).toBe(checkedOut);
+          ).stdout.trim();
+
+        const shipped = await land("SHIPPED.md", "landed upstream");
+        const fetched = await context.workspaceContent.fetchRepository(
+          attached.id,
+        );
+        expect(fetched.baseCommit).toBe(shipped);
+        expect(fetched.gitStatus).toMatchObject({ state: "clean", behind: 0 });
+        expect(await head()).toBe(shipped);
+        // Reached by name, so a person opening a terminal there reads which
+        // branch they are looking at rather than a bare hash.
+        expect(
+          (
+            await runCommand("git", [
+              "-C",
+              attached.referencePath!,
+              "branch",
+              "--list",
+            ])
+          ).stdout,
+        ).toContain("HEAD detached at origin/main");
+
+        // A checkout someone has changed is not moved under them; it reports
+        // how far behind it is, and an explicit sync says why it stayed.
+        await Bun.write(join(attached.referencePath!, "NOTES.md"), "mine\n");
+        await land("LATER.md", "landed again");
+        const behind = await context.workspaceContent.fetchRepository(
+          attached.id,
+        );
+        expect(behind.gitStatus).toMatchObject({ behind: 1 });
+        expect(await head()).toBe(shipped);
+        await expect(
+          context.workspaceContent.syncRepository(attached.id),
+        ).rejects.toMatchObject({ code: "CONFLICT" });
         context.close();
       });
     });
@@ -1689,6 +1713,253 @@ Before working in this workspace:
         context.close();
       });
     }, 30_000);
+  });
+
+  describe("git state the agents and the user share", () => {
+    const git = async (args: string[]) => {
+      const result = await runCommand("git", args);
+      expect(result.exitCode).toBe(0);
+      return result.stdout.trim();
+    };
+    const commitIn = (path: string, name: string) =>
+      Bun.write(join(path, name), `# ${name}\n`).then(async () => {
+        await git(["-C", path, "add", name]);
+        await git([
+          "-C",
+          path,
+          "-c",
+          "user.name=Daedalus Test",
+          "-c",
+          "user.email=test@daedalus.local",
+          "commit",
+          "-qm",
+          name,
+        ]);
+      });
+    const branchExists = async (gitDirectory: string, branch: string) =>
+      (
+        await runCommand("git", [
+          "--git-dir",
+          gitDirectory,
+          "rev-parse",
+          "--verify",
+          "--quiet",
+          `refs/heads/${branch}`,
+        ])
+      ).exitCode === 0;
+
+    test("a clone keeps only the default branch, and every fetch moves it", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const source = join(home, "source", "product");
+        await createRepository(source);
+        await git(["-C", source, "branch", "old-topic"]);
+        const context = await createApplicationContext({
+          env: { DAEDALUS_HOME: home },
+          reconcile: false,
+        });
+        const workspace = await context.workspaces.create({ name: "Heads" });
+        const attached = await context.workspaceContent.addAndAttachRepository({
+          workspace: workspace.id,
+          remoteUrl: source,
+        });
+        const bare = attached.canonicalPath;
+        // The clone's copy of every remote branch is gone; the remote-tracking
+        // ref is what a checkout of it builds on.
+        expect(await branchExists(bare, "old-topic")).toBe(false);
+        expect(
+          await git([
+            "--git-dir",
+            bare,
+            "rev-parse",
+            "refs/remotes/origin/old-topic",
+          ]),
+        ).toBeTruthy();
+
+        await commitIn(source, "LATER.md");
+        await context.workspaceContent.fetchRepository(attached.id);
+        expect(
+          await git(["--git-dir", bare, "rev-parse", "refs/heads/main"]),
+        ).toBe(await git(["-C", source, "rev-parse", "HEAD"]));
+        context.close();
+      });
+    });
+
+    test("an older clone loses its stale branch copies once, and keeps work of its own", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const source = join(home, "source", "product");
+        await createRepository(source);
+        const context = await createApplicationContext({
+          env: { DAEDALUS_HOME: home },
+          reconcile: false,
+        });
+        const workspace = await context.workspaces.create({ name: "Heads" });
+        const attached = await context.workspaceContent.addAndAttachRepository({
+          workspace: workspace.id,
+          remoteUrl: source,
+        });
+        const bare = attached.canonicalPath;
+        // What a clone made before the tidy looked like: a stale copy of a
+        // remote branch, and a branch holding a commit nowhere else.
+        await git(["--git-dir", bare, "branch", "stale-copy", "main"]);
+        const unique = await git([
+          "--git-dir",
+          bare,
+          "commit-tree",
+          "main^{tree}",
+          "-p",
+          "main",
+          "-m",
+          "only here",
+        ]);
+        await git(["--git-dir", bare, "branch", "keep-me", unique]);
+        await git([
+          "--git-dir",
+          bare,
+          "config",
+          "--unset",
+          "daedalus.clonedBranchesTidied",
+        ]);
+
+        await context.workspaceContent.fetchRepository(attached.id);
+        expect(await branchExists(bare, "stale-copy")).toBe(false);
+        expect(await branchExists(bare, "keep-me")).toBe(true);
+        expect(await branchExists(bare, "main")).toBe(true);
+
+        // Once only: a branch made afterwards is the maker's to keep.
+        await git(["--git-dir", bare, "branch", "made-later", "main"]);
+        await context.workspaceContent.fetchRepository(attached.id);
+        expect(await branchExists(bare, "made-later")).toBe(true);
+        context.close();
+      });
+    });
+
+    test("names a task's branch after the task, and follows a branch the agent switched to", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const source = join(home, "source", "product");
+        await createRepository(source);
+        const context = await contextWithStubbedAgent(home);
+        const workspace = await context.workspaces.create({ name: "Names" });
+        const attached = await context.workspaceContent.addAndAttachRepository({
+          workspace: workspace.id,
+          remoteUrl: source,
+        });
+        const task = await context.tasks.create({
+          workspace: workspace.id,
+          title: "Agent status in the app!",
+        });
+        const session = await context.agents.spawn({
+          workspace: workspace.id,
+          provider: "claude",
+          taskId: task.id,
+        });
+        const worktree = await context.workspaceContent.createSessionWorktree({
+          session: session.id,
+          repository: "product",
+        });
+        expect(worktree.branchName).toBe(
+          `daedalus/agent-status-in-the-app-${session.id.slice(0, 8)}`,
+        );
+
+        // The agent moves its work to a branch of its own.
+        await git(["-C", worktree.path, "checkout", "-q", "-b", "topic"]);
+        await commitIn(worktree.path, "WORK.md");
+        const pushed = await context.workspaceContent.pushSessionWorktree({
+          session: session.id,
+          repository: "product",
+        });
+        expect(pushed.worktree.branchName).toBe("topic");
+        expect(await git(["-C", source, "rev-parse", "topic"])).toBe(
+          await git(["-C", worktree.path, "rev-parse", "HEAD"]),
+        );
+        expect(await branchExists(source, worktree.branchName)).toBe(false);
+        expect(
+          (await context.workspaceContent.get(workspace.id)).worktrees[0]
+            ?.branchName,
+        ).toBe("topic");
+
+        // Pushed, so removable; and both branches the tree carried go with it.
+        await context.workspaceContent.removeSessionWorktree({
+          session: session.id,
+          repository: "product",
+        });
+        expect(await branchExists(attached.canonicalPath, "topic")).toBe(false);
+        expect(
+          await branchExists(attached.canonicalPath, worktree.branchName),
+        ).toBe(false);
+        context.close();
+      });
+    });
+
+    test("a squash merge counts as landed only when the merged pull request holds the tree's HEAD", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const source = join(home, "source", "product");
+        await createRepository(source);
+        const context = await contextWithStubbedAgent(home);
+        const workspace = await context.workspaces.create({ name: "Squash" });
+        const attached = await context.workspaceContent.addAndAttachRepository({
+          workspace: workspace.id,
+          remoteUrl: source,
+        });
+        const session = await context.agents.spawn({
+          workspace: workspace.id,
+          provider: "claude",
+        });
+        const worktree = await context.workspaceContent.createSessionWorktree({
+          session: session.id,
+          repository: "product",
+        });
+        await commitIn(worktree.path, "ONE.md");
+        await commitIn(worktree.path, "TWO.md");
+        await context.workspaceContent.pushSessionWorktree({
+          session: session.id,
+          repository: "product",
+        });
+        const head = await git(["-C", worktree.path, "rev-parse", "HEAD"]);
+
+        // What GitHub does: the work lands as one new commit, and the branch
+        // is deleted. The fetch prunes the remote branch that made it safe.
+        await git(["-C", source, "merge", "--squash", worktree.branchName]);
+        await git([
+          "-C",
+          source,
+          "-c",
+          "user.name=Daedalus Test",
+          "-c",
+          "user.email=test@daedalus.local",
+          "commit",
+          "-qm",
+          "Squashed (#1)",
+        ]);
+        await git(["-C", source, "branch", "-D", worktree.branchName]);
+        await context.workspaceContent.fetchRepository(attached.id);
+
+        // No pull request: the commits are only here, so the guard holds.
+        await expect(
+          context.workspaceContent.removeSessionWorktree({
+            session: session.id,
+            repository: "product",
+          }),
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+
+        // What `gh pr view` answers decides it. A merged pull request whose
+        // head is some other commit proves nothing; one whose head is this
+        // tree's HEAD does; an open one does not yet.
+        const answer = (state: string, headRefOid: string) =>
+          pullRequestAnswerHoldsHead(
+            "git",
+            worktree.path,
+            JSON.stringify({ state, headRefOid }),
+          );
+        const squashed = await git(["-C", source, "rev-parse", "HEAD"]);
+        expect(await answer("MERGED", squashed)).toBe(false);
+        expect(await answer("OPEN", head)).toBe(false);
+        expect(await answer("MERGED", head)).toBe(true);
+        expect(
+          await pullRequestAnswerHoldsHead("git", worktree.path, "not json"),
+        ).toBe(false);
+        context.close();
+      });
+    });
   });
 
   test("lists repositories without waiting for git to measure them", async () => {

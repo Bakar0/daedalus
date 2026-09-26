@@ -531,20 +531,6 @@ function SettingsIcon() {
   );
 }
 
-// VS Code Codicons repo-pull glyph (MIT).
-function RepositoryPullIcon() {
-  return (
-    <svg aria-hidden="true" fill="currentColor" viewBox="0 0 16 16">
-      <path d="M4.85 6.15A.49.49 0 0 0 4.5 6a.49.49 0 0 0-.35.15.49.49 0 0 0-.15.35c0 .127.05.255.15.35l3 3c.095.1.222.15.35.15a.49.49 0 0 0 .35-.15l3-3a.49.49 0 0 0 .15-.35.49.49 0 0 0-.15-.35.49.49 0 0 0-.35-.15.49.49 0 0 0-.35.15L8 8.29V1.5a.5.5 0 0 0-1 0v6.79L4.85 6.15Z" />
-      <path
-        clipRule="evenodd"
-        d="M9.95 13h2.55a.5.5 0 0 1 0 1H9.95A2.5 2.5 0 0 1 5.05 14H2.5a.5.5 0 0 1 0-1h2.55a2.5 2.5 0 0 1 4.9 0ZM6.09 14A1.5 1.5 0 0 0 9 13.5 1.5 1.5 0 0 0 6 13.5c0 .18.03.34.09.5Z"
-        fillRule="evenodd"
-      />
-    </svg>
-  );
-}
-
 // VS Code Codicons sync glyph (MIT).
 function RepositoryFetchIcon() {
   return (
@@ -3322,12 +3308,6 @@ export function WorkspaceApp({
     );
   }
 
-  async function syncWorkspaceRepository(repositoryId: string) {
-    await runRepositoryAction(`pull:${repositoryId}`, () =>
-      client.request.workspaceRepositorySync({ id: repositoryId }),
-    );
-  }
-
   async function pushSessionWorktree(worktree: SessionWorktreeDto) {
     await runRepositoryAction(
       `push:${worktree.sessionId}:${worktree.repositoryId}`,
@@ -3958,23 +3938,10 @@ export function WorkspaceApp({
                 pendingRepositoryActions.has(`fetch:${repository.id}`)
               }
               onClick={() => void fetchWorkspaceRepository(repository.id)}
-              title="Fetch the shared clone; no working tree is touched"
+              title={`Fetch, and move this checkout to the latest ${repository.baseBranch ?? "default branch"}`}
               type="button"
             >
               <RepositoryFetchIcon />
-            </button>
-            <button
-              aria-label={`Pull ${repository.name}`}
-              className={`quiet repository-action ${pendingRepositoryActions.has(`pull:${repository.id}`) ? "syncing" : ""}`}
-              disabled={
-                repository.status !== "ready" ||
-                pendingRepositoryActions.has(`pull:${repository.id}`)
-              }
-              onClick={() => void syncWorkspaceRepository(repository.id)}
-              title={`Fetch and fast-forward this checkout from ${repository.baseBranch ?? "the remote default branch"}`}
-              type="button"
-            >
-              <RepositoryPullIcon />
             </button>
           </span>
         </div>
