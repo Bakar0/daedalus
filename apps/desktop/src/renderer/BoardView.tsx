@@ -7,6 +7,7 @@
  * `board-lanes.ts`; this file only draws them and forwards clicks.
  */
 import { useEffect, useState, type ReactNode } from "react";
+import { askConfirm } from "./dialogs";
 import type {
   AgentActivityDto,
   AgentSessionDto,
@@ -169,12 +170,17 @@ export function noAgentLabel(endedAt: string | undefined, now: number) {
   return `No agent running · last one stopped ${age === "just now" ? age : `${age} ago`}`;
 }
 
-export function confirmStartDespite(task: TaskDto, waiting: TaskDto[]) {
+export async function confirmStartDespite(
+  task: TaskDto,
+  waiting: TaskDto[],
+): Promise<boolean> {
   if (waiting.length === 0) return true;
   const names = waiting.map((item) => `#${item.number} ${item.title}`);
-  return window.confirm(
-    `${names.join(", ")} ${waiting.length === 1 ? "is" : "are"} not done yet. Start #${task.number} anyway?`,
-  );
+  return askConfirm({
+    title: "Start anyway?",
+    message: `${names.join(", ")} ${waiting.length === 1 ? "is" : "are"} not done yet. Start #${task.number} anyway?`,
+    confirmLabel: "Start anyway",
+  });
 }
 
 /**
@@ -934,8 +940,9 @@ export function BoardView(props: BoardViewProps) {
                   disabled={!props.tmuxAvailable || starting}
                   onClick={(event) => {
                     event.stopPropagation();
-                    if (confirmStartDespite(task, waitingOn))
-                      props.onStart(task);
+                    void confirmStartDespite(task, waitingOn).then(
+                      (start) => start && props.onStart(task),
+                    );
                   }}
                   title={
                     waitingOn.length
@@ -952,8 +959,9 @@ export function BoardView(props: BoardViewProps) {
                   disabled={!props.tmuxAvailable || starting}
                   onClick={(event) => {
                     event.stopPropagation();
-                    if (confirmStartDespite(task, waitingOn))
-                      props.onStartWith(task);
+                    void confirmStartDespite(task, waitingOn).then(
+                      (start) => start && props.onStartWith(task),
+                    );
                   }}
                   title="Choose provider and model"
                   type="button"
@@ -1063,13 +1071,10 @@ export function BoardView(props: BoardViewProps) {
                       }
                       onClick={() => {
                         const next = laneTasks[0]!;
-                        if (
-                          confirmStartDespite(
-                            next,
-                            unfinishedDependencies(next, tasksById),
-                          )
-                        )
-                          props.onStartNext(next);
+                        void confirmStartDespite(
+                          next,
+                          unfinishedDependencies(next, tasksById),
+                        ).then((start) => start && props.onStartNext(next));
                       }}
                       title={`Start ${workspace ? "" : (workspaceOf(laneTasks[0])?.slug ?? "")}#${laneTasks[0].number} ${laneTasks[0].title} with ${providerLabel(workspaceOf(laneTasks[0])?.defaultProvider ?? props.availableProviders[0] ?? "claude")}`}
                       type="button"

@@ -72,7 +72,9 @@ export function TaskActionBar(props: TaskActionBarProps) {
           className={`board-start${actions.waitingOn.length ? " waiting" : ""}`}
           disabled={!tmuxAvailable || actions.starting}
           onClick={() => {
-            if (confirmStartDespite(task, actions.waitingOn)) props.onStart();
+            void confirmStartDespite(task, actions.waitingOn).then(
+              (start) => start && props.onStart(),
+            );
           }}
           title={
             !tmuxAvailable
@@ -91,8 +93,9 @@ export function TaskActionBar(props: TaskActionBarProps) {
           className="board-start-choose"
           disabled={!tmuxAvailable || actions.starting}
           onClick={() => {
-            if (confirmStartDespite(task, actions.waitingOn))
-              props.onStartWith();
+            void confirmStartDespite(task, actions.waitingOn).then(
+              (start) => start && props.onStartWith(),
+            );
           }}
           title="Choose provider and model"
           type="button"

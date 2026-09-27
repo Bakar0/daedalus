@@ -546,6 +546,12 @@ const client = {
         return ok(target);
       },
     ),
+    taskRemove: record("taskRemove", (params: { id: string }) => {
+      const index = snapshot.tasks.findIndex((item) => item.id === params.id);
+      const [removed] = snapshot.tasks.splice(index, 1);
+      announce();
+      return ok(removed!);
+    }),
     taskUpdate: record(
       "taskUpdate",
       (params: { id: string; priority?: TaskDto["priority"] }) => {

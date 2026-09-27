@@ -55,6 +55,7 @@ import { laneFor } from "./board-lanes";
 import { taskActions } from "./task-actions";
 import { TaskCostLine, TaskTimeline } from "./TaskTimeline";
 import { TaskActionBar } from "./TaskActionBar";
+import { askConfirm, askText, DialogHost } from "./dialogs";
 import { TaskPriorityMenu, TaskStatusMenu } from "./TaskStatusMenu";
 import {
   AgentStatusDot,
@@ -3491,12 +3492,21 @@ export function WorkspaceApp({
     }
   }
 
+  function confirmDiscardDraft() {
+    return askConfirm({
+      title: "Unsaved changes",
+      message: "Discard the unsaved changes in the current file?",
+      confirmLabel: "Discard",
+      danger: true,
+    });
+  }
+
   async function openWorkspaceFile(path: string) {
     if (!workspace) return;
     if (
       selectedWorkspaceFile &&
       workspaceDraft !== selectedWorkspaceFile.content &&
-      !window.confirm("Discard the unsaved changes in the current file?")
+      !(await confirmDiscardDraft())
     )
       return;
     const response = await client.request.workspaceFileRead({
@@ -3546,7 +3556,7 @@ export function WorkspaceApp({
     if (
       selectedWorkspaceFile &&
       workspaceDraft !== selectedWorkspaceFile.content &&
-      !window.confirm("Discard the unsaved changes in the current file?")
+      !(await confirmDiscardDraft())
     )
       return;
     const created = await perform(
@@ -3693,10 +3703,12 @@ export function WorkspaceApp({
   async function moveWorkspaceEntry(entry: WorkspaceFileEntryDto) {
     if (!workspace) return;
     const from = workspaceParentPath(entry.path);
-    const destination = window.prompt(
-      `Move ${entry.name} into which folder? Leave empty for the workspace root.`,
-      from,
-    );
+    const destination = await askText({
+      title: `Move ${entry.name}`,
+      message: "Move into which folder? Leave empty for the workspace root.",
+      initial: from,
+      confirmLabel: "Move",
+    });
     if (destination === null) return;
     const moved = await perform(
       client.request.workspaceEntryMove({
@@ -3711,11 +3723,15 @@ export function WorkspaceApp({
   async function removeWorkspaceEntry(entry: WorkspaceFileEntryDto) {
     if (!workspace) return;
     if (
-      !window.confirm(
-        entry.kind === "directory"
-          ? `Delete the folder ${entry.name} and everything inside it? This cannot be undone.`
-          : `Delete ${entry.name}? This cannot be undone.`,
-      )
+      !(await askConfirm({
+        title: entry.kind === "directory" ? "Delete folder" : "Delete file",
+        message:
+          entry.kind === "directory"
+            ? `Delete the folder ${entry.name} and everything inside it? This cannot be undone.`
+            : `Delete ${entry.name}? This cannot be undone.`,
+        confirmLabel: "Delete",
+        danger: true,
+      }))
     )
       return;
     const removed = await perform(
@@ -4396,7 +4412,13 @@ export function WorkspaceApp({
   );
 
   async function deleteTask(task: TaskDto) {
-    if (!window.confirm(`Permanently delete task “${task.title}”?`)) return;
+    const confirmed = await askConfirm({
+      title: "Delete task",
+      message: `Permanently delete task #${task.number} "${task.title}"? This cannot be undone.`,
+      confirmLabel: "Delete task",
+      danger: true,
+    });
+    if (!confirmed) return;
     await perform(client.request.taskRemove({ id: task.id, force: true }));
     setSelectedTaskId(undefined);
   }
@@ -6606,6 +6628,7 @@ export function WorkspaceApp({
           </div>
         </Modal>
       )}
+      <DialogHost />
     </main>
   );
 }

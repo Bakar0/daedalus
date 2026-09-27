@@ -1484,6 +1484,13 @@ button:not(
   padding: 24px;
   width: calc(100% - 48px);
 }
+/* A confirm can be asked from inside another dialog, so it sits above them. */
+.app-dialog-backdrop {
+  z-index: 20;
+}
+.app-dialog-message {
+  white-space: pre-line;
+}
 .modal-form {
   margin-top: 22px;
 }

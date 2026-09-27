@@ -104,18 +104,21 @@ try {
   >();
   const rendererErrors: string[] = [];
   const dialogs: string[] = [];
-  let acceptDialogs = false;
+  // A native dialog is a failure, not something to answer. The app's
+  // WKWebView never shows one, so `confirm` there is a silent "no" (#40);
+  // Chrome showing it is exactly how the checks used to pass anyway.
+  const nativeDialogs: string[] = [];
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(String(event.data));
     if (message.method === "Page.javascriptDialogOpening") {
-      dialogs.push(message.params.message);
-      // Answered here, from the socket handler: the page is blocked until it
+      nativeDialogs.push(message.params.message);
+      // Dismissed here, from the socket handler: the page is blocked until it
       // is, so waiting for the next evaluate to do it would deadlock.
       socket.send(
         JSON.stringify({
           id: ++sequence,
           method: "Page.handleJavaScriptDialog",
-          params: { accept: acceptDialogs },
+          params: { accept: false },
         }),
       );
       return;
@@ -200,6 +203,22 @@ try {
     throw new Error(`${step}: timed out waiting for ${what}`);
   };
   const failures: string[] = [];
+  /** Waits for the app's own dialog, records what it asked, and answers it. */
+  const answerDialog = async (accept: boolean) => {
+    await waitFor("document.querySelector('.app-dialog')", "the dialog");
+    dialogs.push(
+      await evaluate<string>(
+        "document.querySelector('.app-dialog-message').textContent",
+      ),
+    );
+    await evaluate(
+      `document.querySelector('.app-dialog [data-dialog-answer="${accept ? "confirm" : "cancel"}"]').click()`,
+    );
+    await waitFor(
+      "!document.querySelector('.app-dialog')",
+      "the dialog to close",
+    );
+  };
   const check = (condition: boolean, message: string) => {
     if (!condition) failures.push(`${step}: ${message}`);
   };
@@ -471,9 +490,9 @@ try {
   );
 
   step = "waiting start, declined";
-  acceptDialogs = false;
   const spawnsBeforeStart = (await calls("agentSpawn")).length;
   await clickInCard(27, "Start ⚠");
+  await answerDialog(false);
   await Bun.sleep(200);
   check(
     dialogs.at(-1)?.includes("#25 Board rework is not done yet") ?? false,
@@ -485,8 +504,8 @@ try {
   );
 
   step = "waiting start, accepted";
-  acceptDialogs = true;
   await clickInCard(27, "Start ⚠");
+  await answerDialog(true);
   await waitFor(
     `document.querySelector('.board-lane[data-lane="running"] .board-card[data-task-number="27"]')`,
     "#27 to move to Running",
@@ -859,9 +878,9 @@ try {
 
   // Delete is a plain button beside Edit, in the danger colour, and asks
   // before doing anything. Every bar button carries an icon.
-  acceptDialogs = false;
   const removesBefore = (await calls("taskRemove")).length;
   await evaluate(`${deleteButton}.click()`);
+  await answerDialog(false);
   await Bun.sleep(200);
   check(
     dialogs.at(-1)?.includes("Permanently delete task") ?? false,
@@ -875,7 +894,6 @@ try {
     await evaluate<boolean>("Boolean(document.querySelector('.task-drawer'))"),
     "a declined Delete closed the drawer",
   );
-  acceptDialogs = true;
   const iconless = await evaluate<string[]>(
     `[...${bar}.querySelectorAll('button')].filter((button) => !button.querySelector('.task-action-icon') && button.textContent.trim() !== '▾').map((button) => button.textContent.trim())`,
   );
@@ -1384,6 +1402,40 @@ try {
   await Bun.sleep(150);
   const light = await screenshot("light");
 
+  step = "delete, accepted";
+  // Last, because it takes #25 off the board for good. This is the path that
+  // did nothing in the app (#40): the confirm answered no before anyone saw it.
+  await evaluate(`${card(25)}.click()`);
+  await waitFor("document.querySelector('.task-drawer')", "the drawer to open");
+  await evaluate(`${deleteButton}.click()`);
+  await waitFor("document.querySelector('.app-dialog')", "the dialog");
+  const deleteDialogShot = await screenshot("delete-dialog");
+  await answerDialog(true);
+  await waitFor(
+    `!${card(25)}`,
+    "#25 to leave the board after a confirmed Delete",
+  );
+  check(
+    dialogs.at(-1)?.includes('#25 "Board rework"') ?? false,
+    `Delete asked "${dialogs.at(-1)}"`,
+  );
+  check(
+    (await calls("taskRemove")).some(
+      (params) => params.id === "task-25" && params.force === true,
+    ),
+    "a confirmed Delete did not call taskRemove with force",
+  );
+  check(
+    !(await evaluate<boolean>(
+      "Boolean(document.querySelector('.task-drawer'))",
+    )),
+    "a confirmed Delete left the drawer open",
+  );
+
+  if (nativeDialogs.length)
+    failures.push(
+      `native dialogs opened, which the app cannot show: ${JSON.stringify(nativeDialogs)}`,
+    );
   if (rendererErrors.length)
     failures.push(`renderer errors:\n${rendererErrors.join("\n")}`);
   socket.close();
@@ -1406,6 +1458,7 @@ try {
       allSessionsShot,
       compactShot,
       light,
+      deleteDialogShot,
     ]
       .map((path) => `Screenshot: ${path}`)
       .join("\n"),
