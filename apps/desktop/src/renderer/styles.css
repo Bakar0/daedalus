@@ -2437,6 +2437,22 @@ dd {
 .git-part.tone-clean {
   color: var(--muted);
 }
+.git-part.tone-merged {
+  color: #a98bf0;
+}
+/* What the last fetch did, beside the checkout's status. */
+.repository-fetch-note.tone-new {
+  color: var(--success);
+}
+.repository-fetch-note.tone-held {
+  color: #eab66f;
+}
+.repository-fetch-note.tone-error {
+  color: var(--danger);
+}
+.repository-fetch-note.tone-none {
+  color: var(--muted);
+}
 
 /* An attachment exists before its clone does, so the row has to be able to say
    it is still arriving, or that it never did. */

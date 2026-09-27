@@ -89,6 +89,18 @@ one library clone can be attached to many workspaces.
 This is the place to run the latest merged code: open a terminal in
 `<workspace>/repos/<repository-name>` after a fetch.
 
+The Repositories column's fetch button fetches every repository in the
+workspace at once; each row's own button fetches one. Afterwards each row says
+for two minutes what its checkout took: `+N new` with the commits in its
+tooltip, `up to date`, `not moved` when local changes or diverged history held
+it back, or `fetch failed`.
+
+A worktree row's `↑N` counts only commits that no branch on `origin` holds,
+which is what is waiting to be pushed. A branch whose commits are all on
+`origin` reads `pushed`, and one whose merged pull request holds the
+worktree's `HEAD` reads `merged`, including after a squash merge. `↓N` is how
+far the base branch has moved since the worktree branched.
+
 Every attachment has one behavior: the workspace receives a read-only planning
 checkout, and task sessions receive independent writable Git worktrees when
 they need to implement changes. The repository picker does not ask users to

@@ -1347,6 +1347,8 @@ Before working in this workspace:
           // The committed file only: SCRATCH.md is not part of the diff a
           // reviewer would read.
           filesAhead: 1,
+          // Never pushed, so the one commit exists only here.
+          unpushed: 1,
         });
 
         // The board reads the same measurement for every workspace at once,
@@ -1908,6 +1910,126 @@ Before working in this workspace:
         expect(
           await pullRequestAnswerHoldsHead("git", worktree.path, "not json"),
         ).toBe(false);
+        context.close();
+      });
+    });
+  });
+
+  describe("fetching every repository", () => {
+    const git = async (args: string[]) => {
+      const result = await runCommand("git", args);
+      expect(result.exitCode).toBe(0);
+      return result.stdout.trim();
+    };
+    const commitIn = async (path: string, name: string) => {
+      await Bun.write(join(path, name), `# ${name}\n`);
+      await git(["-C", path, "add", name]);
+      await git([
+        "-C",
+        path,
+        "-c",
+        "user.name=Daedalus Test",
+        "-c",
+        "user.email=test@daedalus.local",
+        "commit",
+        "-qm",
+        `Add ${name}`,
+      ]);
+    };
+
+    test("says what each checkout took, and why one stayed behind", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const moving = join(home, "source", "moving");
+        const quiet = join(home, "source", "quiet");
+        const held = join(home, "source", "held");
+        for (const source of [moving, quiet, held])
+          await createRepository(source);
+        const context = await createApplicationContext({
+          env: { DAEDALUS_HOME: home },
+          reconcile: false,
+        });
+        const workspace = await context.workspaces.create({ name: "All" });
+        const attached = [];
+        for (const remoteUrl of [moving, quiet, held])
+          attached.push(
+            await context.workspaceContent.addAndAttachRepository({
+              workspace: workspace.id,
+              remoteUrl,
+            }),
+          );
+        await commitIn(moving, "ONE.md");
+        await commitIn(moving, "TWO.md");
+        await commitIn(held, "LATER.md");
+        await Bun.write(
+          join(attached[2]!.referencePath!, "NOTES.md"),
+          "mine\n",
+        );
+
+        const outcomes = await context.workspaceContent.fetchRepositories({
+          workspace: workspace.id,
+        });
+        const byName = new Map(outcomes.map((item) => [item.name, item]));
+        expect(byName.get("moving")).toMatchObject({
+          newCommits: 2,
+          behind: 0,
+          commits: [{ subject: "Add TWO.md" }, { subject: "Add ONE.md" }],
+          to: await git(["-C", moving, "rev-parse", "HEAD"]),
+        });
+        expect(byName.get("quiet")).toMatchObject({
+          newCommits: 0,
+          behind: 0,
+          commits: [],
+        });
+        expect(byName.get("held")).toMatchObject({
+          newCommits: 0,
+          behind: 1,
+          heldBack: "local-changes",
+        });
+        expect(byName.get("held")?.from).toBe(byName.get("held")?.to);
+
+        // Naming one fetches only that one.
+        const one = await context.workspaceContent.fetchRepositories({
+          workspace: workspace.id,
+          ids: [attached[1]!.id],
+        });
+        expect(one.map((item) => item.name)).toEqual(["quiet"]);
+        context.close();
+      });
+    }, 30_000);
+
+    test("counts as unpushed only the commits origin does not have", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const source = join(home, "source", "product");
+        await createRepository(source);
+        const context = await contextWithStubbedAgent(home);
+        const workspace = await context.workspaces.create({ name: "Push" });
+        await context.workspaceContent.addAndAttachRepository({
+          workspace: workspace.id,
+          remoteUrl: source,
+        });
+        const session = await context.agents.spawn({
+          workspace: workspace.id,
+          provider: "claude",
+        });
+        const worktree = await context.workspaceContent.createSessionWorktree({
+          session: session.id,
+          repository: "product",
+        });
+        await commitIn(worktree.path, "WORK.md");
+        const status = async () => {
+          await context.workspaceContent.settleGitStatus(workspace.id);
+          return (await context.workspaceContent.get(workspace.id)).worktrees[0]
+            ?.gitStatus;
+        };
+        expect(await status()).toMatchObject({ ahead: 1, unpushed: 1 });
+
+        // Pushed: still ahead of the base branch, but nothing left to push.
+        await context.workspaceContent.pushSessionWorktree({
+          session: session.id,
+          repository: "product",
+        });
+        await context.workspaceContent.get(workspace.id);
+        expect(await status()).toMatchObject({ ahead: 1, unpushed: 0 });
         context.close();
       });
     });

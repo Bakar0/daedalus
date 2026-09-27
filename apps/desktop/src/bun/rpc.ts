@@ -380,6 +380,8 @@ export function createDesktopRequestHandlers(
           await context.workspaceContent.fetchRepository(id),
         ),
       ),
+    workspaceRepositoriesFetch: (params) =>
+      mutate(() => context.workspaceContent.fetchRepositories(params)),
     sessionWorktreeRemove: (params) =>
       mutate(async () => ({
         ...(await context.workspaceContent.removeSessionWorktree(params)),
