@@ -13,6 +13,10 @@ describe("caskSource", () => {
       "releases/download/v#{version}/stable-macos-#{arch}-Daedalus.dmg",
     );
     expect(cask).toContain("auto_updates true");
+    // Linked from inside the app, so `daedal` is on PATH after install.
+    expect(cask).toContain(
+      'binary "#{appdir}/Daedalus.app/Contents/Resources/bin/daedal"',
+    );
   });
 
   test("only an unnotarized build is taken out of quarantine", () => {

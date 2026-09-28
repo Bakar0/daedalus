@@ -34,16 +34,12 @@
 Requires macOS 14 or newer and `git`.
 
 ```sh
-# Install the app
 brew install --cask bakar0/tap/daedalus
-
-# Put the daedal CLI on your PATH (the app creates it on first launch)
-echo 'export PATH="$HOME/.daedalus/bin:$PATH"' >> ~/.zshrc
 ```
 
-Open Daedalus from Applications, then install and sign in to the agent CLIs you want to use, such as [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://github.com/openai/codex).
+This installs the app and puts the `daedal` command on your PATH. Open Daedalus from Applications once to finish setting it up, then install and sign in to the agent CLIs you want to use, such as [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://github.com/openai/codex).
 
-Verify the install from a new terminal:
+Verify the install:
 
 ```console
 $ daedal doctor

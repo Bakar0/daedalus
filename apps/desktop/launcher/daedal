@@ -1,0 +1,17 @@
+#!/bin/sh
+# The `daedal` command Homebrew links onto PATH. It lives in
+# Daedalus.app/Contents/Resources/bin and runs the CLI inside the same app
+# on the app's own bun, so it always matches the installed version.
+#
+# Homebrew installs a small wrapper that unpacks the real app the first time
+# it is opened. Until then there is no CLI to run, so this says so rather
+# than failing on a missing file.
+self=$(readlink -f "$0") || exit 1
+contents=${self%/Resources/bin/daedal}
+bun="$contents/MacOS/bun"
+cli="$contents/Resources/app/cli/daedal.js"
+if [ ! -x "$bun" ] || [ ! -f "$cli" ]; then
+  echo "daedal: open Daedalus once to finish installing it." >&2
+  exit 69
+fi
+exec "$bun" "$cli" "$@"
