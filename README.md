@@ -1,100 +1,115 @@
 # Daedalus
 
-Daedalus is a macOS-first, local-first control plane for coding agents. Phases 0–6 are implemented: the shared foundation, complete workspace/task CLI, durable tmux-backed agent CLI, Electrobun desktop CRUD application, and integrated per-agent terminals.
+A macOS app and CLI for running coding agents such as Claude Code and Codex, organized by workspace and task.
 
-Workspaces are ordinary work-package directories rather than repositories themselves. Daedalus stores one bare clone per remote in its global repository library and creates freshly fetched, read-only planning checkouts under each workspace's `repos/` directory. Agent sessions start in isolated folders and create independent linked Git worktrees only for repositories they actually need. SQLite stores searchable metadata, while the filesystem remains authoritative for workspace existence and tmux remains authoritative for live sessions.
+- **Workspaces and a task board.** Each workspace has a brief, a journal, tasks and the repositories it works on.
+- **Sessions that outlive the app.** Every agent runs in tmux. Quitting, updating or reopening the app leaves them running.
+- **One worktree per session.** Agents get their own Git worktrees, so parallel sessions never share a checkout.
+- **A CLI over the same core.** `daedal` does everything the app does, from a terminal or from inside an agent.
 
 ## Install
 
-With Homebrew:
+Requires macOS 14 or newer, on Apple silicon or Intel.
+
+1. **Install Homebrew**, if the Mac doesn't have it. This also installs Apple's Command Line Tools, which provide `git`.
+
+   ```sh
+   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+   ```
+
+2. **Install Daedalus.**
+
+   ```sh
+   brew install --cask bakar0/tap/daedalus
+   ```
+
+3. **Install the agent CLIs you use**, such as Claude Code or Codex, and sign in to each once in a terminal. Daedalus starts them but doesn't install them.
+
+4. **Open Daedalus** from Applications. The first launch takes a few extra seconds while the app unpacks itself.
+
+5. **Add `daedal` to your shell**, to use it from your own terminal. Sessions started by Daedalus already have it.
+
+   ```sh
+   echo 'export PATH="$HOME/.daedalus/bin:$PATH"' >> ~/.zshrc
+   ```
+
+   Open a new terminal and run `daedal doctor` to check the install.
+
+The app carries its own Bun and tmux, so nothing else needs to be installed.
+
+### Without Homebrew
+
+Download the DMG for your Mac from the [latest release](https://github.com/Bakar0/daedalus/releases/latest), `stable-macos-arm64-Daedalus.dmg` for Apple silicon or `stable-macos-x64-Daedalus.dmg` for Intel, and drag Daedalus to Applications.
+
+Releases aren't signed with an Apple Developer ID yet, so macOS refuses to open a downloaded copy until you run this once:
 
 ```sh
-brew install --cask bakar0/tap/daedalus
+xattr -dr com.apple.quarantine /Applications/Daedalus.app
 ```
 
-Or download `stable-macos-arm64-Daedalus.dmg` (Apple silicon) or `stable-macos-x64-Daedalus.dmg` (Intel) from the [latest release](https://github.com/Bakar0/daedalus/releases/latest) and drag Daedalus to Applications.
+The Homebrew cask does this for you.
 
-The app carries its own Bun and its own tmux, so nothing else has to be installed for it to start and run sessions. It needs macOS 14 or newer, `git` (macOS offers to install the Command Line Tools the first time anything runs it), and the agent CLIs you want to use, such as `claude` or `codex`.
+## Updates
 
-Daedalus checks GitHub Releases for a newer version shortly after it starts and every six hours. When one exists it shows a bar under the toolbar with **Update and restart** and **Later**. Updating replaces the app and reopens it; sessions keep running through the restart, as with any quit. **Later** hides that version until a newer one ships, and **Daedalus → Check for Updates…** asks at any time. Homebrew leaves an app that updates itself alone, so `brew upgrade` does not fight it.
+Daedalus checks for a new release when it starts and every six hours. When one is out, a dot appears on the Settings button, and **Update and restart** appears under the toolbar and in **Settings → About**. The app replaces itself and reopens; running sessions are not interrupted.
 
-Until releases are signed with an Apple Developer ID, macOS refuses to open a downloaded DMG build ("Daedalus is damaged" or "cannot be opened"). The Homebrew cask clears the quarantine flag itself. For a DMG install, run `xattr -dr com.apple.quarantine /Applications/Daedalus.app` once. [Releasing](docs/releasing.md) describes how signing is switched on.
+**Daedalus → Check for Updates…** checks right away. `brew upgrade` leaves Daedalus alone, since it updates itself.
 
-## Requirements for building
+## Your data
 
-- macOS 14 or newer with the Xcode Command Line Tools
-- Bun **1.4.2** (verified; pinned in CI and checked by `daedal doctor`)
-- Electrobun **1.18.1** (project dependency)
+Everything lives in `~/.daedalus`: the database, workspaces, repositories, worktrees and logs. Reinstalling, updating or uninstalling the app never touches it, not even `brew uninstall --zap`.
 
-`bun run build` compiles the tmux the app bundles (see `scripts/build-tmux.ts`), so a build machine needs no tmux either. Running the test suite from a checkout does need tmux **3.7c** or newer on `PATH`.
+## Using the CLI
 
-The dependency baseline was verified on 2026-09-12. Exact JavaScript versions are recorded in `package.json` and `bun.lock`; see [Phase 0 decisions](docs/phase-0.md) for upstream sources and transport evidence.
+```sh
+daedal workspace create "My project"
+daedal task create --workspace my-project --title "Implement feature"
+daedal agent spawn --workspace my-project --provider claude
+daedal agent list --running
+```
 
-## Getting started
+`daedal --help` lists every command. See the [CLI reference](docs/cli.md).
+
+## Development
+
+Requires macOS 14 or newer with the Command Line Tools, Bun **1.4.2**, and tmux **3.7c** or newer on `PATH` for the tests.
 
 ```sh
 bun install --frozen-lockfile
 bun node_modules/electrobun/bin/electrobun.cjs prepare
-bun test
-bun run typecheck
-bun run build
-bun run daedal --help
+bun test && bun run typecheck
+bun run dev          # run the app from source
+bun run build        # package Daedalus-dev.app
 ```
 
-Start the desktop application with:
+A dev build keeps its data in `~/.daedalus-dev`, apart from the installed app. To keep an experiment out of both, set `DAEDALUS_HOME`:
 
 ```sh
-bun run dev
+DAEDALUS_HOME=/tmp/daedalus-test bun run daedal doctor
 ```
 
-The centered workspace control switches between three complete layouts: **Board** uses a wide task canvas with a workspace column and a task drawer, **Sessions** uses a compact vertical session navigator with a terminal-dominant work area, and **Workspace** shows `BRIEF.md`, `JOURNAL.md` and the workspace's files, including the checkouts under `repos/` and `worktrees/`. Board is the first tab and the default. Its right column belongs to the workspace and lists the repositories with their working trees and an add button; a selected task opens in a drawer over it. **New session** presents Codex, Claude, and Terminal as direct tool choices. Session cards include lifecycle status and start/end time. Task briefs remain editable as GitHub-flavored Markdown. Closing or reopening the app detaches and reconnects terminals without terminating their tmux-owned sessions.
+| Command                       | What it checks                                     |
+| ----------------------------- | -------------------------------------------------- |
+| `bun test`                    | unit and SQLite migration tests                    |
+| `bun run typecheck`           | strict TypeScript                                  |
+| `bun run format:check`        | Prettier formatting                                |
+| `bun run verify:versions`     | exact dependency and Bun pins                      |
+| `bun run test:agent-tmux`     | agent lifecycle against a real tmux                |
+| `bun run test:cli-agent`      | workspace → task → agent → cleanup through the CLI |
+| `bun run test:terminal-agent` | terminals: noisy output, reconnect, cleanup        |
+| `bun run test:settings-ui`    | the Settings dialog, in a real browser             |
 
-A separate VS Code-style integrated terminal lives at the bottom of both workspace modes. Its tabs are persisted independently from agent conversations: **+** opens a shell in `DAEDALUS_HOME`, while the terminal action on a workspace card opens one in that workspace path. Collapsing the panel or restarting the app leaves its tmux sessions available; closing a tab terminates and removes only that utility terminal.
-
-Terminal traffic uses a token-authenticated loopback WebSocket. A native Bun PTY attaches to the durable tmux session and preserves exact redraw, cursor, shortcut, Unicode, and resize behavior; the renderer retains 10,000 scrollback lines while attached. Both Bun-side and renderer-side pending output are bounded to 1 MiB. When a noisy producer outruns the UI, Daedalus drops old pending bytes, reports the amount, and leaves the durable tmux pane available for a fresh redraw. Live, reconnecting, exited, and lost states are shown explicitly. CLI `agent attach` remains compatible with the same session.
-
-Changes made through `daedal` while the desktop is open are detected and shown promptly. Workspace and task deletion retain the same core safety guards as the CLI; the UI requires explicit confirmation and never deletes workspace files by default.
-
-Sessions and workspaces use an archive-first lifecycle. Archiving a session stops its tmux process and moves it to the collapsed archive while preserving its provider conversation. Restoring a Codex or Claude session launches a fresh tmux runtime through the provider's native resume command. Archiving a workspace archives all of its sessions; restoring the workspace leaves those sessions archived until they are restored individually. Free terminals reopen as fresh shells in the same workspace.
-
-To keep tests and experiments out of the real home directory:
-
-```sh
-DAEDALUS_HOME=/tmp/my-daedalus-home bun run daedal doctor
-```
-
-The default data directory is `~/.daedalus`, containing `config.json`, `state.db`, `logs/`, and `workspaces/`. Configuration and migrations create directories and databases, never a workspace or task record.
-
-## Commands
-
-- `bun test` — fast unit and SQLite migration integration tests
-- `bun run test:agent-tmux` — isolated production agent/tmux lifecycle verification
-- `bun run test:cli-agent` — full workspace → task → agent → cleanup CLI integration
-- `bun run test:terminal-spike` — real isolated tmux transport verification
-- `bun run test:terminal-agent` — real per-agent terminal, noisy output, reconnect, and cleanup verification
-- `bun run format:check` — formatting validation
-- `bun run typecheck` — strict TypeScript validation
-- `bun run build` — shared packages, CLI, Vite renderer, and packaged Electrobun app
-- `bun run verify:versions` — exact dependency and Bun runtime guard
-- `bun run daedal --help` — complete Phase 2–4 CLI surface
-- `bun run daedal doctor [--json]` — environment diagnostics
-
-Quick start:
-
-```sh
-bun run daedal workspace create "My project"
-bun run daedal task create --workspace my-project --title "Implement feature"
-bun run daedal agent spawn --workspace my-project --provider codex
-bun run daedal agent list --running
-```
-
-Every mutation flows through `@daedalus/core`. Workspace removal preserves files unless both `--delete-files` and `--force` are supplied; task removal requires `--force`; live agents block workspace and task removal.
+Pushing a `v<version>` tag publishes a release; see [Releasing](docs/releasing.md).
 
 ## Documentation
 
-- [Architecture](docs/architecture.md)
-- [Phase 0 decisions and spike evidence](docs/phase-0.md)
-- [CLI contract](docs/cli.md)
-- [Releasing](docs/releasing.md)
-- [Desktop RPC and UI](docs/desktop.md)
-- [Agent skills and installation](docs/skills.md)
+| Document                                       | Covers                                                           |
+| ---------------------------------------------- | ---------------------------------------------------------------- |
+| [Architecture](docs/architecture.md)           | package boundaries, persistence, session lifecycle and terminals |
+| [Desktop](docs/desktop.md)                     | the board, sessions, terminals, notifications and quitting       |
+| [Workspace content](docs/workspace-content.md) | workspaces, the repository library and worktrees                 |
+| [CLI](docs/cli.md)                             | every `daedal` command                                           |
+| [Skills](docs/skills.md)                       | the agent skills Daedalus installs                               |
+| [Skill system](docs/skill-system.md)           | the design of skills and writing styles                          |
+| [Releasing](docs/releasing.md)                 | releases, updates, signing and the Homebrew cask                 |
+| [Phase 0](docs/phase-0.md)                     | the original dependency and transport decisions                  |
