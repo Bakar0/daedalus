@@ -1774,6 +1774,9 @@ export function WorkspaceApp({
   const [quitRequest, setQuitRequest] = useState<ShutdownPlanDto>();
   // Also host-driven: the host checks for releases and says when to show this.
   const [appUpdate, setAppUpdate] = useState<AppUpdateDto | null>(null);
+  // A check asked for from Settings, until the host answers. The host has no
+  // "checking" state of its own, and without one the button looks dead.
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [quitting, setQuitting] = useState<QuitChoice>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -2357,6 +2360,36 @@ export function WorkspaceApp({
       unsubscribe?.();
     };
   }, [client]);
+  const checkForUpdate = useCallback(() => {
+    setCheckingUpdate(true);
+    void client.request
+      .appUpdateCheck({})
+      .then((response) => {
+        if (response.ok) setAppUpdate(response.data);
+        else
+          setAppUpdate({
+            state: "error",
+            currentVersion: snapshot?.settings.version ?? "",
+            message: `Could not check for updates: ${response.error.message}`,
+          });
+      })
+      .finally(() => setCheckingUpdate(false));
+  }, [client, snapshot?.settings.version]);
+  const installUpdate = useCallback(() => {
+    void client.request.appUpdateInstall({}).then((response) => {
+      if (response.ok) setAppUpdate(response.data);
+    });
+  }, [client]);
+  const dismissUpdate = useCallback(
+    (version?: string) => {
+      void client.request
+        .appUpdateDismiss({ ...(version ? { version } : {}) })
+        .then((response) => {
+          if (response.ok) setAppUpdate(response.data);
+        });
+    },
+    [client],
+  );
   // Deliberately not routed through Focus mode. This is a direct response to
   // the user pressing Cmd+Q, not an alert, and suppressing it would leave a
   // keystroke that silently does nothing.
@@ -4620,20 +4653,12 @@ export function WorkspaceApp({
       </header>
       {/* One grid row holds every banner, so two at once stack in it. */}
       <div className="banner-stack">
-        {appUpdate && (
+        {/* Settings shows the same state in About, so the bar would only
+            repeat it behind the dialog. */}
+        {appUpdate && modal !== "settings" && (
           <UpdateBanner
-            onDismiss={(version) =>
-              void client.request
-                .appUpdateDismiss({ ...(version ? { version } : {}) })
-                .then((response) => {
-                  if (response.ok) setAppUpdate(response.data);
-                })
-            }
-            onInstall={() =>
-              void client.request.appUpdateInstall({}).then((response) => {
-                if (response.ok) setAppUpdate(response.data);
-              })
-            }
+            onDismiss={dismissUpdate}
+            onInstall={installUpdate}
             update={appUpdate}
           />
         )}
@@ -5838,13 +5863,28 @@ export function WorkspaceApp({
         )}
         <div className="integrated-terminal-header">
           <button
-            aria-label="Open settings"
+            aria-label={
+              appUpdate?.state === "available"
+                ? `Open settings. Daedalus ${appUpdate.version} is available`
+                : "Open settings"
+            }
             className="quiet settings-corner-button"
-            onClick={() => setModal("settings")}
-            title="Settings"
+            onClick={() => {
+              // An offer opens Settings on About, where its button is.
+              if (appUpdate?.state === "available") setSettingsSection("about");
+              setModal("settings");
+            }}
+            title={
+              appUpdate?.state === "available"
+                ? `Settings · Daedalus ${appUpdate.version} is available`
+                : "Settings"
+            }
             type="button"
           >
             <SettingsIcon />
+            {appUpdate?.state === "available" ? (
+              <span aria-hidden="true" className="update-dot" />
+            ) : undefined}
           </button>
           <button
             aria-expanded={terminalPanelOpen}
@@ -6466,7 +6506,17 @@ export function WorkspaceApp({
       )}
 
       {modal === "settings" && snapshot && (
-        <Modal onClose={() => setModal(undefined)} title="Settings" wide>
+        <Modal
+          onClose={() => {
+            setModal(undefined);
+            // "Up to date" and a failed check were answers to the button in
+            // About, already read there. Kept, they would reappear as a bar.
+            if (appUpdate?.state === "current" || appUpdate?.state === "error")
+              dismissUpdate();
+          }}
+          title="Settings"
+          wide
+        >
           <SettingsModal
             busy={busy}
             client={client}
@@ -6481,6 +6531,12 @@ export function WorkspaceApp({
             section={settingsSection}
             settings={snapshot.settings}
             theme={theme}
+            updates={{
+              update: appUpdate,
+              checking: checkingUpdate,
+              onCheck: checkForUpdate,
+              onInstall: installUpdate,
+            }}
           />
         </Modal>
       )}

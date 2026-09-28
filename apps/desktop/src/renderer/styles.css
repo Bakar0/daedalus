@@ -3818,8 +3818,52 @@ dd {
   display: grid;
   gap: 9px;
 }
-.settings-update-check {
-  margin-top: 14px;
+.settings-update {
+  align-items: center;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  justify-content: space-between;
+  margin-top: 16px;
+  padding-top: 14px;
+}
+.settings-update-status {
+  color: var(--secondary);
+  flex: 1 1 260px;
+  font-size: 12px;
+  margin: 0;
+}
+.settings-update.is-error .settings-update-status {
+  color: var(--danger);
+}
+.settings-update[data-update-state="available"] .settings-update-status {
+  color: var(--text);
+}
+.settings-update-check,
+.settings-update-install {
+  flex-shrink: 0;
+}
+/* A newer version is waiting: on the Settings button and on About. */
+.update-dot {
+  background: var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--panel);
+  display: inline-block;
+  height: 7px;
+  width: 7px;
+}
+.settings-corner-button {
+  position: relative;
+}
+.settings-corner-button .update-dot {
+  position: absolute;
+  right: 8px;
+  top: 2px;
+}
+.settings-nav .update-dot {
+  margin-left: 7px;
+  vertical-align: 1px;
 }
 .settings-fact {
   display: grid;

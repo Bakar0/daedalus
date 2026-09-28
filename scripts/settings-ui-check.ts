@@ -25,6 +25,14 @@ const groupsScreenshotPath = join(
   projectRoot,
   "artifacts/settings-ui-groups.png",
 );
+const aboutScreenshotPath = join(
+  projectRoot,
+  "artifacts/settings-ui-about.png",
+);
+const cornerScreenshotPath = join(
+  projectRoot,
+  "artifacts/settings-ui-update-dot.png",
+);
 const generalScreenshotPath = join(
   projectRoot,
   "artifacts/settings-ui-general.png",
@@ -529,8 +537,83 @@ try {
     generalScreenshotPath,
     Buffer.from(generalShot.data, "base64"),
   );
+  // About, where an update is answered. The fake host offers 0.8.3, so the
+  // row, the dot on the About tab and the dot on the Settings button must all
+  // be there; the banner under the top bar must not, since this dialog would
+  // cover it.
+  await evaluate(`(() => {
+    [...document.querySelectorAll('.settings-nav button')]
+      .find((one) => one.textContent.trim() === 'About').click();
+  })()`);
+  await Bun.sleep(150);
+  const about = await evaluate<{
+    status: string;
+    button: string;
+    tabDot: boolean;
+    cornerDot: boolean;
+    banner: boolean;
+  }>(`(() => ({
+    status: document.querySelector('.settings-update-status')?.textContent ?? '',
+    button: document.querySelector('.settings-update button')?.textContent ?? '',
+    tabDot: Boolean([...document.querySelectorAll('.settings-nav button')]
+      .find((one) => one.textContent.trim() === 'About')?.querySelector('.update-dot')),
+    cornerDot: Boolean(document.querySelector('.settings-corner-button .update-dot')),
+    banner: Boolean(document.querySelector('.update-banner')),
+  }))()`);
+  if (!about.status.includes("Daedalus 0.8.3 is available"))
+    throw new Error(`About does not show the offer: ${about.status}`);
+  if (about.button !== "Update and restart")
+    throw new Error(`About offers the wrong button: ${about.button}`);
+  if (!about.tabDot || !about.cornerDot)
+    throw new Error(
+      `Update dot missing: About tab ${about.tabDot}, Settings button ${about.cornerDot}`,
+    );
+  if (about.banner)
+    throw new Error("The update banner shows behind the Settings dialog");
+  const aboutShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(aboutScreenshotPath, Buffer.from(aboutShot.data, "base64"));
   console.log(
-    `Screenshots: ${screenshotPath}, ${groupsScreenshotPath}, ${generalScreenshotPath}`,
+    "About answers the update itself: the offer, Update and restart, and a dot on the About tab and the Settings button",
+  );
+  // Closed, the offer goes back to the banner, and the dot stays on the
+  // Settings button in the bottom corner.
+  await evaluate(`(() => {
+    [...document.querySelectorAll('button')]
+      .find((one) => one.textContent.trim() === 'Close')?.click();
+  })()`);
+  await Bun.sleep(150);
+  const closed = await evaluate<{
+    banner: string;
+    corner: { x: number; y: number; width: number; height: number } | null;
+  }>(`(() => {
+    const corner = document.querySelector('.settings-corner-button');
+    const box = corner?.getBoundingClientRect();
+    return {
+      banner: document.querySelector('.update-banner')?.textContent ?? '',
+      corner: box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null,
+    };
+  })()`);
+  if (!closed.banner.includes("Daedalus 0.8.3 is available"))
+    throw new Error(`The banner did not return: ${closed.banner}`);
+  if (!closed.corner) throw new Error("No Settings button to show the dot on");
+  const cornerShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+    clip: {
+      x: Math.max(0, closed.corner.x - 8),
+      y: Math.max(0, closed.corner.y - 8),
+      width: 220,
+      height: closed.corner.height + 16,
+      scale: 2,
+    },
+  });
+  await Bun.write(cornerScreenshotPath, Buffer.from(cornerShot.data, "base64"));
+  console.log(
+    "Closed, the offer returns to the banner and the dot stays on Settings",
+  );
+  console.log(
+    `Screenshots: ${screenshotPath}, ${groupsScreenshotPath}, ${generalScreenshotPath}, ${aboutScreenshotPath}, ${cornerScreenshotPath}`,
   );
   socket.close();
 } finally {
