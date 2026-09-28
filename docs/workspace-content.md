@@ -114,10 +114,16 @@ repeat only working files and share the global clone's object database.
 Every agent session starts in an isolated folder. Task-backed sessions use:
 
 ```text
-worktrees/<task-id-prefix>-<task-slug>/<session-id>
+worktrees/<task-number>-<task-slug>/<provider>-<session-id-prefix>
 ```
 
-Workspace-level sessions use `worktrees/unassigned/<session-id>`. No repository
+For example, `worktrees/42-looks-like-we-have-issue-with/claude-038ed21c`. The
+slug is the task title cut at a word boundary to at most 30 characters. If the
+short session folder name is already taken, the folder uses the full session ID
+instead. Workspace-level sessions use
+`worktrees/unassigned/<provider>-<session-id-prefix>`. Sessions created before
+this layout keep their old folders, `<task-id-prefix>-<task-slug>/<session-id>`.
+No repository
 worktrees are created during spawn. The bootstrap instructions list every
 attached read-only checkout, and the bundled CLI lets the agent materialize only
 the repository it needs:
@@ -126,8 +132,8 @@ the repository it needs:
 daedal repo worktree create --session "$DAEDALUS_SESSION_ID" --repository <name>
 ```
 
-The command prints the writable path and is idempotent. The task ID and session
-ID are immutable, while the task slug is a creation-time hint; renaming a task
+The command prints the writable path and is idempotent. The task number and
+session ID are immutable, while the task slug is a creation-time hint; renaming a task
 never moves an existing session folder. A requested repository is created below
 the session folder on a branch named `daedalus/<task-slug>-<session-id-prefix>`
 (`daedalus/session-<session-id-prefix>` without a task), which is readable on
