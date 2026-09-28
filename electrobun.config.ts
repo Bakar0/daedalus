@@ -56,10 +56,13 @@ export default {
   // and it always has a window to ask in.
   runtime: { exitOnLastWindowClosed: false },
   build: {
-    // The runtime the app and its bundled CLI run on. Electrobun 1.18.1 ships
-    // 1.3.13; this is the version the repository verifies (`verify:versions`
-    // and `daedal doctor`), so the app is tested on what it ships with.
-    bunVersion: "1.4.2",
+    // No `bunVersion`: the app runs on the bun Electrobun 1.18.1 ships
+    // (1.3.13), which its native bridge is written against. 0.8.1 pinned
+    // 1.4.2, and every terminal came up black: bun 1.4 hands an FFI callback's
+    // `cstring` argument over as a string, Electrobun's page-to-host bridge
+    // calls `new CString()` on it, that throws, and the error is swallowed. Each
+    // request the page sent before its WebSocket opened, `terminalEndpoint`
+    // among them, was lost. Move with Electrobun, never ahead of it.
     bun: {
       entrypoint: "apps/desktop/src/bun/index.ts",
     },

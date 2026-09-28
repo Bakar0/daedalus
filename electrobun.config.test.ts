@@ -8,6 +8,12 @@ describe("desktop build configuration", () => {
     expect(config.build.copy["apps/desktop/dist/cli.js"]).toBe("cli/daedal.js");
   });
 
+  test("bundles the bun Electrobun ships, not a newer one", () => {
+    // Electrobun 1.18.1's page-to-host bridge breaks on bun 1.4: requests the
+    // page sends before its socket opens are dropped, and terminals stay black.
+    expect("bunVersion" in config.build).toBe(false);
+  });
+
   test("packages the Daedalus macOS app icon", () => {
     expect(config.build.mac.icons).toBe("assets/icon.iconset");
   });
