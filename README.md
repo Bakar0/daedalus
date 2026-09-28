@@ -9,25 +9,19 @@ A macOS app and CLI for running coding agents such as Claude Code and Codex, org
 
 ## Install
 
-Requires macOS 14 or newer, on Apple silicon or Intel.
+Requires macOS 14 or newer, on Apple silicon or Intel, and `git`.
 
-1. **Install Homebrew**, if the Mac doesn't have it. This also installs Apple's Command Line Tools, which provide `git`.
-
-   ```sh
-   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-   ```
-
-2. **Install Daedalus.**
+1. **Install Daedalus.**
 
    ```sh
    brew install --cask bakar0/tap/daedalus
    ```
 
-3. **Install the agent CLIs you use**, such as Claude Code or Codex, and sign in to each once in a terminal. Daedalus starts them but doesn't install them.
+2. **Install the agent CLIs you use**, such as Claude Code or Codex, and sign in to each once in a terminal. Daedalus starts them but doesn't install them.
 
-4. **Open Daedalus** from Applications. The first launch takes a few extra seconds while the app unpacks itself.
+3. **Open Daedalus** from Applications. The first launch takes a few extra seconds while the app unpacks itself.
 
-5. **Add `daedal` to your shell**, to use it from your own terminal. Sessions started by Daedalus already have it.
+4. **Add `daedal` to your shell**, to use it from your own terminal. Sessions started by Daedalus already have it.
 
    ```sh
    echo 'export PATH="$HOME/.daedalus/bin:$PATH"' >> ~/.zshrc
