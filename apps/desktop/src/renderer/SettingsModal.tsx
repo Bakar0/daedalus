@@ -227,6 +227,17 @@ export function SettingsModal({
                 value={settings.repositoryRoot}
               />
             </div>
+            {settings.channel !== "dev" ? (
+              // The answer appears in the banner under the top bar, the same
+              // place a background check would put it.
+              <button
+                className="settings-update-check"
+                disabled={busy}
+                onClick={() => void perform(client.request.appUpdateCheck({}))}
+              >
+                Check for updates
+              </button>
+            ) : undefined}
           </section>
         ) : undefined}
       </div>

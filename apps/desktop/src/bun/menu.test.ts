@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { QUIT_MENU_ACTION, SHUTDOWN_MENU_ACTION } from "@daedalus/protocol";
+import {
+  CHECK_FOR_UPDATES_MENU_ACTION,
+  QUIT_MENU_ACTION,
+  SHUTDOWN_MENU_ACTION,
+} from "@daedalus/protocol";
 import { APPLICATION_MENU } from "./menu";
 
 describe("desktop application menu", () => {
@@ -47,6 +51,7 @@ describe("desktop application menu", () => {
         ),
       ),
     ).toEqual({
+      [CHECK_FOR_UPDATES_MENU_ACTION]: undefined,
       [QUIT_MENU_ACTION]: "Command+Q",
       [SHUTDOWN_MENU_ACTION]: "Command+Shift+Q",
     });

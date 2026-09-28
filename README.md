@@ -4,12 +4,29 @@ Daedalus is a macOS-first, local-first control plane for coding agents. Phases 0
 
 Workspaces are ordinary work-package directories rather than repositories themselves. Daedalus stores one bare clone per remote in its global repository library and creates freshly fetched, read-only planning checkouts under each workspace's `repos/` directory. Agent sessions start in isolated folders and create independent linked Git worktrees only for repositories they actually need. SQLite stores searchable metadata, while the filesystem remains authoritative for workspace existence and tmux remains authoritative for live sessions.
 
-## Requirements
+## Install
 
-- macOS 14 or newer
+With Homebrew:
+
+```sh
+brew install --cask bakar0/tap/daedalus
+```
+
+Or download `stable-macos-arm64-Daedalus.dmg` (Apple silicon) or `stable-macos-x64-Daedalus.dmg` (Intel) from the [latest release](https://github.com/Bakar0/daedalus/releases/latest) and drag Daedalus to Applications.
+
+The app carries its own Bun and its own tmux, so nothing else has to be installed for it to start and run sessions. It needs macOS 14 or newer, `git` (macOS offers to install the Command Line Tools the first time anything runs it), and the agent CLIs you want to use, such as `claude` or `codex`.
+
+Daedalus checks GitHub Releases for a newer version shortly after it starts and every six hours. When one exists it shows a bar under the toolbar with **Update and restart** and **Later**. Updating replaces the app and reopens it; sessions keep running through the restart, as with any quit. **Later** hides that version until a newer one ships, and **Daedalus → Check for Updates…** asks at any time. Homebrew leaves an app that updates itself alone, so `brew upgrade` does not fight it.
+
+Until releases are signed with an Apple Developer ID, macOS refuses to open a downloaded DMG build ("Daedalus is damaged" or "cannot be opened"). The Homebrew cask clears the quarantine flag itself. For a DMG install, run `xattr -dr com.apple.quarantine /Applications/Daedalus.app` once. [Releasing](docs/releasing.md) describes how signing is switched on.
+
+## Requirements for building
+
+- macOS 14 or newer with the Xcode Command Line Tools
 - Bun **1.4.2** (verified; pinned in CI and checked by `daedal doctor`)
-- tmux **3.7c** or newer
-- Electrobun **2.0.1** (project dependency; its paired Hutch/Cottontail toolchain is resolved by Electrobun)
+- Electrobun **1.18.1** (project dependency)
+
+`bun run build` compiles the tmux the app bundles (see `scripts/build-tmux.ts`), so a build machine needs no tmux either. Running the test suite from a checkout does need tmux **3.7c** or newer on `PATH`.
 
 The dependency baseline was verified on 2026-09-12. Exact JavaScript versions are recorded in `package.json` and `bun.lock`; see [Phase 0 decisions](docs/phase-0.md) for upstream sources and transport evidence.
 
@@ -78,5 +95,6 @@ Every mutation flows through `@daedalus/core`. Workspace removal preserves files
 - [Architecture](docs/architecture.md)
 - [Phase 0 decisions and spike evidence](docs/phase-0.md)
 - [CLI contract](docs/cli.md)
+- [Releasing](docs/releasing.md)
 - [Desktop RPC and UI](docs/desktop.md)
 - [Agent skills and installation](docs/skills.md)

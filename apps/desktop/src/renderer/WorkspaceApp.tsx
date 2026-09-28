@@ -19,6 +19,7 @@ import type {
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
+  AppUpdateDto,
   TaskTimelineDto,
   AgentActivity,
   AgentActivityDto,
@@ -47,6 +48,7 @@ import type {
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { SettingsModal, type SettingsSection } from "./SettingsModal";
+import { UpdateBanner } from "./UpdateBanner";
 import { runWithConcurrency } from "./concurrency";
 import { repositoryFuzzyScore } from "./repository-search";
 import { useListReorder } from "./use-list-reorder";
@@ -1770,6 +1772,8 @@ export function WorkspaceApp({
   // The quit dialog is driven entirely by the host: it arrives with the plan
   // already computed, and every button answers back over `quitDecision`.
   const [quitRequest, setQuitRequest] = useState<ShutdownPlanDto>();
+  // Also host-driven: the host checks for releases and says when to show this.
+  const [appUpdate, setAppUpdate] = useState<AppUpdateDto | null>(null);
   const [quitting, setQuitting] = useState<QuitChoice>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -2340,6 +2344,19 @@ export function WorkspaceApp({
       }),
     [client, openSession],
   );
+  // The host may have checked before this window existed, so ask once, then
+  // follow its messages.
+  useEffect(() => {
+    let cancelled = false;
+    void client.request.appUpdateGet?.({}).then((response) => {
+      if (!cancelled && response?.ok) setAppUpdate(response.data);
+    });
+    const unsubscribe = client.subscribeAppUpdate?.(setAppUpdate);
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [client]);
   // Deliberately not routed through Focus mode. This is a direct response to
   // the user pressing Cmd+Q, not an alert, and suppressing it would leave a
   // keystroke that silently does nothing.
@@ -4601,12 +4618,32 @@ export function WorkspaceApp({
           {busy && <span className="syncing">Working…</span>}
         </div>
       </header>
-      {error && (
-        <div className="error-banner" role="alert">
-          <span>{error}</span>
-          <button onClick={() => setError(undefined)}>Dismiss</button>
-        </div>
-      )}
+      {/* One grid row holds every banner, so two at once stack in it. */}
+      <div className="banner-stack">
+        {appUpdate && (
+          <UpdateBanner
+            onDismiss={(version) =>
+              void client.request
+                .appUpdateDismiss({ ...(version ? { version } : {}) })
+                .then((response) => {
+                  if (response.ok) setAppUpdate(response.data);
+                })
+            }
+            onInstall={() =>
+              void client.request.appUpdateInstall({}).then((response) => {
+                if (response.ok) setAppUpdate(response.data);
+              })
+            }
+            update={appUpdate}
+          />
+        )}
+        {error && (
+          <div className="error-banner" role="alert">
+            <span>{error}</span>
+            <button onClick={() => setError(undefined)}>Dismiss</button>
+          </div>
+        )}
+      </div>
 
       <div className={`workspace-shell mode-${view}`}>
         <aside

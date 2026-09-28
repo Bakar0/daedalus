@@ -161,6 +161,47 @@ small,
 .syncing {
   color: #89beff;
 }
+.banner-stack {
+  display: grid;
+  grid-row: 2;
+}
+.update-banner {
+  align-items: center;
+  background: var(--accent-wash);
+  border-bottom: 1px solid var(--line-strong);
+  color: var(--text);
+  display: flex;
+  font-size: 12px;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 8px 18px;
+}
+.update-banner.update-error {
+  background: rgb(105 33 45 / 0.86);
+  border-bottom-color: rgb(255 137 135 / 0.35);
+  color: #ffe5e5;
+}
+.update-banner-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+.update-banner button {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: inherit;
+  font-size: 12px;
+  padding: 3px 10px;
+}
+.update-banner button.update-banner-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.update-banner button.update-banner-primary:hover {
+  background: var(--accent-hover);
+}
 .error-banner {
   align-items: center;
   background: rgb(105 33 45 / 0.86);
@@ -3776,6 +3817,9 @@ dd {
 .settings-facts {
   display: grid;
   gap: 9px;
+}
+.settings-update-check {
+  margin-top: 14px;
 }
 .settings-fact {
   display: grid;

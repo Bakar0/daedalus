@@ -1,7 +1,12 @@
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import {
   boundTerminalCapture,
+  BUNDLED_TMUX_VARIABLE,
   CommandTmuxClient,
+  findTmuxExecutable,
   isInheritedSessionVariable,
   tmuxPtyArguments,
   tmuxPtyEnvironment,
@@ -18,6 +23,32 @@ test("terminal captures preserve recent complete UTF-8 within a byte bound", () 
   expect(decoded).toMatch(/^\u001b\[H\u001b\[2J/);
   expect(decoded).toContain("שלום 😀");
   expect(decoded).not.toContain("�");
+});
+
+describe("findTmuxExecutable", () => {
+  test("prefers the tmux the app bundles", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "daedalus-tmux-"));
+    try {
+      const bundled = join(directory, "tmux");
+      await writeFile(bundled, "#!/bin/sh\n");
+      await chmod(bundled, 0o755);
+      expect(findTmuxExecutable({ [BUNDLED_TMUX_VARIABLE]: bundled })).toBe(
+        bundled,
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("falls back to the usual search when the bundled path is unusable", () => {
+    const usual = findTmuxExecutable({});
+    expect(
+      findTmuxExecutable({ [BUNDLED_TMUX_VARIABLE]: "/nonexistent/tmux" }),
+    ).toBe(usual);
+    // A relative value would resolve against whatever directory the caller
+    // happens to be in, so it is never taken as the bundle's path.
+    expect(findTmuxExecutable({ [BUNDLED_TMUX_VARIABLE]: "tmux" })).toBe(usual);
+  });
 });
 
 test("tmux PTYs always use a UTF-8 locale for Unicode cell widths", () => {

@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import {
   findExecutable,
   runCommand,
@@ -8,8 +9,26 @@ import {
 
 export const TMUX_EXECUTABLE_FALLBACKS = standardExecutableFallbacks("tmux");
 
-export const resolveTmuxExecutable = () =>
-  findExecutable("tmux", TMUX_EXECUTABLE_FALLBACKS) ?? "tmux";
+/**
+ * The tmux Daedalus.app carries in its bundle, as an absolute path. The app
+ * and its bundled CLI set it, so a Mac with no tmux installed still runs
+ * agents, and every Mac runs the version the app was tested with. Unset, or
+ * pointing at nothing executable, the search falls back to PATH and the
+ * standard install locations.
+ */
+export const BUNDLED_TMUX_VARIABLE = "DAEDALUS_TMUX";
+
+export const findTmuxExecutable = (
+  environment: NodeJS.ProcessEnv = process.env,
+): string | undefined => {
+  const bundled = environment[BUNDLED_TMUX_VARIABLE];
+  return findExecutable(bundled && isAbsolute(bundled) ? bundled : "tmux", [
+    "tmux",
+    ...TMUX_EXECUTABLE_FALLBACKS,
+  ]);
+};
+
+export const resolveTmuxExecutable = () => findTmuxExecutable() ?? "tmux";
 
 export interface TmuxLaunch {
   session: string;

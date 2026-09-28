@@ -1,5 +1,6 @@
 import { Electroview } from "electrobun/view";
 import type {
+  AppUpdateDto,
   DesktopRpcSchema,
   ShutdownPlanDto,
   WorkspaceFileChangeDto,
@@ -54,6 +55,12 @@ export function createElectrobunClient(): DesktopClient {
       const receive = ({ plan }: { plan: ShutdownPlanDto }) => listener(plan);
       rpc.addMessageListener("quitRequested", receive);
       return () => rpc.removeMessageListener("quitRequested", receive);
+    },
+    subscribeAppUpdate(listener) {
+      const receive = ({ update }: { update: AppUpdateDto | null }) =>
+        listener(update);
+      rpc.addMessageListener("appUpdateChanged", receive);
+      return () => rpc.removeMessageListener("appUpdateChanged", receive);
     },
   };
 }

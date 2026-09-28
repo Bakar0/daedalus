@@ -1,4 +1,5 @@
 import type {
+  AppUpdateDto,
   DesktopCommand,
   DesktopRpcSchema,
   ShutdownPlanDto,
@@ -33,4 +34,8 @@ export interface DesktopClient {
   ): () => void;
   /** Quit was requested and something is still live. See `quitRequested`. */
   subscribeQuitRequest(listener: (plan: ShutdownPlanDto) => void): () => void;
+  /** The update prompt changed. See `appUpdateChanged`. */
+  subscribeAppUpdate?(
+    listener: (update: AppUpdateDto | null) => void,
+  ): () => void;
 }

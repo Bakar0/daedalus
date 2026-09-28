@@ -17,11 +17,7 @@ import {
   type TaskCost,
   type ManagedSkillStatus,
 } from "@daedalus/core";
-import {
-  findExecutable,
-  probeVersion,
-  TMUX_EXECUTABLE_FALLBACKS,
-} from "@daedalus/platform";
+import { findTmuxExecutable, probeVersion } from "@daedalus/platform";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { DoctorCheck } from "@daedalus/protocol";
@@ -551,7 +547,7 @@ async function doctor(
     const bunVersion = Bun.version;
     // A packaged app inherits no shell PATH, so resolve tmux the same way the
     // tmux client itself does rather than trusting a bare name to be found.
-    const tmuxExecutable = findExecutable("tmux", TMUX_EXECUTABLE_FALLBACKS);
+    const tmuxExecutable = findTmuxExecutable();
     const tmuxVersion = tmuxExecutable
       ? await probeVersion(tmuxExecutable, ["-V"])
       : undefined;
@@ -574,7 +570,7 @@ async function doctor(
         version: tmuxVersion,
         detail: tmuxVersion
           ? `${tmuxExecutable} (verified minimum ${MINIMUM_TMUX})`
-          : "tmux was not found on PATH or at the standard install locations",
+          : "tmux was not found in the app bundle, on PATH or at the standard install locations",
       },
       { name: "home", ok: true, detail: context.config.home },
       { name: "database", ok: true, detail: context.config.databasePath },
