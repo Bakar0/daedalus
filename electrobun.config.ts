@@ -88,8 +88,11 @@ export default {
     win: { bundleCEF: false },
   },
   scripts: {
-    // Adds the bundled tmux to Contents/MacOS before the bundle is signed.
+    // Adds the `daedal` launcher and the bundled tmux before the bundle is
+    // signed.
     postBuild: "scripts/electrobun-post-build.ts",
+    // Adds the launcher to the self-unpacking wrapper Homebrew installs.
+    postWrap: "scripts/electrobun-post-wrap.ts",
   },
   release: { baseUrl: RELEASE_BASE_URL },
 } satisfies ElectrobunConfig;

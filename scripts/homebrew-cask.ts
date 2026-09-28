@@ -66,6 +66,8 @@ cask "daedalus" do
   depends_on macos: :sonoma
 
   app "Daedalus.app"
+  # Puts \`daedal\` on PATH. The launcher runs the CLI inside the app.
+  binary "#{appdir}/Daedalus.app/Contents/Resources/bin/daedal"
 ${quarantine}
   # ~/.daedalus holds the user's workspaces and database, so it is never
   # removed here, not even by --zap.

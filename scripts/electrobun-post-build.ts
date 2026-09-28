@@ -1,5 +1,5 @@
-// Electrobun's postBuild hook: puts the tmux from scripts/build-tmux.ts into
-// the bundle.
+// Electrobun's postBuild hook: puts the `daedal` launcher and the tmux from
+// scripts/build-tmux.ts into the bundle.
 //
 // It goes in Contents/MacOS rather than through `build.copy`, which writes
 // under Resources/app. Electrobun signs every executable in Contents/MacOS and
@@ -12,6 +12,7 @@
 // lacks one. A dev build without it only warns and searches PATH as before.
 import { chmod, copyFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { installLauncher } from "./bundle-launcher";
 
 const environment = process.env;
 const buildDirectory = environment["ELECTROBUN_BUILD_DIR"];
@@ -28,6 +29,9 @@ if (
   process.exit(0);
 }
 
+const bundle = join(buildDirectory, `${appName}.app`);
+console.log(`postBuild: added ${await installLauncher(bundle)}`);
+
 const source = resolve(import.meta.dir, "..", "build", "tmux", arch, "tmux");
 if (!(await Bun.file(source).exists())) {
   const message = `postBuild: no bundled tmux at ${source}. Run \`bun run scripts/build-tmux.ts --arch ${arch}\` first.`;
@@ -39,13 +43,7 @@ if (!(await Bun.file(source).exists())) {
   process.exit(1);
 }
 
-const destination = join(
-  buildDirectory,
-  `${appName}.app`,
-  "Contents",
-  "MacOS",
-  "tmux",
-);
+const destination = join(bundle, "Contents", "MacOS", "tmux");
 await copyFile(source, destination);
 await chmod(destination, 0o755);
 console.log(`postBuild: bundled ${source} as ${destination}`);
