@@ -54,7 +54,8 @@ needs no administrator rights. It refuses while Daedalus is running.
 ## What the bundle carries
 
 The app must run on a Mac with nothing installed, so it ships its own bun
-(`build.bunVersion`, 1.4.2) and its own tmux (`scripts/build-tmux.ts`, copied
+(Electrobun's, 1.3.13; never pin `build.bunVersion` ahead of Electrobun, see
+electrobun.config.ts) and its own tmux (`scripts/build-tmux.ts`, copied
 into `Contents/MacOS` by `scripts/electrobun-post-build.ts`). The app and the
 bundled CLI export that tmux as `DAEDALUS_TMUX`; resolve tmux with
 `findTmuxExecutable()` rather than a bare `"tmux"`. A stable build fails

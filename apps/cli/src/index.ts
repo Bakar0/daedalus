@@ -26,6 +26,13 @@ import packageJson from "../../../package.json";
 const VERSION = packageJson.version;
 const MINIMUM_TMUX = "3.7c";
 const VERIFIED_BUN = "1.4.2";
+/**
+ * The bun inside Daedalus.app, which the bundled CLI runs on: the one
+ * Electrobun 1.18.1 ships. It is pinned by Electrobun, not by this repository
+ * (see electrobun.config.ts), so it is a verified runtime too.
+ */
+const BUNDLED_BUN = "1.3.13";
+const VERIFIED_BUN_RUNTIMES = [VERIFIED_BUN, BUNDLED_BUN];
 const SESSION_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -557,12 +564,14 @@ async function doctor(
     const checks: DoctorCheck[] = [
       {
         name: "bun",
-        ok: bunVersion === VERIFIED_BUN,
+        ok: VERIFIED_BUN_RUNTIMES.includes(bunVersion),
         version: bunVersion,
         detail:
-          bunVersion === VERIFIED_BUN
-            ? "verified runtime"
-            : `expected verified version ${VERIFIED_BUN}`,
+          bunVersion === BUNDLED_BUN
+            ? "runtime bundled with Daedalus.app"
+            : bunVersion === VERIFIED_BUN
+              ? "verified runtime"
+              : `expected verified version ${VERIFIED_BUN}, or ${BUNDLED_BUN} inside the app`,
       },
       {
         name: "tmux",
