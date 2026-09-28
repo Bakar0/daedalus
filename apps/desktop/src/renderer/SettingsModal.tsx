@@ -15,9 +15,14 @@
  * thing between the user and every control.
  */
 import React from "react";
-import type { DesktopSettingsDto, RpcResult } from "@daedalus/protocol";
+import type {
+  AppUpdateDto,
+  DesktopSettingsDto,
+  RpcResult,
+} from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { SkillsPanel } from "./SkillsPanel";
+import { updateMessage } from "./UpdateBanner";
 
 export const SETTINGS_SECTIONS = [
   { id: "general", label: "General" },
@@ -76,6 +81,61 @@ export function SettingFact({
   );
 }
 
+/** What Settings → About needs to show and act on the update prompt. */
+export interface SettingsUpdateControls {
+  update: AppUpdateDto | null;
+  checking: boolean;
+  onCheck: () => void;
+  onInstall: () => void;
+}
+
+/**
+ * The update row in About. It answers where the button was pressed: the
+ * banner under the top bar is behind this dialog, so a result shown only
+ * there reads as a button that did nothing.
+ */
+export function SettingsUpdateRow({
+  update,
+  checking,
+  onCheck,
+  onInstall,
+}: SettingsUpdateControls) {
+  const working =
+    checking ||
+    update?.state === "downloading" ||
+    update?.state === "restarting";
+  const status = checking
+    ? "Checking for updates…"
+    : update
+      ? updateMessage(update)
+      : undefined;
+  return (
+    <div
+      className={`settings-update${update?.state === "error" ? " is-error" : ""}`}
+      data-update-state={checking ? "checking" : (update?.state ?? "idle")}
+    >
+      {status ? (
+        <p aria-live="polite" className="settings-update-status">
+          {status}
+        </p>
+      ) : undefined}
+      {update?.state === "available" && !checking ? (
+        <button className="settings-update-install" onClick={onInstall}>
+          Update and restart
+        </button>
+      ) : (
+        <button
+          className="settings-update-check"
+          disabled={working}
+          onClick={onCheck}
+        >
+          Check for updates
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function SettingsModal({
   settings,
   theme,
@@ -87,6 +147,7 @@ export function SettingsModal({
   onError,
   onFocusMode,
   perform,
+  updates,
 }: {
   busy: boolean;
   client: DesktopClient;
@@ -98,7 +159,9 @@ export function SettingsModal({
   section: SettingsSection;
   settings: DesktopSettingsDto;
   theme: "dark" | "light";
+  updates?: SettingsUpdateControls;
 }) {
+  const updateAvailable = updates?.update?.state === "available";
   return (
     <div className="settings">
       <nav aria-label="Settings sections" className="settings-nav">
@@ -111,6 +174,13 @@ export function SettingsModal({
             type="button"
           >
             {entry.label}
+            {entry.id === "about" && updateAvailable ? (
+              <span
+                aria-label="Update available"
+                className="update-dot"
+                role="img"
+              />
+            ) : undefined}
           </button>
         ))}
       </nav>
@@ -227,16 +297,8 @@ export function SettingsModal({
                 value={settings.repositoryRoot}
               />
             </div>
-            {settings.channel !== "dev" ? (
-              // The answer appears in the banner under the top bar, the same
-              // place a background check would put it.
-              <button
-                className="settings-update-check"
-                disabled={busy}
-                onClick={() => void perform(client.request.appUpdateCheck({}))}
-              >
-                Check for updates
-              </button>
+            {settings.channel !== "dev" && updates ? (
+              <SettingsUpdateRow {...updates} />
             ) : undefined}
           </section>
         ) : undefined}

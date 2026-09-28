@@ -37,15 +37,17 @@ const snapshot = {
   ],
   tasks: [],
   agents: [],
-  integratedTerminals: [],
+  terminals: [],
+  repositories: [],
+  worktrees: [],
   sessionTelemetry: [],
   providerUsage: [],
   sessionActivity: [],
-  sessionAttention: [],
+  attention: [],
   toasts: [],
   settings: {
     version: "0.7.0",
-    channel: "dev",
+    channel: "stable",
     home: "/Users/someone/.daedalus-dev",
     workspaceRoot: "/Users/someone/.daedalus-dev/workspaces",
     databasePath: "/Users/someone/.daedalus-dev/state.db",
@@ -216,6 +218,12 @@ const client = {
     // Asked for on mount. Without it the request throws inside a passive
     // effect and React tears the whole tree down, leaving a blank page.
     workspaceWatchSet: async () => ({ ok: true, data: { watching: [] } }),
+    // An offer, so the check can see it where Settings shows it: a dot on
+    // the Settings button and on About, and the button in About.
+    appUpdateGet: async () => ({
+      ok: true,
+      data: { state: "available", currentVersion: "0.8.2", version: "0.8.3" },
+    }),
   },
   subscribe: (listener: () => void) => {
     listeners.add(listener);
