@@ -1,11 +1,19 @@
 import type { ApplicationMenuItemConfig } from "electrobun/bun";
-import { QUIT_MENU_ACTION, SHUTDOWN_MENU_ACTION } from "@daedalus/protocol";
+import {
+  CHECK_FOR_UPDATES_MENU_ACTION,
+  QUIT_MENU_ACTION,
+  SHUTDOWN_MENU_ACTION,
+} from "@daedalus/protocol";
 
 export const APPLICATION_MENU: ApplicationMenuItemConfig[] = [
   {
     label: "Daedalus",
     submenu: [
       { role: "about" },
+      {
+        label: "Check for Updates…",
+        action: CHECK_FOR_UPDATES_MENU_ACTION,
+      },
       { type: "divider" },
       { role: "hide" },
       { role: "hideOthers" },

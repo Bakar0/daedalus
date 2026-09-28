@@ -19,6 +19,29 @@ export const STABLE_IDENTIFIER = "dev.daedalus.app";
 export const APP_IDENTIFIER =
   channel === "stable" ? STABLE_IDENTIFIER : `${STABLE_IDENTIFIER}.${channel}`;
 
+// Where a stable build looks for updates, and where the release workflow
+// publishes them. GitHub serves `releases/latest/download/<asset>` from the
+// newest published release, so the URL never changes between versions, and a
+// draft is invisible to it until it is published.
+export const RELEASE_BASE_URL =
+  "https://github.com/Bakar0/daedalus/releases/latest/download";
+
+// Signing and notarization need an Apple Developer ID, which only the release
+// machine has. Each turns on when its credentials are in the environment, so
+// a local `build:stable` still works without them. The variable names are
+// Electrobun's own.
+const signing = Boolean(process.env["ELECTROBUN_DEVELOPER_ID"]);
+const notarizing =
+  signing &&
+  Boolean(
+    (process.env["ELECTROBUN_APPLEAPIISSUER"] &&
+      process.env["ELECTROBUN_APPLEAPIKEY"] &&
+      process.env["ELECTROBUN_APPLEAPIKEYPATH"]) ||
+    (process.env["ELECTROBUN_APPLEID"] &&
+      process.env["ELECTROBUN_APPLEIDPASS"] &&
+      process.env["ELECTROBUN_TEAMID"]),
+  );
+
 export default {
   app: {
     name: "Daedalus",
@@ -33,6 +56,10 @@ export default {
   // and it always has a window to ask in.
   runtime: { exitOnLastWindowClosed: false },
   build: {
+    // The runtime the app and its bundled CLI run on. Electrobun 1.18.1 ships
+    // 1.3.13; this is the version the repository verifies (`verify:versions`
+    // and `daedal doctor`), so the app is tested on what it ships with.
+    bunVersion: "1.4.2",
     bun: {
       entrypoint: "apps/desktop/src/bun/index.ts",
     },
@@ -51,8 +78,15 @@ export default {
     mac: {
       bundleCEF: false,
       icons: "assets/icon.iconset",
+      codesign: signing,
+      notarize: notarizing,
     },
     linux: { bundleCEF: false },
     win: { bundleCEF: false },
   },
+  scripts: {
+    // Adds the bundled tmux to Contents/MacOS before the bundle is signed.
+    postBuild: "scripts/electrobun-post-build.ts",
+  },
+  release: { baseUrl: RELEASE_BASE_URL },
 } satisfies ElectrobunConfig;

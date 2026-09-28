@@ -1,0 +1,206 @@
+name: Release
+
+# Pushing a tag v<version> that matches package.json builds the stable app
+# for both Mac architectures, publishes a GitHub release with the DMGs and the
+# update feed the app reads, and updates the Homebrew cask.
+#
+# Optional repository secrets:
+#   MACOS_CERTIFICATE_P12, MACOS_CERTIFICATE_PASSWORD, MACOS_DEVELOPER_ID
+#     A "Developer ID Application" certificate (base64 .p12), its password and
+#     its full name. Without them the app is built unsigned.
+#   APPLE_API_KEY_P8, APPLE_API_KEY_ID, APPLE_API_ISSUER
+#     An App Store Connect API key (base64 .p8) for notarization. Used only
+#     when the certificate is present.
+#   APP_ID, APP_PRIVATE_KEY
+#     The GitHub App that may push to Bakar0/homebrew-tap, as in the servant
+#     release. Without them the cask is attached to the release but not pushed.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    outputs:
+      notarized: ${{ steps.signing.outputs.notarized }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Check the tag matches package.json
+        run: |
+          version=$(bun -e 'console.log(require("./package.json").version)')
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $version" >&2
+            exit 1
+          fi
+
+      - run: bun install --frozen-lockfile
+      - run: bun node_modules/electrobun/bin/electrobun.cjs prepare
+
+      - uses: actions/cache@v4
+        with:
+          path: build/tmux
+          key: tmux-${{ matrix.arch }}-${{ hashFiles('scripts/build-tmux.ts') }}
+
+      - name: Import the signing certificate
+        id: signing
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_DEVELOPER_ID: ${{ secrets.MACOS_DEVELOPER_ID }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          if [ -z "$MACOS_CERTIFICATE_P12" ] || [ -z "$MACOS_DEVELOPER_ID" ]; then
+            echo "No signing certificate; building unsigned."
+            echo "notarized=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password=$(openssl rand -hex 16)
+          echo "$MACOS_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          echo "ELECTROBUN_DEVELOPER_ID=$MACOS_DEVELOPER_ID" >> "$GITHUB_ENV"
+          if [ -n "$APPLE_API_KEY_P8" ] && [ -n "$APPLE_API_KEY_ID" ] && [ -n "$APPLE_API_ISSUER" ]; then
+            echo "$APPLE_API_KEY_P8" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+            echo "ELECTROBUN_APPLEAPIKEYPATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+            echo "ELECTROBUN_APPLEAPIKEY=$APPLE_API_KEY_ID" >> "$GITHUB_ENV"
+            echo "ELECTROBUN_APPLEAPIISSUER=$APPLE_API_ISSUER" >> "$GITHUB_ENV"
+            echo "notarized=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No notarization key; the build is signed but not notarized."
+            echo "notarized=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Electrobun reads the previous release's update.json from the feed to
+      # build a delta patch, so this must run before the new release exists.
+      - run: bun run build:stable
+
+      - name: Check the bundle needs nothing from Homebrew
+        run: |
+          bundle=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$bundle" artifacts/stable-macos-${{ matrix.arch }}-Daedalus.dmg
+          test -d "$bundle/Daedalus.app"
+          hdiutil detach "$bundle"
+          app=$(mktemp -d)
+          tar --zstd -xf artifacts/stable-macos-${{ matrix.arch }}-Daedalus.app.tar.zst -C "$app"
+          contents="$app/Daedalus.app/Contents"
+          "$contents/MacOS/tmux" -V
+          "$contents/MacOS/bun" --version
+          if otool -L "$contents/MacOS/tmux" | tail -n +2 | grep -v '/usr/lib/'; then
+            echo "The bundled tmux links a library outside /usr/lib" >&2
+            exit 1
+          fi
+          env -i HOME="$HOME" PATH=/usr/bin:/bin DAEDALUS_HOME="$RUNNER_TEMP/daedalus-home" \
+            "$contents/MacOS/bun" "$contents/Resources/app/cli/daedal.js" doctor
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stable-macos-${{ matrix.arch }}
+          path: artifacts/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Write the Homebrew cask
+        run: |
+          bun run scripts/homebrew-cask.ts \
+            --version "${GITHUB_REF_NAME#v}" \
+            --arm64 artifacts/stable-macos-arm64-Daedalus.dmg \
+            --x64 artifacts/stable-macos-x64-Daedalus.dmg \
+            ${{ needs.build.outputs.notarized == 'true' && '--notarized' || '' }} \
+            --out artifacts/daedalus.rb
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" artifacts/* \
+            --title "Daedalus ${GITHUB_REF_NAME#v}" \
+            --generate-notes \
+            --verify-tag
+
+      # The same GitHub App the servant release uses: a token that lasts an
+      # hour and can write only to the tap.
+      - name: Check for GitHub App credentials
+        id: gate
+        env:
+          APP_ID: ${{ secrets.APP_ID }}
+        run: |
+          if [ -n "$APP_ID" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::APP_ID not set; the cask is attached to the release but not pushed to Bakar0/homebrew-tap."
+          fi
+
+      - name: Mint tap token
+        if: steps.gate.outputs.enabled == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: Bakar0
+          repositories: homebrew-tap
+
+      - name: Checkout the tap
+        if: steps.gate.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: Bakar0/homebrew-tap
+          token: ${{ steps.app-token.outputs.token }}
+          path: tap
+
+      - name: Commit the cask
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          mkdir -p tap/Casks
+          cp artifacts/daedalus.rb tap/Casks/daedalus.rb
+          user_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
+          cd tap
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          git add Casks/daedalus.rb
+          if git diff --cached --quiet; then
+            echo "Cask already up to date."
+          else
+            git commit -m "daedalus ${GITHUB_REF_NAME}"
+            git push
+          fi

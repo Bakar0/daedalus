@@ -256,6 +256,23 @@ export interface ProviderModelCatalogDto {
  */
 export type QuitChoice = "keep" | "shutdown" | "cancel";
 
+/**
+ * What the window shows about a newer release. `null` in its place means
+ * there is nothing to say.
+ *
+ * - `available`: `version` is newer than the running one and not dismissed.
+ * - `downloading`: the user chose Update; the bundle is being fetched.
+ * - `restarting`: downloaded; the app is replacing itself and will reopen.
+ * - `current`: a check the user asked for found nothing newer.
+ * - `error`: a check the user asked for, or an install, failed; see `message`.
+ */
+export interface AppUpdateDto {
+  state: "available" | "downloading" | "restarting" | "current" | "error";
+  currentVersion: string;
+  version?: string;
+  message?: string;
+}
+
 export interface ShutdownSessionTargetDto {
   id: string;
   name: string;
@@ -649,6 +666,24 @@ export interface DesktopRpcSchema {
       /** The user's answer. `cancel` is the only one that does not quit. */
       quitDecision: Request<{ choice: QuitChoice }, { accepted: true }>;
       /**
+       * The update prompt as it stands, for a window that opens after the
+       * host's check already ran. Changes after that arrive as
+       * `appUpdateChanged`.
+       */
+      appUpdateGet: Request<Record<string, never>, AppUpdateDto | null>;
+      /** Checks now and reports even when nothing is newer. */
+      appUpdateCheck: Request<Record<string, never>, AppUpdateDto | null>;
+      /**
+       * Downloads the offered version, replaces the app and reopens it.
+       * Sessions keep running, as with any quit.
+       */
+      appUpdateInstall: Request<Record<string, never>, AppUpdateDto | null>;
+      /**
+       * Hides the prompt. For an offered `version` it stays hidden until a
+       * newer one is released; without one it only clears a result.
+       */
+      appUpdateDismiss: Request<{ version?: string }, AppUpdateDto | null>;
+      /**
        * Published by the renderer whenever the user moves, so notifications
        * can route on where the user actually is rather than merely being
        * suppressed when the window has focus.
@@ -877,6 +912,8 @@ export interface DesktopRpcSchema {
        * decided that asking is the right thing to do.
        */
       quitRequested: { plan: ShutdownPlanDto };
+      /** The update prompt changed; `null` hides it. */
+      appUpdateChanged: { update: AppUpdateDto | null };
     };
   };
 }
@@ -888,6 +925,7 @@ export interface DesktopRpcSchema {
  */
 export const QUIT_MENU_ACTION = "quit-requested";
 export const SHUTDOWN_MENU_ACTION = "quit-and-shut-down";
+export const CHECK_FOR_UPDATES_MENU_ACTION = "check-for-updates";
 
 export const DESKTOP_COMMANDS = [
   "view-board",

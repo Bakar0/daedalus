@@ -19,6 +19,7 @@ import {
 } from "@daedalus/core";
 import type {
   AgentActivityDto,
+  AppUpdateDto,
   QuitChoice,
   AgentSessionDto,
   DesktopRpcSchema,
@@ -43,6 +44,21 @@ export interface DesktopQuitHost {
   dialogShown(): void;
   decide(choice: QuitChoice): Promise<void>;
 }
+
+/** The host's `UpdateController`, as far as the window can reach it. */
+export interface DesktopUpdateHost {
+  current(): AppUpdateDto | null;
+  check(): Promise<AppUpdateDto | null>;
+  install(): Promise<AppUpdateDto | null>;
+  dismiss(version?: string): Promise<AppUpdateDto | null>;
+}
+
+const NO_UPDATES: DesktopUpdateHost = {
+  current: () => null,
+  check: async () => null,
+  install: async () => null,
+  dismiss: async () => null,
+};
 
 type Requests = DesktopRpcSchema["bun"]["requests"];
 export type DesktopRequestHandlers = {
@@ -211,6 +227,7 @@ export function createDesktopRequestHandlers(
   openExternal: (url: string) => boolean = () => false,
   terminalEndpoint = "",
   quit: DesktopQuitHost = { dialogShown: () => {}, decide: async () => {} },
+  updates: DesktopUpdateHost = NO_UPDATES,
 ): DesktopRequestHandlers {
   const mutate = async <T>(operation: () => T | Promise<T>) => {
     const response = await result(operation);
@@ -345,6 +362,10 @@ export function createDesktopRequestHandlers(
         await quit.decide(choice);
         return { accepted: true as const };
       }),
+    appUpdateGet: () => result(() => updates.current()),
+    appUpdateCheck: () => result(() => updates.check()),
+    appUpdateInstall: () => result(() => updates.install()),
+    appUpdateDismiss: ({ version }) => result(() => updates.dismiss(version)),
     // Presence is a heartbeat, not a data change: announcing it would make the
     // window refresh itself every time the user moved.
     presencePublish: (report) =>

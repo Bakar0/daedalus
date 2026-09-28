@@ -21,4 +21,9 @@ jobs:
       - run: bun test
       - run: bun run test:agent-tmux
       - run: bun run test:cli-agent
+      # `build` compiles the bundled tmux; its sources are pinned in the script.
+      - uses: actions/cache@v4
+        with:
+          path: build/tmux
+          key: tmux-arm64-${{ hashFiles('scripts/build-tmux.ts') }}
       - run: bun run build

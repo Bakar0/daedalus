@@ -6,6 +6,7 @@ import Electrobun, {
   BrowserView,
   BrowserWindow,
   PATHS,
+  Updater,
   Utils,
 } from "electrobun/bun";
 import {
@@ -16,11 +17,10 @@ import {
   type WorkspaceFilesChanged,
 } from "@daedalus/core";
 import {
+  BUNDLED_TMUX_VARIABLE,
   CommandTmuxClient,
-  findExecutable,
   isInheritedSessionVariable,
   pathExists,
-  standardExecutableFallbacks,
   TmuxPtyBridge,
 } from "@daedalus/platform";
 import type {
@@ -29,6 +29,7 @@ import type {
   TerminalServerMessage,
 } from "@daedalus/protocol";
 import {
+  CHECK_FOR_UPDATES_MENU_ACTION,
   isDesktopCommand,
   QUIT_MENU_ACTION,
   SHUTDOWN_MENU_ACTION,
@@ -36,6 +37,7 @@ import {
 import { APPLICATION_MENU } from "./menu";
 import { installCliShim } from "./cli-shim";
 import { QuitController } from "./quit";
+import { UpdateController } from "./updates";
 import { createDesktopRequestHandlers, desktopDataFingerprint } from "./rpc";
 import { authorizeTerminalRequest, TerminalConnection } from "./terminal";
 
@@ -60,6 +62,15 @@ process.env.DAEDALUS_HOME = channelHome(
   appChannel,
   process.env.DAEDALUS_HOME ?? join(homedir(), ".daedalus"),
 );
+
+// The bundle carries its own tmux (scripts/build-tmux.ts), so agents run on a
+// Mac with none installed. It is set before the context looks tmux up, and the
+// variable reaches every agent session and CLI run the app starts, so all of
+// them talk to the server with the same binary. A build without one, such as
+// a dev build made before `build-tmux`, keeps searching PATH as before.
+const bundledTmux = resolve(PATHS.RESOURCES_FOLDER, "../MacOS/tmux");
+if (await pathExists(bundledTmux))
+  process.env[BUNDLED_TMUX_VARIABLE] = bundledTmux;
 
 // Opened from an agent's shell, the app inherits that agent's terminal state
 // and session identity. The tmux client already keeps them out of every
@@ -134,12 +145,14 @@ if (revivedSessions)
     terminals: revivedTerminals.length,
   });
 
+// The shim runs the CLI on the bun inside the bundle, the one this process is
+// running on. A bun from PATH would make the CLI depend on something the Mac
+// may not have, and on a version the app was not built with.
 const cliEntrypoint = resolve(PATHS.RESOURCES_FOLDER, "app/cli/daedal.js");
-const bunExecutable = findExecutable("bun", standardExecutableFallbacks("bun"));
-if ((await pathExists(cliEntrypoint)) && bunExecutable)
+if (await pathExists(cliEntrypoint))
   await installCliShim({
     path: join(context.config.home, "bin", "daedal"),
-    bunExecutable,
+    bunExecutable: process.execPath,
     cliEntrypoint,
   });
 // Skills are installed from here rather than from the application context,
@@ -316,6 +329,54 @@ const quitController = new QuitController({
   log: (event, fields) => void context.logger.write("info", event, fields),
 });
 
+// "Later" is remembered per home, beside the database, so it holds across
+// restarts without a migration for one value.
+const dismissedUpdateFile = Bun.file(
+  join(context.config.home, "update-dismissed.json"),
+);
+const updates = new UpdateController({
+  updater: {
+    local: async () => {
+      const info = await Updater.getLocalInfo();
+      // An unpackaged run has no version.json and so no feed to ask.
+      return { version: info.version, channel: info.channel || "dev" };
+    },
+    check: async () => {
+      const info = await Updater.checkForUpdate();
+      return {
+        version: info.version,
+        updateAvailable: info.updateAvailable,
+        ...(info.error ? { error: info.error } : {}),
+      };
+    },
+    download: async () => {
+      await Updater.downloadUpdate();
+      const info = Updater.updateInfo();
+      return {
+        ready: Boolean(info?.updateReady),
+        ...(info?.error ? { error: info.error } : {}),
+      };
+    },
+    // Swaps the bundle in place, quits through `before-quit` and reopens the
+    // new one. Sessions keep running, as with any quit.
+    apply: () => Updater.applyUpdate(),
+  },
+  readDismissed: async () =>
+    (await dismissedUpdateFile.exists())
+      ? ((await dismissedUpdateFile.json()) as { version?: string }).version
+      : undefined,
+  writeDismissed: async (version) => {
+    await Bun.write(dismissedUpdateFile, JSON.stringify({ version }));
+  },
+  publish: (update) => {
+    if (windowOpen) rpc.send.appUpdateChanged({ update });
+  },
+  // The same cleanup the quit path does first, since the updater quits on
+  // its own rather than through the quit controller.
+  beforeRestart: () => context.presence.retire(),
+  log: (event, fields) => void context.logger.write("info", event, fields),
+});
+
 const createRpc = () =>
   BrowserView.defineRPC<DesktopRpcSchema>({
     // Initial repository clones and fetches can legitimately take several
@@ -330,6 +391,12 @@ const createRpc = () =>
         {
           dialogShown: () => quitController.dialogShown(),
           decide: (choice) => quitController.decide(choice),
+        },
+        {
+          current: () => updates.update,
+          check: () => updates.check({ manual: true }),
+          install: () => updates.install(),
+          dismiss: (version) => updates.dismiss(version),
         },
       ),
     },
@@ -371,6 +438,10 @@ ApplicationMenu.on("application-menu-clicked", (rawEvent) => {
   }
   if (command === SHUTDOWN_MENU_ACTION) {
     void quitController.requestShutdownAndQuit();
+    return;
+  }
+  if (command === CHECK_FOR_UPDATES_MENU_ACTION) {
+    void updates.check({ manual: true });
     return;
   }
   if (isDesktopCommand(command))
@@ -652,3 +723,7 @@ await context.logger.write("info", "desktop_started", {
   terminalTransport: "loopback_websocket",
   reconnectableSessions: preexistingLiveIds.size,
 });
+
+// Stable builds look for a newer release shortly after launch and every few
+// hours after that; see UpdateController for when the window says so.
+void updates.start();

@@ -2,9 +2,8 @@ import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import {
   CommandTmuxClient,
-  findExecutable,
+  findTmuxExecutable,
   runCommand,
-  TMUX_EXECUTABLE_FALLBACKS,
   type NativeNotification,
   type NativeNotifierResult,
   type TmuxClient,
@@ -101,7 +100,7 @@ export async function createApplicationContext(
     options.tmux ??
     new CommandTmuxClient(
       `daedalus-${socketSuffix}`,
-      findExecutable("tmux", TMUX_EXECUTABLE_FALLBACKS) ?? "tmux",
+      findTmuxExecutable(options.env ?? process.env) ?? "tmux",
       runCommand,
       config.home,
       options.env ?? process.env,

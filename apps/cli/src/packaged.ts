@@ -1,7 +1,19 @@
 #!/usr/bin/env bun
 import { resolve } from "node:path";
 import { normalizeError } from "@daedalus/core";
+import { BUNDLED_TMUX_VARIABLE } from "@daedalus/platform";
 import { runCli } from "./index";
+
+// This file is the CLI inside Daedalus.app, at
+// Contents/Resources/app/cli/daedal.js, and the app's tmux is at
+// Contents/MacOS/tmux. A run from the user's own terminal has not inherited
+// the variable the app sets, so it is set here too.
+const bundledTmux = resolve(import.meta.dir, "../../../MacOS/tmux");
+if (
+  !process.env[BUNDLED_TMUX_VARIABLE] &&
+  (await Bun.file(bundledTmux).exists())
+)
+  process.env[BUNDLED_TMUX_VARIABLE] = bundledTmux;
 
 const json = Bun.argv.slice(2).includes("--json");
 try {
