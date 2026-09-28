@@ -18,7 +18,11 @@ import {
 } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { createApplicationContext, parseGitHubRepositoryPages } from "../index";
-import { pullRequestAnswerHoldsHead } from "./workspace-content";
+import {
+  pullRequestAnswerHoldsHead,
+  sessionDirectoryName,
+  sessionTaskDirectoryName,
+} from "./workspace-content";
 
 test("parses every paginated GitHub repository and removes duplicates", () => {
   expect(
@@ -145,6 +149,38 @@ class FakeTmux implements TmuxClient {
     return running;
   }
 }
+
+describe("session folder names", () => {
+  test("uses the task number and the first words of the title", () => {
+    expect(
+      sessionTaskDirectoryName({
+        number: 42,
+        title:
+          "looks like we have issue with the git eorking tree i dsdont see agents working treers",
+      }),
+    ).toBe("42-looks-like-we-have-issue-with");
+    expect(sessionTaskDirectoryName({ number: 7, title: "Fix login" })).toBe(
+      "7-fix-login",
+    );
+    expect(sessionTaskDirectoryName({ number: 3, title: "!!!" })).toBe(
+      "3-task",
+    );
+  });
+
+  test("names a session by provider and short ID", () => {
+    expect(
+      sessionDirectoryName({
+        sessionId: "038ed21c-dfdf-4201-858f-0eb9b89ff8da",
+        provider: "claude",
+      }),
+    ).toBe("claude-038ed21c");
+    expect(
+      sessionDirectoryName({
+        sessionId: "038ed21c-dfdf-4201-858f-0eb9b89ff8da",
+      }),
+    ).toBe("038ed21c");
+  });
+});
 
 describe("WorkspaceContentService", () => {
   test("creates visible workspace context without replacing existing files", async () => {
@@ -504,15 +540,14 @@ Before working in this workspace:
         sessionId: "session-two",
       });
 
-      expect(first.workingDirectory).toBe(
-        join(
-          workspace.path,
-          "worktrees",
-          `${task.id.slice(0, 12)}-try-two-models`,
-          "session-one",
-        ),
+      const taskDirectory = join(
+        workspace.path,
+        "worktrees",
+        `${task.number}-try-two-models`,
       );
-      expect(second.workingDirectory).not.toBe(first.workingDirectory);
+      expect(first.workingDirectory).toBe(join(taskDirectory, "session-"));
+      // Both IDs start with "session-", so the second takes its full ID.
+      expect(second.workingDirectory).toBe(join(taskDirectory, "session-two"));
       expect(first.worktrees).toEqual([]);
       expect(second.worktrees).toEqual([]);
       expect(first.references).toEqual([
@@ -582,8 +617,8 @@ Before working in this workspace:
         join(
           workspace.path,
           "worktrees",
-          `${task.id.slice(0, 12)}-implement-feature`,
-          session.id,
+          `${task.number}-implement-feature`,
+          `custom-${session.id.slice(0, 8)}`,
         ),
       );
       expect(tmux.launches[0]?.cwd).toBe(session.workingDirectory);

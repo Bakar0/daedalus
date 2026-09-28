@@ -273,18 +273,33 @@ export function pathSegment(value: string, fallback: string): string {
   ).slice(0, 80);
 }
 
-export function sessionWorktreeRelativePath(input: {
-  task: Pick<Task, "id" | "title">;
+// Folder names a person reads in Finder or a terminal. The task level is the
+// board's task number and the first few words of its title; the session level
+// is the provider and the start of the session ID, which is enough to tell two
+// attempts at one task apart.
+export function sessionTaskDirectoryName(
+  task: Pick<Task, "number" | "title">,
+): string {
+  return `${task.number}-${shortSlug(task.title, "task", 30)}`;
+}
+
+export function sessionDirectoryName(input: {
   sessionId: string;
-  repositoryName: string;
+  provider?: string;
 }): string {
-  const taskDirectory = `${input.task.id}-${pathSegment(input.task.title, "task")}`;
-  return join(
-    "worktrees",
-    taskDirectory,
-    input.sessionId,
-    pathSegment(input.repositoryName, "repository"),
-  );
+  const id = pathSegment(input.sessionId, "session").slice(0, 8);
+  return input.provider ? `${pathSegment(input.provider, "agent")}-${id}` : id;
+}
+
+// Cuts at a word boundary so the name never ends mid-word.
+function shortSlug(value: string, fallback: string, maxLength: number): string {
+  const slug = pathSegment(value, fallback);
+  if (slug.length <= maxLength) return slug;
+  const cut = slug.slice(0, maxLength + 1);
+  const boundary = cut.lastIndexOf("-");
+  return (
+    boundary > 0 ? cut.slice(0, boundary) : slug.slice(0, maxLength)
+  ).replace(/-+$/, "");
 }
 
 async function createIfMissing(path: string, contents: string): Promise<void> {
@@ -3058,6 +3073,8 @@ export class WorkspaceContentService {
     workspace: Workspace;
     task?: Task;
     sessionId: string;
+    /** The agent provider, such as `claude`, used in the folder name. */
+    provider?: string;
     /**
      * An existing directory to reuse instead of a new one. A session that
      * continues another's work runs where its predecessor did, so the
@@ -3078,11 +3095,16 @@ export class WorkspaceContentService {
       input.workspace.id,
     );
     const group = input.task
-      ? `${pathSegment(input.task.id, "task").slice(0, 12)}-${pathSegment(input.task.title, "task")}`
+      ? sessionTaskDirectoryName(input.task)
       : "unassigned";
+    const groupPath = join(input.workspace.path, "worktrees", group);
+    const shortName = join(groupPath, sessionDirectoryName(input));
+    // A short name that is already taken falls back to the full session ID.
     const workingDirectory =
       input.workingDirectory ??
-      join(input.workspace.path, "worktrees", group, input.sessionId);
+      ((await pathExists(shortName))
+        ? join(groupPath, input.sessionId)
+        : shortName);
     await ensureDirectory(workingDirectory);
     await ensureSessionInstructionFiles(
       workingDirectory,

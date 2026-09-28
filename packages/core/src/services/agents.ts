@@ -774,6 +774,7 @@ export class AgentService {
           workspace,
           task,
           sessionId: id,
+          provider: provider?.name,
           workingDirectory: input.continueFrom?.workingDirectory,
         })
       : { workingDirectory: workspace.path, worktrees: [], references: [] };
