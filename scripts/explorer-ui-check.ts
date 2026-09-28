@@ -221,7 +221,7 @@ let watchdog: ReturnType<typeof setTimeout> | undefined;
 /** Names the step in progress, so a hang says where it stopped. */
 let step = "startup";
 const consoleErrors: string[] = [];
-// Typed, because a `prompt` for a move destination and a `confirm` before a
+// Typed, because a text prompt for a move destination and a confirm before a
 // delete both land here, and only the confirms are what the delete step is
 // counting.
 const dialogs: Array<{ type: string; message: string }> = [];
@@ -317,15 +317,11 @@ try {
   };
   await send("Page.enable");
   /**
-   * `window.confirm` blocks the page, and a blocked page answers no
-   * `Runtime.evaluate` — so a dialog nobody dismisses hangs every assertion
-   * after it rather than failing one. The handler is therefore registered
-   * once, up front, and the answer is a variable the steps set.
-   *
-   * The first attempt registered a one-shot listener just before the click
-   * that opens the dialog, and hung: the delete handler calls `confirm`
-   * synchronously inside the click, so the `evaluate` driving the click was
-   * already blocked by the time anything could have listened.
+   * A native dialog blocks the page, and a blocked page answers no
+   * `Runtime.evaluate`, so one nobody dismisses hangs every assertion after
+   * it rather than failing one. The app no longer opens any, but a
+   * regression would, so the handler below is registered once, up front, and
+   * dismisses and reports whatever appears.
    */
   await send("Runtime.enable");
   socket.addEventListener("message", (event) => {
@@ -348,20 +344,17 @@ try {
       );
   });
 
-  let acceptDialogs = true;
-  /** Supplied to a `prompt`; ignored by a `confirm`. */
-  let dialogReply: string | undefined;
+  // A native dialog is a failure. The app's WKWebView never shows one, so a
+  // `confirm` there is a silent "no" and a `prompt` a silent cancel (#40);
+  // Chrome showing them and CDP accepting them is how this check used to pass.
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(String(event.data));
     if (message.method !== "Page.javascriptDialogOpening") return;
-    dialogs.push({
-      type: String(message.params?.type ?? "unknown"),
-      message: String(message.params?.message ?? ""),
-    });
-    void send("Page.handleJavaScriptDialog", {
-      accept: acceptDialogs,
-      ...(dialogReply === undefined ? {} : { promptText: dialogReply }),
-    });
+    const type = String(message.params?.type ?? "unknown");
+    failures.push(
+      `A native ${type} opened, which the app cannot show: ${String(message.params?.message ?? "")}`,
+    );
+    void send("Page.handleJavaScriptDialog", { accept: false });
   });
 
   const at = (what: string) => {
@@ -444,6 +437,28 @@ try {
     });
     await send("Input.insertText", { text });
     await Bun.sleep(150);
+  };
+
+  /**
+   * Answers the app's own dialog, typing `text` first when it asks for some,
+   * and records what it asked. False when no dialog appeared.
+   */
+  const answerDialog = async (accept: boolean, text?: string) => {
+    if (!(await settles("document.querySelector('.app-dialog')"))) {
+      failures.push(`No dialog appeared during: ${step}`);
+      return false;
+    }
+    dialogs.push(
+      await evaluate<{ type: string; message: string }>(`({
+        type: document.querySelector('.app-dialog').dataset.dialogKind,
+        message: document.querySelector('.app-dialog-message').textContent,
+      })`),
+    );
+    if (text !== undefined) await replaceText(text);
+    await evaluate(
+      `document.querySelector('.app-dialog [data-dialog-answer="${accept ? "confirm" : "cancel"}"]').click()`,
+    );
+    return settles("!document.querySelector('.app-dialog')");
   };
 
   const pressEnter = async () => {
@@ -975,17 +990,16 @@ try {
 
     // 10c. Moving, through the same menu. Its destination arrives by prompt
     //      rather than by drag — drag-to-move is deliberately out of scope —
-    //      so the dialog handler answers with the folder to move into.
+    //      so the dialog is answered with the folder to move into.
     at("moving an entry");
     if (await openMenuOn("worktrees/renamed.md")) {
-      dialogReply = "worktrees/opened";
       await evaluate(
         `[...document.querySelectorAll('.workspace-tree-menu button')].find((button) => button.textContent === 'Move to…').click()`,
       );
+      await answerDialog(true, "worktrees/opened");
       const landed = await settles(
         `[...document.querySelectorAll('.workspace-tree-entry > button')].some((button) => button.getAttribute('title') === 'worktrees/opened/renamed.md')`,
       );
-      dialogReply = undefined;
       if (!landed)
         failures.push(
           "Moving a file into another folder did not put it there in the tree",
@@ -1000,25 +1014,24 @@ try {
         failures.push("The move left the file at its old path as well");
       // Moved back, so the delete step below still has something to delete
       // where it expects to find it.
-      dialogReply = "worktrees";
-      if (await openMenuOn("worktrees/opened/renamed.md"))
+      if (await openMenuOn("worktrees/opened/renamed.md")) {
         await evaluate(
           `[...document.querySelectorAll('.workspace-tree-menu button')].find((button) => button.textContent === 'Move to…').click()`,
         );
+        await answerDialog(true, "worktrees");
+      }
       await settles(
         `[...document.querySelectorAll('.workspace-tree-entry > button')].some((button) => button.getAttribute('title') === 'worktrees/renamed.md')`,
       );
-      dialogReply = undefined;
     }
 
     at("delete confirmation");
-    // 11. Deleting asks first, and a cancelled confirm deletes nothing. The
-    //     dialog is answered through CDP, so this is the real `window.confirm`.
+    // 11. Deleting asks first, and a cancelled confirm deletes nothing.
     await openMenuOn("worktrees/renamed.md");
-    acceptDialogs = false;
     await evaluate(
       `[...document.querySelectorAll('.workspace-tree-menu button')].find((button) => button.textContent === 'Delete').click()`,
     );
+    await answerDialog(false);
     await Bun.sleep(500);
     if (!(await pathExists(join(workspacePath, "worktrees", "renamed.md"))))
       failures.push(
@@ -1026,10 +1039,10 @@ try {
       );
 
     await openMenuOn("worktrees/renamed.md");
-    acceptDialogs = true;
     await evaluate(
       `[...document.querySelectorAll('.workspace-tree-menu button')].find((button) => button.textContent === 'Delete').click()`,
     );
+    await answerDialog(true);
     if (
       !(await settles(
         `![...document.querySelectorAll('.workspace-tree-entry > button')].some((button) => button.getAttribute('title') === 'worktrees/renamed.md')`,
