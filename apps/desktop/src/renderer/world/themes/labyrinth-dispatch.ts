@@ -287,9 +287,9 @@ export function createDispatch(layer: Container, geometry: DispatchGeometry) {
           entry.outside = true;
           const found = laneOf(entry.zone);
           entry.beltPoints = found ? found.route.path.length - 1 : 0;
-          // Its yard spot is settled below, with the others'.
+          // The last point is its yard spot, settled below with the others';
+          // everything before it is the belt, the pipe and the pad.
           entry.path = outward(entry.zone, entry.position);
-          entry.path.pop();
         }
       }
     });

@@ -602,8 +602,16 @@ describe("dispatch", () => {
     const step = createDispatch(layer, geometry);
     let time = settle(step);
     step(time, [zone(crate("packing"))]);
-    while (time < 20) step((time += 0.05), [zone(crate("open"))]);
     const view = layer.children[0]!;
+    const pipe = geometry.lanes[1]!.pipeX;
+    let inPipe = false;
+    while (time < 20) {
+      step((time += 0.05), [zone(crate("open"))]);
+      // Up the pipe, not straight across from the room to the yard.
+      if (Math.abs(view.x - pipe) < 1 && view.y > 100 && view.y < 700)
+        inPipe = true;
+    }
+    expect(inPipe).toBe(true);
     // On the grass, inward of the right-hand post, and still there.
     expect(view.y).toBeLessThan(0);
     expect(view.y).toBeGreaterThan(-60);
