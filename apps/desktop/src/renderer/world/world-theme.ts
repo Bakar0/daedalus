@@ -59,6 +59,28 @@ export interface WorldTheme {
    */
   createVehicle?(look: WorldLook): Container;
   /**
+   * Places that are one room for every zone instead of one per zone. An
+   * agent moves to a shared place only after it has been doing that work
+   * for `dwell` seconds, and leaves only after it has been doing something
+   * else as long, so quick calls do not send it back and forth.
+   */
+  shared?: {
+    places: readonly WorldPlace[];
+    dwell: number;
+    /** Where the `slot`th agent there stands, in world pixels. */
+    spot(place: WorldPlace, slot: number): WorldPoint;
+  };
+  /**
+   * Draws moving things that belong to no agent into a layer above the
+   * zones and below the agents, such as crates on a conveyor. The returned
+   * function runs every frame with the zones as they are now.
+   */
+  drawEffects?(
+    layer: Container,
+    arrangement: WorldArrangement,
+    look: WorldLook,
+  ): ((time: number, zones: readonly WorldZone[]) => void) | void;
+  /**
    * How the camera frames the world at rest. "all" fits the whole world;
    * "width" fills the view's width and starts at the top, for a world that
    * grows downward and is scrolled, like Fallout Shelter. "all" if unset.

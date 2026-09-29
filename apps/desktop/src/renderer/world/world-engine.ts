@@ -1,5 +1,10 @@
 import { Application, Container, type FederatedPointerEvent } from "pixi.js";
-import type { WorldActor, WorldModel, WorldPlace } from "./world-model";
+import type {
+  WorldActor,
+  WorldModel,
+  WorldPlace,
+  WorldZone,
+} from "./world-model";
 import type {
   ActorFigure,
   WorldArrangement,
@@ -72,6 +77,10 @@ interface ActorEntry {
   facing: -1 | 0 | 1;
   /** Flying home on the way out; removed on arrival. */
   leaving: boolean;
+  /** The place it is at, which lags `actor.place` across a shared room. */
+  effective: WorldPlace;
+  /** A move to or from a shared room that is waiting out the dwell. */
+  pending?: { place: WorldPlace; since: number };
 }
 
 export class WorldEngine {
@@ -79,6 +88,8 @@ export class WorldEngine {
   private readonly world = new Container();
   private readonly ground = new Container();
   private readonly plots = new Container();
+  private readonly effects = new Container();
+  private animateEffects?: (time: number, zones: readonly WorldZone[]) => void;
   private readonly figures = new Container();
   private readonly zones = new Map<string, ZoneEntry>();
   private readonly actors = new Map<string, ActorEntry>();
@@ -137,7 +148,7 @@ export class WorldEngine {
     app.canvas.classList.add("world-canvas");
     this.host.append(app.canvas);
     this.figures.sortableChildren = true;
-    this.world.addChild(this.ground, this.plots, this.figures);
+    this.world.addChild(this.ground, this.plots, this.effects, this.figures);
     app.stage.addChild(this.world);
     app.ticker.maxFPS = MAX_FPS;
     app.ticker.add((ticker) => this.tick(ticker.deltaMS / 1000));
@@ -402,11 +413,18 @@ export class WorldEngine {
       const zone = this.zones.get(actor.zoneId);
       if (!zone) continue;
       present.add(actor.sessionId);
-      const key = `${actor.zoneId}\u0000${actor.place}`;
+      const existing = this.actors.get(actor.sessionId);
+      const place = existing ? this.settle(existing, actor.place) : actor.place;
+      const shared = this.theme.shared?.places.includes(place) ?? false;
+      // A shared place counts slots across every zone: it is one room.
+      const key = shared
+        ? `shared\u0000${place}`
+        : `${actor.zoneId}\u0000${place}`;
       const slot = slots.get(key) ?? 0;
       slots.set(key, slot + 1);
-      const target = this.spot(zone, actor.place, slot);
-      const existing = this.actors.get(actor.sessionId);
+      const target = shared
+        ? { ...this.theme.shared!.spot(place, slot) }
+        : this.spot(zone, place, slot);
       if (existing) {
         existing.actor = actor;
         existing.leaving = false;
@@ -430,6 +448,7 @@ export class WorldEngine {
       const arrive = !(snap && shown.has(actor.sessionId));
       shown.add(actor.sessionId);
       const entry = this.enter(actor, target, !arrive);
+      entry.effective = place;
       if (arrive) entry.wait = arrivals++ * ARRIVAL_GAP;
       this.actors.set(actor.sessionId, entry);
     }
@@ -482,7 +501,37 @@ export class WorldEngine {
       wait: 0,
       facing: 0,
       leaving: false,
+      effective: actor.place,
     };
+  }
+
+  /**
+   * The place an actor should be at now. A move into or out of a shared
+   * room waits until the new work has lasted the theme's dwell; any other
+   * move, inside the actor's own zone, happens at once.
+   */
+  private settle(entry: ActorEntry, desired: WorldPlace): WorldPlace {
+    const shared = this.theme.shared;
+    if (desired === entry.effective) {
+      entry.pending = undefined;
+      return desired;
+    }
+    const crossing =
+      shared &&
+      (shared.places.includes(desired) ||
+        shared.places.includes(entry.effective));
+    if (!crossing) {
+      entry.pending = undefined;
+      entry.effective = desired;
+      return desired;
+    }
+    if (entry.pending?.place !== desired)
+      entry.pending = { place: desired, since: this.elapsed };
+    if (this.elapsed - entry.pending.since >= shared.dwell) {
+      entry.pending = undefined;
+      entry.effective = desired;
+    }
+    return entry.effective;
   }
 
   /** The theme's way from one point to another, or a straight line. */
@@ -531,6 +580,11 @@ export class WorldEngine {
       this.animateWorld =
         this.theme.drawWorld(this.ground, this.arrangement, this.look) ??
         undefined;
+      for (const child of this.effects.removeChildren())
+        child.destroy({ children: true });
+      this.animateEffects =
+        this.theme.drawEffects?.(this.effects, this.arrangement, this.look) ??
+        undefined;
       this.applyCamera();
     }
     const seen = new Set<string>();
@@ -565,6 +619,16 @@ export class WorldEngine {
   private tick(seconds: number) {
     this.elapsed += seconds;
     this.animateWorld?.(this.elapsed);
+    this.animateEffects?.(this.elapsed, this.model.zones);
+    // A move waiting out a shared room's dwell happens once it has.
+    const dwell = this.theme.shared?.dwell;
+    if (
+      dwell !== undefined &&
+      [...this.actors.values()].some(
+        (entry) => entry.pending && this.elapsed - entry.pending.since >= dwell,
+      )
+    )
+      this.relayout(false);
     for (const zone of this.zones.values()) zone.animate?.(this.elapsed);
     for (const [id, entry] of this.actors) {
       if (entry.wait > 0) {

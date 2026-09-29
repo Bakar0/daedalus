@@ -222,13 +222,11 @@ const BLOCKS: readonly Block[] = [
     },
   },
   {
-    id: "observatory",
-    tag: "OBSERVATORY",
+    // Web work happens in the shared Observatory; this is a quiet corner
+    // with a window onto the world above, for thinking.
+    id: "thinking",
+    tag: "THINKING",
     places: {
-      web: [
-        { x: -24, y: 4 },
-        { x: 30, y: 10 },
-      ],
       think: [
         { x: -22, y: FLOOR },
         { x: 30, y: FLOOR },
@@ -246,6 +244,8 @@ const BLOCKS: readonly Block[] = [
       const chair = pick(random, CHAIRS);
       g.roundRect(-29, FLOOR_TOP - 42, 58, 24, 8).fill(chair);
       g.roundRect(-33, FLOOR_TOP - 22, 66, 22, 8).fill(chair);
+      g.rect(40, FLOOR_TOP - 60, 3, 60).fill(p.metal);
+      g.circle(41, FLOOR_TOP - 64, 8).fill(0xffe08a);
     },
   },
   {
@@ -268,35 +268,53 @@ const BLOCKS: readonly Block[] = [
     },
   },
   {
+    // Always the block by the door: a packing bench, and a conveyor that
+    // carries each crate out of the room toward the surface.
     id: "ship",
     tag: "SHIPPING",
     places: {
       ship: [
-        { x: -30, y: FLOOR },
-        { x: 8, y: FLOOR - 20 },
+        { x: -24, y: FLOOR },
+        { x: 20, y: FLOOR },
       ],
     },
     wallFree: false,
     draw(g, p) {
-      g.rect(-44, FLOOR_TOP - 34, 34, 34).fill(0xc8914d);
-      g.rect(-12, FLOOR_TOP - 26, 26, 26).fill(0xb07a3a);
-      g.rect(-36, FLOOR_TOP - 58, 26, 24).fill(0xd9a86b);
-      g.roundRect(24, -ROOM_H / 2, 26, ROOM_H / 2 + 60, 11).fill({
-        color: 0x9fd8ff,
-        alpha: 0.18,
-      });
-      g.roundRect(24, -ROOM_H / 2, 26, ROOM_H / 2 + 60, 11).stroke({
-        width: 3,
-        color: p.brass,
-      });
+      // Flattened boxes waiting on the wall, and a roll of tape.
+      g.rect(-50, -40, 40, 50).fill(0xc8914d);
+      g.rect(-46, -36, 32, 42).fill(0xd9a86b);
+      g.rect(-30, -36, 4, 42).fill(0xe8d3a8);
+      // The bench.
+      g.roundRect(-56, FLOOR_TOP - 42, 76, 10, 3).fill(p.wood);
+      g.rect(-50, FLOOR_TOP - 32, 6, 32).fill(p.woodDark);
+      g.rect(10, FLOOR_TOP - 32, 6, 32).fill(p.woodDark);
+      g.circle(-34, FLOOR_TOP - 48, 6).fill(0xe8d3a8);
+      g.circle(-34, FLOOR_TOP - 48, 2.5).fill(p.woodDark);
+      // The conveyor, out through the doorway.
+      const beltLeft = BELT_START;
+      const beltRight = ROOM_W / 2 - SHIP_BLOCK_X;
+      g.roundRect(beltLeft, FLOOR_TOP - 14, beltRight - beltLeft, 10, 5).fill(
+        0x2a2f3f,
+      );
+      for (let x = beltLeft + 8; x < beltRight - 4; x += 16)
+        g.circle(x, FLOOR_TOP - 9, 3).fill(0x8a92a6);
+      g.rect(beltLeft + 4, FLOOR_TOP - 4, 5, 4).fill(p.metal);
+      g.rect(beltRight - 30, FLOOR_TOP - 4, 5, 4).fill(p.metal);
     },
   },
 ];
 
-/** Where the shipping block's tube runs, relative to the block's centre. */
-const TUBE_X = 37;
 const BLOCK_STEP = 117;
 const FIRST_BLOCK = -ROOM_W / 2 + 67;
+/** The shipping block is always the last, beside the door. */
+const SHIP_BLOCK_X = FIRST_BLOCK + 6 * BLOCK_STEP;
+/** Where the conveyor starts, relative to the shipping block. */
+const BELT_START = 24;
+/**
+ * Crates are drawn centred on their path; in design units (the room is drawn
+ * 1.3 times larger) this lifts the centre by half a 1.6-scale crate.
+ */
+const CRATE_LIFT = 16;
 
 type Decoration =
   "painting" | "clock" | "banner" | "amphora" | "plant" | "poster";
@@ -316,8 +334,6 @@ export interface RoomLayout {
   floorColor: number;
   floorStyle: number;
   decorations: Array<{ kind: Decoration; x: number; y: number; tint: number }>;
-  /** The tube's x, for the parcel. */
-  tubeX: number;
 }
 
 const WALL_COLORS = [
@@ -333,11 +349,14 @@ export function layoutFor(id: string): RoomLayout {
   const cached = layouts.get(id);
   if (cached) return cached;
   const random = scatter(hash(id));
-  const order = [...BLOCKS];
+  // Shuffle every station but shipping, which stays beside the door so its
+  // conveyor has somewhere to run.
+  const order = BLOCKS.filter((block) => block.id !== "ship");
   for (let index = order.length - 1; index > 0; index -= 1) {
     const other = Math.floor(random() * (index + 1));
     [order[index], order[other]] = [order[other]!, order[index]!];
   }
+  order.push(BLOCKS.find((block) => block.id === "ship")!);
   const blocks = order.map((block, index) => ({
     block,
     x: FIRST_BLOCK + index * BLOCK_STEP,
@@ -351,7 +370,6 @@ export function layoutFor(id: string): RoomLayout {
         y: -66 + (random() - 0.5) * 16,
         tint: pick(random, TINTS),
       });
-  const ship = blocks.find(({ block }) => block.id === "ship")!;
   const layout: RoomLayout = {
     blocks,
     wallColor: pick(random, WALL_COLORS),
@@ -359,7 +377,6 @@ export function layoutFor(id: string): RoomLayout {
     floorColor: pick(random, FLOOR_COLORS),
     floorStyle: Math.floor(random() * 3),
     decorations,
-    tubeX: ship.x + TUBE_X,
   };
   layouts.set(id, layout);
   return layout;
@@ -374,6 +391,16 @@ export function roomSpots(layout: RoomLayout, place: WorldPlace): WorldPoint[] {
   }
   return [{ x: 0, y: FLOOR }];
 }
+
+/**
+ * Where a crate goes in this room, before mirroring and scaling: packed on
+ * the bench, dropped on the belt, and carried out of the door.
+ */
+export const CRATE_PATH: readonly WorldPoint[] = [
+  { x: SHIP_BLOCK_X - 20, y: FLOOR_TOP - 42 - CRATE_LIFT },
+  { x: SHIP_BLOCK_X + BELT_START + 14, y: FLOOR_TOP - 14 - CRATE_LIFT },
+  { x: ROOM_W / 2 + 2, y: FLOOR_TOP - 14 - CRATE_LIFT },
+];
 
 export function roomTags(layout: RoomLayout) {
   return layout.blocks.map(({ block, x }) => ({ text: block.tag, x }));

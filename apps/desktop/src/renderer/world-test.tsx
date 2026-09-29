@@ -119,9 +119,10 @@ const SCRIPT: Record<string, Beat[]> = {
     ["needs_permission", "Bash(git push)"],
     ["working", "Bash(git push)"],
   ],
+  // Web work for two beats running: long enough to go up to the Observatory.
   a3: [
-    ["idle", null],
     ["working", "WebFetch(https://pixijs.com)"],
+    ["working", "WebSearch(pixi graphics)"],
     ["done", null],
   ],
   a4: [
@@ -134,9 +135,10 @@ const SCRIPT: Record<string, Beat[]> = {
     ["needs_input", "Which branch?"],
     ["needs_input", "Which branch?"],
   ],
+  // Pushing first, so crates leave for the Hermes Post straight away.
   a6: [
-    ["done", null],
-    ["working", "Grep(migration)"],
+    ["working", "Bash(git push origin main)"],
+    ["working", "Bash(gh pr create)"],
     ["idle", null],
   ],
 };

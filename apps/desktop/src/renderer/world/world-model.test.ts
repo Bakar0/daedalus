@@ -15,6 +15,8 @@ import {
 import { WORLD_THEMES } from "./themes";
 import { LABYRINTH_ROOM, labyrinthTheme } from "./themes/labyrinth";
 import { layoutFor } from "./themes/labyrinth-rooms";
+import { createDispatch } from "./themes/labyrinth-dispatch";
+import { Container } from "pixi.js";
 import {
   DEFAULT_WORLD_CHARACTER_ID,
   WORLD_CHARACTERS,
@@ -325,7 +327,8 @@ describe("labyrinth", () => {
   test("the labyrinth grows a floor for every workspace", () => {
     const height = (count: number) =>
       labyrinthTheme.arrange(zones(count)).bounds.height;
-    expect(height(1)).toBe(height(0));
+    // The Observatory is always there; each workspace adds a floor below.
+    expect(height(1)).toBeGreaterThan(height(0));
     expect(height(2)).toBeGreaterThan(height(1));
     expect(height(9)).toBeGreaterThan(height(8));
   });
@@ -388,6 +391,26 @@ describe("labyrinth", () => {
     expect(path.at(-1)!.ride).toBeUndefined();
   });
 
+  test("web work is shared: every zone's bots go to the one Observatory", () => {
+    const arrangement = labyrinthTheme.arrange(zones(3));
+    const shared = labyrinthTheme.shared!;
+    expect(shared.places).toEqual(["web"]);
+    const first = shared.spot("web", 0);
+    // Above every workspace room, and reached by riding the shaft.
+    for (const origin of arrangement.origins)
+      expect(first.y).toBeLessThan(origin.y - H / 2);
+    const spots = Array.from({ length: 12 }, (_, slot) =>
+      shared.spot("web", slot),
+    );
+    expect(new Set(spots.map((point) => `${point.x},${point.y}`)).size).toBe(
+      12,
+    );
+    const origin = arrangement.origins[2]!;
+    const path = arrangement.route!({ x: origin.x, y: origin.y + 90 }, first);
+    expect(path.filter((point) => point.ride)).toHaveLength(1);
+    expect(path.at(-1)).toEqual(first);
+  });
+
   const ids = Array.from({ length: 30 }, (_, index) => `workspace-${index}`);
 
   test("every room gives every place its own spots, inside the room", () => {
@@ -428,12 +451,77 @@ describe("labyrinth", () => {
     expect(looks.size).toBeGreaterThan(10);
   });
 
+  test("the shipping bench is always beside the door", () => {
+    for (const id of ids) {
+      const blocks = layoutFor(id).blocks;
+      expect(blocks.at(-1)!.block.id).toBe("ship");
+      expect(blocks.filter(({ block }) => block.id === "ship")).toHaveLength(1);
+    }
+  });
+
   test("stations never overlap in a room", () => {
     for (const id of ids) {
       const xs = layoutFor(id).blocks.map(({ x }) => x);
       for (let index = 1; index < xs.length; index += 1)
         expect(xs[index]! - xs[index - 1]!).toBeGreaterThanOrEqual(110);
     }
+  });
+});
+
+describe("dispatch", () => {
+  const geometry = {
+    pipeX: 65,
+    pipeY: 44,
+    post: { x: 330, y: 0 },
+    roomPaths: [
+      [
+        { x: 500, y: 700 },
+        { x: 400, y: 740 },
+        { x: 100, y: 740 },
+      ],
+    ],
+    bottom: 760,
+  };
+  const zone = (shipping: number) => ({
+    id: "w0",
+    name: "w0",
+    attention: 0,
+    busy: 1,
+    shipping,
+  });
+
+  test("a crate leaves when a bot starts shipping, and repeats while it does", () => {
+    const layer = new Container();
+    const step = createDispatch(layer, geometry);
+    step(0, [zone(0)]);
+    expect(layer.children).toHaveLength(0);
+    step(0.1, [zone(1)]);
+    // The bot needs a moment to reach the bench.
+    step(1, [zone(1)]);
+    expect(layer.children).toHaveLength(0);
+    step(1.4, [zone(1)]);
+    expect(layer.children).toHaveLength(1);
+    let time = 1.4;
+    while (time < 7) step((time += 0.05), [zone(1)]);
+    expect(layer.children.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("a crate flies off from the post and is gone after its flight", () => {
+    const layer = new Container();
+    const step = createDispatch(layer, geometry);
+    step(0, [zone(1)]);
+    let time = 0;
+    while (time < 1.3) step((time += 0.05), [zone(1)]);
+    step(time, [zone(0)]);
+    const crate = layer.children[0]!;
+    let highest = Infinity;
+    while (time < 20 && layer.children.length) {
+      step((time += 0.05), [zone(0)]);
+      if (!crate.destroyed) highest = Math.min(highest, crate.y);
+    }
+    expect(layer.children).toHaveLength(0);
+    // It rose above the post before it went.
+    expect(highest).toBeLessThan(geometry.post.y - 100);
   });
 });
 

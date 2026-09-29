@@ -9,10 +9,17 @@ import type {
   ZoneRef,
 } from "../world-theme";
 import {
+  createDispatch,
+  type DispatchGeometry,
+  drawPipe,
+  drawPost,
+} from "./labyrinth-dispatch";
+import { drawObservatory, OBSERVATORY_SPOTS } from "./labyrinth-observatory";
+import {
+  CRATE_PATH,
   DOOR_X,
   drawRoom,
   FLOOR,
-  hash,
   layoutFor,
   ROOM_H,
   ROOM_W,
@@ -24,17 +31,18 @@ import {
 /**
  * Daedalus's Labyrinth, seen from the side like a cut-away ant farm.
  * Daedalus Works, a marble workshop-temple, stands on the surface and builds
- * the bots. A glass lift shaft runs straight down from its floor, and every
- * workspace is a room dug off the shaft, one to a floor, door facing it.
- * Bots come out of the workshop, ride the shaft down, and fly through their
- * room's door; inside, they move freely between stations. A finished bot
- * goes back up the same way.
+ * the bots. A glass lift shaft runs straight down from its floor. The top
+ * floor is the Observatory, the one room every workspace shares, for web
+ * work; below it every workspace has a room of its own, one to a floor,
+ * door facing the shaft. Bots come out of the workshop, ride a car down,
+ * and walk in through their room's door; inside, they move freely between
+ * stations. A finished bot goes back up the same way.
  *
- * Rooms are one open space. Stations are furniture along it, from the far
- * wall to the door: lounge, library, workbench under the war-room board,
- * terminal, observatory window over a thinking chair, round table, and the
- * shipping crates beside the pneumatic tube that carries pushes to the
- * surface. Every room is the same size for now.
+ * Each room is laid out and decorated from its workspace's id (see
+ * `labyrinth-rooms.ts`), with the shipping bench always by the door: its
+ * crates ride a conveyor out into the cargo pipe, up to the Hermes Post on
+ * the surface, and fly away (see `labyrinth-dispatch.ts`). Every room is
+ * the same size for now.
  */
 
 const SHAFT_HALF = 45;
@@ -50,6 +58,14 @@ const SCALE = 1.3;
 const ACTOR_SCALE = 1.9;
 const ROOM_X = SHAFT_HALF + CORRIDOR + (ROOM_W * SCALE) / 2;
 const HOME: WorldPoint = { x: 0, y: -40 };
+/** The cargo pipe runs up beside the shaft, in the corridors' gap. */
+const PIPE_X = SHAFT_HALF + CORRIDOR / 2;
+/** ...turns just under the grass... */
+const PIPE_Y = 44;
+/** ...and comes up at the Hermes Post, right of the workshop. */
+const POST: WorldPoint = { x: 330, y: 0 };
+/** Seconds of web work before a bot goes up to the Observatory, and back. */
+const OBSERVATORY_DWELL = 4;
 
 interface Palette {
   skyTop: number;
@@ -149,10 +165,24 @@ function spot(place: WorldPlace, slot: number, zone: ZoneRef): WorldPoint {
   return { x: x * mirrorOf(zone.index) * SCALE, y: base.y * SCALE };
 }
 
-function roomCenter(index: number): WorldPoint {
+/** The centre of the room on `floor`; floor 0 is the shared Observatory. */
+function floorCenter(floor: number): WorldPoint {
   return {
     x: ROOM_X,
-    y: FIRST_TOP + index * (ROOM_H * SCALE + FLOOR_GAP) + (ROOM_H * SCALE) / 2,
+    y: FIRST_TOP + floor * (ROOM_H * SCALE + FLOOR_GAP) + (ROOM_H * SCALE) / 2,
+  };
+}
+
+/** Workspace rooms start one floor below the Observatory. */
+const roomCenter = (index: number) => floorCenter(index + 1);
+const OBSERVATORY = floorCenter(0);
+
+function observatorySpot(_place: WorldPlace, slot: number): WorldPoint {
+  const base = OBSERVATORY_SPOTS[slot % OBSERVATORY_SPOTS.length]!;
+  const crowd = Math.floor(slot / OBSERVATORY_SPOTS.length);
+  return {
+    x: OBSERVATORY.x + (base.x + crowd * 22) * -1 * SCALE,
+    y: OBSERVATORY.y + base.y * SCALE,
   };
 }
 
@@ -165,13 +195,15 @@ function doorOf(center: WorldPoint, index: number): WorldPoint {
 
 function arrange(zones: readonly WorldZone[]): WorldArrangement {
   const origins = zones.map((_, index) => roomCenter(index));
-  const floors = Math.max(1, zones.length);
+  const floors = zones.length + 1;
   const bottom = FIRST_TOP + floors * (ROOM_H * SCALE + FLOOR_GAP) + 40;
   // From the steam pipes left of the workshop to past the rooms' far wall.
   const left = -340;
   const right = ROOM_X + (ROOM_W * SCALE) / 2 + 70;
+  // Every room a bot can be in: the Observatory first, then the zones.
+  const rooms = [OBSERVATORY, ...origins];
   const roomAt = (point: WorldPoint) =>
-    origins.findIndex(
+    rooms.findIndex(
       (origin) =>
         Math.abs(point.x - origin.x) <= (ROOM_W * SCALE) / 2 &&
         Math.abs(point.y - origin.y) <= (ROOM_H * SCALE) / 2 + 20,
@@ -187,11 +219,11 @@ function arrange(zones: readonly WorldZone[]): WorldArrangement {
       // and in through that floor's door.
       const points: Waypoint[] = [];
       if (start !== -1) {
-        const door = doorOf(origins[start]!, start);
+        const door = doorOf(rooms[start]!, start);
         points.push(door, { x: 0, y: door.y });
       } else points.push({ x: 0, y: from.y });
       if (end !== -1) {
-        const door = doorOf(origins[end]!, end);
+        const door = doorOf(rooms[end]!, end);
         points.push({ x: 0, y: door.y, ride: true }, door, to);
       } else points.push({ x: 0, y: to.y, ride: true }, to);
       return points.filter(
@@ -289,18 +321,6 @@ function drawWorkshop(layer: Container, p: Palette) {
   wheel.position.set(0, -204);
   layer.addChild(wheel);
 
-  // The crane on the right lowers a finished bot's frame toward the shaft.
-  const crane = new Graphics();
-  crane.rect(360, -300, 12, 300).fill(p.metal);
-  crane.rect(200, -306, 190, 12).fill(p.metal);
-  crane
-    .moveTo(236, -294)
-    .lineTo(366, -200)
-    .stroke({ width: 5, color: p.metal });
-  layer.addChild(crane);
-  const hook = new Graphics();
-  layer.addChild(hook);
-
   const steam = new Graphics();
   layer.addChild(steam);
 
@@ -328,15 +348,6 @@ function drawWorkshop(layer: Container, p: Palette) {
           )
           .fill({ color: 0xc7ccd6, alpha: 0.42 * (1 - rise) });
       }
-    // The hook swings gently with a crate of parts.
-    const sway = Math.sin(time * 0.9) * 6;
-    hook.clear();
-    hook
-      .moveTo(214, -294)
-      .lineTo(214 + sway, -200)
-      .stroke({ width: 2, color: 0x8a92a6 });
-    hook.roundRect(202 + sway, -200, 24, 18, 3).fill(0xc8914d);
-    hook.rect(212 + sway, -200, 4, 18).fill(0xe8d3a8);
   };
 }
 
@@ -416,8 +427,8 @@ function drawWorld(
       30 + random() * rockHeight,
       3 + random() * 6,
     ).fill(random() > 0.5 ? p.rockDark : p.rockLight);
-  // Corridors from every door to the shaft.
-  arrangement.origins.forEach((origin, index) => {
+  // Corridors from every door, the Observatory's too, to the shaft.
+  [OBSERVATORY, ...arrangement.origins].forEach((origin, index) => {
     const door = doorOf(origin, index);
     const left = Math.min(door.x, 0);
     const right = Math.max(door.x, 0);
@@ -438,6 +449,23 @@ function drawWorld(
   g.rect(-SHAFT_HALF, -30, 4, bottom + 30).fill(p.brass);
   g.rect(SHAFT_HALF - 4, -30, 4, bottom + 30).fill(p.brass);
   layer.addChild(g);
+
+  // The Observatory, which is everyone's and so is no zone.
+  const observatory = new Container();
+  observatory.position.set(OBSERVATORY.x, OBSERVATORY.y);
+  observatory.scale.set(SCALE);
+  drawObservatory(
+    observatory,
+    { ...p, screen: p.screen, floor: p.floor, rock: p.rockDark },
+    mirrorOf(0),
+  );
+  layer.addChild(observatory);
+
+  // The cargo pipe and the post it delivers to.
+  const pipe = new Graphics();
+  drawPipe(pipe, dispatchGeometry(arrangement), p);
+  layer.addChild(pipe);
+  drawPost(layer, POST, p);
 
   const lights = new Graphics();
   layer.addChild(lights);
@@ -556,20 +584,10 @@ function drawZone(
       .stroke({ width: 6, color: zone.attention > 0 ? ATTENTION : p.brass }),
   );
 
-  // The siren when someone is waiting, and a parcel riding the tube.
+  // The siren when someone is waiting.
   const siren = new Graphics();
-  const parcel = new Graphics();
-  inner.addChild(parcel, siren);
+  inner.addChild(siren);
   return (time: number) => {
-    parcel.clear();
-    // A parcel rides the tube only while an agent is at the crates.
-    if (zone.shipping > 0) {
-      const rise = (time * 0.35 + (hash(zone.id) % 100) / 100) % 1;
-      const py = FLOOR + 30 - rise * (ROOM_H / 2 + FLOOR + 30);
-      parcel
-        .roundRect(layout.tubeX * mirror - 10, py, 20, 18, 3)
-        .fill(0xc8914d);
-    }
     siren.clear();
     if (zone.attention === 0) return;
     const sx = -60 * mirror;
@@ -600,6 +618,29 @@ function drawZone(
           ])
           .fill({ color: ATTENTION, alpha: 0.16 });
   };
+}
+
+/** Where the crates go, for this arrangement of rooms. */
+function dispatchGeometry(arrangement: WorldArrangement): DispatchGeometry {
+  const mirror = mirrorOf(0);
+  const roomPaths = arrangement.origins.map((origin) =>
+    CRATE_PATH.map((point) => ({
+      x: origin.x + point.x * mirror * SCALE,
+      y: origin.y + point.y * SCALE,
+    })),
+  );
+  const deepest = roomPaths.at(-1)?.at(-1)?.y ?? PIPE_Y + 40;
+  return {
+    pipeX: PIPE_X,
+    pipeY: PIPE_Y,
+    post: POST,
+    roomPaths,
+    bottom: deepest + 13,
+  };
+}
+
+function drawEffects(layer: Container, arrangement: WorldArrangement) {
+  return createDispatch(layer, dispatchGeometry(arrangement));
 }
 
 /**
@@ -639,6 +680,12 @@ export const labyrinthTheme: WorldTheme = {
   actorScale: ACTOR_SCALE,
   fit: "width",
   createVehicle,
+  shared: {
+    places: ["web"],
+    dwell: OBSERVATORY_DWELL,
+    spot: observatorySpot,
+  },
+  drawEffects,
 };
 
 export const LABYRINTH_ROOM = {
