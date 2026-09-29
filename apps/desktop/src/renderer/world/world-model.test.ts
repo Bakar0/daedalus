@@ -2,14 +2,19 @@ import { describe, expect, test } from "vitest";
 import type {
   AgentActivityDto,
   AgentSessionDto,
+  GitStatusDto,
+  PullRequestRefDto,
   SessionAttentionDto,
+  SessionWorktreeDto,
   TaskDto,
   WorkspaceDto,
 } from "@daedalus/protocol";
 import {
   buildWorldModel,
+  crateFor,
   stationForDetail,
   WORLD_PLACES,
+  type WorldCrate,
   type WorldModelInput,
 } from "./world-model";
 import { WORLD_THEMES } from "./themes";
@@ -104,7 +109,36 @@ const input = (overrides: Partial<WorldModelInput> = {}): WorldModelInput => ({
   activity: new Map(),
   attention: new Map(),
   telemetry: new Map(),
+  worktrees: [],
   ...overrides,
+});
+
+const worktree = (
+  sessionId: string,
+  path: string,
+  git: Partial<GitStatusDto>,
+  pullRequest?: Omit<PullRequestRefDto, "url">,
+): SessionWorktreeDto => ({
+  sessionId,
+  repositoryId: "r",
+  path,
+  branchName: `daedalus/${sessionId}`,
+  createdAt: "2026-09-23T10:00:00.000Z",
+  gitStatus: {
+    state: "ahead",
+    changedFiles: 0,
+    ahead: 0,
+    behind: 0,
+    ...git,
+  },
+  ...(pullRequest
+    ? {
+        pullRequest: {
+          ...pullRequest,
+          url: `https://github.com/o/r/pull/${pullRequest.number}`,
+        },
+      }
+    : {}),
 });
 
 describe("stationForDetail", () => {
@@ -190,8 +224,6 @@ describe("buildWorldModel", () => {
       detail: "Approve git push?",
     });
     expect(model.zones[0]?.attention).toBe(1);
-    // Waiting to push is not pushing: the tube stays empty until approved.
-    expect(model.zones[0]?.shipping).toBe(0);
   });
 
   test("idle and done rest in the lounge; lost waits at the door", () => {
@@ -228,17 +260,43 @@ describe("buildWorldModel", () => {
     expect(model.actors.map((actor) => actor.sessionId)).toEqual(["here"]);
   });
 
-  test("counts the agents shipping right now, for the tube", () => {
+  test("one crate per branch with work on it, by git and PR state", () => {
     const model = buildWorldModel(
       input({
-        sessions: [session("a"), session("b")],
-        activity: new Map([
-          ["a", activity("a", "working", "Bash(git push)")],
-          ["b", activity("b", "working", "Edit(x.ts)")],
-        ]),
+        sessions: [
+          session("a"),
+          session("b", {
+            status: "exited",
+            archivedAt: "2026-09-23T12:00:00.000Z",
+          }),
+          session("c"),
+        ],
+        worktrees: [
+          worktree("a", "/w/a", { ahead: 2, unpushed: 2 }),
+          worktree(
+            "b",
+            "/w/b",
+            { ahead: 1, unpushed: 0 },
+            {
+              number: 7,
+              state: "OPEN",
+              isDraft: false,
+            },
+          ),
+          worktree("c", "/w/c", { ahead: 0 }),
+        ],
       }),
     );
-    expect(model.zones[0]).toMatchObject({ busy: 2, shipping: 1 });
+    // The archived session's branch still has an open pull request.
+    expect(model.zones[0]?.crates).toEqual([
+      { id: "/w/a", stage: "packing", label: "daedalus/a", url: null },
+      {
+        id: "/w/b",
+        stage: "open",
+        label: "#7",
+        url: "https://github.com/o/r/pull/7",
+      },
+    ]);
   });
 
   test("reports context and model from telemetry", () => {
@@ -295,7 +353,7 @@ describe("labyrinth", () => {
       name: `Workspace ${index}`,
       attention: 0,
       busy: 0,
-      shipping: 0,
+      crates: [],
     }));
   const { width: W, height: H } = LABYRINTH_ROOM;
   const inRoom = (
@@ -509,61 +567,114 @@ describe("dispatch", () => {
       },
     ],
   };
-  const zone = (shipping: number) => ({
+  const zone = (...crates: WorldCrate[]) => ({
     id: "w0",
     name: "w0",
     attention: 0,
     busy: 1,
-    shipping,
+    crates,
   });
+  const crate = (stage: WorldCrate["stage"]): WorldCrate => ({
+    id: "/w/a",
+    stage,
+    label: "#7",
+    url: null,
+  });
+  /** Runs past the startup window, so later changes are seen happening. */
+  const settle = (step: (time: number, zones: never[]) => void) => {
+    let time = 0;
+    while (time < 2) step((time += 0.05), []);
+    return time;
+  };
 
-  test("a crate leaves when a bot starts shipping, and repeats while it does", () => {
+  test("a crate waits on the bench while its commits are local", () => {
     const layer = new Container();
     const step = createDispatch(layer, geometry);
-    step(0, [zone(0)]);
-    expect(layer.children).toHaveLength(0);
-    step(0.1, [zone(1)]);
-    // The bot needs a moment to reach the bench.
-    step(1, [zone(1)]);
-    expect(layer.children).toHaveLength(0);
-    step(1.4, [zone(1)]);
+    let time = settle(step);
+    step(time, [zone(crate("packing"))]);
     expect(layer.children).toHaveLength(1);
-    let time = 1.4;
-    while (time < 7) step((time += 0.05), [zone(1)]);
-    expect(layer.children.length).toBeGreaterThanOrEqual(2);
+    while (time < 10) step((time += 0.05), [zone(crate("packing"))]);
+    expect(layer.children[0]!.position).toMatchObject({ x: 1000, y: 700 });
   });
 
-  test("a crate flies off from the post and is gone after its flight", () => {
+  test("pushed, it rides out to the yard by its post and waits there", () => {
     const layer = new Container();
     const step = createDispatch(layer, geometry);
-    step(0, [zone(1)]);
-    let time = 0;
-    while (time < 1.3) step((time += 0.05), [zone(1)]);
-    step(time, [zone(0)]);
-    const crate = layer.children[0]!;
+    let time = settle(step);
+    step(time, [zone(crate("packing"))]);
+    while (time < 20) step((time += 0.05), [zone(crate("open"))]);
+    const view = layer.children[0]!;
+    // On the grass, inward of the right-hand post, and still there.
+    expect(view.y).toBeLessThan(0);
+    expect(view.y).toBeGreaterThan(-60);
+    expect(view.x).toBeLessThan(geometry.lanes[1]!.post.x);
+    expect(view.x).toBeGreaterThan(geometry.lanes[1]!.post.x - 400);
+  });
+
+  test("it flies off outward only when its pull request merges", () => {
+    const layer = new Container();
+    const step = createDispatch(layer, geometry);
+    let time = settle(step);
+    step(time, [zone(crate("packing"))]);
+    while (time < 20) step((time += 0.05), [zone(crate("open"))]);
+    const view = layer.children[0]!;
     let highest = Infinity;
-    while (time < 20 && layer.children.length) {
-      step((time += 0.05), [zone(0)]);
-      if (!crate.destroyed) highest = Math.min(highest, crate.y);
+    let farthest = -Infinity;
+    while (time < 40 && layer.children.length) {
+      step((time += 0.05), [zone(crate("merged"))]);
+      if (!view.destroyed) {
+        highest = Math.min(highest, view.y);
+        farthest = Math.max(farthest, view.x);
+      }
     }
     expect(layer.children).toHaveLength(0);
-    // It rose above its post before it went.
     expect(highest).toBeLessThan(geometry.lanes[1]!.post.y - 100);
+    expect(farthest).toBeGreaterThan(geometry.lanes[1]!.post.x);
   });
 
-  test("a crate flies away from the workshop, outward", () => {
+  test("what is waiting as the World opens is placed, not replayed", () => {
     const layer = new Container();
     const step = createDispatch(layer, geometry);
-    step(0, [zone(1)]);
+    step(0, [zone(crate("open"))]);
+    step(0.05, [zone(crate("open"))]);
+    expect(layer.children[0]!.y).toBeLessThan(0);
+    // A branch that merged before anyone looked shows nothing.
+    const quiet = new Container();
+    createDispatch(quiet, geometry)(0, [zone(crate("merged"))]);
+    expect(quiet.children).toHaveLength(0);
+  });
+
+  test("a closed pull request takes its crate away without a flight", () => {
+    const layer = new Container();
+    const step = createDispatch(layer, geometry);
     let time = 0;
-    while (time < 1.3) step((time += 0.05), [zone(1)]);
-    const crate = layer.children[0]!;
-    let farthest = -Infinity;
-    while (time < 20 && layer.children.length) {
-      step((time += 0.05), [zone(0)]);
-      if (!crate.destroyed) farthest = Math.max(farthest, crate.x);
-    }
-    expect(farthest).toBeGreaterThan(geometry.lanes[1]!.post.x + 100);
+    step(time, [zone(crate("open"))]);
+    while (time < 5) step((time += 0.05), [zone()]);
+    expect(layer.children).toHaveLength(0);
+  });
+});
+
+describe("crateFor", () => {
+  test("follows the branch from local commits to a merged pull request", () => {
+    const stage = (
+      git: Partial<GitStatusDto>,
+      pull?: Omit<PullRequestRefDto, "url">,
+    ) => crateFor(worktree("a", "/w/a", git, pull))?.stage ?? null;
+    expect(stage({ ahead: 0 })).toBeNull();
+    expect(stage({ ahead: 3, unpushed: 3 })).toBe("packing");
+    expect(stage({ ahead: 3, unpushed: 0 })).toBe("pushed");
+    expect(
+      stage({ ahead: 3 }, { number: 1, state: "OPEN", isDraft: true }),
+    ).toBe("draft");
+    expect(
+      stage({ ahead: 3 }, { number: 1, state: "OPEN", isDraft: false }),
+    ).toBe("open");
+    expect(
+      stage({ ahead: 0 }, { number: 1, state: "MERGED", isDraft: false }),
+    ).toBe("merged");
+    expect(
+      stage({ ahead: 3 }, { number: 1, state: "CLOSED", isDraft: false }),
+    ).toBeNull();
   });
 });
 

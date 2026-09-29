@@ -11,6 +11,7 @@ import type {
   AgentActivityDto,
   AgentSessionDto,
   SessionAttentionDto,
+  SessionWorktreeDto,
   TaskDto,
   WorkspaceDto,
 } from "@daedalus/protocol";
@@ -151,6 +152,86 @@ const SCRIPT: Record<string, Beat[]> = {
   ],
 };
 
+/**
+ * Branches on their way out. "World view" walks one branch through every
+ * stage, a beat each; "API client" has a draft waiting and "Migrations" an
+ * open pull request.
+ */
+const STAGES: Array<
+  Pick<SessionWorktreeDto, "gitStatus" | "pullRequest" | "landed">
+> = [
+  {
+    gitStatus: {
+      state: "ahead",
+      changedFiles: 0,
+      ahead: 2,
+      behind: 0,
+      unpushed: 2,
+    },
+  },
+  {
+    gitStatus: {
+      state: "ahead",
+      changedFiles: 0,
+      ahead: 2,
+      behind: 0,
+      unpushed: 0,
+    },
+  },
+  {
+    gitStatus: {
+      state: "ahead",
+      changedFiles: 0,
+      ahead: 3,
+      behind: 0,
+      unpushed: 0,
+    },
+    pullRequest: {
+      number: 512,
+      url: "https://github.com/o/r/pull/512",
+      state: "OPEN",
+      isDraft: true,
+    },
+  },
+  {
+    gitStatus: {
+      state: "ahead",
+      changedFiles: 0,
+      ahead: 3,
+      behind: 0,
+      unpushed: 0,
+    },
+    pullRequest: {
+      number: 512,
+      url: "https://github.com/o/r/pull/512",
+      state: "OPEN",
+      isDraft: false,
+    },
+  },
+  {
+    gitStatus: { state: "clean", changedFiles: 0, ahead: 0, behind: 0 },
+    pullRequest: {
+      number: 512,
+      url: "https://github.com/o/r/pull/512",
+      state: "MERGED",
+      isDraft: false,
+    },
+    landed: true,
+  },
+];
+
+const worktree = (
+  sessionId: string,
+  stage: (typeof STAGES)[number],
+): SessionWorktreeDto => ({
+  sessionId,
+  repositoryId: "r",
+  path: `/tmp/worktrees/${sessionId}`,
+  branchName: `daedalus/${sessionId}`,
+  createdAt: at(120),
+  ...stage,
+});
+
 function Page() {
   const [beat, setBeat] = useState(0);
   const appearance =
@@ -205,6 +286,14 @@ function Page() {
     tasks,
     activity,
     attention,
+    worktrees: [
+      worktree("a1", STAGES[beat % STAGES.length]!),
+      worktree("a5", STAGES[2]!),
+      worktree("a6", {
+        ...STAGES[3]!,
+        pullRequest: { ...STAGES[3]!.pullRequest!, number: 498 },
+      }),
+    ],
     telemetry: new Map([
       [
         "a1",

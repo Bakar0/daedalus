@@ -3,6 +3,7 @@ import type {
   AgentSessionDto,
   SessionAttentionDto,
   SessionTelemetryDto,
+  SessionWorktreeDto,
   TaskDto,
   WorkspaceDto,
 } from "@daedalus/protocol";
@@ -67,8 +68,27 @@ export interface WorldZone {
   attention: number;
   /** Live actors in this zone, lost ones not counted: how busy it looks. */
   busy: number;
-  /** Actors in this zone working at the shipping station right now. */
-  shipping: number;
+  /** One crate per branch with work on it, in the order they were started. */
+  crates: WorldCrate[];
+}
+
+/**
+ * Where one branch's work is on its way out. A crate is packed while its
+ * commits are only local, waits at the post once they are pushed or a pull
+ * request is open, and flies off when the pull request merges. It stands
+ * for a result, so it moves on git and pull request state, never on how
+ * many commands an agent ran.
+ */
+export type WorldCrateStage =
+  "packing" | "pushed" | "draft" | "open" | "merged";
+
+export interface WorldCrate {
+  /** The worktree's path: one crate per branch, for as long as it exists. */
+  id: string;
+  stage: WorldCrateStage;
+  /** "#512" when there is a pull request, else the branch name. */
+  label: string;
+  url: string | null;
 }
 
 export interface WorldModel {
@@ -159,6 +179,29 @@ export interface WorldModelInput {
   activity: ReadonlyMap<string, AgentActivityDto>;
   attention: ReadonlyMap<string, SessionAttentionDto>;
   telemetry: ReadonlyMap<string, SessionTelemetryDto>;
+  worktrees: readonly SessionWorktreeDto[];
+}
+
+/**
+ * A worktree's crate, or none when there is nothing on its way out: no
+ * commits ahead of base and no pull request, or a pull request closed
+ * without merging.
+ */
+export function crateFor(worktree: SessionWorktreeDto): WorldCrate | null {
+  const pull = worktree.pullRequest;
+  const base = {
+    id: worktree.path,
+    label: pull ? `#${pull.number}` : worktree.branchName,
+    url: pull?.url ?? null,
+  };
+  if (worktree.landed || pull?.state === "MERGED")
+    return { ...base, stage: "merged" };
+  if (pull?.state === "OPEN")
+    return { ...base, stage: pull.isDraft ? "draft" : "open" };
+  if (pull) return null;
+  const status = worktree.gitStatus;
+  if (!status || status.ahead === 0) return null;
+  return { ...base, stage: (status.unpushed ?? 0) > 0 ? "packing" : "pushed" };
 }
 
 /**
@@ -170,6 +213,20 @@ export function buildWorldModel(input: WorldModelInput): WorldModel {
   const zoneIds = new Set(input.workspaces.map((item) => item.id));
   const tasks = new Map(input.tasks.map((item) => [item.id, item]));
   const actors: WorldActor[] = [];
+  // Every session's workspace, the ended ones too: a branch outlives the
+  // agent that pushed it.
+  const sessionZones = new Map(
+    input.sessions.map((item) => [item.id, item.workspaceId]),
+  );
+  const crates = new Map<string, WorldCrate[]>();
+  for (const worktree of [...input.worktrees].sort((left, right) =>
+    left.createdAt.localeCompare(right.createdAt),
+  )) {
+    const zoneId = sessionZones.get(worktree.sessionId);
+    const crate = crateFor(worktree);
+    if (!zoneId || !crate) continue;
+    crates.set(zoneId, [...(crates.get(zoneId) ?? []), crate]);
+  }
   for (const session of input.sessions) {
     if (session.kind !== "agent" || session.archivedAt) continue;
     if (!zoneIds.has(session.workspaceId)) continue;
@@ -208,12 +265,7 @@ export function buildWorldModel(input: WorldModelInput): WorldModel {
       busy: actors.filter(
         (actor) => actor.zoneId === workspace.id && actor.mood !== "lost",
       ).length,
-      shipping: actors.filter(
-        (actor) =>
-          actor.zoneId === workspace.id &&
-          actor.mood === "working" &&
-          actor.place === "ship",
-      ).length,
+      crates: crates.get(workspace.id) ?? [],
     })),
     actors,
   };

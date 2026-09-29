@@ -1,14 +1,20 @@
 import { Container, Graphics, Text } from "pixi.js";
-import type { WorldZone } from "../world-model";
+import type { WorldCrate, WorldZone } from "../world-model";
 import type { WorldPoint } from "../world-theme";
 
 /**
- * Shipping, factory style. When an agent pushes or opens a pull request, it
- * packs a crate at its room's bench against the back wall; a conveyor
- * carries the crate out through a hatch into the cargo pipe on that side's
- * outer edge, far from the lift, the pipe lifts it to the surface, and at
- * the Hermes Post on top the crate unfolds Daedalus's wings and flies off
- * into the sky, outward. While an agent keeps shipping, crates keep coming.
+ * Shipping, factory style, one crate per branch. A crate sits packed on its
+ * room's bench against the back wall while the branch's commits are only
+ * local. Once they are pushed, a conveyor carries it out through a hatch
+ * into the cargo pipe on that side's outer edge, the pipe lifts it to the
+ * surface, and it waits on the grass beside the Hermes Post with its pull
+ * request's number, wrapped while the pull request is a draft. When the
+ * pull request merges, the crate unfolds Daedalus's wings and flies off
+ * into the sky, outward. A closed pull request or a removed worktree takes
+ * its crate away quietly.
+ *
+ * The waiting crates are the point: they are what is about to land, and
+ * every one of them is real.
  */
 
 export interface DispatchPalette {
@@ -34,10 +40,6 @@ export interface DispatchGeometry {
   routes: ReadonlyArray<{ lane: number; path: WorldPoint[] }>;
 }
 
-/** A second crate follows this long after the first while shipping goes on. */
-const REPEAT = 5;
-/** The agent needs a moment to reach the bench before the first crate. */
-const FIRST_DELAY = 1.2;
 const BELT_SPEED = 110;
 const PIPE_SPEED = 260;
 const FLIGHT = 3.2;
@@ -45,6 +47,12 @@ const CRATE_SCALE = 1.6;
 /** Half a crate's height in world pixels: it sits on things, not in them. */
 export const CRATE_HALF = 13 * CRATE_SCALE;
 const PAD_HEIGHT = 18;
+/** Waiting crates stand in rows on the grass, inward from the post. */
+const ROW = 6;
+const YARD_GAP = 62;
+const YARD_START = 90;
+const GROUND = -6;
+const FADE = 0.6;
 
 const label = (value: string, size: number, fill: number) =>
   new Text({
@@ -111,20 +119,35 @@ export function drawPost(
 }
 
 interface Crate {
+  id: string;
+  zone: number;
+  stage: WorldCrate["stage"];
   view: Container;
   wings: Graphics;
+  wrap: Graphics;
+  tag: Text;
+  /** Points still to travel through; empty when it has arrived. */
   path: WorldPoint[];
   /** How many of the path's points are inside the room, for the slower belt. */
   beltPoints: number;
   position: WorldPoint;
-  /** Seconds since take-off, or -1 while it is still travelling. */
+  /** Seconds since take-off, or -1 while it is on the ground. */
   flying: number;
   from: WorldPoint;
   /** -1 flies off to the left, 1 to the right: away from the workshop. */
   heading: number;
+  /** Seconds since it started fading out, or -1. */
+  fading: number;
+  /** True once it has left the room for the yard. */
+  outside: boolean;
 }
 
-function crateView(): { view: Container; wings: Graphics } {
+function crateView(): {
+  view: Container;
+  wings: Graphics;
+  wrap: Graphics;
+  tag: Text;
+} {
   const view = new Container();
   const wings = new Graphics();
   for (const side of [-1, 1]) {
@@ -147,102 +170,208 @@ function crateView(): { view: Container; wings: Graphics } {
   box.roundRect(-12, -14, 9, 7, 1).fill(0xffffff);
   box.rect(-11, -12, 7, 1.2).fill(0x8a92a6);
   box.rect(-11, -9.5, 5, 1.2).fill(0x8a92a6);
+  // A draft is wrapped in cloth and tied: not ready to go yet.
+  const wrap = new Graphics();
+  wrap.roundRect(-17, -28, 34, 29, 5).fill({ color: 0xe9e4d8, alpha: 0.92 });
+  wrap.moveTo(-17, -12).lineTo(17, -16).stroke({ width: 2, color: 0xa08a6a });
+  wrap.circle(0, -14, 3).fill(0xa08a6a);
+  wrap.visible = false;
   // Centred on its path, so it rides the middle of the pipe.
   const body = new Container();
-  body.addChild(wings, box);
+  body.addChild(wings, box, wrap);
   body.y = 13;
-  view.addChild(body);
+  // Outlined, so it reads against a day sky and a night one alike.
+  const tag = new Text({
+    text: "",
+    resolution: 6,
+    style: {
+      fill: 0xffffff,
+      fontFamily:
+        "-apple-system, BlinkMacSystemFont, 'SF Pro Rounded', 'SF Pro Text', sans-serif",
+      fontSize: 8,
+      fontWeight: "800",
+      stroke: { color: 0x1b1d2a, width: 3, join: "round" },
+    },
+  });
+  tag.anchor.set(0.5, 1);
+  tag.y = -16;
+  view.addChild(body, tag);
   // Big enough to read beside the scaled-up bots.
   view.scale.set(CRATE_SCALE);
-  return { view, wings };
+  return { view, wings, wrap, tag };
 }
 
 /** Moves crates along the line; returns the effects animator. */
 export function createDispatch(layer: Container, geometry: DispatchGeometry) {
-  const crates: Crate[] = [];
-  const previous = new Map<number, number>();
-  const nextAt = new Map<number, number>();
-  const launch = (index: number) => {
-    const route = geometry.routes[index];
+  const crates = new Map<string, Crate>();
+  let last = 0;
+  let startedAt: number | undefined;
+
+  const laneOf = (zone: number) => {
+    const route = geometry.routes[zone];
     const lane = route && geometry.lanes[route.lane];
-    if (!route || !lane || route.path.length === 0) return;
+    return route && lane && route.path.length ? { route, lane } : undefined;
+  };
+  const bench = (zone: number) => laneOf(zone)?.route.path[0];
+  /** Where the `slot`th waiting crate on a lane stands. */
+  const yard = (lane: DispatchLane, slot: number): WorldPoint => {
+    const inward = -(Math.sign(lane.post.x) || 1);
+    return {
+      x: lane.post.x + inward * (YARD_START + (slot % ROW) * YARD_GAP),
+      y: GROUND - CRATE_HALF - Math.floor(slot / ROW) * CRATE_HALF * 2,
+    };
+  };
+  /** Out of the room, up the pipe, onto the pad, then to its yard spot. */
+  const outward = (zone: number, to: WorldPoint): WorldPoint[] => {
+    const found = laneOf(zone);
+    if (!found) return [to];
+    const { route, lane } = found;
     const exit = route.path.at(-1)!;
     const pad = { x: lane.post.x, y: lane.post.y - PAD_HEIGHT - CRATE_HALF };
-    const path = [...route.path.slice(1), { x: lane.pipeX, y: exit.y }, pad];
-    const { view, wings } = crateView();
+    return [...route.path.slice(1), { x: lane.pipeX, y: exit.y }, pad, to];
+  };
+
+  const add = (zone: number, crate: WorldCrate, snap: boolean) => {
+    const start = bench(zone);
+    if (!start) return;
+    const { view, wings, wrap, tag } = crateView();
     layer.addChild(view);
-    crates.push({
+    const entry: Crate = {
+      id: crate.id,
+      zone,
+      stage: "packing",
       view,
       wings,
-      path,
-      beltPoints: route.path.length - 1,
-      position: { ...route.path[0]! },
+      wrap,
+      tag,
+      path: [],
+      beltPoints: 0,
+      position: { ...start },
       flying: -1,
-      from: pad,
-      heading: Math.sign(lane.post.x) || 1,
-    });
+      from: { ...start },
+      heading: Math.sign(laneOf(zone)!.lane.post.x) || 1,
+      fading: -1,
+      outside: false,
+    };
+    crates.set(crate.id, entry);
+    // Already outside when first seen at startup: it stands in the yard
+    // rather than replaying a trip that happened while nobody watched.
+    if (snap && crate.stage !== "packing") entry.outside = true;
   };
-  let last = 0;
+
   return (time: number, zones: readonly WorldZone[]) => {
     const seconds = Math.min(0.1, Math.max(0, time - last));
     last = time;
+    startedAt ??= time;
+    // What is there as the World opens was there before: it is placed, not
+    // replayed.
+    const snapping = time - startedAt < 1.5;
+    const present = new Set<string>();
     zones.forEach((zone, index) => {
-      const before = previous.get(index) ?? 0;
-      previous.set(index, zone.shipping);
-      if (zone.shipping > before) nextAt.set(index, time + FIRST_DELAY);
-      if (zone.shipping === 0) nextAt.delete(index);
-      const due = nextAt.get(index);
-      if (due !== undefined && time >= due) {
-        launch(index);
-        nextAt.set(index, time + REPEAT);
+      for (const crate of zone.crates ?? []) {
+        present.add(crate.id);
+        let entry = crates.get(crate.id);
+        if (!entry) {
+          // A branch that had merged before anyone looked has nothing to
+          // show; only a merge seen happening flies.
+          if (crate.stage === "merged") continue;
+          add(index, crate, snapping);
+          entry = crates.get(crate.id);
+          if (!entry) continue;
+        }
+        entry.tag.text = crate.stage === "packing" ? "" : crate.label;
+        entry.wrap.visible = crate.stage === "draft";
+        if (entry.stage === crate.stage) continue;
+        entry.stage = crate.stage;
+        if (crate.stage !== "packing" && !entry.outside) {
+          entry.outside = true;
+          const found = laneOf(entry.zone);
+          entry.beltPoints = found ? found.route.path.length - 1 : 0;
+          // Its yard spot is settled below, with the others'.
+          entry.path = outward(entry.zone, entry.position);
+          entry.path.pop();
+        }
       }
     });
-    for (let index = crates.length - 1; index >= 0; index -= 1) {
-      const crate = crates[index]!;
-      if (crate.flying < 0) {
-        let budget = seconds * (crate.beltPoints > 0 ? BELT_SPEED : PIPE_SPEED);
-        while (budget > 0 && crate.path.length) {
-          const next = crate.path[0]!;
-          const dx = next.x - crate.position.x;
-          const dy = next.y - crate.position.y;
+    for (const entry of crates.values())
+      if (!present.has(entry.id) && entry.fading < 0 && entry.flying < 0)
+        entry.fading = 0;
+
+    // Waiting crates take yard spots per lane, in the order they arrived.
+    const slots = new Map<number, number>();
+    for (const entry of crates.values()) {
+      if (!entry.outside || entry.flying >= 0 || entry.fading >= 0) continue;
+      const found = laneOf(entry.zone);
+      if (!found) continue;
+      const lane = geometry.routes[entry.zone]!.lane;
+      const slot = slots.get(lane) ?? 0;
+      slots.set(lane, slot + 1);
+      const spot = yard(found.lane, slot);
+      if (entry.path.length === 0) {
+        const away = Math.hypot(
+          spot.x - entry.position.x,
+          spot.y - entry.position.y,
+        );
+        // Snapped in at startup, or shuffled along when one ahead left.
+        if (snapping || away > 400) entry.position = spot;
+        else if (away > 0.5) entry.path = [spot];
+      } else entry.path[entry.path.length - 1] = spot;
+      if (entry.stage === "merged" && entry.path.length === 0) entry.flying = 0;
+    }
+
+    for (const [id, entry] of crates) {
+      if (entry.fading >= 0) {
+        entry.fading += seconds;
+        entry.view.alpha = Math.max(0, 1 - entry.fading / FADE);
+        if (entry.fading >= FADE) {
+          entry.view.destroy({ children: true });
+          crates.delete(id);
+          continue;
+        }
+      } else if (entry.flying < 0) {
+        let budget = seconds * (entry.beltPoints > 0 ? BELT_SPEED : PIPE_SPEED);
+        while (budget > 0 && entry.path.length) {
+          const next = entry.path[0]!;
+          const dx = next.x - entry.position.x;
+          const dy = next.y - entry.position.y;
           const distance = Math.hypot(dx, dy);
           if (distance <= budget) {
-            crate.position = { ...next };
-            crate.path.shift();
-            if (crate.beltPoints > 0) crate.beltPoints -= 1;
+            entry.position = { ...next };
+            entry.path.shift();
+            if (entry.beltPoints > 0) entry.beltPoints -= 1;
             budget -= distance;
           } else {
-            crate.position.x += (dx / distance) * budget;
-            crate.position.y += (dy / distance) * budget;
+            entry.position.x += (dx / distance) * budget;
+            entry.position.y += (dy / distance) * budget;
             budget = 0;
           }
         }
-        if (!crate.path.length) crate.flying = 0;
+        entry.from = { ...entry.position };
       } else {
-        // Wings unfold on the pad, then it climbs away toward the sky.
-        crate.flying += seconds;
-        const t = crate.flying;
+        // Wings unfold where it stands, then it climbs away toward the sky.
+        entry.flying += seconds;
+        const t = entry.flying;
         const unfold = Math.min(1, t / 0.4);
         const airborne = Math.max(0, t - 0.4);
-        crate.wings.scale.set(unfold, unfold * (1 + Math.sin(t * 22) * 0.35));
-        crate.position = {
+        entry.wings.scale.set(unfold, unfold * (1 + Math.sin(t * 22) * 0.35));
+        entry.position = {
           x:
-            crate.from.x +
-            crate.heading * (airborne * 70 + airborne * airborne * 26),
+            entry.from.x +
+            entry.heading * (airborne * 70 + airborne * airborne * 26),
           y:
-            crate.from.y -
+            entry.from.y -
             airborne * 120 -
             airborne * airborne * 30 +
             Math.sin(t * 22) * 2,
         };
-        crate.view.alpha = Math.min(1, Math.max(0, (FLIGHT - t) / 0.8));
+        entry.view.alpha = Math.min(1, Math.max(0, (FLIGHT - t) / 0.8));
         if (t >= FLIGHT) {
-          crate.view.destroy({ children: true });
-          crates.splice(index, 1);
+          entry.view.destroy({ children: true });
+          crates.delete(id);
           continue;
         }
       }
-      crate.view.position.set(crate.position.x, crate.position.y);
+      entry.view.position.set(entry.position.x, entry.position.y);
     }
   };
 }
