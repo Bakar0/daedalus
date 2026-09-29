@@ -15,6 +15,7 @@ import {
   drawPost,
 } from "./labyrinth-dispatch";
 import { drawObservatory, OBSERVATORY_SPOTS } from "./labyrinth-observatory";
+import { createSky } from "./labyrinth-sky";
 import {
   CRATE_PATH,
   DOOR_X,
@@ -69,9 +70,6 @@ const PIPE_OUTER = ROOM_X + (ROOM_W * SCALE) / 2 + 40;
 const OBSERVATORY_DWELL = 4;
 
 interface Palette {
-  skyTop: number;
-  skyBottom: number;
-  star: number;
   grass: number;
   rock: number;
   rockDark: number;
@@ -95,9 +93,6 @@ interface Palette {
 
 const PALETTES: Record<WorldLook["appearance"], Palette> = {
   dark: {
-    skyTop: 0x0f1a36,
-    skyBottom: 0x2c4775,
-    star: 0xffffff,
     grass: 0x3f6b3c,
     rock: 0x3b2f27,
     rockDark: 0x2f261f,
@@ -119,9 +114,6 @@ const PALETTES: Record<WorldLook["appearance"], Palette> = {
     dim: 0x7fa6ff,
   },
   light: {
-    skyTop: 0x7fc0ec,
-    skyBottom: 0xcfe9f7,
-    star: 0xffffff,
     grass: 0x6dbb5c,
     rock: 0x8a6d55,
     rockDark: 0x765b46,
@@ -368,44 +360,15 @@ function drawWorld(
 ) {
   const p = PALETTES[look.appearance];
   const { x, y, width, height } = arrangement.bounds;
+  // The sky follows the local clock; the rest is drawn once.
+  const sky = new Graphics();
+  layer.addChild(sky);
+  const animateSky = createSky(sky, arrangement);
   const g = new Graphics();
-  // Sky in bands, stars, the moon or the sun.
+  const random = scatter(arrangement.origins.length + 3);
   // Sky and rock run well past the world's edges, so a letterboxed view
   // shows more of them rather than the backdrop.
   const bleed = 3000;
-  g.rect(x - bleed, y - bleed, width + bleed * 2, bleed).fill(p.skyTop);
-  g.rect(x - bleed, y, bleed, -y).fill(p.skyTop);
-  g.rect(x + width, y, bleed, -y).fill(p.skyTop);
-  const bands = 8;
-  for (let band = 0; band < bands; band += 1) {
-    const mix = band / (bands - 1);
-    const channel = (shift: number) =>
-      Math.round(
-        ((p.skyTop >> shift) & 255) * (1 - mix) +
-          ((p.skyBottom >> shift) & 255) * mix,
-      );
-    const color = (channel(16) << 16) | (channel(8) << 8) | channel(0);
-    g.rect(
-      x - bleed,
-      y + (band * -y) / bands,
-      width + bleed * 2,
-      -y / bands + 1,
-    ).fill(color);
-  }
-  const random = scatter(arrangement.origins.length + 3);
-  if (look.appearance === "dark")
-    for (let star = 0; star < 60; star += 1)
-      g.circle(
-        x + random() * width,
-        y + random() * -y * 0.8,
-        0.8 + random() * 1.2,
-      ).fill({
-        color: p.star,
-        alpha: 0.4 + random() * 0.5,
-      });
-  g.circle(x + width * 0.86, y + 90, 34).fill(
-    look.appearance === "dark" ? 0xf4e7b8 : 0xfff3b0,
-  );
   // Ground and rock.
   g.rect(x, -6, width, 26).fill(p.grass);
   g.rect(x - bleed, 20, width + bleed * 2, height + y - 20 + bleed).fill(
@@ -487,6 +450,7 @@ function drawWorld(
   layer.addChild(workshop);
 
   return (time: number) => {
+    animateSky();
     animateWorkshop(time);
     // Lights chase down the shaft, the way the bots go.
     lights.clear();

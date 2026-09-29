@@ -16,6 +16,7 @@ import { WORLD_THEMES } from "./themes";
 import { LABYRINTH_ROOM, labyrinthTheme } from "./themes/labyrinth";
 import { layoutFor } from "./themes/labyrinth-rooms";
 import { createDispatch } from "./themes/labyrinth-dispatch";
+import { skyAt } from "./themes/labyrinth-sky";
 import { Container } from "pixi.js";
 import {
   DEFAULT_WORLD_CHARACTER_ID,
@@ -619,5 +620,22 @@ describe("personas", () => {
       Array.from({ length: 200 }, (_, index) => personaFor(`s-${index}`).id),
     );
     expect(seen.size).toBe(PERSONAS.length);
+  });
+});
+
+describe("labyrinth sky", () => {
+  test("follows the clock: sun by day, stars and moon by night", () => {
+    const noon = skyAt(12);
+    expect(noon.body?.kind).toBe("sun");
+    expect(noon.stars).toBe(0);
+    expect(noon.body!.progress).toBeGreaterThan(0.4);
+    expect(noon.body!.progress).toBeLessThan(0.5);
+    const midnight = skyAt(0);
+    expect(midnight.body?.kind).toBe("moon");
+    expect(midnight.stars).toBe(1);
+    // Stars fade in over the hour after sunset rather than switching on.
+    expect(skyAt(20).stars).toBeCloseTo(0.5);
+    expect(skyAt(24).top).toBe(skyAt(0).top);
+    expect(skyAt(-1).top).toBe(skyAt(23).top);
   });
 });

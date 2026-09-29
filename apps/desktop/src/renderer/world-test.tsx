@@ -1,8 +1,9 @@
 /**
  * A page for looking at the World view without a host: two workspaces of
  * agents whose activity changes every few seconds, the way snapshots would.
- * `?theme=light` shows the light appearance. `window.__world` reports what
- * rendered, for a check to read.
+ * `?theme=light` shows the light appearance, and `?hour=21.5` pins the sky
+ * to that local time. `window.__world` reports what rendered, for a check to
+ * read.
  */
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -15,6 +16,7 @@ import type {
 } from "@daedalus/protocol";
 import WorldView from "./world/WorldView";
 import { buildWorldModel } from "./world/world-model";
+import { setSkyClock } from "./world/themes/labyrinth-sky";
 import "./styles.css";
 
 declare global {
@@ -23,6 +25,12 @@ declare global {
   }
 }
 window.__world = { opened: [], ready: false, errors: [] };
+const pinnedHour = Number(new URLSearchParams(location.search).get("hour"));
+if (
+  new URLSearchParams(location.search).has("hour") &&
+  Number.isFinite(pinnedHour)
+)
+  setSkyClock(() => pinnedHour);
 window.addEventListener("error", (event) =>
   window.__world.errors.push(event.message),
 );
