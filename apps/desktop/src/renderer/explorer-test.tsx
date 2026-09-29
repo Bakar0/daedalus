@@ -61,6 +61,7 @@ const snapshot: DesktopSnapshotDto = {
   sessionActivity: [],
   attention: [],
   worktrees: [],
+  shipped: [],
   toasts: [],
   settings: {
     version: "0.6.0",

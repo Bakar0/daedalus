@@ -172,6 +172,22 @@ export interface PullRequestRefDto {
   url: string;
   state: "OPEN" | "CLOSED" | "MERGED";
   isDraft: boolean;
+  title?: string;
+  /** GitHub's merge time, present once merged. */
+  mergedAt?: string;
+}
+
+/** A merged pull request, remembered after its worktree is gone. */
+export interface ShippedPullRequestDto {
+  url: string;
+  workspaceId: string;
+  sessionId: string | null;
+  taskId: string | null;
+  repositoryId: string | null;
+  number: number;
+  title: string | null;
+  branchName: string;
+  mergedAt: string;
 }
 
 export interface SessionWorktreeDto {
@@ -507,6 +523,8 @@ export interface DesktopSnapshotDto {
    * workspace view ever having been opened.
    */
   worktrees: SessionWorktreeDto[];
+  /** Every merged pull request remembered, oldest first, for the World. */
+  shipped: ShippedPullRequestDto[];
   toasts: ToastDto[];
   settings: DesktopSettingsDto;
 }

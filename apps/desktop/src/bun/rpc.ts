@@ -185,6 +185,9 @@ export async function desktopSnapshot(
     worktrees: context.workspaceContent
       .listWorktrees()
       .map((worktree) => ({ ...worktree })),
+    shipped: context.workspaceContent
+      .listShippedPullRequests()
+      .map((item) => ({ ...item })),
     attention: context.activity.listAttention().map(sessionAttentionDto),
     toasts: context.notifications.pending("toast").map(toastDto),
     settings: {

@@ -35,6 +35,7 @@ import type {
   AgentSession,
   GitStatus,
   PullRequestRef,
+  ShippedPullRequest,
   SessionWorktree,
   Task,
   Workspace,
@@ -943,9 +944,10 @@ const EDITOR_LAUNCHERS: Array<{
 const PULL_REQUEST_REFRESH_MS = 60_000;
 
 /**
- * Reads `gh pr view --json number,url,state,isDraft`. Anything else, including
- * a partial answer, is no pull request: a link that might be wrong is worse
- * than no link.
+ * Reads `gh pr view --json number,url,state,isDraft,title,mergedAt`. Anything
+ * else, including a partial answer, is no pull request: a link that might be
+ * wrong is worse than no link. The title and merge time are extras and may be
+ * missing.
  */
 export function parsePullRequestView(
   stdout: string,
@@ -961,11 +963,22 @@ export function parsePullRequestView(
       (state !== "OPEN" && state !== "CLOSED" && state !== "MERGED")
     )
       return undefined;
+    const title =
+      typeof value.title === "string" && value.title.trim()
+        ? value.title.trim()
+        : undefined;
+    const mergedAt =
+      typeof value.mergedAt === "string" &&
+      Number.isFinite(Date.parse(value.mergedAt))
+        ? value.mergedAt
+        : undefined;
     return {
       number: value.number,
       url: value.url,
       state,
       isDraft: value.isDraft === true,
+      ...(title ? { title } : {}),
+      ...(state === "MERGED" && mergedAt ? { mergedAt } : {}),
     };
   } catch {
     return undefined;
@@ -1094,6 +1107,11 @@ export class WorkspaceContentService {
    * it, so the board shows a worktree's delta without the workspace view ever
    * having been opened.
    */
+  /** Every merged pull request remembered, for the World. */
+  listShippedPullRequests(): ShippedPullRequest[] {
+    return this.repositories.listShippedPullRequests();
+  }
+
   listWorktrees(): SessionWorktree[] {
     const worktrees = this.repositories.listSessionWorktrees({});
     this.scheduleGitStatusRefresh(null);
@@ -1217,11 +1235,14 @@ export class WorkspaceContentService {
         // whatever the task's state: after a squash merge that is what a
         // landed branch looks like, and only the pull request can tell the
         // two apart.
+        // An open pull request is followed to its end whatever the task's
+        // state, so a merge after the card was marked done is still seen.
         if (
           git &&
           current &&
           ((target.wantsPullRequest &&
             (status.ahead > 0 || this.pullRequestCache.get(key)?.value)) ||
+            this.pullRequestCache.get(key)?.value?.state === "OPEN" ||
             (status.unpushed ?? 0) > 0) &&
           (await this.refreshPullRequest(
             key,
@@ -1232,6 +1253,7 @@ export class WorkspaceContentService {
               current,
               target.baseBranch,
             )) ?? current,
+            target.worktree,
           ))
         )
           changed = true;
@@ -1280,6 +1302,7 @@ export class WorkspaceContentService {
     key: string,
     path: string,
     branchName: string,
+    worktree?: SessionWorktree,
   ): Promise<boolean> {
     const cached = this.pullRequestCache.get(key);
     const git = findExecutable("git");
@@ -1301,7 +1324,7 @@ export class WorkspaceContentService {
         "view",
         branchName,
         "--json",
-        "number,url,state,isDraft,headRefOid",
+        "number,url,state,isDraft,headRefOid,title,mergedAt",
       ],
       { cwd: path, env: { GH_PROMPT_DISABLED: "1" } },
     ).catch(() => undefined);
@@ -1315,10 +1338,40 @@ export class WorkspaceContentService {
       ...(value ? { value } : {}),
       ...(landed ? { landedHead: head } : {}),
     });
+    if (value?.state === "MERGED" && worktree)
+      this.recordShipped(worktree, value, branchName);
     return (
       !samePullRequest(cached?.value, value) ||
       Boolean(cached?.landedHead) !== landed
     );
+  }
+
+  /**
+   * Remembers a merged pull request past its worktree. Written once per URL;
+   * a merge first seen after a restart still gets GitHub's own time.
+   */
+  private recordShipped(
+    worktree: SessionWorktree,
+    pull: PullRequestRef,
+    branchName: string,
+  ) {
+    const session = this.repositories.findAgent(worktree.sessionId);
+    if (!session) return;
+    try {
+      this.repositories.recordShippedPullRequest({
+        url: pull.url,
+        workspaceId: session.workspaceId,
+        sessionId: session.id,
+        taskId: session.taskId,
+        repositoryId: worktree.repositoryId,
+        number: pull.number,
+        title: pull.title ?? null,
+        branchName,
+        mergedAt: pull.mergedAt ?? new Date().toISOString(),
+      });
+    } catch {
+      // A record the World reads is not worth failing a status refresh over.
+    }
   }
 
   async setInstructionFilesEnabled(enabled: boolean): Promise<void> {

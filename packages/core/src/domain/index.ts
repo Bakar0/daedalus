@@ -183,6 +183,9 @@ export interface PullRequestRef {
   url: string;
   state: "OPEN" | "CLOSED" | "MERGED";
   isDraft: boolean;
+  title?: string;
+  /** GitHub's merge time, present once merged. */
+  mergedAt?: string;
 }
 
 export interface WorkspaceRepository {
@@ -345,6 +348,22 @@ export interface ClearedAttentionReason {
   source: AgentActivitySource;
   raisedAt: string;
   clearedAt: string;
+}
+
+/**
+ * A pull request that merged, remembered after its worktree is gone. Written
+ * once, the first time a refresh sees it merged.
+ */
+export interface ShippedPullRequest {
+  url: string;
+  workspaceId: UUID;
+  sessionId: UUID | null;
+  taskId: UUID | null;
+  repositoryId: UUID | null;
+  number: number;
+  title: string | null;
+  branchName: string;
+  mergedAt: string;
 }
 
 export type NotificationLevel = "info" | "success" | "error";
