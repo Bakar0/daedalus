@@ -13,6 +13,8 @@ import {
   type WorldModelInput,
 } from "./world-model";
 import { WORLD_THEMES } from "./themes";
+import { WORLD_CHARACTERS } from "./characters";
+import { SPRITE_CLASSES, SPRITE_SIZE, spriteRows } from "./characters/pixel";
 
 const workspace = (id: string): WorkspaceDto => ({
   id,
@@ -259,6 +261,33 @@ describe("themes", () => {
           crowd.slice(0, 3).map((point) => `${point.x},${point.y}`),
         );
         expect(firstThree.size).toBe(3);
+      }
+    },
+  );
+});
+
+describe("characters", () => {
+  test("every style has a unique id and a label", () => {
+    const ids = WORLD_CHARACTERS.map((character) => character.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const character of WORLD_CHARACTERS)
+      expect(character.label).toBeTruthy();
+  });
+
+  // A sprite row one character short shears everything under it sideways.
+  test.each(Object.entries(SPRITE_CLASSES))(
+    "the %s sprite is a full grid in every pose",
+    (_, kind) => {
+      for (const pose of [
+        "stand",
+        "stepA",
+        "stepB",
+        "wave",
+        "cheer",
+      ] as const) {
+        const rows = spriteRows(kind, pose);
+        expect(rows).toHaveLength(SPRITE_SIZE.rows);
+        for (const row of rows) expect(row).toHaveLength(SPRITE_SIZE.columns);
       }
     },
   );

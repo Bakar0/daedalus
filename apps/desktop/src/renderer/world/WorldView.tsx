@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { waitingLabel } from "../session-view";
 import { WorldEngine } from "./world-engine";
 import type { WorldActor, WorldModel } from "./world-model";
+import { WORLD_CHARACTERS, worldCharacterById } from "./characters";
 import type { WorldPoint } from "./world-theme";
 import { WORLD_THEMES, worldThemeById } from "./themes";
 
@@ -13,29 +14,56 @@ import { WORLD_THEMES, worldThemeById } from "./themes";
  */
 
 const THEME_STORAGE_KEY = "daedalus.world.theme";
+const CHARACTER_STORAGE_KEY = "daedalus.world.character";
 
-const storedThemeId = () => {
+const stored = (key: string) => {
   try {
-    return window.localStorage.getItem(THEME_STORAGE_KEY);
+    return window.localStorage.getItem(key);
   } catch {
     return null;
   }
 };
 
-const storeThemeId = (id: string) => {
+const store = (key: string, value: string) => {
   try {
-    window.localStorage.setItem(THEME_STORAGE_KEY, id);
+    window.localStorage.setItem(key, value);
   } catch {
     // A remembered picker choice is a convenience; the default still works.
   }
 };
 
+/** A labelled select, shown only when there is more than one choice. */
+function Picker(props: {
+  label: string;
+  options: ReadonlyArray<{ id: string; label: string; description: string }>;
+  value: string;
+  onChange(id: string): void;
+}) {
+  if (props.options.length < 2) return null;
+  return (
+    <label className="world-theme-picker">
+      <span>{props.label}</span>
+      <select
+        onChange={(event) => props.onChange(event.target.value)}
+        title={
+          props.options.find((item) => item.id === props.value)?.description
+        }
+        value={props.value}
+      >
+        {props.options.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 export interface WorldViewProps {
   model: WorldModel;
   appearance: "dark" | "light";
   now: number;
-  /** True when every workspace is showing, for the empty-state wording. */
-  showingAll: boolean;
   onOpenSession(sessionId: string, workspaceId: string): void;
 }
 
@@ -47,7 +75,10 @@ export default function WorldView(props: WorldViewProps) {
   const host = useRef<HTMLDivElement>(null);
   const engine = useRef<WorldEngine | null>(null);
   const [themeId, setThemeId] = useState(
-    () => worldThemeById(storedThemeId()).id,
+    () => worldThemeById(stored(THEME_STORAGE_KEY)).id,
+  );
+  const [characterId, setCharacterId] = useState(
+    () => worldCharacterById(stored(CHARACTER_STORAGE_KEY)).id,
   );
   const [failure, setFailure] = useState<string>();
   // The place is kept so the card closes when the agent walks off: a figure
@@ -69,6 +100,7 @@ export default function WorldView(props: WorldViewProps) {
     WorldEngine.create(
       element,
       worldThemeById(themeId),
+      worldCharacterById(characterId),
       { appearance: latest.current.appearance },
       {
         onSelect: (sessionId) => {
@@ -113,8 +145,12 @@ export default function WorldView(props: WorldViewProps) {
   useEffect(() => engine.current?.setLook({ appearance }), [appearance]);
   useEffect(() => {
     engine.current?.setTheme(worldThemeById(themeId));
-    storeThemeId(themeId);
+    store(THEME_STORAGE_KEY, themeId);
   }, [themeId]);
+  useEffect(() => {
+    engine.current?.setCharacter(worldCharacterById(characterId));
+    store(CHARACTER_STORAGE_KEY, characterId);
+  }, [characterId]);
 
   const waiting = model.actors.filter((actor) => actor.mood === "attention");
   const working = model.actors.filter((actor) => actor.mood === "working");
@@ -141,22 +177,20 @@ export default function WorldView(props: WorldViewProps) {
             </span>
           </small>
         </div>
-        {WORLD_THEMES.length > 1 && (
-          <label className="world-theme-picker">
-            <span>Theme</span>
-            <select
-              onChange={(event) => setThemeId(event.target.value)}
-              title={worldThemeById(themeId).description}
-              value={themeId}
-            >
-              {WORLD_THEMES.map((theme) => (
-                <option key={theme.id} value={theme.id}>
-                  {theme.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
+        <div className="world-pickers">
+          <Picker
+            label="Agents"
+            onChange={setCharacterId}
+            options={WORLD_CHARACTERS}
+            value={characterId}
+          />
+          <Picker
+            label="World"
+            onChange={setThemeId}
+            options={WORLD_THEMES}
+            value={themeId}
+          />
+        </div>
       </div>
       <div className="world-body">
         <div
@@ -174,10 +208,7 @@ export default function WorldView(props: WorldViewProps) {
           {!failure && model.actors.length === 0 && (
             <div className="world-overlay world-quiet">
               <strong>Nobody is in</strong>
-              <span>
-                Start a session from the board and it walks in here.
-                {props.showingAll ? "" : " Every workspace shows in All."}
-              </span>
+              <span>Start a session from any board and it walks in here.</span>
             </div>
           )}
         </div>
@@ -191,7 +222,7 @@ export default function WorldView(props: WorldViewProps) {
                   <strong>{actor.name}</strong>
                   <small>
                     {actor.label} · {waitingLabel(actor.since, now)}
-                    {props.showingAll ? ` · ${zoneName(actor)}` : ""}
+                    {` · ${zoneName(actor)}`}
                   </small>
                   {actor.detail && <span>{actor.detail}</span>}
                 </span>
@@ -224,7 +255,7 @@ export default function WorldView(props: WorldViewProps) {
             {hovered.label}
             {hovered.unconfirmed ? " (unconfirmed)" : ""}
             {hovered.since ? ` · ${waitingLabel(hovered.since, now)}` : ""}
-            {props.showingAll ? ` · ${zoneName(hovered)}` : ""}
+            {` · ${zoneName(hovered)}`}
           </small>
           {hovered.detail && <code>{hovered.detail}</code>}
           {(hovered.model || hovered.contextPercent !== null) && (

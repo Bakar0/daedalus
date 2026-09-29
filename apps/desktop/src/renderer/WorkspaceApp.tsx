@@ -4919,12 +4919,12 @@ export function WorkspaceApp({
           <div className="workspace-main-header">
             <div>
               <span className="eyebrow">
-                {showingAll && workspace
+                {(showingAll || view === "world") && workspace
                   ? `${activeWorkspaces.length} ${activeWorkspaces.length === 1 ? "workspace" : "workspaces"}`
                   : (workspace?.slug ?? "Select a workspace")}
               </span>
               <h1>
-                {showingAll && workspace
+                {(showingAll || view === "world") && workspace
                   ? "All workspaces"
                   : (workspace?.name ?? "Workspace")}
               </h1>
@@ -5307,10 +5307,16 @@ export function WorkspaceApp({
             >
               <WorldView
                 appearance={theme}
+                // The World is every workspace at once, whatever the sidebar
+                // has selected: it is the one view of everything running.
                 model={buildWorldModel({
-                  workspaces: showingAll ? orderedWorkspaces : [workspace],
-                  sessions: workspaceSessions,
-                  tasks: allTasks,
+                  workspaces: orderedWorkspaces,
+                  sessions: orderedWorkspaces.flatMap((item) =>
+                    (snapshot?.agents ?? []).filter(
+                      (session) => session.workspaceId === item.id,
+                    ),
+                  ),
+                  tasks: snapshot?.tasks ?? [],
                   activity: activityById,
                   attention: attentionById,
                   telemetry: telemetryById,
@@ -5323,7 +5329,6 @@ export function WorkspaceApp({
                   openSession(sessionId);
                   setView("sessions");
                 }}
-                showingAll={showingAll}
               />
             </Suspense>
           ) : view === "board" ? (

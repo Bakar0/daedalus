@@ -212,7 +212,6 @@ function Page() {
         model={model}
         now={Date.now()}
         onOpenSession={(id) => window.__world.opened.push(id)}
-        showingAll
       />
     </div>
   );

@@ -2,6 +2,7 @@ import { Application, Container, type FederatedPointerEvent } from "pixi.js";
 import type { WorldActor, WorldModel, WorldPlace } from "./world-model";
 import type {
   ActorFigure,
+  WorldCharacter,
   WorldLook,
   WorldPoint,
   WorldTheme,
@@ -60,6 +61,7 @@ export class WorldEngine {
   private constructor(
     private readonly host: HTMLElement,
     private theme: WorldTheme,
+    private character: WorldCharacter,
     private look: WorldLook,
     private readonly options: WorldEngineOptions,
   ) {}
@@ -68,10 +70,11 @@ export class WorldEngine {
   static async create(
     host: HTMLElement,
     theme: WorldTheme,
+    character: WorldCharacter,
     look: WorldLook,
     options: WorldEngineOptions,
   ): Promise<WorldEngine> {
-    const engine = new WorldEngine(host, theme, look, options);
+    const engine = new WorldEngine(host, theme, character, look, options);
     await engine.app.init({
       antialias: true,
       autoDensity: true,
@@ -112,6 +115,22 @@ export class WorldEngine {
     if (theme.id === this.theme.id) return;
     this.theme = theme;
     this.rebuild();
+  }
+
+  /** New figures for everyone, standing where they already were. */
+  setCharacter(character: WorldCharacter) {
+    if (character.id === this.character.id) return;
+    this.character = character;
+    for (const [id, entry] of this.actors) {
+      const position = entry.position;
+      this.remove(id);
+      const zone = this.zones.get(entry.actor.zoneId);
+      if (!zone || entry.leaving) continue;
+      const replacement = this.enter(entry.actor, zone, entry.target, true);
+      replacement.position = position;
+      this.actors.set(id, replacement);
+    }
+    this.place();
   }
 
   setLook(look: WorldLook) {
@@ -187,7 +206,7 @@ export class WorldEngine {
     target: WorldPoint,
     snap: boolean,
   ): ActorEntry {
-    const figure = this.theme.createActor(actor, this.look);
+    const figure = this.character.create(actor, this.look);
     figure.update(actor);
     const { view } = figure;
     view.eventMode = "static";

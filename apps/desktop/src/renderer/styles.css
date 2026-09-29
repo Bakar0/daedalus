@@ -4893,6 +4893,10 @@ dd {
   color: #ff8282;
   font-weight: 600;
 }
+.world-pickers {
+  display: flex;
+  gap: 14px;
+}
 .world-theme-picker {
   align-items: center;
   color: var(--muted);

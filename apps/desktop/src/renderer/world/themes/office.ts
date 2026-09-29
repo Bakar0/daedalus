@@ -1,12 +1,6 @@
 import { Container, Graphics, Text } from "pixi.js";
-import type { WorldActor, WorldPlace, WorldZone } from "../world-model";
-import type {
-  ActorFigure,
-  ActorFrame,
-  WorldLook,
-  WorldPoint,
-  WorldTheme,
-} from "../world-theme";
+import type { WorldPlace, WorldZone } from "../world-model";
+import type { WorldLook, WorldPoint, WorldTheme } from "../world-theme";
 
 /**
  * Each workspace is a room. Readers stand at the bookshelf, editors and
@@ -22,8 +16,6 @@ const WIDTH = 560;
 const HEIGHT = 360;
 const HEADER = 30;
 const WALL = 84;
-/** Figures are drawn small and scaled, so the numbers below stay simple. */
-const FIGURE_SCALE = 1.35;
 
 interface Palette {
   backdrop: number;
@@ -81,13 +73,6 @@ const ATTENTION = 0xff5f5f;
 const DONE = 0x3fbf88;
 const ERROR = 0xffa53d;
 const WORKING = 0xafbaff;
-
-const PROVIDER_SHIRTS: Record<string, number> = {
-  claude: 0xd97757,
-  codex: 0x10a37f,
-};
-const SKIN = [0xf2c9a0, 0xd9a577, 0xa8714a, 0x7a4e30, 0xf5d5b8];
-const HAIR = [0x2b1d14, 0x5a3a22, 0xb8862f, 0x1a1a1a, 0x8c4a2f];
 
 const DESKS = [60, 150, 240, 330, 420];
 
@@ -323,186 +308,6 @@ function drawZone(layer: Container, zone: WorldZone, look: WorldLook): void {
   }
 }
 
-/** Stable per session, so an agent keeps its looks across snapshots. */
-function hash(value: string): number {
-  let result = 0;
-  for (let index = 0; index < value.length; index += 1)
-    result = (result * 31 + value.charCodeAt(index)) >>> 0;
-  return result;
-}
-
-class OfficeWorker implements ActorFigure {
-  readonly view = new Container();
-  private readonly body = new Container();
-  private readonly legs = new Graphics();
-  private readonly figure = new Graphics();
-  private readonly arm = new Graphics();
-  private readonly ring = new Graphics();
-  private readonly bubble = new Container();
-  private readonly bubbleShape = new Graphics();
-  private readonly bubbleText: Text;
-  private readonly name: Text;
-  private readonly nameBack = new Graphics();
-  private actor: WorldActor;
-  private readonly shirt: number;
-  private readonly skin: number;
-  private readonly hair: number;
-  private readonly seed: number;
-
-  constructor(
-    actor: WorldActor,
-    private readonly palette: Palette,
-  ) {
-    this.actor = actor;
-    const seed = hash(actor.sessionId);
-    this.seed = (seed % 1000) / 1000;
-    this.shirt = PROVIDER_SHIRTS[actor.provider] ?? 0x7b8cff;
-    this.skin = SKIN[seed % SKIN.length]!;
-    this.hair = HAIR[(seed >> 4) % HAIR.length]!;
-    this.bubbleText = label("", 11, 0xffffff, "600");
-    this.bubbleText.anchor.set(0.5);
-    this.name = label("", 9, palette.text, "600");
-    this.name.anchor.set(0.5, 0);
-    this.drawFigure();
-    this.bubble.addChild(this.bubbleShape, this.bubbleText);
-    this.bubble.position.set(0, -46);
-    this.body.addChild(this.legs, this.figure, this.arm, this.bubble);
-    this.view.addChild(this.ring, this.body, this.nameBack, this.name);
-    this.name.position.set(0, 4);
-    this.view.hitArea = {
-      contains: (x, y) => x > -18 && x < 18 && y > -72 && y < 18,
-    };
-  }
-
-  private drawFigure() {
-    const g = this.figure;
-    g.ellipse(0, 0, 10, 3).fill({ color: 0x000000, alpha: 0.25 });
-    g.roundRect(-7, -22, 14, 15, 5).fill(this.shirt);
-    g.circle(0, -28, 6).fill(this.skin);
-    g.ellipse(0, -32.4, 6.1, 3).fill(this.hair);
-    g.circle(-2.2, -27.5, 0.9).fill(0x1a1a1a);
-    g.circle(2.2, -27.5, 0.9).fill(0x1a1a1a);
-  }
-
-  update(actor: WorldActor) {
-    this.actor = actor;
-    const name = truncate(actor.name, 16);
-    if (this.name.text !== name) {
-      this.name.text = name;
-      this.nameBack
-        .clear()
-        .roundRect(-this.name.width / 2 - 4, 3, this.name.width + 8, 13, 5)
-        .fill({ color: this.palette.plate, alpha: 0.78 });
-    }
-    this.drawBubble();
-    this.arm.clear();
-    if (actor.mood === "attention") {
-      // A raised hand is the thing to spot from across the room.
-      this.arm
-        .moveTo(6, -18)
-        .lineTo(11, -36)
-        .stroke({ width: 3, color: this.shirt, cap: "round" })
-        .circle(11, -37, 2.4)
-        .fill(this.skin);
-    }
-    this.view.alpha =
-      actor.mood === "lost" ? 0.45 : actor.unconfirmed ? 0.7 : 1;
-  }
-
-  private drawBubble() {
-    const { mood, label: state } = this.actor;
-    const shape = this.bubbleShape.clear();
-    let text = "";
-    let color: number | undefined;
-    if (mood === "attention") {
-      color = ATTENTION;
-      text = state === "needs permission" ? "!" : "?";
-    } else if (mood === "done") {
-      color = DONE;
-      text = "✓";
-    } else if (mood === "error") {
-      color = ERROR;
-      text = "!";
-    } else if (mood === "lost") {
-      color = this.palette.muted;
-      text = "?";
-    } else if (mood === "idle") {
-      text = "z";
-    }
-    if (color !== undefined) {
-      shape.circle(0, 0, 8).fill(color);
-      shape.poly([-3, 6, 3, 6, 0, 11]).fill(color);
-    } else if (mood === "working") {
-      shape
-        .roundRect(-11, -6, 22, 12, 6)
-        .fill({ color: this.palette.plate, alpha: 0.9 });
-    }
-    this.bubbleText.text = text;
-    this.bubbleText.style.fill =
-      color !== undefined ? 0xffffff : this.palette.muted;
-    this.bubble.visible = mood !== "ended";
-  }
-
-  animate({ time, walking, facing }: ActorFrame) {
-    const { mood } = this.actor;
-    const t = time + this.seed * 10;
-    const legs = this.legs.clear();
-    const stride = walking ? Math.sin(t * 14) * 2.5 : 0;
-    legs
-      .rect(-4.5, -8 + Math.max(0, stride), 3.5, 8 - Math.max(0, stride))
-      .fill(0x2a3148);
-    legs
-      .rect(1, -8 + Math.max(0, -stride), 3.5, 8 - Math.max(0, -stride))
-      .fill(0x2a3148);
-    this.body.scale.set(
-      facing === -1 ? -FIGURE_SCALE : FIGURE_SCALE,
-      FIGURE_SCALE,
-    );
-    this.body.y = walking
-      ? -Math.abs(Math.sin(t * 14)) * 1.5
-      : mood === "working"
-        ? Math.sin(t * 6) * 0.6
-        : 0;
-
-    this.bubble.y = -46 + Math.sin(t * 2) * 1.2;
-    if (mood === "working") {
-      // Three dots typing, the same beat the terminal cursor keeps.
-      const dots = this.bubbleShape;
-      dots
-        .clear()
-        .roundRect(-11, -6, 22, 12, 6)
-        .fill({ color: this.palette.plate, alpha: 0.9 });
-      for (let dot = 0; dot < 3; dot += 1) {
-        const lift = Math.max(0, Math.sin(t * 6 - dot * 0.9)) * 2;
-        dots.circle(-6 + dot * 6, -lift, 1.8).fill(WORKING);
-      }
-    } else if (mood === "idle") {
-      this.bubbleText.alpha = 0.5 + Math.sin(t * 1.5) * 0.3;
-      this.bubble.y = -48 - ((t * 4) % 6);
-    }
-
-    const ring = this.ring.clear();
-    if (mood === "attention") {
-      const pulse = (t * 1.2) % 1;
-      ring.ellipse(0, 0, 12 + pulse * 10, 4 + pulse * 3).stroke({
-        width: 2,
-        color: ATTENTION,
-        alpha: 1 - pulse,
-      });
-      ring.ellipse(0, 0, 12, 4).stroke({ width: 2, color: ATTENTION });
-      this.arm.rotation = Math.sin(t * 5) * 0.08;
-    } else if (mood === "error") {
-      for (let puff = 0; puff < 3; puff += 1) {
-        const rise = (t * 0.6 + puff / 3) % 1;
-        ring.circle(-6 + puff * 5, -40 - rise * 20, 3 + rise * 3).fill({
-          color: 0x8a8f99,
-          alpha: 0.5 * (1 - rise),
-        });
-      }
-    }
-  }
-}
-
 export const officeTheme: WorldTheme = {
   id: "office",
   label: "Office",
@@ -512,6 +317,4 @@ export const officeTheme: WorldTheme = {
   backdrop: (look) => PALETTES[look.appearance].backdrop,
   drawZone,
   spot: officeSpot,
-  createActor: (actor, look) =>
-    new OfficeWorker(actor, PALETTES[look.appearance]),
 };
