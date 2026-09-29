@@ -67,6 +67,8 @@ export interface WorldZone {
   attention: number;
   /** Live actors in this zone, lost ones not counted: how busy it looks. */
   busy: number;
+  /** Actors in this zone working at the shipping station right now. */
+  shipping: number;
 }
 
 export interface WorldModel {
@@ -205,6 +207,12 @@ export function buildWorldModel(input: WorldModelInput): WorldModel {
       ).length,
       busy: actors.filter(
         (actor) => actor.zoneId === workspace.id && actor.mood !== "lost",
+      ).length,
+      shipping: actors.filter(
+        (actor) =>
+          actor.zoneId === workspace.id &&
+          actor.mood === "working" &&
+          actor.place === "ship",
       ).length,
     })),
     actors,

@@ -206,15 +206,26 @@ export class WorldEngine {
 
   // Camera.
 
-  private fitScale() {
+  /** The scale that shows the whole world. */
+  private allScale() {
     const { width, height } = this.arrangement.bounds;
     const screen = this.app.screen;
     return Math.min(screen.width / width, screen.height / height);
   }
 
+  /** The scale at rest: the whole world, or its full width for "width". */
+  private fitScale() {
+    if (this.theme.fit !== "width") return this.allScale();
+    return this.app.screen.width / this.arrangement.bounds.width;
+  }
+
+  /** Where the camera rests: the middle, or the top for "width". */
   private boundsCenter(): WorldPoint {
     const { x, y, width, height } = this.arrangement.bounds;
-    return { x: x + width / 2, y: y + height / 2 };
+    if (this.theme.fit !== "width")
+      return { x: x + width / 2, y: y + height / 2 };
+    const visible = this.app.screen.height / this.fitScale();
+    return { x: x + width / 2, y: y + Math.min(height, visible) / 2 };
   }
 
   private scale() {
@@ -223,7 +234,9 @@ export class WorldEngine {
 
   private zoomLimits() {
     const fit = this.fitScale();
-    return { min: 0.85, max: Math.max(1, MAX_SCALE / fit) };
+    // Zooming out may always reach the whole world, and a little beyond.
+    const min = Math.min(0.85, (this.allScale() / fit) * 0.95);
+    return { min, max: Math.max(1, MAX_SCALE / fit) };
   }
 
   /** Keeps the world point under `screenPoint` where it is while zooming. */
@@ -266,13 +279,18 @@ export class WorldEngine {
       this.zoom = 1;
       this.center = this.boundsCenter();
     }
-    // The centre stays over the world, so it cannot be panned out to sea.
+    // The view stays on the world: along an axis the world is larger than
+    // the view, its edges stop the pan; along one it is smaller, it centres.
     const { x, y, width, height } = this.arrangement.bounds;
-    this.center = {
-      x: Math.min(x + width, Math.max(x, this.center.x)),
-      y: Math.min(y + height, Math.max(y, this.center.y)),
-    };
     const scale = this.scale();
+    const clamp = (value: number, start: number, size: number, view: number) =>
+      view >= size
+        ? start + size / 2
+        : Math.min(start + size - view / 2, Math.max(start + view / 2, value));
+    this.center = {
+      x: clamp(this.center.x, x, width, this.app.screen.width / scale),
+      y: clamp(this.center.y, y, height, this.app.screen.height / scale),
+    };
     const screen = this.app.screen;
     this.world.scale.set(scale);
     this.world.position.set(
@@ -413,6 +431,7 @@ export class WorldEngine {
     const figure = this.character.create(actor, this.look);
     figure.update(actor);
     const { view } = figure;
+    view.scale.set(this.theme.actorScale ?? 1);
     view.eventMode = "static";
     view.cursor = "pointer";
     // A press that turned into a drag is a pan, not a click.

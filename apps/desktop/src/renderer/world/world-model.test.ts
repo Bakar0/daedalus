@@ -186,6 +186,8 @@ describe("buildWorldModel", () => {
       detail: "Approve git push?",
     });
     expect(model.zones[0]?.attention).toBe(1);
+    // Waiting to push is not pushing: the tube stays empty until approved.
+    expect(model.zones[0]?.shipping).toBe(0);
   });
 
   test("idle and done rest in the lounge; lost waits at the door", () => {
@@ -220,6 +222,19 @@ describe("buildWorldModel", () => {
       }),
     );
     expect(model.actors.map((actor) => actor.sessionId)).toEqual(["here"]);
+  });
+
+  test("counts the agents shipping right now, for the tube", () => {
+    const model = buildWorldModel(
+      input({
+        sessions: [session("a"), session("b")],
+        activity: new Map([
+          ["a", activity("a", "working", "Bash(git push)")],
+          ["b", activity("b", "working", "Edit(x.ts)")],
+        ]),
+      }),
+    );
+    expect(model.zones[0]).toMatchObject({ busy: 2, shipping: 1 });
   });
 
   test("reports context and model from telemetry", () => {
@@ -276,6 +291,7 @@ describe("labyrinth", () => {
       name: `Workspace ${index}`,
       attention: 0,
       busy: 0,
+      shipping: 0,
     }));
   const { width: W, height: H } = LABYRINTH_ROOM;
   const inRoom = (
@@ -286,12 +302,13 @@ describe("labyrinth", () => {
     Math.abs(point.y - origin.y) <= H / 2;
 
   test.each([0, 1, 2, 3, 8, 21])(
-    "%i rooms sit two to a floor, either side of the shaft, never overlapping",
+    "%i rooms stack one to a floor, right of the shaft, never overlapping",
     (count) => {
       const { origins, bounds } = labyrinthTheme.arrange(zones(count));
       expect(origins).toHaveLength(count);
       origins.forEach((origin, index) => {
-        expect(Math.sign(origin.x)).toBe(index % 2 === 0 ? -1 : 1);
+        expect(origin.x).toBeGreaterThan(0);
+        if (index > 0) expect(origin.y).toBeGreaterThan(origins[index - 1]!.y);
         // Clear of the shaft, and inside the world.
         expect(Math.abs(origin.x) - W / 2).toBeGreaterThan(45);
         expect(origin.y + H / 2).toBeLessThanOrEqual(bounds.y + bounds.height);
@@ -304,11 +321,11 @@ describe("labyrinth", () => {
     },
   );
 
-  test("the labyrinth grows a floor for every two workspaces", () => {
+  test("the labyrinth grows a floor for every workspace", () => {
     const height = (count: number) =>
       labyrinthTheme.arrange(zones(count)).bounds.height;
-    expect(height(2)).toBe(height(1));
-    expect(height(3)).toBeGreaterThan(height(2));
+    expect(height(1)).toBe(height(0));
+    expect(height(2)).toBeGreaterThan(height(1));
     expect(height(9)).toBeGreaterThan(height(8));
   });
 
@@ -353,15 +370,16 @@ describe("labyrinth", () => {
     expect(path.at(-1)).toEqual(to);
   });
 
-  test("every spot stays inside the room, mirrored on the right", () => {
+  test("every spot stays inside the room, and the door faces the shaft", () => {
     for (const place of WORLD_PLACES)
       for (let slot = 0; slot < 10; slot += 1) {
-        const left = labyrinthTheme.spot(place, slot, 0);
-        const right = labyrinthTheme.spot(place, slot, 1);
-        expect(Math.abs(left.x)).toBeLessThanOrEqual(W / 2);
-        expect(Math.abs(left.y)).toBeLessThanOrEqual(H / 2);
-        expect(right).toEqual({ x: -left.x, y: left.y });
+        const point = labyrinthTheme.spot(place, slot, 0);
+        expect(Math.abs(point.x)).toBeLessThanOrEqual(W / 2);
+        expect(Math.abs(point.y)).toBeLessThanOrEqual(H / 2);
+        expect(labyrinthTheme.spot(place, slot, 3)).toEqual(point);
       }
+    // The shaft is to the left of every room.
+    expect(labyrinthTheme.spot("door", 0, 0).x).toBeLessThan(0);
   });
 });
 

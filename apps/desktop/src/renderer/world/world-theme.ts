@@ -51,6 +51,14 @@ export interface WorldTheme {
   spot(place: WorldPlace, slot: number, zone: number): WorldPoint;
   /** Where new agents come from and finished ones go back to, in world pixels. */
   home: WorldPoint;
+  /** How much larger than their natural size agents are drawn; 1 if unset. */
+  actorScale?: number;
+  /**
+   * How the camera frames the world at rest. "all" fits the whole world;
+   * "width" fills the view's width and starts at the top, for a world that
+   * grows downward and is scrolled, like Fallout Shelter. "all" if unset.
+   */
+  fit?: "all" | "width";
 }
 
 export interface WorldArrangement {

@@ -11,7 +11,7 @@ import type {
  * Daedalus's Labyrinth, seen from the side like a cut-away ant farm.
  * Daedalus Works, a marble workshop-temple, stands on the surface and builds
  * the bots. A glass lift shaft runs straight down from its floor, and every
- * workspace is a room dug off the shaft, two to a floor, doors facing it.
+ * workspace is a room dug off the shaft, one to a floor, door facing it.
  * Bots come out of the workshop, ride the shaft down, and fly through their
  * room's door; inside, they move freely between stations. A finished bot
  * goes back up the same way.
@@ -20,8 +20,7 @@ import type {
  * wall to the door: lounge, library, workbench under the war-room board,
  * terminal, observatory window over a thinking chair, round table, and the
  * shipping crates beside the pneumatic tube that carries pushes to the
- * surface. Rooms on the right of the shaft are mirror images, so every
- * door opens onto the shaft. Every room is the same size for now.
+ * surface. Every room is the same size for now.
  */
 
 const ROOM_W = 900;
@@ -34,7 +33,14 @@ const FIRST_TOP = 80;
 const FLOOR = 90;
 /** Where a room's door is, before mirroring. */
 const DOOR_X = ROOM_W / 2 - 24;
-const ROOM_X = SHAFT_HALF + CORRIDOR + ROOM_W / 2;
+/**
+ * Rooms are designed at 900 by 300 and drawn this much larger, and bots are
+ * scaled up further, so a bot reads the way a dweller does in Fallout
+ * Shelter: big beside the furniture, not lost in the room.
+ */
+const SCALE = 1.3;
+const ACTOR_SCALE = 1.9;
+const ROOM_X = SHAFT_HALF + CORRIDOR + (ROOM_W * SCALE) / 2;
 const HOME: WorldPoint = { x: 0, y: -40 };
 
 interface Palette {
@@ -121,49 +127,53 @@ const ATTENTION = 0xff5f5f;
 /** Standing spots per place, before mirroring, relative to the room centre. */
 const SPOTS: Record<WorldPlace, WorldPoint[]> = {
   lounge: [
-    { x: -415, y: FLOOR },
-    { x: -385, y: FLOOR },
-    { x: -400, y: FLOOR - 16 },
+    { x: -420, y: FLOOR },
+    { x: -370, y: FLOOR },
+    { x: -395, y: FLOOR - 24 },
   ],
   read: [
     { x: -250, y: FLOOR },
-    { x: -222, y: FLOOR },
-    { x: -286, y: -6 },
+    { x: -200, y: FLOOR },
+    { x: -290, y: -10 },
   ],
   plan: [
-    { x: -180, y: -12 },
-    { x: -128, y: -16 },
+    { x: -190, y: -14 },
+    { x: -120, y: -20 },
   ],
   edit: [
-    { x: -176, y: FLOOR },
-    { x: -128, y: FLOOR },
+    { x: -190, y: FLOOR },
+    { x: -118, y: FLOOR },
   ],
   run: [
-    { x: -8, y: FLOOR },
-    { x: 34, y: FLOOR },
+    { x: -14, y: FLOOR },
+    { x: 50, y: FLOOR },
   ],
   web: [
-    { x: 136, y: 6 },
-    { x: 178, y: 12 },
+    { x: 128, y: 4 },
+    { x: 190, y: 10 },
   ],
   think: [
-    { x: 138, y: FLOOR },
-    { x: 178, y: FLOOR },
+    { x: 126, y: FLOOR },
+    { x: 190, y: FLOOR },
   ],
   delegate: [
-    { x: 242, y: FLOOR },
-    { x: 298, y: FLOOR },
-    { x: 270, y: FLOOR - 18 },
+    { x: 236, y: FLOOR },
+    { x: 304, y: FLOOR },
+    { x: 270, y: FLOOR - 26 },
   ],
   ship: [
-    { x: 342, y: FLOOR },
-    { x: 374, y: FLOOR },
+    { x: 334, y: FLOOR },
+    { x: 380, y: FLOOR - 20 },
   ],
-  door: [{ x: DOOR_X - 4, y: FLOOR }],
+  door: [{ x: DOOR_X - 8, y: FLOOR }],
 };
 
-/** Rooms on the right of the shaft are mirrored so their doors face it. */
-const mirrorOf = (zone: number) => (zone % 2 === 0 ? 1 : -1);
+/**
+ * Every room hangs off the right of the shaft, one per floor, as in Fallout
+ * Shelter. Furniture is designed with the door on the right, so rooms are
+ * drawn mirrored, door on the left, facing the shaft.
+ */
+const mirrorOf = (_zone: number) => -1;
 
 function spot(place: WorldPlace, slot: number, zone: number): WorldPoint {
   const spots = SPOTS[place];
@@ -173,37 +183,41 @@ function spot(place: WorldPlace, slot: number, zone: number): WorldPoint {
   if (extra > 0) {
     // A queue forms toward the middle of the room and stays inside it.
     const direction = base.x > 0 ? -1 : 1;
-    x = Math.max(-DOOR_X, Math.min(DOOR_X, base.x + direction * 26 * extra));
+    x = Math.max(-DOOR_X, Math.min(DOOR_X, base.x + direction * 40 * extra));
   }
-  return { x: x * mirrorOf(zone), y: base.y };
+  return { x: x * mirrorOf(zone) * SCALE, y: base.y * SCALE };
 }
 
 function roomCenter(index: number): WorldPoint {
-  const floor = Math.floor(index / 2);
   return {
-    x: mirrorOf(index) === 1 ? -ROOM_X : ROOM_X,
-    y: FIRST_TOP + floor * (ROOM_H + FLOOR_GAP) + ROOM_H / 2,
+    x: ROOM_X,
+    y: FIRST_TOP + index * (ROOM_H * SCALE + FLOOR_GAP) + (ROOM_H * SCALE) / 2,
   };
 }
 
 function doorOf(center: WorldPoint, index: number): WorldPoint {
-  return { x: center.x + DOOR_X * mirrorOf(index), y: center.y + FLOOR };
+  return {
+    x: center.x + DOOR_X * SCALE * mirrorOf(index),
+    y: center.y + FLOOR * SCALE,
+  };
 }
 
 function arrange(zones: readonly WorldZone[]): WorldArrangement {
   const origins = zones.map((_, index) => roomCenter(index));
-  const floors = Math.max(1, Math.ceil(zones.length / 2));
-  const bottom = FIRST_TOP + floors * (ROOM_H + FLOOR_GAP) + 40;
-  const half = ROOM_X + ROOM_W / 2 + 70;
+  const floors = Math.max(1, zones.length);
+  const bottom = FIRST_TOP + floors * (ROOM_H * SCALE + FLOOR_GAP) + 40;
+  // From the steam pipes left of the workshop to past the rooms' far wall.
+  const left = -340;
+  const right = ROOM_X + (ROOM_W * SCALE) / 2 + 70;
   const roomAt = (point: WorldPoint) =>
     origins.findIndex(
       (origin) =>
-        Math.abs(point.x - origin.x) <= ROOM_W / 2 &&
-        Math.abs(point.y - origin.y) <= ROOM_H / 2 + 20,
+        Math.abs(point.x - origin.x) <= (ROOM_W * SCALE) / 2 &&
+        Math.abs(point.y - origin.y) <= (ROOM_H * SCALE) / 2 + 20,
     );
   return {
     origins,
-    bounds: { x: -half, y: -340, width: half * 2, height: bottom + 340 },
+    bounds: { x: left, y: -340, width: right - left, height: bottom + 340 },
     route: (from, to) => {
       const start = roomAt(from);
       const end = roomAt(to);
@@ -404,7 +418,12 @@ function drawWorld(
           ((p.skyBottom >> shift) & 255) * mix,
       );
     const color = (channel(16) << 16) | (channel(8) << 8) | channel(0);
-    g.rect(x, y + (band * -y) / bands, width, -y / bands + 1).fill(color);
+    g.rect(
+      x - bleed,
+      y + (band * -y) / bands,
+      width + bleed * 2,
+      -y / bands + 1,
+    ).fill(color);
   }
   const random = scatter(arrangement.origins.length + 3);
   if (look.appearance === "dark")
@@ -426,12 +445,16 @@ function drawWorld(
     p.rock,
   );
   g.rect(x - bleed, -6, width + bleed * 2, 26).fill(p.grass);
-  for (let stratum = 0; stratum < height / 70; stratum += 1) {
+  // Rock layers and stones run past the edges too, a screen's width each way.
+  const spread = 1200;
+  const rockLeft = x - spread;
+  const rockWidth = width + spread * 2;
+  for (let stratum = 0; stratum < (height + spread) / 70; stratum += 1) {
     const sy = 60 + stratum * 70 + random() * 20;
-    g.moveTo(x, sy);
-    for (let step = 1; step <= 24; step += 1)
+    g.moveTo(rockLeft, sy);
+    for (let step = 1; step <= 48; step += 1)
       g.lineTo(
-        x + (width * step) / 24,
+        rockLeft + (rockWidth * step) / 48,
         sy + Math.sin(step * 1.3 + stratum) * 8,
       );
     g.stroke({
@@ -440,10 +463,11 @@ function drawWorld(
       alpha: 0.7,
     });
   }
-  for (let stone = 0; stone < (width * height) / 9000; stone += 1)
+  const rockHeight = height + y - 30 + spread;
+  for (let stone = 0; stone < (rockWidth * rockHeight) / 9000; stone += 1)
     g.circle(
-      x + random() * width,
-      30 + random() * (height + y - 30),
+      rockLeft + random() * rockWidth,
+      30 + random() * rockHeight,
       3 + random() * 6,
     ).fill(random() > 0.5 ? p.rockDark : p.rockLight);
   // Corridors from every door to the shaft.
@@ -639,6 +663,10 @@ function drawZone(
 ) {
   const p = PALETTES[look.appearance];
   const mirror = mirrorOf(index);
+  // Drawn at design size and scaled up, so the numbers stay readable.
+  const inner = new Container();
+  inner.scale.set(SCALE);
+  layer.addChild(inner);
   const busy = zone.busy > 0;
   const room = new Graphics();
   const wall = WALLS[hash(zone.id) % WALLS.length]!;
@@ -659,7 +687,7 @@ function drawZone(
   room
     .rect(-ROOM_W / 2, -ROOM_H / 2, ROOM_W, 12)
     .fill({ color: 0x000000, alpha: 0.3 });
-  layer.addChild(room);
+  inner.addChild(room);
 
   // Lamps: warm light when anyone is in, dim blue when it is empty.
   const lamps = new Graphics();
@@ -679,15 +707,15 @@ function drawZone(
     lamps.rect(lx - 12, -ROOM_H / 2, 24, 10).fill(0x8a92a6);
     lamps.circle(lx, -ROOM_H / 2 + 14, 6).fill(busy ? p.warm : p.dim);
   }
-  layer.addChild(lamps);
+  inner.addChild(lamps);
 
   const furniture = new Graphics();
   drawFurniture(furniture, p);
   furniture.scale.x = mirror;
-  layer.addChild(furniture);
+  inner.addChild(furniture);
 
   if (!busy)
-    layer.addChild(
+    inner.addChild(
       new Graphics()
         .roundRect(-ROOM_W / 2, -ROOM_H / 2, ROOM_W, ROOM_H, 12)
         .fill({ color: 0x0a1020, alpha: 0.35 }),
@@ -703,7 +731,7 @@ function drawZone(
     holder.addChild(pill, tag);
     // On the floorboards, below the bots' name tags.
     holder.position.set(tx * mirror, FLOOR + 38);
-    layer.addChild(holder);
+    inner.addChild(holder);
   }
 
   // Header: the workspace's name and how it is doing.
@@ -734,9 +762,9 @@ function drawZone(
       ? -ROOM_W / 2 + 14
       : ROOM_W / 2 - 14 - (chipX + chip.width + 28);
   header.position.set(farWall, -ROOM_H / 2 + 22);
-  layer.addChild(header);
+  inner.addChild(header);
 
-  layer.addChild(
+  inner.addChild(
     new Graphics()
       .roundRect(-ROOM_W / 2, -ROOM_H / 2, ROOM_W, ROOM_H, 12)
       .stroke({ width: 6, color: zone.attention > 0 ? ATTENTION : p.brass }),
@@ -745,10 +773,11 @@ function drawZone(
   // The siren when someone is waiting, and a parcel riding the tube.
   const siren = new Graphics();
   const parcel = new Graphics();
-  layer.addChild(parcel, siren);
+  inner.addChild(parcel, siren);
   return (time: number) => {
     parcel.clear();
-    if (busy) {
+    // A parcel rides the tube only while an agent is at the crates.
+    if (zone.shipping > 0) {
       const rise = (time * 0.35 + (hash(zone.id) % 100) / 100) % 1;
       const py = FLOOR + 30 - rise * (ROOM_H / 2 + FLOOR + 30);
       parcel
@@ -798,6 +827,11 @@ export const labyrinthTheme: WorldTheme = {
   drawZone,
   spot,
   home: HOME,
+  actorScale: ACTOR_SCALE,
+  fit: "width",
 };
 
-export const LABYRINTH_ROOM = { width: ROOM_W, height: ROOM_H };
+export const LABYRINTH_ROOM = {
+  width: ROOM_W * SCALE,
+  height: ROOM_H * SCALE,
+};
