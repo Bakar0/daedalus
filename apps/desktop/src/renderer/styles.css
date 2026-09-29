@@ -5014,6 +5014,79 @@ dd {
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+.world-week-button {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--secondary);
+  font-size: 12px;
+  padding: 5px 10px;
+}
+.world-week-button:hover,
+.world-week-button[aria-expanded="true"] {
+  background: var(--raised-hover);
+  color: var(--text);
+}
+.world-week {
+  /* Over the canvas, which is appended after it. */
+  z-index: 2;
+  background: var(--overlay);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.35);
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 10px;
+  left: 12px;
+  max-height: calc(100% - 24px);
+  overflow: auto;
+  padding: 12px 14px;
+  position: absolute;
+  top: 12px;
+  width: min(340px, calc(100% - 24px));
+}
+.world-week header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+.world-week header button {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+}
+.world-week-empty {
+  color: var(--muted);
+  margin: 0;
+}
+.world-week-head {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+.world-week-head span {
+  color: var(--text);
+  font-weight: 600;
+}
+.world-week-head small,
+.world-week li small {
+  color: var(--muted);
+}
+.world-week ul {
+  display: grid;
+  gap: 3px;
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+.world-week li {
+  color: var(--secondary);
+  display: grid;
+  overflow-wrap: anywhere;
+}
 .world-card {
   background: var(--overlay);
   border: 1px solid var(--line-strong);

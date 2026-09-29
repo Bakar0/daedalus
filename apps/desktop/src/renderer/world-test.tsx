@@ -318,6 +318,7 @@ function Page() {
     sessions: live,
     tasks: [...tasks, ...doneTasks],
     shipped,
+    now: Date.now(),
     activity,
     attention,
     worktrees: [

@@ -12,6 +12,7 @@ import type {
   WorldLook,
   Waypoint,
   WorldPoint,
+  WorldAction,
   WorldTheme,
 } from "./world-theme";
 import { tipOf } from "./world-theme";
@@ -43,6 +44,8 @@ export interface WorldEngineOptions {
   onHover(sessionId: string | null, point: WorldPoint | null): void;
   /** Scenery the pointer is over that has something to say (see `setTip`). */
   onTip?(text: string | null, point: WorldPoint | null): void;
+  /** Scenery that was clicked and names an action. */
+  onAction?(action: WorldAction): void;
 }
 
 /** World pixels per second: a trip across the first ring takes a few seconds. */
@@ -96,7 +99,7 @@ export class WorldEngine {
   private readonly figures = new Container();
   private readonly zones = new Map<string, ZoneEntry>();
   private readonly actors = new Map<string, ActorEntry>();
-  private model: WorldModel = { zones: [], actors: [] };
+  private model: WorldModel = { zones: [], actors: [], week: [] };
   private arrangement: WorldArrangement = {
     origins: [],
     bounds: { x: -400, y: -300, width: 800, height: 600 },
@@ -159,13 +162,20 @@ export class WorldEngine {
     this.listen(document, "visibilitychange", this.visibility);
     this.listenToCamera(app.canvas);
     // A passive container hears nothing, not even what bubbles up from its
-    // children, so the rooms' layer listens for their scenery's tips.
-    this.plots.eventMode = "static";
-    this.plots.on("pointerover", (event: FederatedPointerEvent) => {
-      const text = tipOf(event.target as Container);
-      if (text) this.options.onTip?.(text, this.clientPoint(event));
-    });
-    this.plots.on("pointerout", () => this.options.onTip?.(null, null));
+    // children, so the scenery layers listen for their children's tips.
+    for (const layer of [this.ground, this.plots]) {
+      layer.eventMode = "static";
+      layer.on("pointerover", (event: FederatedPointerEvent) => {
+        const tip = tipOf(event.target as Container);
+        if (tip) this.options.onTip?.(tip.text, this.clientPoint(event));
+      });
+      layer.on("pointerout", () => this.options.onTip?.(null, null));
+      layer.on("pointertap", (event: FederatedPointerEvent) => {
+        const action = tipOf(event.target as Container)?.action;
+        if (action && this.lastTravel <= DRAG_THRESHOLD)
+          this.options.onAction?.(action);
+      });
+    }
   }
 
   private listen<T extends Event>(

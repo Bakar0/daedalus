@@ -114,6 +114,7 @@ const input = (overrides: Partial<WorldModelInput> = {}): WorldModelInput => ({
   telemetry: new Map(),
   worktrees: [],
   shipped: [],
+  now: Date.parse("2026-09-23T12:00:00.000Z"),
   ...overrides,
 });
 
@@ -720,6 +721,29 @@ describe("trophies", () => {
       ["pull-request", "PR #12 Change 12"],
     ]);
     expect(zone.trophies[2]!.detail).toBe("PR #10 merged");
+  });
+
+  test("the week lists the last seven days, newest first, busiest first", () => {
+    const model = buildWorldModel(
+      input({
+        workspaces: [workspace("w"), workspace("v"), workspace("quiet")],
+        tasks: [
+          done("t1", 1, "2026-09-10T10:00:00.000Z"),
+          done("t2", 2, "2026-09-20T10:00:00.000Z"),
+          done("t3", 3, "2026-09-22T10:00:00.000Z"),
+          { ...done("t4", 4, "2026-09-21T10:00:00.000Z"), workspaceId: "v" },
+        ],
+      }),
+    );
+    expect(
+      model.week.map((item) => [
+        item.zoneId,
+        item.trophies.map((trophy) => trophy.label),
+      ]),
+    ).toEqual([
+      ["w", ["#3 Task 3", "#2 Task 2"]],
+      ["v", ["#4 Task 4"]],
+    ]);
   });
 
   test("the shelf holds the newest; the tier counts them all", () => {

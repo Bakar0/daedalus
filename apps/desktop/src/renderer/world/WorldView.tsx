@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { waitingLabel } from "../session-view";
 import { WorldEngine } from "./world-engine";
-import type { WorldActor, WorldModel } from "./world-model";
+import type { WorldActor, WorldModel, WorldWeek } from "./world-model";
 import { WORLD_CHARACTERS, worldCharacterById } from "./characters";
 import type { WorldPoint } from "./world-theme";
 import { WORLD_THEMES, worldThemeById } from "./themes";
@@ -73,6 +73,63 @@ export interface WorldViewProps {
 const count = (value: number, noun: string) =>
   `${value} ${noun}${value === 1 ? "" : "s"}`;
 
+/** The newest this many per workspace; the counts cover the rest. */
+const WEEK_ROWS = 8;
+
+/**
+ * What shipped in the last seven days, per workspace: the scroll at the
+ * Hermes Post. It lists outcomes and nothing else.
+ */
+function WeekScroll(props: { week: WorldWeek[]; onClose(): void }) {
+  const tasks = (item: WorldWeek) =>
+    item.trophies.filter((trophy) => trophy.kind !== "pull-request").length;
+  const pulls = (item: WorldWeek) =>
+    item.trophies.filter((trophy) => trophy.kind !== "task").length;
+  return (
+    <section aria-label="This week" className="world-week">
+      <header>
+        <strong>This week in the Labyrinth</strong>
+        <button aria-label="Close" onClick={props.onClose} type="button">
+          ×
+        </button>
+      </header>
+      {props.week.length === 0 && (
+        <p className="world-week-empty">
+          Nothing finished in the last seven days yet.
+        </p>
+      )}
+      {props.week.map((item) => (
+        <div className="world-week-zone" key={item.zoneId}>
+          <div className="world-week-head">
+            <span>{item.name}</span>
+            <small>
+              {[
+                tasks(item) ? `${tasks(item)} done` : null,
+                pulls(item) ? `${count(pulls(item), "PR")} merged` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </small>
+          </div>
+          <ul>
+            {item.trophies.slice(0, WEEK_ROWS).map((trophy) => (
+              <li key={trophy.id}>
+                <span>{trophy.label}</span>
+                {trophy.detail && <small>{trophy.detail}</small>}
+              </li>
+            ))}
+            {item.trophies.length > WEEK_ROWS && (
+              <li>
+                <small>and {item.trophies.length - WEEK_ROWS} more</small>
+              </li>
+            )}
+          </ul>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 export default function WorldView(props: WorldViewProps) {
   const { model, appearance, now } = props;
   const host = useRef<HTMLDivElement>(null);
@@ -93,6 +150,7 @@ export default function WorldView(props: WorldViewProps) {
   }>();
   // Scenery with something to say, such as a trophy on a shelf.
   const [tip, setTip] = useState<{ text: string; point: WorldPoint }>();
+  const [weekOpen, setWeekOpen] = useState(false);
   // The engine's callbacks outlive renders; they read the latest props here.
   const latest = useRef(props);
   latest.current = props;
@@ -127,6 +185,9 @@ export default function WorldView(props: WorldViewProps) {
         },
         onTip: (text, point) =>
           setTip(text && point ? { text, point } : undefined),
+        onAction: (action) => {
+          if (action === "week") setWeekOpen((open) => !open);
+        },
       },
     ).then(
       (instance) => {
@@ -183,6 +244,15 @@ export default function WorldView(props: WorldViewProps) {
           </small>
         </div>
         <div className="world-pickers">
+          <button
+            aria-expanded={weekOpen}
+            className="world-week-button"
+            onClick={() => setWeekOpen((open) => !open)}
+            title="What every workspace finished in the last seven days"
+            type="button"
+          >
+            This week
+          </button>
           <Picker
             label="Agents"
             onChange={(id) => {
@@ -236,6 +306,9 @@ export default function WorldView(props: WorldViewProps) {
                 +
               </button>
             </div>
+          )}
+          {weekOpen && (
+            <WeekScroll onClose={() => setWeekOpen(false)} week={model.week} />
           )}
           {failure && (
             <div className="empty large world-overlay">

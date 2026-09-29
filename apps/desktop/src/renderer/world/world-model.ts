@@ -126,7 +126,23 @@ export interface WorldCrate {
 export interface WorldModel {
   zones: WorldZone[];
   actors: WorldActor[];
+  /** What each workspace finished in the last seven days, busiest first. */
+  week: WorldWeek[];
 }
+
+/**
+ * One workspace's week, for the scroll at the Hermes Post. It lists what
+ * was finished and counts nothing else: no streak, no day counter, so a
+ * week off costs nothing.
+ */
+export interface WorldWeek {
+  zoneId: string;
+  name: string;
+  /** Newest first. */
+  trophies: WorldTrophy[];
+}
+
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 const TOOL_STATIONS: ReadonlyArray<[RegExp, WorldStation]> = [
   [
@@ -213,6 +229,8 @@ export interface WorldModelInput {
   telemetry: ReadonlyMap<string, SessionTelemetryDto>;
   worktrees: readonly SessionWorktreeDto[];
   shipped: readonly ShippedPullRequestDto[];
+  /** Milliseconds since the epoch, for what "this week" means. */
+  now: number;
 }
 
 /** Every workspace's wins, oldest first. */
@@ -350,5 +368,15 @@ export function buildWorldModel(input: WorldModelInput): WorldModel {
       wins: wins.get(workspace.id)?.length ?? 0,
     })),
     actors,
+    week: input.workspaces
+      .map((workspace) => ({
+        zoneId: workspace.id,
+        name: workspace.name,
+        trophies: (wins.get(workspace.id) ?? [])
+          .filter((trophy) => input.now - Date.parse(trophy.at) <= WEEK_MS)
+          .reverse(),
+      }))
+      .filter((item) => item.trophies.length > 0)
+      .sort((left, right) => right.trophies.length - left.trophies.length),
   };
 }

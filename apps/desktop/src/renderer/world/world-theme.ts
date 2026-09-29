@@ -94,16 +94,31 @@ export interface WorldTheme {
  * and the engine shows it when the pointer is over it.
  */
 interface Tipped {
-  worldTip?: string;
+  worldTip?: WorldTip;
 }
 
-export function setTip(target: Container, text: string) {
-  (target as Container & Tipped).worldTip = text;
+/**
+ * A hover card's text, and optionally what clicking does: an action name
+ * the view understands, such as "week" for the weekly scroll.
+ */
+export interface WorldTip {
+  text: string;
+  action?: WorldAction;
+}
+
+export type WorldAction = "week";
+
+export function setTip(target: Container, text: string, action?: WorldAction) {
+  (target as Container & Tipped).worldTip = {
+    text,
+    ...(action ? { action } : {}),
+  };
   target.eventMode = "static";
+  if (action) target.cursor = "pointer";
 }
 
-/** The hover text of `target` or the nearest ancestor that has one. */
-export function tipOf(target: Container | null): string | null {
+/** The tip of `target` or the nearest ancestor that has one. */
+export function tipOf(target: Container | null): WorldTip | null {
   for (let node = target; node; node = node.parent)
     if ((node as Container & Tipped).worldTip)
       return (node as Container & Tipped).worldTip!;

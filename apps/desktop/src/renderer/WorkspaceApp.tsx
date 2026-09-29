@@ -5322,6 +5322,7 @@ export function WorkspaceApp({
                   telemetry: telemetryById,
                   worktrees: snapshot?.worktrees ?? [],
                   shipped: snapshot?.shipped ?? [],
+                  now,
                 })}
                 now={now}
                 onOpenSession={(sessionId, sessionWorkspaceId) => {

@@ -445,6 +445,7 @@ function drawWorld(
     drawPost(layer, lane.post, p);
   }
   layer.addChild(pipe);
+  layer.addChild(weekScroll(dispatch.lanes[0]!.post));
 
   const lights = new Graphics();
   layer.addChild(lights);
@@ -599,6 +600,24 @@ function drawZone(
           ])
           .fill({ color: ATTENTION, alpha: 0.16 });
   };
+}
+
+/**
+ * The week's scroll, pinned to the left Hermes Post's column: click it for
+ * what every workspace finished in the last seven days.
+ */
+function weekScroll(post: WorldPoint) {
+  const scroll = new Graphics();
+  scroll.roundRect(-13, -2, 26, 34, 3).fill(0xf1e3c0);
+  scroll.roundRect(-16, -6, 32, 7, 3).fill(0xe0cc9a);
+  scroll.roundRect(-16, 29, 32, 7, 3).fill(0xe0cc9a);
+  for (let line = 0; line < 4; line += 1)
+    scroll.rect(-8, 5 + line * 6, line === 3 ? 10 : 16, 1.6).fill(0x8a6a4a);
+  scroll.circle(0, -8, 2.5).fill(0x8a5a24);
+  scroll.position.set(post.x + 51, post.y - 92);
+  scroll.hitArea = new Rectangle(-18, -10, 36, 48);
+  setTip(scroll, "This week in the Labyrinth\nClick for what shipped", "week");
+  return scroll;
 }
 
 const SHELF_Y = -ROOM_H / 2 + 34;
