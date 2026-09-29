@@ -206,6 +206,33 @@ export default function WorldView(props: WorldViewProps) {
           ref={host}
           role="img"
         >
+          {!failure && (
+            <div className="world-zoom" aria-label="Zoom">
+              <button
+                aria-label="Zoom out"
+                onClick={() => engine.current?.zoomBy(1 / 1.5)}
+                title="Zoom out"
+                type="button"
+              >
+                −
+              </button>
+              <button
+                onClick={() => engine.current?.fit()}
+                title="Show the whole world"
+                type="button"
+              >
+                Fit
+              </button>
+              <button
+                aria-label="Zoom in"
+                onClick={() => engine.current?.zoomBy(1.5)}
+                title="Zoom in (or pinch, or Cmd-scroll; drag to move)"
+                type="button"
+              >
+                +
+              </button>
+            </div>
+          )}
           {failure && (
             <div className="empty large world-overlay">
               <strong>The World view could not start</strong>

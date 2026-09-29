@@ -39,7 +39,8 @@ export const text = (
 ) =>
   new Text({
     text: value,
-    resolution: 3,
+    // Sharp at the closest zoom, where a name tag is several times its size.
+    resolution: 6,
     style: {
       fill,
       fontFamily:

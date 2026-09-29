@@ -2,6 +2,7 @@ import { Application, Container, type FederatedPointerEvent } from "pixi.js";
 import type { WorldActor, WorldModel, WorldPlace } from "./world-model";
 import type {
   ActorFigure,
+  WorldArrangement,
   WorldCharacter,
   WorldLook,
   WorldPoint,
@@ -9,10 +10,14 @@ import type {
 } from "./world-theme";
 
 /**
- * Runs one World: lays zones out in a grid scaled to the view, walks actors
- * to the spot their theme gives them, and reports clicks and hovers. It holds
- * no state the snapshot does not: every `setModel` is the whole truth, and an
- * actor missing from it walks out of the door.
+ * Runs one World: asks the theme where zones go, flies actors to the spot
+ * the theme gives them, and owns the camera. It holds no state the snapshot
+ * does not: every `setModel` is the whole truth, a new actor flies out from
+ * the theme's home, and an actor missing from it flies back there.
+ *
+ * The camera is one continuous view. It starts fitted to the whole world;
+ * pinching, Cmd-scrolling or the zoom buttons move closer, dragging or
+ * two-finger scrolling pans, and nothing ever swaps the scene for another.
  */
 
 export interface WorldEngineOptions {
@@ -21,19 +26,23 @@ export interface WorldEngineOptions {
   onHover(sessionId: string | null, point: WorldPoint | null): void;
 }
 
-/** World pixels per second. Slow enough to watch, quick enough to matter. */
-const WALK_SPEED = 150;
-/** Gap between zones, in world pixels. */
-const ZONE_GAP = 24;
+/** World pixels per second: a trip across the first ring takes a few seconds. */
+const FLY_SPEED = 210;
 /**
  * The world is ambient: 30 frames a second looks the same for figures this
  * size and halves the cost of leaving the view open all day.
  */
 const MAX_FPS = 30;
+/** Closest the camera goes, in screen pixels per world pixel. */
+const MAX_SCALE = 2.6;
+/** Pointer travel, in screen pixels, past which a press is a drag. */
+const DRAG_THRESHOLD = 5;
 
 interface ZoneEntry {
   layer: Container;
   origin: WorldPoint;
+  key: string;
+  animate?: (time: number) => void;
 }
 
 interface ActorEntry {
@@ -42,21 +51,38 @@ interface ActorEntry {
   position: WorldPoint;
   target: WorldPoint;
   facing: -1 | 0 | 1;
-  /** Walking to the door on the way out; removed on arrival. */
+  /** Flying home on the way out; removed on arrival. */
   leaving: boolean;
 }
 
 export class WorldEngine {
   private readonly app = new Application();
   private readonly world = new Container();
-  private readonly scenery = new Container();
+  private readonly ground = new Container();
+  private readonly plots = new Container();
   private readonly figures = new Container();
   private readonly zones = new Map<string, ZoneEntry>();
   private readonly actors = new Map<string, ActorEntry>();
   private model: WorldModel = { zones: [], actors: [] };
-  private sceneryKey = "";
+  private arrangement: WorldArrangement = {
+    origins: [],
+    bounds: { x: -400, y: -300, width: 800, height: 600 },
+  };
+  private worldKey = "";
+  private animateWorld?: (time: number) => void;
   private elapsed = 0;
   private destroyed = false;
+  private placedOnce = false;
+  /** 1 is fitted to the world; larger is closer. */
+  private zoom = 1;
+  /** The world point at the centre of the view. */
+  private center: WorldPoint = { x: 0, y: 0 };
+  /** False until the user zooms or pans; until then the view follows the fit. */
+  private moved = false;
+  private press: { x: number; y: number; travel: number } | null = null;
+  private lastTravel = 0;
+  private gestureScale = 1;
+  private readonly cleanups: Array<() => void> = [];
 
   private constructor(
     private readonly host: HTMLElement,
@@ -92,12 +118,26 @@ export class WorldEngine {
     app.canvas.classList.add("world-canvas");
     this.host.append(app.canvas);
     this.figures.sortableChildren = true;
-    this.world.addChild(this.scenery, this.figures);
+    this.world.addChild(this.ground, this.plots, this.figures);
     app.stage.addChild(this.world);
     app.ticker.maxFPS = MAX_FPS;
     app.ticker.add((ticker) => this.tick(ticker.deltaMS / 1000));
-    app.renderer.on("resize", () => this.relayout(true));
-    document.addEventListener("visibilitychange", this.visibility);
+    app.renderer.on("resize", () => this.applyCamera());
+    this.listen(document, "visibilitychange", this.visibility);
+    this.listenToCamera(app.canvas);
+  }
+
+  private listen<T extends Event>(
+    target: EventTarget,
+    type: string,
+    handler: (event: T) => void,
+    options?: AddEventListenerOptions,
+  ) {
+    const listener = handler as EventListener;
+    target.addEventListener(type, listener, options);
+    this.cleanups.push(() =>
+      target.removeEventListener(type, listener, options),
+    );
   }
 
   /** A hidden window draws nothing. */
@@ -108,12 +148,19 @@ export class WorldEngine {
 
   setModel(model: WorldModel) {
     this.model = model;
-    this.relayout(false);
+    this.relayout(!this.placedOnce);
+    this.placedOnce = true;
   }
 
   setTheme(theme: WorldTheme) {
     if (theme.id === this.theme.id) return;
     this.theme = theme;
+    this.rebuild();
+  }
+
+  setLook(look: WorldLook) {
+    if (look.appearance === this.look.appearance) return;
+    this.look = look;
     this.rebuild();
   }
 
@@ -124,27 +171,169 @@ export class WorldEngine {
     for (const [id, entry] of this.actors) {
       const position = entry.position;
       this.remove(id);
-      const zone = this.zones.get(entry.actor.zoneId);
-      if (!zone || entry.leaving) continue;
-      const replacement = this.enter(entry.actor, zone, entry.target, true);
+      if (entry.leaving) continue;
+      const replacement = this.enter(entry.actor, entry.target, true);
       replacement.position = position;
       this.actors.set(id, replacement);
     }
     this.place();
   }
 
-  setLook(look: WorldLook) {
-    if (look.appearance === this.look.appearance) return;
-    this.look = look;
-    this.rebuild();
+  /** Back to the whole world in view. */
+  fit() {
+    this.zoom = 1;
+    this.center = this.boundsCenter();
+    this.moved = false;
+    this.applyCamera();
+  }
+
+  /** Zoom about the middle of the view; `factor` above 1 moves closer. */
+  zoomBy(factor: number) {
+    const screen = this.app.screen;
+    this.zoomAt(factor, { x: screen.width / 2, y: screen.height / 2 });
   }
 
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
-    document.removeEventListener("visibilitychange", this.visibility);
+    for (const cleanup of this.cleanups) cleanup();
     this.app.destroy({ removeView: true }, { children: true });
   }
+
+  // Camera.
+
+  private fitScale() {
+    const { width, height } = this.arrangement.bounds;
+    const screen = this.app.screen;
+    return Math.min(screen.width / width, screen.height / height);
+  }
+
+  private boundsCenter(): WorldPoint {
+    const { x, y, width, height } = this.arrangement.bounds;
+    return { x: x + width / 2, y: y + height / 2 };
+  }
+
+  private scale() {
+    return this.fitScale() * this.zoom;
+  }
+
+  private zoomLimits() {
+    const fit = this.fitScale();
+    return { min: 0.85, max: Math.max(1, MAX_SCALE / fit) };
+  }
+
+  /** Keeps the world point under `screenPoint` where it is while zooming. */
+  private zoomAt(factor: number, screenPoint: WorldPoint) {
+    const before = this.toWorld(screenPoint);
+    const { min, max } = this.zoomLimits();
+    this.zoom = Math.min(max, Math.max(min, this.zoom * factor));
+    const scale = this.scale();
+    const screen = this.app.screen;
+    this.center = {
+      x: before.x - (screenPoint.x - screen.width / 2) / scale,
+      y: before.y - (screenPoint.y - screen.height / 2) / scale,
+    };
+    this.moved = true;
+    this.applyCamera();
+  }
+
+  private panBy(dx: number, dy: number) {
+    const scale = this.scale();
+    this.center = {
+      x: this.center.x - dx / scale,
+      y: this.center.y - dy / scale,
+    };
+    this.moved = true;
+    this.applyCamera();
+  }
+
+  private toWorld(point: WorldPoint): WorldPoint {
+    const scale = this.scale();
+    const screen = this.app.screen;
+    return {
+      x: this.center.x + (point.x - screen.width / 2) / scale,
+      y: this.center.y + (point.y - screen.height / 2) / scale,
+    };
+  }
+
+  private applyCamera() {
+    if (this.destroyed) return;
+    if (!this.moved) {
+      this.zoom = 1;
+      this.center = this.boundsCenter();
+    }
+    // The centre stays over the world, so it cannot be panned out to sea.
+    const { x, y, width, height } = this.arrangement.bounds;
+    this.center = {
+      x: Math.min(x + width, Math.max(x, this.center.x)),
+      y: Math.min(y + height, Math.max(y, this.center.y)),
+    };
+    const scale = this.scale();
+    const screen = this.app.screen;
+    this.world.scale.set(scale);
+    this.world.position.set(
+      screen.width / 2 - this.center.x * scale,
+      screen.height / 2 - this.center.y * scale,
+    );
+  }
+
+  private listenToCamera(canvas: HTMLCanvasElement) {
+    const local = (event: { clientX: number; clientY: number }) => {
+      const bounds = canvas.getBoundingClientRect();
+      return { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
+    };
+    // A trackpad pinch arrives as a Ctrl-wheel in most engines and as
+    // gesture events in WebKit; Cmd-wheel zooms too. A plain wheel pans.
+    this.listen<WheelEvent>(
+      canvas,
+      "wheel",
+      (event) => {
+        event.preventDefault();
+        if (event.ctrlKey || event.metaKey)
+          this.zoomAt(Math.exp(-event.deltaY * 0.01), local(event));
+        else this.panBy(-event.deltaX, -event.deltaY);
+      },
+      { passive: false },
+    );
+    type Gesture = Event & { scale: number; clientX: number; clientY: number };
+    this.listen<Gesture>(canvas, "gesturestart", (event) => {
+      event.preventDefault();
+      this.gestureScale = 1;
+    });
+    this.listen<Gesture>(canvas, "gesturechange", (event) => {
+      event.preventDefault();
+      this.zoomAt(event.scale / this.gestureScale, local(event));
+      this.gestureScale = event.scale;
+    });
+    this.listen<PointerEvent>(canvas, "pointerdown", (event) => {
+      this.press = { ...local(event), travel: 0 };
+      this.lastTravel = 0;
+    });
+    this.listen<PointerEvent>(window, "pointermove", (event) => {
+      if (!this.press || !(event.buttons & 1)) return;
+      const point = local(event);
+      const dx = point.x - this.press.x;
+      const dy = point.y - this.press.y;
+      this.press.travel += Math.hypot(dx, dy);
+      this.lastTravel = this.press.travel;
+      this.press.x = point.x;
+      this.press.y = point.y;
+      if (this.press.travel > DRAG_THRESHOLD) {
+        canvas.style.cursor = "grabbing";
+        this.options.onHover(null, null);
+        this.panBy(dx, dy);
+      }
+    });
+    this.listen<PointerEvent>(window, "pointerup", () => {
+      this.press = null;
+      canvas.style.cursor = "";
+    });
+    this.listen<MouseEvent>(canvas, "dblclick", (event) =>
+      this.zoomAt(1.8, local(event)),
+    );
+  }
+
+  // Layout.
 
   /** A new theme or appearance redraws everything; positions restart. */
   private rebuild() {
@@ -152,13 +341,16 @@ export class WorldEngine {
     for (const entry of this.actors.values())
       entry.figure.view.destroy({ children: true });
     this.actors.clear();
-    this.sceneryKey = "";
+    this.worldKey = "";
+    for (const zone of this.zones.values())
+      zone.layer.destroy({ children: true });
+    this.zones.clear();
     this.relayout(true);
   }
 
   /**
-   * Places zones and gives every actor its target. `snap` teleports actors
-   * instead of walking them, for a resize or a redraw, where a walk would
+   * Places zones and gives every actor its target. `snap` places actors
+   * without flying, for the first draw and a redraw, where a flight would
    * show movement that did not happen.
    */
   private relayout(snap: boolean) {
@@ -184,25 +376,23 @@ export class WorldEngine {
         if (snap) existing.position = { ...target };
         continue;
       }
-      this.actors.set(actor.sessionId, this.enter(actor, zone, target, snap));
+      this.actors.set(actor.sessionId, this.enter(actor, target, snap));
     }
     for (const [id, entry] of this.actors) {
       if (present.has(id) || entry.leaving) continue;
-      const zone = this.zones.get(entry.actor.zoneId);
-      if (!zone || snap) {
+      if (snap) {
         this.remove(id);
         continue;
       }
       entry.leaving = true;
-      entry.target = this.spot(zone, "door", 0);
+      entry.target = { ...this.theme.home };
     }
     this.place();
   }
 
-  /** Arrives through the door and walks to its spot. */
+  /** Flies out of the theme's home to its spot. */
   private enter(
     actor: WorldActor,
-    zone: ZoneEntry,
     target: WorldPoint,
     snap: boolean,
   ): ActorEntry {
@@ -211,16 +401,21 @@ export class WorldEngine {
     const { view } = figure;
     view.eventMode = "static";
     view.cursor = "pointer";
-    view.on("pointertap", () => this.options.onSelect(actor.sessionId));
+    // A press that turned into a drag is a pan, not a click.
+    view.on("pointertap", () => {
+      if (this.lastTravel <= DRAG_THRESHOLD)
+        this.options.onSelect(actor.sessionId);
+    });
     view.on("pointerover", (event: FederatedPointerEvent) =>
       this.options.onHover(actor.sessionId, this.clientPoint(event)),
     );
-    view.on("pointermove", (event: FederatedPointerEvent) =>
-      this.options.onHover(actor.sessionId, this.clientPoint(event)),
-    );
+    view.on("pointermove", (event: FederatedPointerEvent) => {
+      if (!this.press || this.press.travel <= DRAG_THRESHOLD)
+        this.options.onHover(actor.sessionId, this.clientPoint(event));
+    });
     view.on("pointerout", () => this.options.onHover(null, null));
     this.figures.addChild(view);
-    const start = snap ? target : this.spot(zone, "door", 0);
+    const start = snap ? target : this.theme.home;
     return {
       actor,
       figure,
@@ -249,63 +444,52 @@ export class WorldEngine {
   }
 
   /**
-   * A grid as close to the view's shape as the zone count allows, scaled to
-   * fit and centred. Scenery is redrawn only when what it shows changes.
+   * Asks the theme for the arrangement, redraws the ground only when the set
+   * of zones changes, and redraws a zone only when what it shows changes.
    */
   private layoutZones() {
-    const { width, height } = this.theme.zoneSize;
-    const count = Math.max(1, this.model.zones.length);
-    const screen = this.app.screen;
-    const padding = 16;
-    // Every column count is tried; the one that draws the zones largest wins.
-    const fit = (columns: number) => {
-      const rows = Math.ceil(count / columns);
-      const worldWidth = columns * width + (columns - 1) * ZONE_GAP;
-      const worldHeight = rows * height + (rows - 1) * ZONE_GAP;
-      const scale = Math.min(
-        (screen.width - padding * 2) / worldWidth,
-        (screen.height - padding * 2) / worldHeight,
-      );
-      return { columns, worldWidth, worldHeight, scale };
-    };
-    let best = fit(1);
-    for (let columns = 2; columns <= count; columns += 1) {
-      const candidate = fit(columns);
-      if (candidate.scale > best.scale) best = candidate;
-    }
-    const { columns, worldWidth, worldHeight, scale } = best;
-    this.world.scale.set(Math.max(0.1, scale));
-    this.world.position.set(
-      (screen.width - worldWidth * this.world.scale.x) / 2,
-      (screen.height - worldHeight * this.world.scale.y) / 2,
-    );
-    const key = JSON.stringify([
+    const zones = this.model.zones;
+    const worldKey = JSON.stringify([
       this.theme.id,
       this.look.appearance,
-      columns,
-      this.model.zones,
+      zones.map((zone) => zone.id),
     ]);
-    if (key === this.sceneryKey) return;
-    this.sceneryKey = key;
-    for (const child of this.scenery.removeChildren())
-      child.destroy({ children: true });
-    this.zones.clear();
-    this.model.zones.forEach((zone, index) => {
+    if (worldKey !== this.worldKey) {
+      this.worldKey = worldKey;
+      this.arrangement = this.theme.arrange(zones);
+      for (const child of this.ground.removeChildren())
+        child.destroy({ children: true });
+      this.animateWorld =
+        this.theme.drawWorld(this.ground, this.arrangement, this.look) ??
+        undefined;
+      this.applyCamera();
+    }
+    const seen = new Set<string>();
+    zones.forEach((zone, index) => {
+      seen.add(zone.id);
+      const origin = this.arrangement.origins[index] ?? { x: 0, y: 0 };
+      const key = JSON.stringify([worldKey, zone, origin]);
+      const existing = this.zones.get(zone.id);
+      if (existing?.key === key) return;
+      existing?.layer.destroy({ children: true });
       const layer = new Container();
-      const origin = {
-        x: (index % columns) * (width + ZONE_GAP),
-        y: Math.floor(index / columns) * (height + ZONE_GAP),
-      };
       layer.position.set(origin.x, origin.y);
-      this.theme.drawZone(layer, zone, this.look);
-      this.scenery.addChild(layer);
-      this.zones.set(zone.id, { layer, origin });
+      const animate = this.theme.drawZone(layer, zone, this.look) ?? undefined;
+      this.plots.addChild(layer);
+      this.zones.set(zone.id, { layer, origin, key, animate });
     });
+    for (const [id, entry] of this.zones) {
+      if (seen.has(id)) continue;
+      entry.layer.destroy({ children: true });
+      this.zones.delete(id);
+    }
   }
 
   private tick(seconds: number) {
     this.elapsed += seconds;
-    const step = WALK_SPEED * Math.min(seconds, 0.1);
+    this.animateWorld?.(this.elapsed);
+    for (const zone of this.zones.values()) zone.animate?.(this.elapsed);
+    const step = FLY_SPEED * Math.min(seconds, 0.1);
     for (const [id, entry] of this.actors) {
       const dx = entry.target.x - entry.position.x;
       const dy = entry.target.y - entry.position.y;
@@ -334,7 +518,7 @@ export class WorldEngine {
     this.place();
   }
 
-  /** Nearer the bottom draws in front, so figures overlap like people do. */
+  /** Nearer the bottom draws in front, so figures overlap the way they would. */
   private place() {
     for (const entry of this.actors.values()) {
       const { view } = entry.figure;

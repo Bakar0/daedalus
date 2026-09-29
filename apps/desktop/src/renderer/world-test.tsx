@@ -183,9 +183,15 @@ function Page() {
         updatedAt: at(4),
       });
   }
+  // From the second beat a new session starts, so it flies out of the
+  // workshop, and "Release notes" finishes, so it flies back in.
+  const live = [
+    ...sessions.filter((item) => beat < 2 || item.id !== "a3"),
+    ...(beat >= 1 ? [session("a8", "atlas", "New arrival", "claude")] : []),
+  ];
   const model = buildWorldModel({
     workspaces,
-    sessions,
+    sessions: live,
     tasks,
     activity,
     attention,

@@ -2,34 +2,58 @@ import type { Container } from "pixi.js";
 import type { WorldActor, WorldPlace, WorldZone } from "./world-model";
 
 /**
- * What a world concept has to provide: the rooms. The engine owns the Pixi
- * application, layout, movement, input and the frame budget; a theme only
- * draws scenery. A new concept is one file implementing this and one line in
- * `themes/index.ts`. The agents are a separate choice, `WorldCharacter`, so
- * any character style walks around any world.
+ * What a world concept has to provide. The engine owns the Pixi application,
+ * the camera, movement, input and the frame budget; a theme decides where
+ * zones go and draws the scenery. A new concept is one file implementing this
+ * and one line in `themes/index.ts`. The agents are a separate choice,
+ * `WorldCharacter`, so any character style flies around any world.
  *
- * Coordinates are world pixels inside one zone, with the origin at the zone's
- * top-left corner. The engine scales the whole world to fit the view, so a
- * theme never deals with the window size or the display's pixel density.
+ * Coordinates are world pixels. The engine fits the world to the view and
+ * lets the user zoom and pan it, so a theme never deals with the window size
+ * or the display's pixel density.
  */
 export interface WorldTheme {
   id: string;
-  /** Shown in the picker: "Office". */
+  /** Shown in the picker: "Island". */
   label: string;
   /** One line for the picker's tooltip. */
   description: string;
-  /** Every zone is this size. */
-  zoneSize: { width: number; height: number };
-  /** Behind and between zones. */
+  /** Behind everything: the colour past the edge of the world. */
   backdrop(look: WorldLook): number;
-  /** Draws one zone's scenery into `layer`. */
-  drawZone(layer: Container, zone: WorldZone, look: WorldLook): void;
   /**
-   * Where the `slot`th actor at `place` stands, inside a zone. Slots count
-   * from 0 in a stable order, so two agents at the terminal never stand on
-   * each other and never swap places when a third arrives.
+   * Where each zone's centre goes, in order, and the rectangle the whole
+   * world occupies. Called again whenever the zones change, so the world can
+   * grow and shrink with them.
+   */
+  arrange(zones: readonly WorldZone[]): WorldArrangement;
+  /**
+   * Draws what is not a zone: ground, roads, the place agents come from.
+   * The returned function, when there is one, animates it each frame.
+   */
+  drawWorld(
+    layer: Container,
+    arrangement: WorldArrangement,
+    look: WorldLook,
+  ): ((time: number) => void) | void;
+  /** Draws one zone's scenery into `layer`, centred on (0, 0). */
+  drawZone(
+    layer: Container,
+    zone: WorldZone,
+    look: WorldLook,
+  ): ((time: number) => void) | void;
+  /**
+   * Where the `slot`th actor at `place` stands, relative to the zone's
+   * centre. Slots count from 0 in a stable order, so two agents at the forge
+   * never stand on each other and never swap places when a third arrives.
    */
   spot(place: WorldPlace, slot: number): WorldPoint;
+  /** Where new agents come from and finished ones go back to, in world pixels. */
+  home: WorldPoint;
+}
+
+export interface WorldArrangement {
+  origins: WorldPoint[];
+  bounds: { x: number; y: number; width: number; height: number };
 }
 
 /**

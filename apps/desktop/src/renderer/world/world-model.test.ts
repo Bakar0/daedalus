@@ -13,6 +13,7 @@ import {
   type WorldModelInput,
 } from "./world-model";
 import { WORLD_THEMES } from "./themes";
+import { ISLAND_PLOT, islandTheme } from "./themes/island";
 import {
   DEFAULT_WORLD_CHARACTER_ID,
   WORLD_CHARACTERS,
@@ -249,27 +250,92 @@ describe("themes", () => {
   // The engine asks for every place; a theme that forgets one would stack
   // agents at the origin, which no type catches.
   test.each(WORLD_THEMES.map((theme) => [theme.id, theme] as const))(
-    "%s places every place inside its zone, and spreads a crowd",
+    "%s gives every place its own spots, and spreads a crowd",
     (_, theme) => {
-      const { width, height } = theme.zoneSize;
       for (const place of WORLD_PLACES) {
         const crowd = Array.from({ length: 8 }, (_, slot) =>
           theme.spot(place, slot),
         );
         for (const point of crowd) {
-          expect(point.x).toBeGreaterThanOrEqual(0);
-          expect(point.x).toBeLessThanOrEqual(width);
-          expect(point.y).toBeGreaterThanOrEqual(0);
-          expect(point.y).toBeLessThanOrEqual(height);
+          expect(Number.isFinite(point.x)).toBe(true);
+          expect(Number.isFinite(point.y)).toBe(true);
         }
-        // The first three always get their own spot, whatever the place.
-        const firstThree = new Set(
+        const distinct = new Set(
           crowd.slice(0, 3).map((point) => `${point.x},${point.y}`),
         );
-        expect(firstThree.size).toBe(3);
+        expect(distinct.size).toBe(3);
       }
     },
   );
+});
+
+describe("island", () => {
+  const zones = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      id: `w${index}`,
+      name: `Workspace ${index}`,
+      attention: 0,
+      busy: 0,
+    }));
+  const overlaps = (
+    a: { x: number; y: number },
+    b: { x: number; y: number },
+    width: number,
+    height: number,
+  ) => Math.abs(a.x - b.x) < width && Math.abs(a.y - b.y) < height;
+
+  test.each([0, 1, 2, 3, 6, 7, 12, 18, 19, 40])(
+    "%i plots never overlap each other or the workshop, and fit the world",
+    (count) => {
+      const { origins, bounds } = islandTheme.arrange(zones(count));
+      expect(origins).toHaveLength(count);
+      origins.forEach((origin, index) => {
+        // The workshop is about 340 by 280 around the centre.
+        expect(
+          overlaps(
+            origin,
+            { x: 0, y: 0 },
+            ISLAND_PLOT.width / 2 + 170,
+            ISLAND_PLOT.height / 2 + 140,
+          ),
+        ).toBe(false);
+        for (const other of origins.slice(index + 1))
+          expect(
+            overlaps(origin, other, ISLAND_PLOT.width, ISLAND_PLOT.height),
+          ).toBe(false);
+        expect(origin.x - ISLAND_PLOT.width / 2).toBeGreaterThanOrEqual(
+          bounds.x,
+        );
+        expect(origin.x + ISLAND_PLOT.width / 2).toBeLessThanOrEqual(
+          bounds.x + bounds.width,
+        );
+        expect(origin.y - ISLAND_PLOT.height / 2).toBeGreaterThanOrEqual(
+          bounds.y,
+        );
+        expect(origin.y + ISLAND_PLOT.height / 2).toBeLessThanOrEqual(
+          bounds.y + bounds.height,
+        );
+      });
+    },
+  );
+
+  test("the island grows with the workspaces and shrinks when they go", () => {
+    const width = (count: number) =>
+      islandTheme.arrange(zones(count)).bounds.width;
+    expect(width(7)).toBeGreaterThan(width(6));
+    expect(width(19)).toBeGreaterThan(width(18));
+    expect(width(6)).toBeGreaterThanOrEqual(width(3));
+    expect(width(0)).toBeLessThan(width(1));
+  });
+
+  test("every spot stays inside the plot's fence", () => {
+    for (const place of WORLD_PLACES)
+      for (let slot = 0; slot < 10; slot += 1) {
+        const point = islandTheme.spot(place, slot);
+        expect(Math.abs(point.x)).toBeLessThanOrEqual(ISLAND_PLOT.width / 2);
+        expect(Math.abs(point.y)).toBeLessThanOrEqual(ISLAND_PLOT.height / 2);
+      }
+  });
 });
 
 describe("characters", () => {

@@ -65,6 +65,8 @@ export interface WorldZone {
   name: string;
   /** Actors in this zone waiting on the user. */
   attention: number;
+  /** Live actors in this zone, lost ones not counted: how busy it looks. */
+  busy: number;
 }
 
 export interface WorldModel {
@@ -200,6 +202,9 @@ export function buildWorldModel(input: WorldModelInput): WorldModel {
       name: workspace.name,
       attention: actors.filter(
         (actor) => actor.zoneId === workspace.id && actor.mood === "attention",
+      ).length,
+      busy: actors.filter(
+        (actor) => actor.zoneId === workspace.id && actor.mood !== "lost",
       ).length,
     })),
     actors,
