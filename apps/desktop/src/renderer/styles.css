@@ -2077,7 +2077,8 @@ dd {
     var(--workspace-panel-width) 6px var(--sessions-panel-width) 6px
     minmax(320px, 1fr);
 }
-.workspace-shell.mode-workspace {
+.workspace-shell.mode-workspace,
+.workspace-shell.mode-world {
   grid-template-columns: var(--workspace-panel-width) 6px minmax(0, 1fr);
 }
 .workspace-column {
@@ -3425,7 +3426,8 @@ dd {
 @media (max-width: 820px) {
   .workspace-shell.mode-board,
   .workspace-shell.mode-sessions,
-  .workspace-shell.mode-workspace {
+  .workspace-shell.mode-workspace,
+  .workspace-shell.mode-world {
     grid-template-columns:
       min(var(--workspace-panel-width), 180px) 6px
       minmax(400px, 1fr);
@@ -4860,4 +4862,171 @@ dd {
 .task-action-bar > .board-launch-row {
   font-size: 12px;
   padding: 0 2px;
+}
+
+/* World (#44). The canvas fills the column; everything that has to be read
+   or clicked precisely (the counts, the Needs you list, the hover card) is
+   HTML over or beside it, so it follows the app's type and theme. */
+.world-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.world-toolbar {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-height: 58px;
+}
+.world-toolbar > div:first-child {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+.world-summary {
+  color: var(--muted);
+}
+.world-waiting {
+  color: #ff8282;
+  font-weight: 600;
+}
+.world-theme-picker {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
+}
+.world-body {
+  display: flex;
+  flex: 1;
+  gap: 12px;
+  min-height: 0;
+}
+.world-stage {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  position: relative;
+}
+.world-canvas {
+  display: block;
+  inset: 0;
+  position: absolute;
+}
+.world-overlay {
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+}
+.world-quiet {
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  bottom: 16px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 3px;
+  inset: auto 50% auto auto;
+  padding: 10px 14px;
+  transform: translateX(50%);
+}
+.world-quiet strong {
+  color: var(--secondary);
+}
+.world-needs {
+  display: flex;
+  flex: 0 0 240px;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  overflow: auto;
+}
+.world-needs button {
+  align-items: flex-start;
+  color: var(--text);
+  background: var(--raised);
+  border: 1px solid rgb(255 130 130 / 0.35);
+  border-radius: 9px;
+  display: flex;
+  gap: 9px;
+  padding: 9px 10px;
+  text-align: left;
+}
+.world-needs button:hover {
+  background: var(--raised-hover);
+}
+.world-needs .agent-dot {
+  flex: none;
+  margin-top: 4px;
+}
+.world-needs-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.world-needs-copy small {
+  color: var(--muted);
+}
+.world-needs-copy span {
+  color: var(--secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.world-card {
+  background: var(--overlay);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.35);
+  display: grid;
+  font-size: 12px;
+  gap: 3px;
+  max-width: 300px;
+  padding: 9px 11px;
+  pointer-events: none;
+  position: fixed;
+  z-index: 50;
+}
+.world-card span {
+  color: var(--secondary);
+}
+.world-card small {
+  color: var(--muted);
+}
+.world-card code {
+  color: var(--secondary);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.world-card-hint {
+  opacity: 0.8;
+}
+.world-accessible-list {
+  clip-path: inset(50%);
+  height: 1px;
+  margin: 0;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+.world-accessible-list:focus-within {
+  background: var(--overlay);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  clip-path: none;
+  height: auto;
+  list-style: none;
+  padding: 8px;
+  width: auto;
+  z-index: 40;
 }

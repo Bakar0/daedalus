@@ -355,6 +355,7 @@ describe("desktop application shell", () => {
     expect(preferredWorkspaceView("sessions")).toBe("sessions");
     expect(preferredWorkspaceView("workspace")).toBe("workspace");
     expect(preferredWorkspaceView("board")).toBe("board");
+    expect(preferredWorkspaceView("world")).toBe("world");
     expect(preferredWorkspaceView("retired-mode")).toBe("board");
     expect(preferredWorkspaceView(null)).toBe("board");
     expect(preferredWorkspaceView()).toBe("board");
@@ -578,6 +579,7 @@ describe("desktop application shell", () => {
     test("the scope's views fall back from Workspace to Board", () => {
       expect(preferredScopeView("all", "workspace")).toBe("board");
       expect(preferredScopeView("all", "sessions")).toBe("sessions");
+      expect(preferredScopeView("all", "world")).toBe("world");
       expect(preferredScopeView("workspace", "workspace")).toBe("workspace");
       expect(preferredScopeView("all", null)).toBe("board");
     });

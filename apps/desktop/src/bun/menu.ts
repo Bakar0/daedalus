@@ -65,6 +65,7 @@ export const APPLICATION_MENU: ApplicationMenuItemConfig[] = [
         action: "view-sessions",
         accelerator: "Command+3",
       },
+      { label: "World", action: "view-world", accelerator: "Command+4" },
       { type: "divider" },
       {
         label: "Toggle Integrated Terminal",

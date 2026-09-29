@@ -931,6 +931,7 @@ export const DESKTOP_COMMANDS = [
   "view-board",
   "view-sessions",
   "view-workspace",
+  "view-world",
   "toggle-terminal",
 ] as const;
 

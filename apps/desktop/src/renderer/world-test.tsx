@@ -1,0 +1,225 @@
+/**
+ * A page for looking at the World view without a host: two workspaces of
+ * agents whose activity changes every few seconds, the way snapshots would.
+ * `?theme=light` shows the light appearance. `window.__world` reports what
+ * rendered, for a check to read.
+ */
+import { StrictMode, useEffect, useState } from "react";
+import { createRoot } from "react-dom/client";
+import type {
+  AgentActivityDto,
+  AgentSessionDto,
+  SessionAttentionDto,
+  TaskDto,
+  WorkspaceDto,
+} from "@daedalus/protocol";
+import WorldView from "./world/WorldView";
+import { buildWorldModel } from "./world/world-model";
+import "./styles.css";
+
+declare global {
+  interface Window {
+    __world: { opened: string[]; ready: boolean; errors: string[] };
+  }
+}
+window.__world = { opened: [], ready: false, errors: [] };
+window.addEventListener("error", (event) =>
+  window.__world.errors.push(event.message),
+);
+
+const at = (minutes: number) =>
+  new Date(Date.now() - minutes * 60_000).toISOString();
+
+const workspace = (id: string, name: string): WorkspaceDto => ({
+  id,
+  slug: id,
+  name,
+  path: `/tmp/${id}`,
+  createdAt: at(600),
+  updatedAt: at(600),
+  archivedAt: null,
+  available: true,
+  position: 0,
+  startSetsInProgress: true,
+  autoHandoffPercent: null,
+  defaultProvider: null,
+  defaultModel: null,
+});
+
+const session = (
+  id: string,
+  workspaceId: string,
+  name: string,
+  provider: "claude" | "codex",
+  taskId: string | null = null,
+): AgentSessionDto => ({
+  id,
+  workspaceId,
+  taskId,
+  name,
+  provider,
+  kind: "agent",
+  tmuxSession: `daedalus_${id}`,
+  command: provider,
+  args: [],
+  workingDirectory: "/tmp",
+  status: "running",
+  exitCode: null,
+  startedAt: at(90),
+  endedAt: null,
+  providerSessionId: null,
+  archivedAt: null,
+  resumeCount: 0,
+  lostReason: null,
+  handoffRequestedAt: null,
+  position: 0,
+});
+
+const task = (id: string, number: number, title: string): TaskDto => ({
+  id,
+  workspaceId: "deadalus",
+  number,
+  title,
+  description: "",
+  status: "in_progress",
+  priority: "normal",
+  createdAt: at(600),
+  updatedAt: at(600),
+  completedAt: null,
+  briefUpdatedAt: null,
+});
+
+const workspaces = [
+  workspace("deadalus", "deadalus"),
+  workspace("atlas", "atlas"),
+];
+const sessions = [
+  session("a1", "deadalus", "World view", "claude", "t44"),
+  session("a2", "deadalus", "Board polish", "codex", "t25"),
+  session("a3", "deadalus", "Release notes", "claude"),
+  session("a4", "deadalus", "Hook tests", "claude"),
+  session("a5", "atlas", "API client", "codex"),
+  session("a6", "atlas", "Migrations", "claude"),
+  { ...session("a7", "atlas", "Old spike", "claude"), status: "lost" as const },
+];
+const tasks = [
+  task("t44", 44, "All workspace 2d game world"),
+  task("t25", 25, "Board lanes"),
+];
+
+type Beat = [AgentActivityDto["activity"], string | null];
+const SCRIPT: Record<string, Beat[]> = {
+  a1: [
+    ["working", "Read(world-engine.ts)"],
+    ["working", "Edit(office.ts)"],
+    ["working", "Bash(bun test)"],
+  ],
+  a2: [
+    ["needs_permission", "Bash(git push)"],
+    ["needs_permission", "Bash(git push)"],
+    ["working", "Bash(git push)"],
+  ],
+  a3: [
+    ["idle", null],
+    ["working", "WebFetch(https://pixijs.com)"],
+    ["done", null],
+  ],
+  a4: [
+    ["working", "Task(Explore hooks)"],
+    ["error", "overloaded_error"],
+    ["working", "TodoWrite"],
+  ],
+  a5: [
+    ["working", "exec_command(cargo build)"],
+    ["needs_input", "Which branch?"],
+    ["needs_input", "Which branch?"],
+  ],
+  a6: [
+    ["done", null],
+    ["working", "Grep(migration)"],
+    ["idle", null],
+  ],
+};
+
+function Page() {
+  const [beat, setBeat] = useState(0);
+  const appearance =
+    new URLSearchParams(location.search).get("theme") === "light"
+      ? "light"
+      : "dark";
+  useEffect(() => {
+    const timer = setInterval(() => setBeat((value) => value + 1), 3500);
+    window.__world.ready = true;
+    return () => clearInterval(timer);
+  }, []);
+  const activity = new Map<string, AgentActivityDto>();
+  const attention = new Map<string, SessionAttentionDto>();
+  for (const [id, beats] of Object.entries(SCRIPT)) {
+    const [value, detail] = beats[beat % beats.length]!;
+    activity.set(id, {
+      sessionId: id,
+      activity: value,
+      detail,
+      since: at(3),
+      observedAt: at(0),
+      source: "hook",
+    });
+    if (value === "needs_permission" || value === "needs_input")
+      attention.set(id, {
+        sessionId: id,
+        workspaceId: sessions.find((item) => item.id === id)!.workspaceId,
+        reasons: [
+          {
+            id: `${id}-r`,
+            text:
+              value === "needs_input"
+                ? "Which branch should I base this on?"
+                : "Approve: git push origin main",
+            raisedAt: at(4),
+            source: "hook",
+          },
+        ],
+        raisedAt: at(4),
+        updatedAt: at(4),
+      });
+  }
+  const model = buildWorldModel({
+    workspaces,
+    sessions,
+    tasks,
+    activity,
+    attention,
+    telemetry: new Map([
+      [
+        "a1",
+        {
+          sessionId: "a1",
+          model: "claude-opus-5-5",
+          context: { usedTokens: 90_000, usedPercent: 45 },
+          observedAt: at(0),
+        },
+      ],
+    ]),
+  });
+  return (
+    <div
+      className="app"
+      data-theme={appearance}
+      style={{ display: "flex", padding: 20 }}
+    >
+      <WorldView
+        appearance={appearance}
+        model={model}
+        now={Date.now()}
+        onOpenSession={(id) => window.__world.opened.push(id)}
+        showingAll
+      />
+    </div>
+  );
+}
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <Page />
+  </StrictMode>,
+);
