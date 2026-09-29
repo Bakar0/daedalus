@@ -4,11 +4,11 @@ import type { WorldPoint } from "../world-theme";
 
 /**
  * Shipping, factory style. When an agent pushes or opens a pull request, it
- * packs a crate at its room's bench; a conveyor carries the crate out of the
- * door into the cargo pipe beside the lift shaft, the pipe lifts it to the
- * surface and runs it over to the Hermes Post, and there the crate unfolds
- * Daedalus's wings and flies off into the sky. While an agent keeps
- * shipping, crates keep coming.
+ * packs a crate at its room's bench against the back wall; a conveyor
+ * carries the crate out through a hatch into the cargo pipe on that side's
+ * outer edge, far from the lift, the pipe lifts it to the surface, and at
+ * the Hermes Post on top the crate unfolds Daedalus's wings and flies off
+ * into the sky, outward. While an agent keeps shipping, crates keep coming.
  */
 
 export interface DispatchPalette {
@@ -19,17 +19,19 @@ export interface DispatchPalette {
   metal: number;
 }
 
-export interface DispatchGeometry {
-  /** The pipe's vertical run, beside the shaft. */
+/** One side's cargo pipe, straight up the outer edge to its post. */
+export interface DispatchLane {
   pipeX: number;
-  /** The height the pipe turns along, just under the surface. */
-  pipeY: number;
-  /** The Hermes Post, on the surface. */
-  post: WorldPoint;
-  /** For each zone, the crate's path out of its room, in world pixels. */
-  roomPaths: readonly WorldPoint[][];
   /** The deepest point the pipe reaches. */
   bottom: number;
+  /** The Hermes Post on the surface, on top of the pipe. */
+  post: WorldPoint;
+}
+
+export interface DispatchGeometry {
+  lanes: readonly DispatchLane[];
+  /** For each zone, its lane and the crate's path out of its room. */
+  routes: ReadonlyArray<{ lane: number; path: WorldPoint[] }>;
 }
 
 /** A second crate follows this long after the first while shipping goes on. */
@@ -57,26 +59,21 @@ const label = (value: string, size: number, fill: number) =>
     },
   });
 
-/** The pipe from the lowest room up to the surface, and over to the post. */
-export function drawPipe(
-  g: Graphics,
-  geometry: DispatchGeometry,
-  p: DispatchPalette,
-) {
-  const { pipeX, pipeY, post, bottom } = geometry;
-  const glass = { color: 0x9fd8ff, alpha: 0.16 };
-  g.roundRect(pipeX - 13, pipeY - 13, 26, bottom - pipeY + 13, 12).fill(glass);
-  g.roundRect(pipeX - 13, pipeY - 13, post.x - pipeX + 26, 26, 12).fill(glass);
-  g.roundRect(post.x - 13, post.y, 26, pipeY - post.y + 13, 12).fill(glass);
-  const rim = { width: 3, color: p.brass };
-  g.roundRect(pipeX - 13, pipeY - 13, 26, bottom - pipeY + 13, 12).stroke(rim);
-  g.roundRect(pipeX - 13, pipeY - 13, post.x - pipeX + 26, 26, 12).stroke(rim);
-  g.roundRect(post.x - 13, post.y, 26, pipeY - post.y + 13, 12).stroke(rim);
-  // Brass collars along the runs.
-  for (let y = pipeY + 40; y < bottom; y += 90)
+/** A lane's pipe, from its deepest room up to the post. */
+export function drawPipe(g: Graphics, lane: DispatchLane, p: DispatchPalette) {
+  const { pipeX, bottom, post } = lane;
+  const height = bottom - post.y;
+  g.roundRect(pipeX - 13, post.y, 26, height, 12).fill({
+    color: 0x9fd8ff,
+    alpha: 0.16,
+  });
+  g.roundRect(pipeX - 13, post.y, 26, height, 12).stroke({
+    width: 3,
+    color: p.brass,
+  });
+  // Brass collars along the run.
+  for (let y = post.y + 60; y < bottom; y += 90)
     g.rect(pipeX - 16, y, 32, 6).fill(p.brassDark);
-  for (let x = pipeX + 50; x < post.x - 20; x += 70)
-    g.rect(x, pipeY - 16, 6, 32).fill(p.brassDark);
 }
 
 /** The Hermes Post: a bronze launch pad under a little marble gate. */
@@ -123,6 +120,8 @@ interface Crate {
   /** Seconds since take-off, or -1 while it is still travelling. */
   flying: number;
   from: WorldPoint;
+  /** -1 flies off to the left, 1 to the right: away from the workshop. */
+  heading: number;
 }
 
 function crateView(): { view: Container; wings: Graphics } {
@@ -164,29 +163,23 @@ export function createDispatch(layer: Container, geometry: DispatchGeometry) {
   const previous = new Map<number, number>();
   const nextAt = new Map<number, number>();
   const launch = (index: number) => {
-    const room = geometry.roomPaths[index];
-    if (!room || room.length === 0) return;
-    const exit = room.at(-1)!;
-    const path = [
-      ...room.slice(1),
-      { x: geometry.pipeX, y: exit.y },
-      { x: geometry.pipeX, y: geometry.pipeY },
-      { x: geometry.post.x, y: geometry.pipeY },
-      { x: geometry.post.x, y: geometry.post.y - PAD_HEIGHT - CRATE_HALF },
-    ];
+    const route = geometry.routes[index];
+    const lane = route && geometry.lanes[route.lane];
+    if (!route || !lane || route.path.length === 0) return;
+    const exit = route.path.at(-1)!;
+    const pad = { x: lane.post.x, y: lane.post.y - PAD_HEIGHT - CRATE_HALF };
+    const path = [...route.path.slice(1), { x: lane.pipeX, y: exit.y }, pad];
     const { view, wings } = crateView();
     layer.addChild(view);
     crates.push({
       view,
       wings,
       path,
-      beltPoints: room.length - 1,
-      position: { ...room[0]! },
+      beltPoints: route.path.length - 1,
+      position: { ...route.path[0]! },
       flying: -1,
-      from: {
-        x: geometry.post.x,
-        y: geometry.post.y - PAD_HEIGHT - CRATE_HALF,
-      },
+      from: pad,
+      heading: Math.sign(lane.post.x) || 1,
     });
   };
   let last = 0;
@@ -233,7 +226,9 @@ export function createDispatch(layer: Container, geometry: DispatchGeometry) {
         const airborne = Math.max(0, t - 0.4);
         crate.wings.scale.set(unfold, unfold * (1 + Math.sin(t * 22) * 0.35));
         crate.position = {
-          x: crate.from.x + airborne * 70 + airborne * airborne * 26,
+          x:
+            crate.from.x +
+            crate.heading * (airborne * 70 + airborne * airborne * 26),
           y:
             crate.from.y -
             airborne * 120 -

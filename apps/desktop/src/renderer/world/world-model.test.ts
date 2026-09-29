@@ -305,13 +305,16 @@ describe("labyrinth", () => {
     Math.abs(point.y - origin.y) <= H / 2;
 
   test.each([0, 1, 2, 3, 8, 21])(
-    "%i rooms stack one to a floor, right of the shaft, never overlapping",
+    "%i rooms sit two to a floor, both sides of the shaft, never overlapping",
     (count) => {
       const { origins, bounds } = labyrinthTheme.arrange(zones(count));
       expect(origins).toHaveLength(count);
       origins.forEach((origin, index) => {
-        expect(origin.x).toBeGreaterThan(0);
-        if (index > 0) expect(origin.y).toBeGreaterThan(origins[index - 1]!.y);
+        // The Observatory holds the top left, so the first workspace is on
+        // the right and they alternate from there.
+        expect(Math.sign(origin.x)).toBe(index % 2 === 0 ? 1 : -1);
+        if (index > 0)
+          expect(origin.y).toBeGreaterThanOrEqual(origins[index - 1]!.y);
         // Clear of the shaft, and inside the world.
         expect(Math.abs(origin.x) - W / 2).toBeGreaterThan(45);
         expect(origin.y + H / 2).toBeLessThanOrEqual(bounds.y + bounds.height);
@@ -324,13 +327,32 @@ describe("labyrinth", () => {
     },
   );
 
-  test("the labyrinth grows a floor for every workspace", () => {
+  test("the labyrinth grows a floor for every two rooms", () => {
     const height = (count: number) =>
       labyrinthTheme.arrange(zones(count)).bounds.height;
-    // The Observatory is always there; each workspace adds a floor below.
-    expect(height(1)).toBeGreaterThan(height(0));
+    // The Observatory shares the top floor with the first workspace.
+    expect(height(1)).toBe(height(0));
     expect(height(2)).toBeGreaterThan(height(1));
-    expect(height(9)).toBeGreaterThan(height(8));
+    expect(height(3)).toBe(height(2));
+    expect(height(10)).toBeGreaterThan(height(9));
+  });
+
+  test("shipping is at the back of the room, away from the shaft", () => {
+    const arrangement = labyrinthTheme.arrange(zones(4));
+    arrangement.origins.forEach((origin, index) => {
+      const ship = labyrinthTheme.spot("ship", 0, { index, id: `w${index}` });
+      expect(Math.sign(ship.x)).toBe(Math.sign(origin.x));
+      expect(Math.abs(ship.x)).toBeGreaterThan(W / 4);
+    });
+  });
+
+  test("every room's door faces the shaft, on either side", () => {
+    const arrangement = labyrinthTheme.arrange(zones(4));
+    arrangement.origins.forEach((origin, index) => {
+      const door = labyrinthTheme.spot("door", 0, { index, id: `w${index}` });
+      // The door spot is on the shaft's side of the room's centre.
+      expect(Math.sign(door.x)).toBe(-Math.sign(origin.x));
+    });
   });
 
   test("between rooms a bot goes out the door, along the shaft and in", () => {
@@ -396,9 +418,10 @@ describe("labyrinth", () => {
     const shared = labyrinthTheme.shared!;
     expect(shared.places).toEqual(["web"]);
     const first = shared.spot("web", 0);
-    // Above every workspace room, and reached by riding the shaft.
+    // On the top floor, left of the shaft, above or level with every room.
+    expect(first.x).toBeLessThan(0);
     for (const origin of arrangement.origins)
-      expect(first.y).toBeLessThan(origin.y - H / 2);
+      expect(first.y).toBeLessThanOrEqual(origin.y + H / 2);
     const spots = Array.from({ length: 12 }, (_, slot) =>
       shared.spot("web", slot),
     );
@@ -451,10 +474,10 @@ describe("labyrinth", () => {
     expect(looks.size).toBeGreaterThan(10);
   });
 
-  test("the shipping bench is always beside the door", () => {
+  test("the shipping bench is always against the back wall", () => {
     for (const id of ids) {
       const blocks = layoutFor(id).blocks;
-      expect(blocks.at(-1)!.block.id).toBe("ship");
+      expect(blocks[0]!.block.id).toBe("ship");
       expect(blocks.filter(({ block }) => block.id === "ship")).toHaveLength(1);
     }
   });
@@ -470,17 +493,20 @@ describe("labyrinth", () => {
 
 describe("dispatch", () => {
   const geometry = {
-    pipeX: 65,
-    pipeY: 44,
-    post: { x: 330, y: 0 },
-    roomPaths: [
-      [
-        { x: 500, y: 700 },
-        { x: 400, y: 740 },
-        { x: 100, y: 740 },
-      ],
+    lanes: [
+      { pipeX: -1300, bottom: 760, post: { x: -1300, y: 0 } },
+      { pipeX: 1300, bottom: 760, post: { x: 1300, y: 0 } },
     ],
-    bottom: 760,
+    routes: [
+      {
+        lane: 1,
+        path: [
+          { x: 1000, y: 700 },
+          { x: 1100, y: 740 },
+          { x: 1260, y: 740 },
+        ],
+      },
+    ],
   };
   const zone = (shipping: number) => ({
     id: "w0",
@@ -520,8 +546,23 @@ describe("dispatch", () => {
       if (!crate.destroyed) highest = Math.min(highest, crate.y);
     }
     expect(layer.children).toHaveLength(0);
-    // It rose above the post before it went.
-    expect(highest).toBeLessThan(geometry.post.y - 100);
+    // It rose above its post before it went.
+    expect(highest).toBeLessThan(geometry.lanes[1]!.post.y - 100);
+  });
+
+  test("a crate flies away from the workshop, outward", () => {
+    const layer = new Container();
+    const step = createDispatch(layer, geometry);
+    step(0, [zone(1)]);
+    let time = 0;
+    while (time < 1.3) step((time += 0.05), [zone(1)]);
+    const crate = layer.children[0]!;
+    let farthest = -Infinity;
+    while (time < 20 && layer.children.length) {
+      step((time += 0.05), [zone(0)]);
+      if (!crate.destroyed) farthest = Math.max(farthest, crate.x);
+    }
+    expect(farthest).toBeGreaterThan(geometry.lanes[1]!.post.x + 100);
   });
 });
 

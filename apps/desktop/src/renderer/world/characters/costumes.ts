@@ -599,7 +599,7 @@ export const COSTUMES: Record<PersonaId, Costume> = {
     },
   },
   ariadne: {
-    // The ball of red thread. The bot unwinds it wherever it flies.
+    // The ball of red thread that led Theseus out of the labyrinth.
     head: ({ g, y }) => {
       g.poly([-10, y - 37, -6, y - 40, 0, y - 41, 6, y - 40, 10, y - 37]).fill(
         0x7a3b8f,
@@ -651,9 +651,4 @@ export const COSTUMES: Record<PersonaId, Costume> = {
       }
     },
   },
-};
-
-/** Personas whose bot leaves a trail behind it as it flies. */
-export const TRAILS: Partial<Record<PersonaId, number>> = {
-  ariadne: 0xd6334a,
 };

@@ -1,7 +1,7 @@
 import { Graphics } from "pixi.js";
 import type { WorldActor } from "../world-model";
 import type { ActorFrame, WorldCharacter, WorldLook } from "../world-theme";
-import { COSTUMES, TRAILS, type Costume, type CostumeFrame } from "./costumes";
+import { COSTUMES, type Costume, type CostumeFrame } from "./costumes";
 import { ATTENTION, blinking, DONE, ERROR, FigureBase } from "./parts";
 import { personaFor, type Persona } from "./personas";
 
@@ -32,17 +32,12 @@ const OTHER: Finish = {
 };
 
 const TOP = -56;
-/** How long Ariadne's thread stays on the floor behind her, in seconds. */
-const TRAIL_SECONDS = 8;
 
 class Bot extends FigureBase {
   private readonly g = new Graphics();
   private readonly finish: Finish;
   readonly persona: Persona;
   private readonly costume: Costume;
-  private readonly trail?: { graphics: Graphics; color: number };
-  private readonly trailPoints: Array<{ x: number; y: number; at: number }> =
-    [];
 
   constructor(actor: WorldActor, look: WorldLook, persona?: Persona) {
     super(actor, look, TOP);
@@ -50,12 +45,6 @@ class Bot extends FigureBase {
     this.persona = persona ?? personaFor(actor.sessionId);
     this.costume = COSTUMES[this.persona.id];
     this.body.addChild(this.g);
-    const trailColor = TRAILS[this.persona.id];
-    if (trailColor !== undefined) {
-      // In the view, not the body, so it does not flip with the figure.
-      this.trail = { graphics: new Graphics(), color: trailColor };
-      this.view.addChildAt(this.trail.graphics, 0);
-    }
   }
 
   protected pose(t: number, { walking }: ActorFrame) {
@@ -135,40 +124,6 @@ class Bot extends FigureBase {
 
     this.costume.near?.(costume);
     if (mood === "error") this.sparks(g, t, y);
-    this.drawTrail(t, y);
-  }
-
-  /**
-   * The thread runs from the hand back along where the bot has been. Points
-   * are kept in the parent's coordinates and drawn relative to where the bot
-   * is now, so the thread stays on the floor while the bot moves on.
-   */
-  private drawTrail(t: number, y: number) {
-    if (!this.trail) return;
-    const here = { x: this.view.position.x, y: this.view.position.y };
-    const last = this.trailPoints.at(-1);
-    const step = last ? Math.hypot(last.x - here.x, last.y - here.y) : 0;
-    // A jump no flight could make is a placement, not a trip: start over.
-    if (step > 120) this.trailPoints.length = 0;
-    if (!last || step > 2) this.trailPoints.push({ ...here, at: t });
-    while (
-      this.trailPoints.length > 1 &&
-      t - this.trailPoints[0]!.at > TRAIL_SECONDS
-    )
-      this.trailPoints.shift();
-    const g = this.trail.graphics.clear();
-    if (this.trailPoints.length < 2) return;
-    const handX = 16 * this.body.scale.x;
-    const handY = y - 20;
-    // The trail is drawn inside the figure, which a theme may scale up, so
-    // world offsets are divided back into the figure's own units.
-    const scale = this.view.scale.x || 1;
-    g.moveTo(handX, handY);
-    for (let index = this.trailPoints.length - 1; index >= 0; index -= 1) {
-      const point = this.trailPoints[index]!;
-      g.lineTo((point.x - here.x) / scale, (point.y - here.y) / scale - 2);
-    }
-    g.stroke({ width: 1.4, color: this.trail.color, alpha: 0.85 });
   }
 
   private arms(g: Graphics, t: number, y: number) {

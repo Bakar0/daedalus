@@ -268,48 +268,50 @@ const BLOCKS: readonly Block[] = [
     },
   },
   {
-    // Always the block by the door: a packing bench, and a conveyor that
-    // carries each crate out of the room toward the surface.
+    // Always the block against the far wall, away from the lift: a packing
+    // bench, and a conveyor that carries each crate out through a hatch in
+    // the back wall to the cargo pipe on the labyrinth's edge.
     id: "ship",
     tag: "SHIPPING",
     places: {
       ship: [
-        { x: -24, y: FLOOR },
-        { x: 20, y: FLOOR },
+        { x: 34, y: FLOOR },
+        { x: -6, y: FLOOR - 20 },
       ],
     },
     wallFree: false,
     draw(g, p) {
+      const wall = -ROOM_W / 2 - SHIP_BLOCK_X;
       // Flattened boxes waiting on the wall, and a roll of tape.
-      g.rect(-50, -40, 40, 50).fill(0xc8914d);
-      g.rect(-46, -36, 32, 42).fill(0xd9a86b);
-      g.rect(-30, -36, 4, 42).fill(0xe8d3a8);
+      g.rect(14, -40, 40, 50).fill(0xc8914d);
+      g.rect(18, -36, 32, 42).fill(0xd9a86b);
+      g.rect(32, -36, 4, 42).fill(0xe8d3a8);
       // The bench.
-      g.roundRect(-56, FLOOR_TOP - 42, 76, 10, 3).fill(p.wood);
-      g.rect(-50, FLOOR_TOP - 32, 6, 32).fill(p.woodDark);
-      g.rect(10, FLOOR_TOP - 32, 6, 32).fill(p.woodDark);
-      g.circle(-34, FLOOR_TOP - 48, 6).fill(0xe8d3a8);
-      g.circle(-34, FLOOR_TOP - 48, 2.5).fill(p.woodDark);
-      // The conveyor, out through the doorway.
-      const beltLeft = BELT_START;
-      const beltRight = ROOM_W / 2 - SHIP_BLOCK_X;
-      g.roundRect(beltLeft, FLOOR_TOP - 14, beltRight - beltLeft, 10, 5).fill(
-        0x2a2f3f,
-      );
-      for (let x = beltLeft + 8; x < beltRight - 4; x += 16)
+      g.roundRect(-6, FLOOR_TOP - 42, 68, 10, 3).fill(p.wood);
+      g.rect(0, FLOOR_TOP - 32, 6, 32).fill(p.woodDark);
+      g.rect(50, FLOOR_TOP - 32, 6, 32).fill(p.woodDark);
+      g.circle(44, FLOOR_TOP - 48, 6).fill(0xe8d3a8);
+      g.circle(44, FLOOR_TOP - 48, 2.5).fill(p.woodDark);
+      // The hatch in the back wall, and the conveyor out through it.
+      g.roundRect(wall - 2, FLOOR_TOP - 52, 24, 52, 4).fill(0x1b1d2a);
+      g.roundRect(wall - 2, FLOOR_TOP - 52, 24, 52, 4).stroke({
+        width: 3,
+        color: p.brass,
+      });
+      g.roundRect(wall, FLOOR_TOP - 14, BELT_END - wall, 10, 5).fill(0x2a2f3f);
+      for (let x = wall + 8; x < BELT_END - 4; x += 16)
         g.circle(x, FLOOR_TOP - 9, 3).fill(0x8a92a6);
-      g.rect(beltLeft + 4, FLOOR_TOP - 4, 5, 4).fill(p.metal);
-      g.rect(beltRight - 30, FLOOR_TOP - 4, 5, 4).fill(p.metal);
+      g.rect(BELT_END - 12, FLOOR_TOP - 4, 5, 4).fill(p.metal);
     },
   },
 ];
 
 const BLOCK_STEP = 117;
 const FIRST_BLOCK = -ROOM_W / 2 + 67;
-/** The shipping block is always the last, beside the door. */
-const SHIP_BLOCK_X = FIRST_BLOCK + 6 * BLOCK_STEP;
-/** Where the conveyor starts, relative to the shipping block. */
-const BELT_START = 24;
+/** The shipping block is always the first, against the back wall. */
+const SHIP_BLOCK_X = FIRST_BLOCK;
+/** Where the conveyor ends, under the bench, relative to the block. */
+const BELT_END = 4;
 /**
  * Crates are drawn centred on their path; in design units (the room is drawn
  * 1.3 times larger) this lifts the centre by half a 1.6-scale crate.
@@ -349,14 +351,14 @@ export function layoutFor(id: string): RoomLayout {
   const cached = layouts.get(id);
   if (cached) return cached;
   const random = scatter(hash(id));
-  // Shuffle every station but shipping, which stays beside the door so its
-  // conveyor has somewhere to run.
+  // Shuffle every station but shipping, which stays against the back wall,
+  // as far from the lift as the room goes.
   const order = BLOCKS.filter((block) => block.id !== "ship");
   for (let index = order.length - 1; index > 0; index -= 1) {
     const other = Math.floor(random() * (index + 1));
     [order[index], order[other]] = [order[other]!, order[index]!];
   }
-  order.push(BLOCKS.find((block) => block.id === "ship")!);
+  order.unshift(BLOCKS.find((block) => block.id === "ship")!);
   const blocks = order.map((block, index) => ({
     block,
     x: FIRST_BLOCK + index * BLOCK_STEP,
@@ -394,12 +396,12 @@ export function roomSpots(layout: RoomLayout, place: WorldPlace): WorldPoint[] {
 
 /**
  * Where a crate goes in this room, before mirroring and scaling: packed on
- * the bench, dropped on the belt, and carried out of the door.
+ * the bench, dropped on the belt, and carried out through the back wall.
  */
 export const CRATE_PATH: readonly WorldPoint[] = [
-  { x: SHIP_BLOCK_X - 20, y: FLOOR_TOP - 42 - CRATE_LIFT },
-  { x: SHIP_BLOCK_X + BELT_START + 14, y: FLOOR_TOP - 14 - CRATE_LIFT },
-  { x: ROOM_W / 2 + 2, y: FLOOR_TOP - 14 - CRATE_LIFT },
+  { x: SHIP_BLOCK_X + 28, y: FLOOR_TOP - 42 - CRATE_LIFT },
+  { x: SHIP_BLOCK_X + BELT_END - 10, y: FLOOR_TOP - 14 - CRATE_LIFT },
+  { x: -ROOM_W / 2 - 2, y: FLOOR_TOP - 14 - CRATE_LIFT },
 ];
 
 export function roomTags(layout: RoomLayout) {
