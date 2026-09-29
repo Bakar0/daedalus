@@ -48,11 +48,16 @@ export interface WorldTheme {
    * the terminal never stand on each other and never swap places when a
    * third arrives.
    */
-  spot(place: WorldPlace, slot: number, zone: number): WorldPoint;
+  spot(place: WorldPlace, slot: number, zone: ZoneRef): WorldPoint;
   /** Where new agents come from and finished ones go back to, in world pixels. */
   home: WorldPoint;
   /** How much larger than their natural size agents are drawn; 1 if unset. */
   actorScale?: number;
+  /**
+   * What carries an agent along a route leg marked `ride`: an elevator car,
+   * a cart. Drawn behind the agent, feet at (0, 0), in world pixels.
+   */
+  createVehicle?(look: WorldLook): Container;
   /**
    * How the camera frames the world at rest. "all" fits the whole world;
    * "width" fills the view's width and starts at the top, for a world that
@@ -69,7 +74,18 @@ export interface WorldArrangement {
    * world where agents cannot fly straight: through a door, along a shaft.
    * Without it the engine flies in a straight line.
    */
-  route?(from: WorldPoint, to: WorldPoint): WorldPoint[];
+  route?(from: WorldPoint, to: WorldPoint): Waypoint[];
+}
+
+/** A point on a route; `ride` means the leg that ends here is ridden. */
+export interface Waypoint extends WorldPoint {
+  ride?: boolean;
+}
+
+/** Which zone a spot is asked for: its place in order, and its id. */
+export interface ZoneRef {
+  index: number;
+  id: string;
 }
 
 /**

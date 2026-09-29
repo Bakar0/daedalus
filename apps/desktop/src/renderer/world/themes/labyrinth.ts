@@ -1,11 +1,25 @@
 import { Container, Graphics, Text } from "pixi.js";
 import type { WorldPlace, WorldZone } from "../world-model";
 import type {
+  Waypoint,
   WorldArrangement,
   WorldLook,
   WorldPoint,
   WorldTheme,
+  ZoneRef,
 } from "../world-theme";
+import {
+  DOOR_X,
+  drawRoom,
+  FLOOR,
+  hash,
+  layoutFor,
+  ROOM_H,
+  ROOM_W,
+  roomSpots,
+  roomTags,
+  scatter,
+} from "./labyrinth-rooms";
 
 /**
  * Daedalus's Labyrinth, seen from the side like a cut-away ant farm.
@@ -23,16 +37,10 @@ import type {
  * surface. Every room is the same size for now.
  */
 
-const ROOM_W = 900;
-const ROOM_H = 300;
 const SHAFT_HALF = 45;
 const CORRIDOR = 40;
 const FLOOR_GAP = 60;
 const FIRST_TOP = 80;
-/** Where a standing bot's feet are, relative to the room's centre. */
-const FLOOR = 90;
-/** Where a room's door is, before mirroring. */
-const DOOR_X = ROOM_W / 2 - 24;
 /**
  * Rooms are designed at 900 by 300 and drawn this much larger, and bots are
  * scaled up further, so a bot reads the way a dweller does in Fallout
@@ -119,54 +127,7 @@ const PALETTES: Record<WorldLook["appearance"], Palette> = {
   },
 };
 
-/** Wall colours, picked per workspace so neighbouring rooms differ. */
-const WALLS = [0x314670, 0x245555, 0x4c375a, 0x4a4a2c, 0x5a3530, 0x2e4a3a];
-
 const ATTENTION = 0xff5f5f;
-
-/** Standing spots per place, before mirroring, relative to the room centre. */
-const SPOTS: Record<WorldPlace, WorldPoint[]> = {
-  lounge: [
-    { x: -420, y: FLOOR },
-    { x: -370, y: FLOOR },
-    { x: -395, y: FLOOR - 24 },
-  ],
-  read: [
-    { x: -250, y: FLOOR },
-    { x: -200, y: FLOOR },
-    { x: -290, y: -10 },
-  ],
-  plan: [
-    { x: -190, y: -14 },
-    { x: -120, y: -20 },
-  ],
-  edit: [
-    { x: -190, y: FLOOR },
-    { x: -118, y: FLOOR },
-  ],
-  run: [
-    { x: -14, y: FLOOR },
-    { x: 50, y: FLOOR },
-  ],
-  web: [
-    { x: 128, y: 4 },
-    { x: 190, y: 10 },
-  ],
-  think: [
-    { x: 126, y: FLOOR },
-    { x: 190, y: FLOOR },
-  ],
-  delegate: [
-    { x: 236, y: FLOOR },
-    { x: 304, y: FLOOR },
-    { x: 270, y: FLOOR - 26 },
-  ],
-  ship: [
-    { x: 334, y: FLOOR },
-    { x: 380, y: FLOOR - 20 },
-  ],
-  door: [{ x: DOOR_X - 8, y: FLOOR }],
-};
 
 /**
  * Every room hangs off the right of the shaft, one per floor, as in Fallout
@@ -175,8 +136,8 @@ const SPOTS: Record<WorldPlace, WorldPoint[]> = {
  */
 const mirrorOf = (_zone: number) => -1;
 
-function spot(place: WorldPlace, slot: number, zone: number): WorldPoint {
-  const spots = SPOTS[place];
+function spot(place: WorldPlace, slot: number, zone: ZoneRef): WorldPoint {
+  const spots = roomSpots(layoutFor(zone.id), place);
   const base = spots[Math.min(slot, spots.length - 1)]!;
   const extra = slot - (spots.length - 1);
   let x = base.x;
@@ -185,7 +146,7 @@ function spot(place: WorldPlace, slot: number, zone: number): WorldPoint {
     const direction = base.x > 0 ? -1 : 1;
     x = Math.max(-DOOR_X, Math.min(DOOR_X, base.x + direction * 40 * extra));
   }
-  return { x: x * mirrorOf(zone) * SCALE, y: base.y * SCALE };
+  return { x: x * mirrorOf(zone.index) * SCALE, y: base.y * SCALE };
 }
 
 function roomCenter(index: number): WorldPoint {
@@ -222,15 +183,17 @@ function arrange(zones: readonly WorldZone[]): WorldArrangement {
       const start = roomAt(from);
       const end = roomAt(to);
       if (start !== -1 && start === end) return [to];
-      const points: WorldPoint[] = [];
+      // Out through the door to the shaft, ride the car to the other floor,
+      // and in through that floor's door.
+      const points: Waypoint[] = [];
       if (start !== -1) {
         const door = doorOf(origins[start]!, start);
         points.push(door, { x: 0, y: door.y });
       } else points.push({ x: 0, y: from.y });
       if (end !== -1) {
         const door = doorOf(origins[end]!, end);
-        points.push({ x: 0, y: door.y }, door, to);
-      } else points.push({ x: 0, y: to.y }, to);
+        points.push({ x: 0, y: door.y, ride: true }, door, to);
+      } else points.push({ x: 0, y: to.y, ride: true }, to);
       return points.filter(
         (point, index) =>
           index === 0 ||
@@ -261,23 +224,6 @@ const label = (
 
 const truncate = (value: string, length: number) =>
   value.length > length ? `${value.slice(0, length - 1)}…` : value;
-
-function hash(value: string): number {
-  let result = 2166136261;
-  for (let index = 0; index < value.length; index += 1)
-    result = Math.imul(result ^ value.charCodeAt(index), 16777619) >>> 0;
-  return result;
-}
-
-/** Deterministic noise for stones and stars, the same on every draw. */
-function scatter(seed: number) {
-  let value = (seed * 2654435761) >>> 0;
-  return () => {
-    value = Math.imul(value ^ (value >>> 15), 2246822507) >>> 0;
-    value = Math.imul(value ^ (value >>> 13), 3266489909) >>> 0;
-    return ((value ^ (value >>> 16)) >>> 0) / 4294967296;
-  };
-}
 
 function gear(g: Graphics, radius: number, color: number, hub: number) {
   const points: number[] = [];
@@ -513,148 +459,6 @@ function drawWorld(
   };
 }
 
-function books(g: Graphics, x: number, y: number, width: number, seed: number) {
-  const colors = [
-    0xc0504d, 0x4f81bd, 0x9bbb59, 0xf2c14e, 0x8064a2, 0x4bacc6, 0xf79646,
-  ];
-  let cursor = x;
-  let index = seed;
-  while (cursor < x + width - 6) {
-    const bookWidth = 6 + (index % 3);
-    const bookHeight = 18 + ((index * 7) % 7);
-    g.rect(cursor, y - bookHeight, bookWidth, bookHeight).fill(
-      colors[index % colors.length]!,
-    );
-    cursor += bookWidth + 1.5;
-    index += 1;
-  }
-}
-
-/** The furniture, drawn facing the far wall on the left; mirrored for right rooms. */
-function drawFurniture(g: Graphics, p: Palette) {
-  const floorTop = FLOOR + 8;
-  // Lounge: couch and a floor lamp.
-  g.roundRect(-440, floorTop - 38, 90, 20, 8).fill(0x4a5a8a);
-  g.roundRect(-444, floorTop - 24, 98, 24, 8).fill(0x556aa0);
-  g.roundRect(-448, floorTop - 30, 12, 30, 5).fill(0x4a5a8a);
-  g.roundRect(-358, floorTop - 30, 12, 30, 5).fill(0x4a5a8a);
-  g.rect(-338, floorTop - 70, 3, 70).fill(p.metal);
-  g.poly([
-    -348,
-    floorTop - 70,
-    -324,
-    floorTop - 70,
-    -330,
-    floorTop - 86,
-    -342,
-    floorTop - 86,
-  ]).fill(0xe8d3a8);
-  // Library: tall shelf and a ladder.
-  g.rect(-332, -70, 72, floorTop + 70).fill(p.woodDark);
-  for (let shelf = 0; shelf < 5; shelf += 1) {
-    const sy = -44 + shelf * 30;
-    books(g, -328, sy, 64, shelf * 3);
-    g.rect(-330, sy, 68, 3).fill(p.wood);
-  }
-  g.moveTo(-300, -64)
-    .lineTo(-278, floorTop)
-    .stroke({ width: 3, color: p.wood });
-  g.moveTo(-288, -64)
-    .lineTo(-266, floorTop)
-    .stroke({ width: 3, color: p.wood });
-  for (let rung = 0; rung < 6; rung += 1) {
-    const t = rung / 6 + 0.08;
-    g.moveTo(-300 + 22 * t, -64 + (floorTop + 64) * t)
-      .lineTo(-288 + 22 * t, -64 + (floorTop + 64) * t)
-      .stroke({ width: 2, color: p.wood });
-  }
-  // War-room board on the wall above the workbench.
-  g.roundRect(-212, -104, 124, 62, 4).fill(0xb07a3a);
-  g.rect(-206, -98, 112, 50).fill(0xd9b27b);
-  const notes: Array<[number, number, number]> = [
-    [-200, -92, 0xfff3a0],
-    [-176, -90, 0xffc2d1],
-    [-152, -93, 0xb8e8ff],
-    [-128, -90, 0xfff3a0],
-    [-190, -70, 0xc8f7c5],
-    [-164, -68, 0xfff3a0],
-  ];
-  for (const [nx, ny, color] of notes) g.rect(nx, ny, 18, 16).fill(color);
-  g.moveTo(-130, -64)
-    .lineTo(-122, -58)
-    .lineTo(-110, -72)
-    .stroke({ width: 2, color: 0x3fbf88 });
-  // Workbench with two monitors.
-  g.roundRect(-214, floorTop - 36, 124, 10, 3).fill(p.wood);
-  g.rect(-208, floorTop - 26, 6, 26).fill(p.woodDark);
-  g.rect(-102, floorTop - 26, 6, 26).fill(p.woodDark);
-  for (const mx of [-204, -150]) {
-    g.roundRect(mx, floorTop - 78, 50, 36, 3).fill(0x1d2233);
-    const code = [0xc792ea, 0x82aaff, 0xc3e88d, 0xf78c6c, 0x82aaff];
-    code.forEach((color, line) =>
-      g
-        .rect(
-          mx + 5 + (line % 2) * 5,
-          floorTop - 72 + line * 6,
-          20 + ((line * 13) % 18),
-          2.5,
-        )
-        .fill(color),
-    );
-    g.rect(mx + 22, floorTop - 42, 6, 6).fill(p.metal);
-  }
-  // Terminal: a server rack and a console.
-  g.roundRect(-60, -6, 28, floorTop + 6, 3).fill(p.metal);
-  for (let unit = 0; unit < 6; unit += 1)
-    g.rect(-56, 0 + unit * 16, 20, 9).fill(0x1d2233);
-  g.roundRect(-26, 0, 78, 56, 5).fill(p.screen);
-  g.roundRect(-26, 0, 78, 56, 5).stroke({ width: 3, color: p.metal });
-  g.rect(-20, 10, 34, 3).fill(0x3fdc8b);
-  g.rect(-20, 18, 44, 3).fill(0xc3e88d);
-  g.rect(-20, 26, 28, 3).fill(0x8a97ad);
-  g.rect(8, 56, 10, floorTop - 56).fill(p.metal);
-  // Observatory: a round window onto a globe, over a thinking chair.
-  g.circle(157, -50, 48).fill(p.brass);
-  g.circle(157, -50, 42).fill(0x12223f);
-  g.circle(157, -50, 28).fill(0x4fa3f7);
-  g.poly([140, -62, 154, -68, 160, -58, 150, -50, 144, -44, 136, -52]).fill(
-    0x5fcf7a,
-  );
-  g.poly([164, -46, 176, -50, 180, -38, 168, -32, 162, -38]).fill(0x5fcf7a);
-  g.roundRect(128, floorTop - 42, 58, 24, 8).fill(0x8a3a5a);
-  g.roundRect(124, floorTop - 22, 66, 22, 8).fill(0xa04a6a);
-  // Round table for subagents, with two stools.
-  g.ellipse(270, floorTop - 38, 38, 8).fill(p.wood);
-  g.rect(266, floorTop - 36, 8, 36).fill(p.woodDark);
-  g.ellipse(270, floorTop - 2, 18, 4).fill(p.woodDark);
-  g.rect(230, floorTop - 18, 14, 18).fill(p.woodDark);
-  g.rect(296, floorTop - 18, 14, 18).fill(p.woodDark);
-  // Shipping: crates and the tube up to the surface.
-  g.rect(326, floorTop - 34, 34, 34).fill(0xc8914d);
-  g.rect(358, floorTop - 26, 26, 26).fill(0xb07a3a);
-  g.rect(334, floorTop - 58, 26, 24).fill(0xd9a86b);
-  g.roundRect(392, -ROOM_H / 2, 26, ROOM_H / 2 + 60, 11).fill({
-    color: 0x9fd8ff,
-    alpha: 0.18,
-  });
-  g.roundRect(392, -ROOM_H / 2, 26, ROOM_H / 2 + 60, 11).stroke({
-    width: 3,
-    color: p.brass,
-  });
-  // The doorway onto the corridor.
-  g.rect(ROOM_W / 2 - 12, floorTop - 86, 12, 86).fill(p.rockDark);
-}
-
-const TAGS: Array<[string, number]> = [
-  ["LOUNGE", -400],
-  ["LIBRARY", -296],
-  ["WORKBENCH", -152],
-  ["TERMINAL", 0],
-  ["OBSERVATORY", 157],
-  ["ROUND TABLE", 270],
-  ["SHIPPING", 356],
-];
-
 function drawZone(
   layer: Container,
   zone: WorldZone,
@@ -668,27 +472,7 @@ function drawZone(
   inner.scale.set(SCALE);
   layer.addChild(inner);
   const busy = zone.busy > 0;
-  const room = new Graphics();
-  const wall = WALLS[hash(zone.id) % WALLS.length]!;
-  // Wall tiles, wainscot and floor.
-  room.roundRect(-ROOM_W / 2, -ROOM_H / 2, ROOM_W, ROOM_H, 12).fill(wall);
-  for (let tx = -ROOM_W / 2 + 32; tx < ROOM_W / 2; tx += 32)
-    room
-      .rect(tx, -ROOM_H / 2, 1.5, ROOM_H)
-      .fill({ color: 0x000000, alpha: 0.12 });
-  for (let ty = -ROOM_H / 2 + 32; ty < FLOOR; ty += 32)
-    room
-      .rect(-ROOM_W / 2, ty, ROOM_W, 1.5)
-      .fill({ color: 0x000000, alpha: 0.12 });
-  room
-    .rect(-ROOM_W / 2, FLOOR + 8, ROOM_W, ROOM_H / 2 - FLOOR - 8)
-    .fill(p.floor);
-  room.rect(-ROOM_W / 2, FLOOR + 8, ROOM_W, 4).fill(p.wood);
-  room
-    .rect(-ROOM_W / 2, -ROOM_H / 2, ROOM_W, 12)
-    .fill({ color: 0x000000, alpha: 0.3 });
-  inner.addChild(room);
-
+  const layout = layoutFor(zone.id);
   // Lamps: warm light when anyone is in, dim blue when it is empty.
   const lamps = new Graphics();
   for (const lx of [-260, 0, 260]) {
@@ -709,10 +493,12 @@ function drawZone(
   }
   inner.addChild(lamps);
 
-  const furniture = new Graphics();
-  drawFurniture(furniture, p);
-  furniture.scale.x = mirror;
-  inner.addChild(furniture);
+  // The room is designed door-right and mirrored so the door faces the
+  // shaft. The lamps go on top of it, below the text.
+  const room = new Graphics();
+  drawRoom(room, layout, p, zone.id, p.rockDark);
+  room.scale.x = mirror;
+  inner.addChildAt(room, 0);
 
   if (!busy)
     inner.addChild(
@@ -721,7 +507,7 @@ function drawZone(
         .fill({ color: 0x0a1020, alpha: 0.35 }),
     );
 
-  for (const [text, tx] of TAGS) {
+  for (const { text, x: tx } of roomTags(layout)) {
     const tag = label(text, 10, 0x1b1d2a, "800");
     const pill = new Graphics()
       .roundRect(-tag.width / 2 - 6, -2, tag.width + 12, 16, 5)
@@ -781,7 +567,7 @@ function drawZone(
       const rise = (time * 0.35 + (hash(zone.id) % 100) / 100) % 1;
       const py = FLOOR + 30 - rise * (ROOM_H / 2 + FLOOR + 30);
       parcel
-        .roundRect(395 * mirror - (mirror === -1 ? 20 : 0), py, 20, 18, 3)
+        .roundRect(layout.tubeX * mirror - 10, py, 20, 18, 3)
         .fill(0xc8914d);
     }
     siren.clear();
@@ -816,6 +602,29 @@ function drawZone(
   };
 }
 
+/**
+ * The lift car: a brass cage a bot rides between the workshop and its floor.
+ * Feet at (0, 0), in world pixels, sized for the scaled-up bots.
+ */
+function createVehicle(look: WorldLook) {
+  const p = PALETTES[look.appearance];
+  const car = new Graphics();
+  // A short run of cable and the pulley; the cable itself would cross the
+  // workshop above, so it fades out just over the car.
+  for (let step = 0; step < 6; step += 1)
+    car
+      .rect(-2, -146 - (step + 1) * 14, 4, 14)
+      .fill({ color: 0x8a92a6, alpha: 0.7 - step * 0.12 });
+  car.roundRect(-42, -136, 84, 146, 8).fill({ color: 0x1d2233, alpha: 0.85 });
+  car.roundRect(-42, -136, 84, 146, 8).stroke({ width: 4, color: p.brass });
+  car.rect(-42, 2, 84, 8).fill(p.brassDark);
+  car.rect(-30, -146, 60, 10).fill(p.brass);
+  for (const x of [-26, -13, 0, 13, 26])
+    car.rect(x - 1, -130, 2, 128).fill({ color: p.brass, alpha: 0.35 });
+  car.circle(0, -124, 4).fill(p.warm);
+  return car;
+}
+
 export const labyrinthTheme: WorldTheme = {
   id: "labyrinth",
   label: "Labyrinth",
@@ -829,6 +638,7 @@ export const labyrinthTheme: WorldTheme = {
   home: HOME,
   actorScale: ACTOR_SCALE,
   fit: "width",
+  createVehicle,
 };
 
 export const LABYRINTH_ROOM = {

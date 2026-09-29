@@ -14,6 +14,7 @@ import {
 } from "./world-model";
 import { WORLD_THEMES } from "./themes";
 import { LABYRINTH_ROOM, labyrinthTheme } from "./themes/labyrinth";
+import { layoutFor } from "./themes/labyrinth-rooms";
 import {
   DEFAULT_WORLD_CHARACTER_ID,
   WORLD_CHARACTERS,
@@ -269,7 +270,7 @@ describe("themes", () => {
     (_, theme) => {
       for (const place of WORLD_PLACES) {
         const crowd = Array.from({ length: 8 }, (_, slot) =>
-          theme.spot(place, slot, 0),
+          theme.spot(place, slot, { index: 0, id: "w0" }),
         );
         for (const point of crowd) {
           expect(Number.isFinite(point.x)).toBe(true);
@@ -370,16 +371,69 @@ describe("labyrinth", () => {
     expect(path.at(-1)).toEqual(to);
   });
 
-  test("every spot stays inside the room, and the door faces the shaft", () => {
-    for (const place of WORLD_PLACES)
-      for (let slot = 0; slot < 10; slot += 1) {
-        const point = labyrinthTheme.spot(place, slot, 0);
-        expect(Math.abs(point.x)).toBeLessThanOrEqual(W / 2);
-        expect(Math.abs(point.y)).toBeLessThanOrEqual(H / 2);
-        expect(labyrinthTheme.spot(place, slot, 3)).toEqual(point);
+  test("the shaft leg is ridden, the walk to and from the doors is not", () => {
+    const arrangement = labyrinthTheme.arrange(zones(3));
+    const [a, , c] = arrangement.origins as [
+      { x: number; y: number },
+      unknown,
+      { x: number; y: number },
+    ];
+    const path = arrangement.route!(
+      { x: a.x, y: a.y + 90 },
+      { x: c.x, y: c.y + 90 },
+    );
+    const ridden = path.filter((point) => point.ride);
+    expect(ridden).toHaveLength(1);
+    expect(ridden[0]!.x).toBe(0);
+    expect(path.at(-1)!.ride).toBeUndefined();
+  });
+
+  const ids = Array.from({ length: 30 }, (_, index) => `workspace-${index}`);
+
+  test("every room gives every place its own spots, inside the room", () => {
+    for (const id of ids)
+      for (const place of WORLD_PLACES) {
+        const points = Array.from({ length: 8 }, (_, slot) =>
+          labyrinthTheme.spot(place, slot, { index: 0, id }),
+        );
+        for (const point of points) {
+          expect(Math.abs(point.x)).toBeLessThanOrEqual(W / 2);
+          expect(Math.abs(point.y)).toBeLessThanOrEqual(H / 2);
+        }
+        if (place !== "door")
+          expect(
+            new Set(points.slice(0, 2).map((point) => `${point.x},${point.y}`))
+              .size,
+          ).toBe(2);
       }
     // The shaft is to the left of every room.
-    expect(labyrinthTheme.spot("door", 0, 0).x).toBeLessThan(0);
+    expect(
+      labyrinthTheme.spot("door", 0, { index: 0, id: "w0" }).x,
+    ).toBeLessThan(0);
+  });
+
+  test("a workspace keeps its room, and rooms differ between workspaces", () => {
+    const order = (id: string) =>
+      layoutFor(id)
+        .blocks.map(({ block }) => block.id)
+        .join(",");
+    expect(order("workspace-1")).toBe(order("workspace-1"));
+    expect(new Set(ids.map(order)).size).toBeGreaterThan(20);
+    const looks = new Set(
+      ids.map((id) => {
+        const layout = layoutFor(id);
+        return `${layout.wallStyle}-${layout.floorStyle}-${layout.wallColor}`;
+      }),
+    );
+    expect(looks.size).toBeGreaterThan(10);
+  });
+
+  test("stations never overlap in a room", () => {
+    for (const id of ids) {
+      const xs = layoutFor(id).blocks.map(({ x }) => x);
+      for (let index = 1; index < xs.length; index += 1)
+        expect(xs[index]! - xs[index - 1]!).toBeGreaterThanOrEqual(110);
+    }
   });
 });
 

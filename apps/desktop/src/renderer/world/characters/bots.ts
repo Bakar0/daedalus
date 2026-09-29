@@ -147,8 +147,10 @@ class Bot extends FigureBase {
     if (!this.trail) return;
     const here = { x: this.view.position.x, y: this.view.position.y };
     const last = this.trailPoints.at(-1);
-    if (!last || Math.hypot(last.x - here.x, last.y - here.y) > 2)
-      this.trailPoints.push({ ...here, at: t });
+    const step = last ? Math.hypot(last.x - here.x, last.y - here.y) : 0;
+    // A jump no flight could make is a placement, not a trip: start over.
+    if (step > 120) this.trailPoints.length = 0;
+    if (!last || step > 2) this.trailPoints.push({ ...here, at: t });
     while (
       this.trailPoints.length > 1 &&
       t - this.trailPoints[0]!.at > TRAIL_SECONDS
@@ -158,10 +160,13 @@ class Bot extends FigureBase {
     if (this.trailPoints.length < 2) return;
     const handX = 16 * this.body.scale.x;
     const handY = y - 20;
+    // The trail is drawn inside the figure, which a theme may scale up, so
+    // world offsets are divided back into the figure's own units.
+    const scale = this.view.scale.x || 1;
     g.moveTo(handX, handY);
     for (let index = this.trailPoints.length - 1; index >= 0; index -= 1) {
       const point = this.trailPoints[index]!;
-      g.lineTo(point.x - here.x, point.y - here.y - 2);
+      g.lineTo((point.x - here.x) / scale, (point.y - here.y) / scale - 2);
     }
     g.stroke({ width: 1.4, color: this.trail.color, alpha: 0.85 });
   }

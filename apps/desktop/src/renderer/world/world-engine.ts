@@ -5,9 +5,20 @@ import type {
   WorldArrangement,
   WorldCharacter,
   WorldLook,
+  Waypoint,
   WorldPoint,
   WorldTheme,
 } from "./world-theme";
+
+/**
+ * Sessions the World has already shown, for as long as the app runs. A
+ * session it has not shown yet arrives from the theme's home even on the
+ * first draw, so an agent started while the World was closed still comes
+ * out of the workshop and rides down, rather than appearing in its room.
+ */
+const shown = new Set<string>();
+/** Seconds between arrivals, so a crowd comes down one after another. */
+const ARRIVAL_GAP = 0.9;
 
 /**
  * Runs one World: asks the theme where zones go, flies actors to the spot
@@ -39,6 +50,7 @@ const MAX_SCALE = 2.6;
 const DRAG_THRESHOLD = 5;
 
 interface ZoneEntry {
+  id: string;
   layer: Container;
   index: number;
   origin: WorldPoint;
@@ -52,7 +64,11 @@ interface ActorEntry {
   position: WorldPoint;
   target: WorldPoint;
   /** Waypoints still to fly through, ending at `target`. */
-  path: WorldPoint[];
+  path: Waypoint[];
+  /** Seconds to wait at home before setting off; hidden meanwhile. */
+  wait: number;
+  /** The car carrying it along a ridden leg, made when first needed. */
+  vehicle?: Container;
   facing: -1 | 0 | 1;
   /** Flying home on the way out; removed on arrival. */
   leaving: boolean;
@@ -178,6 +194,7 @@ export class WorldEngine {
       const replacement = this.enter(entry.actor, entry.target, true);
       replacement.position = position;
       replacement.path = entry.path;
+      replacement.wait = entry.wait;
       this.actors.set(id, replacement);
     }
     this.place();
@@ -380,6 +397,7 @@ export class WorldEngine {
     this.layoutZones();
     const slots = new Map<string, number>();
     const present = new Set<string>();
+    let arrivals = 0;
     for (const actor of this.model.actors) {
       const zone = this.zones.get(actor.zoneId);
       if (!zone) continue;
@@ -407,7 +425,13 @@ export class WorldEngine {
         }
         continue;
       }
-      this.actors.set(actor.sessionId, this.enter(actor, target, snap));
+      // Placed directly only when this app has shown it before; anything
+      // new arrives from home, queued behind the others arriving with it.
+      const arrive = !(snap && shown.has(actor.sessionId));
+      shown.add(actor.sessionId);
+      const entry = this.enter(actor, target, !arrive);
+      if (arrive) entry.wait = arrivals++ * ARRIVAL_GAP;
+      this.actors.set(actor.sessionId, entry);
     }
     for (const [id, entry] of this.actors) {
       if (present.has(id) || entry.leaving) continue;
@@ -455,13 +479,14 @@ export class WorldEngine {
       position: { ...start },
       target,
       path: snap ? [] : this.route(start, target),
+      wait: 0,
       facing: 0,
       leaving: false,
     };
   }
 
   /** The theme's way from one point to another, or a straight line. */
-  private route(from: WorldPoint, to: WorldPoint): WorldPoint[] {
+  private route(from: WorldPoint, to: WorldPoint): Waypoint[] {
     const path = this.arrangement.route?.(from, to) ?? [to];
     return path.length ? path.map((point) => ({ ...point })) : [{ ...to }];
   }
@@ -469,6 +494,7 @@ export class WorldEngine {
   private remove(id: string) {
     const entry = this.actors.get(id);
     if (!entry) return;
+    entry.vehicle?.destroy({ children: true });
     entry.figure.view.destroy({ children: true });
     this.actors.delete(id);
   }
@@ -479,7 +505,10 @@ export class WorldEngine {
   }
 
   private spot(zone: ZoneEntry, place: WorldPlace, slot: number): WorldPoint {
-    const local = this.theme.spot(place, slot, zone.index);
+    const local = this.theme.spot(place, slot, {
+      index: zone.index,
+      id: zone.id,
+    });
     return { x: zone.origin.x + local.x, y: zone.origin.y + local.y };
   }
 
@@ -517,7 +546,14 @@ export class WorldEngine {
       const animate =
         this.theme.drawZone(layer, zone, this.look, index) ?? undefined;
       this.plots.addChild(layer);
-      this.zones.set(zone.id, { layer, index, origin, key, animate });
+      this.zones.set(zone.id, {
+        id: zone.id,
+        layer,
+        index,
+        origin,
+        key,
+        animate,
+      });
     });
     for (const [id, entry] of this.zones) {
       if (seen.has(id)) continue;
@@ -531,6 +567,12 @@ export class WorldEngine {
     this.animateWorld?.(this.elapsed);
     for (const zone of this.zones.values()) zone.animate?.(this.elapsed);
     for (const [id, entry] of this.actors) {
+      if (entry.wait > 0) {
+        entry.wait -= seconds;
+        entry.figure.view.visible = false;
+        continue;
+      }
+      entry.figure.view.visible = true;
       // Fly through the waypoints in order, carrying leftover distance on.
       let budget = FLY_SPEED * Math.min(seconds, 0.1);
       while (budget > 0 && entry.path.length) {
@@ -550,6 +592,7 @@ export class WorldEngine {
         }
       }
       const walking = entry.path.length > 0;
+      this.carry(entry, walking && entry.path[0]!.ride === true);
       if (!walking) {
         entry.facing = 0;
         if (entry.leaving) {
@@ -573,12 +616,30 @@ export class WorldEngine {
     this.place();
   }
 
+  /** Shows the theme's vehicle around an agent on a ridden leg. */
+  private carry(entry: ActorEntry, riding: boolean) {
+    if (!riding) {
+      if (entry.vehicle) entry.vehicle.visible = false;
+      return;
+    }
+    if (!entry.vehicle) {
+      const vehicle = this.theme.createVehicle?.(this.look);
+      if (!vehicle) return;
+      entry.vehicle = vehicle;
+      this.figures.addChild(vehicle);
+    }
+    entry.vehicle.visible = true;
+  }
+
   /** Nearer the bottom draws in front, so figures overlap the way they would. */
   private place() {
     for (const entry of this.actors.values()) {
       const { view } = entry.figure;
       view.position.set(entry.position.x, entry.position.y);
       view.zIndex = entry.position.y;
+      // The car sits just behind its rider.
+      entry.vehicle?.position.set(entry.position.x, entry.position.y);
+      if (entry.vehicle) entry.vehicle.zIndex = entry.position.y - 0.5;
     }
   }
 }
