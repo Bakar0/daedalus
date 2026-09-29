@@ -1,12 +1,16 @@
 import { Graphics } from "pixi.js";
 import type { WorldActor } from "../world-model";
 import type { ActorFrame, WorldCharacter, WorldLook } from "../world-theme";
+import { COSTUMES, TRAILS, type Costume, type CostumeFrame } from "./costumes";
 import { ATTENTION, blinking, DONE, ERROR, FigureBase } from "./parts";
+import { personaFor, type Persona } from "./personas";
 
 /**
  * Little hovering robots. The screen is the face, the antenna light is the
  * state, and the thruster cuts out when the bot is idle and lands. Claude's
- * are cream with coral trim, Codex's are graphite with a green glow.
+ * are cream with coral trim, Codex's are graphite with a green glow. Each
+ * one is dressed as a figure from Greek myth (see `personas.ts`), and the
+ * costume never covers the face or the light.
  */
 
 interface Finish {
@@ -27,16 +31,31 @@ const OTHER: Finish = {
   glow: 0x9fb5ff,
 };
 
-const TOP = -52;
+const TOP = -56;
+/** How long Ariadne's thread stays on the floor behind her, in seconds. */
+const TRAIL_SECONDS = 8;
 
 class Bot extends FigureBase {
   private readonly g = new Graphics();
   private readonly finish: Finish;
+  readonly persona: Persona;
+  private readonly costume: Costume;
+  private readonly trail?: { graphics: Graphics; color: number };
+  private readonly trailPoints: Array<{ x: number; y: number; at: number }> =
+    [];
 
-  constructor(actor: WorldActor, look: WorldLook) {
+  constructor(actor: WorldActor, look: WorldLook, persona?: Persona) {
     super(actor, look, TOP);
     this.finish = FINISHES[actor.provider] ?? OTHER;
+    this.persona = persona ?? personaFor(actor.sessionId);
+    this.costume = COSTUMES[this.persona.id];
     this.body.addChild(this.g);
+    const trailColor = TRAILS[this.persona.id];
+    if (trailColor !== undefined) {
+      // In the view, not the body, so it does not flip with the figure.
+      this.trail = { graphics: new Graphics(), color: trailColor };
+      this.view.addChildAt(this.trail.graphics, 0);
+    }
   }
 
   protected pose(t: number, { walking }: ActorFrame) {
@@ -67,16 +86,34 @@ class Bot extends FigureBase {
       });
       g.poly([-2, y - 6, 2, y - 6, 0, y - 6 + length * 0.6]).fill(0xfff2b0);
     }
+    const busy = mood === "working" ? Math.sin(t * 8) * 1.5 : 0;
+    const wave = Math.sin(t * 10) * 3;
+    const costume: CostumeFrame = {
+      g,
+      t,
+      y,
+      mood,
+      walking,
+      landed,
+      hand:
+        mood === "attention"
+          ? { x: 15, y: y - 41 + wave }
+          : { x: 16, y: y - 20 - busy },
+    };
+    this.costume.back?.(costume);
     // Thruster, body, side arms.
     g.roundRect(-7, y - 10, 14, 5, 2).fill(0x5a6275);
     g.roundRect(-13, y - 38, 26, 28, 9).fill(f.shell);
     g.roundRect(-13, y - 16, 26, 6, 3).fill(f.trim);
+    this.costume.front?.(costume);
     this.arms(g, t, y);
+    this.costume.held?.(costume);
 
     // Screen face.
     g.roundRect(-10, y - 35, 20, 16, 5).fill(f.screen);
     this.face(g, t, y);
     g.roundRect(-9, y - 34, 7, 3, 1.5).fill({ color: 0xffffff, alpha: 0.12 });
+    this.costume.head?.(costume);
 
     // Antenna and its light.
     g.moveTo(0, y - 38)
@@ -96,7 +133,37 @@ class Bot extends FigureBase {
     if (on) g.circle(0, y - 46.5, 5).fill({ color: light, alpha: 0.25 });
     g.circle(0, y - 46.5, 2.6).fill(on ? light : 0x4b5160);
 
+    this.costume.near?.(costume);
     if (mood === "error") this.sparks(g, t, y);
+    this.drawTrail(t, y);
+  }
+
+  /**
+   * The thread runs from the hand back along where the bot has been. Points
+   * are kept in the parent's coordinates and drawn relative to where the bot
+   * is now, so the thread stays on the floor while the bot moves on.
+   */
+  private drawTrail(t: number, y: number) {
+    if (!this.trail) return;
+    const here = { x: this.view.position.x, y: this.view.position.y };
+    const last = this.trailPoints.at(-1);
+    if (!last || Math.hypot(last.x - here.x, last.y - here.y) > 2)
+      this.trailPoints.push({ ...here, at: t });
+    while (
+      this.trailPoints.length > 1 &&
+      t - this.trailPoints[0]!.at > TRAIL_SECONDS
+    )
+      this.trailPoints.shift();
+    const g = this.trail.graphics.clear();
+    if (this.trailPoints.length < 2) return;
+    const handX = 16 * this.body.scale.x;
+    const handY = y - 20;
+    g.moveTo(handX, handY);
+    for (let index = this.trailPoints.length - 1; index >= 0; index -= 1) {
+      const point = this.trailPoints[index]!;
+      g.lineTo(point.x - here.x, point.y - here.y - 2);
+    }
+    g.stroke({ width: 1.4, color: this.trail.color, alpha: 0.85 });
   }
 
   private arms(g: Graphics, t: number, y: number) {
@@ -204,6 +271,17 @@ export const botsCharacter: WorldCharacter = {
   id: "bots",
   label: "Bots",
   description:
-    "Hovering robots with a screen for a face and an antenna light that shows their state.",
+    "Hovering robots dressed as figures from Greek myth, with a screen for a face and an antenna light that shows their state.",
   create: (actor, look) => new Bot(actor, look),
+  caption: (actor) => {
+    const persona = personaFor(actor.sessionId);
+    return `as ${persona.name}, ${persona.epithet}`;
+  },
 };
+
+/** For the gallery: a bot in a chosen costume, whatever its session id. */
+export const createBot = (
+  actor: WorldActor,
+  look: WorldLook,
+  persona: Persona,
+) => new Bot(actor, look, persona);

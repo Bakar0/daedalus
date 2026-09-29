@@ -44,6 +44,8 @@ export interface WorldCharacter {
   description: string;
   /** Builds the figure for one actor. It is placed and moved by the engine. */
   create(actor: WorldActor, look: WorldLook): ActorFigure;
+  /** An extra line for the hover card, when the style gives agents a role. */
+  caption?(actor: WorldActor): string | null;
 }
 
 export interface WorldLook {

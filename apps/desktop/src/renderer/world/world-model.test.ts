@@ -15,6 +15,8 @@ import {
 import { WORLD_THEMES } from "./themes";
 import { WORLD_CHARACTERS } from "./characters";
 import { SPRITE_CLASSES, SPRITE_SIZE, spriteRows } from "./characters/pixel";
+import { COSTUMES } from "./characters/costumes";
+import { PERSONAS, personaFor } from "./characters/personas";
 
 const workspace = (id: string): WorkspaceDto => ({
   id,
@@ -291,4 +293,24 @@ describe("characters", () => {
       }
     },
   );
+});
+
+describe("personas", () => {
+  test("every persona has a costume that draws something", () => {
+    for (const persona of PERSONAS) {
+      const costume = COSTUMES[persona.id];
+      expect(Object.keys(costume).length).toBeGreaterThan(0);
+    }
+    expect(new Set(PERSONAS.map((persona) => persona.id)).size).toBe(
+      PERSONAS.length,
+    );
+  });
+
+  test("a session keeps its persona, and sessions spread across them", () => {
+    expect(personaFor("session-a")).toBe(personaFor("session-a"));
+    const seen = new Set(
+      Array.from({ length: 200 }, (_, index) => personaFor(`s-${index}`).id),
+    );
+    expect(seen.size).toBe(PERSONAS.length);
+  });
 });

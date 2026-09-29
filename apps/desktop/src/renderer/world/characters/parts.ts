@@ -1,6 +1,7 @@
 import { Container, Graphics, Text } from "pixi.js";
 import type { WorldActor, WorldStation } from "../world-model";
 import type { ActorFigure, ActorFrame, WorldLook } from "../world-theme";
+import { hash } from "./personas";
 
 /**
  * What every character style shares: the name tag, the ring on the floor when
@@ -28,12 +29,7 @@ export const HAIR = [
 ];
 
 /** Stable per session, so an agent keeps its looks across snapshots. */
-export function hash(value: string): number {
-  let result = 2166136261;
-  for (let index = 0; index < value.length; index += 1)
-    result = Math.imul(result ^ value.charCodeAt(index), 16777619) >>> 0;
-  return result;
-}
+export { hash };
 
 export const text = (
   value: string,

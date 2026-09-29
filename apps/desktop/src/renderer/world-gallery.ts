@@ -4,7 +4,17 @@
  * shows the light appearance. Nothing here is used by the app.
  */
 import { Application, Container, Graphics, Text } from "pixi.js";
+
+// Kept for a check to read: a throw inside a Pixi tick stops the ticker for
+// good, so the first one is the one that matters.
+const errors: string[] = [];
+(window as unknown as { __errors: string[] }).__errors = errors;
+window.addEventListener("error", (event) =>
+  errors.push(`${event.message} ${event.error?.stack ?? ""}`),
+);
 import { WORLD_CHARACTERS } from "./world/characters";
+import { createBot } from "./world/characters/bots";
+import { PERSONAS } from "./world/characters/personas";
 import type { WorldActor } from "./world/world-model";
 import type { ActorFigure, WorldLook } from "./world/world-theme";
 
@@ -89,12 +99,67 @@ const label = (value: string, size: number, fill: number) =>
     },
   });
 
+// `?personas` shows every bot costume instead, each cycling through the
+// states so one screen shows how a costume reads in all of them.
+const personaMode = params.has("personas");
+const CYCLE: Array<{
+  label: string;
+  actor: Partial<WorldActor>;
+  walking?: boolean;
+}> = [
+  { label: "working", actor: { mood: "working", place: "edit" } },
+  { label: "walking", actor: { mood: "working", place: "run" }, walking: true },
+  {
+    label: "needs you",
+    actor: { mood: "attention", label: "needs permission" },
+  },
+  { label: "idle", actor: { mood: "idle", place: "lounge" } },
+  { label: "done", actor: { mood: "done", place: "lounge" } },
+  { label: "error", actor: { mood: "error", place: "run" } },
+];
+const cycling: Array<{ figure: ActorFigure; actor: WorldActor }> = [];
+
 // Each style and provider gets a band; a band holds `lines` rows of states,
 // each state titled above its figure.
 const figures: Array<{ figure: ActorFigure; walking: boolean }> = [];
 const bandHeight = lines * CELL_H;
 let band = 0;
-for (const character of styles) {
+if (personaMode) {
+  const perRow = 8;
+  PERSONAS.forEach((persona, index) => {
+    for (const [side, provider] of PROVIDERS.entries()) {
+      const slot = index * 2 + side;
+      const x = LABEL_W / 2 + (slot % perRow) * CELL_W + CELL_W / 2;
+      const y = 30 + Math.floor(slot / perRow) * (CELL_H + 18);
+      const title = label(persona.name, 11, ink);
+      title.anchor.set(0.5, 0);
+      title.position.set(x, y + CELL_H + 2);
+      sheet.addChild(title);
+      const actor: WorldActor = {
+        sessionId: `${persona.id}-${provider}`,
+        zoneId: "gallery",
+        name: provider === "claude" ? "Claude" : "Codex",
+        provider,
+        taskLabel: null,
+        mood: "working",
+        label: "working",
+        place: "edit",
+        detail: null,
+        since: null,
+        unconfirmed: false,
+        contextPercent: null,
+        model: null,
+      };
+      const figure = createBot(actor, look, persona);
+      figure.update(actor);
+      figure.view.position.set(x, y + CELL_H - 22);
+      sheet.addChild(figure.view);
+      cycling.push({ figure, actor });
+    }
+  });
+  band = Math.ceil((PERSONAS.length * 2) / perRow);
+}
+for (const character of personaMode ? [] : styles) {
   for (const provider of PROVIDERS) {
     const top = band * (bandHeight + 8);
     sheet.addChild(
@@ -142,8 +207,12 @@ for (const character of styles) {
 }
 
 const fit = () => {
-  const width = LABEL_W + wrap * CELL_W + 8;
-  const height = band * (bandHeight + 8);
+  const width = personaMode
+    ? LABEL_W + 8 * CELL_W
+    : LABEL_W + wrap * CELL_W + 8;
+  const height = personaMode
+    ? 30 + band * (CELL_H + 18) + 8
+    : band * (bandHeight + 8);
   const scale = Math.min(app.screen.width / width, app.screen.height / height);
   sheet.scale.set(scale);
   sheet.position.set(
@@ -156,9 +225,48 @@ app.renderer.on("resize", fit);
 
 let time = 0;
 app.ticker.maxFPS = 30;
+const stateLabel = new Text({
+  text: "",
+  resolution: 3,
+  style: {
+    fill: muted,
+    fontSize: 14,
+    fontWeight: "600",
+    fontFamily: "-apple-system, sans-serif",
+  },
+});
+stateLabel.position.set(12, 8);
+if (personaMode) app.stage.addChild(stateLabel);
+let shown = -1;
 app.ticker.add((ticker) => {
   time += ticker.deltaMS / 1000;
+  if (personaMode) {
+    // `?state=2` holds one state instead of cycling.
+    const held = params.get("state");
+    const index =
+      held === null
+        ? Math.floor(time / 3) % CYCLE.length
+        : Number(held) % CYCLE.length;
+    const beat = CYCLE[index]!;
+    if (index !== shown) {
+      shown = index;
+      stateLabel.text = `Every costume, now: ${beat.label}`;
+      for (const item of cycling) {
+        item.actor = { ...item.actor, ...beat.actor } as WorldActor;
+        item.figure.update(item.actor);
+      }
+    }
+    for (const item of cycling)
+      item.figure.animate({
+        time,
+        walking: beat.walking ?? false,
+        facing: beat.walking ? 1 : 0,
+      });
+    return;
+  }
   for (const { figure, walking } of figures)
     figure.animate({ time, walking, facing: walking ? 1 : 0 });
 });
 (window as unknown as { __gallery: boolean }).__gallery = true;
+(window as unknown as { __app: Application }).__app = app;
+(window as unknown as { __cycling: typeof cycling }).__cycling = cycling;

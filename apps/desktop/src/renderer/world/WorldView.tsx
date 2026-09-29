@@ -250,6 +250,11 @@ export default function WorldView(props: WorldViewProps) {
           style={{ left: hover.point.x + 14, top: hover.point.y + 14 }}
         >
           <strong>{hovered.name}</strong>
+          {worldCharacterById(characterId).caption?.(hovered) && (
+            <em className="world-card-persona">
+              {worldCharacterById(characterId).caption?.(hovered)}
+            </em>
+          )}
           {hovered.taskLabel && <span>{hovered.taskLabel}</span>}
           <small>
             {hovered.label}
