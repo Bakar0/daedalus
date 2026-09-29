@@ -35,18 +35,20 @@ export interface WorldTheme {
     arrangement: WorldArrangement,
     look: WorldLook,
   ): ((time: number) => void) | void;
-  /** Draws one zone's scenery into `layer`, centred on (0, 0). */
+  /** Draws the `index`th zone's scenery into `layer`, centred on (0, 0). */
   drawZone(
     layer: Container,
     zone: WorldZone,
     look: WorldLook,
+    index: number,
   ): ((time: number) => void) | void;
   /**
-   * Where the `slot`th actor at `place` stands, relative to the zone's
-   * centre. Slots count from 0 in a stable order, so two agents at the forge
-   * never stand on each other and never swap places when a third arrives.
+   * Where the `slot`th actor at `place` stands, relative to the centre of
+   * the `zone`th zone. Slots count from 0 in a stable order, so two agents at
+   * the terminal never stand on each other and never swap places when a
+   * third arrives.
    */
-  spot(place: WorldPlace, slot: number): WorldPoint;
+  spot(place: WorldPlace, slot: number, zone: number): WorldPoint;
   /** Where new agents come from and finished ones go back to, in world pixels. */
   home: WorldPoint;
 }
@@ -54,6 +56,12 @@ export interface WorldTheme {
 export interface WorldArrangement {
   origins: WorldPoint[];
   bounds: { x: number; y: number; width: number; height: number };
+  /**
+   * The waypoints from one world point to another, ending at `to`, for a
+   * world where agents cannot fly straight: through a door, along a shaft.
+   * Without it the engine flies in a straight line.
+   */
+  route?(from: WorldPoint, to: WorldPoint): WorldPoint[];
 }
 
 /**

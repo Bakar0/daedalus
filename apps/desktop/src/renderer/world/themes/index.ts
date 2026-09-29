@@ -1,13 +1,13 @@
 import type { WorldTheme } from "../world-theme";
-import { islandTheme } from "./island";
+import { labyrinthTheme } from "./labyrinth";
 
 /**
  * Every world concept the picker offers. Adding one is a file implementing
  * `WorldTheme` and a line here; nothing else in the app changes.
  */
-export const WORLD_THEMES: readonly WorldTheme[] = [islandTheme];
+export const WORLD_THEMES: readonly WorldTheme[] = [labyrinthTheme];
 
-export const DEFAULT_WORLD_THEME_ID = islandTheme.id;
+export const DEFAULT_WORLD_THEME_ID = labyrinthTheme.id;
 
 export const worldThemeById = (id: string | null | undefined): WorldTheme =>
   WORLD_THEMES.find((theme) => theme.id === id) ??

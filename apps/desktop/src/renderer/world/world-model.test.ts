@@ -13,7 +13,7 @@ import {
   type WorldModelInput,
 } from "./world-model";
 import { WORLD_THEMES } from "./themes";
-import { ISLAND_PLOT, islandTheme } from "./themes/island";
+import { LABYRINTH_ROOM, labyrinthTheme } from "./themes/labyrinth";
 import {
   DEFAULT_WORLD_CHARACTER_ID,
   WORLD_CHARACTERS,
@@ -254,7 +254,7 @@ describe("themes", () => {
     (_, theme) => {
       for (const place of WORLD_PLACES) {
         const crowd = Array.from({ length: 8 }, (_, slot) =>
-          theme.spot(place, slot),
+          theme.spot(place, slot, 0),
         );
         for (const point of crowd) {
           expect(Number.isFinite(point.x)).toBe(true);
@@ -269,7 +269,7 @@ describe("themes", () => {
   );
 });
 
-describe("island", () => {
+describe("labyrinth", () => {
   const zones = (count: number) =>
     Array.from({ length: count }, (_, index) => ({
       id: `w${index}`,
@@ -277,63 +277,90 @@ describe("island", () => {
       attention: 0,
       busy: 0,
     }));
-  const overlaps = (
-    a: { x: number; y: number },
-    b: { x: number; y: number },
-    width: number,
-    height: number,
-  ) => Math.abs(a.x - b.x) < width && Math.abs(a.y - b.y) < height;
+  const { width: W, height: H } = LABYRINTH_ROOM;
+  const inRoom = (
+    point: { x: number; y: number },
+    origin: { x: number; y: number },
+  ) =>
+    Math.abs(point.x - origin.x) <= W / 2 &&
+    Math.abs(point.y - origin.y) <= H / 2;
 
-  test.each([0, 1, 2, 3, 6, 7, 12, 18, 19, 40])(
-    "%i plots never overlap each other or the workshop, and fit the world",
+  test.each([0, 1, 2, 3, 8, 21])(
+    "%i rooms sit two to a floor, either side of the shaft, never overlapping",
     (count) => {
-      const { origins, bounds } = islandTheme.arrange(zones(count));
+      const { origins, bounds } = labyrinthTheme.arrange(zones(count));
       expect(origins).toHaveLength(count);
       origins.forEach((origin, index) => {
-        // The workshop is about 340 by 280 around the centre.
-        expect(
-          overlaps(
-            origin,
-            { x: 0, y: 0 },
-            ISLAND_PLOT.width / 2 + 170,
-            ISLAND_PLOT.height / 2 + 140,
-          ),
-        ).toBe(false);
+        expect(Math.sign(origin.x)).toBe(index % 2 === 0 ? -1 : 1);
+        // Clear of the shaft, and inside the world.
+        expect(Math.abs(origin.x) - W / 2).toBeGreaterThan(45);
+        expect(origin.y + H / 2).toBeLessThanOrEqual(bounds.y + bounds.height);
         for (const other of origins.slice(index + 1))
           expect(
-            overlaps(origin, other, ISLAND_PLOT.width, ISLAND_PLOT.height),
+            Math.abs(origin.x - other.x) < W &&
+              Math.abs(origin.y - other.y) < H,
           ).toBe(false);
-        expect(origin.x - ISLAND_PLOT.width / 2).toBeGreaterThanOrEqual(
-          bounds.x,
-        );
-        expect(origin.x + ISLAND_PLOT.width / 2).toBeLessThanOrEqual(
-          bounds.x + bounds.width,
-        );
-        expect(origin.y - ISLAND_PLOT.height / 2).toBeGreaterThanOrEqual(
-          bounds.y,
-        );
-        expect(origin.y + ISLAND_PLOT.height / 2).toBeLessThanOrEqual(
-          bounds.y + bounds.height,
-        );
       });
     },
   );
 
-  test("the island grows with the workspaces and shrinks when they go", () => {
-    const width = (count: number) =>
-      islandTheme.arrange(zones(count)).bounds.width;
-    expect(width(7)).toBeGreaterThan(width(6));
-    expect(width(19)).toBeGreaterThan(width(18));
-    expect(width(6)).toBeGreaterThanOrEqual(width(3));
-    expect(width(0)).toBeLessThan(width(1));
+  test("the labyrinth grows a floor for every two workspaces", () => {
+    const height = (count: number) =>
+      labyrinthTheme.arrange(zones(count)).bounds.height;
+    expect(height(2)).toBe(height(1));
+    expect(height(3)).toBeGreaterThan(height(2));
+    expect(height(9)).toBeGreaterThan(height(8));
   });
 
-  test("every spot stays inside the plot's fence", () => {
+  test("between rooms a bot goes out the door, along the shaft and in", () => {
+    const arrangement = labyrinthTheme.arrange(zones(4));
+    const [a, , , d] = arrangement.origins as [
+      { x: number; y: number },
+      unknown,
+      unknown,
+      { x: number; y: number },
+    ];
+    const from = { x: a.x - 300, y: a.y + 90 };
+    const to = { x: d.x + 200, y: d.y + 90 };
+    const path = arrangement.route!(from, to);
+    expect(path.at(-1)).toEqual(to);
+    // Every leg outside a room runs in the shaft or along a corridor.
+    let previous = from;
+    for (const point of path) {
+      const vertical = point.x === previous.x;
+      if (vertical && !inRoom(point, a) && !inRoom(point, d))
+        expect(point.x).toBe(0);
+      previous = point;
+    }
+    expect(path.some((point) => point.x === 0)).toBe(true);
+  });
+
+  test("inside one room a bot flies straight to its station", () => {
+    const arrangement = labyrinthTheme.arrange(zones(2));
+    const origin = arrangement.origins[1]!;
+    const to = { x: origin.x + 100, y: origin.y + 90 };
+    expect(
+      arrangement.route!({ x: origin.x - 200, y: origin.y + 90 }, to),
+    ).toEqual([to]);
+  });
+
+  test("from the workshop a bot rides the shaft down to its room", () => {
+    const arrangement = labyrinthTheme.arrange(zones(3));
+    const origin = arrangement.origins[2]!;
+    const to = { x: origin.x, y: origin.y + 90 };
+    const path = arrangement.route!(labyrinthTheme.home, to);
+    expect(path[0]!.x).toBe(0);
+    expect(path.at(-1)).toEqual(to);
+  });
+
+  test("every spot stays inside the room, mirrored on the right", () => {
     for (const place of WORLD_PLACES)
       for (let slot = 0; slot < 10; slot += 1) {
-        const point = islandTheme.spot(place, slot);
-        expect(Math.abs(point.x)).toBeLessThanOrEqual(ISLAND_PLOT.width / 2);
-        expect(Math.abs(point.y)).toBeLessThanOrEqual(ISLAND_PLOT.height / 2);
+        const left = labyrinthTheme.spot(place, slot, 0);
+        const right = labyrinthTheme.spot(place, slot, 1);
+        expect(Math.abs(left.x)).toBeLessThanOrEqual(W / 2);
+        expect(Math.abs(left.y)).toBeLessThanOrEqual(H / 2);
+        expect(right).toEqual({ x: -left.x, y: left.y });
       }
   });
 });

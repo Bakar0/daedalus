@@ -40,6 +40,7 @@ const DRAG_THRESHOLD = 5;
 
 interface ZoneEntry {
   layer: Container;
+  index: number;
   origin: WorldPoint;
   key: string;
   animate?: (time: number) => void;
@@ -50,6 +51,8 @@ interface ActorEntry {
   figure: ActorFigure;
   position: WorldPoint;
   target: WorldPoint;
+  /** Waypoints still to fly through, ending at `target`. */
+  path: WorldPoint[];
   facing: -1 | 0 | 1;
   /** Flying home on the way out; removed on arrival. */
   leaving: boolean;
@@ -174,6 +177,7 @@ export class WorldEngine {
       if (entry.leaving) continue;
       const replacement = this.enter(entry.actor, entry.target, true);
       replacement.position = position;
+      replacement.path = entry.path;
       this.actors.set(id, replacement);
     }
     this.place();
@@ -369,11 +373,20 @@ export class WorldEngine {
       const existing = this.actors.get(actor.sessionId);
       if (existing) {
         existing.actor = actor;
-        existing.target = target;
         existing.leaving = false;
         existing.figure.view.alpha = 1;
         existing.figure.update(actor);
-        if (snap) existing.position = { ...target };
+        if (snap) {
+          existing.position = { ...target };
+          existing.target = target;
+          existing.path = [];
+        } else if (
+          target.x !== existing.target.x ||
+          target.y !== existing.target.y
+        ) {
+          existing.target = target;
+          existing.path = this.route(existing.position, target);
+        }
         continue;
       }
       this.actors.set(actor.sessionId, this.enter(actor, target, snap));
@@ -386,6 +399,7 @@ export class WorldEngine {
       }
       entry.leaving = true;
       entry.target = { ...this.theme.home };
+      entry.path = this.route(entry.position, entry.target);
     }
     this.place();
   }
@@ -421,9 +435,16 @@ export class WorldEngine {
       figure,
       position: { ...start },
       target,
+      path: snap ? [] : this.route(start, target),
       facing: 0,
       leaving: false,
     };
+  }
+
+  /** The theme's way from one point to another, or a straight line. */
+  private route(from: WorldPoint, to: WorldPoint): WorldPoint[] {
+    const path = this.arrangement.route?.(from, to) ?? [to];
+    return path.length ? path.map((point) => ({ ...point })) : [{ ...to }];
   }
 
   private remove(id: string) {
@@ -439,7 +460,7 @@ export class WorldEngine {
   }
 
   private spot(zone: ZoneEntry, place: WorldPlace, slot: number): WorldPoint {
-    const local = this.theme.spot(place, slot);
+    const local = this.theme.spot(place, slot, zone.index);
     return { x: zone.origin.x + local.x, y: zone.origin.y + local.y };
   }
 
@@ -474,9 +495,10 @@ export class WorldEngine {
       existing?.layer.destroy({ children: true });
       const layer = new Container();
       layer.position.set(origin.x, origin.y);
-      const animate = this.theme.drawZone(layer, zone, this.look) ?? undefined;
+      const animate =
+        this.theme.drawZone(layer, zone, this.look, index) ?? undefined;
       this.plots.addChild(layer);
-      this.zones.set(zone.id, { layer, origin, key, animate });
+      this.zones.set(zone.id, { layer, index, origin, key, animate });
     });
     for (const [id, entry] of this.zones) {
       if (seen.has(id)) continue;
@@ -489,26 +511,40 @@ export class WorldEngine {
     this.elapsed += seconds;
     this.animateWorld?.(this.elapsed);
     for (const zone of this.zones.values()) zone.animate?.(this.elapsed);
-    const step = FLY_SPEED * Math.min(seconds, 0.1);
     for (const [id, entry] of this.actors) {
-      const dx = entry.target.x - entry.position.x;
-      const dy = entry.target.y - entry.position.y;
-      const distance = Math.hypot(dx, dy);
-      const walking = distance > 0.5;
-      if (walking) {
-        const move = Math.min(step, distance);
-        entry.position.x += (dx / distance) * move;
-        entry.position.y += (dy / distance) * move;
+      // Fly through the waypoints in order, carrying leftover distance on.
+      let budget = FLY_SPEED * Math.min(seconds, 0.1);
+      while (budget > 0 && entry.path.length) {
+        const next = entry.path[0]!;
+        const dx = next.x - entry.position.x;
+        const dy = next.y - entry.position.y;
+        const distance = Math.hypot(dx, dy);
         if (Math.abs(dx) > 0.5) entry.facing = dx < 0 ? -1 : 1;
-      } else {
-        entry.position = { ...entry.target };
+        if (distance <= budget) {
+          entry.position = { ...next };
+          entry.path.shift();
+          budget -= distance;
+        } else {
+          entry.position.x += (dx / distance) * budget;
+          entry.position.y += (dy / distance) * budget;
+          budget = 0;
+        }
+      }
+      const walking = entry.path.length > 0;
+      if (!walking) {
         entry.facing = 0;
         if (entry.leaving) {
           this.remove(id);
           continue;
         }
       }
-      if (entry.leaving) entry.figure.view.alpha = Math.min(1, distance / 60);
+      if (entry.leaving) {
+        const left = Math.hypot(
+          entry.target.x - entry.position.x,
+          entry.target.y - entry.position.y,
+        );
+        entry.figure.view.alpha = Math.min(1, left / 60);
+      }
       entry.figure.animate({
         time: this.elapsed,
         walking,
