@@ -13,7 +13,11 @@ import {
   type WorldModelInput,
 } from "./world-model";
 import { WORLD_THEMES } from "./themes";
-import { WORLD_CHARACTERS } from "./characters";
+import {
+  DEFAULT_WORLD_CHARACTER_ID,
+  WORLD_CHARACTERS,
+  worldCharacterById,
+} from "./characters";
 import { SPRITE_CLASSES, SPRITE_SIZE, spriteRows } from "./characters/pixel";
 import { COSTUMES } from "./characters/costumes";
 import { PERSONAS, personaFor } from "./characters/personas";
@@ -269,6 +273,15 @@ describe("themes", () => {
 });
 
 describe("characters", () => {
+  // A remembered choice that is missing or no longer exists falls back to
+  // the default, and the default is Bots: the style the user picked.
+  test("an unknown or missing choice falls back to Bots", () => {
+    expect(DEFAULT_WORLD_CHARACTER_ID).toBe("bots");
+    expect(worldCharacterById(null).id).toBe("bots");
+    expect(worldCharacterById("retired-style").id).toBe("bots");
+    expect(worldCharacterById("pixel").id).toBe("pixel");
+  });
+
   test("every style has a unique id and a label", () => {
     const ids = WORLD_CHARACTERS.map((character) => character.id);
     expect(new Set(ids).size).toBe(ids.length);

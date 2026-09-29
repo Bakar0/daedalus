@@ -13,8 +13,11 @@ import { WORLD_THEMES, worldThemeById } from "./themes";
  * session, exactly as a board card does.
  */
 
-const THEME_STORAGE_KEY = "daedalus.world.theme";
-const CHARACTER_STORAGE_KEY = "daedalus.world.character";
+// Only a choice made in a picker is remembered, so a new default reaches
+// everyone who never chose. The keys moved when that became true: the old
+// ones held whatever the default was on the day, written on every open.
+const THEME_STORAGE_KEY = "daedalus.world.picked-theme";
+const CHARACTER_STORAGE_KEY = "daedalus.world.picked-agents";
 
 const stored = (key: string) => {
   try {
@@ -145,11 +148,9 @@ export default function WorldView(props: WorldViewProps) {
   useEffect(() => engine.current?.setLook({ appearance }), [appearance]);
   useEffect(() => {
     engine.current?.setTheme(worldThemeById(themeId));
-    store(THEME_STORAGE_KEY, themeId);
   }, [themeId]);
   useEffect(() => {
     engine.current?.setCharacter(worldCharacterById(characterId));
-    store(CHARACTER_STORAGE_KEY, characterId);
   }, [characterId]);
 
   const waiting = model.actors.filter((actor) => actor.mood === "attention");
@@ -180,13 +181,19 @@ export default function WorldView(props: WorldViewProps) {
         <div className="world-pickers">
           <Picker
             label="Agents"
-            onChange={setCharacterId}
+            onChange={(id) => {
+              setCharacterId(id);
+              store(CHARACTER_STORAGE_KEY, id);
+            }}
             options={WORLD_CHARACTERS}
             value={characterId}
           />
           <Picker
             label="World"
-            onChange={setThemeId}
+            onChange={(id) => {
+              setThemeId(id);
+              store(THEME_STORAGE_KEY, id);
+            }}
             options={WORLD_THEMES}
             value={themeId}
           />

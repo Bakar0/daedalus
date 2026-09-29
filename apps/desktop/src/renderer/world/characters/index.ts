@@ -21,4 +21,7 @@ export const DEFAULT_WORLD_CHARACTER_ID = botsCharacter.id;
 export const worldCharacterById = (
   id: string | null | undefined,
 ): WorldCharacter =>
-  WORLD_CHARACTERS.find((character) => character.id === id) ?? chibiCharacter;
+  WORLD_CHARACTERS.find((character) => character.id === id) ??
+  WORLD_CHARACTERS.find(
+    (character) => character.id === DEFAULT_WORLD_CHARACTER_ID,
+  )!;
