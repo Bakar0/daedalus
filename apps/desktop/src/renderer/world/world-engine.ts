@@ -14,6 +14,7 @@ import type {
   WorldPoint,
   WorldTheme,
 } from "./world-theme";
+import { tipOf } from "./world-theme";
 
 /**
  * Sessions the World has already shown, for as long as the app runs. A
@@ -40,6 +41,8 @@ export interface WorldEngineOptions {
   onSelect(sessionId: string): void;
   /** `point` is in page (client) pixels, for an HTML hover card. */
   onHover(sessionId: string | null, point: WorldPoint | null): void;
+  /** Scenery the pointer is over that has something to say (see `setTip`). */
+  onTip?(text: string | null, point: WorldPoint | null): void;
 }
 
 /** World pixels per second: a trip across the first ring takes a few seconds. */
@@ -155,6 +158,14 @@ export class WorldEngine {
     app.renderer.on("resize", () => this.applyCamera());
     this.listen(document, "visibilitychange", this.visibility);
     this.listenToCamera(app.canvas);
+    // A passive container hears nothing, not even what bubbles up from its
+    // children, so the rooms' layer listens for their scenery's tips.
+    this.plots.eventMode = "static";
+    this.plots.on("pointerover", (event: FederatedPointerEvent) => {
+      const text = tipOf(event.target as Container);
+      if (text) this.options.onTip?.(text, this.clientPoint(event));
+    });
+    this.plots.on("pointerout", () => this.options.onTip?.(null, null));
   }
 
   private listen<T extends Event>(

@@ -1,4 +1,4 @@
-import { Container, Graphics, Text } from "pixi.js";
+import { Container, Graphics, Rectangle, Text } from "pixi.js";
 import type { WorldPlace, WorldZone } from "../world-model";
 import type {
   Waypoint,
@@ -8,6 +8,8 @@ import type {
   WorldTheme,
   ZoneRef,
 } from "../world-theme";
+import { setTip } from "../world-theme";
+import { roomTier, type WorldTrophy } from "../world-model";
 import {
   createDispatch,
   type DispatchGeometry,
@@ -25,6 +27,7 @@ import {
   ROOM_H,
   ROOM_W,
   roomSpots,
+  drawTrophy,
   roomTags,
   scatter,
 } from "./labyrinth-rooms";
@@ -501,7 +504,7 @@ function drawZone(
   // The room is designed door-right and mirrored so the door faces the
   // shaft. The lamps go on top of it, below the text.
   const room = new Graphics();
-  drawRoom(room, layout, p, zone.id, p.rockDark);
+  drawRoom(room, layout, p, zone.id, p.rockDark, roomTier(zone.wins));
   room.scale.x = mirror;
   inner.addChildAt(room, 0);
 
@@ -554,6 +557,7 @@ function drawZone(
       : ROOM_W / 2 - 14 - (chipX + chip.width + 28);
   header.position.set(farWall, -ROOM_H / 2 + 22);
   inner.addChild(header);
+  drawShelf(inner, zone.trophies, chipX + chip.width + 28, mirror, p);
 
   inner.addChild(
     new Graphics()
@@ -596,6 +600,66 @@ function drawZone(
           .fill({ color: ATTENTION, alpha: 0.16 });
   };
 }
+
+const SHELF_Y = -ROOM_H / 2 + 34;
+const SHELF_STEP = 24;
+const LAMPS = [-260, 0, 260];
+
+/**
+ * The room's shelf under the ceiling, from the header toward the door: one
+ * trophy per thing the workspace finished, newest nearest the door. It
+ * skips the lamps and the siren, and hovering a trophy names what it was.
+ */
+function drawShelf(
+  inner: Container,
+  trophies: readonly WorldTrophy[],
+  headerWidth: number,
+  mirror: number,
+  p: Palette,
+) {
+  if (trophies.length === 0) return;
+  // In the unmirrored room: the far wall is on the left, the door right.
+  const slots: number[] = [];
+  for (
+    let x = -ROOM_W / 2 + 14 + headerWidth + 22;
+    x < DOOR_X - 60 && slots.length < trophies.length;
+    x += SHELF_STEP
+  ) {
+    const blocked = [...LAMPS, -60].some((lx) => Math.abs(x - lx) < 26);
+    if (!blocked) slots.push(x);
+  }
+  const shown = trophies.slice(-slots.length);
+  const plank = new Graphics();
+  const first = slots[0]!;
+  const last = slots[shown.length - 1]!;
+  const left = Math.min(first * mirror, last * mirror) - 16;
+  const right = Math.max(first * mirror, last * mirror) + 16;
+  plank.rect(left, SHELF_Y, right - left, 4).fill(p.woodDark);
+  plank.rect(left, SHELF_Y + 4, right - left, 2).fill({
+    color: 0x000000,
+    alpha: 0.25,
+  });
+  inner.addChild(plank);
+  shown.forEach((trophy, index) => {
+    const item = new Graphics();
+    drawTrophy(item, trophy.kind);
+    item.position.set(slots[index]! * mirror, SHELF_Y);
+    item.hitArea = new Rectangle(-11, -22, 22, 24);
+    setTip(
+      item,
+      [trophy.label, trophy.detail, `Done ${shortDate(trophy.at)}`]
+        .filter(Boolean)
+        .join("\n"),
+    );
+    inner.addChild(item);
+  });
+}
+
+const shortDate = (value: string) =>
+  new Date(value).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
 
 /**
  * Where the crates go, for this arrangement of rooms: out of each room's

@@ -12,6 +12,7 @@ import type {
   AgentSessionDto,
   SessionAttentionDto,
   SessionWorktreeDto,
+  ShippedPullRequestDto,
   TaskDto,
   WorkspaceDto,
 } from "@daedalus/protocol";
@@ -232,6 +233,38 @@ const worktree = (
   ...stage,
 });
 
+/**
+ * What each workspace has finished: "deadalus" has `?wins=N` of them (27 by
+ * default, a marble room), some with merged pull requests, and "atlas" four.
+ */
+const wins = Number(new URLSearchParams(location.search).get("wins") ?? 27);
+const doneTasks: TaskDto[] = [
+  ...Array.from({ length: wins }, (_, index) => ({
+    ...task(`d${index}`, 100 + index, `Finished thing ${index + 1}`),
+    status: "done" as const,
+    completedAt: at(60 * (wins - index)),
+  })),
+  ...Array.from({ length: 4 }, (_, index) => ({
+    ...task(`e${index}`, 200 + index, `Atlas thing ${index + 1}`),
+    workspaceId: "atlas",
+    status: "done" as const,
+    completedAt: at(90 * (4 - index)),
+  })),
+];
+const shipped: ShippedPullRequestDto[] = doneTasks
+  .filter((_, index) => index % 3 === 0)
+  .map((item) => ({
+    url: `https://github.com/o/r/pull/${item.number + 300}`,
+    workspaceId: item.workspaceId,
+    sessionId: null,
+    taskId: item.id,
+    repositoryId: null,
+    number: item.number + 300,
+    title: item.title,
+    branchName: `b${item.number}`,
+    mergedAt: item.completedAt!,
+  }));
+
 function Page() {
   const [beat, setBeat] = useState(0);
   const appearance =
@@ -283,7 +316,8 @@ function Page() {
   const model = buildWorldModel({
     workspaces,
     sessions: live,
-    tasks,
+    tasks: [...tasks, ...doneTasks],
+    shipped,
     activity,
     attention,
     worktrees: [

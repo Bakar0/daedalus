@@ -4,6 +4,7 @@ import type {
   SessionAttentionDto,
   SessionTelemetryDto,
   SessionWorktreeDto,
+  ShippedPullRequestDto,
   TaskDto,
   WorkspaceDto,
 } from "@daedalus/protocol";
@@ -70,6 +71,37 @@ export interface WorldZone {
   busy: number;
   /** One crate per branch with work on it, in the order they were started. */
   crates: WorldCrate[];
+  /** The newest wins, oldest first, as many as a shelf holds. */
+  trophies: WorldTrophy[];
+  /** Every win this workspace has, for how grand its room is. */
+  wins: number;
+}
+
+/**
+ * Something the workspace finished, kept on its room's shelf: a task marked
+ * done, gilded when it also merged a pull request, or a merged pull request
+ * no done task accounts for. A task and its pull request are one win, so
+ * splitting work into more pieces does not fill the shelf faster.
+ */
+export interface WorldTrophy {
+  id: string;
+  kind: "task" | "shipped-task" | "pull-request";
+  /** "#44 All workspace 2d game world" or "PR #512 Ship the World". */
+  label: string;
+  /** "PR #512 merged", when a task shipped one. */
+  detail: string | null;
+  at: string;
+}
+
+/** How many trophies a shelf shows. */
+export const SHELF_SIZE = 18;
+
+/**
+ * How grand a room is, from its wins: bare stone, then frescoes at 10,
+ * then marble and bronze at 25. It only ever goes up.
+ */
+export function roomTier(wins: number): 0 | 1 | 2 {
+  return wins >= 25 ? 2 : wins >= 10 ? 1 : 0;
 }
 
 /**
@@ -180,6 +212,53 @@ export interface WorldModelInput {
   attention: ReadonlyMap<string, SessionAttentionDto>;
   telemetry: ReadonlyMap<string, SessionTelemetryDto>;
   worktrees: readonly SessionWorktreeDto[];
+  shipped: readonly ShippedPullRequestDto[];
+}
+
+/** Every workspace's wins, oldest first. */
+export function trophiesByZone(
+  tasks: readonly TaskDto[],
+  shipped: readonly ShippedPullRequestDto[],
+): Map<string, WorldTrophy[]> {
+  const done = new Map(
+    tasks
+      .filter((task) => task.status === "done" && task.completedAt)
+      .map((task) => [task.id, task]),
+  );
+  const pulls = new Map<string, ShippedPullRequestDto[]>();
+  const trophies: Array<WorldTrophy & { zoneId: string }> = [];
+  for (const pull of shipped) {
+    if (pull.taskId && done.has(pull.taskId)) {
+      pulls.set(pull.taskId, [...(pulls.get(pull.taskId) ?? []), pull]);
+      continue;
+    }
+    trophies.push({
+      zoneId: pull.workspaceId,
+      id: pull.url,
+      kind: "pull-request",
+      label: `PR #${pull.number}${pull.title ? ` ${pull.title}` : ""}`,
+      detail: null,
+      at: pull.mergedAt,
+    });
+  }
+  for (const task of done.values()) {
+    const merged = pulls.get(task.id) ?? [];
+    trophies.push({
+      zoneId: task.workspaceId,
+      id: task.id,
+      kind: merged.length ? "shipped-task" : "task",
+      label: `#${task.number} ${task.title}`,
+      detail: merged.length
+        ? `${merged.map((pull) => `PR #${pull.number}`).join(", ")} merged`
+        : null,
+      at: task.completedAt!,
+    });
+  }
+  trophies.sort((left, right) => left.at.localeCompare(right.at));
+  const byZone = new Map<string, WorldTrophy[]>();
+  for (const { zoneId, ...trophy } of trophies)
+    byZone.set(zoneId, [...(byZone.get(zoneId) ?? []), trophy]);
+  return byZone;
 }
 
 /**
@@ -255,6 +334,7 @@ export function buildWorldModel(input: WorldModelInput): WorldModel {
       model: telemetry?.model ?? null,
     });
   }
+  const wins = trophiesByZone(input.tasks, input.shipped);
   return {
     zones: input.workspaces.map((workspace) => ({
       id: workspace.id,
@@ -266,6 +346,8 @@ export function buildWorldModel(input: WorldModelInput): WorldModel {
         (actor) => actor.zoneId === workspace.id && actor.mood !== "lost",
       ).length,
       crates: crates.get(workspace.id) ?? [],
+      trophies: (wins.get(workspace.id) ?? []).slice(-SHELF_SIZE),
+      wins: wins.get(workspace.id)?.length ?? 0,
     })),
     actors,
   };

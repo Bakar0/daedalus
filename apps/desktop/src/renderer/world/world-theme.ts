@@ -88,6 +88,28 @@ export interface WorldTheme {
   fit?: "all" | "width";
 }
 
+/**
+ * Scenery that explains itself: a theme marks a display object with the
+ * text for a hover card, such as a trophy naming the task it stands for,
+ * and the engine shows it when the pointer is over it.
+ */
+interface Tipped {
+  worldTip?: string;
+}
+
+export function setTip(target: Container, text: string) {
+  (target as Container & Tipped).worldTip = text;
+  target.eventMode = "static";
+}
+
+/** The hover text of `target` or the nearest ancestor that has one. */
+export function tipOf(target: Container | null): string | null {
+  for (let node = target; node; node = node.parent)
+    if ((node as Container & Tipped).worldTip)
+      return (node as Container & Tipped).worldTip!;
+  return null;
+}
+
 export interface WorldArrangement {
   origins: WorldPoint[];
   bounds: { x: number; y: number; width: number; height: number };

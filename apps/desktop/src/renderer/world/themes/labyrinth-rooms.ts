@@ -31,6 +31,34 @@ export interface RoomPalette {
   paper: number;
 }
 
+/** A trophy on the shelf: a task, a task that shipped, or a pull request. */
+export function drawTrophy(
+  g: Graphics,
+  kind: "task" | "shipped-task" | "pull-request",
+) {
+  if (kind === "pull-request") {
+    // A rolled scroll, tied with a ribbon.
+    g.roundRect(-9, -9, 18, 9, 4).fill(0xf1e3c0);
+    g.circle(-9, -4.5, 4.5).fill(0xe0cc9a);
+    g.circle(9, -4.5, 4.5).fill(0xe0cc9a);
+    g.rect(-1.5, -9, 3, 9).fill(0xa8323a);
+    return;
+  }
+  // An amphora; gilded when the task also merged its work.
+  const body = kind === "shipped-task" ? 0xe8c65a : 0xc9743a;
+  const band = kind === "shipped-task" ? 0x8a5a24 : 0x1b1d2a;
+  g.ellipse(0, -8, 6, 8).fill(body);
+  g.rect(-2.5, -19, 5, 5).fill(body);
+  g.ellipse(0, -19, 4, 1.4).fill(body);
+  g.rect(-6, -9.5, 12, 2.4).fill(band);
+  g.moveTo(-2.5, -17)
+    .bezierCurveTo(-7, -18, -7, -12, -4.5, -11)
+    .stroke({ width: 1.2, color: body });
+  g.moveTo(2.5, -17)
+    .bezierCurveTo(7, -18, 7, -12, 4.5, -11)
+    .stroke({ width: 1.2, color: body });
+}
+
 /** Deterministic randomness, the same sequence for the same seed. */
 export function scatter(seed: number) {
   let value = (seed * 2654435761) >>> 0;
@@ -620,17 +648,55 @@ function drawDecoration(
   }
 }
 
-/** Draws the whole room, far wall on the left, door on the right. */
+/**
+ * Marble pilasters at both ends of a tier 2 room, behind the furniture: the
+ * room has shipped enough to be rebuilt in stone.
+ */
+function drawPilasters(g: Graphics) {
+  for (const x of [-ROOM_W / 2 + 4, DOOR_X - 40]) {
+    g.rect(x, -ROOM_H / 2 + 12, 22, FLOOR_TOP + ROOM_H / 2 - 12).fill(0xeee9df);
+    g.rect(x + 6, -ROOM_H / 2 + 20, 2, FLOOR_TOP + ROOM_H / 2 - 28).fill(
+      0xcfc8ba,
+    );
+    g.rect(x + 14, -ROOM_H / 2 + 20, 2, FLOOR_TOP + ROOM_H / 2 - 28).fill(
+      0xcfc8ba,
+    );
+    g.rect(x - 4, -ROOM_H / 2 + 12, 30, 8).fill(0xcfc8ba);
+    g.rect(x - 4, FLOOR_TOP - 8, 30, 8).fill(0xcfc8ba);
+  }
+}
+
+/** A gold Greek key along the ceiling of a room with 10 wins or more. */
+function drawFrieze(g: Graphics, tier: number) {
+  const y = -ROOM_H / 2 + 3;
+  const color = tier >= 2 ? 0xf2d37a : 0xd9a64a;
+  for (let x = -ROOM_W / 2 + 10; x < ROOM_W / 2 - 16; x += 14)
+    g.moveTo(x, y + 7)
+      .lineTo(x, y)
+      .lineTo(x + 10, y)
+      .lineTo(x + 10, y + 5)
+      .lineTo(x + 4, y + 5)
+      .lineTo(x + 4, y + 3)
+      .stroke({ width: 1.5, color });
+}
+
+/**
+ * Draws the whole room, far wall on the left, door on the right. `tier`
+ * is how grand it has grown from what its workspace finished (see
+ * `roomTier`).
+ */
 export function drawRoom(
   g: Graphics,
   layout: RoomLayout,
   p: RoomPalette,
   seed: string,
   rock: number,
+  tier = 0,
 ) {
   const random = scatter(hash(`${seed}:draw`));
   drawWall(g, layout, random);
   drawFloor(g, layout);
+  if (tier >= 2) drawPilasters(g);
   for (const decoration of layout.decorations) drawDecoration(g, decoration, p);
   for (const { block, x } of layout.blocks) {
     const local = new Graphics();
@@ -642,6 +708,7 @@ export function drawRoom(
     color: 0x000000,
     alpha: 0.3,
   });
+  if (tier >= 1) drawFrieze(g, tier);
   // The doorway onto the corridor.
   g.rect(ROOM_W / 2 - 12, FLOOR_TOP - 86, 12, 86).fill(rock);
 }

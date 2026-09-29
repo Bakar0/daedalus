@@ -6,12 +6,15 @@ import type {
   PullRequestRefDto,
   SessionAttentionDto,
   SessionWorktreeDto,
+  ShippedPullRequestDto,
   TaskDto,
   WorkspaceDto,
 } from "@daedalus/protocol";
 import {
   buildWorldModel,
   crateFor,
+  roomTier,
+  SHELF_SIZE,
   stationForDetail,
   WORLD_PLACES,
   type WorldCrate,
@@ -110,6 +113,7 @@ const input = (overrides: Partial<WorldModelInput> = {}): WorldModelInput => ({
   attention: new Map(),
   telemetry: new Map(),
   worktrees: [],
+  shipped: [],
   ...overrides,
 });
 
@@ -354,6 +358,8 @@ describe("labyrinth", () => {
       attention: 0,
       busy: 0,
       crates: [],
+      trophies: [],
+      wins: 0,
     }));
   const { width: W, height: H } = LABYRINTH_ROOM;
   const inRoom = (
@@ -573,6 +579,8 @@ describe("dispatch", () => {
     attention: 0,
     busy: 1,
     crates,
+    trophies: [],
+    wins: 0,
   });
   const crate = (stage: WorldCrate["stage"]): WorldCrate => ({
     id: "/w/a",
@@ -659,6 +667,74 @@ describe("dispatch", () => {
     step(time, [zone(crate("open"))]);
     while (time < 5) step((time += 0.05), [zone()]);
     expect(layer.children).toHaveLength(0);
+  });
+});
+
+describe("trophies", () => {
+  const done = (id: string, number: number, completedAt: string): TaskDto => ({
+    ...task,
+    id,
+    number,
+    title: `Task ${number}`,
+    status: "done",
+    completedAt,
+  });
+  const pull = (
+    number: number,
+    taskId: string | null,
+    mergedAt: string,
+  ): ShippedPullRequestDto => ({
+    url: `https://github.com/o/r/pull/${number}`,
+    workspaceId: "w",
+    sessionId: null,
+    taskId,
+    repositoryId: null,
+    number,
+    title: `Change ${number}`,
+    branchName: `b${number}`,
+    mergedAt,
+  });
+
+  test("a task and its pull request are one win; strays count alone", () => {
+    const model = buildWorldModel(
+      input({
+        tasks: [
+          done("t1", 1, "2026-09-20T10:00:00.000Z"),
+          done("t2", 2, "2026-09-22T10:00:00.000Z"),
+          { ...task, id: "t3", number: 3, status: "cancelled" },
+        ],
+        shipped: [
+          pull(10, "t2", "2026-09-22T09:00:00.000Z"),
+          pull(11, null, "2026-09-21T10:00:00.000Z"),
+          // Its task was reopened, so the pull request stands alone.
+          pull(12, "t3", "2026-09-23T10:00:00.000Z"),
+        ],
+      }),
+    );
+    const zone = model.zones[0]!;
+    expect(zone.wins).toBe(4);
+    expect(zone.trophies.map((item) => [item.kind, item.label])).toEqual([
+      ["task", "#1 Task 1"],
+      ["pull-request", "PR #11 Change 11"],
+      ["shipped-task", "#2 Task 2"],
+      ["pull-request", "PR #12 Change 12"],
+    ]);
+    expect(zone.trophies[2]!.detail).toBe("PR #10 merged");
+  });
+
+  test("the shelf holds the newest; the tier counts them all", () => {
+    const tasks = Array.from({ length: 30 }, (_, index) =>
+      done(
+        `t${index}`,
+        index,
+        `2026-09-01T10:${String(index).padStart(2, "0")}:00.000Z`,
+      ),
+    );
+    const zone = buildWorldModel(input({ tasks })).zones[0]!;
+    expect(zone.wins).toBe(30);
+    expect(zone.trophies).toHaveLength(SHELF_SIZE);
+    expect(zone.trophies.at(-1)!.label).toBe("#29 Task 29");
+    expect([0, 9, 10, 24, 25, 90].map(roomTier)).toEqual([0, 0, 1, 1, 2, 2]);
   });
 });
 

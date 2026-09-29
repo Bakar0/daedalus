@@ -91,6 +91,8 @@ export default function WorldView(props: WorldViewProps) {
     point: WorldPoint;
     place: string;
   }>();
+  // Scenery with something to say, such as a trophy on a shelf.
+  const [tip, setTip] = useState<{ text: string; point: WorldPoint }>();
   // The engine's callbacks outlive renders; they read the latest props here.
   const latest = useRef(props);
   latest.current = props;
@@ -123,6 +125,8 @@ export default function WorldView(props: WorldViewProps) {
               : undefined,
           );
         },
+        onTip: (text, point) =>
+          setTip(text && point ? { text, point } : undefined),
       },
     ).then(
       (instance) => {
@@ -277,6 +281,23 @@ export default function WorldView(props: WorldViewProps) {
           </li>
         ))}
       </ul>
+      {tip && !hovered && (
+        <div
+          className="world-card"
+          role="tooltip"
+          style={{ left: tip.point.x + 14, top: tip.point.y + 14 }}
+        >
+          {tip.text
+            .split("\n")
+            .map((line, index) =>
+              index === 0 ? (
+                <strong key={line}>{line}</strong>
+              ) : (
+                <small key={line}>{line}</small>
+              ),
+            )}
+        </div>
+      )}
       {hovered && hover && (
         <div
           className="world-card"
