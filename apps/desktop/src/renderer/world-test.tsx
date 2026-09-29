@@ -145,11 +145,11 @@ const SCRIPT: Record<string, Beat[]> = {
     ["needs_input", "Which branch?"],
     ["needs_input", "Which branch?"],
   ],
-  // Pushing first, so crates leave for the Hermes Post straight away.
+  // Pushing, then ending its turn with a summary, which pops over it.
   a6: [
     ["working", "Bash(git push origin main)"],
     ["working", "Bash(gh pr create)"],
-    ["idle", null],
+    ["idle", "Opened the migration PR; CI is green."],
   ],
 };
 

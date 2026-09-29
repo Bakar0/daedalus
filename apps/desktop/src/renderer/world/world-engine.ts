@@ -1,4 +1,10 @@
-import { Application, Container, type FederatedPointerEvent } from "pixi.js";
+import {
+  Application,
+  Container,
+  Graphics,
+  Text,
+  type FederatedPointerEvent,
+} from "pixi.js";
 import type {
   WorldActor,
   WorldModel,
@@ -59,6 +65,9 @@ const MAX_FPS = 30;
 const MAX_SCALE = 2.6;
 /** Pointer travel, in screen pixels, past which a press is a drag. */
 const DRAG_THRESHOLD = 5;
+/** Seconds a progress pop stays up, rising, before the next one shows. */
+const POP_SECONDS = 2.6;
+const POP_RISE = 26;
 
 interface ZoneEntry {
   id: string;
@@ -87,6 +96,9 @@ interface ActorEntry {
   effective: WorldPlace;
   /** A move to or from a shared room that is waiting out the dwell. */
   pending?: { place: WorldPlace; since: number };
+  /** Progress pops still to show, one at a time, and the one showing. */
+  pops: string[];
+  pop?: { view: Container; age: number };
 }
 
 export class WorldEngine {
@@ -227,9 +239,62 @@ export class WorldEngine {
       replacement.position = position;
       replacement.path = entry.path;
       replacement.wait = entry.wait;
+      replacement.pops = entry.pops;
       this.actors.set(id, replacement);
     }
     this.place();
+  }
+
+  /**
+   * Floats `text` up from over an agent's head for a moment: progress it
+   * just made. Several in a row show one after another.
+   */
+  celebrate(sessionId: string, text: string) {
+    const entry = this.actors.get(sessionId);
+    if (!entry || entry.leaving) return;
+    // A backlog of old news is worse than none.
+    if (entry.pops.length < 3) entry.pops.push(text);
+  }
+
+  private showPops(entry: ActorEntry, seconds: number) {
+    if (entry.pop) {
+      entry.pop.age += seconds;
+      if (entry.pop.age >= POP_SECONDS) {
+        entry.pop.view.destroy({ children: true });
+        entry.pop = undefined;
+      }
+    }
+    if (!entry.pop && entry.pops.length && entry.wait <= 0) {
+      const view = new Container();
+      const text = new Text({
+        text: entry.pops.shift()!,
+        resolution: 4,
+        style: {
+          fill: 0xffffff,
+          fontFamily:
+            "-apple-system, BlinkMacSystemFont, 'SF Pro Rounded', 'SF Pro Text', sans-serif",
+          fontSize: 15,
+          fontWeight: "700",
+        },
+      });
+      text.anchor.set(0.5);
+      const pill = new Graphics()
+        .roundRect(-text.width / 2 - 10, -14, text.width + 20, 28, 14)
+        .fill({ color: 0x173b2c, alpha: 0.94 })
+        .stroke({ width: 2, color: 0x7fc28a });
+      view.addChild(pill, text);
+      view.zIndex = 1e6;
+      this.figures.addChild(view);
+      entry.pop = { view, age: 0 };
+    }
+    if (!entry.pop) return;
+    const { view, age } = entry.pop;
+    const head = 50 * (this.theme.actorScale ?? 1) + 34;
+    view.position.set(
+      entry.position.x,
+      entry.position.y - head - (age / POP_SECONDS) * POP_RISE,
+    );
+    view.alpha = Math.min(1, age / 0.2, (POP_SECONDS - age) / 0.6);
   }
 
   /** Back to the whole world in view. */
@@ -523,6 +588,7 @@ export class WorldEngine {
       facing: 0,
       leaving: false,
       effective: actor.place,
+      pops: [],
     };
   }
 
@@ -565,6 +631,7 @@ export class WorldEngine {
     const entry = this.actors.get(id);
     if (!entry) return;
     entry.vehicle?.destroy({ children: true });
+    entry.pop?.view.destroy({ children: true });
     entry.figure.view.destroy({ children: true });
     this.actors.delete(id);
   }
@@ -697,6 +764,7 @@ export class WorldEngine {
         walking,
         facing: entry.facing,
       });
+      this.showPops(entry, seconds);
     }
     this.place();
   }

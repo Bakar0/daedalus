@@ -25,6 +25,7 @@ import { LABYRINTH_ROOM, labyrinthTheme } from "./themes/labyrinth";
 import { layoutFor } from "./themes/labyrinth-rooms";
 import { createDispatch } from "./themes/labyrinth-dispatch";
 import { skyAt } from "./themes/labyrinth-sky";
+import { milestonesBetween } from "./world-milestones";
 import { Container } from "pixi.js";
 import {
   DEFAULT_WORLD_CHARACTER_ID,
@@ -294,9 +295,18 @@ describe("buildWorldModel", () => {
     );
     // The archived session's branch still has an open pull request.
     expect(model.zones[0]?.crates).toEqual([
-      { id: "/w/a", stage: "packing", label: "daedalus/a", url: null },
+      {
+        id: "/w/a",
+        sessionId: "a",
+        commits: 2,
+        stage: "packing",
+        label: "daedalus/a",
+        url: null,
+      },
       {
         id: "/w/b",
+        sessionId: "b",
+        commits: 1,
         stage: "open",
         label: "#7",
         url: "https://github.com/o/r/pull/7",
@@ -585,6 +595,8 @@ describe("dispatch", () => {
   });
   const crate = (stage: WorldCrate["stage"]): WorldCrate => ({
     id: "/w/a",
+    sessionId: "a",
+    commits: 2,
     stage,
     label: "#7",
     url: null,
@@ -759,6 +771,86 @@ describe("trophies", () => {
     expect(zone.trophies).toHaveLength(SHELF_SIZE);
     expect(zone.trophies.at(-1)!.label).toBe("#29 Task 29");
     expect([0, 9, 10, 24, 25, 90].map(roomTier)).toEqual([0, 0, 1, 1, 2, 2]);
+  });
+});
+
+describe("milestones", () => {
+  const snapshot = (
+    mood: "working" | "idle" | "attention",
+    extra: Partial<WorldModelInput> = {},
+    detail: string | null = null,
+  ) =>
+    buildWorldModel(
+      input({
+        sessions: [session("a", { taskId: "t" })],
+        activity: new Map([
+          [
+            "a",
+            activity(
+              "a",
+              mood === "attention" ? "needs_permission" : mood,
+              detail,
+            ),
+          ],
+        ]),
+        ...extra,
+      }),
+    );
+
+  test("a finished turn pops the agent's closing words; a question does not", () => {
+    const before = snapshot("working", {}, "Edit(x.ts)");
+    expect(
+      milestonesBetween(
+        before,
+        snapshot("idle", {}, "Found 12 sources on reward prediction error."),
+      ),
+    ).toEqual([
+      {
+        sessionId: "a",
+        text: "✓ Found 12 sources on reward prediction error.",
+      },
+    ]);
+    expect(milestonesBetween(before, snapshot("attention"))).toEqual([]);
+    expect(milestonesBetween(before, before)).toEqual([]);
+  });
+
+  test("commits, pushes, pull requests and a done task", () => {
+    const git = (
+      ahead: number,
+      unpushed: number,
+      pull?: Omit<PullRequestRefDto, "url">,
+    ) => ({ worktrees: [worktree("a", "/w/a", { ahead, unpushed }, pull)] });
+    const steps: Array<Partial<WorldModelInput>> = [
+      git(0, 0),
+      git(1, 1),
+      git(1, 0),
+      git(2, 0, { number: 9, state: "OPEN", isDraft: true }),
+      git(2, 0, { number: 9, state: "OPEN", isDraft: false }),
+      {
+        ...git(0, 0, { number: 9, state: "MERGED", isDraft: false }),
+        tasks: [
+          {
+            ...task,
+            id: "t",
+            status: "done",
+            completedAt: "2026-09-23T11:00:00.000Z",
+          },
+        ],
+      },
+    ];
+    const models = steps.map((step) => snapshot("working", step));
+    const texts = models
+      .slice(1)
+      .map((model, index) =>
+        milestonesBetween(models[index]!, model).map((item) => item.text),
+      );
+    expect(texts).toEqual([
+      ["Committed"],
+      ["Pushed"],
+      ["Committed", "Opened PR #9"],
+      ["PR #9 ready for review"],
+      [`✓ #${task.number} ${task.title} done`, "PR #9 merged"],
+    ]);
   });
 });
 

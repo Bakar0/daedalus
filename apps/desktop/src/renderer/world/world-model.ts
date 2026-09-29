@@ -49,6 +49,8 @@ export interface WorldActor {
   provider: AgentSessionDto["provider"];
   /** "#44 All workspace 2d game world", when the session has a task. */
   taskLabel: string | null;
+  /** Its task is marked done. */
+  taskDone: boolean;
   /** The board's tone, so the World and the board never disagree. */
   mood: SessionTone;
   /** Short state word: "working", "needs permission", "idle". */
@@ -117,6 +119,10 @@ export type WorldCrateStage =
 export interface WorldCrate {
   /** The worktree's path: one crate per branch, for as long as it exists. */
   id: string;
+  /** The session whose worktree it is. */
+  sessionId: string;
+  /** Commits ahead of base, for noticing a new one. */
+  commits: number;
   stage: WorldCrateStage;
   /** "#512" when there is a pull request, else the branch name. */
   label: string;
@@ -288,6 +294,8 @@ export function crateFor(worktree: SessionWorktreeDto): WorldCrate | null {
   const pull = worktree.pullRequest;
   const base = {
     id: worktree.path,
+    sessionId: worktree.sessionId,
+    commits: worktree.gitStatus?.ahead ?? 0,
     label: pull ? `#${pull.number}` : worktree.branchName,
     url: pull?.url ?? null,
   };
@@ -342,6 +350,7 @@ export function buildWorldModel(input: WorldModelInput): WorldModel {
       name: sessionName(session),
       provider: session.provider,
       taskLabel: task ? `#${task.number} ${task.title}` : null,
+      taskDone: task?.status === "done",
       mood: view.tone,
       label: view.label,
       place: placeFor(view.tone, activity),

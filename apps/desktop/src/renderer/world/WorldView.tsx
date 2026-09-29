@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { waitingLabel } from "../session-view";
 import { WorldEngine } from "./world-engine";
+import { milestonesBetween } from "./world-milestones";
 import type { WorldActor, WorldModel, WorldWeek } from "./world-model";
 import { WORLD_CHARACTERS, worldCharacterById } from "./characters";
 import type { WorldPoint } from "./world-theme";
@@ -34,6 +35,14 @@ const store = (key: string, value: string) => {
     // A remembered picker choice is a convenience; the default still works.
   }
 };
+
+/**
+ * Each agent's latest progress, for the hover card, kept for as long as the
+ * app runs so reopening the World does not forget it. Four each, newest
+ * first; nothing adds them up.
+ */
+const recent = new Map<string, Array<{ text: string; at: string }>>();
+const RECENT_SIZE = 4;
 
 /** A labelled select, shown only when there is more than one choice. */
 function Picker(props: {
@@ -209,7 +218,25 @@ export default function WorldView(props: WorldViewProps) {
     // One engine per mount; theme and appearance changes go through setters.
   }, []);
 
-  useEffect(() => engine.current?.setModel(model), [model]);
+  // Progress is a change between two snapshots, so the first one shows none.
+  const previous = useRef<WorldModel | null>(null);
+  useEffect(() => {
+    engine.current?.setModel(model);
+    if (previous.current) {
+      const at = new Date().toISOString();
+      for (const milestone of milestonesBetween(previous.current, model)) {
+        engine.current?.celebrate(milestone.sessionId, milestone.text);
+        recent.set(
+          milestone.sessionId,
+          [
+            { text: milestone.text, at },
+            ...(recent.get(milestone.sessionId) ?? []),
+          ].slice(0, RECENT_SIZE),
+        );
+      }
+    }
+    previous.current = model;
+  }, [model]);
   useEffect(() => engine.current?.setLook({ appearance }), [appearance]);
   useEffect(() => {
     engine.current?.setTheme(worldThemeById(themeId));
@@ -391,6 +418,11 @@ export default function WorldView(props: WorldViewProps) {
             {` · ${zoneName(hovered)}`}
           </small>
           {hovered.detail && <code>{hovered.detail}</code>}
+          {recent.get(hovered.sessionId)?.map((item) => (
+            <small className="world-card-progress" key={item.at + item.text}>
+              {item.text} · {waitingLabel(item.at, now)}
+            </small>
+          ))}
           {(hovered.model || hovered.contextPercent !== null) && (
             <small>
               {[

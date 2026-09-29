@@ -5112,6 +5112,9 @@ dd {
   font-size: 11px;
   overflow-wrap: anywhere;
 }
+.world-card .world-card-progress {
+  color: #7fc28a;
+}
 .world-card-persona {
   color: var(--accent);
   font-size: 11px;
