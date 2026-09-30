@@ -12,7 +12,7 @@ import {
   type WorldPreview,
 } from "./world-preview";
 import type { WorldActor, WorldModel, WorldWeek } from "./world-model";
-import { WORLD_CHARACTERS, worldCharacterById } from "./characters";
+import { botsCharacter } from "./characters/bots";
 import { contextLevel } from "./characters/parts";
 import type { WorldPoint } from "./world-theme";
 import { WORLD_THEMES, worldThemeById } from "./themes";
@@ -28,7 +28,6 @@ import { WORLD_THEMES, worldThemeById } from "./themes";
 // everyone who never chose. The keys moved when that became true: the old
 // ones held whatever the default was on the day, written on every open.
 const THEME_STORAGE_KEY = "daedalus.world.picked-theme";
-const CHARACTER_STORAGE_KEY = "daedalus.world.picked-agents";
 
 const stored = (key: string) => {
   try {
@@ -232,9 +231,6 @@ export default function WorldView(props: WorldViewProps) {
   const [themeId, setThemeId] = useState(
     () => worldThemeById(stored(THEME_STORAGE_KEY)).id,
   );
-  const [characterId, setCharacterId] = useState(
-    () => worldCharacterById(stored(CHARACTER_STORAGE_KEY)).id,
-  );
   const [failure, setFailure] = useState<string>();
   // The place is kept so the card closes when the agent walks off: a figure
   // moving out from under a still pointer fires no pointer event.
@@ -258,7 +254,7 @@ export default function WorldView(props: WorldViewProps) {
     WorldEngine.create(
       element,
       worldThemeById(themeId),
-      worldCharacterById(characterId),
+      botsCharacter,
       { appearance: latest.current.appearance },
       {
         onSelect: (sessionId) => {
@@ -327,9 +323,6 @@ export default function WorldView(props: WorldViewProps) {
   useEffect(() => {
     engine.current?.setTheme(worldThemeById(themeId));
   }, [themeId]);
-  useEffect(() => {
-    engine.current?.setCharacter(worldCharacterById(characterId));
-  }, [characterId]);
 
   const waiting = model.actors.filter((actor) => actor.mood === "attention");
   const working = model.actors.filter((actor) => actor.mood === "working");
@@ -436,15 +429,6 @@ export default function WorldView(props: WorldViewProps) {
           >
             This week
           </button>
-          <Picker
-            label="Agents"
-            onChange={(id) => {
-              setCharacterId(id);
-              store(CHARACTER_STORAGE_KEY, id);
-            }}
-            options={WORLD_CHARACTERS}
-            value={characterId}
-          />
           <Picker
             label="World"
             onChange={(id) => {
@@ -561,9 +545,9 @@ export default function WorldView(props: WorldViewProps) {
           style={{ left: hover.point.x + 14, top: hover.point.y + 14 }}
         >
           <strong>{hovered.name}</strong>
-          {worldCharacterById(characterId).caption?.(hovered) && (
+          {botsCharacter.caption?.(hovered) && (
             <em className="world-card-persona">
-              {worldCharacterById(characterId).caption?.(hovered)}
+              {botsCharacter.caption?.(hovered)}
             </em>
           )}
           {hovered.taskLabel && <span>{hovered.taskLabel}</span>}

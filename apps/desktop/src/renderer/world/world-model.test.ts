@@ -28,12 +28,6 @@ import { skyAt } from "./themes/labyrinth-sky";
 import { milestonesBetween } from "./world-milestones";
 import { NO_PREVIEW, previewModel } from "./world-preview";
 import { Container } from "pixi.js";
-import {
-  DEFAULT_WORLD_CHARACTER_ID,
-  WORLD_CHARACTERS,
-  worldCharacterById,
-} from "./characters";
-import { SPRITE_CLASSES, SPRITE_SIZE, spriteRows } from "./characters/pixel";
 import { COSTUMES } from "./characters/costumes";
 import { PERSONAS, personaFor } from "./characters/personas";
 import { contextLevel } from "./characters/parts";
@@ -1019,42 +1013,6 @@ describe("crateFor", () => {
       stage({ ahead: 3 }, { number: 1, state: "CLOSED", isDraft: false }),
     ).toBeNull();
   });
-});
-
-describe("characters", () => {
-  // A remembered choice that is missing or no longer exists falls back to
-  // the default, and the default is Bots: the style the user picked.
-  test("an unknown or missing choice falls back to Bots", () => {
-    expect(DEFAULT_WORLD_CHARACTER_ID).toBe("bots");
-    expect(worldCharacterById(null).id).toBe("bots");
-    expect(worldCharacterById("retired-style").id).toBe("bots");
-    expect(worldCharacterById("pixel").id).toBe("pixel");
-  });
-
-  test("every style has a unique id and a label", () => {
-    const ids = WORLD_CHARACTERS.map((character) => character.id);
-    expect(new Set(ids).size).toBe(ids.length);
-    for (const character of WORLD_CHARACTERS)
-      expect(character.label).toBeTruthy();
-  });
-
-  // A sprite row one character short shears everything under it sideways.
-  test.each(Object.entries(SPRITE_CLASSES))(
-    "the %s sprite is a full grid in every pose",
-    (_, kind) => {
-      for (const pose of [
-        "stand",
-        "stepA",
-        "stepB",
-        "wave",
-        "cheer",
-      ] as const) {
-        const rows = spriteRows(kind, pose);
-        expect(rows).toHaveLength(SPRITE_SIZE.rows);
-        for (const row of rows) expect(row).toHaveLength(SPRITE_SIZE.columns);
-      }
-    },
-  );
 });
 
 describe("personas", () => {

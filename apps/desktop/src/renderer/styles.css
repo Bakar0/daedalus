@@ -4901,10 +4901,15 @@ dd {
   flex: 1;
   flex-direction: column;
   min-height: 0;
+  /* In its own window the view is a flex row item; without this a wide
+     toolbar stretches it past the window's right edge, and the Needs you
+     list with it. */
+  min-width: 0;
 }
 .world-toolbar {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   justify-content: space-between;
   min-height: 58px;
@@ -4924,6 +4929,7 @@ dd {
 }
 .world-pickers {
   display: flex;
+  flex-wrap: wrap;
   gap: 14px;
 }
 .world-theme-picker {
