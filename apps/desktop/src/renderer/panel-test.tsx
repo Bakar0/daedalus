@@ -193,6 +193,7 @@ const snapshot: DesktopSnapshotDto = {
       updatedAt: "2026-09-14T00:01:00.000Z",
     },
   ],
+  shipped: [],
   toasts: [],
   settings: {
     version: "0.3.0",

@@ -51,6 +51,7 @@ const base: DesktopSnapshotDto = {
   sessionActivity: [],
   attention: [],
   worktrees: [],
+  shipped: [],
   toasts: [],
   settings: {
     version: "0.3.0",
@@ -355,6 +356,7 @@ describe("desktop application shell", () => {
     expect(preferredWorkspaceView("sessions")).toBe("sessions");
     expect(preferredWorkspaceView("workspace")).toBe("workspace");
     expect(preferredWorkspaceView("board")).toBe("board");
+    expect(preferredWorkspaceView("world")).toBe("world");
     expect(preferredWorkspaceView("retired-mode")).toBe("board");
     expect(preferredWorkspaceView(null)).toBe("board");
     expect(preferredWorkspaceView()).toBe("board");
@@ -386,6 +388,13 @@ describe("desktop application shell", () => {
     );
     expect(switcher.indexOf(">Sessions<")).toBeLessThan(
       switcher.indexOf(">Workspace<"),
+    );
+    // The World spans every workspace, so it is not one of the modes: its
+    // button sits apart, at the right end of the top bar.
+    expect(switcher).not.toContain("World");
+    const actions = html.slice(html.indexOf('class="top-actions"'));
+    expect(actions).toMatch(
+      /class="world-toggle[^"]*"[^>]*>.*World<\/button>/s,
     );
     expect(html).toContain("mode-board");
     expect(html).not.toContain("No session selected");
@@ -578,6 +587,7 @@ describe("desktop application shell", () => {
     test("the scope's views fall back from Workspace to Board", () => {
       expect(preferredScopeView("all", "workspace")).toBe("board");
       expect(preferredScopeView("all", "sessions")).toBe("sessions");
+      expect(preferredScopeView("all", "world")).toBe("world");
       expect(preferredScopeView("workspace", "workspace")).toBe("workspace");
       expect(preferredScopeView("all", null)).toBe("board");
     });

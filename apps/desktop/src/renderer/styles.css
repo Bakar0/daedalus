@@ -158,6 +158,35 @@ small,
 .heading-actions {
   gap: 7px;
 }
+.top-actions .world-toggle {
+  align-items: center;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--secondary);
+  display: flex;
+  gap: 6px;
+  padding: 6px 12px;
+}
+.top-actions .world-toggle:hover:not(:disabled) {
+  background: var(--raised-hover);
+  color: var(--text);
+}
+.top-actions .world-toggle.active {
+  background: var(--elevated);
+  border-color: var(--line-strong);
+  box-shadow: 0 2px 9px rgb(0 0 0 / 0.2);
+  color: var(--text);
+}
+.world-toggle svg {
+  fill: none;
+  height: 14px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+  width: 14px;
+}
 .syncing {
   color: #89beff;
 }
@@ -2077,7 +2106,8 @@ dd {
     var(--workspace-panel-width) 6px var(--sessions-panel-width) 6px
     minmax(320px, 1fr);
 }
-.workspace-shell.mode-workspace {
+.workspace-shell.mode-workspace,
+.workspace-shell.mode-world {
   grid-template-columns: var(--workspace-panel-width) 6px minmax(0, 1fr);
 }
 .workspace-column {
@@ -3425,7 +3455,8 @@ dd {
 @media (max-width: 820px) {
   .workspace-shell.mode-board,
   .workspace-shell.mode-sessions,
-  .workspace-shell.mode-workspace {
+  .workspace-shell.mode-workspace,
+  .workspace-shell.mode-world {
     grid-template-columns:
       min(var(--workspace-panel-width), 180px) 6px
       minmax(400px, 1fr);
@@ -4860,4 +4891,348 @@ dd {
 .task-action-bar > .board-launch-row {
   font-size: 12px;
   padding: 0 2px;
+}
+
+/* World (#44). The canvas fills the column; everything that has to be read
+   or clicked precisely (the counts, the Needs you list, the hover card) is
+   HTML over or beside it, so it follows the app's type and theme. */
+.world-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.world-toolbar {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-height: 58px;
+}
+.world-toolbar > div:first-child {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+.world-summary {
+  color: var(--muted);
+}
+.world-waiting {
+  color: #ff8282;
+  font-weight: 600;
+}
+.world-pickers {
+  display: flex;
+  gap: 14px;
+}
+.world-theme-picker {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
+}
+.world-body {
+  display: flex;
+  flex: 1;
+  gap: 12px;
+  min-height: 0;
+}
+.world-stage {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  position: relative;
+}
+.world-canvas {
+  display: block;
+  inset: 0;
+  position: absolute;
+}
+.world-zoom {
+  /* Over the canvas, which is appended after it. */
+  z-index: 2;
+  background: var(--overlay);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  bottom: 12px;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.25);
+  display: flex;
+  position: absolute;
+  right: 12px;
+}
+.world-zoom button {
+  background: transparent;
+  border: 0;
+  color: var(--secondary);
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 34px;
+  padding: 6px 10px;
+}
+.world-zoom button + button {
+  border-left: 1px solid var(--line);
+}
+.world-zoom button:hover {
+  background: var(--raised-hover);
+  color: var(--text);
+}
+.world-overlay {
+  z-index: 1;
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+}
+.world-quiet {
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  bottom: 16px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 3px;
+  inset: auto 50% auto auto;
+  padding: 10px 14px;
+  transform: translateX(50%);
+}
+.world-quiet strong {
+  color: var(--secondary);
+}
+.world-needs {
+  display: flex;
+  flex: 0 0 240px;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  overflow: auto;
+}
+.world-needs button {
+  align-items: flex-start;
+  color: var(--text);
+  background: var(--raised);
+  border: 1px solid rgb(255 130 130 / 0.35);
+  border-radius: 9px;
+  display: flex;
+  gap: 9px;
+  padding: 9px 10px;
+  text-align: left;
+}
+.world-needs button:hover {
+  background: var(--raised-hover);
+}
+.world-needs .agent-dot {
+  flex: none;
+  margin-top: 4px;
+}
+.world-needs-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.world-needs-copy small {
+  color: var(--muted);
+}
+.world-needs-copy span {
+  color: var(--secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.world-preview {
+  align-items: center;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  display: flex;
+  gap: 6px;
+  padding: 3px 6px;
+}
+.world-preview button {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--secondary);
+  font-size: 12px;
+  padding: 3px 8px;
+}
+.world-preview select {
+  font-size: 12px;
+  height: auto;
+  padding: 3px 6px;
+}
+.world-preview button:disabled {
+  opacity: 0.5;
+}
+/* The World on its own: the view fills the window. */
+.app.world-window {
+  display: flex;
+  height: 100vh;
+  padding: 14px 16px 16px;
+}
+.world-pickers .world-week-button {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--secondary);
+  font-size: 12px;
+  padding: 5px 10px;
+}
+.world-pickers .world-week-button:hover,
+.world-pickers .world-week-button[aria-expanded="true"] {
+  background: var(--raised-hover);
+  color: var(--text);
+}
+.world-week {
+  /* Over the canvas, which is appended after it. */
+  z-index: 2;
+  background: var(--overlay);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.35);
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 10px;
+  left: 12px;
+  max-height: calc(100% - 24px);
+  overflow: auto;
+  padding: 12px 14px;
+  position: absolute;
+  top: 12px;
+  width: min(340px, calc(100% - 24px));
+}
+.world-week header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+.world-week header button {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+}
+.world-week-empty {
+  color: var(--muted);
+  margin: 0;
+}
+.world-week-head {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+.world-week-head span {
+  color: var(--text);
+  font-weight: 600;
+}
+.world-week-head small,
+.world-week li small {
+  color: var(--muted);
+}
+.world-week ul {
+  display: grid;
+  gap: 3px;
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+.world-week li {
+  color: var(--secondary);
+  display: grid;
+  overflow-wrap: anywhere;
+}
+.world-card {
+  background: var(--overlay);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.35);
+  display: grid;
+  font-size: 12px;
+  gap: 3px;
+  max-width: 300px;
+  padding: 9px 11px;
+  pointer-events: none;
+  position: fixed;
+  z-index: 50;
+}
+.world-card span {
+  color: var(--secondary);
+}
+.world-card small {
+  color: var(--muted);
+}
+.world-card code {
+  color: var(--secondary);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.world-card .world-card-progress {
+  color: #7fc28a;
+}
+.world-context {
+  display: grid;
+  gap: 3px;
+  margin-top: 2px;
+}
+.world-context-bar {
+  background: var(--raised);
+  border-radius: 3px;
+  height: 6px;
+  overflow: hidden;
+  position: relative;
+  width: 180px;
+}
+.world-context-bar > span {
+  background: #7fc28a;
+  display: block;
+  height: 100%;
+}
+.world-context-bar.level-1 > span {
+  background: #c9d46a;
+}
+.world-context-bar.level-2 > span {
+  background: #e8b04a;
+}
+.world-context-bar.level-3 > span {
+  background: #ff5f5f;
+}
+.world-context-bar > i {
+  background: rgb(255 255 255 / 0.5);
+  height: 100%;
+  position: absolute;
+  top: 0;
+  width: 1px;
+}
+.world-card-persona {
+  color: var(--accent);
+  font-size: 11px;
+}
+.world-card-hint {
+  opacity: 0.8;
+}
+.world-accessible-list {
+  clip-path: inset(50%);
+  height: 1px;
+  margin: 0;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+.world-accessible-list:focus-within {
+  background: var(--overlay);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  clip-path: none;
+  height: auto;
+  list-style: none;
+  padding: 8px;
+  width: auto;
+  z-index: 40;
 }

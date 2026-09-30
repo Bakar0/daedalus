@@ -24,6 +24,7 @@ import type {
   AgentSessionDto,
   DesktopRpcSchema,
   DesktopSnapshotDto,
+  DesktopWindowRole,
   IntegratedTerminalDto,
   PresenceStateDto,
   RepositoryLibraryDto,
@@ -185,6 +186,9 @@ export async function desktopSnapshot(
     worktrees: context.workspaceContent
       .listWorktrees()
       .map((worktree) => ({ ...worktree })),
+    shipped: context.workspaceContent
+      .listShippedPullRequests()
+      .map((item) => ({ ...item })),
     attention: context.activity.listAttention().map(sessionAttentionDto),
     toasts: context.notifications.pending("toast").map(toastDto),
     settings: {
@@ -221,6 +225,22 @@ export function desktopDataFingerprint(context: ApplicationContext): string {
   });
 }
 
+/**
+ * The windows side of the host: which window a set of handlers serves, and
+ * the two things the World window asks of the others.
+ */
+export interface DesktopWindowHost {
+  role: DesktopWindowRole;
+  openWorld(): void;
+  focusSession(sessionId: string): void;
+}
+
+const MAIN_WINDOW_ONLY: DesktopWindowHost = {
+  role: "main",
+  openWorld: () => {},
+  focusSession: () => {},
+};
+
 export function createDesktopRequestHandlers(
   context: ApplicationContext,
   onMutation: () => void = () => {},
@@ -228,6 +248,7 @@ export function createDesktopRequestHandlers(
   terminalEndpoint = "",
   quit: DesktopQuitHost = { dialogShown: () => {}, decide: async () => {} },
   updates: DesktopUpdateHost = NO_UPDATES,
+  windows: DesktopWindowHost = MAIN_WINDOW_ONLY,
 ): DesktopRequestHandlers {
   const mutate = async <T>(operation: () => T | Promise<T>) => {
     const response = await result(operation);
@@ -237,6 +258,17 @@ export function createDesktopRequestHandlers(
 
   return {
     snapshot: () => result(() => desktopSnapshot(context)),
+    windowRole: () => result(() => ({ role: windows.role })),
+    worldWindowOpen: () =>
+      result(() => {
+        windows.openWorld();
+        return { opened: true };
+      }),
+    sessionFocus: ({ sessionId }) =>
+      result(() => {
+        windows.focusSession(sessionId);
+        return { focused: true };
+      }),
     terminalEndpoint: () => result(() => ({ endpoint: terminalEndpoint })),
     openExternal: ({ url }) =>
       result(() => {

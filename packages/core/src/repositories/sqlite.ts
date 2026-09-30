@@ -6,6 +6,7 @@ import type {
   AgentSessionStatus,
   AttentionReason,
   ClearedAttentionReason,
+  ShippedPullRequest,
   IntegratedTerminal,
   NotificationLevel,
   PendingNotification,
@@ -261,6 +262,18 @@ interface AttentionHistoryRow {
   source: AgentActivitySource;
   raised_at: string;
   cleared_at: string;
+}
+
+interface ShippedPullRequestRow {
+  url: string;
+  workspace_id: string;
+  session_id: string | null;
+  task_id: string | null;
+  repository_id: string | null;
+  number: number;
+  title: string | null;
+  branch_name: string;
+  merged_at: string;
 }
 
 interface PendingNotificationRow {
@@ -1070,6 +1083,48 @@ export class SqliteRepositories {
         source: row.source,
         raisedAt: row.raised_at,
         clearedAt: row.cleared_at,
+      }));
+  }
+
+  /** Files a merged pull request once; a second sighting changes nothing. */
+  recordShippedPullRequest(shipped: ShippedPullRequest): void {
+    this.database
+      .query(
+        `INSERT OR IGNORE INTO shipped_pull_requests
+         (url, workspace_id, session_id, task_id, repository_id, number, title,
+          branch_name, merged_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        shipped.url,
+        shipped.workspaceId,
+        shipped.sessionId,
+        shipped.taskId,
+        shipped.repositoryId,
+        shipped.number,
+        shipped.title,
+        shipped.branchName,
+        shipped.mergedAt,
+      );
+  }
+
+  /** Every merged pull request remembered, oldest first. */
+  listShippedPullRequests(): ShippedPullRequest[] {
+    return this.database
+      .query<ShippedPullRequestRow, []>(
+        "SELECT * FROM shipped_pull_requests ORDER BY merged_at, rowid",
+      )
+      .all()
+      .map((row) => ({
+        url: row.url,
+        workspaceId: row.workspace_id,
+        sessionId: row.session_id,
+        taskId: row.task_id,
+        repositoryId: row.repository_id,
+        number: row.number,
+        title: row.title,
+        branchName: row.branch_name,
+        mergedAt: row.merged_at,
       }));
   }
 

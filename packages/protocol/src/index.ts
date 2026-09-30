@@ -172,6 +172,22 @@ export interface PullRequestRefDto {
   url: string;
   state: "OPEN" | "CLOSED" | "MERGED";
   isDraft: boolean;
+  title?: string;
+  /** GitHub's merge time, present once merged. */
+  mergedAt?: string;
+}
+
+/** A merged pull request, remembered after its worktree is gone. */
+export interface ShippedPullRequestDto {
+  url: string;
+  workspaceId: string;
+  sessionId: string | null;
+  taskId: string | null;
+  repositoryId: string | null;
+  number: number;
+  title: string | null;
+  branchName: string;
+  mergedAt: string;
 }
 
 export interface SessionWorktreeDto {
@@ -507,6 +523,8 @@ export interface DesktopSnapshotDto {
    * workspace view ever having been opened.
    */
   worktrees: SessionWorktreeDto[];
+  /** Every merged pull request remembered, oldest first, for the World. */
+  shipped: ShippedPullRequestDto[];
   toasts: ToastDto[];
   settings: DesktopSettingsDto;
 }
@@ -526,6 +544,9 @@ type Request<Params, Response> = {
   params: Params;
   response: RpcResult<Response>;
 };
+
+/** The app's own window, or the World opened in a window of its own. */
+export type DesktopWindowRole = "main" | "world";
 
 /** Stable contract shared by Electrobun's Bun and renderer runtimes. */
 export interface DesktopRpcSchema {
@@ -875,6 +896,19 @@ export interface DesktopRpcSchema {
       >;
       terminalClose: Request<{ id: string }, IntegratedTerminalDto>;
       openExternal: Request<{ url: string }, { opened: boolean }>;
+      /**
+       * Which window is asking: the main app, or the World on its own. Both
+       * load the same page, and a `views://` URL carries no parameters, so a
+       * page learns what to draw by asking.
+       */
+      windowRole: Request<Record<string, never>, { role: DesktopWindowRole }>;
+      /** Opens the World in a window of its own, or brings it forward. */
+      worldWindowOpen: Request<Record<string, never>, { opened: boolean }>;
+      /**
+       * Brings the main window forward on a session, for a click in the
+       * World window: the session opens where its terminal lives.
+       */
+      sessionFocus: Request<{ sessionId: string }, { focused: boolean }>;
     };
     messages: Record<never, never>;
   };
@@ -926,11 +960,13 @@ export interface DesktopRpcSchema {
 export const QUIT_MENU_ACTION = "quit-requested";
 export const SHUTDOWN_MENU_ACTION = "quit-and-shut-down";
 export const CHECK_FOR_UPDATES_MENU_ACTION = "check-for-updates";
+export const OPEN_WORLD_WINDOW_MENU_ACTION = "open-world-window";
 
 export const DESKTOP_COMMANDS = [
   "view-board",
   "view-sessions",
   "view-workspace",
+  "view-world",
   "toggle-terminal",
 ] as const;
 

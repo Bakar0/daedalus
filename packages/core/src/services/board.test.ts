@@ -272,6 +272,73 @@ describe("pull request lookup", () => {
     ])
       expect(parsePullRequestView(bad)).toBeUndefined();
   });
+
+  test("keeps the title, and the merge time once merged", () => {
+    expect(
+      parsePullRequestView(
+        JSON.stringify({
+          number: 7,
+          url: "https://x/7",
+          state: "MERGED",
+          title: " Ship the World ",
+          mergedAt: "2026-09-28T10:00:00Z",
+        }),
+      ),
+    ).toMatchObject({
+      title: "Ship the World",
+      mergedAt: "2026-09-28T10:00:00Z",
+    });
+    // An open pull request has no merge time, whatever gh says.
+    const open = parsePullRequestView(
+      JSON.stringify({
+        number: 7,
+        url: "https://x/7",
+        state: "OPEN",
+        mergedAt: "2026-09-28T10:00:00Z",
+      }),
+    );
+    expect(open?.mergedAt).toBeUndefined();
+    expect(open?.title).toBeUndefined();
+  });
+});
+
+describe("shipped pull requests", () => {
+  test("are filed once and outlive their session's worktree", async () => {
+    await withBoardContext(async (context) => {
+      const workspace = await context.workspaces.create({ name: "Ship" });
+      const shipped = {
+        url: "https://github.com/o/r/pull/7",
+        workspaceId: workspace.id,
+        sessionId: null,
+        taskId: null,
+        repositoryId: null,
+        number: 7,
+        title: "Ship the World",
+        branchName: "daedalus/world",
+        mergedAt: "2026-09-28T10:00:00.000Z",
+      };
+      context.repositories.recordShippedPullRequest(shipped);
+      // A later sighting, with a later time, changes nothing.
+      context.repositories.recordShippedPullRequest({
+        ...shipped,
+        mergedAt: "2026-09-29T10:00:00.000Z",
+      });
+      context.repositories.recordShippedPullRequest({
+        ...shipped,
+        url: "https://github.com/o/r/pull/3",
+        number: 3,
+        mergedAt: "2026-09-20T10:00:00.000Z",
+      });
+      expect(
+        context.workspaceContent
+          .listShippedPullRequests()
+          .map((item) => [item.number, item.mergedAt]),
+      ).toEqual([
+        [3, "2026-09-20T10:00:00.000Z"],
+        [7, "2026-09-28T10:00:00.000Z"],
+      ]);
+    });
+  });
 });
 
 describe("journal entries for a task", () => {

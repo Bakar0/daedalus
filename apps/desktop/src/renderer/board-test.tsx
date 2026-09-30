@@ -321,6 +321,7 @@ const snapshot: DesktopSnapshotDto = {
       },
     },
   ],
+  shipped: [],
   toasts: [],
   settings: {
     version: "0.7.0",

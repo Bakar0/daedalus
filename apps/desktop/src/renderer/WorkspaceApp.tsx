@@ -5,6 +5,8 @@ import "@xterm/xterm/css/xterm.css";
 import { basicSetup, EditorView } from "codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -58,6 +60,7 @@ import { taskActions } from "./task-actions";
 import { TaskCostLine, TaskTimeline } from "./TaskTimeline";
 import { TaskActionBar } from "./TaskActionBar";
 import { askConfirm, askText, DialogHost } from "./dialogs";
+import { buildWorldModel, worldInputFromSnapshot } from "./world/world-model";
 import { TaskPriorityMenu, TaskStatusMenu } from "./TaskStatusMenu";
 import {
   AgentStatusDot,
@@ -76,6 +79,10 @@ import {
   waitingLabel,
   type SessionStatusView,
 } from "./session-view";
+
+// Pixi is about 290 kB (87 kB gzipped) that the app only needs once someone
+// opens the World, so the view and everything under it load on first open.
+const WorldView = lazy(() => import("./world/WorldView"));
 
 // The indicator vocabulary moved to `session-view.tsx`; these stay importable
 // from here because the tests and harnesses have always found them here.
@@ -173,7 +180,7 @@ const rememberExpandedDirectories = (
 const lastViewStorageKey = (workspaceId: string) =>
   `daedalus.view.last.${workspaceId}`;
 
-export type WorkspaceView = "board" | "sessions" | "workspace";
+export type WorkspaceView = "board" | "sessions" | "workspace" | "world";
 
 /**
  * What the main column shows: one workspace, or every active workspace at
@@ -204,7 +211,9 @@ export function preferredWorkspaceView(
   // Board first, and first by default. The board is where a dispatcher starts
   // the day, and since #27 it also holds the repositories and the add button,
   // so a workspace with nothing attached yet is fixed from here too.
-  return rememberedView === "sessions" || rememberedView === "workspace"
+  return rememberedView === "sessions" ||
+    rememberedView === "workspace" ||
+    rememberedView === "world"
     ? rememberedView
     : "board";
 }
@@ -1647,6 +1656,12 @@ export function WorkspaceApp({
       preferredScopeView(scope, rememberedWorkspaceView(scopeKey)),
   );
   const viewWorkspaceId = useRef(scopeKey);
+  // Where the World button returns to: the World spans every workspace, so
+  // it toggles over whichever workspace view was open.
+  const lastWorkspaceView = useRef<WorkspaceView>(
+    view === "world" ? "board" : view,
+  );
+  if (view !== "world") lastWorkspaceView.current = view;
   const [workspaceContent, setWorkspaceContent] = useState(
     initialWorkspaceContent,
   );
@@ -2319,6 +2334,10 @@ export function WorkspaceApp({
   const runDesktopCommand = useCallback(
     (command: DesktopCommand) => {
       if (command === "view-board") setView("board");
+      else if (command === "view-world" && workspaceId)
+        setView((current) =>
+          current === "world" ? lastWorkspaceView.current : "world",
+        );
       else if (command === "view-sessions" && workspaceId) setView("sessions");
       else if (command === "view-workspace" && workspaceId && !showingAll)
         setView("workspace");
@@ -4649,6 +4668,25 @@ export function WorkspaceApp({
         </nav>
         <div className="top-actions">
           {busy && <span className="syncing">Working…</span>}
+          {/* Apart from the tabs: the World is every workspace at once. */}
+          <button
+            aria-pressed={view === "world"}
+            className={`world-toggle ${view === "world" ? "active" : ""}`}
+            disabled={!workspace}
+            onClick={() =>
+              setView(view === "world" ? lastWorkspaceView.current : "world")
+            }
+            title={
+              view === "world"
+                ? "Back to the workspace (⌘4)"
+                : "Every workspace's agents at once (⌘4)"
+            }
+          >
+            <svg aria-hidden="true" viewBox="0 0 16 16">
+              <path d="M8 1.5h6.5v13h-13v-13H5M5 4.5h6.5v7h-7v-7M8 7.5h1v1" />
+            </svg>
+            World
+          </button>
         </div>
       </header>
       {/* One grid row holds every banner, so two at once stack in it. */}
@@ -4896,17 +4934,17 @@ export function WorkspaceApp({
         />
 
         <section
-          className={`workspace-main ${view === "board" ? "board-column" : view === "sessions" ? `session-navigator ${sessionsPanelWidth < PANEL_COMPACT_THRESHOLD ? "panel-compact" : ""}` : "workspace-content-column"}`}
+          className={`workspace-main ${view === "board" ? "board-column" : view === "sessions" ? `session-navigator ${sessionsPanelWidth < PANEL_COMPACT_THRESHOLD ? "panel-compact" : ""}` : view === "world" ? "workspace-content-column world-column" : "workspace-content-column"}`}
         >
           <div className="workspace-main-header">
             <div>
               <span className="eyebrow">
-                {showingAll && workspace
+                {(showingAll || view === "world") && workspace
                   ? `${activeWorkspaces.length} ${activeWorkspaces.length === 1 ? "workspace" : "workspaces"}`
                   : (workspace?.slug ?? "Select a workspace")}
               </span>
               <h1>
-                {showingAll && workspace
+                {(showingAll || view === "world") && workspace
                   ? "All workspaces"
                   : (workspace?.name ?? "Workspace")}
               </h1>
@@ -5283,6 +5321,32 @@ export function WorkspaceApp({
                 </div>
               )}
             </>
+          ) : view === "world" ? (
+            <Suspense
+              fallback={<div className="empty large">Opening the World…</div>}
+            >
+              <WorldView
+                appearance={theme}
+                preview={!!snapshot && snapshot.settings.channel !== "stable"}
+                // The World is every workspace at once, whatever the sidebar
+                // has selected: it is the one view of everything running.
+                model={buildWorldModel(
+                  worldInputFromSnapshot(snapshot, orderedWorkspaces, now),
+                )}
+                onPopOut={() => {
+                  void client.request.worldWindowOpen({});
+                  setView(lastWorkspaceView.current);
+                }}
+                now={now}
+                onOpenSession={(sessionId, sessionWorkspaceId) => {
+                  // The same path a board card takes: the scope stays, the
+                  // workspace underneath follows the session.
+                  setWorkspaceId(sessionWorkspaceId);
+                  openSession(sessionId);
+                  setView("sessions");
+                }}
+              />
+            </Suspense>
           ) : view === "board" ? (
             <BoardView
               activity={activityById}
