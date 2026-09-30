@@ -5012,13 +5012,73 @@ dd {
 }
 .world-needs {
   display: flex;
+  /* The basis is the dragged width, set inline. */
   flex: 0 0 240px;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  padding-left: 8px;
+  position: relative;
+}
+/* A strip down the list's left edge; dragging it left widens the list. */
+.world-needs-handle {
+  border-radius: 3px;
+  bottom: 0;
+  cursor: col-resize;
+  left: 0;
+  position: absolute;
+  top: 0;
+  touch-action: none;
+  width: 6px;
+}
+.world-needs-handle:hover,
+.world-needs-handle:focus-visible {
+  background: var(--line-strong);
+}
+.world-needs-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+.world-needs-head .eyebrow {
+  margin-bottom: 0;
+}
+.world-body .world-needs-collapse,
+.world-body .world-needs-strip {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--secondary);
+}
+.world-body .world-needs-collapse {
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 8px;
+}
+.world-body .world-needs-collapse:hover,
+.world-body .world-needs-strip:hover {
+  background: var(--raised-hover);
+  color: var(--text);
+}
+/* The collapsed list: a narrow button with the count. */
+.world-body .world-needs-strip {
+  align-items: center;
+  align-self: flex-start;
+  border-color: rgb(255 130 130 / 0.35);
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 7px;
+}
+.world-needs-list {
+  display: flex;
   flex-direction: column;
   gap: 6px;
   min-height: 0;
   overflow: auto;
 }
-.world-needs button {
+.world-needs-list button {
   align-items: flex-start;
   color: var(--text);
   background: var(--raised);
@@ -5029,7 +5089,7 @@ dd {
   padding: 9px 10px;
   text-align: left;
 }
-.world-needs button:hover {
+.world-needs-list button:hover {
   background: var(--raised-hover);
 }
 .world-needs .agent-dot {
