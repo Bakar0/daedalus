@@ -389,6 +389,13 @@ describe("desktop application shell", () => {
     expect(switcher.indexOf(">Sessions<")).toBeLessThan(
       switcher.indexOf(">Workspace<"),
     );
+    // The World spans every workspace, so it is not one of the modes: its
+    // button sits apart, at the right end of the top bar.
+    expect(switcher).not.toContain("World");
+    const actions = html.slice(html.indexOf('class="top-actions"'));
+    expect(actions).toMatch(
+      /class="world-toggle[^"]*"[^>]*>.*World<\/button>/s,
+    );
     expect(html).toContain("mode-board");
     expect(html).not.toContain("No session selected");
     expect(html).toContain("No workspaces yet");

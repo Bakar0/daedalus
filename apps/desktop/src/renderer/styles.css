@@ -158,6 +158,35 @@ small,
 .heading-actions {
   gap: 7px;
 }
+.top-actions .world-toggle {
+  align-items: center;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--secondary);
+  display: flex;
+  gap: 6px;
+  padding: 6px 12px;
+}
+.top-actions .world-toggle:hover:not(:disabled) {
+  background: var(--raised-hover);
+  color: var(--text);
+}
+.top-actions .world-toggle.active {
+  background: var(--elevated);
+  border-color: var(--line-strong);
+  box-shadow: 0 2px 9px rgb(0 0 0 / 0.2);
+  color: var(--text);
+}
+.world-toggle svg {
+  fill: none;
+  height: 14px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+  width: 14px;
+}
 .syncing {
   color: #89beff;
 }

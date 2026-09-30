@@ -1656,6 +1656,12 @@ export function WorkspaceApp({
       preferredScopeView(scope, rememberedWorkspaceView(scopeKey)),
   );
   const viewWorkspaceId = useRef(scopeKey);
+  // Where the World button returns to: the World spans every workspace, so
+  // it toggles over whichever workspace view was open.
+  const lastWorkspaceView = useRef<WorkspaceView>(
+    view === "world" ? "board" : view,
+  );
+  if (view !== "world") lastWorkspaceView.current = view;
   const [workspaceContent, setWorkspaceContent] = useState(
     initialWorkspaceContent,
   );
@@ -2328,7 +2334,10 @@ export function WorkspaceApp({
   const runDesktopCommand = useCallback(
     (command: DesktopCommand) => {
       if (command === "view-board") setView("board");
-      else if (command === "view-world" && workspaceId) setView("world");
+      else if (command === "view-world" && workspaceId)
+        setView((current) =>
+          current === "world" ? lastWorkspaceView.current : "world",
+        );
       else if (command === "view-sessions" && workspaceId) setView("sessions");
       else if (command === "view-workspace" && workspaceId && !showingAll)
         setView("workspace");
@@ -4656,17 +4665,28 @@ export function WorkspaceApp({
           >
             Workspace
           </button>
-          <button
-            aria-current={view === "world" ? "page" : undefined}
-            className={view === "world" ? "active" : ""}
-            disabled={!workspace}
-            onClick={() => setView("world")}
-          >
-            World
-          </button>
         </nav>
         <div className="top-actions">
           {busy && <span className="syncing">Working…</span>}
+          {/* Apart from the tabs: the World is every workspace at once. */}
+          <button
+            aria-pressed={view === "world"}
+            className={`world-toggle ${view === "world" ? "active" : ""}`}
+            disabled={!workspace}
+            onClick={() =>
+              setView(view === "world" ? lastWorkspaceView.current : "world")
+            }
+            title={
+              view === "world"
+                ? "Back to the workspace (⌘4)"
+                : "Every workspace's agents at once (⌘4)"
+            }
+          >
+            <svg aria-hidden="true" viewBox="0 0 16 16">
+              <path d="M8 1.5h6.5v13h-13v-13H5M5 4.5h6.5v7h-7v-7M8 7.5h1v1" />
+            </svg>
+            World
+          </button>
         </div>
       </header>
       {/* One grid row holds every banner, so two at once stack in it. */}
