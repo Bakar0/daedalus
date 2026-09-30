@@ -5115,6 +5115,40 @@ dd {
 .world-card .world-card-progress {
   color: #7fc28a;
 }
+.world-context {
+  display: grid;
+  gap: 3px;
+  margin-top: 2px;
+}
+.world-context-bar {
+  background: var(--raised);
+  border-radius: 3px;
+  height: 6px;
+  overflow: hidden;
+  position: relative;
+  width: 180px;
+}
+.world-context-bar > span {
+  background: #7fc28a;
+  display: block;
+  height: 100%;
+}
+.world-context-bar.level-1 > span {
+  background: #c9d46a;
+}
+.world-context-bar.level-2 > span {
+  background: #e8b04a;
+}
+.world-context-bar.level-3 > span {
+  background: #ff5f5f;
+}
+.world-context-bar > i {
+  background: rgb(255 255 255 / 0.5);
+  height: 100%;
+  position: absolute;
+  top: 0;
+  width: 1px;
+}
 .world-card-persona {
   color: var(--accent);
   font-size: 11px;

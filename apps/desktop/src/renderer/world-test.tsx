@@ -339,6 +339,23 @@ function Page() {
           observedAt: at(0),
         },
       ],
+      // Sweating, and nearly out: black smoke.
+      [
+        "a4",
+        {
+          sessionId: "a4",
+          context: { usedTokens: 120_000, usedPercent: 62 },
+          observedAt: at(0),
+        },
+      ],
+      [
+        "a6",
+        {
+          sessionId: "a6",
+          context: { usedTokens: 176_000, usedPercent: 88 },
+          observedAt: at(0),
+        },
+      ],
     ]),
   });
   return (

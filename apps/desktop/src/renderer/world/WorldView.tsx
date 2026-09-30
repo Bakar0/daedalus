@@ -4,6 +4,7 @@ import { WorldEngine } from "./world-engine";
 import { milestonesBetween } from "./world-milestones";
 import type { WorldActor, WorldModel, WorldWeek } from "./world-model";
 import { WORLD_CHARACTERS, worldCharacterById } from "./characters";
+import { contextLevel } from "./characters/parts";
 import type { WorldPoint } from "./world-theme";
 import { WORLD_THEMES, worldThemeById } from "./themes";
 
@@ -81,6 +82,36 @@ export interface WorldViewProps {
 
 const count = (value: number, noun: string) =>
   `${value} ${noun}${value === 1 ? "" : "s"}`;
+
+/**
+ * How full an agent's context is, on its hover card: a bar with marks at
+ * 30, 50 and 80%, the points where the figure starts to steam, sweat and
+ * smoke.
+ */
+function ContextMeter(props: { percent: number }) {
+  const level = contextLevel(props.percent);
+  const note = ["", "warming up", "sweating", "about to run out"][level];
+  return (
+    <span className="world-context">
+      <span
+        aria-label={`${Math.round(props.percent)}% of context used`}
+        className={`world-context-bar level-${level}`}
+        role="meter"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(props.percent)}
+      >
+        <span style={{ width: `${Math.min(100, props.percent)}%` }} />
+        {[30, 50, 80].map((mark) => (
+          <i key={mark} style={{ left: `${mark}%` }} />
+        ))}
+      </span>
+      <small>
+        {Math.round(props.percent)}% context{note ? ` · ${note}` : ""}
+      </small>
+    </span>
+  );
+}
 
 /** The newest this many per workspace; the counts cover the rest. */
 const WEEK_ROWS = 8;
@@ -423,17 +454,9 @@ export default function WorldView(props: WorldViewProps) {
               {item.text} · {waitingLabel(item.at, now)}
             </small>
           ))}
-          {(hovered.model || hovered.contextPercent !== null) && (
-            <small>
-              {[
-                hovered.model,
-                hovered.contextPercent !== null
-                  ? `${Math.round(hovered.contextPercent)}% context`
-                  : null,
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-            </small>
+          {hovered.model && <small>{hovered.model}</small>}
+          {hovered.contextPercent !== null && (
+            <ContextMeter percent={hovered.contextPercent} />
           )}
           <small className="world-card-hint">Click to open the session</small>
         </div>

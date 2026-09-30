@@ -35,6 +35,7 @@ import {
 import { SPRITE_CLASSES, SPRITE_SIZE, spriteRows } from "./characters/pixel";
 import { COSTUMES } from "./characters/costumes";
 import { PERSONAS, personaFor } from "./characters/personas";
+import { contextLevel } from "./characters/parts";
 
 const workspace = (id: string): WorkspaceDto => ({
   id,
@@ -850,6 +851,14 @@ describe("milestones", () => {
       ["Committed", "Opened PR #9"],
       ["PR #9 ready for review"],
       [`✓ #${task.number} ${task.title} done`, "PR #9 merged"],
+    ]);
+  });
+});
+
+describe("context level", () => {
+  test("steam at 30%, sweat at 50%, smoke at 80%; unknown shows nothing", () => {
+    expect([null, 0, 29.9, 30, 49, 50, 79, 80, 100].map(contextLevel)).toEqual([
+      0, 0, 0, 1, 1, 2, 2, 3, 3,
     ]);
   });
 });

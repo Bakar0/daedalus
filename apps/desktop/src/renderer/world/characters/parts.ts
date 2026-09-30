@@ -57,6 +57,80 @@ const truncate = (value: string, length: number) =>
 export const blinking = (time: number, seed: number) =>
   (time + seed * 7) % (3.2 + seed * 2) < 0.12;
 
+/**
+ * How full an agent's context is, as the figure shows it: 0 below 30%,
+ * then a wisp of steam (1), sweat and grey steam (2), and from 80% black
+ * smoke pouring out of its head (3). Unknown context shows nothing.
+ */
+export function contextLevel(percent: number | null): 0 | 1 | 2 | 3 {
+  if (percent === null) return 0;
+  return percent >= 80 ? 3 : percent >= 50 ? 2 : percent >= 30 ? 1 : 0;
+}
+
+/**
+ * Steam, sweat or smoke over a head at `top`, for a context `level`. Drawn
+ * from the clock alone, so it needs no state and never piles up.
+ */
+function drawFumes(g: Graphics, level: number, t: number, top: number) {
+  if (level === 0) return;
+  const puffs = level === 3 ? 9 : level === 2 ? 4 : 1;
+  const rate = level === 3 ? 0.6 : level === 2 ? 0.45 : 0.32;
+  const height = level === 3 ? 80 : 46;
+  for (let puff = 0; puff < puffs; puff += 1) {
+    const phase = (t * rate + puff / puffs) % 1;
+    // A single wisp shows only part of the time: now and then, not always.
+    if (level === 1 && phase > 0.6) continue;
+    const rise = level === 1 ? phase / 0.6 : phase;
+    // Out of the top of the head, drifting and spreading as it rises.
+    const x = Math.sin(t * 1.3 + puff * 2.1) * 5 * rise - 6 * rise;
+    const y = top + 6 - rise * height;
+    if (level === 3) {
+      const radius = 6 + rise * 14;
+      const alpha = Math.min(1, (1 - rise) * 1.4);
+      // A light rim, so it reads on a dark wall as well as a pale one.
+      g.circle(x, y, radius + 1.5).fill({
+        color: 0x9a9aa6,
+        alpha: alpha * 0.7,
+      });
+      g.circle(x, y, radius).fill({ color: 0x16161a, alpha });
+      g.circle(x - radius * 0.3, y - radius * 0.3, radius * 0.45).fill({
+        color: 0x3a3a44,
+        alpha,
+      });
+      continue;
+    }
+    const radius = (level === 2 ? 4 : 3.5) + rise * (level === 2 ? 7 : 6);
+    g.circle(x, y, radius).fill({
+      color: level === 2 ? 0xdfe3ea : 0xffffff,
+      alpha: (level === 2 ? 0.75 : 0.7) * (1 - rise),
+    });
+  }
+  if (level === 3)
+    // Embers spitting out of the head.
+    for (let spark = 0; spark < 3; spark += 1) {
+      const phase = (t * 1.4 + spark / 3) % 1;
+      const side = spark % 2 ? 1 : -1;
+      g.circle(
+        side * phase * 14,
+        top + 4 - phase * 22 + phase * phase * 16,
+        1.8,
+      ).fill({ color: 0xffa53d, alpha: 1 - phase });
+    }
+  if (level < 2) return;
+  // Sweat flying off either side of the head.
+  for (const side of [-1, 1]) {
+    const phase = (t * 0.9 + (side === 1 ? 0.5 : 0)) % 1;
+    const x = side * (10 + phase * 16);
+    const y = top + 10 - phase * 10 + phase * phase * 30;
+    const alpha = 1 - phase;
+    g.moveTo(x, y - 6)
+      .quadraticCurveTo(x + side * 4.5, y + 1.5, x, y + 3)
+      .quadraticCurveTo(x - side * 4.5, y + 1.5, x, y - 6)
+      .fill({ color: 0x6ec0ff, alpha });
+    g.circle(x - side, y - 1, 1).fill({ color: 0xffffff, alpha });
+  }
+}
+
 /** What the bubble over an agent's head shows. */
 type Bubble =
   | { kind: "tool"; station: WorldStation }
@@ -187,6 +261,7 @@ export abstract class FigureBase implements ActorFigure {
   protected readonly seed: number;
   protected readonly hashed: number;
   private readonly ring = new Graphics();
+  private readonly fumes = new Graphics();
   private readonly bubble = new Container();
   private readonly bubbleBack = new Graphics();
   private readonly bubbleIcon = new Graphics();
@@ -216,7 +291,7 @@ export abstract class FigureBase implements ActorFigure {
     this.bubble.addChild(this.bubbleBack, this.bubbleIcon, this.bubbleMark);
     this.tag.addChild(this.tagBack, this.tagText);
     this.tag.position.set(0, 5);
-    this.view.addChild(this.ring, this.body, this.bubble, this.tag);
+    this.view.addChild(this.ring, this.body, this.fumes, this.bubble, this.tag);
     this.view.hitArea = {
       contains: (x, y) => x > -20 && x < 20 && y > headTop - 6 && y < 18,
     };
@@ -277,6 +352,10 @@ export abstract class FigureBase implements ActorFigure {
     const t = frame.time + this.seed * 10;
     this.body.scale.x = frame.facing === -1 ? -1 : 1;
     this.pose(t, frame);
+    const level = contextLevel(this.actor.contextPercent);
+    // Nearly out of context: it trembles under the smoke.
+    this.body.x = level === 3 ? Math.sin(t * 38) * 0.7 : 0;
+    drawFumes(this.fumes.clear(), level, t, this.headTop);
     const { mood } = this.actor;
     const lift =
       mood === "idle" ? ((t * 0.8) % 1) * 5 : Math.sin(t * 2.4) * 1.5;
