@@ -26,6 +26,12 @@ import {
 
 export interface LaunchInput {
   prompt?: string;
+  /**
+   * `default` asks before every tool call the session's settings do not
+   * allow. A resident runs unattended with an explicit allow list, where the
+   * relaxed mode's own judgement would be one more thing that can block.
+   */
+  permissionMode?: "default";
   taskId?: string;
   sessionId?: string;
   sessionName?: string;
@@ -572,7 +578,9 @@ class ConfiguredProvider implements AgentProvider {
         args.push("--add-dir", directory);
     if (this.promptArgument)
       args.push(
-        ...permissionModeArgs(this.name, this.definition.permissionMode),
+        ...(input.permissionMode === "default" && this.name === "claude"
+          ? ["--permission-mode", "default"]
+          : permissionModeArgs(this.name, this.definition.permissionMode)),
       );
     if (this.promptArgument && this.name === "codex") {
       args.push(...CODEX_DAEDALUS_TUI_ARGS);
@@ -737,4 +745,12 @@ export function buildAgentPrompt(input: {
       : `Execute task #${input.taskNumber}. Do not merely summarize or restate it; complete the task.`;
   const message = input.message?.trim() || undefined;
   return [taskInstruction, message].filter(Boolean).join("\n\n") || undefined;
+}
+
+/**
+ * A resident's launch prompt. Thin on purpose: the charter and the skills in
+ * its workspace carry the rest, and each routine run brings what it needs.
+ */
+export function residentPrompt(name: string): string {
+  return `You are ${name}, a Daedalus resident. Read CHARTER.md in your working directory and follow it. Daedalus will type /daedalus-routine lines when routines are due, and the user may talk to you here. If SERVICES.md is still empty, start first-run setup with the user as the daedalus-resident skill describes.`;
 }

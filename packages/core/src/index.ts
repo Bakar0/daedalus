@@ -25,3 +25,7 @@ export * from "./services/workspaces";
 export * from "./services/workspace-content";
 export * from "./services/workspace-watch";
 export * from "./services/skills";
+export * from "./services/findings";
+export * from "./services/residents";
+export * from "./services/routine-files";
+export * from "./services/routines";

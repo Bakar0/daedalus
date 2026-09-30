@@ -393,3 +393,5 @@ export interface PresenceState {
   userIdleSeconds: number;
   observedAt: string;
 }
+
+export * from "./residents";

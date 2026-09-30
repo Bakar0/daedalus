@@ -18,6 +18,18 @@ import {
   type TaskCost,
   type ManagedSkillStatus,
 } from "@daedalus/core";
+import {
+  expectPositionals,
+  parseArguments,
+  printResult,
+  required,
+} from "./arguments";
+import {
+  findingCommand,
+  residentCommand,
+  residentHelp,
+  routineCommand,
+} from "./residents";
 import { findTmuxExecutable, probeVersion } from "@daedalus/platform";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -242,6 +254,9 @@ Usage:
   daedal repo <library|list|add|attach|sync|fetch|detach|worktree> ... [--json]
   daedal agent <spawn|list|get|wait|attach|send|archive|restore|revive|stop|remove> ... [--json]
   daedal skill <list|get|enable|disable|visibility|install|remove|sync|doctor> ... [--json]
+  daedal resident <create|list|get|start|stop|pause|resume|update> ... [--json]
+  daedal routine <add|list|get|enable|disable|run|remove|runs|start|done|fail> ... [--json]
+  daedal finding <report|list|clear|verdict> ... [--json]
   daedal attention "<reason>" [--session <agent-id>] [--clear] [--json]
   daedal notify "<message>" [--level info|success|error] [--desktop] [--json]
   daedal ui state [--json]
@@ -250,6 +265,7 @@ Usage:
 Run 'daedal <command> --help' for command details.`;
 
 const commandHelp: Record<string, string> = {
+  ...residentHelp,
   workspace: `Workspace commands:
   daedal workspace create <name> [--slug <slug>] [--path <path>]
   daedal workspace list [--archived]
@@ -421,50 +437,6 @@ session, seconds idle, and whether Focus mode is on — so an agent can choose
 its own channel before pinging.`,
 };
 
-interface ParsedArguments {
-  positionals: string[];
-  values: Record<string, string>;
-  flags: Set<string>;
-}
-
-function parseArguments(
-  args: string[],
-  valueOptions: string[],
-  booleanOptions: string[] = [],
-): ParsedArguments {
-  const values: Record<string, string> = {};
-  const flags = new Set<string>();
-  const positionals: string[] = [];
-  for (let index = 0; index < args.length; index += 1) {
-    const argument = args[index]!;
-    if (!argument.startsWith("--")) {
-      positionals.push(argument);
-      continue;
-    }
-    const name = argument.slice(2);
-    if (booleanOptions.includes(name)) {
-      flags.add(name);
-      continue;
-    }
-    if (!valueOptions.includes(name))
-      throw new DaedalusError("VALIDATION", `Unknown option '--${name}'`);
-    const value = args[index + 1];
-    if (value === undefined || value.startsWith("--"))
-      throw new DaedalusError(
-        "VALIDATION",
-        `Option '--${name}' requires a value`,
-      );
-    if (values[name] !== undefined)
-      throw new DaedalusError(
-        "VALIDATION",
-        `Option '--${name}' was provided more than once`,
-      );
-    values[name] = value;
-    index += 1;
-  }
-  return { positionals, values, flags };
-}
-
 const durationLabel = (milliseconds: number) => {
   const minutes = Math.max(0, Math.floor(milliseconds / 60_000));
   if (minutes < 60) return `${minutes}m`;
@@ -511,26 +483,6 @@ async function descriptionOption(
       `Description file '${file}' was not found`,
     );
   return source.text();
-}
-
-function required(value: string | undefined, description: string): string {
-  if (value === undefined)
-    throw new DaedalusError("VALIDATION", `${description} is required`);
-  return value;
-}
-
-function expectPositionals(
-  values: string[],
-  count: number,
-  usage: string,
-): void {
-  if (values.length !== count)
-    throw new DaedalusError("VALIDATION", `Usage: ${usage}`);
-}
-
-function printResult(data: unknown, json: boolean, human: () => void): void {
-  if (json) console.log(JSON.stringify({ ok: true, data }));
-  else human();
 }
 
 /**
@@ -2393,6 +2345,9 @@ export async function runCli(
       "ui",
       "focus",
       "shutdown",
+      "resident",
+      "routine",
+      "finding",
     ].includes(args[0]!)
   )
     throw new DaedalusError("VALIDATION", `Unknown command '${args[0]}'`);
@@ -2417,6 +2372,12 @@ export async function runCli(
       return await focusCommand(context, args.slice(1), json);
     if (args[0] === "shutdown")
       return await shutdownCommand(context, args.slice(1), json);
+    if (args[0] === "resident")
+      return await residentCommand(context, args.slice(1), json);
+    if (args[0] === "routine")
+      return await routineCommand(context, args.slice(1), json);
+    if (args[0] === "finding")
+      return await findingCommand(context, args.slice(1), json);
     return await agentCommand(context, args.slice(1), json, options);
   } finally {
     context.close();

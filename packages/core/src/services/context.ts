@@ -14,6 +14,9 @@ import { JsonLogger } from "../logging";
 import { runMigrations } from "../repositories/migrations";
 import { SqliteRepositories } from "../repositories/sqlite";
 import { ActivityService } from "./activity";
+import { FindingService } from "./findings";
+import { ResidentService } from "./residents";
+import { RoutineService } from "./routines";
 import { SkillService } from "./skills";
 import { AgentService } from "./agents";
 import { IntegratedTerminalService } from "./integrated-terminals";
@@ -50,6 +53,9 @@ export interface ApplicationContext {
   notifications: NotificationService;
   activity: ActivityService;
   skills: SkillService;
+  residents: ResidentService;
+  routines: RoutineService;
+  findings: FindingService;
   /** Ends everything at once. Nothing else in the app reaches for it. */
   shutdown: ShutdownService;
   tmux: TmuxClient;
@@ -167,6 +173,23 @@ export async function createApplicationContext(
     home: config.home,
     ...(options.now ? { now: options.now } : {}),
   });
+  const routines = new RoutineService(
+    repositories,
+    workspaces,
+    async (sessionId, reason) => {
+      await activity.raise({ sessionId, reason });
+    },
+    options.now,
+  );
+  const findings = new FindingService(repositories, notifications, options.now);
+  const residents = new ResidentService(
+    repositories,
+    workspaces,
+    agents,
+    routines,
+    findings,
+    options.now,
+  );
   if (options.reconcile !== false) {
     // A clone only lives as long as the process running it, so anything still
     // marked as preparing belongs to a run that is over.
@@ -195,6 +218,9 @@ export async function createApplicationContext(
     notifications,
     activity,
     skills: new SkillService(config),
+    residents,
+    routines,
+    findings,
     shutdown: new ShutdownService(repositories, agents, terminals, tmux),
     tmux,
     // Watchers are kernel resources held outside the database, so they are

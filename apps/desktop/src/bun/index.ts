@@ -248,6 +248,10 @@ const server = Bun.serve<SocketData>({
               socket.data.initialSize,
               terminalTmux.executable,
             ),
+          onInput: () => {
+            if (socket.data.targetKind === "agent")
+              lastTerminalInput.set(target.id, Date.now());
+          },
           onError: (error) =>
             void context.logger.write("error", "terminal_connection_failed", {
               targetId: target.id,
@@ -669,6 +673,11 @@ setInterval(() => {
   void context.presence.keepAlive().catch(() => undefined);
 }, 1_200);
 
+// When the user last typed into each agent's terminal. A resident's routine
+// delivery holds for a minute after, so a line Daedalus types never lands in
+// the middle of what the user is writing.
+const lastTerminalInput = new Map<string, number>();
+
 let checkingForExternalChanges = false;
 setInterval(async () => {
   if (checkingForExternalChanges) return;
@@ -708,6 +717,24 @@ setInterval(async () => {
         context.agents.sweepAutoHandoffs(telemetry.sessionTelemetry),
       )
       .catch(() => undefined);
+    // Residents' routines ride the tick too: the clock lives in the app, so
+    // nothing fires while it is closed.
+    if (context.residents.list().length) {
+      const telemetry = await context.telemetry.read().catch(() => undefined);
+      const contextUse = new Map(
+        (telemetry?.sessionTelemetry ?? []).map((item) => [
+          item.sessionId,
+          item.context?.usedPercent,
+        ]),
+      );
+      const residentTick = await context.residents.tick({
+        contextPercent: (sessionId) => contextUse.get(sessionId),
+        lastInputAt: (sessionId) => lastTerminalInput.get(sessionId),
+        activity: (sessionId) => context.activity.get(sessionId),
+      });
+      for (const event of residentTick.events)
+        await context.logger.write("info", "resident", { event });
+    }
     for (const [socket, connection] of connections) {
       const target =
         socket.data.targetKind === "agent"

@@ -22,6 +22,7 @@ import type {
   WorkspaceRepository,
   WorkspaceRepositoryAccess,
 } from "../domain";
+import { ResidentRepository } from "./residents";
 
 interface WorkspaceRow {
   id: string;
@@ -324,11 +325,14 @@ const pendingNotificationFromRow = (
 export class SqliteRepositories {
   readonly database: Database;
 
+  readonly residents: ResidentRepository;
+
   constructor(databasePath: string) {
     this.database = new Database(databasePath, { create: true });
     this.database.exec(
       "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;",
     );
+    this.residents = new ResidentRepository(this.database);
   }
 
   /**
@@ -345,6 +349,17 @@ export class SqliteRepositories {
 
   transaction<T>(operation: () => T): T {
     return this.database.transaction(operation)();
+  }
+
+  /**
+   * A transaction that takes the write lock before it reads. Two processes
+   * that both read and then write under a deferred transaction can each see
+   * the other's row missing; under WAL the second one's upgrade then fails
+   * outright instead of waiting. Taking the lock first makes the second
+   * process wait for the busy timeout and read the first one's row.
+   */
+  immediateTransaction<T>(operation: () => T): T {
+    return this.database.transaction(operation).immediate();
   }
 
   createWorkspace(workspace: Workspace): void {

@@ -114,6 +114,8 @@ export interface TerminalConnectionOptions {
   status: "live" | "reconnected";
   createBridge: (onOutput: (output: Uint8Array) => void) => TerminalBridge;
   onError?: (error: unknown) => void;
+  /** Called on every input frame, before it reaches the terminal. */
+  onInput?: () => void;
 }
 
 export class TerminalConnection {
@@ -158,6 +160,7 @@ export class TerminalConnection {
             TERMINAL_INPUT_LIMIT
         )
           throw new Error("Terminal input frame is too large");
+        this.options.onInput?.();
         const operation = this.#inputChain.then(() => {
           this.bridge.write(message.data);
         });

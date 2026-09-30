@@ -14,6 +14,7 @@ import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import {
   buildAgentPrompt,
+  residentPrompt,
   buildHandoffRequest,
   catalogOffersModel,
   CLAUDE_DEFAULT_MODEL,
@@ -719,6 +720,11 @@ export class AgentService {
      */
     continueFrom?: AgentSession;
     handoff?: boolean;
+    /**
+     * A resident's session: it runs at the workspace root, where its memory
+     * lives, and in the provider's default permission mode.
+     */
+    resident?: boolean;
   }): Promise<AgentSession> {
     const workspace = await this.workspaces.getActive(input.workspace);
     const task = input.taskId ? this.tasks.get(input.taskId) : undefined;
@@ -775,7 +781,9 @@ export class AgentService {
           task,
           sessionId: id,
           provider: provider?.name,
-          workingDirectory: input.continueFrom?.workingDirectory,
+          workingDirectory:
+            input.continueFrom?.workingDirectory ??
+            (input.resident ? workspace.path : undefined),
         })
       : { workingDirectory: workspace.path, worktrees: [], references: [] };
     if (input.draftBrief && !task)
@@ -801,6 +809,7 @@ export class AgentService {
           sessionName: name,
           prompt: launchPrompt,
           model,
+          ...(input.resident ? { permissionMode: "default" as const } : {}),
           additionalDirectories: prepared.references.map(
             (repository) =>
               repository.referencePath ?? repository.canonicalPath,
@@ -970,7 +979,9 @@ export class AgentService {
         agent.status !== "running" ||
         agent.archivedAt ||
         agent.handoffRequestedAt ||
-        (agent.provider !== "claude" && agent.provider !== "codex")
+        (agent.provider !== "claude" && agent.provider !== "codex") ||
+        // A resident drains its routines first; its own scheduler decides.
+        this.repositories.residents.findResidentBySession(agent.id)
       )
         continue;
       try {
@@ -1030,10 +1041,14 @@ export class AgentService {
         `${handoff}\n`,
         "utf8",
       );
+    const resident = this.repositories.residents.findResidentBySession(
+      predecessor.id,
+    );
     const session = await this.spawn({
       workspace: predecessor.workspaceId,
       taskId: predecessor.taskId ?? undefined,
-      name: handoffSessionName(predecessor.name),
+      // A resident keeps its own name; its sessions are one agent over time.
+      name: resident ? resident.name : handoffSessionName(predecessor.name),
       provider,
       // A different provider would not understand the old one's model name.
       model:
@@ -1041,10 +1056,21 @@ export class AgentService {
         (provider === predecessor.provider
           ? sessionLaunchModel(predecessor.args)
           : undefined),
-      message: input.message,
+      message: resident
+        ? [residentPrompt(resident.name), input.message?.trim()]
+            .filter(Boolean)
+            .join("\n\n")
+        : input.message,
       continueFrom: predecessor,
       handoff: Boolean(handoff),
+      resident: Boolean(resident),
     });
+    // The duty moves with the work, so the scheduler follows the successor.
+    if (resident)
+      this.repositories.residents.transferResidentSession(
+        predecessor.id,
+        session.id,
+      );
     if (input.archive === "later") return { session, predecessor };
     try {
       return {
