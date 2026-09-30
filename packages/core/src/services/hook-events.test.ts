@@ -5,6 +5,7 @@ import {
   observeClaudeTranscript,
   observeCodexHook,
   observeCodexRollout,
+  pendingBackgroundAgents,
   summarizeTool,
 } from "./hook-events";
 
@@ -266,6 +267,154 @@ const codex = (event: string, extra: Record<string, unknown> = {}) => ({
   model: "gpt-5.6-sol",
   permission_mode: "default",
   ...extra,
+});
+
+describe("Claude background agents", () => {
+  // Shaped like the #46 transcript that raised a false "needs you": an
+  // `Agent` launch, the turn ending, then the report queued five minutes on.
+  const now = Date.parse("2026-09-30T09:05:06.000Z");
+  const launch = (agentId: string, timestamp = "2026-09-30T09:03:52.275Z") =>
+    JSON.stringify({
+      type: "user",
+      isSidechain: false,
+      timestamp,
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            content: [
+              { type: "text", text: "Async agent launched successfully." },
+            ],
+          },
+        ],
+      },
+      toolUseResult: {
+        isAsync: true,
+        status: "async_launched",
+        agentId,
+        description: "Map daedalus for on-call agent plan",
+      },
+    });
+  const notification = (agentId: string) =>
+    JSON.stringify({
+      type: "queue-operation",
+      operation: "enqueue",
+      timestamp: "2026-09-30T09:08:43.894Z",
+      content: `<task-notification>\n<task-id>${agentId}</task-id>\n<status>completed</status>\n</task-notification>`,
+    });
+  const handBack = (agentId: string) =>
+    JSON.stringify({
+      type: "queue-operation",
+      operation: "enqueue",
+      timestamp: "2026-09-30T09:08:30.591Z",
+      content: `<agent-message from="${agentId}">\n[Subagent hand-back] report\n</agent-message>`,
+    });
+  const collected = (agentId: string, status: string) =>
+    JSON.stringify({
+      type: "user",
+      timestamp: "2026-09-30T09:04:30.000Z",
+      toolUseResult: {
+        retrieval_status: status === "running" ? "timeout" : "success",
+        task: { task_id: agentId, task_type: "local_agent", status },
+      },
+    });
+  const stop = {
+    last_assistant_message: "I'll write the plan when it reports.",
+  };
+
+  test("a launch with no report yet is pending", () => {
+    expect(pendingBackgroundAgents(launch("a1"), now)).toBe(1);
+    expect(
+      pendingBackgroundAgents([launch("a1"), launch("a2")].join("\n"), now),
+    ).toBe(2);
+  });
+
+  test("any of the three reports settles it", () => {
+    for (const report of [
+      notification("a1"),
+      handBack("a1"),
+      collected("a1", "completed"),
+    ])
+      expect(
+        pendingBackgroundAgents([launch("a1"), report].join("\n"), now),
+      ).toBe(0);
+    // Asking for the output of a task still running settles nothing.
+    expect(
+      pendingBackgroundAgents(
+        [launch("a1"), collected("a1", "running")].join("\n"),
+        now,
+      ),
+    ).toBe(1);
+  });
+
+  test("conversation text that quotes the tags settles nothing", () => {
+    const quoted = JSON.stringify({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "<task-id>a1</task-id>" }] },
+    });
+    expect(
+      pendingBackgroundAgents([launch("a1"), quoted].join("\n"), now),
+    ).toBe(1);
+  });
+
+  test("a launch nobody reported for hours is presumed dead", () => {
+    // What a crash or resume under a running agent leaves behind; counting it
+    // forever would silence the idle alert for the rest of the conversation.
+    expect(
+      pendingBackgroundAgents(launch("a1", "2026-09-30T05:00:00.000Z"), now),
+    ).toBe(0);
+  });
+
+  test("a truncated tail and unrelated lines are skipped", () => {
+    expect(
+      pendingBackgroundAgents(
+        ['ync_launched","agentId":"a0"}', "not json", launch("a1")].join("\n"),
+        now,
+      ),
+    ).toBe(1);
+  });
+
+  test("Stop with an agent out reads as working, not as a finished turn", () => {
+    expect(
+      observeClaudeHook("Stop", claude("Stop", stop), { backgroundAgents: 1 }),
+    ).toMatchObject({
+      activity: "working",
+      detail: "Waiting for 1 background agent",
+      ifActivity: ["working", "unknown", "error"],
+    });
+    expect(
+      observeClaudeHook("Stop", claude("Stop", stop), { backgroundAgents: 2 })
+        ?.detail,
+    ).toBe("Waiting for 2 background agents");
+    expect(observeClaudeHook("Stop", claude("Stop", stop))).toMatchObject({
+      activity: "idle",
+    });
+  });
+
+  test("the idle notice raises no badge while an agent is out", () => {
+    const idle = claude("Notification", {
+      notification_type: "idle_prompt",
+      message: "Claude is waiting for your input",
+    });
+    expect(
+      observeClaudeHook("Notification", idle, { backgroundAgents: 1 }),
+    ).toBeUndefined();
+    expect(observeClaudeHook("Notification", idle)).toMatchObject({
+      activity: "needs_input",
+    });
+    // A real permission dialog still needs the user, agent or no agent.
+    expect(
+      observeClaudeHook(
+        "Notification",
+        claude("Notification", {
+          notification_type: "permission_prompt",
+          message: "Claude needs your permission to use Bash",
+        }),
+        { backgroundAgents: 1 },
+      ),
+    ).toMatchObject({ activity: "needs_permission" });
+  });
 });
 
 describe("Codex hook payloads", () => {
@@ -582,6 +731,17 @@ describe("Claude pane fallback", () => {
         ["  ⎿  ✻ Brewed for 3s · done 6:35 PM", ...box].join("\n"),
       ),
     ).toBeUndefined();
+  });
+
+  test("waiting on a background agent is work, so an older done stays unread", () => {
+    const text = [
+      "✻ Brewed for 3s · done 9:01 AM",
+      "❯ execute task #46",
+      "⏺ I'll write the plan when it reports.",
+      "✻ Waiting for 1 background agent to finish",
+      ...box,
+    ].join("\n");
+    expect(observeClaudePane(text)).toBeUndefined();
   });
 
   test("a pane with no status line at all is no observation", () => {
