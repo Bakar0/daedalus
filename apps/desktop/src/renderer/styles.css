@@ -5014,7 +5014,31 @@ dd {
   font-size: 12px;
   overflow-wrap: anywhere;
 }
-.world-week-button {
+.world-preview {
+  align-items: center;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  display: flex;
+  gap: 6px;
+  padding: 3px 6px;
+}
+.world-preview button {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--secondary);
+  font-size: 12px;
+  padding: 3px 8px;
+}
+.world-preview select {
+  font-size: 12px;
+  height: auto;
+  padding: 3px 6px;
+}
+.world-preview button:disabled {
+  opacity: 0.5;
+}
+.world-pickers .world-week-button {
   background: var(--raised);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -5022,8 +5046,8 @@ dd {
   font-size: 12px;
   padding: 5px 10px;
 }
-.world-week-button:hover,
-.world-week-button[aria-expanded="true"] {
+.world-pickers .world-week-button:hover,
+.world-pickers .world-week-button[aria-expanded="true"] {
   background: var(--raised-hover);
   color: var(--text);
 }

@@ -26,6 +26,7 @@ import { layoutFor } from "./themes/labyrinth-rooms";
 import { createDispatch } from "./themes/labyrinth-dispatch";
 import { skyAt } from "./themes/labyrinth-sky";
 import { milestonesBetween } from "./world-milestones";
+import { NO_PREVIEW, previewModel } from "./world-preview";
 import { Container } from "pixi.js";
 import {
   DEFAULT_WORLD_CHARACTER_ID,
@@ -851,6 +852,52 @@ describe("milestones", () => {
       ["Committed", "Opened PR #9"],
       ["PR #9 ready for review"],
       [`✓ #${task.number} ${task.title} done`, "PR #9 merged"],
+    ]);
+  });
+});
+
+describe("preview", () => {
+  const model = () =>
+    buildWorldModel(
+      input({
+        sessions: ["a", "b", "c", "d", "e"].map((id) => session(id)),
+      }),
+    );
+
+  test("off leaves the model alone", () => {
+    const real = model();
+    expect(previewModel(real, NO_PREVIEW)).toBe(real);
+  });
+
+  test("one level each puts an agent past every threshold", () => {
+    const shown = previewModel(model(), { context: "spread", crateStep: null });
+    expect(
+      shown.actors.map((actor) => contextLevel(actor.contextPercent)),
+    ).toEqual([0, 1, 2, 3, 0]);
+    expect(
+      previewModel(model(), { context: 90, crateStep: null }).actors.every(
+        (actor) => actor.contextPercent === 90,
+      ),
+    ).toBe(true);
+  });
+
+  test("the pretend crate makes the same pops a real branch would", () => {
+    const real = model();
+    const steps = [null, 0, 1, 2, 3, 4, null].map((crateStep) =>
+      previewModel(real, { context: "off", crateStep }),
+    );
+    const texts = steps
+      .slice(1)
+      .map((shown, index) =>
+        milestonesBetween(steps[index]!, shown).map((item) => item.text),
+      );
+    expect(texts).toEqual([
+      ["Committed"],
+      ["Pushed"],
+      ["Committed", "Opened PR #999"],
+      ["PR #999 ready for review"],
+      ["PR #999 merged"],
+      [],
     ]);
   });
 });

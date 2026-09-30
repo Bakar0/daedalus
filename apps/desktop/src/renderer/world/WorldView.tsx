@@ -1,7 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { waitingLabel } from "../session-view";
 import { WorldEngine } from "./world-engine";
 import { milestonesBetween } from "./world-milestones";
+import {
+  CONTEXT_PREVIEWS,
+  CRATE_STAGES,
+  NO_PREVIEW,
+  previewModel,
+  type ContextPreview,
+  type WorldPreview,
+} from "./world-preview";
 import type { WorldActor, WorldModel, WorldWeek } from "./world-model";
 import { WORLD_CHARACTERS, worldCharacterById } from "./characters";
 import { contextLevel } from "./characters/parts";
@@ -75,6 +83,11 @@ function Picker(props: {
 
 export interface WorldViewProps {
   model: WorldModel;
+  /**
+   * Offers the preview controls, for development builds: pretend context
+   * levels, a pop and a crate, drawn over the real agents.
+   */
+  preview?: boolean;
   appearance: "dark" | "light";
   now: number;
   onOpenSession(sessionId: string, workspaceId: string): void;
@@ -171,7 +184,32 @@ function WeekScroll(props: { week: WorldWeek[]; onClose(): void }) {
 }
 
 export default function WorldView(props: WorldViewProps) {
-  const { model, appearance, now } = props;
+  const { appearance, now } = props;
+  const [preview, setPreview] = useState<WorldPreview>(NO_PREVIEW);
+  // What is drawn: the real model, or it with the preview applied.
+  const model = useMemo(
+    () => previewModel(props.model, preview),
+    [props.model, preview],
+  );
+  const drawn = useRef(model);
+  drawn.current = model;
+  // The pretend crate moves on a stage every few seconds, then is gone.
+  useEffect(() => {
+    if (preview.crateStep === null) return;
+    const timer = setTimeout(
+      () =>
+        setPreview((current) => ({
+          ...current,
+          crateStep:
+            current.crateStep === null ||
+            current.crateStep + 1 > CRATE_STAGES.length
+              ? null
+              : current.crateStep + 1,
+        })),
+      3500,
+    );
+    return () => clearTimeout(timer);
+  }, [preview.crateStep]);
   const host = useRef<HTMLDivElement>(null);
   const engine = useRef<WorldEngine | null>(null);
   const [themeId, setThemeId] = useState(
@@ -234,7 +272,7 @@ export default function WorldView(props: WorldViewProps) {
         if (cancelled) return instance.destroy();
         created = instance;
         engine.current = instance;
-        instance.setModel(latest.current.model);
+        instance.setModel(drawn.current);
       },
       (cause: unknown) => {
         if (!cancelled)
@@ -302,6 +340,53 @@ export default function WorldView(props: WorldViewProps) {
           </small>
         </div>
         <div className="world-pickers">
+          {props.preview && (
+            <div className="world-preview" aria-label="Preview">
+              <select
+                aria-label="Preview context"
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setPreview((current) => ({
+                    ...current,
+                    context: (value === "off" || value === "spread"
+                      ? value
+                      : Number(value)) as ContextPreview,
+                  }));
+                }}
+                title="Pretend context levels, on this screen only"
+                value={String(preview.context)}
+              >
+                {CONTEXT_PREVIEWS.map((option) => (
+                  <option key={option.value} value={String(option.value)}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => {
+                  for (const actor of model.actors)
+                    engine.current?.celebrate(
+                      actor.sessionId,
+                      "✓ Preview: a turn finished",
+                    );
+                }}
+                title="Pop a pretend milestone over every agent"
+                type="button"
+              >
+                Pop
+              </button>
+              <button
+                disabled={preview.crateStep !== null || !model.actors.length}
+                onClick={() =>
+                  setPreview((current) => ({ ...current, crateStep: 0 }))
+                }
+                title="Send a pretend crate from commit to merge"
+                type="button"
+              >
+                Ship a crate
+              </button>
+            </div>
+          )}
           <button
             aria-expanded={weekOpen}
             className="world-week-button"

@@ -5307,6 +5307,7 @@ export function WorkspaceApp({
             >
               <WorldView
                 appearance={theme}
+                preview={!!snapshot && snapshot.settings.channel !== "stable"}
                 // The World is every workspace at once, whatever the sidebar
                 // has selected: it is the one view of everything running.
                 model={buildWorldModel({

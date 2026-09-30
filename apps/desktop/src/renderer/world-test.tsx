@@ -368,6 +368,7 @@ function Page() {
         appearance={appearance}
         model={model}
         now={Date.now()}
+        preview
         onOpenSession={(id) => window.__world.opened.push(id)}
       />
     </div>
