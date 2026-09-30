@@ -154,6 +154,50 @@ describe("desktop RPC handlers", () => {
     });
   });
 
+  test("tells a window its role, and passes World window requests on", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const context = await createApplicationContext({
+        env: { ...process.env, DAEDALUS_HOME: home },
+        tmux: new FakeTmux(),
+      });
+      const calls: string[] = [];
+      const world = createDesktopRequestHandlers(
+        context,
+        undefined,
+        undefined,
+        "",
+        undefined,
+        undefined,
+        {
+          role: "world",
+          openWorld: () => calls.push("open"),
+          focusSession: (id) => calls.push(`focus ${id}`),
+        },
+      );
+      try {
+        expect(await world.windowRole({})).toEqual({
+          ok: true,
+          data: { role: "world" },
+        });
+        expect(await world.worldWindowOpen({})).toEqual({
+          ok: true,
+          data: { opened: true },
+        });
+        expect(await world.sessionFocus({ sessionId: "s1" })).toEqual({
+          ok: true,
+          data: { focused: true },
+        });
+        expect(calls).toEqual(["open", "focus s1"]);
+        // Handlers made without a window host serve the main window.
+        expect(
+          await createDesktopRequestHandlers(context).windowRole({}),
+        ).toEqual({ ok: true, data: { role: "main" } });
+      } finally {
+        context.close();
+      }
+    });
+  });
+
   test("opens only web links through the system handler", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const context = await createApplicationContext({

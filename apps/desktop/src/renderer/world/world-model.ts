@@ -1,4 +1,5 @@
 import type {
+  DesktopSnapshotDto,
   AgentActivityDto,
   AgentSessionDto,
   SessionAttentionDto,
@@ -247,6 +248,35 @@ export interface WorldModelInput {
   shipped: readonly ShippedPullRequestDto[];
   /** Milliseconds since the epoch, for what "this week" means. */
   now: number;
+}
+
+/**
+ * The model's input from a whole snapshot, for the given workspaces in the
+ * order they are drawn. The main window and the World window both build it
+ * this way, so the two never disagree.
+ */
+export function worldInputFromSnapshot(
+  snapshot: DesktopSnapshotDto | null | undefined,
+  workspaces: readonly WorkspaceDto[],
+  now: number,
+): WorldModelInput {
+  const byId = <T extends { sessionId: string }>(items: readonly T[]) =>
+    new Map(items.map((item) => [item.sessionId, item]));
+  return {
+    workspaces,
+    sessions: workspaces.flatMap((workspace) =>
+      (snapshot?.agents ?? []).filter(
+        (session) => session.workspaceId === workspace.id,
+      ),
+    ),
+    tasks: snapshot?.tasks ?? [],
+    activity: byId(snapshot?.sessionActivity ?? []),
+    attention: byId(snapshot?.attention ?? []),
+    telemetry: byId(snapshot?.sessionTelemetry ?? []),
+    worktrees: snapshot?.worktrees ?? [],
+    shipped: snapshot?.shipped ?? [],
+    now,
+  };
 }
 
 /** Every workspace's wins, oldest first. */

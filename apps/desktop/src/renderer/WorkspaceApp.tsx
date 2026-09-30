@@ -60,7 +60,7 @@ import { taskActions } from "./task-actions";
 import { TaskCostLine, TaskTimeline } from "./TaskTimeline";
 import { TaskActionBar } from "./TaskActionBar";
 import { askConfirm, askText, DialogHost } from "./dialogs";
-import { buildWorldModel } from "./world/world-model";
+import { buildWorldModel, worldInputFromSnapshot } from "./world/world-model";
 import { TaskPriorityMenu, TaskStatusMenu } from "./TaskStatusMenu";
 import {
   AgentStatusDot,
@@ -5330,21 +5330,13 @@ export function WorkspaceApp({
                 preview={!!snapshot && snapshot.settings.channel !== "stable"}
                 // The World is every workspace at once, whatever the sidebar
                 // has selected: it is the one view of everything running.
-                model={buildWorldModel({
-                  workspaces: orderedWorkspaces,
-                  sessions: orderedWorkspaces.flatMap((item) =>
-                    (snapshot?.agents ?? []).filter(
-                      (session) => session.workspaceId === item.id,
-                    ),
-                  ),
-                  tasks: snapshot?.tasks ?? [],
-                  activity: activityById,
-                  attention: attentionById,
-                  telemetry: telemetryById,
-                  worktrees: snapshot?.worktrees ?? [],
-                  shipped: snapshot?.shipped ?? [],
-                  now,
-                })}
+                model={buildWorldModel(
+                  worldInputFromSnapshot(snapshot, orderedWorkspaces, now),
+                )}
+                onPopOut={() => {
+                  void client.request.worldWindowOpen({});
+                  setView(lastWorkspaceView.current);
+                }}
                 now={now}
                 onOpenSession={(sessionId, sessionWorkspaceId) => {
                   // The same path a board card takes: the scope stays, the

@@ -5067,6 +5067,12 @@ dd {
 .world-preview button:disabled {
   opacity: 0.5;
 }
+/* The World on its own: the view fills the window. */
+.app.world-window {
+  display: flex;
+  height: 100vh;
+  padding: 14px 16px 16px;
+}
 .world-pickers .world-week-button {
   background: var(--raised);
   border: 1px solid var(--line);

@@ -26,10 +26,12 @@ import {
 import type {
   DesktopCommand,
   DesktopRpcSchema,
+  DesktopWindowRole,
   TerminalServerMessage,
 } from "@daedalus/protocol";
 import {
   CHECK_FOR_UPDATES_MENU_ACTION,
+  OPEN_WORLD_WINDOW_MENU_ACTION,
   isDesktopCommand,
   QUIT_MENU_ACTION,
   SHUTDOWN_MENU_ACTION,
@@ -306,7 +308,9 @@ function announce(source: "desktop" | "external"): void {
   fingerprint = desktopDataFingerprint(context);
   // There is no window between closing one and reopening from the Dock, and
   // a repository finishing its clone in that gap must not throw.
-  if (windowOpen) rpc.send.dataChanged({ revision: ++revision, source });
+  revision += 1;
+  if (windowOpen) rpc.send.dataChanged({ revision, source });
+  if (worldOpen) worldRpc.send.dataChanged({ revision, source });
 }
 
 /**
@@ -377,7 +381,7 @@ const updates = new UpdateController({
   log: (event, fields) => void context.logger.write("info", event, fields),
 });
 
-const createRpc = () =>
+const createRpc = (role: DesktopWindowRole = "main") =>
   BrowserView.defineRPC<DesktopRpcSchema>({
     // Initial repository clones and fetches can legitimately take several
     // minutes for large histories or slower remotes.
@@ -398,6 +402,11 @@ const createRpc = () =>
           install: () => updates.install(),
           dismiss: (version) => updates.dismiss(version),
         },
+        {
+          role,
+          openWorld: openWorldWindow,
+          focusSession: focusMainSession,
+        },
       ),
     },
   });
@@ -409,6 +418,13 @@ const createRpc = () =>
 let rpc!: ReturnType<typeof createRpc>;
 let mainWindow!: BrowserWindow<ReturnType<typeof createRpc>>;
 let windowOpen = false;
+// The World in a window of its own (#44), opened from the World view. It
+// loads the same page, which asks its role and draws only the World.
+let worldRpc!: ReturnType<typeof createRpc>;
+let worldWindow!: BrowserWindow<ReturnType<typeof createRpc>>;
+let worldOpen = false;
+/** A session to select once a main window reopened for it can hear. */
+let pendingFocus: string | undefined;
 
 /**
  * Filesystem changes go straight to the window rather than through
@@ -438,6 +454,10 @@ ApplicationMenu.on("application-menu-clicked", (rawEvent) => {
   }
   if (command === SHUTDOWN_MENU_ACTION) {
     void quitController.requestShutdownAndQuit();
+    return;
+  }
+  if (command === OPEN_WORLD_WINDOW_MENU_ACTION) {
+    openWorldWindow();
     return;
   }
   if (command === CHECK_FOR_UPDATES_MENU_ACTION) {
@@ -515,6 +535,43 @@ function openMainWindow(): void {
     if (typeof width === "number" && typeof height === "number")
       rpc.send.windowResized({ width, height });
   });
+}
+
+/** Opens the World window, or brings it forward when it is open. */
+function openWorldWindow(): void {
+  if (worldOpen) {
+    worldWindow.show();
+    worldWindow.focus();
+    return;
+  }
+  worldRpc = createRpc("world");
+  worldWindow = new BrowserWindow({
+    title: "Daedalus World",
+    url: rendererUrl,
+    rpc: worldRpc,
+    frame: { width: 1180, height: 780, x: 160, y: 120 },
+  });
+  worldOpen = true;
+  worldWindow.on("close", () => {
+    worldOpen = false;
+    void context.logger.write("info", "world_window_closed", {});
+  });
+  void context.logger.write("info", "world_window_opened", {});
+}
+
+/**
+ * A click on an agent in the World window: the main window comes forward
+ * and selects it, reopened first if it was closed.
+ */
+function focusMainSession(sessionId: string): void {
+  if (!windowOpen) {
+    pendingFocus = sessionId;
+    openMainWindow();
+    return;
+  }
+  mainWindow.show();
+  mainWindow.focus();
+  rpc.send.focusSession({ sessionId });
 }
 
 // Clicking the Dock icon of a running app with no window is how macOS expects
@@ -669,6 +726,12 @@ setInterval(async () => {
     const focusRequest = await context.presence.takeFocusRequest();
     if (focusRequest)
       rpc.send.focusSession({ sessionId: focusRequest.sessionId });
+    // A session asked for from the World window while the main one was
+    // closed: sent once the reopened window has had a tick to load.
+    if (pendingFocus && windowOpen) {
+      rpc.send.focusSession({ sessionId: pendingFocus });
+      pendingFocus = undefined;
+    }
     // Alerts a CLI handed over are delivered as Daedalus, not Script Editor.
     // Only fresh ones: an alert parked while the app was down is already late,
     // and a queue that shouts a week of history is worse than a dropped ping.

@@ -75,6 +75,7 @@ describe("desktop application menu", () => {
       "view-board": "Command+2",
       "view-sessions": "Command+3",
       "view-world": "Command+4",
+      "open-world-window": "Command+Option+4",
       "toggle-terminal": "Control+`",
     });
   });

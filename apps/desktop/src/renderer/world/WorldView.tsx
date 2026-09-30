@@ -89,6 +89,8 @@ export interface WorldViewProps {
    * levels, a pop and a crate, drawn over the real agents.
    */
   preview?: boolean;
+  /** Opens the World in a window of its own; absent in that window. */
+  onPopOut?(): void;
   appearance: "dark" | "light";
   now: number;
   onOpenSession(sessionId: string, workspaceId: string): void;
@@ -414,6 +416,16 @@ export default function WorldView(props: WorldViewProps) {
                 Hand off
               </button>
             </div>
+          )}
+          {props.onPopOut && (
+            <button
+              className="world-week-button"
+              onClick={props.onPopOut}
+              title="Open the World in a window of its own, to keep beside your work"
+              type="button"
+            >
+              Open in window ↗
+            </button>
           )}
           <button
             aria-expanded={weekOpen}

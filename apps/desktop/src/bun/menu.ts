@@ -1,6 +1,7 @@
 import type { ApplicationMenuItemConfig } from "electrobun/bun";
 import {
   CHECK_FOR_UPDATES_MENU_ACTION,
+  OPEN_WORLD_WINDOW_MENU_ACTION,
   QUIT_MENU_ACTION,
   SHUTDOWN_MENU_ACTION,
 } from "@daedalus/protocol";
@@ -66,6 +67,11 @@ export const APPLICATION_MENU: ApplicationMenuItemConfig[] = [
         accelerator: "Command+3",
       },
       { label: "World", action: "view-world", accelerator: "Command+4" },
+      {
+        label: "Open World in New Window",
+        action: OPEN_WORLD_WINDOW_MENU_ACTION,
+        accelerator: "Command+Option+4",
+      },
       { type: "divider" },
       {
         label: "Toggle Integrated Terminal",
