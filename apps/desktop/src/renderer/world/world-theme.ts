@@ -81,16 +81,21 @@ export interface WorldTheme {
     look: WorldLook,
   ): ((time: number, zones: readonly WorldZone[]) => void) | void;
   /**
-   * The handoff machine: an agent handing off waits at the shared place
-   * "handoff", then walks into `from`, comes apart, streams to `to` and is
-   * put back together there as its successor, which walks on from `to`.
-   * Without it a successor simply arrives from home.
+   * The handoff machine, as bays: an agent handing off stands in a bay's
+   * `from` (the shared place "handoff" puts it there) while it writes its
+   * note and is scanned; when its successor starts, it comes apart,
+   * streams to the same bay's `to`, and is put back together there as its
+   * successor, which walks on. Without it a successor arrives from home.
    */
   handoff?: {
-    from: WorldPoint;
-    to: WorldPoint;
-    /** The control point of the stream's curve between them. */
-    arc: WorldPoint;
+    bays: ReadonlyArray<{
+      from: WorldPoint;
+      to: WorldPoint;
+      /** The control point of the stream's curve between them. */
+      arc: WorldPoint;
+      /** Status lamps over the two ends, lit while the bay works. */
+      lamps?: readonly [WorldPoint, WorldPoint];
+    }>;
   };
   /**
    * How the camera frames the world at rest. "all" fits the whole world;

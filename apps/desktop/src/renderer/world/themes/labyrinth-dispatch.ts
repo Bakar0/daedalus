@@ -48,7 +48,8 @@ const CRATE_SCALE = 1.6;
 export const CRATE_HALF = 13 * CRATE_SCALE;
 const PAD_HEIGHT = 18;
 /** Waiting crates stand in rows on the grass, inward from the post. */
-const ROW = 6;
+// Five to a row, so the right yard stays clear of the Rebuilder.
+const ROW = 5;
 const YARD_GAP = 62;
 const YARD_START = 90;
 const GROUND = -6;

@@ -86,6 +86,7 @@ const PIECES = 42;
 interface Transfer {
   from: string;
   to: string;
+  bay: number;
   age: number;
   pieces: Array<{
     start: WorldPoint;
@@ -133,6 +134,8 @@ interface ActorEntry {
   pop?: { view: Container; age: number };
   /** Its successor, when it is on its way into the handoff machine. */
   handoffTo?: string;
+  /** Which of the machine's bays it uses. */
+  handoffBay?: number;
   /** A successor waiting to be put together in the handoff machine. */
   held?: boolean;
 }
@@ -147,6 +150,8 @@ export class WorldEngine {
   private readonly figures = new Container();
   private readonly machine = new Container();
   private readonly transfers: Transfer[] = [];
+  /** Scan beams and bay lamps, redrawn every frame. */
+  private readonly scanners = new Graphics();
   private readonly zones = new Map<string, ZoneEntry>();
   private readonly actors = new Map<string, ActorEntry>();
   private model: WorldModel = { zones: [], actors: [], week: [] };
@@ -211,6 +216,7 @@ export class WorldEngine {
       this.figures,
       this.machine,
     );
+    this.machine.addChild(this.scanners);
     app.stage.addChild(this.world);
     app.ticker.maxFPS = MAX_FPS;
     app.ticker.add((ticker) => this.tick(ticker.deltaMS / 1000));
@@ -607,8 +613,9 @@ export class WorldEngine {
       const entry = this.enter(actor, target, !arrive || through);
       entry.effective = place;
       if (through && machine) {
-        // Waits unseen in the second chamber until it is put together.
-        entry.position = { ...machine.to };
+        // Waits unseen in its output bay until it is put together.
+        const old = this.actors.get(actor.continuesFrom!)!;
+        entry.position = { ...machine.bays[this.bayFor(old)]!.to };
         entry.path = [];
         entry.held = true;
         entry.figure.view.visible = false;
@@ -637,10 +644,29 @@ export class WorldEngine {
     this.place();
   }
 
-  /** Sends an agent into the handoff machine's first chamber. */
+  /**
+   * The bay an agent uses: the one it is standing in or heading for, else
+   * the nearest. Kept once chosen, so the successor lands opposite it.
+   */
+  private bayFor(entry: ActorEntry): number {
+    if (entry.handoffBay !== undefined) return entry.handoffBay;
+    const bays = this.theme.handoff!.bays;
+    const distance = (index: number) =>
+      Math.hypot(
+        bays[index]!.from.x - entry.target.x,
+        bays[index]!.from.y - entry.target.y,
+      );
+    let best = 0;
+    for (let index = 1; index < bays.length; index += 1)
+      if (distance(index) < distance(best)) best = index;
+    entry.handoffBay = best;
+    return best;
+  }
+
+  /** Sends an agent into its intake bay, if it is not there already. */
   private intoMachine(entry: ActorEntry, successor: string) {
-    const from = this.theme.handoff!.from;
     if (entry.handoffTo) return;
+    const from = this.theme.handoff!.bays[this.bayFor(entry)]!.from;
     entry.handoffTo = successor;
     entry.leaving = true;
     entry.pending = undefined;
@@ -650,7 +676,8 @@ export class WorldEngine {
 
   /** Starts taking an agent that reached the first chamber apart. */
   private startTransfer(entry: ActorEntry) {
-    const machine = this.theme.handoff!;
+    const bay = this.bayFor(entry);
+    const machine = this.theme.handoff!.bays[bay]!;
     const scale = this.theme.actorScale ?? 1;
     const body = (point: WorldPoint) => ({
       x: point.x + (Math.random() - 0.5) * 36 * scale,
@@ -662,6 +689,7 @@ export class WorldEngine {
     this.transfers.push({
       from: entry.actor.sessionId,
       to: entry.handoffTo!,
+      bay,
       age: 0,
       view,
       pieces: Array.from({ length: PIECES }, (_, index) => ({
@@ -680,9 +708,9 @@ export class WorldEngine {
    * fades in where they land, then walks out.
    */
   private runTransfers(seconds: number) {
-    const machine = this.theme.handoff;
     for (let index = this.transfers.length - 1; index >= 0; index -= 1) {
       const transfer = this.transfers[index]!;
+      const machine = this.theme.handoff?.bays[transfer.bay];
       transfer.age += seconds;
       const { age, view } = transfer;
       const old = this.actors.get(transfer.from);
@@ -719,9 +747,10 @@ export class WorldEngine {
       // A glow in each chamber while it works.
       const glow = (point: WorldPoint, strength: number) => {
         if (strength <= 0) return;
+        // As wide as a bay, so neighbouring bays stay dark.
         view
-          .ellipse(point.x, point.y - 26 * scale, 34 * scale, 44 * scale)
-          .fill({ color: 0x9fd8ff, alpha: 0.35 * strength });
+          .roundRect(point.x - 27, point.y - 58 * scale, 54, 58 * scale, 8)
+          .fill({ color: 0x9fd8ff, alpha: 0.4 * strength });
       };
       glow(
         machine.from,
@@ -988,7 +1017,61 @@ export class WorldEngine {
       this.showPops(entry, seconds);
     }
     this.runTransfers(seconds);
+    this.drawScanners();
     this.place();
+  }
+
+  /**
+   * The machine's bays at work: a scan beam sweeps over an agent standing
+   * in an intake bay while it writes its note, with the bay's lamp pulsing
+   * amber; a bay in the middle of a transfer lights blue at the intake and
+   * green at the output.
+   */
+  private drawScanners() {
+    const g = this.scanners.clear();
+    const machine = this.theme.handoff;
+    if (!machine) return;
+    const scale = this.theme.actorScale ?? 1;
+    const t = this.elapsed;
+    const lamp = (point: WorldPoint | undefined, color: number, alpha = 1) => {
+      if (!point) return;
+      g.circle(point.x, point.y, 9).fill({ color, alpha: 0.3 * alpha });
+      g.circle(point.x, point.y, 4.5).fill({ color, alpha });
+    };
+    for (const entry of this.actors.values()) {
+      if (entry.handoffTo || entry.path.length || entry.held) continue;
+      if (entry.effective !== "handoff") continue;
+      const bay = machine.bays.find(
+        (item) =>
+          Math.hypot(
+            item.from.x - entry.position.x,
+            item.from.y - entry.position.y,
+          ) < 3,
+      );
+      if (!bay) continue;
+      const height = 56 * scale;
+      const half = 25 * scale;
+      const y = bay.from.y - (0.5 + 0.5 * Math.sin(t * 2.4)) * height;
+      g.rect(bay.from.x - half, bay.from.y - height, half * 2, height).fill({
+        color: 0x9fd8ff,
+        alpha: 0.08,
+      });
+      g.rect(bay.from.x - half, y - 6, half * 2, 12).fill({
+        color: 0x9fd8ff,
+        alpha: 0.22,
+      });
+      g.rect(bay.from.x - half, y - 1.5, half * 2, 3).fill({
+        color: 0xd8f1ff,
+        alpha: 0.9,
+      });
+      lamp(bay.lamps?.[0], 0xe8b04a, 0.55 + 0.45 * Math.sin(t * 4));
+    }
+    for (const transfer of this.transfers) {
+      const bay = machine.bays[transfer.bay];
+      if (!bay) continue;
+      if (transfer.age < DISSOLVE + 0.6) lamp(bay.lamps?.[0], 0x7fc8ff);
+      if (transfer.age > ASSEMBLE_START - 0.4) lamp(bay.lamps?.[1], 0x7fc28a);
+    }
   }
 
   /** Shows the theme's vehicle around an agent on a ridden leg. */

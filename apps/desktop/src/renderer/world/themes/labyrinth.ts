@@ -70,13 +70,20 @@ const HOME: WorldPoint = { x: 0, y: -40 };
  */
 const PIPE_OUTER = ROOM_X + (ROOM_W * SCALE) / 2 + 40;
 /**
- * The Rebuilder on the surface, right of the workshop: two glass chambers
- * joined by a brass arc. A bot handing off waits by the first, steps in,
- * comes apart, and is put back together in the second as its successor.
+ * The Rebuilder on the surface, right of the workshop: an industrial
+ * teleporter with three intake bays and three output bays under one steel
+ * conduit. A bot handing off steps into an intake bay and is scanned while
+ * it writes its note; when its successor starts, it comes apart and is put
+ * back together in the matching output bay. Three can hand off at once; a
+ * fourth waits outside.
  */
-const REBUILDER = { from: 440, to: 700, ground: -6 };
-const CHAMBER_W = 76;
-const CHAMBER_H = 150;
+const GROUND = -6;
+const BAY_W = 62;
+const BAY_H = 146;
+/** The bays' centres, intake then output. */
+const INTAKE = [382, 458, 534];
+const OUTPUT = [680, 756, 832];
+const BAY_FLOOR = GROUND - 16;
 
 /** Seconds of web work before a bot goes up to the Observatory, and back. */
 const OBSERVATORY_DWELL = 4;
@@ -191,11 +198,15 @@ function roomCenter(index: number): WorldPoint {
 }
 const OBSERVATORY = slotCenter(0);
 
-/** Where bots handing off wait: a queue in front of the first chamber. */
+/**
+ * Where bots handing off go: into the three intake bays, then a queue on
+ * the grass before the machine.
+ */
 function rebuilderSpot(slot: number): WorldPoint {
+  if (slot < INTAKE.length) return { x: INTAKE[slot]!, y: BAY_FLOOR };
   return {
-    x: REBUILDER.from - CHAMBER_W / 2 - 40 - slot * 56,
-    y: REBUILDER.ground,
+    x: INTAKE[0]! - BAY_W / 2 - 50 - (slot - INTAKE.length) * 52,
+    y: GROUND,
   };
 }
 
@@ -205,85 +216,109 @@ function sharedSpot(place: WorldPlace, slot: number): WorldPoint {
     : observatorySpot(place, slot);
 }
 
-/** The Rebuilder's two chambers and the arc between them. */
+const STEEL = 0x5d6673;
+const STEEL_DARK = 0x3c434e;
+const STEEL_LIGHT = 0x8a93a1;
+
+/** One unit of three bays: a steel housing with glass fronts. */
+function drawUnit(g: Graphics, centres: readonly number[], p: Palette) {
+  const left = centres[0]! - BAY_W / 2 - 12;
+  const right = centres.at(-1)! + BAY_W / 2 + 12;
+  const top = GROUND - BAY_H - 18;
+  // Housing, roof and a hazard-striped plinth.
+  g.roundRect(left, top, right - left, BAY_H + 18, 6).fill(STEEL_DARK);
+  g.rect(left - 6, top - 10, right - left + 12, 14).fill(STEEL);
+  g.rect(left - 6, top - 10, right - left + 12, 3).fill(STEEL_LIGHT);
+  g.rect(left - 4, GROUND - 16, right - left + 8, 16).fill(0x2a2e35);
+  for (let x = left - 4; x < right + 4; x += 16)
+    g.poly([
+      x,
+      GROUND,
+      x + 8,
+      GROUND,
+      x + 16,
+      GROUND - 16,
+      x + 8,
+      GROUND - 16,
+    ]).fill(0xe8b04a);
+  for (const x of centres) {
+    // A bay: dark back, glass front, a lamp over it, rivets down the posts.
+    g.roundRect(x - BAY_W / 2, top + 10, BAY_W, BAY_H - 12, 5).fill(0x1d2430);
+    g.roundRect(x - BAY_W / 2, top + 10, BAY_W, BAY_H - 12, 5).fill({
+      color: 0x9fd8ff,
+      alpha: 0.12,
+    });
+    g.roundRect(x - BAY_W / 2, top + 10, BAY_W, BAY_H - 12, 5).stroke({
+      width: 3,
+      color: STEEL_LIGHT,
+    });
+    g.rect(x - BAY_W / 2 + 6, top + 16, 4, BAY_H - 34).fill({
+      color: 0xffffff,
+      alpha: 0.18,
+    });
+    g.circle(x, top - 3, 5).fill(0x2a2e35);
+    for (const side of [-1, 1])
+      for (let y = top + 18; y < GROUND - 20; y += 22)
+        g.circle(x + side * (BAY_W / 2 + 6), y, 1.8).fill(STEEL_LIGHT);
+  }
+  // Brass pipes down the sides.
+  g.rect(left - 12, top + 6, 7, BAY_H).fill(p.brassDark);
+  g.rect(right + 5, top + 6, 7, BAY_H).fill(p.brassDark);
+}
+
+/** The Rebuilder: intake, output, and the conduit between them. */
 function drawRebuilder(layer: Container, p: Palette) {
   const g = new Graphics();
-  const { from, to, ground } = REBUILDER;
-  // The brass arc the pieces stream along, and its supports.
-  g.moveTo(from, ground - CHAMBER_H + 6)
-    .bezierCurveTo(
-      from + 60,
-      ground - CHAMBER_H - 90,
-      to - 60,
-      ground - CHAMBER_H - 90,
-      to,
-      ground - CHAMBER_H + 6,
-    )
-    .stroke({ width: 12, color: p.brassDark });
-  g.moveTo(from, ground - CHAMBER_H + 6)
-    .bezierCurveTo(
-      from + 60,
-      ground - CHAMBER_H - 90,
-      to - 60,
-      ground - CHAMBER_H - 90,
-      to,
-      ground - CHAMBER_H + 6,
-    )
-    .stroke({ width: 5, color: 0x9fd8ff, alpha: 0.5 });
-  for (const x of [from, to]) {
-    // Base, glass tube, cap.
-    g.roundRect(
-      x - CHAMBER_W / 2 - 10,
-      ground - 16,
-      CHAMBER_W + 20,
-      16,
-      4,
-    ).fill(p.brassDark);
-    g.roundRect(
-      x - CHAMBER_W / 2,
-      ground - CHAMBER_H,
-      CHAMBER_W,
-      CHAMBER_H - 16,
-      10,
-    ).fill({
-      color: 0x9fd8ff,
-      alpha: 0.16,
-    });
-    g.roundRect(
-      x - CHAMBER_W / 2,
-      ground - CHAMBER_H,
-      CHAMBER_W,
-      CHAMBER_H - 16,
-      10,
-    ).stroke({
-      width: 3,
-      color: p.brass,
-    });
-    g.rect(
-      x - CHAMBER_W / 2 + 8,
-      ground - CHAMBER_H + 10,
-      5,
-      CHAMBER_H - 36,
-    ).fill({
-      color: 0xffffff,
-      alpha: 0.25,
-    });
-    g.roundRect(
-      x - CHAMBER_W / 2 - 8,
-      ground - CHAMBER_H - 12,
-      CHAMBER_W + 16,
-      16,
-      5,
-    ).fill(p.brass);
-    g.circle(x, ground - CHAMBER_H - 16, 7).fill(p.brassDark);
+  const top = GROUND - BAY_H - 18;
+  const start = INTAKE[1]!;
+  const end = OUTPUT[1]!;
+  // The conduit: a steel duct over both units with three cables inside.
+  const curve = (graphics: Graphics, lift: number) =>
+    graphics
+      .moveTo(start, top - 8)
+      .bezierCurveTo(
+        start + 40,
+        top - 120 - lift,
+        end - 40,
+        top - 120 - lift,
+        end,
+        top - 8,
+      );
+  curve(g, 0).stroke({ width: 26, color: STEEL_DARK });
+  curve(g, 0).stroke({ width: 20, color: STEEL });
+  for (const [lift, color] of [
+    [6, 0x7fc8ff],
+    [0, 0xe8b04a],
+    [-6, 0x7fc28a],
+  ] as const)
+    curve(g, lift).stroke({ width: 2.5, color, alpha: 0.9 });
+  for (const t of [0.15, 0.5, 0.85]) {
+    // Bands around the duct.
+    const x = start + (end - start) * t;
+    const y = top - 8 - (1 - Math.pow(2 * t - 1, 2)) * 92;
+    g.rect(x - 4, y - 15, 8, 30).fill(STEEL_LIGHT);
   }
+  drawUnit(g, INTAKE, p);
+  drawUnit(g, OUTPUT, p);
   layer.addChild(g);
-  const sign = label("REBUILDER", 11, 0xffe7b0, "800");
+  for (const [text, centres] of [
+    ["INTAKE", INTAKE],
+    ["OUTPUT", OUTPUT],
+  ] as const) {
+    const tag = label(text, 9, 0xe8eef6, "800");
+    tag.anchor.set(0.5);
+    tag.position.set(centres[1]!, top - 3);
+    layer.addChild(tag);
+  }
+  const sign = label("REBUILDER", 12, 0x1b1d2a, "800");
   sign.anchor.set(0.5);
-  sign.position.set((from + to) / 2, ground - 10);
+  sign.position.set((start + end) / 2, top - 100);
   const plate = new Graphics()
-    .roundRect(-sign.width / 2 - 8, -9, sign.width + 16, 18, 5)
-    .fill(p.brassDark);
+    .roundRect(-sign.width / 2 - 10, -11, sign.width + 20, 22, 4)
+    .fill(0xe8b04a);
+  plate
+    .roundRect(-sign.width / 2 - 10, -11, sign.width + 20, 22, 4)
+    .stroke({ width: 2, color: STEEL_DARK });
   plate.position.set(sign.x, sign.y);
   layer.addChild(plate, sign);
 }
@@ -869,11 +904,18 @@ export const labyrinthTheme: WorldTheme = {
     spot: sharedSpot,
   },
   handoff: {
-    from: { x: REBUILDER.from, y: REBUILDER.ground - 16 },
-    to: { x: REBUILDER.to, y: REBUILDER.ground - 16 },
-    // The control point of the stream's curve: its top runs along the arc.
-    arc: { x: (REBUILDER.from + REBUILDER.to) / 2, y: REBUILDER.ground - 374 },
+    bays: INTAKE.map((x, index) => ({
+      from: { x, y: BAY_FLOOR },
+      to: { x: OUTPUT[index]!, y: BAY_FLOOR },
+      // Up through the conduit and down into the matching output bay.
+      arc: { x: (x + OUTPUT[index]!) / 2, y: GROUND - BAY_H - 300 },
+      lamps: [
+        { x, y: GROUND - BAY_H - 21 },
+        { x: OUTPUT[index]!, y: GROUND - BAY_H - 21 },
+      ] as const,
+    })),
   },
+
   drawEffects,
 };
 

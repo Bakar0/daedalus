@@ -491,31 +491,38 @@ describe("labyrinth", () => {
     expect(path.at(-1)!.ride).toBeUndefined();
   });
 
-  test("a bot handing off rides up to wait by the Rebuilder on the surface", () => {
+  test("a bot handing off rides up into one of the Rebuilder's three bays", () => {
     const arrangement = labyrinthTheme.arrange(zones(3));
     const shared = labyrinthTheme.shared!;
-    const machine = labyrinthTheme.handoff!;
-    const queue = Array.from({ length: 3 }, (_, slot) =>
+    const { bays } = labyrinthTheme.handoff!;
+    expect(bays).toHaveLength(3);
+    // The first three stand in the intake bays; a fourth queues outside.
+    const spots = Array.from({ length: 5 }, (_, slot) =>
       shared.spot("handoff", slot),
     );
-    for (const point of queue) {
-      // On the grass, right of the workshop, left of the first chamber.
+    expect(spots.slice(0, 3)).toEqual(bays.map((bay) => bay.from));
+    for (const point of spots.slice(3)) {
       expect(point.y).toBeLessThan(0);
       expect(point.x).toBeGreaterThan(240);
-      expect(point.x).toBeLessThan(machine.from.x);
+      expect(point.x).toBeLessThan(bays[0]!.from.x);
     }
-    expect(new Set(queue.map((point) => point.x)).size).toBe(3);
+    expect(new Set(spots.map((point) => point.x)).size).toBe(5);
+    for (const bay of bays) {
+      // Each bay sends to its own output bay, further along the surface.
+      expect(bay.to.x).toBeGreaterThan(bay.from.x);
+      expect(bay.to.y).toBe(bay.from.y);
+    }
     const origin = arrangement.origins[2]!;
     const path = arrangement.route!(
       { x: origin.x, y: origin.y + 90 },
-      queue[0]!,
+      spots[0]!,
     );
     expect(path.filter((point) => point.ride)).toHaveLength(1);
-    expect(path.at(-1)).toEqual(queue[0]);
-    // From the queue into the chamber is a walk along the grass.
-    expect(arrangement.route!(queue[0]!, machine.from)).toEqual([machine.from]);
-    // The successor comes out of the second chamber, further along.
-    expect(machine.to.x).toBeGreaterThan(machine.from.x);
+    expect(path.at(-1)).toEqual(spots[0]);
+    // From the queue into a bay is a walk along the grass.
+    expect(arrangement.route!(spots[3]!, bays[2]!.from)).toEqual([
+      bays[2]!.from,
+    ]);
   });
 
   test("web work is shared: every zone's bots go to the one Observatory", () => {
