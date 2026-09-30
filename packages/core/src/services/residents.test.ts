@@ -5,6 +5,7 @@ import type { TmuxClient, TmuxLaunch } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
   appendToBrief,
+  claudeReady,
   createApplicationContext,
   residentAtPrompt,
   type AgentActivityState,
@@ -738,6 +739,14 @@ describe("findings", () => {
         "cannot report",
       );
     });
+  });
+});
+
+describe("claudeReady", () => {
+  test("recognises the default mode footer a resident starts with", () => {
+    expect(claudeReady("❯ \n  ⏸ manual mode on · ← for agents")).toBe(true);
+    expect(claudeReady("auto mode on (shift+tab to cycle)")).toBe(true);
+    expect(claudeReady("Do you trust the files in this folder?")).toBe(false);
   });
 });
 

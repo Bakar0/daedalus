@@ -395,6 +395,16 @@ export async function hasPersistedCodexSession(input: {
   }
 }
 
+/**
+ * Claude's footer once it is ready for input. The relaxed modes print
+ * "shift+tab to cycle"; the default mode a resident starts in prints
+ * "manual mode on" instead, and older versions "? for shortcuts".
+ */
+export const claudeReady = (screen: string): boolean =>
+  screen.includes("shift+tab to cycle") ||
+  screen.includes("manual mode on") ||
+  screen.includes("? for shortcuts");
+
 export class AgentService {
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -545,7 +555,7 @@ export class AgentService {
       // driving keys into a session that already belongs to the user.
       if (
         (provider === "codex" && screen.includes("Ask Codex to do anything")) ||
-        (provider === "claude" && screen.includes("shift+tab to cycle"))
+        (provider === "claude" && claudeReady(screen))
       ) {
         return;
       } else if (provider === "codex" && screen.includes("Hooks need review")) {
