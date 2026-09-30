@@ -93,6 +93,17 @@ processes reporting at once produce one task. A finding cleared for 24 hours
 closes, and its task moves to done if no agent was ever started on it. That
 is the one task status change a resident makes.
 
+## Feedback and urgency
+
+`daedal finding verdict <id> noise` closes a finding, and from then on its
+key raises nothing: a report under it only records that it was seen. `verdict
+<id> none` undoes that. A finding whose task the user moves to done is
+recorded as useful. The resident learns patterns from these verdicts itself
+and writes them into `SERVICES.md`; Daedalus only enforces the exact key.
+
+An `urgent` finding gets through Focus mode. It is the one exception to Focus
+mode, and it still says nothing about a session already on screen.
+
 ## Lifecycle
 
 `start` spawns the session; `pause` stops delivery and keeps the session;

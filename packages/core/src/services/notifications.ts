@@ -27,6 +27,11 @@ export interface NotificationRequest {
   blocking?: boolean;
   /** Ask for the desktop channel regardless of where the user is. */
   desktop?: boolean;
+  /**
+   * Gets through Focus mode. For a resident's urgent finding, which the user
+   * chose to be interrupted for; Focus mode still holds everything else.
+   */
+  urgent?: boolean;
 }
 
 export type NotificationSuppression =
@@ -69,7 +74,8 @@ export function routeNotification(
   // user is looking at is what teaches people to dismiss alerts unread.
   if (watching && !request.desktop)
     return { channel: null, suppressed: "on_screen" };
-  if (focusMode) return { channel: null, suppressed: "focus_mode" };
+  if (focusMode && !request.urgent)
+    return { channel: null, suppressed: "focus_mode" };
   const away = !present || !presence.appForeground;
   return {
     channel: request.desktop || away ? "desktop" : "toast",

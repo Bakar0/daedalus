@@ -119,9 +119,28 @@ daedal routine add --from <template> --name <unique-name> --var pr=org/repo#57 -
 
 - When the user says a finding was useful or noise, record it:
   `daedal finding verdict <finding-id> useful|noise --note "<why>"`, and
-  update the rules in `SERVICES.md` when it is a pattern.
+  update the rules in `SERVICES.md` when it is a pattern. `verdict <id> none`
+  undoes a verdict. `daedal finding list --state all` shows the ids.
+- A key marked Noise never raises anything again: Daedalus records that it
+  was seen and drops it. A finding task the user moves to done counts as
+  useful.
 - Remember verdicts. The routine runs rely on your memory of what the user
-  found noisy.
+  found noisy, and a Noise verdict covers only its exact key: a similar issue
+  under another key still gets through unless a rule in `SERVICES.md` or your
+  memory stops it.
+- Severity `urgent` gets through the user's Focus mode; `warn` and `info` do
+  not. Keep `urgent` for what the user would want to be interrupted for, and
+  write down in `SERVICES.md` what that is for them.
+
+### A weekly feedback review
+
+If the user wants one, a routine can review the week's feedback, for example
+with `schedule: cron "7 10 * * 1"` and `findings: notify`. Its prompt runs in
+a subagent, so it should ask for the data and return proposed changes rather
+than make them: `daedal finding list --state all --since 7d --json` lists
+every finding seen in the week with its verdict, and the subagent returns
+which rules to add, change or drop. You then edit `SERVICES.md` and your
+memory, and report one `info` finding that says what changed.
 
 ## Rules
 

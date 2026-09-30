@@ -98,7 +98,13 @@ export interface FindingReport {
   body: string;
 }
 
-export type FindingAction = "opened" | "updated" | "reopened" | "merged";
+export type FindingAction =
+  | "opened"
+  | "updated"
+  | "reopened"
+  | "merged"
+  /** The user marked this key Noise: seen and recorded, nothing raised. */
+  | "suppressed";
 
 export interface FindingReportResult {
   action: FindingAction;
@@ -144,6 +150,17 @@ export class FindingService {
     const result = this.repositories.immediateTransaction(
       (): FindingReportResult => {
         const residents = this.repositories.residents;
+        const latest = residents.findLatestFinding(input.resident.id, key);
+        if (latest?.verdict === "noise") {
+          const seen: Finding = { ...latest, lastSeenAt: at };
+          residents.updateFinding(seen);
+          return {
+            action: "suppressed",
+            finding: seen,
+            task: null,
+            notified: null,
+          };
+        }
         const open = residents.findOpenFinding(input.resident.id, key);
         if (open) return this.update(open, input, evidence, at);
         if (sameAs) {
@@ -182,7 +199,6 @@ export class FindingService {
             : null;
           return { action: "merged", finding, task, notified: null };
         }
-        const latest = residents.findLatestFinding(input.resident.id, key);
         // Measured from when the issue went away, not from when its task
         // was closed a day later.
         const endedAt = latest?.clearedAt ?? latest?.closedAt;
@@ -349,6 +365,7 @@ export class FindingService {
       title: `${input.resident.name} · ${where}`,
       body: `${result.action === "reopened" ? "Came back: " : ""}${result.finding.title}`,
       desktop: input.severity === "urgent",
+      urgent: input.severity === "urgent",
     });
     return decision.reason;
   }
@@ -375,23 +392,34 @@ export class FindingService {
     });
   }
 
+  /**
+   * The user's word on a finding. Noise also closes it if it is open, and
+   * from then on the key raises nothing: it is recorded as seen and dropped.
+   * `null` undoes a verdict, so the key can open a task again. The task
+   * itself is left as it is either way; its status is the user's.
+   */
   verdict(
     resident: Resident,
     id: string,
-    value: FindingVerdict,
+    value: FindingVerdict | null,
     note?: string,
   ): Finding {
     const finding = this.repositories.residents.findFinding(id);
     if (!finding || finding.residentId !== resident.id)
       throw new DaedalusError("NOT_FOUND", `Finding '${id}' was not found`);
-    const updated: Finding = { ...finding, verdict: value };
     const at = this.now().toISOString();
+    const updated: Finding =
+      value === "noise" && finding.state !== "closed"
+        ? { ...finding, verdict: value, state: "closed", closedAt: at }
+        : { ...finding, verdict: value };
     this.repositories.transaction(() => {
       this.repositories.residents.updateFinding(updated);
       if (finding.taskId)
         this.appendSection(
           finding.taskId,
-          `Marked ${value} at ${localTime(at)}`,
+          value
+            ? `Marked ${value} at ${localTime(at)}`
+            : `Verdict removed at ${localTime(at)}`,
           note ?? "",
           at,
         );
@@ -421,11 +449,15 @@ export class FindingService {
         const taskEnded =
           task && (task.status === "done" || task.status === "cancelled");
         if (finding.state === "open") {
+          // A task the user closed as done counts as useful; one they
+          // cancelled says nothing either way.
           if (taskEnded)
             residents.updateFinding({
               ...finding,
               state: "closed",
               closedAt: task.completedAt ?? at,
+              verdict:
+                finding.verdict ?? (task.status === "done" ? "useful" : null),
             });
           continue;
         }

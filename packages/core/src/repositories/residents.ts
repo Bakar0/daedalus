@@ -449,7 +449,12 @@ export class ResidentRepository {
 
   listFindings(
     residentId: string,
-    filters: { states?: FindingState[]; routine?: string } = {},
+    filters: {
+      states?: FindingState[];
+      routine?: string;
+      /** Only findings seen at or after this time. */
+      seenSince?: string;
+    } = {},
   ): Finding[] {
     const clauses = ["resident_id = ?"];
     const values: string[] = [residentId];
@@ -460,6 +465,10 @@ export class ResidentRepository {
     if (filters.routine) {
       clauses.push("routine = ?");
       values.push(filters.routine);
+    }
+    if (filters.seenSince) {
+      clauses.push("last_seen_at >= ?");
+      values.push(filters.seenSince);
     }
     return this.database
       .query<FindingRow, string[]>(

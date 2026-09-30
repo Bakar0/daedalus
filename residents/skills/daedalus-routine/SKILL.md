@@ -84,9 +84,11 @@ EOF
 ```
 
 Daedalus does the deduplication. A key that is already open becomes an
-update to its task, and a key that came back reopens its task, so report
-every finding you keep even if you reported it before. Never create a task
-or send a notification any other way.
+update to its task, a key that came back reopens its task, and a key the
+user marked Noise is recorded and dropped, so report every finding you keep
+even if you reported it before. Never create a task or send a notification
+any other way. Use `urgent` only for what `SERVICES.md` says the user wants to
+be interrupted for: it gets through their Focus mode.
 
 Then clear what went away. For each key that step 1 listed as open for this
 routine, that the subagent checked (it is covered by `checked`) and that it

@@ -193,6 +193,24 @@ describe("notification routing", () => {
       ),
     ).toEqual({ channel: null, suppressed: "focus_mode" });
   });
+
+  test("lets an urgent alert through focus mode, and nothing else", () => {
+    expect(
+      routeNotification(
+        presence({ sessionId: "other" }),
+        { sessionId: "session", urgent: true } as never,
+        true,
+      ),
+    ).toEqual({ channel: "toast", suppressed: null });
+    // Still quiet about what is already on screen.
+    expect(
+      routeNotification(
+        presence(),
+        { sessionId: "session", urgent: true } as never,
+        true,
+      ),
+    ).toEqual({ channel: null, suppressed: "on_screen" });
+  });
 });
 
 describe("ActivityService", () => {

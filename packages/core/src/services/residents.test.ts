@@ -643,6 +643,73 @@ describe("findings", () => {
     });
   });
 
+  test("a key marked Noise raises nothing until the verdict is removed", async () => {
+    await withResidents(async (harness) => {
+      const { context } = harness;
+      const { workspace, report } = await reportSetup(harness);
+      const resident = context.residents.get("argus");
+      const opened = await report();
+      const noise = context.findings.verdict(
+        resident,
+        opened.finding.id,
+        "noise",
+        "flaky runner",
+      );
+      expect(noise).toMatchObject({ verdict: "noise", state: "closed" });
+      expect(context.tasks.get(opened.task!.id).description).toContain(
+        "## Marked noise at",
+      );
+      harness.advance(3_600_000);
+      const quiet = await report({ severity: "urgent" });
+      expect(quiet).toMatchObject({
+        action: "suppressed",
+        task: null,
+        notified: null,
+      });
+      expect(quiet.finding.lastSeenAt).toBe(harness.clock.now.toISOString());
+      expect(
+        context.repositories.listTasks({ workspaceId: workspace.id }),
+      ).toHaveLength(1);
+      context.findings.verdict(resident, opened.finding.id, null);
+      const back = await report();
+      expect(back.action).toBe("reopened");
+      expect(back.task?.id).toBe(opened.task!.id);
+    });
+  });
+
+  test("a finding task the user closes as done counts as useful", async () => {
+    await withResidents(async (harness) => {
+      const { context } = harness;
+      const { report } = await reportSetup(harness);
+      const resident = context.residents.get("argus");
+      const opened = await report();
+      context.tasks.setStatus(opened.task!.id, "done");
+      context.findings.sweep(resident);
+      expect(
+        context.repositories.residents.findFinding(opened.finding.id),
+      ).toMatchObject({
+        state: "closed",
+        verdict: "useful",
+      });
+    });
+  });
+
+  test("an urgent finding gets through Focus mode and a warning does not", async () => {
+    await withResidents(async (harness) => {
+      const { context } = harness;
+      const { report } = await reportSetup(harness);
+      await context.presence.setFocusMode(true);
+      const warning = await report();
+      expect(warning.notified).toBe("focus mode is on");
+      const urgent = await report({
+        key: "ci-health:org/repo:main:CI:deploy",
+        severity: "urgent",
+      });
+      expect(urgent.notified).not.toBe("focus mode is on");
+      expect(urgent.task?.priority).toBe("high");
+    });
+  });
+
   test("a notify routine notifies and opens no task", async () => {
     await withResidents(async (harness) => {
       const { context } = harness;

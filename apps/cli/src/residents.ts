@@ -3,6 +3,7 @@ import {
   DaedalusError,
   findingSeverity,
   formatDuration,
+  parseDuration,
   type ApplicationContext,
   type Finding,
   type FindingState,
@@ -55,9 +56,9 @@ and 'fail' are for the resident itself, when Daedalus types
   finding: `Finding commands:
   daedal finding report --run <run-id> --key <key> --severity info|warn|urgent
       --title <title> [--url <url>] [--same-as <key>] (--body <text> | --body-file <path|->)
-  daedal finding list [--state open|cleared|closed|all] [--resident <r>]
+  daedal finding list [--state open|cleared|closed|all] [--since <7d>] [--resident <r>]
   daedal finding clear <key> [--resident <r>]
-  daedal finding verdict <finding-id> useful|noise [--note <text>] [--resident <r>]
+  daedal finding verdict <finding-id> useful|noise|none [--note <text>] [--resident <r>]
 
 'report' is the only way a resident raises an issue. The key identifies the
 issue, so a key that is open becomes an update to its task and sends no second
@@ -65,7 +66,10 @@ notification; one that comes back within 14 days reopens its task; --same-as
 adds the finding to another open finding's task. A routine with findings: task
 opens a task on the resident's board; findings: notify only notifies.
 'clear' marks a key gone. A cleared finding closes after 24 hours, and its
-task moves to done if no agent was ever started on it.`,
+task moves to done if no agent was ever started on it.
+'verdict noise' closes a finding and stops its key from raising anything
+again; 'verdict none' undoes it. A finding task the user moves to done counts
+as useful. 'list --since 7d --state all' is what a weekly review reads.`,
 };
 
 function residentFor(
@@ -136,7 +140,7 @@ const runLine = (run: RoutineRun) =>
   `${run.id}\t${run.routine}\t${run.status}${run.outcome ? ` (${run.outcome})` : ""}\t${localTime(run.queuedAt)}${run.summary ? `\t${run.summary}` : ""}`;
 
 const findingLine = (finding: Finding, taskNumber?: number) =>
-  `${finding.id}\t${finding.state}\t${finding.severity}\t${finding.key}${taskNumber ? `\ttask #${taskNumber}` : ""}\t${finding.title}`;
+  `${finding.id}\t${finding.state}\t${finding.severity}\t${finding.verdict ?? "—"}\t${finding.key}${taskNumber ? `\ttask #${taskNumber}` : ""}\t${finding.title}`;
 
 function routineLine(view: RoutineView): string {
   const { routine, state, lastRun } = view;
@@ -472,8 +476,11 @@ export async function findingCommand(
     return 0;
   }
   if (action === "list") {
-    const parsed = parseArguments(args, ["resident", "state"]);
+    const parsed = parseArguments(args, ["resident", "state", "since"]);
     expectPositionals(parsed.positionals, 0, "daedal finding list");
+    const since = parsed.values.since
+      ? new Date(Date.now() - parseDuration(parsed.values.since)).toISOString()
+      : undefined;
     const resident = residentFor(context, parsed.values.resident);
     const state = parsed.values.state ?? "open";
     if (!["open", "cleared", "closed", "all"].includes(state))
@@ -483,6 +490,7 @@ export async function findingCommand(
       );
     const findings = context.repositories.residents.listFindings(resident.id, {
       ...(state === "all" ? {} : { states: [state as FindingState] }),
+      ...(since ? { seenSince: since } : {}),
     });
     const tasks = new Map(
       context.repositories
@@ -514,20 +522,24 @@ export async function findingCommand(
   }
   if (action === "verdict") {
     const parsed = parseArguments(args, ["resident", "note"]);
-    const usage = "daedal finding verdict <finding-id> useful|noise";
+    const usage = "daedal finding verdict <finding-id> useful|noise|none";
     expectPositionals(parsed.positionals, 2, usage);
     const value = parsed.positionals[1];
-    if (value !== "useful" && value !== "noise")
+    if (value !== "useful" && value !== "noise" && value !== "none")
       throw new DaedalusError("VALIDATION", `Usage: ${usage}`);
     const resident = residentFor(context, parsed.values.resident);
     const finding = context.findings.verdict(
       resident,
       parsed.positionals[0]!,
-      value,
+      value === "none" ? null : value,
       parsed.values.note,
     );
     printResult({ finding }, json, () =>
-      console.log(`Marked ${finding.key} ${value}`),
+      console.log(
+        value === "none"
+          ? `Removed the verdict on ${finding.key}`
+          : `Marked ${finding.key} ${value}`,
+      ),
     );
     return 0;
   }
