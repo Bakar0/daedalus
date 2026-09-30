@@ -5,6 +5,7 @@ import { milestonesBetween } from "./world-milestones";
 import {
   CONTEXT_PREVIEWS,
   CRATE_STAGES,
+  HANDOFF_STEPS,
   NO_PREVIEW,
   previewModel,
   type ContextPreview,
@@ -210,6 +211,20 @@ export default function WorldView(props: WorldViewProps) {
     );
     return () => clearTimeout(timer);
   }, [preview.crateStep]);
+  // The pretend handoff: writing, then replaced, then back to real.
+  useEffect(() => {
+    const step = preview.handoffStep;
+    if (step === null || step === undefined) return;
+    const timer = setTimeout(
+      () =>
+        setPreview((current) => ({
+          ...current,
+          handoffStep: current.handoffStep === 0 ? 1 : null,
+        })),
+      HANDOFF_STEPS[step]! * 1000,
+    );
+    return () => clearTimeout(timer);
+  }, [preview.handoffStep]);
   const host = useRef<HTMLDivElement>(null);
   const engine = useRef<WorldEngine | null>(null);
   const [themeId, setThemeId] = useState(
@@ -384,6 +399,19 @@ export default function WorldView(props: WorldViewProps) {
                 type="button"
               >
                 Ship a crate
+              </button>
+              <button
+                disabled={
+                  (preview.handoffStep ?? null) !== null ||
+                  !props.model.actors.length
+                }
+                onClick={() =>
+                  setPreview((current) => ({ ...current, handoffStep: 0 }))
+                }
+                title="The first agent hands off through the Rebuilder"
+                type="button"
+              >
+                Hand off
               </button>
             </div>
           )}

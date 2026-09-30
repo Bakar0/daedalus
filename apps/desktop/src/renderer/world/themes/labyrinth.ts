@@ -69,6 +69,15 @@ const HOME: WorldPoint = { x: 0, y: -40 };
  * world goes.
  */
 const PIPE_OUTER = ROOM_X + (ROOM_W * SCALE) / 2 + 40;
+/**
+ * The Rebuilder on the surface, right of the workshop: two glass chambers
+ * joined by a brass arc. A bot handing off waits by the first, steps in,
+ * comes apart, and is put back together in the second as its successor.
+ */
+const REBUILDER = { from: 440, to: 700, ground: -6 };
+const CHAMBER_W = 76;
+const CHAMBER_H = 150;
+
 /** Seconds of web work before a bot goes up to the Observatory, and back. */
 const OBSERVATORY_DWELL = 4;
 
@@ -182,6 +191,103 @@ function roomCenter(index: number): WorldPoint {
 }
 const OBSERVATORY = slotCenter(0);
 
+/** Where bots handing off wait: a queue in front of the first chamber. */
+function rebuilderSpot(slot: number): WorldPoint {
+  return {
+    x: REBUILDER.from - CHAMBER_W / 2 - 40 - slot * 56,
+    y: REBUILDER.ground,
+  };
+}
+
+function sharedSpot(place: WorldPlace, slot: number): WorldPoint {
+  return place === "handoff"
+    ? rebuilderSpot(slot)
+    : observatorySpot(place, slot);
+}
+
+/** The Rebuilder's two chambers and the arc between them. */
+function drawRebuilder(layer: Container, p: Palette) {
+  const g = new Graphics();
+  const { from, to, ground } = REBUILDER;
+  // The brass arc the pieces stream along, and its supports.
+  g.moveTo(from, ground - CHAMBER_H + 6)
+    .bezierCurveTo(
+      from + 60,
+      ground - CHAMBER_H - 90,
+      to - 60,
+      ground - CHAMBER_H - 90,
+      to,
+      ground - CHAMBER_H + 6,
+    )
+    .stroke({ width: 12, color: p.brassDark });
+  g.moveTo(from, ground - CHAMBER_H + 6)
+    .bezierCurveTo(
+      from + 60,
+      ground - CHAMBER_H - 90,
+      to - 60,
+      ground - CHAMBER_H - 90,
+      to,
+      ground - CHAMBER_H + 6,
+    )
+    .stroke({ width: 5, color: 0x9fd8ff, alpha: 0.5 });
+  for (const x of [from, to]) {
+    // Base, glass tube, cap.
+    g.roundRect(
+      x - CHAMBER_W / 2 - 10,
+      ground - 16,
+      CHAMBER_W + 20,
+      16,
+      4,
+    ).fill(p.brassDark);
+    g.roundRect(
+      x - CHAMBER_W / 2,
+      ground - CHAMBER_H,
+      CHAMBER_W,
+      CHAMBER_H - 16,
+      10,
+    ).fill({
+      color: 0x9fd8ff,
+      alpha: 0.16,
+    });
+    g.roundRect(
+      x - CHAMBER_W / 2,
+      ground - CHAMBER_H,
+      CHAMBER_W,
+      CHAMBER_H - 16,
+      10,
+    ).stroke({
+      width: 3,
+      color: p.brass,
+    });
+    g.rect(
+      x - CHAMBER_W / 2 + 8,
+      ground - CHAMBER_H + 10,
+      5,
+      CHAMBER_H - 36,
+    ).fill({
+      color: 0xffffff,
+      alpha: 0.25,
+    });
+    g.roundRect(
+      x - CHAMBER_W / 2 - 8,
+      ground - CHAMBER_H - 12,
+      CHAMBER_W + 16,
+      16,
+      5,
+    ).fill(p.brass);
+    g.circle(x, ground - CHAMBER_H - 16, 7).fill(p.brassDark);
+  }
+  layer.addChild(g);
+  const sign = label("REBUILDER", 11, 0xffe7b0, "800");
+  sign.anchor.set(0.5);
+  sign.position.set((from + to) / 2, ground - 10);
+  const plate = new Graphics()
+    .roundRect(-sign.width / 2 - 8, -9, sign.width + 16, 18, 5)
+    .fill(p.brassDark);
+  plate.position.set(sign.x, sign.y);
+  layer.addChild(plate, sign);
+}
+
 function observatorySpot(_place: WorldPlace, slot: number): WorldPoint {
   const base = OBSERVATORY_SPOTS[slot % OBSERVATORY_SPOTS.length]!;
   const crowd = Math.floor(slot / OBSERVATORY_SPOTS.length);
@@ -220,6 +326,8 @@ function arrange(zones: readonly WorldZone[]): WorldArrangement {
       const start = roomAt(from);
       const end = roomAt(to);
       if (start !== -1 && start === end) return [to];
+      // Along the surface, from one spot on the grass to another.
+      if (start === -1 && end === -1 && from.y <= 0 && to.y <= 0) return [to];
       // Out through the door to the shaft, ride the car to the other floor,
       // and in through that floor's door.
       const points: Waypoint[] = [];
@@ -446,6 +554,8 @@ function drawWorld(
   }
   layer.addChild(pipe);
   layer.addChild(weekScroll(dispatch.lanes[0]!.post));
+
+  drawRebuilder(layer, p);
 
   const lights = new Graphics();
   layer.addChild(lights);
@@ -754,9 +864,15 @@ export const labyrinthTheme: WorldTheme = {
   fit: "width",
   createVehicle,
   shared: {
-    places: ["web"],
+    places: ["web", "handoff"],
     dwell: OBSERVATORY_DWELL,
-    spot: observatorySpot,
+    spot: sharedSpot,
+  },
+  handoff: {
+    from: { x: REBUILDER.from, y: REBUILDER.ground - 16 },
+    to: { x: REBUILDER.to, y: REBUILDER.ground - 16 },
+    // The control point of the stream's curve: its top runs along the arc.
+    arc: { x: (REBUILDER.from + REBUILDER.to) / 2, y: REBUILDER.ground - 374 },
   },
   drawEffects,
 };

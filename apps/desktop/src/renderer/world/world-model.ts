@@ -26,8 +26,11 @@ import {
 export type WorldStation =
   "read" | "edit" | "run" | "ship" | "web" | "delegate" | "plan" | "think";
 
-/** Everywhere an actor can stand. Every theme must place all of them. */
-export type WorldPlace = WorldStation | "lounge" | "door";
+/**
+ * Everywhere an actor can stand. Every theme must place all of them.
+ * "handoff" is where an agent waits while it writes its handoff note.
+ */
+export type WorldPlace = WorldStation | "lounge" | "door" | "handoff";
 
 export const WORLD_PLACES: readonly WorldPlace[] = [
   "read",
@@ -40,6 +43,7 @@ export const WORLD_PLACES: readonly WorldPlace[] = [
   "think",
   "lounge",
   "door",
+  "handoff",
 ];
 
 export interface WorldActor {
@@ -51,6 +55,12 @@ export interface WorldActor {
   taskLabel: string | null;
   /** Its task is marked done. */
   taskDone: boolean;
+  /**
+   * The session this one took over from in a handoff: the one asked to hand
+   * off in the same working directory, started before this one. Null for a
+   * session that started fresh.
+   */
+  continuesFrom: string | null;
   /** The board's tone, so the World and the board never disagree. */
   mood: SessionTone;
   /** Short state word: "working", "needs permission", "idle". */
@@ -332,6 +342,13 @@ export function buildWorldModel(input: WorldModelInput): WorldModel {
     if (!zoneId || !crate) continue;
     crates.set(zoneId, [...(crates.get(zoneId) ?? []), crate]);
   }
+  // Sessions that were asked to hand off, newest request first, archived
+  // ones too: the predecessor is archived the moment its successor starts.
+  const handedOff = input.sessions
+    .filter((item) => item.handoffRequestedAt)
+    .sort((left, right) =>
+      right.handoffRequestedAt!.localeCompare(left.handoffRequestedAt!),
+    );
   for (const session of input.sessions) {
     if (session.kind !== "agent" || session.archivedAt) continue;
     if (!zoneIds.has(session.workspaceId)) continue;
@@ -351,9 +368,21 @@ export function buildWorldModel(input: WorldModelInput): WorldModel {
       provider: session.provider,
       taskLabel: task ? `#${task.number} ${task.title}` : null,
       taskDone: task?.status === "done",
+      continuesFrom:
+        handedOff.find(
+          (item) =>
+            item.id !== session.id &&
+            item.workingDirectory === session.workingDirectory &&
+            session.startedAt >= item.handoffRequestedAt!,
+        )?.id ?? null,
       mood: view.tone,
       label: view.label,
-      place: placeFor(view.tone, activity),
+      // Asked to hand off: it goes to wait at the handoff machine while it
+      // writes its note, whatever it is doing meanwhile.
+      place:
+        session.handoffRequestedAt && view.tone !== "lost"
+          ? "handoff"
+          : placeFor(view.tone, activity),
       detail: view.detail,
       since: view.since,
       unconfirmed: view.unconfirmed,

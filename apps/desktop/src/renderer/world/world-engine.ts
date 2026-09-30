@@ -30,6 +30,12 @@ import { tipOf } from "./world-theme";
  * out of the workshop and rides down, rather than appearing in its room.
  */
 const shown = new Set<string>();
+/**
+ * Sessions that went through the handoff machine: their figure stays gone
+ * while their successor is there, even if a snapshot still lists them for
+ * a moment.
+ */
+const rebuilt = new Set<string>();
 /** Seconds between arrivals, so a crowd comes down one after another. */
 const ARRIVAL_GAP = 0.9;
 
@@ -65,6 +71,32 @@ const MAX_FPS = 30;
 const MAX_SCALE = 2.6;
 /** Pointer travel, in screen pixels, past which a press is a drag. */
 const DRAG_THRESHOLD = 5;
+/**
+ * The handoff machine's timing, in seconds from the moment the old figure
+ * is inside the first chamber: it comes apart, its pieces stream to the
+ * second chamber, and the successor is put together there and walks out.
+ */
+const DISSOLVE = 1.1;
+const STREAM_START = 0.3;
+const STREAM = 1.3;
+const ASSEMBLE_START = 1.9;
+const RELEASE = 3.1;
+const PIECES = 42;
+
+interface Transfer {
+  from: string;
+  to: string;
+  age: number;
+  pieces: Array<{
+    start: WorldPoint;
+    end: WorldPoint;
+    delay: number;
+    size: number;
+    color: number;
+  }>;
+  view: Graphics;
+}
+
 /** Seconds a progress pop stays up, rising, before the next one shows. */
 const POP_SECONDS = 2.6;
 const POP_RISE = 26;
@@ -99,6 +131,10 @@ interface ActorEntry {
   /** Progress pops still to show, one at a time, and the one showing. */
   pops: string[];
   pop?: { view: Container; age: number };
+  /** Its successor, when it is on its way into the handoff machine. */
+  handoffTo?: string;
+  /** A successor waiting to be put together in the handoff machine. */
+  held?: boolean;
 }
 
 export class WorldEngine {
@@ -109,6 +145,8 @@ export class WorldEngine {
   private readonly effects = new Container();
   private animateEffects?: (time: number, zones: readonly WorldZone[]) => void;
   private readonly figures = new Container();
+  private readonly machine = new Container();
+  private readonly transfers: Transfer[] = [];
   private readonly zones = new Map<string, ZoneEntry>();
   private readonly actors = new Map<string, ActorEntry>();
   private model: WorldModel = { zones: [], actors: [], week: [] };
@@ -166,7 +204,13 @@ export class WorldEngine {
     app.canvas.classList.add("world-canvas");
     this.host.append(app.canvas);
     this.figures.sortableChildren = true;
-    this.world.addChild(this.ground, this.plots, this.effects, this.figures);
+    this.world.addChild(
+      this.ground,
+      this.plots,
+      this.effects,
+      this.figures,
+      this.machine,
+    );
     app.stage.addChild(this.world);
     app.ticker.maxFPS = MAX_FPS;
     app.ticker.add((ticker) => this.tick(ticker.deltaMS / 1000));
@@ -495,11 +539,34 @@ export class WorldEngine {
     const slots = new Map<string, number>();
     const present = new Set<string>();
     let arrivals = 0;
+    const machine = this.theme.handoff;
+    // A successor whose predecessor is on screen takes over through the
+    // handoff machine, when the theme has one and this is not a redraw.
+    const successors = new Map<string, string>();
+    if (machine && !snap)
+      for (const actor of this.model.actors)
+        if (
+          actor.continuesFrom &&
+          this.actors.has(actor.continuesFrom) &&
+          !this.actors.has(actor.sessionId)
+        )
+          successors.set(actor.continuesFrom, actor.sessionId);
+    const replaced = new Set(
+      this.model.actors.map((actor) => actor.continuesFrom),
+    );
     for (const actor of this.model.actors) {
       const zone = this.zones.get(actor.zoneId);
       if (!zone) continue;
+      if (rebuilt.has(actor.sessionId) && replaced.has(actor.sessionId))
+        continue;
       present.add(actor.sessionId);
       const existing = this.actors.get(actor.sessionId);
+      const successor = successors.get(actor.sessionId);
+      if (existing && machine && (successor || existing.handoffTo)) {
+        // Into the first chamber, even while a snapshot still lists it.
+        this.intoMachine(existing, successor ?? existing.handoffTo!);
+        continue;
+      }
       const place = existing ? this.settle(existing, actor.place) : actor.place;
       const shared = this.theme.shared?.places.includes(place) ?? false;
       // A shared place counts slots across every zone: it is one room.
@@ -533,15 +600,34 @@ export class WorldEngine {
       // new arrives from home, queued behind the others arriving with it.
       const arrive = !(snap && shown.has(actor.sessionId));
       shown.add(actor.sessionId);
-      const entry = this.enter(actor, target, !arrive);
+      const through =
+        machine && actor.continuesFrom
+          ? successors.get(actor.continuesFrom) === actor.sessionId
+          : false;
+      const entry = this.enter(actor, target, !arrive || through);
       entry.effective = place;
-      if (arrive) entry.wait = arrivals++ * ARRIVAL_GAP;
+      if (through && machine) {
+        // Waits unseen in the second chamber until it is put together.
+        entry.position = { ...machine.to };
+        entry.path = [];
+        entry.held = true;
+        entry.figure.view.visible = false;
+      } else if (arrive) entry.wait = arrivals++ * ARRIVAL_GAP;
       this.actors.set(actor.sessionId, entry);
     }
     for (const [id, entry] of this.actors) {
-      if (present.has(id) || entry.leaving) continue;
-      if (snap) {
+      if (present.has(id)) continue;
+      // Already on its way home when its successor showed up: redirected.
+      if (entry.leaving && !(successors.has(id) && !entry.handoffTo)) continue;
+      if (snap || entry.held) {
         this.remove(id);
+        continue;
+      }
+      // Gone from the snapshot, which is how a handoff usually ends: the
+      // predecessor is archived as its successor starts.
+      const successor = entry.handoffTo ?? successors.get(id);
+      if (successor && machine) {
+        this.intoMachine(entry, successor);
         continue;
       }
       entry.leaving = true;
@@ -549,6 +635,126 @@ export class WorldEngine {
       entry.path = this.route(entry.position, entry.target);
     }
     this.place();
+  }
+
+  /** Sends an agent into the handoff machine's first chamber. */
+  private intoMachine(entry: ActorEntry, successor: string) {
+    const from = this.theme.handoff!.from;
+    if (entry.handoffTo) return;
+    entry.handoffTo = successor;
+    entry.leaving = true;
+    entry.pending = undefined;
+    entry.target = { ...from };
+    entry.path = this.route(entry.position, entry.target);
+  }
+
+  /** Starts taking an agent that reached the first chamber apart. */
+  private startTransfer(entry: ActorEntry) {
+    const machine = this.theme.handoff!;
+    const scale = this.theme.actorScale ?? 1;
+    const body = (point: WorldPoint) => ({
+      x: point.x + (Math.random() - 0.5) * 36 * scale,
+      y: point.y - Math.random() * 48 * scale,
+    });
+    const colors = [0x9fd8ff, 0xffffff, 0xffd27a, 0x7fc8ff];
+    const view = new Graphics();
+    this.machine.addChild(view);
+    this.transfers.push({
+      from: entry.actor.sessionId,
+      to: entry.handoffTo!,
+      age: 0,
+      view,
+      pieces: Array.from({ length: PIECES }, (_, index) => ({
+        start: body(machine.from),
+        end: body(machine.to),
+        delay: Math.random() * 0.7,
+        size: 2.5 + Math.random() * 3.5,
+        color: colors[index % colors.length]!,
+      })),
+    });
+  }
+
+  /**
+   * The handoff machine at work: the old figure fades and shrinks as its
+   * pieces lift off, they stream along the theme's arc, and the successor
+   * fades in where they land, then walks out.
+   */
+  private runTransfers(seconds: number) {
+    const machine = this.theme.handoff;
+    for (let index = this.transfers.length - 1; index >= 0; index -= 1) {
+      const transfer = this.transfers[index]!;
+      transfer.age += seconds;
+      const { age, view } = transfer;
+      const old = this.actors.get(transfer.from);
+      if (old) {
+        const left = Math.max(0, 1 - age / DISSOLVE);
+        old.figure.view.alpha = left;
+        old.figure.view.scale.set(
+          (this.theme.actorScale ?? 1) * (0.6 + 0.4 * left),
+        );
+        if (age >= DISSOLVE) {
+          this.remove(transfer.from);
+          rebuilt.add(transfer.from);
+        }
+      }
+      const next = this.actors.get(transfer.to);
+      if (next) {
+        const built = Math.min(
+          1,
+          Math.max(0, (age - ASSEMBLE_START) / (RELEASE - ASSEMBLE_START)),
+        );
+        next.figure.view.visible = built > 0;
+        next.figure.view.alpha = built;
+        next.figure.view.scale.set(
+          (this.theme.actorScale ?? 1) * (0.6 + 0.4 * built),
+        );
+        if (age >= RELEASE && next.held) {
+          next.held = false;
+          next.path = this.route(next.position, next.target);
+        }
+      }
+      view.clear();
+      if (!machine) continue;
+      const scale = this.theme.actorScale ?? 1;
+      // A glow in each chamber while it works.
+      const glow = (point: WorldPoint, strength: number) => {
+        if (strength <= 0) return;
+        view
+          .ellipse(point.x, point.y - 26 * scale, 34 * scale, 44 * scale)
+          .fill({ color: 0x9fd8ff, alpha: 0.35 * strength });
+      };
+      glow(
+        machine.from,
+        Math.min(1, age / 0.3) * Math.max(0, 1 - (age - DISSOLVE) / 0.5),
+      );
+      glow(
+        machine.to,
+        Math.min(1, Math.max(0, (age - ASSEMBLE_START + 0.4) / 0.3)) *
+          Math.max(0, 1 - (age - RELEASE) / 0.5),
+      );
+      for (const piece of transfer.pieces) {
+        const t = (age - STREAM_START - piece.delay) / STREAM;
+        if (t >= 1) continue;
+        const u = Math.max(0, t);
+        // Along a curve through the arc's control point.
+        const x =
+          (1 - u) * (1 - u) * piece.start.x +
+          2 * (1 - u) * u * machine.arc.x +
+          u * u * piece.end.x;
+        const y =
+          (1 - u) * (1 - u) * piece.start.y +
+          2 * (1 - u) * u * machine.arc.y +
+          u * u * piece.end.y;
+        const alpha = t < 0 ? Math.min(1, age / 0.4) : 1;
+        view
+          .rect(x - piece.size / 2, y - piece.size / 2, piece.size, piece.size)
+          .fill({ color: piece.color, alpha });
+      }
+      if (age >= RELEASE + 0.5) {
+        view.destroy();
+        this.transfers.splice(index, 1);
+      }
+    }
   }
 
   /** Flies out of the theme's home to its spot. */
@@ -719,6 +925,17 @@ export class WorldEngine {
       this.relayout(false);
     for (const zone of this.zones.values()) zone.animate?.(this.elapsed);
     for (const [id, entry] of this.actors) {
+      // Its visibility belongs to the handoff machine until it walks out,
+      // unless there is nothing left to take apart: then it just appears.
+      if (entry.held) {
+        const waiting =
+          this.transfers.some((item) => item.to === id) ||
+          this.actors.get(entry.actor.continuesFrom ?? "")?.handoffTo === id;
+        if (waiting) continue;
+        entry.held = false;
+        entry.figure.view.visible = true;
+        entry.path = this.route(entry.position, entry.target);
+      }
       if (entry.wait > 0) {
         entry.wait -= seconds;
         entry.figure.view.visible = false;
@@ -747,12 +964,16 @@ export class WorldEngine {
       this.carry(entry, walking && entry.path[0]!.ride === true);
       if (!walking) {
         entry.facing = 0;
-        if (entry.leaving) {
+        if (entry.handoffTo) {
+          // Inside the first chamber: the machine takes it from here.
+          if (!this.transfers.some((item) => item.from === id))
+            this.startTransfer(entry);
+        } else if (entry.leaving) {
           this.remove(id);
           continue;
         }
       }
-      if (entry.leaving) {
+      if (entry.leaving && !entry.handoffTo) {
         const left = Math.hypot(
           entry.target.x - entry.position.x,
           entry.target.y - entry.position.y,
@@ -766,6 +987,7 @@ export class WorldEngine {
       });
       this.showPops(entry, seconds);
     }
+    this.runTransfers(seconds);
     this.place();
   }
 

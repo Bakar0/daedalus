@@ -415,6 +415,12 @@ export function layoutFor(id: string): RoomLayout {
 /** Standing spots for a place in this room, before mirroring and scaling. */
 export function roomSpots(layout: RoomLayout, place: WorldPlace): WorldPoint[] {
   if (place === "door") return [{ x: DOOR_X - 8, y: FLOOR }];
+  // Heading out to hand off: by the door, on its way to the lift.
+  if (place === "handoff")
+    return [
+      { x: DOOR_X - 30, y: FLOOR },
+      { x: DOOR_X - 70, y: FLOOR },
+    ];
   for (const { block, x } of layout.blocks) {
     const spots = block.places[place];
     if (spots) return spots.map((spot) => ({ x: spot.x + x, y: spot.y }));

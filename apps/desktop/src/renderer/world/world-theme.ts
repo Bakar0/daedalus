@@ -81,6 +81,18 @@ export interface WorldTheme {
     look: WorldLook,
   ): ((time: number, zones: readonly WorldZone[]) => void) | void;
   /**
+   * The handoff machine: an agent handing off waits at the shared place
+   * "handoff", then walks into `from`, comes apart, streams to `to` and is
+   * put back together there as its successor, which walks on from `to`.
+   * Without it a successor simply arrives from home.
+   */
+  handoff?: {
+    from: WorldPoint;
+    to: WorldPoint;
+    /** The control point of the stream's curve between them. */
+    arc: WorldPoint;
+  };
+  /**
    * How the camera frames the world at rest. "all" fits the whole world;
    * "width" fills the view's width and starts at the top, for a world that
    * grows downward and is scrolled, like Fallout Shelter. "all" if unset.

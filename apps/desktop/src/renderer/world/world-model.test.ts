@@ -491,10 +491,37 @@ describe("labyrinth", () => {
     expect(path.at(-1)!.ride).toBeUndefined();
   });
 
+  test("a bot handing off rides up to wait by the Rebuilder on the surface", () => {
+    const arrangement = labyrinthTheme.arrange(zones(3));
+    const shared = labyrinthTheme.shared!;
+    const machine = labyrinthTheme.handoff!;
+    const queue = Array.from({ length: 3 }, (_, slot) =>
+      shared.spot("handoff", slot),
+    );
+    for (const point of queue) {
+      // On the grass, right of the workshop, left of the first chamber.
+      expect(point.y).toBeLessThan(0);
+      expect(point.x).toBeGreaterThan(240);
+      expect(point.x).toBeLessThan(machine.from.x);
+    }
+    expect(new Set(queue.map((point) => point.x)).size).toBe(3);
+    const origin = arrangement.origins[2]!;
+    const path = arrangement.route!(
+      { x: origin.x, y: origin.y + 90 },
+      queue[0]!,
+    );
+    expect(path.filter((point) => point.ride)).toHaveLength(1);
+    expect(path.at(-1)).toEqual(queue[0]);
+    // From the queue into the chamber is a walk along the grass.
+    expect(arrangement.route!(queue[0]!, machine.from)).toEqual([machine.from]);
+    // The successor comes out of the second chamber, further along.
+    expect(machine.to.x).toBeGreaterThan(machine.from.x);
+  });
+
   test("web work is shared: every zone's bots go to the one Observatory", () => {
     const arrangement = labyrinthTheme.arrange(zones(3));
     const shared = labyrinthTheme.shared!;
-    expect(shared.places).toEqual(["web"]);
+    expect(shared.places).toEqual(["web", "handoff"]);
     const first = shared.spot("web", 0);
     // On the top floor, left of the shaft, above or level with every room.
     expect(first.x).toBeLessThan(0);
@@ -853,6 +880,59 @@ describe("milestones", () => {
       ["PR #9 ready for review"],
       [`✓ #${task.number} ${task.title} done`, "PR #9 merged"],
     ]);
+  });
+});
+
+describe("handoff", () => {
+  test("a session asked to hand off goes to the machine; its successor names it", () => {
+    const requested = "2026-09-23T11:00:00.000Z";
+    const model = buildWorldModel(
+      input({
+        sessions: [
+          session("old", {
+            workingDirectory: "/w/tree",
+            handoffRequestedAt: requested,
+          }),
+          session("new", {
+            workingDirectory: "/w/tree",
+            startedAt: "2026-09-23T11:02:00.000Z",
+          }),
+          // Same folder, but it started before the request: not a successor.
+          session("earlier", {
+            workingDirectory: "/w/tree",
+            startedAt: "2026-09-23T10:30:00.000Z",
+          }),
+          session("elsewhere", { startedAt: "2026-09-23T11:05:00.000Z" }),
+        ],
+        activity: new Map([["old", activity("old", "working", "Edit(x.ts)")]]),
+      }),
+    );
+    const byId = new Map(model.actors.map((actor) => [actor.sessionId, actor]));
+    expect(byId.get("old")!.place).toBe("handoff");
+    expect(byId.get("new")!.continuesFrom).toBe("old");
+    expect(byId.get("earlier")!.continuesFrom).toBeNull();
+    expect(byId.get("elsewhere")!.continuesFrom).toBeNull();
+  });
+
+  test("the successor still names an archived predecessor", () => {
+    const model = buildWorldModel(
+      input({
+        sessions: [
+          session("old", {
+            workingDirectory: "/w/tree",
+            handoffRequestedAt: "2026-09-23T11:00:00.000Z",
+            status: "exited",
+            archivedAt: "2026-09-23T11:02:00.000Z",
+          }),
+          session("new", {
+            workingDirectory: "/w/tree",
+            startedAt: "2026-09-23T11:02:00.000Z",
+          }),
+        ],
+      }),
+    );
+    expect(model.actors.map((actor) => actor.sessionId)).toEqual(["new"]);
+    expect(model.actors[0]!.continuesFrom).toBe("old");
   });
 });
 

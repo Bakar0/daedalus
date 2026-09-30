@@ -37,9 +37,17 @@ export interface WorldPreview {
   context: ContextPreview;
   /** How far the pretend crate has got, or null for none. */
   crateStep: number | null;
+  /**
+   * A pretend handoff by the first agent: 0 while it writes its note, 1
+   * once its successor has started. Null for none.
+   */
+  handoffStep?: 0 | 1 | null;
 }
 
 export const NO_PREVIEW: WorldPreview = { context: "off", crateStep: null };
+
+/** Seconds each pretend handoff step lasts, long enough to watch. */
+export const HANDOFF_STEPS = [15, 10];
 
 /**
  * The model with the preview applied. The pretend crate belongs to the
@@ -51,9 +59,15 @@ export function previewModel(
   model: WorldModel,
   preview: WorldPreview,
 ): WorldModel {
-  if (preview.context === "off" && preview.crateStep === null) return model;
+  const handoffStep = preview.handoffStep ?? null;
+  if (
+    preview.context === "off" &&
+    preview.crateStep === null &&
+    handoffStep === null
+  )
+    return model;
   const { context, crateStep } = preview;
-  const actors =
+  let actors =
     context === "off"
       ? model.actors
       : model.actors.map((actor, index) => ({
@@ -62,6 +76,27 @@ export function previewModel(
             context === "spread" ? SPREAD[index % SPREAD.length]! : context,
         }));
   const owner = model.actors[0];
+  // The first agent hands off: nearly out of context, it waits at the
+  // machine writing, then a fresh successor takes its place.
+  const leaving = actors[0];
+  if (leaving && handoffStep === 0)
+    actors = [
+      { ...leaving, place: "handoff", contextPercent: 92 },
+      ...actors.slice(1),
+    ];
+  if (leaving && handoffStep === 1)
+    actors = [
+      {
+        ...leaving,
+        sessionId: `${leaving.sessionId}:rebuilt`,
+        name: `${leaving.name} (2)`,
+        continuesFrom: leaving.sessionId,
+        contextPercent: 4,
+        mood: "working",
+        label: "working",
+      },
+      ...actors.slice(1),
+    ];
   const stage =
     crateStep === null ? undefined : (CRATE_STAGES[crateStep] ?? undefined);
   if (!owner || !stage) return { ...model, actors };
