@@ -8,6 +8,7 @@ import {
   codexConfigPath,
   observeClaudeHook,
   observeCodexHook,
+  pendingBackgroundAgents,
   resolveAgentExecutable,
   sweepProviderActivity,
   writeActivityRecord,
@@ -109,8 +110,9 @@ async function captureAgentEvent(
     const observation =
       provider === "codex"
         ? observeCodexHook(event, payload)
-        : (observeClaudeHook(event, payload) ??
-          observeCodexHook(event, payload));
+        : (observeClaudeHook(event, payload, {
+            backgroundAgents: await claudeBackgroundAgents(event, payload),
+          }) ?? observeCodexHook(event, payload));
     if (!observation) return 0;
     const providerSessionId =
       typeof payload.session_id === "string" ? payload.session_id : undefined;
@@ -125,6 +127,38 @@ async function captureAgentEvent(
     // An activity hook must never interfere with the provider session.
   }
   return 0;
+}
+
+/**
+ * How much of a Claude transcript is read for background agents. A launch
+ * further back than this is missed and the turn reads as an ordinary one,
+ * which is the behaviour from before this was read at all.
+ */
+const CLAUDE_BACKGROUND_TAIL_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Background agents the Claude conversation is still waiting on, read only for
+ * the two events whose meaning depends on it. Every other hook fires mid-turn,
+ * many times a minute, and must not pay for a transcript read.
+ */
+async function claudeBackgroundAgents(
+  event: string,
+  payload: Record<string, unknown>,
+): Promise<number> {
+  if (event !== "Stop" && event !== "Notification") return 0;
+  if (event === "Notification" && payload.notification_type !== "idle_prompt")
+    return 0;
+  const path = payload.transcript_path;
+  if (typeof path !== "string" || !path) return 0;
+  try {
+    const file = Bun.file(path);
+    const text = await file
+      .slice(Math.max(0, file.size - CLAUDE_BACKGROUND_TAIL_BYTES))
+      .text();
+    return pendingBackgroundAgents(text);
+  } catch {
+    return 0;
+  }
 }
 
 /**

@@ -131,6 +131,108 @@ const isSubagentPayload = (payload: Record<string, unknown>): boolean =>
   String(payload.hook_event_name ?? "").startsWith("Subagent");
 
 /**
+ * How long a background agent may go unreported before it is presumed gone.
+ *
+ * A launch with no completion is normally an agent still running, but it is
+ * also what a process that died under one leaves behind: after a crash or a
+ * resume nothing will ever report it. Treating it as running forever would
+ * silence the idle alert for the rest of the conversation, so past this age it
+ * stops counting. Of 97 background agents in the local transcripts, all but
+ * one reported within an hour. Missing the rare longer one only brings back
+ * the idle alert, which is the behaviour from before this existed.
+ */
+export const BACKGROUND_AGENT_MAX_AGE_MS = 3 * 60 * 60_000;
+
+/** The entries a background agent's report arrives in; see below. */
+const TASK_ID = /<task-id>([^<]+)<\/task-id>/g;
+const AGENT_MESSAGE = /<agent-message from="([^"]+)"/g;
+
+/**
+ * Counts the background agents a Claude conversation launched and has not yet
+ * heard back from.
+ *
+ * When Claude ends a turn with one still out, it prints "Waiting for 1
+ * background agent to finish" and resumes by itself when the report lands.
+ * Nothing about that is the user's move, yet the hooks cannot tell: `Stop`
+ * fires as for any finished turn, and sixty seconds later Claude sends the
+ * same `idle_prompt` notification it sends when it really is waiting on a
+ * person. The transcript can tell, so this reads it.
+ *
+ * A launch is the `Agent` tool result whose `toolUseResult.status` is
+ * `async_launched`, which only a real launch writes. A report is any of the
+ * three ways one comes back: the `<task-notification>` or the
+ * `<agent-message>` hand-back Claude queues for the parent, or a `TaskOutput`
+ * call that collected a finished task. Only queued entries and tool results
+ * are read, never conversation text, so a transcript that merely quotes these
+ * tags cannot settle an agent that is still running.
+ */
+export function pendingBackgroundAgents(
+  text_: string,
+  now = Date.now(),
+): number {
+  const launched = new Map<string, number>();
+  const reported = new Set<string>();
+  for (const line of text_.split("\n")) {
+    // Most lines are none of this; parsing only the candidates keeps a
+    // multi-megabyte tail cheap.
+    if (
+      !line.includes("async_launched") &&
+      !line.includes("<task-notification>") &&
+      !line.includes("<agent-message") &&
+      !line.includes("retrieval_status")
+    )
+      continue;
+    let entry: {
+      type?: unknown;
+      operation?: unknown;
+      content?: unknown;
+      timestamp?: unknown;
+      attachment?: { type?: unknown; prompt?: unknown };
+      toolUseResult?: {
+        status?: unknown;
+        agentId?: unknown;
+        task?: { task_id?: unknown; status?: unknown };
+      };
+    };
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      // A truncated first line is expected when reading a tail.
+      continue;
+    }
+    const result = entry.toolUseResult;
+    const agentId = text(result?.agentId);
+    if (result?.status === "async_launched" && agentId) {
+      const at = Date.parse(String(entry.timestamp));
+      launched.set(agentId, Number.isFinite(at) ? at : now);
+    }
+    const collected = text(result?.task?.task_id);
+    if (collected && text(result?.task?.status) !== "running")
+      reported.add(collected);
+    const queued =
+      entry.type === "queue-operation" && entry.operation === "enqueue"
+        ? entry.content
+        : entry.attachment?.type === "queued_command"
+          ? entry.attachment.prompt
+          : undefined;
+    if (typeof queued !== "string") continue;
+    for (const pattern of [TASK_ID, AGENT_MESSAGE])
+      for (const match of queued.matchAll(pattern)) reported.add(match[1]!);
+  }
+  let pending = 0;
+  for (const [agentId, at] of launched)
+    if (!reported.has(agentId) && now - at < BACKGROUND_AGENT_MAX_AGE_MS)
+      pending += 1;
+  return pending;
+}
+
+/** What a hook cannot see in its own payload; the caller reads it elsewhere. */
+export interface ClaudeHookContext {
+  /** Background agents still out, from `pendingBackgroundAgents`. */
+  backgroundAgents?: number;
+}
+
+/**
  * Claude Code hook payloads, verified against Claude Code 2.1.272. The
  * `Notification` event is the one that matters most: it is what fires when an
  * interactive session puts a permission dialog on screen, which is the only
@@ -139,6 +241,7 @@ const isSubagentPayload = (payload: Record<string, unknown>): boolean =>
 export function observeClaudeHook(
   event: string,
   payload: Record<string, unknown>,
+  context: ClaudeHookContext = {},
 ): ActivityObservation | undefined {
   if (isSubagentPayload(payload)) return undefined;
   const source: AgentActivitySource = "hook";
@@ -146,6 +249,7 @@ export function observeClaudeHook(
   const tool = summarizeTool(toolName, payload.tool_input);
   const asking = toolName ? CLAUDE_ASK_TOOL.test(toolName) : false;
   const ask = asking ? askSummary(payload.tool_input) : undefined;
+  const background = context.backgroundAgents ?? 0;
   switch (event) {
     case "SessionStart":
       return { activity: "idle", source };
@@ -198,6 +302,15 @@ export function observeClaudeHook(
                 ifNotActivity: ["needs_input"],
               };
         case "idle_prompt":
+          // Claude sends this after a minute at the prompt, including while
+          // it waits for its own background agents. That wait ends without
+          // the user, so it is not a question and must not raise the badge.
+          if (background > 0) return undefined;
+          return {
+            activity: "needs_input",
+            source,
+            detail: shorten(message ?? "Waiting for your answer"),
+          };
         case "agent_needs_input":
           return {
             activity: "needs_input",
@@ -215,6 +328,15 @@ export function observeClaudeHook(
       }
     }
     case "Stop": {
+      // The turn is over but the work is not: Claude resumes on its own when
+      // the agent reports, which is `working` as far as the user is concerned.
+      if (background > 0)
+        return {
+          activity: "working",
+          source,
+          detail: `Waiting for ${background} background agent${background === 1 ? "" : "s"}`,
+          ifActivity: RUNNING,
+        };
       const last = text(payload.last_assistant_message);
       return {
         activity: "idle",
@@ -464,6 +586,15 @@ const CLAUDE_PANE_INTERRUPTED = /^\s*⎿\s+Interrupted\b/;
 const CLAUDE_PANE_BUSY = /^\S .*\((?:\d+h\s*)?(?:\d+m\s*)?\d+s\b[^)]*\)$/;
 
 /**
+ * "✻ Waiting for 1 background agent to finish": the turn has ended, but the
+ * session resumes by itself when the agent reports. That is still work, so it
+ * stops the scan the way a live timer does rather than letting it read past to
+ * an older `done` line.
+ */
+const CLAUDE_PANE_BACKGROUND =
+  /^\S Waiting for \d+ background agents? to finish/;
+
+/**
  * The last resort, and the only signal that survives an *instant* escape.
  *
  * Escaping after Claude has begun responding leaves `[Request interrupted by
@@ -486,7 +617,8 @@ export function observeClaudePane(
     const line = lines[index]!.trimEnd();
     // A live timer is the newest word on the turn: whatever sits above it is
     // older, so the scan stops rather than reading past it to a stale `done`.
-    if (CLAUDE_PANE_BUSY.test(line)) return undefined;
+    if (CLAUDE_PANE_BUSY.test(line) || CLAUDE_PANE_BACKGROUND.test(line))
+      return undefined;
     const interrupted = CLAUDE_PANE_INTERRUPTED.test(line);
     if (interrupted || CLAUDE_PANE_DONE.test(line))
       return {
