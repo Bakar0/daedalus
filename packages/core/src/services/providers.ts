@@ -26,12 +26,6 @@ import {
 
 export interface LaunchInput {
   prompt?: string;
-  /**
-   * `default` asks before every tool call the session's settings do not
-   * allow. A resident runs unattended with an explicit allow list, where the
-   * relaxed mode's own judgement would be one more thing that can block.
-   */
-  permissionMode?: "default";
   taskId?: string;
   sessionId?: string;
   sessionName?: string;
@@ -578,9 +572,7 @@ class ConfiguredProvider implements AgentProvider {
         args.push("--add-dir", directory);
     if (this.promptArgument)
       args.push(
-        ...(input.permissionMode === "default" && this.name === "claude"
-          ? ["--permission-mode", "default"]
-          : permissionModeArgs(this.name, this.definition.permissionMode)),
+        ...permissionModeArgs(this.name, this.definition.permissionMode),
       );
     if (this.promptArgument && this.name === "codex") {
       args.push(...CODEX_DAEDALUS_TUI_ARGS);

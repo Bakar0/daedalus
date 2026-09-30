@@ -732,7 +732,8 @@ export class AgentService {
     handoff?: boolean;
     /**
      * A resident's session: it runs at the workspace root, where its memory
-     * lives, and in the provider's default permission mode.
+     * lives. It gets the same relaxed permission mode as every session; its
+     * deny list in the workspace settings is what keeps it read-only.
      */
     resident?: boolean;
   }): Promise<AgentSession> {
@@ -819,7 +820,6 @@ export class AgentService {
           sessionName: name,
           prompt: launchPrompt,
           model,
-          ...(input.resident ? { permissionMode: "default" as const } : {}),
           additionalDirectories: prepared.references.map(
             (repository) =>
               repository.referencePath ?? repository.canonicalPath,

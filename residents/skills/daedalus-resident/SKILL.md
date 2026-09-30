@@ -57,13 +57,15 @@ look, and write down what you learn.
    the exact read-only commands that worked, flags that matter, limits you hit
    and what a quiet result looks like. Routine prompts refer to it ("use the
    logs commands in TOOLS.md") instead of repeating commands.
-4. **Permissions.** You run unattended, so a permission prompt blocks every
-   routine behind it. Propose an allow list for your session from `TOOLS.md`:
-   read-only commands only, plus `daedal routine *`, `daedal finding *` and
-   `daedal attention`. Propose a deny list for every command that writes
-   outside Daedalus (posting, commenting, rerunning, acknowledging, and API
-   calls with a method or field flag). Show both, and after the user says yes,
-   write them to `.claude/settings.json` in your workspace root.
+4. **Permissions.** You run unattended in auto mode, where the provider
+   judges each tool call. Make writing outside Daedalus impossible rather than
+   merely unlikely: propose a deny list for every command and tool that
+   writes (posting, commenting, rerunning, acknowledging, and API calls with a
+   method or field flag), and an allow list for the read-only commands in
+   `TOOLS.md` plus `daedal routine *`, `daedal finding *` and
+   `daedal attention`, so none of them is ever held up. Show both, and after
+   the user says yes, write them to `.claude/settings.json` in your workspace
+   root.
 5. **Routines.** Propose routines for what they asked to watch, one at a
    time, as described below.
 6. **Repositories.** For each repository an investigation may need, attach it

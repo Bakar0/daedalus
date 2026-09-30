@@ -23,10 +23,10 @@ resident's own files, written with the user during first-run setup.
 The skills live in the workspace rather than with the global skills, so
 `/daedalus-routine` exists only in the resident's session. The resident's
 session runs at the workspace root and never moves, so Claude's memory for
-that directory carries across handoffs. It starts with `--permission-mode
-default`; its allow and deny lists go in the workspace's
-`.claude/settings.json`, which the resident proposes during setup and writes
-once the user agrees.
+that directory carries across handoffs. It starts in auto mode like every Daedalus session. Its deny list, which
+blocks everything that writes outside Daedalus, and its allow list go in the
+workspace's `.claude/settings.json`; the resident proposes them during setup
+and writes them once the user agrees.
 
 Residents run on Claude only for now: the routine skill is a Claude slash
 command in the workspace.

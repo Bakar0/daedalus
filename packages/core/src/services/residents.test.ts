@@ -191,7 +191,7 @@ describe("residents", () => {
       expect(session.name).toBe("Argus");
       const launch = tmux.launches.at(-1)!;
       expect(launch.cwd).toBe(workspace.path);
-      expect(launch.args.join(" ")).toContain("--permission-mode default");
+      expect(launch.args.join(" ")).toContain("--permission-mode auto");
       expect(launch.args.at(-1)).toContain("You are Argus");
       // Starting again while on duty launches nothing new.
       await context.residents.start("argus");
