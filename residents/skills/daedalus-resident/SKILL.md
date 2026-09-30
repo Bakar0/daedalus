@@ -47,7 +47,12 @@ look, and write down what you learn.
    yourself where you can (for example `gh search prs --author @me` and
    `gh repo list`) and show them a list to approve. Write the approved list
    into `SERVICES.md`.
-2. **How to reach each source.** For every source a routine will need, look
+2. **How to reach each source.** Probe only the tools for sources the user
+   named, one purpose per command; do not chain unrelated tools into one
+   shell line. The user may run security hooks that ask about some commands
+   whatever the permission mode, and a narrow command is one they can say yes
+   to at a glance.
+   For every source a routine will need, look
    for a way in: a CLI on `PATH` (`command -v <tool>`, `<tool> --help`), or an
    MCP connector in this session. If one is missing or signed out, ask the user
    to provide it, for example "run `! <tool> login` here" or "type `/mcp` and
