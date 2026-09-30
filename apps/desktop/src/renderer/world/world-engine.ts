@@ -178,7 +178,7 @@ export class WorldEngine {
   private constructor(
     private readonly host: HTMLElement,
     private theme: WorldTheme,
-    private character: WorldCharacter,
+    private readonly character: WorldCharacter,
     private look: WorldLook,
     private readonly options: WorldEngineOptions,
   ) {}
@@ -221,6 +221,12 @@ export class WorldEngine {
     app.ticker.maxFPS = MAX_FPS;
     app.ticker.add((ticker) => this.tick(ticker.deltaMS / 1000));
     app.renderer.on("resize", () => this.applyCamera());
+    // Pixi's `resizeTo` only hears the window resize. The stage also narrows
+    // without one, when the Needs you list opens beside it, and a canvas
+    // left at the old width has its right side cut off.
+    const observer = new ResizeObserver(() => app.queueResize());
+    observer.observe(this.host);
+    this.cleanups.push(() => observer.disconnect());
     this.listen(document, "visibilitychange", this.visibility);
     this.listenToCamera(app.canvas);
     // A passive container hears nothing, not even what bubbles up from its
@@ -278,23 +284,6 @@ export class WorldEngine {
   }
 
   /** New figures for everyone, standing where they already were. */
-  setCharacter(character: WorldCharacter) {
-    if (character.id === this.character.id) return;
-    this.character = character;
-    for (const [id, entry] of this.actors) {
-      const position = entry.position;
-      this.remove(id);
-      if (entry.leaving) continue;
-      const replacement = this.enter(entry.actor, entry.target, true);
-      replacement.position = position;
-      replacement.path = entry.path;
-      replacement.wait = entry.wait;
-      replacement.pops = entry.pops;
-      this.actors.set(id, replacement);
-    }
-    this.place();
-  }
-
   /**
    * Floats `text` up from over an agent's head for a moment: progress it
    * just made. Several in a row show one after another.

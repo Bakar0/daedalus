@@ -4,29 +4,15 @@ import type { ActorFigure, ActorFrame, WorldLook } from "../world-theme";
 import { hash } from "./personas";
 
 /**
- * What every character style shares: the name tag, the ring on the floor when
+ * What sits around a figure's body: the name tag, the ring on the floor when
  * an agent is waiting on you, and the speech bubble that says what it is
- * doing. A style only draws the body, in `pose`, once per frame.
+ * doing. The body itself is drawn in `pose`, once per frame.
  */
 
 export const ATTENTION = 0xff5f5f;
 export const DONE = 0x3fbf88;
 export const ERROR = 0xffa53d;
 export const INK = 0x1b1d2a;
-
-export const PROVIDER_COLORS: Record<string, { main: number; dark: number }> = {
-  claude: { main: 0xe07a5f, dark: 0xa8513a },
-  codex: { main: 0x2fbf8f, dark: 0x1d7f5f },
-};
-export const OTHER_PROVIDER = { main: 0x6c8cff, dark: 0x4058b8 };
-
-export const providerColors = (provider: string) =>
-  PROVIDER_COLORS[provider] ?? OTHER_PROVIDER;
-
-export const SKIN = [0xf6d2b0, 0xe8b48a, 0xc68a5e, 0x94603c, 0x6b4428];
-export const HAIR = [
-  0x2b1d14, 0x6b4226, 0xd4a24c, 0x1a1a24, 0xa8452c, 0x9aa3b5,
-];
 
 /** Stable per session, so an agent keeps its looks across snapshots. */
 export { hash };

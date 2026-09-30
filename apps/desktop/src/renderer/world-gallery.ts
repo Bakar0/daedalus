@@ -1,6 +1,6 @@
 /**
- * Every character style in every state, animated, for choosing a look.
- * One row per style and provider; one column per state. `?theme=light`
+ * The bots in every state, animated, for checking how they look.
+ * One row per provider; one column per state. `?theme=light`
  * shows the light appearance. Nothing here is used by the app.
  */
 import { Application, Container, Graphics, Text } from "pixi.js";
@@ -12,8 +12,7 @@ const errors: string[] = [];
 window.addEventListener("error", (event) =>
   errors.push(`${event.message} ${event.error?.stack ?? ""}`),
 );
-import { WORLD_CHARACTERS } from "./world/characters";
-import { createBot } from "./world/characters/bots";
+import { botsCharacter, createBot } from "./world/characters/bots";
 import { PERSONAS } from "./world/characters/personas";
 import type { WorldActor } from "./world/world-model";
 import type { ActorFigure, WorldLook } from "./world/world-theme";
@@ -55,13 +54,8 @@ const CELL_H = 110;
 const LABEL_W = 110;
 
 const params = new URLSearchParams(location.search);
-// `?only=chibi` shows one style; `?wrap=5` puts five states on a line, for a
-// closer look.
-const only = params.get("only");
+// `?wrap=5` puts five states on a line, for a closer look.
 const wrap = Number(params.get("wrap")) || COLUMNS.length;
-const styles = WORLD_CHARACTERS.filter(
-  (character) => !only || character.id === only,
-);
 const lines = Math.ceil(COLUMNS.length / wrap);
 const appearance: WorldLook["appearance"] =
   new URLSearchParams(location.search).get("theme") === "light"
@@ -119,7 +113,7 @@ const CYCLE: Array<{
 ];
 const cycling: Array<{ figure: ActorFigure; actor: WorldActor }> = [];
 
-// Each style and provider gets a band; a band holds `lines` rows of states,
+// Each provider gets a band; a band holds `lines` rows of states,
 // each state titled above its figure.
 const figures: Array<{ figure: ActorFigure; walking: boolean }> = [];
 const bandHeight = lines * CELL_H;
@@ -161,7 +155,7 @@ if (personaMode) {
   });
   band = Math.ceil((PERSONAS.length * 2) / perRow);
 }
-for (const character of personaMode ? [] : styles) {
+for (const character of personaMode ? [] : [botsCharacter]) {
   for (const provider of PROVIDERS) {
     const top = band * (bandHeight + 8);
     sheet.addChild(

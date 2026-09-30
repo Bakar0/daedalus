@@ -165,13 +165,12 @@ export interface ZoneRef {
 }
 
 /**
- * How agents look. A style is one file in `characters/` and one line in
- * `characters/index.ts`. Figures stand with their feet at (0, 0) and are
- * about 50 world pixels tall, which is what every theme's spots assume.
+ * How agents look: the bots in `characters/bots.ts`, the only style since
+ * #48. Figures stand with their feet at (0, 0) and are about 50 world pixels
+ * tall, which is what every theme's spots assume.
  */
 export interface WorldCharacter {
   id: string;
-  /** Shown in the picker: "Bots". */
   label: string;
   description: string;
   /** Builds the figure for one actor. It is placed and moved by the engine. */

@@ -12,7 +12,7 @@ import {
   type WorldPreview,
 } from "./world-preview";
 import type { WorldActor, WorldModel, WorldWeek } from "./world-model";
-import { WORLD_CHARACTERS, worldCharacterById } from "./characters";
+import { botsCharacter } from "./characters/bots";
 import { contextLevel } from "./characters/parts";
 import type { WorldPoint } from "./world-theme";
 import { WORLD_THEMES, worldThemeById } from "./themes";
@@ -28,7 +28,13 @@ import { WORLD_THEMES, worldThemeById } from "./themes";
 // everyone who never chose. The keys moved when that became true: the old
 // ones held whatever the default was on the day, written on every open.
 const THEME_STORAGE_KEY = "daedalus.world.picked-theme";
-const CHARACTER_STORAGE_KEY = "daedalus.world.picked-agents";
+const NEEDS_WIDTH_KEY = "daedalus.world.needs-width";
+const NEEDS_COLLAPSED_KEY = "daedalus.world.needs-collapsed";
+
+/** How wide the Needs you list can be dragged, in CSS pixels. */
+const NEEDS_WIDTH = { min: 180, max: 480, initial: 240 };
+const clampWidth = (value: number) =>
+  Math.min(NEEDS_WIDTH.max, Math.max(NEEDS_WIDTH.min, value));
 
 const stored = (key: string) => {
   try {
@@ -232,9 +238,6 @@ export default function WorldView(props: WorldViewProps) {
   const [themeId, setThemeId] = useState(
     () => worldThemeById(stored(THEME_STORAGE_KEY)).id,
   );
-  const [characterId, setCharacterId] = useState(
-    () => worldCharacterById(stored(CHARACTER_STORAGE_KEY)).id,
-  );
   const [failure, setFailure] = useState<string>();
   // The place is kept so the card closes when the agent walks off: a figure
   // moving out from under a still pointer fires no pointer event.
@@ -246,6 +249,39 @@ export default function WorldView(props: WorldViewProps) {
   // Scenery with something to say, such as a trophy on a shelf.
   const [tip, setTip] = useState<{ text: string; point: WorldPoint }>();
   const [weekOpen, setWeekOpen] = useState(false);
+  const [needsWidth, setNeedsWidth] = useState(() => {
+    const saved = Number(stored(NEEDS_WIDTH_KEY));
+    return saved ? clampWidth(saved) : NEEDS_WIDTH.initial;
+  });
+  const [needsCollapsed, setNeedsCollapsed] = useState(
+    () => stored(NEEDS_COLLAPSED_KEY) === "true",
+  );
+  const collapseNeeds = (collapsed: boolean) => {
+    setNeedsCollapsed(collapsed);
+    store(NEEDS_COLLAPSED_KEY, String(collapsed));
+  };
+  // The handle is on the list's left edge, so dragging left widens it.
+  const resizeNeeds = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
+    const startX = event.clientX;
+    const startWidth = needsWidth;
+    let width = startWidth;
+    const move = (next: PointerEvent) => {
+      width = clampWidth(startWidth + startX - next.clientX);
+      setNeedsWidth(width);
+    };
+    const end = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", end);
+      store(NEEDS_WIDTH_KEY, String(width));
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+  };
   // The engine's callbacks outlive renders; they read the latest props here.
   const latest = useRef(props);
   latest.current = props;
@@ -258,7 +294,7 @@ export default function WorldView(props: WorldViewProps) {
     WorldEngine.create(
       element,
       worldThemeById(themeId),
-      worldCharacterById(characterId),
+      botsCharacter,
       { appearance: latest.current.appearance },
       {
         onSelect: (sessionId) => {
@@ -327,9 +363,6 @@ export default function WorldView(props: WorldViewProps) {
   useEffect(() => {
     engine.current?.setTheme(worldThemeById(themeId));
   }, [themeId]);
-  useEffect(() => {
-    engine.current?.setCharacter(worldCharacterById(characterId));
-  }, [characterId]);
 
   const waiting = model.actors.filter((actor) => actor.mood === "attention");
   const working = model.actors.filter((actor) => actor.mood === "working");
@@ -437,15 +470,6 @@ export default function WorldView(props: WorldViewProps) {
             This week
           </button>
           <Picker
-            label="Agents"
-            onChange={(id) => {
-              setCharacterId(id);
-              store(CHARACTER_STORAGE_KEY, id);
-            }}
-            options={WORLD_CHARACTERS}
-            value={characterId}
-          />
-          <Picker
             label="World"
             onChange={(id) => {
               setThemeId(id);
@@ -506,22 +530,86 @@ export default function WorldView(props: WorldViewProps) {
             </div>
           )}
         </div>
-        {waiting.length > 0 && (
-          <aside aria-label="Needs you" className="world-needs">
-            <span className="eyebrow">Needs you</span>
-            {waiting.map((actor) => (
-              <button key={actor.sessionId} onClick={() => open(actor)}>
-                <span className="agent-dot tone-attention" aria-hidden="true" />
-                <span className="world-needs-copy">
-                  <strong>{actor.name}</strong>
-                  <small>
-                    {actor.label} · {waitingLabel(actor.since, now)}
-                    {` · ${zoneName(actor)}`}
-                  </small>
-                  {actor.detail && <span>{actor.detail}</span>}
-                </span>
+        {waiting.length > 0 && needsCollapsed && (
+          <button
+            aria-expanded={false}
+            aria-label={`Show Needs you (${waiting.length})`}
+            className="world-needs-strip"
+            onClick={() => collapseNeeds(false)}
+            title="Show who needs you"
+            type="button"
+          >
+            <span aria-hidden="true">‹</span>
+            <span className="agent-dot tone-attention" aria-hidden="true" />
+            <strong>{waiting.length}</strong>
+          </button>
+        )}
+        {waiting.length > 0 && !needsCollapsed && (
+          <aside
+            aria-label="Needs you"
+            className="world-needs"
+            style={{ flexBasis: needsWidth }}
+          >
+            <div
+              aria-label="Resize Needs you"
+              aria-orientation="vertical"
+              aria-valuemax={NEEDS_WIDTH.max}
+              aria-valuemin={NEEDS_WIDTH.min}
+              aria-valuenow={needsWidth}
+              className="world-needs-handle"
+              onDoubleClick={() => {
+                setNeedsWidth(NEEDS_WIDTH.initial);
+                store(NEEDS_WIDTH_KEY, String(NEEDS_WIDTH.initial));
+              }}
+              onKeyDown={(event) => {
+                const step =
+                  event.key === "ArrowLeft"
+                    ? 20
+                    : event.key === "ArrowRight"
+                      ? -20
+                      : 0;
+                if (!step) return;
+                event.preventDefault();
+                const width = clampWidth(needsWidth + step);
+                setNeedsWidth(width);
+                store(NEEDS_WIDTH_KEY, String(width));
+              }}
+              onPointerDown={resizeNeeds}
+              role="separator"
+              tabIndex={0}
+              title="Drag to resize; double-click to reset"
+            />
+            <div className="world-needs-head">
+              <span className="eyebrow">Needs you</span>
+              <button
+                aria-expanded={true}
+                aria-label="Collapse Needs you"
+                className="world-needs-collapse"
+                onClick={() => collapseNeeds(true)}
+                title="Collapse to a strip"
+                type="button"
+              >
+                ›
               </button>
-            ))}
+            </div>
+            <div className="world-needs-list">
+              {waiting.map((actor) => (
+                <button key={actor.sessionId} onClick={() => open(actor)}>
+                  <span
+                    className="agent-dot tone-attention"
+                    aria-hidden="true"
+                  />
+                  <span className="world-needs-copy">
+                    <strong>{actor.name}</strong>
+                    <small>
+                      {actor.label} · {waitingLabel(actor.since, now)}
+                      {` · ${zoneName(actor)}`}
+                    </small>
+                    {actor.detail && <span>{actor.detail}</span>}
+                  </span>
+                </button>
+              ))}
+            </div>
           </aside>
         )}
       </div>
@@ -561,9 +649,9 @@ export default function WorldView(props: WorldViewProps) {
           style={{ left: hover.point.x + 14, top: hover.point.y + 14 }}
         >
           <strong>{hovered.name}</strong>
-          {worldCharacterById(characterId).caption?.(hovered) && (
+          {botsCharacter.caption?.(hovered) && (
             <em className="world-card-persona">
-              {worldCharacterById(characterId).caption?.(hovered)}
+              {botsCharacter.caption?.(hovered)}
             </em>
           )}
           {hovered.taskLabel && <span>{hovered.taskLabel}</span>}
