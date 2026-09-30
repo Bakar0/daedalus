@@ -59,7 +59,7 @@ export const blinking = (time: number, seed: number) =>
 
 /**
  * How full an agent's context is, as the figure shows it: 0 below 30%,
- * then a wisp of steam (1), sweat and grey steam (2), and from 80% black
+ * then steady white steam (1), sweat and grey steam (2), and from 80% black
  * smoke pouring out of its head (3). Unknown context shows nothing.
  */
 export function contextLevel(percent: number | null): 0 | 1 | 2 | 3 {
@@ -73,14 +73,12 @@ export function contextLevel(percent: number | null): 0 | 1 | 2 | 3 {
  */
 function drawFumes(g: Graphics, level: number, t: number, top: number) {
   if (level === 0) return;
-  const puffs = level === 3 ? 9 : level === 2 ? 4 : 1;
+  const puffs = level === 3 ? 9 : level === 2 ? 4 : 2;
   const rate = level === 3 ? 0.6 : level === 2 ? 0.45 : 0.32;
   const height = level === 3 ? 80 : 46;
   for (let puff = 0; puff < puffs; puff += 1) {
     const phase = (t * rate + puff / puffs) % 1;
-    // A single wisp shows only part of the time: now and then, not always.
-    if (level === 1 && phase > 0.6) continue;
-    const rise = level === 1 ? phase / 0.6 : phase;
+    const rise = phase;
     // Out of the top of the head, drifting and spreading as it rises.
     const x = Math.sin(t * 1.3 + puff * 2.1) * 5 * rise - 6 * rise;
     const y = top + 6 - rise * height;
@@ -99,10 +97,13 @@ function drawFumes(g: Graphics, level: number, t: number, top: number) {
       });
       continue;
     }
-    const radius = (level === 2 ? 4 : 3.5) + rise * (level === 2 ? 7 : 6);
+    const radius = 5 + rise * (level === 2 ? 8 : 7);
+    const alpha = Math.min(1, (1 - rise) * 1.3) * 0.85;
+    // A faint grey edge, so white steam still reads on a pale wall.
+    g.circle(x, y, radius + 1).fill({ color: 0x9aa0ad, alpha: alpha * 0.5 });
     g.circle(x, y, radius).fill({
       color: level === 2 ? 0xdfe3ea : 0xffffff,
-      alpha: (level === 2 ? 0.75 : 0.7) * (1 - rise),
+      alpha,
     });
   }
   if (level === 3)
