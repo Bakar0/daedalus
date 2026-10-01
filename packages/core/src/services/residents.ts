@@ -95,6 +95,16 @@ export function composerText(screen: string): string | undefined {
   return undefined;
 }
 
+/**
+ * The pane's own answer to "is it at its prompt": an input box is showing
+ * and no turn is running (Claude shows "esc to interrupt" while it works).
+ */
+export function paneAtPrompt(screen: string): boolean {
+  return (
+    composerText(screen) !== undefined && !/esc to interrupt/i.test(screen)
+  );
+}
+
 export function residentAtPrompt(
   activity: AgentActivityState | undefined,
 ): boolean {
@@ -683,8 +693,25 @@ export class ResidentService {
     const typedAt = input.lastInputAt(session.id);
     if (typedAt !== undefined && now.getTime() - typedAt < USER_TYPING_HOLD_MS)
       return hold("you typed in its terminal in the last minute");
+    const busy = new Set(delivered.map((run) => run.routine));
+    const next = this.routines
+      .inFlightRuns(resident)
+      .filter((run) => !run.deliveredAt && !busy.has(run.routine))
+      .sort((left, right) => left.id - right.id)[0];
+    if (!next) return hold(null);
+    const screen = await this.agents.screen(session.id).catch(() => "");
+    // Text left in the input box would be sent along with the routine line,
+    // so a draft holds delivery until it is sent or cleared.
+    const draft = composerText(screen);
+    if (draft)
+      return hold(
+        `unsent text in ${resident.name}'s input box: "${draft.slice(0, 40)}${draft.length > 40 ? "…" : ""}"`,
+      );
     const activity = input.activity(session.id);
-    if (!residentAtPrompt(activity))
+    // A reading that decayed to unknown says nothing; the pane does. An
+    // empty input box with no turn running is a prompt.
+    const unknown = !activity || activity.activity === "unknown";
+    if (!residentAtPrompt(activity) && !(unknown && paneAtPrompt(screen)))
       return hold(
         activity?.activity === "needs_permission"
           ? `${resident.name} is waiting on a permission prompt`
@@ -702,25 +729,10 @@ export class ResidentService {
     // The last line has not been seen yet: the pane may still be taking it.
     if (
       lastDelivery &&
-      Date.parse(activity!.observedAt) <= lastDelivery &&
+      (!activity || Date.parse(activity.observedAt) <= lastDelivery) &&
       now.getTime() - lastDelivery < UNACKNOWLEDGED_DELIVERY_MS
     )
       return hold(null);
-    const busy = new Set(delivered.map((run) => run.routine));
-    const next = this.routines
-      .inFlightRuns(resident)
-      .filter((run) => !run.deliveredAt && !busy.has(run.routine))
-      .sort((left, right) => left.id - right.id)[0];
-    if (!next) return hold(null);
-    // Text left in the input box would be sent along with the routine line,
-    // so a draft holds delivery until it is sent or cleared.
-    const draft = composerText(
-      await this.agents.screen(session.id).catch(() => ""),
-    );
-    if (draft)
-      return hold(
-        `unsent text in ${resident.name}'s input box: "${draft.slice(0, 40)}${draft.length > 40 ? "…" : ""}"`,
-      );
     hold(null);
     await this.agents.send(session.id, `/daedalus-routine ${next.id}`);
     result.delivered.push(this.routines.markDelivered(next, session.id));

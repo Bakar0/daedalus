@@ -311,6 +311,34 @@ describe("residents", () => {
     });
   });
 
+  test("an unknown reading falls back to what the pane shows", async () => {
+    await withResidents(async (harness) => {
+      const { context, tmux } = harness;
+      const resident = await argus(harness);
+      await context.routines.add(resident, { text: routineFile("ci-health") });
+      const unknown = idle(harness, {
+        activity: (sessionId) => ({
+          sessionId,
+          activity: "unknown",
+          detail: null,
+          since: harness.clock.now.toISOString(),
+          observedAt: harness.clock.now.toISOString(),
+          source: "hook",
+        }),
+      });
+      tmux.screen =
+        "✻ Churning… (12s · esc to interrupt)\n────────────\n❯ \n────";
+      await context.residents.tick(unknown);
+      expect(routineLines(tmux)).toEqual([]);
+      expect((await context.residents.overviews())[0]!.deliveryHold).toBe(
+        "Argus is busy",
+      );
+      tmux.screen = "⏺ done\n────────────\n❯ \n────";
+      await context.residents.tick(unknown);
+      expect(routineLines(tmux)).toHaveLength(1);
+    });
+  });
+
   test("Claude's idle notice does not hold a resident's routines", async () => {
     await withResidents(async (harness) => {
       const { context, tmux } = harness;
