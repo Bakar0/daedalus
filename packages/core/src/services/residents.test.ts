@@ -782,6 +782,58 @@ describe("findings", () => {
   });
 });
 
+describe("resident overview", () => {
+  test("the lantern shows the most pressing state, and memory lists files", async () => {
+    await withResidents(async (harness) => {
+      const { context } = harness;
+      const resident = await argus(harness);
+      await context.routines.add(resident, { text: routineFile("ci-health") });
+      const quiet = (await context.residents.overviews())[0]!;
+      expect(quiet).toMatchObject({ lamp: "quiet", openFindings: 0 });
+      await context.residents.tick(idle(harness));
+      expect((await context.residents.overviews())[0]!.lamp).toBe("running");
+      const [run] = context.routines.deliveredRuns(resident);
+      const workspace = await context.workspaces.get("argus");
+      await context.findings.report({
+        resident: context.residents.get("argus"),
+        workspace,
+        routine: "ci-health",
+        findings: "task",
+        runId: run!.id,
+        key: "ci-health:a",
+        severity: "urgent",
+        title: "down",
+        body: "",
+      });
+      expect((await context.residents.overviews())[0]).toMatchObject({
+        lamp: "urgent",
+        openFindings: 1,
+        openFindingTasks: 1,
+      });
+      const memoryDirectory = join(
+        harness.home,
+        "claude",
+        "projects",
+        workspace.path.replace(/[^a-zA-Z0-9]/g, "-"),
+        "memory",
+      );
+      await Bun.write(join(memoryDirectory, "cx.md"), "archive tier");
+      await Bun.write(join(memoryDirectory, "MEMORY.md"), "- [cx](cx.md)");
+      const files = await context.residents.memory(
+        "argus",
+        context.config.claudeProjectsDirectory,
+      );
+      expect(files.map((file) => `${file.source}:${file.name}`)).toEqual([
+        "workspace:SERVICES.md",
+        "workspace:TOOLS.md",
+        "workspace:CHARTER.md",
+        "memory:MEMORY.md",
+        "memory:cx.md",
+      ]);
+    });
+  });
+});
+
 describe("claudeReady", () => {
   test("recognises the default mode footer a resident starts with", () => {
     expect(claudeReady("❯ \n  ⏸ manual mode on · ← for agents")).toBe(true);

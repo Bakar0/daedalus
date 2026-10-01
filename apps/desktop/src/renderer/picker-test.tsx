@@ -47,6 +47,8 @@ const snapshot = {
   agentActivity: [],
   sessionAttention: [],
   toasts: [],
+  residents: [],
+  findings: [],
   presence: {
     appForeground: true,
     workspaceId: null,

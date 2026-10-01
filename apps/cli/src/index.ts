@@ -260,7 +260,7 @@ Usage:
   daedal attention "<reason>" [--session <agent-id>] [--clear] [--json]
   daedal notify "<message>" [--level info|success|error] [--desktop] [--json]
   daedal ui state [--json]
-  daedal focus <agent-id> [--json]
+  daedal focus <agent-id> | --task <task-id> [--json]
 
 Run 'daedal <command> --help' for command details.`;
 
@@ -1689,7 +1689,20 @@ async function focusCommand(
   args: string[],
   json: boolean,
 ): Promise<number> {
-  const parsed = parseArguments(args, []);
+  const parsed = parseArguments(args, ["task"]);
+  if (parsed.values.task !== undefined) {
+    expectPositionals(parsed.positionals, 0, "daedal focus --task <task-id>");
+    const task = context.tasks.get(parsed.values.task);
+    const result = await context.presence.requestTaskFocus(task.id);
+    printResult({ taskId: task.id, ...result }, json, () =>
+      console.log(
+        result.raised
+          ? `Focused task ${task.id}`
+          : `Requested focus for task ${task.id}; could not raise the app`,
+      ),
+    );
+    return 0;
+  }
   expectPositionals(parsed.positionals, 1, "daedal focus <agent-id>");
   const session = await context.agents.get(parsed.positionals[0]!);
   const result = await context.presence.requestFocus(session.id);

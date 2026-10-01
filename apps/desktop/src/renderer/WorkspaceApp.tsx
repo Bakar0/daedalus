@@ -19,6 +19,8 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from "react";
 import Markdown from "react-markdown";
+import { ResidentsNav } from "./residents/ResidentsNav";
+import { ResidentPage, type ResidentTab } from "./residents/ResidentPage";
 import remarkGfm from "remark-gfm";
 import type {
   AppUpdateDto,
@@ -180,7 +182,8 @@ const rememberExpandedDirectories = (
 const lastViewStorageKey = (workspaceId: string) =>
   `daedalus.view.last.${workspaceId}`;
 
-export type WorkspaceView = "board" | "sessions" | "workspace" | "world";
+export type WorkspaceView =
+  "board" | "sessions" | "workspace" | "world" | "resident";
 
 /**
  * What the main column shows: one workspace, or every active workspace at
@@ -1656,6 +1659,7 @@ export function WorkspaceApp({
       preferredScopeView(scope, rememberedWorkspaceView(scopeKey)),
   );
   const viewWorkspaceId = useRef(scopeKey);
+  const [residentTab, setResidentTab] = useState<ResidentTab>("board");
   // Where the World button returns to: the World spans every workspace, so
   // it toggles over whichever workspace view was open.
   const lastWorkspaceView = useRef<WorkspaceView>(
@@ -2365,6 +2369,24 @@ export function WorkspaceApp({
         setView("sessions");
       }),
     [client, openSession],
+  );
+  // A clicked finding notification lands on its task: on the resident's page
+  // when the task is a resident's, on the board otherwise.
+  useEffect(
+    () =>
+      client.subscribeFocusTask?.((taskId) => {
+        const current = snapshotRef.current;
+        const task = current?.tasks.find((item) => item.id === taskId);
+        if (!task) return;
+        const isResident = current?.residents.some(
+          (resident) => resident.workspaceId === task.workspaceId,
+        );
+        if (isResident) setResidentTab("board");
+        enterWorkspace(task.workspaceId, isResident ? "resident" : "board");
+        setSelectedTaskId(task.id);
+        setEditingTask(false);
+      }),
+    [client],
   );
   // The host may have checked before this window existed, so ask once, then
   // follow its messages.
@@ -4599,6 +4621,120 @@ export function WorkspaceApp({
       );
     });
 
+  // Residents are listed on their own, never as projects; their workspace
+  // still holds the board their findings live on.
+  const residents = snapshot?.residents ?? [];
+  const residentWorkspaceIds = new Set(
+    residents.map((resident) => resident.workspaceId),
+  );
+  const selectedResident =
+    view === "resident" && !showingAll
+      ? residents.find((resident) => resident.workspaceId === workspaceId)
+      : undefined;
+  const findingsByTask = new Map(
+    (snapshot?.findings ?? []).flatMap((finding) =>
+      finding.taskId ? [[finding.taskId, finding] as const] : [],
+    ),
+  );
+  const residentSession = selectedResident?.sessionId
+    ? snapshot?.agents.find((item) => item.id === selectedResident.sessionId)
+    : undefined;
+  const boardView = workspace ? (
+    <BoardView
+      activity={activityById}
+      attention={attentionById}
+      availableProviders={availableBoardProviders}
+      busy={busy}
+      launches={workspaceSessionLaunches}
+      modelCatalogs={modelCatalogs}
+      now={now}
+      onCreateTask={() => setModal("task")}
+      onDismissLaunch={dismissSessionLaunch}
+      onDraftBrief={(task) => void startTaskSession(task, { draftBrief: true })}
+      onQuickCapture={quickCaptureTask}
+      onAnswer={async (session, text) =>
+        Boolean(
+          await perform(client.request.agentSend({ id: session.id, text })),
+        )
+      }
+      onMarkDone={(task) =>
+        void perform(
+          client.request.taskSetStatus({ id: task.id, status: "done" }),
+        )
+      }
+      onOpenWorktree={(worktree) =>
+        void perform(
+          client.request.sessionWorktreeOpen({
+            session: worktree.sessionId,
+            repository: worktree.repositoryId,
+          }),
+        )
+      }
+      findings={findingsByTask}
+      onFindingVerdict={(finding, verdict) =>
+        void perform(
+          client.request.findingVerdict({
+            resident: finding.residentId,
+            id: finding.id,
+            verdict,
+          }),
+        )
+      }
+      onPark={(task) =>
+        void perform(
+          client.request.taskSetStatus({
+            id: task.id,
+            status: "blocked",
+          }),
+        )
+      }
+      onSecondOpinion={(task, provider) =>
+        void startTaskSession(task, { provider })
+      }
+      onStartNext={(task) => void startTaskSession(task)}
+      onNeedModels={ensureModelCatalog}
+      onOpenLink={openTerminalLink}
+      onOpenSession={(session) => {
+        // The Sessions view lists this scope's sessions, so the
+        // scope stays; the workspace underneath follows the session
+        // so the terminal heading and the content loaders agree.
+        setWorkspaceId(session.workspaceId);
+        openSession(session.id);
+        setView("sessions");
+      }}
+      onSelectTask={(task) => {
+        setSelectedTaskId(task.id);
+        setEditingTask(false);
+      }}
+      onSetInProgress={(task) =>
+        void perform(
+          client.request.taskSetStatus({
+            id: task.id,
+            status: "in_progress",
+          }),
+        )
+      }
+      onStart={(task) => void startTaskSession(task)}
+      onStartWith={(task) => openSessionModal(task)}
+      onUpdateSettings={(changes) =>
+        void perform(
+          client.request.workspaceUpdate({
+            reference: workspace.id,
+            ...changes,
+          }),
+        )
+      }
+      selectedTaskId={selectedTaskId}
+      sessions={workspaceSessions}
+      tasks={allTasks}
+      telemetry={telemetryById}
+      tmuxAvailable={Boolean(snapshot?.settings.tmuxAvailable)}
+      workspace={showingAll ? undefined : workspace}
+      workspaces={activeWorkspaces}
+      worktrees={workspaceWorktrees}
+    />
+  ) : null;
+
   return (
     <main
       className={`app ${terminalPanelOpen ? "terminal-panel-open" : ""}`}
@@ -4712,6 +4848,17 @@ export function WorkspaceApp({
         <aside
           className={`workspace-column ${workspacePanelWidth < PANEL_COMPACT_THRESHOLD ? "panel-compact" : ""}`}
         >
+          <ResidentsNav
+            compact={workspacePanelWidth < PANEL_COMPACT_THRESHOLD}
+            now={now}
+            onOpen={(resident) => {
+              setSelectedTaskId(undefined);
+              clearSessionFocusRequest();
+              enterWorkspace(resident.workspaceId, "resident");
+            }}
+            residents={residents}
+            selectedId={selectedResident?.id}
+          />
           <div className="section-heading">
             <div>
               <span className="eyebrow">Projects</span>
@@ -4746,147 +4893,152 @@ export function WorkspaceApp({
                 </div>
               )}
             {allWorkspacesCard}
-            {orderedWorkspaces.map((item) => {
-              const itemSessions = (snapshot?.agents ?? []).filter(
-                (session) =>
-                  session.workspaceId === item.id && !session.archivedAt,
-              );
-              const liveCount = itemSessions.filter(sessionIsLive).length;
-              // Blocked sessions come first so the five-icon truncation can
-              // never be the reason a blocked session goes unnoticed.
-              const itemViews = itemSessions
-                .map((session) => ({ session, view: statusViewFor(session) }))
-                .sort(
-                  (left, right) =>
-                    Number(right.view.attention) - Number(left.view.attention),
+            {orderedWorkspaces
+              .filter((item) => !residentWorkspaceIds.has(item.id))
+              .map((item) => {
+                const itemSessions = (snapshot?.agents ?? []).filter(
+                  (session) =>
+                    session.workspaceId === item.id && !session.archivedAt,
                 );
-              const attentionCount = itemViews.filter((item) =>
-                sessionNeedsAttention(item.view),
-              ).length;
-              const sessionLabel = `${itemSessions.length} ${itemSessions.length === 1 ? "session" : "sessions"}`;
-              const insightLabel = `${sessionLabel} in ${item.name}: ${liveCount} live, ${attentionCount} need you`;
+                const liveCount = itemSessions.filter(sessionIsLive).length;
+                // Blocked sessions come first so the five-icon truncation can
+                // never be the reason a blocked session goes unnoticed.
+                const itemViews = itemSessions
+                  .map((session) => ({ session, view: statusViewFor(session) }))
+                  .sort(
+                    (left, right) =>
+                      Number(right.view.attention) -
+                      Number(left.view.attention),
+                  );
+                const attentionCount = itemViews.filter((item) =>
+                  sessionNeedsAttention(item.view),
+                ).length;
+                const sessionLabel = `${itemSessions.length} ${itemSessions.length === 1 ? "session" : "sessions"}`;
+                const insightLabel = `${sessionLabel} in ${item.name}: ${liveCount} live, ${attentionCount} need you`;
 
-              return (
-                <div
-                  className={`workspace-card ${!showingAll && item.id === workspaceId ? "selected" : ""}`}
-                  data-dragging={
-                    workspaceReorder.draggingId === item.id ? "true" : undefined
-                  }
-                  key={item.id}
-                  onPointerDown={workspaceReorder.onPointerDown(item.id)}
-                  ref={workspaceReorder.registerCard(item.id)}
-                >
-                  <button
-                    className="workspace-item"
-                    onClick={() => selectWorkspace(item.id)}
-                    onKeyDown={(event) => {
-                      if (!event.altKey) return;
-                      const direction =
-                        event.key === "ArrowUp"
-                          ? "up"
-                          : event.key === "ArrowDown"
-                            ? "down"
-                            : undefined;
-                      if (
-                        direction &&
-                        workspaceReorder.moveByKeyboard(item.id, direction)
-                      )
-                        event.preventDefault();
-                    }}
+                return (
+                  <div
+                    className={`workspace-card ${!showingAll && item.id === workspaceId ? "selected" : ""}`}
+                    data-dragging={
+                      workspaceReorder.draggingId === item.id
+                        ? "true"
+                        : undefined
+                    }
+                    key={item.id}
+                    onPointerDown={workspaceReorder.onPointerDown(item.id)}
+                    ref={workspaceReorder.registerCard(item.id)}
                   >
-                    <span className="workspace-icon">
-                      {item.name.slice(0, 1).toUpperCase()}
-                    </span>
-                    <span className="workspace-card-content">
-                      <strong className="workspace-card-name">
-                        <span>{item.name}</span>
-                        {/* A session blocked in a workspace nobody is looking
+                    <button
+                      className="workspace-item"
+                      onClick={() => selectWorkspace(item.id)}
+                      onKeyDown={(event) => {
+                        if (!event.altKey) return;
+                        const direction =
+                          event.key === "ArrowUp"
+                            ? "up"
+                            : event.key === "ArrowDown"
+                              ? "down"
+                              : undefined;
+                        if (
+                          direction &&
+                          workspaceReorder.moveByKeyboard(item.id, direction)
+                        )
+                          event.preventDefault();
+                      }}
+                    >
+                      <span className="workspace-icon">
+                        {item.name.slice(0, 1).toUpperCase()}
+                      </span>
+                      <span className="workspace-card-content">
+                        <strong className="workspace-card-name">
+                          <span>{item.name}</span>
+                          {/* A session blocked in a workspace nobody is looking
                             at has to be discoverable without clicking in. The
                             badge is a bare count so it survives a 210px
                             column; the line below spells it out. */}
-                        {attentionCount > 0 && (
-                          <span
-                            aria-label={`${attentionCount} ${attentionCount === 1 ? "session needs" : "sessions need"} you in ${item.name}`}
-                            className="workspace-attention-badge"
-                            title={`${attentionCount} ${attentionCount === 1 ? "session needs" : "sessions need"} you`}
-                          >
-                            {attentionCount}
-                          </span>
-                        )}
-                      </strong>
-                      <small>
-                        {item.available
-                          ? item.slug
-                          : `${item.slug} · folder missing`}
-                      </small>
-                      <span
-                        aria-label={insightLabel}
-                        className="workspace-session-insights"
-                      >
-                        <span className="workspace-session-icons">
-                          {itemViews.slice(0, 5).map(({ session, view }) => {
-                            const tool = sessionTool(session);
-                            return (
-                              <span
-                                className={`workspace-session-indicator tool-${tool}`}
-                                data-attention={
-                                  view.attention ? "true" : undefined
-                                }
-                                key={session.id}
-                                title={statusAriaLabel(session, view, now)}
-                              >
-                                <ToolIcon tool={tool} />
-                                <AgentStatusDot
-                                  count={view.reasons.length}
-                                  view={view}
-                                />
-                              </span>
-                            );
-                          })}
-                          {itemSessions.length > 5 && (
-                            <small>+{itemSessions.length - 5}</small>
+                          {attentionCount > 0 && (
+                            <span
+                              aria-label={`${attentionCount} ${attentionCount === 1 ? "session needs" : "sessions need"} you in ${item.name}`}
+                              className="workspace-attention-badge"
+                              title={`${attentionCount} ${attentionCount === 1 ? "session needs" : "sessions need"} you`}
+                            >
+                              {attentionCount}
+                            </span>
                           )}
-                        </span>
-                        <small
-                          className={
-                            attentionCount > 0
-                              ? "workspace-insight-copy needs-attention"
-                              : "workspace-insight-copy"
-                          }
-                        >
-                          {attentionCount > 0
-                            ? `${attentionCount} need${attentionCount === 1 ? "s" : ""} you`
-                            : itemSessions.length > 0
-                              ? `${liveCount} live · ${sessionLabel}`
-                              : "No sessions"}
+                        </strong>
+                        <small>
+                          {item.available
+                            ? item.slug
+                            : `${item.slug} · folder missing`}
                         </small>
+                        <span
+                          aria-label={insightLabel}
+                          className="workspace-session-insights"
+                        >
+                          <span className="workspace-session-icons">
+                            {itemViews.slice(0, 5).map(({ session, view }) => {
+                              const tool = sessionTool(session);
+                              return (
+                                <span
+                                  className={`workspace-session-indicator tool-${tool}`}
+                                  data-attention={
+                                    view.attention ? "true" : undefined
+                                  }
+                                  key={session.id}
+                                  title={statusAriaLabel(session, view, now)}
+                                >
+                                  <ToolIcon tool={tool} />
+                                  <AgentStatusDot
+                                    count={view.reasons.length}
+                                    view={view}
+                                  />
+                                </span>
+                              );
+                            })}
+                            {itemSessions.length > 5 && (
+                              <small>+{itemSessions.length - 5}</small>
+                            )}
+                          </span>
+                          <small
+                            className={
+                              attentionCount > 0
+                                ? "workspace-insight-copy needs-attention"
+                                : "workspace-insight-copy"
+                            }
+                          >
+                            {attentionCount > 0
+                              ? `${attentionCount} need${attentionCount === 1 ? "s" : ""} you`
+                              : itemSessions.length > 0
+                                ? `${liveCount} live · ${sessionLabel}`
+                                : "No sessions"}
+                          </small>
+                        </span>
                       </span>
+                    </button>
+                    <span className="workspace-card-actions" data-no-drag>
+                      <button
+                        aria-label={`Open ${item.name} in integrated terminal`}
+                        className="session-card-action workspace-terminal-action"
+                        disabled={!item.available || busy}
+                        onClick={() => void createIntegratedTerminal(item)}
+                        title="Open in integrated terminal"
+                        type="button"
+                      >
+                        <SessionLaunchIcon />
+                      </button>
+                      <button
+                        aria-label={`Archive ${item.name} workspace`}
+                        className="session-card-action workspace-card-archive"
+                        onClick={() => setWorkspaceAction(item)}
+                        title="Archive workspace"
+                        type="button"
+                      >
+                        <ArchiveIcon />
+                      </button>
                     </span>
-                  </button>
-                  <span className="workspace-card-actions" data-no-drag>
-                    <button
-                      aria-label={`Open ${item.name} in integrated terminal`}
-                      className="session-card-action workspace-terminal-action"
-                      disabled={!item.available || busy}
-                      onClick={() => void createIntegratedTerminal(item)}
-                      title="Open in integrated terminal"
-                      type="button"
-                    >
-                      <SessionLaunchIcon />
-                    </button>
-                    <button
-                      aria-label={`Archive ${item.name} workspace`}
-                      className="session-card-action workspace-card-archive"
-                      onClick={() => setWorkspaceAction(item)}
-                      title="Archive workspace"
-                      type="button"
-                    >
-                      <ArchiveIcon />
-                    </button>
-                  </span>
-                </div>
-              );
-            })}
+                  </div>
+                );
+              })}
           </nav>
           {archivedWorkspaces.length > 0 && (
             <details className="archive-list workspace-archive-list">
@@ -4934,27 +5086,74 @@ export function WorkspaceApp({
         />
 
         <section
-          className={`workspace-main ${view === "board" ? "board-column" : view === "sessions" ? `session-navigator ${sessionsPanelWidth < PANEL_COMPACT_THRESHOLD ? "panel-compact" : ""}` : view === "world" ? "workspace-content-column world-column" : "workspace-content-column"}`}
+          className={`workspace-main ${view === "board" ? "board-column" : view === "sessions" ? `session-navigator ${sessionsPanelWidth < PANEL_COMPACT_THRESHOLD ? "panel-compact" : ""}` : view === "world" ? "workspace-content-column world-column" : view === "resident" ? "workspace-content-column resident-column" : "workspace-content-column"}`}
         >
-          <div className="workspace-main-header">
-            <div>
-              <span className="eyebrow">
-                {(showingAll || view === "world") && workspace
-                  ? `${activeWorkspaces.length} ${activeWorkspaces.length === 1 ? "workspace" : "workspaces"}`
-                  : (workspace?.slug ?? "Select a workspace")}
-              </span>
-              <h1>
-                {(showingAll || view === "world") && workspace
-                  ? "All workspaces"
-                  : (workspace?.name ?? "Workspace")}
-              </h1>
+          {!selectedResident && (
+            <div className="workspace-main-header">
+              <div>
+                <span className="eyebrow">
+                  {(showingAll || view === "world") && workspace
+                    ? `${activeWorkspaces.length} ${activeWorkspaces.length === 1 ? "workspace" : "workspaces"}`
+                    : (workspace?.slug ?? "Select a workspace")}
+                </span>
+                <h1>
+                  {(showingAll || view === "world") && workspace
+                    ? "All workspaces"
+                    : (workspace?.name ?? "Workspace")}
+                </h1>
+              </div>
             </div>
-          </div>
+          )}
           {!workspace ? (
             <div className="empty large">
               <strong>Choose a workspace</strong>
               <span>Its board, sessions, and files will appear here.</span>
             </div>
+          ) : selectedResident ? (
+            <ResidentPage
+              board={boardView}
+              busy={busy}
+              client={client}
+              dataRevision={dataRevision}
+              now={now}
+              onChanged={() => void refresh()}
+              onError={setError}
+              onTab={setResidentTab}
+              resident={selectedResident}
+              tab={residentTab}
+              terminal={
+                residentSession && sessionIsLive(residentSession) ? (
+                  <TerminalSurface
+                    activity={activityById.get(residentSession.id)}
+                    attention={attentionById.get(residentSession.id)}
+                    terminalEndpoint={terminalEndpoint}
+                    focused={shouldFocusSession(
+                      focusedSessionId,
+                      residentSession.id,
+                    )}
+                    fitRevision={terminalFitRevision}
+                    id={residentSession.id}
+                    key={`${residentSession.id}:${terminalMountRevision}`}
+                    label={selectedResident.name}
+                    locationLabel={selectedResident.workspaceSlug}
+                    onClearAttention={() =>
+                      void clearAttention(residentSession.id)
+                    }
+                    onFocused={clearSessionFocusRequest}
+                    onOpenLink={openTerminalLink}
+                    session={residentSession}
+                    status={residentSession.status}
+                    target="agent"
+                    telemetry={telemetryById.get(residentSession.id)}
+                  />
+                ) : (
+                  <div className="terminal-empty">
+                    <strong>{selectedResident.name} is not running</strong>
+                    <span>Start it from the button above.</span>
+                  </div>
+                )
+              }
+            />
           ) : view === "workspace" ? (
             <>
               <div className="workspace-content-toolbar">
@@ -5348,93 +5547,7 @@ export function WorkspaceApp({
               />
             </Suspense>
           ) : view === "board" ? (
-            <BoardView
-              activity={activityById}
-              attention={attentionById}
-              availableProviders={availableBoardProviders}
-              busy={busy}
-              launches={workspaceSessionLaunches}
-              modelCatalogs={modelCatalogs}
-              now={now}
-              onCreateTask={() => setModal("task")}
-              onDismissLaunch={dismissSessionLaunch}
-              onDraftBrief={(task) =>
-                void startTaskSession(task, { draftBrief: true })
-              }
-              onQuickCapture={quickCaptureTask}
-              onAnswer={async (session, text) =>
-                Boolean(
-                  await perform(
-                    client.request.agentSend({ id: session.id, text }),
-                  ),
-                )
-              }
-              onMarkDone={(task) =>
-                void perform(
-                  client.request.taskSetStatus({ id: task.id, status: "done" }),
-                )
-              }
-              onOpenWorktree={(worktree) =>
-                void perform(
-                  client.request.sessionWorktreeOpen({
-                    session: worktree.sessionId,
-                    repository: worktree.repositoryId,
-                  }),
-                )
-              }
-              onPark={(task) =>
-                void perform(
-                  client.request.taskSetStatus({
-                    id: task.id,
-                    status: "blocked",
-                  }),
-                )
-              }
-              onSecondOpinion={(task, provider) =>
-                void startTaskSession(task, { provider })
-              }
-              onStartNext={(task) => void startTaskSession(task)}
-              onNeedModels={ensureModelCatalog}
-              onOpenLink={openTerminalLink}
-              onOpenSession={(session) => {
-                // The Sessions view lists this scope's sessions, so the
-                // scope stays; the workspace underneath follows the session
-                // so the terminal heading and the content loaders agree.
-                setWorkspaceId(session.workspaceId);
-                openSession(session.id);
-                setView("sessions");
-              }}
-              onSelectTask={(task) => {
-                setSelectedTaskId(task.id);
-                setEditingTask(false);
-              }}
-              onSetInProgress={(task) =>
-                void perform(
-                  client.request.taskSetStatus({
-                    id: task.id,
-                    status: "in_progress",
-                  }),
-                )
-              }
-              onStart={(task) => void startTaskSession(task)}
-              onStartWith={(task) => openSessionModal(task)}
-              onUpdateSettings={(changes) =>
-                void perform(
-                  client.request.workspaceUpdate({
-                    reference: workspace.id,
-                    ...changes,
-                  }),
-                )
-              }
-              selectedTaskId={selectedTaskId}
-              sessions={workspaceSessions}
-              tasks={allTasks}
-              telemetry={telemetryById}
-              tmuxAvailable={Boolean(snapshot?.settings.tmuxAvailable)}
-              workspace={showingAll ? undefined : workspace}
-              workspaces={activeWorkspaces}
-              worktrees={workspaceWorktrees}
-            />
+            boardView
           ) : (
             <>
               <div className="sessions-toolbar">
@@ -5810,32 +5923,34 @@ export function WorkspaceApp({
           </aside>
         )}
 
-        {view === "board" && workspace && selectedTask && (
-          <section
-            aria-label={`Task #${selectedTask.number}`}
-            className="task-drawer"
-            role="dialog"
-          >
-            <div className="section-heading">
-              <div>
-                <span className="eyebrow">Task #{selectedTask.number}</span>
-                <h1>Task brief</h1>
+        {(view === "board" || (selectedResident && residentTab === "board")) &&
+          workspace &&
+          selectedTask && (
+            <section
+              aria-label={`Task #${selectedTask.number}`}
+              className="task-drawer"
+              role="dialog"
+            >
+              <div className="section-heading">
+                <div>
+                  <span className="eyebrow">Task #{selectedTask.number}</span>
+                  <h1>Task brief</h1>
+                </div>
+                <div className="panel-heading-actions">
+                  <button
+                    aria-label="Close task"
+                    className="quiet task-drawer-close"
+                    onClick={closeTaskDrawer}
+                    title="Close (Esc)"
+                    type="button"
+                  >
+                    <DismissIcon />
+                  </button>
+                </div>
               </div>
-              <div className="panel-heading-actions">
-                <button
-                  aria-label="Close task"
-                  className="quiet task-drawer-close"
-                  onClick={closeTaskDrawer}
-                  title="Close (Esc)"
-                  type="button"
-                >
-                  <DismissIcon />
-                </button>
-              </div>
-            </div>
-            {taskInspector}
-          </section>
-        )}
+              {taskInspector}
+            </section>
+          )}
 
         {view === "sessions" && workspace && (
           <section className="terminal-column">

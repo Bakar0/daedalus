@@ -1,5 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import residentBriefTemplate from "../../../../residents/workspace/BRIEF.md" with { type: "text" };
 import residentCharterTemplate from "../../../../residents/workspace/CHARTER.md" with { type: "text" };
 import residentServicesTemplate from "../../../../residents/workspace/SERVICES.md" with { type: "text" };
@@ -14,7 +14,7 @@ import type {
 } from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
-import type { AgentService } from "./agents";
+import { claudeProjectKey, type AgentService } from "./agents";
 import type { FindingService } from "./findings";
 import { residentPrompt } from "./providers";
 import { ROUTINES_DIRECTORY, TEMPLATES_DIRECTORY } from "./routine-files";
@@ -103,6 +103,38 @@ export function freshContextBoundary(now: Date): Date {
   return boundary;
 }
 
+/**
+ * What the resident's lantern shows, most pressing first: an urgent finding,
+ * any open finding, a routine in flight, or nothing to say.
+ */
+export type ResidentLamp = "urgent" | "findings" | "running" | "quiet";
+
+export interface ResidentOverview {
+  resident: Resident;
+  workspaceSlug: string;
+  workspacePath: string;
+  /** The session's lifecycle, or null when it has none on duty. */
+  sessionStatus: AgentSession["status"] | null;
+  lamp: ResidentLamp;
+  nextRunAt: string | null;
+  runsInFlight: number;
+  runsQueued: number;
+  openFindings: number;
+  openFindingTasks: number;
+  routineErrors: number;
+}
+
+export interface ResidentMemoryFile {
+  /** Where it is shown from: the workspace, or the provider's memory. */
+  source: "workspace" | "memory";
+  name: string;
+  path: string;
+  content: string;
+  truncated: boolean;
+}
+
+const MEMORY_FILE_LIMIT = 64 * 1024;
+
 export interface ResidentTickInput {
   /** Context use per session, from telemetry. */
   contextPercent: (sessionId: string) => number | undefined;
@@ -147,6 +179,104 @@ export class ResidentService {
         `Resident '${reference}' was not found`,
       );
     return resident;
+  }
+
+  /** What a surface needs to show each resident at a glance. */
+  async overviews(): Promise<ResidentOverview[]> {
+    const overviews: ResidentOverview[] = [];
+    for (const resident of this.list()) {
+      const workspace = this.repositories.findWorkspace(resident.workspaceId);
+      if (!workspace) continue;
+      const session = this.liveSession(resident);
+      const inFlight = this.routines.inFlightRuns(resident);
+      const open = this.repositories.residents.listFindings(resident.id, {
+        states: ["open"],
+      });
+      const { routines, errors } = await this.routines.read(resident);
+      const enabled = new Set(
+        routines.filter((routine) => routine.enabled).map((item) => item.name),
+      );
+      const next = this.repositories.residents
+        .listRoutineStates(resident.id)
+        .filter((state) => enabled.has(state.name) && state.nextRunAt)
+        .map((state) => state.nextRunAt!)
+        .sort()[0];
+      const running = inFlight.filter((run) => run.deliveredAt).length;
+      overviews.push({
+        resident,
+        workspaceSlug: workspace.slug,
+        workspacePath: workspace.path,
+        sessionStatus: session?.status ?? null,
+        lamp: open.some((finding) => finding.severity === "urgent")
+          ? "urgent"
+          : open.length
+            ? "findings"
+            : running
+              ? "running"
+              : "quiet",
+        nextRunAt: resident.state === "on_duty" ? (next ?? null) : null,
+        runsInFlight: running,
+        runsQueued: inFlight.length - running,
+        openFindings: open.length,
+        openFindingTasks: new Set(
+          open.flatMap((finding) => (finding.taskId ? [finding.taskId] : [])),
+        ).size,
+        routineErrors: errors.length,
+      });
+    }
+    return overviews;
+  }
+
+  /**
+   * The resident's files and its provider memory, read-only. Only the
+   * resident writes its memory; a surface shows it.
+   */
+  async memory(
+    reference: string,
+    claudeProjectsDirectory: string,
+  ): Promise<ResidentMemoryFile[]> {
+    const resident = this.get(reference);
+    const workspace = await this.workspaces.get(resident.workspaceId);
+    const read = async (
+      source: ResidentMemoryFile["source"],
+      path: string,
+    ): Promise<ResidentMemoryFile | undefined> => {
+      const text = await readFile(path, "utf8").catch(() => undefined);
+      if (text === undefined) return undefined;
+      return {
+        source,
+        name: basename(path),
+        path,
+        content: text.slice(0, MEMORY_FILE_LIMIT),
+        truncated: text.length > MEMORY_FILE_LIMIT,
+      };
+    };
+    const files: ResidentMemoryFile[] = [];
+    for (const name of ["SERVICES.md", "TOOLS.md", "CHARTER.md"]) {
+      const file = await read("workspace", join(workspace.path, name));
+      if (file) files.push(file);
+    }
+    const memoryDirectory = join(
+      claudeProjectsDirectory,
+      claudeProjectKey(workspace.path),
+      "memory",
+    );
+    const entries = await readdir(memoryDirectory).catch(() => []);
+    // The index first, then the memories it points at.
+    const ordered = entries
+      .filter((name) => name.endsWith(".md"))
+      .sort((left, right) =>
+        left === "MEMORY.md"
+          ? -1
+          : right === "MEMORY.md"
+            ? 1
+            : left.localeCompare(right),
+      );
+    for (const name of ordered) {
+      const file = await read("memory", join(memoryDirectory, name));
+      if (file) files.push(file);
+    }
+    return files;
   }
 
   /**

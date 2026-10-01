@@ -42,6 +42,11 @@ export function createElectrobunClient(): DesktopClient {
       rpc.addMessageListener("focusSession", receive);
       return () => rpc.removeMessageListener("focusSession", receive);
     },
+    subscribeFocusTask(listener) {
+      const receive = ({ taskId }: { taskId: string }) => listener(taskId);
+      rpc.addMessageListener("focusTask", receive);
+      return () => rpc.removeMessageListener("focusTask", receive);
+    },
     subscribeWorkspaceFiles(listener) {
       const receive = (change: {
         workspaceId: string;

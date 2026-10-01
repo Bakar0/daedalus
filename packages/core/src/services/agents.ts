@@ -147,7 +147,7 @@ export function isMissingCodexConversationError(message: string): boolean {
   );
 }
 
-function claudeProjectKey(workingDirectory: string): string {
+export function claudeProjectKey(workingDirectory: string): string {
   return workingDirectory.replace(/[^a-zA-Z0-9]/g, "-");
 }
 

@@ -32,6 +32,8 @@ export interface NotificationRequest {
    * chose to be interrupted for; Focus mode still holds everything else.
    */
   urgent?: boolean;
+  /** A clicked desktop alert opens this task rather than the session. */
+  taskId?: string;
 }
 
 export type NotificationSuppression =
@@ -172,11 +174,13 @@ export class NotificationService {
       title: request.title,
       ...(request.subtitle ? { subtitle: request.subtitle } : {}),
       body: request.body,
-      ...(this.cliExecutable && request.sessionId
+      ...(this.cliExecutable && (request.taskId || request.sessionId)
         ? {
             activate: {
               executable: this.cliExecutable,
-              args: ["focus", request.sessionId],
+              args: request.taskId
+                ? ["focus", "--task", request.taskId]
+                : ["focus", request.sessionId!],
             },
           }
         : {}),

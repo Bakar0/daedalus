@@ -347,6 +347,7 @@ textarea {
 
 button:not(
   .workspace-item,
+  .resident-item,
   .quiet,
   .danger-link,
   .skills-group-head,
@@ -363,6 +364,7 @@ button:not(
 }
 button:not(
     .workspace-item,
+    .resident-item,
     .quiet,
     .danger-link,
     .skills-group-head,
@@ -5301,4 +5303,413 @@ dd {
   padding: 8px;
   width: auto;
   z-index: 40;
+}
+
+/* ---------------------------------------------------------------------------
+   Residents (#49). Long-lived agents get their own section above the
+   workspaces and their own page; they are not projects.
+   ------------------------------------------------------------------------ */
+.app {
+  --lamp-amber: #f0b44c;
+}
+.app[data-theme="light"] {
+  --lamp-amber: #b4740b;
+}
+.residents-section {
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+}
+.residents-heading {
+  margin-bottom: 6px;
+}
+.residents-section > .item-list {
+  overflow: visible;
+}
+.resident-card {
+  border-radius: 9px;
+  display: flex;
+  margin: 2px 0;
+  transition: background 140ms ease;
+}
+.resident-card:hover {
+  background: var(--raised-hover);
+}
+.resident-card.selected {
+  background: var(--accent-wash);
+  box-shadow: inset 0 0 0 1px rgb(69 150 254 / 0.18);
+}
+.resident-card .resident-item {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  display: flex;
+  flex: 1;
+  gap: 10px;
+  margin: 0;
+  min-width: 0;
+  padding: 8px;
+  text-align: left;
+}
+.resident-icon {
+  align-items: center;
+  background: radial-gradient(circle at 50% 35%, #2a2f45, #171b2b);
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  display: flex;
+  flex: 0 0 auto;
+  height: 30px;
+  justify-content: center;
+  width: 30px;
+}
+.app[data-theme="light"] .resident-icon {
+  background: radial-gradient(circle at 50% 35%, #ffffff, #dfe6f3);
+}
+.resident-card-content {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+.resident-card-content strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+.resident-card-content small {
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.resident-count {
+  background: var(--lamp-amber);
+  border-radius: 999px;
+  color: #1b1405;
+  font-size: 10px;
+  font-weight: 700;
+  min-width: 18px;
+  padding: 1px 6px;
+  text-align: center;
+}
+.resident-count.urgent {
+  background: var(--danger);
+  color: #fff;
+}
+.workspace-column.panel-compact .residents-heading,
+.workspace-column.panel-compact .resident-card-content,
+.workspace-column.panel-compact .resident-count {
+  display: none;
+}
+.workspace-column.panel-compact .resident-card .resident-item {
+  justify-content: center;
+  padding: 7px;
+}
+
+/* The lantern. Quiet is a steady low glow, a run sweeps, an open finding is
+   amber and an urgent one red. Off is an empty ring. */
+.resident-lamp {
+  border-radius: 50%;
+  display: inline-block;
+  flex: 0 0 auto;
+  height: 10px;
+  position: relative;
+  width: 10px;
+}
+.resident-lamp.lamp-quiet {
+  background: var(--success);
+  box-shadow: 0 0 6px rgb(88 199 154 / 0.45);
+  opacity: 0.8;
+}
+.resident-lamp.lamp-running {
+  animation: resident-lamp-sweep 1.6s ease-in-out infinite;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+.resident-lamp.lamp-findings {
+  background: var(--lamp-amber);
+  box-shadow: 0 0 8px var(--lamp-amber);
+}
+.resident-lamp.lamp-urgent {
+  animation: resident-lamp-sweep 1s ease-in-out infinite;
+  background: var(--danger);
+  box-shadow: 0 0 10px var(--danger);
+}
+.resident-lamp.lamp-off {
+  border: 1.5px solid var(--muted);
+}
+@keyframes resident-lamp-sweep {
+  50% {
+    opacity: 0.45;
+    transform: scale(0.85);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .resident-lamp {
+    animation: none !important;
+  }
+}
+
+/* The page */
+.resident-column {
+  padding-top: 18px;
+}
+.resident-page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  min-width: 0;
+}
+.resident-header {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+.resident-title {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+.resident-title .resident-lamp {
+  height: 14px;
+  width: 14px;
+}
+.resident-title small {
+  color: var(--muted);
+}
+.resident-controls {
+  display: flex;
+  gap: 8px;
+}
+.resident-tabs {
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 4px;
+}
+.resident-tabs button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--secondary);
+  display: inline-flex;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 12px;
+}
+.resident-tabs button.active {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+.resident-tab-count {
+  background: var(--lamp-amber);
+  border-radius: 999px;
+  color: #1b1405;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 0 6px;
+}
+.resident-tab-count.bad {
+  background: var(--danger);
+  color: #fff;
+}
+.resident-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+}
+.resident-column {
+  min-width: 0;
+  overflow: hidden;
+}
+.resident-body-terminal {
+  overflow: hidden;
+}
+.resident-table-wrap {
+  overflow: auto;
+}
+.resident-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  width: 100%;
+}
+.resident-table th {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  padding: 6px 10px;
+  text-align: left;
+  text-transform: uppercase;
+}
+.resident-table td {
+  border-top: 1px solid var(--line);
+  padding: 8px 10px;
+  vertical-align: top;
+}
+.resident-table td small {
+  color: var(--muted);
+  display: block;
+}
+.resident-table td small.bad,
+.resident-table .bad {
+  color: var(--danger);
+}
+.resident-table tr.off td {
+  opacity: 0.55;
+}
+.resident-table .numeric {
+  font-variant-numeric: tabular-nums;
+}
+.resident-row-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.resident-switch {
+  align-items: center;
+  display: inline-flex;
+  gap: 4px;
+}
+.resident-run-summary {
+  color: var(--secondary);
+  max-width: 520px;
+}
+.resident-routine-error {
+  border: 1px solid var(--danger);
+  font-size: 12px;
+  border-radius: 8px;
+  display: grid;
+  gap: 2px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+}
+.resident-routine-error small {
+  color: var(--muted);
+}
+.run-status {
+  border-radius: 999px;
+  font-size: 11px;
+  padding: 1px 8px;
+}
+.run-status.tone-quiet {
+  background: rgb(88 199 154 / 0.14);
+  color: var(--success);
+}
+.run-status.tone-loud {
+  background: rgb(240 180 76 / 0.16);
+  color: var(--lamp-amber);
+}
+.run-status.tone-bad {
+  background: rgb(255 137 135 / 0.14);
+  color: var(--danger);
+}
+.run-status.tone-live {
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+.run-status.tone-muted {
+  background: var(--raised);
+  color: var(--muted);
+}
+.resident-memory {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 180px minmax(0, 1fr);
+  min-height: 0;
+}
+.resident-memory-files {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+.resident-memory-files > div {
+  display: grid;
+  gap: 2px;
+}
+.resident-memory-files button {
+  background: transparent;
+  border: 0;
+  color: var(--secondary);
+  margin: 0;
+  overflow: hidden;
+  padding: 5px 8px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.resident-memory-files button.active {
+  background: var(--accent-wash);
+  color: var(--text);
+}
+.resident-memory-content {
+  min-width: 0;
+  overflow: auto;
+}
+
+/* A finding's strip on a board card */
+.finding-details {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 11px;
+  gap: 6px;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+.finding-source,
+.finding-verdict {
+  align-items: center;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.finding-severity {
+  border-radius: 4px;
+  font-weight: 650;
+  padding: 0 5px;
+  text-transform: uppercase;
+}
+.finding-severity.severity-urgent {
+  background: var(--danger);
+  color: #fff;
+}
+.finding-severity.severity-warn {
+  background: rgb(240 180 76 / 0.2);
+  color: var(--lamp-amber);
+}
+.finding-severity.severity-info {
+  background: var(--raised);
+  color: var(--muted);
+}
+.finding-routine {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.finding-cleared {
+  color: var(--success);
+}
+.finding-reopened {
+  color: var(--lamp-amber);
+}
+.finding-details button {
+  font-size: 11px;
+  margin: 0;
+  padding: 2px 8px;
+}
+.finding-verdict-label {
+  color: var(--muted);
+}
+.workspace-shell.mode-resident {
+  grid-template-columns: var(--workspace-panel-width) 6px minmax(0, 1fr);
 }

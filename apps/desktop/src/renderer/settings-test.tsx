@@ -45,6 +45,8 @@ const snapshot = {
   sessionActivity: [],
   attention: [],
   toasts: [],
+  residents: [],
+  findings: [],
   settings: {
     version: "0.7.0",
     channel: "stable",

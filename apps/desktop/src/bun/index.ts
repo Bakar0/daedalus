@@ -751,7 +751,9 @@ setInterval(async () => {
     // `daedal focus` parks a request and raises the app; the window learns
     // which session to select here.
     const focusRequest = await context.presence.takeFocusRequest();
-    if (focusRequest)
+    if (focusRequest?.taskId)
+      rpc.send.focusTask({ taskId: focusRequest.taskId });
+    else if (focusRequest?.sessionId)
       rpc.send.focusSession({ sessionId: focusRequest.sessionId });
     // A session asked for from the World window while the main one was
     // closed: sent once the reopened window has had a tick to load.

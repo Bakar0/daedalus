@@ -11,6 +11,8 @@ import {
   type PendingNotification,
   type PresenceState,
   type RepositoryLibraryEntry,
+  type ResidentOverview,
+  type RoutineRun,
   type SessionAttention,
   type Task,
   type Workspace,
@@ -28,6 +30,9 @@ import type {
   IntegratedTerminalDto,
   PresenceStateDto,
   RepositoryLibraryDto,
+  ResidentDetailDto,
+  ResidentOverviewDto,
+  RoutineRunDto,
   RpcResult,
   SessionAttentionDto,
   TaskDto,
@@ -191,6 +196,14 @@ export async function desktopSnapshot(
       .map((item) => ({ ...item })),
     attention: context.activity.listAttention().map(sessionAttentionDto),
     toasts: context.notifications.pending("toast").map(toastDto),
+    residents: (await context.residents.overviews()).map(residentOverviewDto),
+    findings: context.residents
+      .list()
+      .flatMap((resident) =>
+        context.repositories.residents.listFindings(resident.id),
+      )
+      .filter((finding) => finding.taskId)
+      .map((finding) => ({ ...finding })),
     settings: {
       version: packageJson.version,
       channel: channelName(context.config.home),
@@ -222,7 +235,80 @@ export function desktopDataFingerprint(context: ApplicationContext): string {
     activity: context.repositories.listAgentActivity(),
     attention: context.repositories.listSessionAttention(),
     notifications: context.repositories.listPendingNotifications(),
+    // A run starting or ending moves the lantern, so it reloads too. Routine
+    // files are not in SQLite; their state rows change when they are read.
+    residents: context.repositories.residents.listResidents().map((item) => ({
+      item,
+      runs: context.repositories.residents.listRoutineRuns(item.id, {
+        limit: 5,
+      }),
+      states: context.repositories.residents.listRoutineStates(item.id),
+      findings: context.repositories.residents.listFindings(item.id, {
+        states: ["open", "cleared"],
+      }),
+    })),
   });
+}
+
+const residentOverviewDto = (
+  overview: ResidentOverview,
+): ResidentOverviewDto => ({
+  id: overview.resident.id,
+  slug: overview.resident.slug,
+  name: overview.resident.name,
+  workspaceId: overview.resident.workspaceId,
+  workspaceSlug: overview.workspaceSlug,
+  workspacePath: overview.workspacePath,
+  state: overview.resident.state,
+  sessionId: overview.resident.sessionId,
+  sessionStatus: overview.sessionStatus,
+  lamp: overview.lamp,
+  nextRunAt: overview.nextRunAt,
+  runsInFlight: overview.runsInFlight,
+  runsQueued: overview.runsQueued,
+  openFindings: overview.openFindings,
+  openFindingTasks: overview.openFindingTasks,
+  routineErrors: overview.routineErrors,
+  autoHandoffPercent: overview.resident.autoHandoffPercent,
+});
+
+const routineRunDto = (run: RoutineRun): RoutineRunDto => ({
+  id: run.id,
+  routine: run.routine,
+  status: run.status,
+  queuedAt: run.queuedAt,
+  deliveredAt: run.deliveredAt,
+  startedAt: run.startedAt,
+  finishedAt: run.finishedAt,
+  outcome: run.outcome,
+  summary: run.summary,
+  missedMs: run.missedMs,
+});
+
+async function residentDetail(
+  context: ApplicationContext,
+  reference: string,
+): Promise<ResidentDetailDto> {
+  const resident = context.residents.get(reference);
+  const { routines, errors } = await context.routines.list(resident);
+  return {
+    routines: routines.map(({ routine, state, lastRun }) => ({
+      name: routine.name,
+      path: routine.path,
+      schedule: routine.schedule.text,
+      until: routine.until,
+      model: routine.model,
+      timeoutMs: routine.timeoutMs,
+      findings: routine.findings,
+      enabled: routine.enabled,
+      nextRunAt: routine.enabled ? (state?.nextRunAt ?? null) : null,
+      lastRunAt: state?.lastRunAt ?? null,
+      consecutiveFailures: state?.consecutiveFailures ?? 0,
+      lastRun: lastRun ? routineRunDto(lastRun) : null,
+    })),
+    errors: errors.map((error) => ({ ...error })),
+    runs: context.routines.runs(resident, { limit: 100 }).map(routineRunDto),
+  };
 }
 
 /**
@@ -258,6 +344,52 @@ export function createDesktopRequestHandlers(
 
   return {
     snapshot: () => result(() => desktopSnapshot(context)),
+    residentDetail: ({ reference }) =>
+      result(() => residentDetail(context, reference)),
+    residentMemory: ({ reference }) =>
+      result(async () =>
+        (
+          await context.residents.memory(
+            reference,
+            context.config.claudeProjectsDirectory,
+          )
+        ).map((file) => ({ ...file })),
+      ),
+    residentControl: ({ reference, action }) =>
+      mutate(async () => {
+        const resident =
+          action === "start"
+            ? await context.residents.start(reference)
+            : action === "stop"
+              ? await context.residents.stop(reference)
+              : action === "pause"
+                ? context.residents.pause(reference)
+                : await context.residents.resume(reference);
+        return { state: resident.state };
+      }),
+    routineSetEnabled: ({ resident, name, enabled }) =>
+      mutate(async () => {
+        const routine = await context.routines.setEnabled(
+          context.residents.get(resident),
+          name,
+          enabled,
+        );
+        return { name: routine.name, enabled: routine.enabled };
+      }),
+    routineRunNow: ({ resident, name }) =>
+      mutate(async () =>
+        routineRunDto(
+          await context.routines.runNow(context.residents.get(resident), name),
+        ),
+      ),
+    findingVerdict: ({ resident, id, verdict }) =>
+      mutate(() => ({
+        ...context.findings.verdict(
+          context.residents.get(resident),
+          id,
+          verdict,
+        ),
+      })),
     windowRole: () => result(() => ({ role: windows.role })),
     worldWindowOpen: () =>
       result(() => {

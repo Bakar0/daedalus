@@ -20,6 +20,8 @@ export interface DesktopClient {
   subscribeCommands(listener: (command: DesktopCommand) => void): () => void;
   subscribeWindowResize(listener: () => void): () => void;
   subscribeFocusSession(listener: (sessionId: string) => void): () => void;
+  /** Optional so test clients need not stub it. */
+  subscribeFocusTask?(listener: (taskId: string) => void): () => void;
   /**
    * A workspace's files changed on disk. Already coalesced and debounced by
    * the host; `overflow` means the batch was too large to describe and

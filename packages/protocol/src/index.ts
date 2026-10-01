@@ -507,6 +507,90 @@ export interface TaskTimelineDto {
   cost: TaskCostDto;
 }
 
+/** One resident at a glance, for the sidebar and the Resident page. */
+export interface ResidentOverviewDto {
+  id: string;
+  slug: string;
+  name: string;
+  workspaceId: string;
+  workspaceSlug: string;
+  workspacePath: string;
+  state: "on_duty" | "draining" | "paused" | "stopped";
+  sessionId: string | null;
+  sessionStatus: "starting" | "running" | "exited" | "lost" | null;
+  /** Most pressing first: an urgent finding, any finding, a run, nothing. */
+  lamp: "urgent" | "findings" | "running" | "quiet";
+  nextRunAt: string | null;
+  runsInFlight: number;
+  runsQueued: number;
+  openFindings: number;
+  openFindingTasks: number;
+  routineErrors: number;
+  autoHandoffPercent: number;
+}
+
+export interface FindingDto {
+  id: string;
+  residentId: string;
+  routine: string;
+  key: string;
+  sameAs: string | null;
+  severity: "info" | "warn" | "urgent";
+  title: string;
+  url: string | null;
+  taskId: string | null;
+  state: "open" | "cleared" | "closed";
+  verdict: "useful" | "noise" | null;
+  openedAt: string;
+  lastSeenAt: string;
+  clearedAt: string | null;
+  closedAt: string | null;
+  reopenCount: number;
+}
+
+export interface RoutineDto {
+  name: string;
+  path: string;
+  schedule: string;
+  until: string | null;
+  model: string | null;
+  timeoutMs: number;
+  findings: "task" | "notify" | "none";
+  enabled: boolean;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  consecutiveFailures: number;
+  lastRun: RoutineRunDto | null;
+}
+
+export interface RoutineRunDto {
+  id: number;
+  routine: string;
+  status: "queued" | "running" | "done" | "failed" | "skipped";
+  queuedAt: string;
+  deliveredAt: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  outcome: "quiet" | "notified" | "task" | null;
+  summary: string | null;
+  missedMs: number;
+}
+
+export interface ResidentDetailDto {
+  routines: RoutineDto[];
+  /** Routine files that did not parse, with the reason. */
+  errors: Array<{ name: string; path: string; error: string }>;
+  runs: RoutineRunDto[];
+}
+
+export interface ResidentMemoryFileDto {
+  source: "workspace" | "memory";
+  name: string;
+  path: string;
+  content: string;
+  truncated: boolean;
+}
+
 export interface DesktopSnapshotDto {
   workspaces: WorkspaceDto[];
   tasks: TaskDto[];
@@ -526,6 +610,10 @@ export interface DesktopSnapshotDto {
   /** Every merged pull request remembered, oldest first, for the World. */
   shipped: ShippedPullRequestDto[];
   toasts: ToastDto[];
+  /** Residents, which the sidebar shows apart from workspaces. */
+  residents: ResidentOverviewDto[];
+  /** Every finding that has a task, so a board card can show its details. */
+  findings: FindingDto[];
   settings: DesktopSettingsDto;
 }
 
@@ -553,6 +641,21 @@ export interface DesktopRpcSchema {
   bun: {
     requests: {
       snapshot: Request<Record<string, never>, DesktopSnapshotDto>;
+      residentDetail: Request<{ reference: string }, ResidentDetailDto>;
+      residentMemory: Request<{ reference: string }, ResidentMemoryFileDto[]>;
+      residentControl: Request<
+        { reference: string; action: "start" | "stop" | "pause" | "resume" },
+        { state: ResidentOverviewDto["state"] }
+      >;
+      routineSetEnabled: Request<
+        { resident: string; name: string; enabled: boolean },
+        { name: string; enabled: boolean }
+      >;
+      routineRunNow: Request<{ resident: string; name: string }, RoutineRunDto>;
+      findingVerdict: Request<
+        { resident: string; id: string; verdict: "useful" | "noise" | null },
+        FindingDto
+      >;
       /**
        * The loopback WebSocket the renderer attaches terminals to. It carries
        * a per-launch token, and the `views://` handler resolves a URL as a
@@ -940,6 +1043,8 @@ export interface DesktopRpcSchema {
        * Without the deep link people learn to ignore notifications.
        */
       focusSession: { sessionId: string };
+      /** The same, for a clicked finding notification: opens its task. */
+      focusTask: { taskId: string };
       /**
        * Quit was requested while something was still live. The renderer draws
        * the dialog and answers with `quitDecision`; the host has already

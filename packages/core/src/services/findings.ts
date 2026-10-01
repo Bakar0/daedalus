@@ -366,6 +366,7 @@ export class FindingService {
       body: `${result.action === "reopened" ? "Came back: " : ""}${result.finding.title}`,
       desktop: input.severity === "urgent",
       urgent: input.severity === "urgent",
+      ...(result.task ? { taskId: result.task.id } : {}),
     });
     return decision.reason;
   }

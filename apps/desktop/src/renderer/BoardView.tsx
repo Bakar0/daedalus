@@ -8,7 +8,12 @@
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { askConfirm } from "./dialogs";
+import {
+  FindingDetails,
+  type FindingVerdictChoice,
+} from "./residents/FindingDetails";
 import type {
+  FindingDto,
   AgentActivityDto,
   AgentSessionDto,
   ProviderModelCatalogDto,
@@ -98,6 +103,12 @@ export interface BoardViewProps {
   onMarkDone: (task: TaskDto) => void;
   /** Sets the task blocked, which moves it to Parked. */
   onPark: (task: TaskDto) => void;
+  /** Findings by the task they opened, for a resident's board. */
+  findings?: ReadonlyMap<string, FindingDto>;
+  onFindingVerdict?: (
+    finding: FindingDto,
+    verdict: FindingVerdictChoice,
+  ) => void;
   onUpdateSettings: (changes: {
     startSetsInProgress?: boolean;
     autoHandoffPercent?: number | null;
@@ -694,6 +705,7 @@ export function BoardView(props: BoardViewProps) {
       const target = tasksById.get(reference.taskId);
       return target ? [{ reference, target }] : [];
     });
+    const finding = props.findings?.get(task.id);
     return (
       <article
         aria-label={cardLabel}
@@ -717,6 +729,14 @@ export function BoardView(props: BoardViewProps) {
             </span>
           )}
         </div>
+        {finding && props.onFindingVerdict && (
+          <FindingDetails
+            busy={props.busy}
+            finding={finding}
+            onOpenLink={props.onOpenLink}
+            onVerdict={props.onFindingVerdict}
+          />
+        )}
         {references.length > 0 && (
           <div aria-label="Referenced tasks" className="board-card-chips">
             {references.map(({ reference, target }) => (
