@@ -51,13 +51,20 @@ tasks yourself and never change a task's status.
 When `SERVICES.md` still says it is empty, set yourself up. Do it in this
 order, without asking anything.
 
-1. **Find the tools.** Check which ways in exist: `command -v gh`, then
-   `gh auth status`; any observability, paging or cloud CLI on `PATH`; and the
-   MCP tools in this session (chat, calendar, tickets, logs). One check per
-   command. For each one that works, make one small read-only call to prove
-   it. Write `TOOLS.md`: per source, the tool, the account or profile, the
-   exact read-only commands that worked, flags that matter (a log tier, a time
-   window), and what was missing.
+1. **Find the tools.** Check which ways in exist, CLIs first, since a
+   signed-in CLI often works where a connector does not:
+   - which common CLIs are on `PATH`, in one presence check:
+     `command -v gh glab kubectl cx datadog dog pd newrelic grafana sentry-cli
+jira linear aws gcloud az`;
+   - for each one found, its own read-only status or identity command
+     (`gh auth status`, `cx profiles list`, `kubectl config get-contexts`),
+     one per command;
+   - the MCP tools in this session (chat, calendar, tickets, logs). When a
+     CLI and a connector both reach a source, use the one whose test call
+     works, and prefer the CLI. For each one that works, make one small read-only call to prove
+     it. Write `TOOLS.md`: per source, the tool, the account or profile, the
+     exact read-only commands that worked, flags that matter (a log tier, a time
+     window), and what was missing.
 2. **Find the scope from the user's own activity.** The user's recent work is
    the best evidence of what they own.
    - Code: their pull requests and commits of the last 90 days
