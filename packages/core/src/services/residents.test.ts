@@ -496,6 +496,22 @@ describe("residents", () => {
     });
   });
 
+  test("a resident's session on duty is not archived on its own", async () => {
+    await withResidents(async (harness) => {
+      const { context } = harness;
+      const resident = await argus(harness);
+      await expect(
+        context.agents.archive(resident.sessionId!, true),
+      ).rejects.toThrow("is a resident on duty");
+      // Its successor takes over, after which the old session archives.
+      const { session, predecessor } = await context.agents.continueSession({
+        id: resident.sessionId!,
+      });
+      expect(predecessor.archivedAt).not.toBeNull();
+      expect(context.residents.get("argus").sessionId).toBe(session.id);
+    });
+  });
+
   test("remove stops the resident and keeps its files unless asked", async () => {
     await withResidents(async (harness) => {
       const { context } = harness;

@@ -5710,26 +5710,19 @@ dd {
 .finding-verdict-label {
   color: var(--muted);
 }
-.workspace-shell.mode-resident {
+.workspace-shell.mode-routines {
   grid-template-columns: var(--workspace-panel-width) 6px minmax(0, 1fr);
-}
-.resident-mode-label {
-  align-items: center;
-  color: var(--secondary);
-  display: flex;
-  font-size: 12px;
-  gap: 8px;
-  padding: 6px 16px;
-}
-.resident-mode-label span {
-  color: var(--muted);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 .resident-explainer {
   color: var(--secondary);
   font-size: 12px;
   margin: 0;
   max-width: 760px;
+}
+.session-card-resident {
+  box-shadow: inset 3px 0 0 var(--lamp-amber);
+}
+.session-resident-badge {
+  color: var(--lamp-amber);
+  font-weight: 600;
 }

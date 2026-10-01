@@ -467,7 +467,8 @@ export class ResidentService {
   async stop(reference: string): Promise<Resident> {
     const resident = this.get(reference);
     const session = this.liveSession(resident);
-    if (session) await this.agents.archive(session.id, true);
+    if (session)
+      await this.agents.archive(session.id, true, { resident: true });
     this.routines.skipUndelivered(
       resident,
       "Skipped: the resident was stopped",

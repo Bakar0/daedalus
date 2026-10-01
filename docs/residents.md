@@ -121,3 +121,14 @@ session that dies is revived or relaunched, at most once every 5 minutes.
 
 Nothing fires while the app is closed. Workspace auto handoff skips resident
 sessions, because the resident's own drain decides when it hands off.
+
+## In the app
+
+Residents have their own sidebar section above Workspaces, and their
+workspaces are left out of the Workspaces list. A resident's workspace has
+the usual Board, Sessions and Workspace modes plus Routines, which shows its
+routines, runs and memory and holds Pause, Resume and Stop. Findings are
+tasks on the Board; their cards show severity, routine and whether the issue
+cleared, with Useful and Noise. The resident's own session is pinned at the
+top of Sessions and cannot be archived on its own: continue it in a new
+session to replace it, or stop the resident.

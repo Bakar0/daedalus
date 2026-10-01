@@ -183,7 +183,12 @@ const lastViewStorageKey = (workspaceId: string) =>
   `daedalus.view.last.${workspaceId}`;
 
 export type WorkspaceView =
-  "board" | "sessions" | "workspace" | "world" | "resident";
+  | "board"
+  | "sessions"
+  | "workspace"
+  | "world"
+  /** Only on a resident's workspace: its routines, runs and memory. */
+  | "routines";
 
 /**
  * What the main column shows: one workspace, or every active workspace at
@@ -216,6 +221,7 @@ export function preferredWorkspaceView(
   // so a workspace with nothing attached yet is fixed from here too.
   return rememberedView === "sessions" ||
     rememberedView === "workspace" ||
+    rememberedView === "routines" ||
     rememberedView === "world"
     ? rememberedView
     : "board";
@@ -1659,7 +1665,7 @@ export function WorkspaceApp({
       preferredScopeView(scope, rememberedWorkspaceView(scopeKey)),
   );
   const viewWorkspaceId = useRef(scopeKey);
-  const [residentTab, setResidentTab] = useState<ResidentTab>("board");
+  const [residentTab, setResidentTab] = useState<ResidentTab>("routines");
   // Where the World button returns to: the World spans every workspace, so
   // it toggles over whichever workspace view was open.
   const lastWorkspaceView = useRef<WorkspaceView>(
@@ -2370,19 +2376,15 @@ export function WorkspaceApp({
       }),
     [client, openSession],
   );
-  // A clicked finding notification lands on its task: on the resident's page
-  // when the task is a resident's, on the board otherwise.
+  // A clicked finding notification lands on its task, on its board.
   useEffect(
     () =>
       client.subscribeFocusTask?.((taskId) => {
-        const current = snapshotRef.current;
-        const task = current?.tasks.find((item) => item.id === taskId);
-        if (!task) return;
-        const isResident = current?.residents.some(
-          (resident) => resident.workspaceId === task.workspaceId,
+        const task = snapshotRef.current?.tasks.find(
+          (item) => item.id === taskId,
         );
-        if (isResident) setResidentTab("board");
-        enterWorkspace(task.workspaceId, isResident ? "resident" : "board");
+        if (!task) return;
+        enterWorkspace(task.workspaceId, "board");
         setSelectedTaskId(task.id);
         setEditingTask(false);
       }),
@@ -2821,9 +2823,20 @@ export function WorkspaceApp({
         }),
       ),
   });
-  const orderedSessions = sessionReorder.order.flatMap(
-    (id) => sessions.find((item) => item.id === id) ?? [],
+  // A resident's own session is pinned above the rest: it is the one that
+  // runs for weeks, and the agents below it are investigations it led to.
+  const residentSessionIds = new Set(
+    (snapshot?.residents ?? []).flatMap((resident) =>
+      resident.sessionId ? [resident.sessionId] : [],
+    ),
   );
+  const orderedSessions = sessionReorder.order
+    .flatMap((id) => sessions.find((item) => item.id === id) ?? [])
+    .sort(
+      (left, right) =>
+        Number(residentSessionIds.has(right.id)) -
+        Number(residentSessionIds.has(left.id)),
+    );
   const workspaceSessionLaunches = sessionLaunches.filter((item) =>
     inScope(item.workspaceId),
   );
@@ -4627,18 +4640,24 @@ export function WorkspaceApp({
   const residentWorkspaceIds = new Set(
     residents.map((resident) => resident.workspaceId),
   );
-  const selectedResident =
-    view === "resident" && !showingAll
-      ? residents.find((resident) => resident.workspaceId === workspaceId)
-      : undefined;
+  // The resident whose workspace is open, which gives the bar its Routines
+  // tab; `selectedResident` is set while that tab is showing.
+  const currentResident = showingAll
+    ? undefined
+    : residents.find((resident) => resident.workspaceId === workspaceId);
+  const selectedResident = view === "routines" ? currentResident : undefined;
+  // The Routines tab exists only on a resident's workspace; anywhere else,
+  // or once the resident is gone, the board stands in.
+  const routinesWithoutResident =
+    view === "routines" && Boolean(snapshot) && !currentResident;
+  useEffect(() => {
+    if (routinesWithoutResident) setView("board");
+  }, [routinesWithoutResident]);
   const findingsByTask = new Map(
     (snapshot?.findings ?? []).flatMap((finding) =>
       finding.taskId ? [[finding.taskId, finding] as const] : [],
     ),
   );
-  const residentSession = selectedResident?.sessionId
-    ? snapshot?.agents.find((item) => item.id === selectedResident.sessionId)
-    : undefined;
   const boardView = workspace ? (
     <BoardView
       activity={activityById}
@@ -4671,7 +4690,6 @@ export function WorkspaceApp({
         )
       }
       findings={findingsByTask}
-      findingsBoard={Boolean(selectedResident)}
       onFindingVerdict={(finding, verdict) =>
         void perform(
           client.request.findingVerdict({
@@ -4774,45 +4792,45 @@ export function WorkspaceApp({
             <small>Agent workspace</small>
           </span>
         </div>
-        {selectedResident ? (
-          // A resident is not a project: the project modes would only offer
-          // its workspace's raw board, sessions and files. Its own page has
-          // everything it needs, so the bar says where you are instead.
-          <div className="app-mode-switcher resident-mode-label">
-            <span>Resident</span>
-            <strong>{selectedResident.name}</strong>
-          </div>
-        ) : (
-          <nav className="app-mode-switcher" aria-label="Workspace mode">
+        <nav className="app-mode-switcher" aria-label="Workspace mode">
+          <button
+            aria-current={view === "board" ? "page" : undefined}
+            className={view === "board" ? "active" : ""}
+            disabled={!workspace}
+            onClick={() => setView("board")}
+          >
+            Board
+          </button>
+          <button
+            aria-current={view === "sessions" ? "page" : undefined}
+            className={view === "sessions" ? "active" : ""}
+            disabled={!workspace}
+            onClick={() => setView("sessions")}
+          >
+            Sessions
+          </button>
+          <button
+            aria-current={view === "workspace" ? "page" : undefined}
+            className={view === "workspace" ? "active" : ""}
+            disabled={!workspace || showingAll}
+            onClick={() => setView("workspace")}
+            title={
+              showingAll ? "Pick a workspace to browse its files" : undefined
+            }
+          >
+            Workspace
+          </button>
+          {currentResident && (
             <button
-              aria-current={view === "board" ? "page" : undefined}
-              className={view === "board" ? "active" : ""}
-              disabled={!workspace}
-              onClick={() => setView("board")}
+              aria-current={view === "routines" ? "page" : undefined}
+              className={view === "routines" ? "active" : ""}
+              onClick={() => setView("routines")}
+              title={`What ${currentResident.name} does on its own`}
             >
-              Board
+              Routines
             </button>
-            <button
-              aria-current={view === "sessions" ? "page" : undefined}
-              className={view === "sessions" ? "active" : ""}
-              disabled={!workspace}
-              onClick={() => setView("sessions")}
-            >
-              Sessions
-            </button>
-            <button
-              aria-current={view === "workspace" ? "page" : undefined}
-              className={view === "workspace" ? "active" : ""}
-              disabled={!workspace || showingAll}
-              onClick={() => setView("workspace")}
-              title={
-                showingAll ? "Pick a workspace to browse its files" : undefined
-              }
-            >
-              Workspace
-            </button>
-          </nav>
-        )}
+          )}
+        </nav>
         <div className="top-actions">
           {busy && <span className="syncing">Working…</span>}
           {/* Apart from the tabs: the World is every workspace at once. */}
@@ -4865,7 +4883,12 @@ export function WorkspaceApp({
             onOpen={(resident) => {
               setSelectedTaskId(undefined);
               clearSessionFocusRequest();
-              enterWorkspace(resident.workspaceId, "resident");
+              enterWorkspace(
+                resident.workspaceId,
+                preferredWorkspaceView(
+                  rememberedWorkspaceView(resident.workspaceId),
+                ),
+              );
             }}
             residents={residents}
             selectedId={selectedResident?.id}
@@ -5097,7 +5120,7 @@ export function WorkspaceApp({
         />
 
         <section
-          className={`workspace-main ${view === "board" ? "board-column" : view === "sessions" ? `session-navigator ${sessionsPanelWidth < PANEL_COMPACT_THRESHOLD ? "panel-compact" : ""}` : view === "world" ? "workspace-content-column world-column" : view === "resident" ? "workspace-content-column resident-column" : "workspace-content-column"}`}
+          className={`workspace-main ${view === "board" ? "board-column" : view === "sessions" ? `session-navigator ${sessionsPanelWidth < PANEL_COMPACT_THRESHOLD ? "panel-compact" : ""}` : view === "world" ? "workspace-content-column world-column" : view === "routines" ? "workspace-content-column resident-column" : "workspace-content-column"}`}
         >
           {!selectedResident && (
             <div className="workspace-main-header">
@@ -5122,7 +5145,6 @@ export function WorkspaceApp({
             </div>
           ) : selectedResident ? (
             <ResidentPage
-              board={boardView}
               busy={busy}
               client={client}
               dataRevision={dataRevision}
@@ -5132,38 +5154,6 @@ export function WorkspaceApp({
               onTab={setResidentTab}
               resident={selectedResident}
               tab={residentTab}
-              terminal={
-                residentSession && sessionIsLive(residentSession) ? (
-                  <TerminalSurface
-                    activity={activityById.get(residentSession.id)}
-                    attention={attentionById.get(residentSession.id)}
-                    terminalEndpoint={terminalEndpoint}
-                    focused={shouldFocusSession(
-                      focusedSessionId,
-                      residentSession.id,
-                    )}
-                    fitRevision={terminalFitRevision}
-                    id={residentSession.id}
-                    key={`${residentSession.id}:${terminalMountRevision}`}
-                    label={selectedResident.name}
-                    locationLabel={selectedResident.workspaceSlug}
-                    onClearAttention={() =>
-                      void clearAttention(residentSession.id)
-                    }
-                    onFocused={clearSessionFocusRequest}
-                    onOpenLink={openTerminalLink}
-                    session={residentSession}
-                    status={residentSession.status}
-                    target="agent"
-                    telemetry={telemetryById.get(residentSession.id)}
-                  />
-                ) : (
-                  <div className="terminal-empty">
-                    <strong>{selectedResident.name} is not running</strong>
-                    <span>Start it from the button above.</span>
-                  </div>
-                )
-              }
             />
           ) : view === "workspace" ? (
             <>
@@ -5681,9 +5671,10 @@ export function WorkspaceApp({
                   const timestamp = session.endedAt ?? session.startedAt;
                   const startupError = sessionStartupErrors.get(session.id);
                   const view = statusViewFor(session);
+                  const isResident = residentSessionIds.has(session.id);
                   return (
                     <div
-                      className={`session-card tone-${view.tone} ${session.id === activeSessionId ? "selected" : ""}`}
+                      className={`session-card tone-${view.tone} ${session.id === activeSessionId ? "selected" : ""} ${isResident ? "session-card-resident" : ""}`}
                       data-attention={view.attention ? "true" : undefined}
                       data-dragging={
                         sessionReorder.draggingId === session.id
@@ -5727,7 +5718,13 @@ export function WorkspaceApp({
                                 {" · "}
                               </span>
                             )}
-                            {task?.title ?? "Workspace session"}
+                            {isResident ? (
+                              <span className="session-resident-badge">
+                                Resident · on duty
+                              </span>
+                            ) : (
+                              (task?.title ?? "Workspace session")
+                            )}
                           </small>
                           <em>
                             <AgentStatusDot
@@ -5803,15 +5800,20 @@ export function WorkspaceApp({
                               <HandoffIcon />
                             </button>
                           )}
-                        <button
-                          aria-label={`Archive ${sessionName(session)} session`}
-                          className="session-card-action"
-                          onClick={() => setSessionAction({ session })}
-                          title="Archive session"
-                          type="button"
-                        >
-                          <ArchiveIcon />
-                        </button>
+                        {/* Never archived on its own: there would be no one
+                            on duty. Continue starts its successor; Stop is
+                            on the Routines tab. */}
+                        {!isResident && (
+                          <button
+                            aria-label={`Archive ${sessionName(session)} session`}
+                            className="session-card-action"
+                            onClick={() => setSessionAction({ session })}
+                            title="Archive session"
+                            type="button"
+                          >
+                            <ArchiveIcon />
+                          </button>
+                        )}
                       </span>
                     </div>
                   );
@@ -5934,34 +5936,32 @@ export function WorkspaceApp({
           </aside>
         )}
 
-        {(view === "board" || (selectedResident && residentTab === "board")) &&
-          workspace &&
-          selectedTask && (
-            <section
-              aria-label={`Task #${selectedTask.number}`}
-              className="task-drawer"
-              role="dialog"
-            >
-              <div className="section-heading">
-                <div>
-                  <span className="eyebrow">Task #{selectedTask.number}</span>
-                  <h1>Task brief</h1>
-                </div>
-                <div className="panel-heading-actions">
-                  <button
-                    aria-label="Close task"
-                    className="quiet task-drawer-close"
-                    onClick={closeTaskDrawer}
-                    title="Close (Esc)"
-                    type="button"
-                  >
-                    <DismissIcon />
-                  </button>
-                </div>
+        {view === "board" && workspace && selectedTask && (
+          <section
+            aria-label={`Task #${selectedTask.number}`}
+            className="task-drawer"
+            role="dialog"
+          >
+            <div className="section-heading">
+              <div>
+                <span className="eyebrow">Task #{selectedTask.number}</span>
+                <h1>Task brief</h1>
               </div>
-              {taskInspector}
-            </section>
-          )}
+              <div className="panel-heading-actions">
+                <button
+                  aria-label="Close task"
+                  className="quiet task-drawer-close"
+                  onClick={closeTaskDrawer}
+                  title="Close (Esc)"
+                  type="button"
+                >
+                  <DismissIcon />
+                </button>
+              </div>
+            </div>
+            {taskInspector}
+          </section>
+        )}
 
         {view === "sessions" && workspace && (
           <section className="terminal-column">

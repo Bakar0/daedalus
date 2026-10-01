@@ -1273,7 +1273,20 @@ export class AgentService {
     return agent;
   }
 
-  async archive(id: string, force = false): Promise<AgentSession> {
+  async archive(
+    id: string,
+    force = false,
+    options: { resident?: boolean } = {},
+  ): Promise<AgentSession> {
+    // A resident's session on duty is never archived on its own, or nobody
+    // would be on duty. Its successor replaces it (`agent continue`), or the
+    // resident is stopped, which archives it on purpose.
+    const resident = this.repositories.residents.findResidentBySession(id);
+    if (resident && !options.resident)
+      throw new DaedalusError(
+        "CONFLICT",
+        `${resident.name} is a resident on duty; continue it in a new session, or stop it with 'daedal resident stop ${resident.slug}'`,
+      );
     let agent = await this.get(id);
     if (agent.archivedAt) return agent;
     // Archivability is settled before anything is stopped, so a session that

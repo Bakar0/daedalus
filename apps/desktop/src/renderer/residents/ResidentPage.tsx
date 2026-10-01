@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
@@ -12,11 +12,9 @@ import type { DesktopClient } from "../client-types";
 import { ResidentLamp, residentStatusLine } from "./ResidentsNav";
 import { durationLabel, relativeTime } from "./time";
 
-export type ResidentTab = "board" | "terminal" | "routines" | "runs" | "memory";
+export type ResidentTab = "routines" | "runs" | "memory";
 
 const TABS: Array<{ id: ResidentTab; label: string }> = [
-  { id: "board", label: "Findings" },
-  { id: "terminal", label: "Terminal" },
   { id: "routines", label: "Routines" },
   { id: "runs", label: "Runs" },
   { id: "memory", label: "Memory" },
@@ -41,18 +39,16 @@ function RunStatus({ run }: { run: RoutineRunDto }) {
 }
 
 /**
- * A resident's own page: what it watches, what it did, and its terminal.
- * Kept out of `WorkspaceApp` on purpose. The app hands in the two parts it
- * already knows how to draw, the board and the terminal, and this tree owns
- * everything else, including its own data loading.
+ * The Routines tab of a resident's workspace: what it runs on its own, what
+ * it did, and what it remembers. Its findings are on the Board and its
+ * session is pinned in Sessions, like any workspace's. Kept out of
+ * `WorkspaceApp` on purpose; it loads its own data.
  */
 export function ResidentPage({
   client,
   resident,
   tab,
   onTab,
-  board,
-  terminal,
   dataRevision,
   now,
   busy,
@@ -63,8 +59,6 @@ export function ResidentPage({
   resident: ResidentOverviewDto;
   tab: ResidentTab;
   onTab: (tab: ResidentTab) => void;
-  board: ReactNode;
-  terminal: ReactNode;
   /** Bumped by the app on every data change, so the page reloads with it. */
   dataRevision: number;
   now: number;
@@ -148,7 +142,7 @@ export function ResidentPage({
         <div className="resident-title">
           <ResidentLamp resident={resident} />
           <div>
-            <span className="eyebrow">Resident · {resident.workspaceSlug}</span>
+            <span className="eyebrow">Resident</span>
             <h1>{resident.name}</h1>
             <small>{residentStatusLine(resident, now)}</small>
           </div>
@@ -186,10 +180,10 @@ export function ResidentPage({
       </header>
 
       <p className="resident-explainer">
-        {resident.name} checks what you own on its own schedule and opens a task
-        under Findings for anything that needs you. To investigate one, open it
-        and start an agent. To change what {resident.name} watches, tell it in
-        Terminal.
+        {resident.name} runs these routines on its own. What needs you appears
+        on the Board as a task; start an agent on it there. To change what{" "}
+        {resident.name} watches, tell it in its session, pinned at the top of
+        Sessions.
       </p>
 
       <nav aria-label={`${resident.name} views`} className="resident-tabs">
@@ -201,11 +195,6 @@ export function ResidentPage({
             onClick={() => onTab(item.id)}
           >
             {item.label}
-            {item.id === "board" && resident.openFindingTasks > 0 && (
-              <span className="resident-tab-count">
-                {resident.openFindingTasks}
-              </span>
-            )}
             {item.id === "routines" && resident.routineErrors > 0 && (
               <span className="resident-tab-count bad">
                 {resident.routineErrors}
@@ -216,8 +205,6 @@ export function ResidentPage({
       </nav>
 
       <div className={`resident-body resident-body-${tab}`}>
-        {tab === "board" && board}
-        {tab === "terminal" && terminal}
         {tab === "routines" && (
           <RoutinesTable
             detail={detail}
