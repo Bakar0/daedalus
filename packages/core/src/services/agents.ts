@@ -430,7 +430,13 @@ export class AgentService {
   private async agentEnvironment(
     session: AgentSession,
     environment: Record<string, string> = {},
+    resident?: boolean,
   ): Promise<Record<string, string>> {
+    // Set on a resident's session, at spawn and on every relaunch, so its
+    // hooks can tell that sitting at the prompt is the resting state there.
+    const isResident =
+      resident ??
+      Boolean(this.repositories.residents.findResidentBySession(session.id));
     const task = session.taskId
       ? this.repositories.findTask(session.taskId)
       : undefined;
@@ -455,6 +461,7 @@ export class AgentService {
       DAEDALUS_HOME: this.config.home,
       DAEDALUS_SESSION_ID: session.id,
       DAEDALUS_WORKSPACE_ID: session.workspaceId,
+      ...(isResident ? { DAEDALUS_RESIDENT: "1" } : {}),
       ...(task
         ? {
             DAEDALUS_TASK_ID: task.id,
@@ -865,7 +872,7 @@ export class AgentService {
         args: launch.args,
         env: input.terminal
           ? launch.env
-          : await this.agentEnvironment(session, launch.env),
+          : await this.agentEnvironment(session, launch.env, input.resident),
       });
       if (!input.terminal)
         await this.confirmOwnedWorkspaceTrust(
@@ -1216,6 +1223,12 @@ export class AgentService {
   async attach(id: string): Promise<number> {
     const agent = await this.requireRunning(id);
     return this.tmux.attach(agent.tmuxSession);
+  }
+
+  /** What the session's pane shows right now, as text. */
+  async screen(id: string): Promise<string> {
+    const agent = await this.requireRunning(id);
+    return this.tmux.capture(agent.tmuxSession);
   }
 
   async send(id: string, text: string): Promise<AgentSession> {

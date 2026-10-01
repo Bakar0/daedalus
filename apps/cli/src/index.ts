@@ -119,6 +119,15 @@ async function captureAgentEvent(
       typeof payload.thread_id === "string"
         ? "codex"
         : "claude";
+    // A resident sits at its prompt between routines. Claude's minute-later
+    // idle notice is a question for a person, and nobody is at a resident's
+    // terminal, so it would only hold up the next routine and raise a badge.
+    if (
+      process.env.DAEDALUS_RESIDENT === "1" &&
+      event === "Notification" &&
+      payload.notification_type === "idle_prompt"
+    )
+      return 0;
     const observation =
       provider === "codex"
         ? observeCodexHook(event, payload)

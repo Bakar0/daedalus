@@ -77,6 +77,24 @@ async function writeIfChanged(path: string, contents: string): Promise<void> {
  * answer, so it does not hold delivery; a real question or permission
  * dialog does, because a typed line would answer it.
  */
+/** The text of Claude's `idle_prompt` notification. */
+const CLAUDE_IDLE_NOTICE = "Claude is waiting for your input";
+
+/**
+ * The text in the session's input box, if the pane shows one: the last
+ * prompt line under Claude's composer rule. `undefined` when no prompt line
+ * is found, which says nothing either way.
+ */
+export function composerText(screen: string): string | undefined {
+  const lines = screen.split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const match = /^\s*[❯>]\s?(.*)$/.exec(lines[index]!);
+    if (match && /^\s*─{8,}/.test(lines[index - 1] ?? ""))
+      return match[1]!.replace(/\u00a0/g, " ").trim();
+  }
+  return undefined;
+}
+
 export function residentAtPrompt(
   activity: AgentActivityState | undefined,
 ): boolean {
@@ -88,7 +106,11 @@ export function residentAtPrompt(
     case "working":
       return /^Waiting for \d+ background agents?$/.test(activity.detail ?? "");
     case "needs_input":
-      return activity.source === "agent";
+      // A badge the resident raised on itself, or Claude's idle notice from
+      // a session started before residents dropped it: neither is a prompt.
+      return (
+        activity.source === "agent" || activity.detail === CLAUDE_IDLE_NOTICE
+      );
     default:
       return false;
   }
@@ -662,6 +684,12 @@ export class ResidentService {
       .filter((run) => !run.deliveredAt && !busy.has(run.routine))
       .sort((left, right) => left.id - right.id)[0];
     if (!next) return;
+    // Text left in the input box would be sent along with the routine line,
+    // so a draft holds delivery until it is sent or cleared.
+    const draft = composerText(
+      await this.agents.screen(session.id).catch(() => ""),
+    );
+    if (draft) return;
     await this.agents.send(session.id, `/daedalus-routine ${next.id}`);
     result.delivered.push(this.routines.markDelivered(next, session.id));
   }

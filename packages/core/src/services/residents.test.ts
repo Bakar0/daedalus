@@ -6,6 +6,7 @@ import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
   appendToBrief,
   claudeReady,
+  composerText,
   createApplicationContext,
   residentAtPrompt,
   type AgentActivityState,
@@ -34,8 +35,9 @@ class FakeTmux implements TmuxClient {
   async attach() {
     return 0;
   }
+  screen = "shift+tab to cycle";
   async capture() {
-    return "shift+tab to cycle";
+    return this.screen;
   }
   async sendKeys() {}
   async send(session: string, text: string) {
@@ -273,6 +275,49 @@ describe("residents", () => {
       await expect(
         context.routines.start(resident, queued!.id),
       ).rejects.toThrow("not queued");
+    });
+  });
+
+  test("holds delivery while text waits in the input box", async () => {
+    await withResidents(async (harness) => {
+      const { context, tmux } = harness;
+      const resident = await argus(harness);
+      await context.routines.add(resident, { text: routineFile("ci-health") });
+      tmux.screen = [
+        "⏺ ci-health run 2 found nothing to report.",
+        "──────────────────────────────── Argus ─",
+        "❯ run slack-needs-me now",
+        "────────────────────────────────",
+        "  ⏵⏵ auto mode on (shift+tab to cycle)",
+      ].join("\n");
+      await context.residents.tick(idle(harness));
+      expect(routineLines(tmux)).toEqual([]);
+      tmux.screen = tmux.screen.replace("❯ run slack-needs-me now", "❯ ");
+      harness.advance(1_000);
+      await context.residents.tick(idle(harness));
+      expect(routineLines(tmux)).toHaveLength(1);
+    });
+  });
+
+  test("Claude's idle notice does not hold a resident's routines", async () => {
+    await withResidents(async (harness) => {
+      const { context, tmux } = harness;
+      const resident = await argus(harness);
+      expect(tmux.launches[0]!.env?.DAEDALUS_RESIDENT).toBe("1");
+      await context.routines.add(resident, { text: routineFile("ci-health") });
+      await context.residents.tick(
+        idle(harness, {
+          activity: (sessionId) => ({
+            sessionId,
+            activity: "needs_input",
+            detail: "Claude is waiting for your input",
+            since: harness.clock.now.toISOString(),
+            observedAt: harness.clock.now.toISOString(),
+            source: "hook",
+          }),
+        }),
+      );
+      expect(routineLines(tmux)).toHaveLength(1);
     });
   });
 
@@ -831,6 +876,22 @@ describe("resident overview", () => {
         "memory:cx.md",
       ]);
     });
+  });
+});
+
+describe("composerText", () => {
+  test("reads the input box under the composer rule", () => {
+    const pane = (line: string) =>
+      [
+        "❯ You are Argus",
+        "text",
+        "──────────── Argus ─",
+        line,
+        "────────",
+      ].join("\n");
+    expect(composerText(pane("❯ draft here"))).toBe("draft here");
+    expect(composerText(pane("❯ "))).toBe("");
+    expect(composerText("no composer at all")).toBeUndefined();
   });
 });
 
