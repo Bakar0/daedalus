@@ -5713,3 +5713,23 @@ dd {
 .workspace-shell.mode-resident {
   grid-template-columns: var(--workspace-panel-width) 6px minmax(0, 1fr);
 }
+.resident-mode-label {
+  align-items: center;
+  color: var(--secondary);
+  display: flex;
+  font-size: 12px;
+  gap: 8px;
+  padding: 6px 16px;
+}
+.resident-mode-label span {
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.resident-explainer {
+  color: var(--secondary);
+  font-size: 12px;
+  margin: 0;
+  max-width: 760px;
+}

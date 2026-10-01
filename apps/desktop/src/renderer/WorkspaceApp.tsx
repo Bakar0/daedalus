@@ -4671,6 +4671,7 @@ export function WorkspaceApp({
         )
       }
       findings={findingsByTask}
+      findingsBoard={Boolean(selectedResident)}
       onFindingVerdict={(finding, verdict) =>
         void perform(
           client.request.findingVerdict({
@@ -4773,35 +4774,45 @@ export function WorkspaceApp({
             <small>Agent workspace</small>
           </span>
         </div>
-        <nav className="app-mode-switcher" aria-label="Workspace mode">
-          <button
-            aria-current={view === "board" ? "page" : undefined}
-            className={view === "board" ? "active" : ""}
-            disabled={!workspace}
-            onClick={() => setView("board")}
-          >
-            Board
-          </button>
-          <button
-            aria-current={view === "sessions" ? "page" : undefined}
-            className={view === "sessions" ? "active" : ""}
-            disabled={!workspace}
-            onClick={() => setView("sessions")}
-          >
-            Sessions
-          </button>
-          <button
-            aria-current={view === "workspace" ? "page" : undefined}
-            className={view === "workspace" ? "active" : ""}
-            disabled={!workspace || showingAll}
-            onClick={() => setView("workspace")}
-            title={
-              showingAll ? "Pick a workspace to browse its files" : undefined
-            }
-          >
-            Workspace
-          </button>
-        </nav>
+        {selectedResident ? (
+          // A resident is not a project: the project modes would only offer
+          // its workspace's raw board, sessions and files. Its own page has
+          // everything it needs, so the bar says where you are instead.
+          <div className="app-mode-switcher resident-mode-label">
+            <span>Resident</span>
+            <strong>{selectedResident.name}</strong>
+          </div>
+        ) : (
+          <nav className="app-mode-switcher" aria-label="Workspace mode">
+            <button
+              aria-current={view === "board" ? "page" : undefined}
+              className={view === "board" ? "active" : ""}
+              disabled={!workspace}
+              onClick={() => setView("board")}
+            >
+              Board
+            </button>
+            <button
+              aria-current={view === "sessions" ? "page" : undefined}
+              className={view === "sessions" ? "active" : ""}
+              disabled={!workspace}
+              onClick={() => setView("sessions")}
+            >
+              Sessions
+            </button>
+            <button
+              aria-current={view === "workspace" ? "page" : undefined}
+              className={view === "workspace" ? "active" : ""}
+              disabled={!workspace || showingAll}
+              onClick={() => setView("workspace")}
+              title={
+                showingAll ? "Pick a workspace to browse its files" : undefined
+              }
+            >
+              Workspace
+            </button>
+          </nav>
+        )}
         <div className="top-actions">
           {busy && <span className="syncing">Working…</span>}
           {/* Apart from the tabs: the World is every workspace at once. */}

@@ -103,6 +103,11 @@ export interface BoardViewProps {
   onMarkDone: (task: TaskDto) => void;
   /** Sets the task blocked, which moves it to Parked. */
   onPark: (task: TaskDto) => void;
+  /**
+   * A resident's board. Its tasks come only from the resident, so it has no
+   * capture, create button or settings, and it calls them findings.
+   */
+  findingsBoard?: boolean;
   /** Findings by the task they opened, for a resident's board. */
   findings?: ReadonlyMap<string, FindingDto>;
   onFindingVerdict?: (
@@ -1000,13 +1005,13 @@ export function BoardView(props: BoardViewProps) {
     <div className="board-view">
       <div className="board-toolbar">
         <div>
-          <strong>Tasks</strong>
+          <strong>{props.findingsBoard ? "Findings" : "Tasks"}</strong>
           <span className="count-badge">{tasks.length}</span>
         </div>
         {/* Settings, the create button and capture each write to one
             workspace, so the all-workspaces board has none of them: a task
             is captured on the board of the workspace it belongs to. */}
-        {workspace ? (
+        {props.findingsBoard ? null : workspace ? (
           <div className="heading-actions">
             <BoardSettings
               availableProviders={props.availableProviders}
@@ -1027,7 +1032,7 @@ export function BoardView(props: BoardViewProps) {
       <div className="board-lanes">
         {/* Deliberately not a <form>: Enter submitting through the browser's
             implicit-submission path is what wedged the explorer's renderer. */}
-        {workspace && (
+        {workspace && !props.findingsBoard && (
           <input
             aria-label="Quick capture: type a task title and press Enter"
             className="board-capture"
@@ -1045,11 +1050,19 @@ export function BoardView(props: BoardViewProps) {
         )}
         {tasks.length === 0 && (
           <div className="empty large">
-            <strong>{workspace ? "No tasks yet" : "No tasks anywhere"}</strong>
+            <strong>
+              {props.findingsBoard
+                ? "Nothing needs you"
+                : workspace
+                  ? "No tasks yet"
+                  : "No tasks anywhere"}
+            </strong>
             <span>
-              {workspace
-                ? "Use New to create a task."
-                : "Pick a workspace and capture one."}
+              {props.findingsBoard
+                ? "A finding appears here when a routine reports one."
+                : workspace
+                  ? "Use New to create a task."
+                  : "Pick a workspace and capture one."}
             </span>
           </div>
         )}

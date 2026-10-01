@@ -185,6 +185,13 @@ export function ResidentPage({
         </div>
       </header>
 
+      <p className="resident-explainer">
+        {resident.name} checks what you own on its own schedule and opens a task
+        under Findings for anything that needs you. To investigate one, open it
+        and start an agent. To change what {resident.name} watches, tell it in
+        Terminal.
+      </p>
+
       <nav aria-label={`${resident.name} views`} className="resident-tabs">
         {TABS.map((item) => (
           <button
