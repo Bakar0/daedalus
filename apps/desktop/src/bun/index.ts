@@ -41,7 +41,11 @@ import { installCliShim } from "./cli-shim";
 import { QuitController } from "./quit";
 import { UpdateController } from "./updates";
 import { createDesktopRequestHandlers, desktopDataFingerprint } from "./rpc";
-import { authorizeTerminalRequest, TerminalConnection } from "./terminal";
+import {
+  authorizeTerminalRequest,
+  isTyping,
+  TerminalConnection,
+} from "./terminal";
 
 interface SocketData {
   initialSize?: { cols: number; rows: number };
@@ -248,8 +252,8 @@ const server = Bun.serve<SocketData>({
               socket.data.initialSize,
               terminalTmux.executable,
             ),
-          onInput: () => {
-            if (socket.data.targetKind === "agent")
+          onInput: (data) => {
+            if (socket.data.targetKind === "agent" && isTyping(data))
               lastTerminalInput.set(target.id, Date.now());
           },
           onError: (error) =>

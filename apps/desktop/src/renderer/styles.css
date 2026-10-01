@@ -5737,3 +5737,13 @@ dd {
 .resident-hold strong {
   color: var(--lamp-amber);
 }
+.resident-run-notice {
+  color: var(--lamp-amber);
+  display: block;
+  font-size: 11px;
+  margin-top: 4px;
+  text-align: right;
+}
+.resident-run-notice.live {
+  color: var(--accent);
+}

@@ -378,11 +378,16 @@ export function createDesktopRequestHandlers(
         return { name: routine.name, enabled: routine.enabled };
       }),
     routineRunNow: ({ resident, name }) =>
-      mutate(async () =>
-        routineRunDto(
-          await context.routines.runNow(context.residents.get(resident), name),
-        ),
-      ),
+      mutate(async () => {
+        const run = await context.routines.runNow(
+          context.residents.get(resident),
+          name,
+        );
+        return {
+          ...routineRunDto(run),
+          ...(run.alreadyQueued ? { alreadyQueued: true } : {}),
+        };
+      }),
     findingVerdict: ({ resident, id, verdict }) =>
       mutate(() => ({
         ...context.findings.verdict(

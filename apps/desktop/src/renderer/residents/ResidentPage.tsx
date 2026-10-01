@@ -70,6 +70,8 @@ export function ResidentPage({
   const [memory, setMemory] = useState<ResidentMemoryFileDto[]>();
   const [memoryFile, setMemoryFile] = useState<string>();
   const [working, setWorking] = useState(false);
+  /** What the last Run now did, per routine, until the run moves on. */
+  const [runNotices, setRunNotices] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -223,14 +225,28 @@ export function ResidentPage({
             detail={detail}
             disabled={disabled}
             now={now}
-            onRunNow={(routine) =>
-              void act(
-                client.request.routineRunNow({
+            onRunNow={async (routine) => {
+              setWorking(true);
+              try {
+                const response = await client.request.routineRunNow({
                   resident: resident.id,
                   name: routine.name,
-                }),
-              )
-            }
+                });
+                setRunNotices((current) => ({
+                  ...current,
+                  [routine.name]: response.ok
+                    ? response.data.alreadyQueued
+                      ? `Already queued as run ${response.data.id}`
+                      : `Queued as run ${response.data.id}`
+                    : response.error.message,
+                }));
+                if (response.ok) onChanged();
+              } finally {
+                setWorking(false);
+              }
+            }}
+            runNotices={runNotices}
+            hold={resident.runsQueued > 0 ? resident.deliveryHold : null}
             onToggle={(routine) =>
               void act(
                 client.request.routineSetEnabled({
@@ -301,6 +317,8 @@ function RoutinesTable({
   now,
   onToggle,
   onRunNow,
+  runNotices,
+  hold,
 }: {
   routines: RoutineDto[];
   detail?: ResidentDetailDto;
@@ -308,6 +326,9 @@ function RoutinesTable({
   now: number;
   onToggle: (routine: RoutineDto) => void;
   onRunNow: (routine: RoutineDto) => void;
+  runNotices: Record<string, string>;
+  /** Why queued runs are waiting, if they are. */
+  hold: string | null;
 }) {
   if (!detail) return <div className="empty">Loading routines…</div>;
   return (
@@ -393,6 +414,11 @@ function RoutinesTable({
                       <span>{routine.enabled ? "On" : "Off"}</span>
                     </label>
                   </div>
+                  <RunNotice
+                    hold={hold}
+                    notice={runNotices[routine.name]}
+                    routine={routine}
+                  />
                 </td>
               </tr>
             ))}
@@ -451,5 +477,31 @@ function RunsTable({ runs, now }: { runs: RoutineRunDto[]; now: number }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+/**
+ * Says what Run now did and what happens next: queued and starting, queued
+ * and waiting (with the reason), or running. Without it a click that queues
+ * a run behind something looks like a click that did nothing.
+ */
+function RunNotice({
+  routine,
+  notice,
+  hold,
+}: {
+  routine: RoutineDto;
+  notice?: string;
+  hold: string | null;
+}) {
+  const status = routine.lastRun?.status;
+  if (status === "running")
+    return <small className="resident-run-notice live">Running now</small>;
+  if (status !== "queued") return null;
+  return (
+    <small className="resident-run-notice">
+      {notice ?? `Queued as run ${routine.lastRun!.id}`} ·{" "}
+      {hold ? `waiting: ${hold}` : "starts within seconds"}
+    </small>
   );
 }

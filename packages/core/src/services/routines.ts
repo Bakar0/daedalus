@@ -108,7 +108,12 @@ export class RoutineService {
       routines: routines.map((routine) => ({
         routine,
         state: states.get(routine.name) ?? null,
-        lastRun: runs.find((run) => run.routine === routine.name) ?? null,
+        // Overlap skips are newer than the run they were skipped for, and
+        // say nothing about it, so the row shows the run that is real.
+        lastRun:
+          runs.find(
+            (run) => run.routine === routine.name && run.status !== "skipped",
+          ) ?? null,
       })),
       errors,
     };

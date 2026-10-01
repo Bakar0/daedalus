@@ -576,6 +576,8 @@ export interface RoutineRunDto {
   outcome: "quiet" | "notified" | "task" | null;
   summary: string | null;
   missedMs: number;
+  /** Set by Run now when the routine already had a run waiting. */
+  alreadyQueued?: boolean;
 }
 
 export interface ResidentDetailDto {

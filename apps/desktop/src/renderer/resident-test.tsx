@@ -343,9 +343,21 @@ const client = {
         return ok({ name: params.name, enabled: params.enabled });
       },
     ),
-    routineRunNow: record("routineRunNow", (params: { name: string }) =>
-      ok(run(7, params.name, "queued", null, 0, null)),
-    ),
+    routineRunNow: record("routineRunNow", (params: { name: string }) => {
+      const routine = detail.routines.find(
+        (item) => item.name === params.name,
+      )!;
+      const already = routine.lastRun?.status === "queued";
+      const queued = already
+        ? routine.lastRun!
+        : run(7, params.name, "queued", null, 0, null);
+      routine.lastRun = queued;
+      snapshot.residents[0]!.runsQueued = 1;
+      snapshot.residents[0]!.deliveryHold =
+        "Argus is waiting on a permission prompt";
+      announce();
+      return ok({ ...queued, ...(already ? { alreadyQueued: true } : {}) });
+    }),
     findingVerdict: record(
       "findingVerdict",
       (params: { id: string; verdict: "useful" | "noise" | null }) => {
