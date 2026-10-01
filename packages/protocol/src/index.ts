@@ -526,6 +526,8 @@ export interface ResidentOverviewDto {
   openFindings: number;
   openFindingTasks: number;
   routineErrors: number;
+  /** Why queued runs are waiting, when they are. */
+  deliveryHold: string | null;
   autoHandoffPercent: number;
 }
 

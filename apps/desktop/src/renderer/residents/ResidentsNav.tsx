@@ -34,6 +34,8 @@ export function residentStatusLine(
   if (resident.state === "paused") return "Paused";
   if (resident.sessionStatus === "lost") return "Session lost, reviving";
   if (resident.state === "draining") return "Handing off";
+  if (resident.runsQueued && resident.deliveryHold)
+    return `${resident.runsQueued} waiting: ${resident.deliveryHold}`;
   const parts = [
     resident.runsInFlight
       ? `${resident.runsInFlight} running`

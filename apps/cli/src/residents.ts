@@ -415,7 +415,9 @@ export async function routineCommand(
       const run = await context.routines.runNow(resident, name);
       printResult({ run }, json, () =>
         console.log(
-          `Queued run ${run.id}; the app delivers it when ${resident.name} is idle`,
+          run.alreadyQueued
+            ? `Run ${run.id} is already queued; the app delivers it when ${resident.name} is idle`
+            : `Queued run ${run.id}; the app delivers it when ${resident.name} is idle`,
         ),
       );
       return 0;

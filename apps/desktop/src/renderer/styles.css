@@ -5726,3 +5726,14 @@ dd {
   color: var(--lamp-amber);
   font-weight: 600;
 }
+.resident-hold {
+  border: 1px solid var(--lamp-amber);
+  border-radius: 8px;
+  display: grid;
+  font-size: 12px;
+  gap: 2px;
+  padding: 8px 10px;
+}
+.resident-hold strong {
+  color: var(--lamp-amber);
+}

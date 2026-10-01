@@ -186,6 +186,19 @@ export function ResidentPage({
         Sessions.
       </p>
 
+      {resident.runsQueued > 0 && resident.deliveryHold && (
+        <div className="resident-hold" role="status">
+          <strong>
+            {resident.runsQueued}{" "}
+            {resident.runsQueued === 1 ? "run is" : "runs are"} waiting
+          </strong>
+          <span>
+            {resident.deliveryHold}. Daedalus types the next routine in once
+            this clears.
+          </span>
+        </div>
+      )}
+
       <nav aria-label={`${resident.name} views`} className="resident-tabs">
         {TABS.map((item) => (
           <button

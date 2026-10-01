@@ -238,17 +238,25 @@ export class RoutineService {
     return routine;
   }
 
-  /** Queues a run now, whatever the schedule says. */
-  async runNow(resident: Resident, name: string): Promise<RoutineRun> {
+  /**
+   * Queues a run now, whatever the schedule says. A run already waiting to
+   * be typed in is the same request, so it is returned rather than refused;
+   * only a run that is running now is a conflict.
+   */
+  async runNow(
+    resident: Resident,
+    name: string,
+  ): Promise<RoutineRun & { alreadyQueued?: boolean }> {
     const { routine } = await this.get(resident, name);
-    const inFlight = this.inFlightRuns(resident).some(
+    const existing = this.inFlightRuns(resident).find(
       (run) => run.routine === routine.name,
     );
-    if (inFlight)
+    if (existing?.deliveredAt)
       throw new DaedalusError(
         "CONFLICT",
-        `Routine '${name}' already has a run queued or in flight`,
+        `Routine '${name}' is running now (run ${existing.id})`,
       );
+    if (existing) return { ...existing, alreadyQueued: true };
     return this.repositories.residents.createRoutineRun({
       residentId: resident.id,
       routine: routine.name,

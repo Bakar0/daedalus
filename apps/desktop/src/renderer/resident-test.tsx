@@ -155,6 +155,7 @@ const snapshot: DesktopSnapshotDto = {
       openFindings: 2,
       openFindingTasks: 2,
       routineErrors: 1,
+      deliveryHold: null,
       autoHandoffPercent: 60,
     },
   ],

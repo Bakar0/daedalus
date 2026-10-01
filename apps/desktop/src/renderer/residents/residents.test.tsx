@@ -33,6 +33,7 @@ const resident = (
   openFindings: 0,
   openFindingTasks: 0,
   routineErrors: 0,
+  deliveryHold: null,
   autoHandoffPercent: 60,
   ...overrides,
 });

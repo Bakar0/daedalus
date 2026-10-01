@@ -269,6 +269,7 @@ const residentOverviewDto = (
   openFindings: overview.openFindings,
   openFindingTasks: overview.openFindingTasks,
   routineErrors: overview.routineErrors,
+  deliveryHold: overview.deliveryHold,
   autoHandoffPercent: overview.resident.autoHandoffPercent,
 });
 

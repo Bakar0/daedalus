@@ -144,6 +144,11 @@ export interface ResidentOverview {
   openFindings: number;
   openFindingTasks: number;
   routineErrors: number;
+  /**
+   * Why queued runs are not being typed in, when they are not: said out
+   * loud, because a queue that silently stops looks like a broken feature.
+   */
+  deliveryHold: string | null;
 }
 
 export interface ResidentMemoryFile {
@@ -173,6 +178,8 @@ export interface ResidentTickResult {
 
 export class ResidentService {
   private readonly lastRevive = new Map<string, number>();
+  /** The last tick's reason for holding delivery, per resident. */
+  private readonly holds = new Map<string, string | null>();
 
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -244,6 +251,10 @@ export class ResidentService {
           open.flatMap((finding) => (finding.taskId ? [finding.taskId] : [])),
         ).size,
         routineErrors: errors.length,
+        deliveryHold:
+          inFlight.length - running > 0
+            ? (this.holds.get(resident.id) ?? null)
+            : null,
       });
     }
     return overviews;
@@ -658,39 +669,59 @@ export class ResidentService {
       return;
     }
 
-    if (resident.state !== "on_duty" || session.handoffRequestedAt) return;
-    if (delivered.length >= MAX_RUNS_IN_FLIGHT) return;
+    const hold = (reason: string | null): void => {
+      this.holds.set(resident.id, reason);
+    };
+    if (resident.state !== "on_duty")
+      return hold(
+        `${resident.name} is ${resident.state === "paused" ? "paused" : "not on duty"}`,
+      );
+    if (session.handoffRequestedAt)
+      return hold(`${resident.name} is handing off`);
+    if (delivered.length >= MAX_RUNS_IN_FLIGHT)
+      return hold(`${MAX_RUNS_IN_FLIGHT} runs already in flight`);
     const typedAt = input.lastInputAt(session.id);
     if (typedAt !== undefined && now.getTime() - typedAt < USER_TYPING_HOLD_MS)
-      return;
+      return hold("you typed in its terminal in the last minute");
     const activity = input.activity(session.id);
-    if (!residentAtPrompt(activity)) return;
+    if (!residentAtPrompt(activity))
+      return hold(
+        activity?.activity === "needs_permission"
+          ? `${resident.name} is waiting on a permission prompt`
+          : activity?.activity === "needs_input"
+            ? `${resident.name} is waiting for an answer in its terminal`
+            : `${resident.name} is busy`,
+      );
     const lastDelivery = Math.max(
       0,
       ...this.routines
         .runs(resident, { limit: 20 })
         .map((run) => (run.deliveredAt ? Date.parse(run.deliveredAt) : 0)),
     );
-    if (now.getTime() - lastDelivery < DELIVERY_GAP_MS) return;
+    if (now.getTime() - lastDelivery < DELIVERY_GAP_MS) return hold(null);
     // The last line has not been seen yet: the pane may still be taking it.
     if (
       lastDelivery &&
       Date.parse(activity!.observedAt) <= lastDelivery &&
       now.getTime() - lastDelivery < UNACKNOWLEDGED_DELIVERY_MS
     )
-      return;
+      return hold(null);
     const busy = new Set(delivered.map((run) => run.routine));
     const next = this.routines
       .inFlightRuns(resident)
       .filter((run) => !run.deliveredAt && !busy.has(run.routine))
       .sort((left, right) => left.id - right.id)[0];
-    if (!next) return;
+    if (!next) return hold(null);
     // Text left in the input box would be sent along with the routine line,
     // so a draft holds delivery until it is sent or cleared.
     const draft = composerText(
       await this.agents.screen(session.id).catch(() => ""),
     );
-    if (draft) return;
+    if (draft)
+      return hold(
+        `unsent text in ${resident.name}'s input box: "${draft.slice(0, 40)}${draft.length > 40 ? "…" : ""}"`,
+      );
+    hold(null);
     await this.agents.send(session.id, `/daedalus-routine ${next.id}`);
     result.delivered.push(this.routines.markDelivered(next, session.id));
   }

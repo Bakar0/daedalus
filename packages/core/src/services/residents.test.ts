@@ -292,10 +292,22 @@ describe("residents", () => {
       ].join("\n");
       await context.residents.tick(idle(harness));
       expect(routineLines(tmux)).toEqual([]);
+      // Said out loud, not a silent queue.
+      expect((await context.residents.overviews())[0]!.deliveryHold).toContain(
+        'unsent text in Argus\'s input box: "run slack-needs-me now"',
+      );
+      // Run now asks for what is already waiting: no error, the same run.
+      const queued = context.routines.inFlightRuns(resident)[0]!;
+      const again = await context.routines.runNow(resident, "ci-health");
+      expect(again).toMatchObject({ id: queued.id, alreadyQueued: true });
       tmux.screen = tmux.screen.replace("❯ run slack-needs-me now", "❯ ");
       harness.advance(1_000);
       await context.residents.tick(idle(harness));
       expect(routineLines(tmux)).toHaveLength(1);
+      expect((await context.residents.overviews())[0]!.deliveryHold).toBeNull();
+      await expect(
+        context.routines.runNow(resident, "ci-health"),
+      ).rejects.toThrow("is running now");
     });
   });
 
