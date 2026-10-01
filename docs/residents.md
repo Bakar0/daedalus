@@ -4,11 +4,14 @@ A resident is a named, long-lived agent that owns a workspace and runs
 routines on a clock the desktop app keeps. The first one is Argus, an on-call
 agent. Daedalus knows nothing about what a resident watches: a routine is a
 schedule and a prompt, and everything specific to the user lives in the
-resident's own files, written with the user during first-run setup.
+resident's own files. The resident writes them itself on first start, from
+the tools it finds and the user's own recent activity, without asking; it
+sends one summary and the user corrects it afterwards.
 
 ## The workspace
 
-`daedal resident create <slug>` creates a normal workspace with:
+`daedal resident create <slug>` creates a workspace under
+`<DAEDALUS_HOME>/residents/<slug>`, apart from the user's projects, with:
 
 | Path                                                                  | Purpose                                                       |
 | --------------------------------------------------------------------- | ------------------------------------------------------------- |

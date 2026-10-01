@@ -9,10 +9,11 @@ disable-model-invocation: true
 
 Daedalus typed this line because routine run `$ARGUMENTS` is due. Nobody is
 waiting on the other side of the terminal. Say at most one short line in the
-conversation, and nothing when the run is quiet.
+conversation, and nothing when the run is quiet. Never ask the user anything
+during a run; if something is missing, fail the run and say what.
 
-Use `"$DAEDALUS_HOME/bin/daedal"` for every command below, or `daedal` from
-`PATH` when `DAEDALUS_HOME` is unset.
+In every command below, `daedal` stands for `{{daedal}}`. Type that path
+itself, never a variable, so the command matches your allow list.
 
 ## 1. Start the run
 

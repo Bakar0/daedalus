@@ -126,6 +126,12 @@ export class ResidentService {
     private readonly agents: AgentService,
     private readonly routines: RoutineService,
     private readonly findings: FindingService,
+    private readonly paths: {
+      /** Where resident workspaces live, apart from the user's projects. */
+      root: string;
+      /** The `daedal` this home's sessions run, written into the skills. */
+      daedal: string;
+    },
     private readonly now: () => Date = () => new Date(),
   ) {}
 
@@ -186,7 +192,11 @@ export class ResidentService {
       throw new DaedalusError("CONFLICT", `Resident '${slug}' already exists`);
     const name =
       input.name?.trim() || `${slug.slice(0, 1).toUpperCase()}${slug.slice(1)}`;
-    const workspace = await this.workspaces.create({ name, slug });
+    const workspace = await this.workspaces.create({
+      name,
+      slug,
+      path: join(this.paths.root, slug),
+    });
     const resident: Resident = {
       id: crypto.randomUUID(),
       slug,
@@ -235,8 +245,29 @@ export class ResidentService {
     for (const skill of RESIDENT_SKILLS)
       await writeIfChanged(
         join(path, ".claude", "skills", skill.name, "SKILL.md"),
-        skill.contents,
+        skill.contents.replaceAll("{{daedal}}", this.paths.daedal),
       );
+    // A starting point the resident adds to during setup and owns after.
+    // Its own commands are allowed so they never wait on a prompt, and it
+    // cannot ask the user a question, because nobody is there to answer.
+    await createIfMissing(
+      join(path, ".claude", "settings.json"),
+      `${JSON.stringify(
+        {
+          permissions: {
+            allow: ["routine", "finding", "attention", "notify"].flatMap(
+              (command) => [
+                `Bash(${this.paths.daedal} ${command}:*)`,
+                `Bash(daedal ${command}:*)`,
+              ],
+            ),
+            deny: ["AskUserQuestion"],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
   }
 
   private liveSession(resident: Resident): AgentSession | undefined {
@@ -296,6 +327,28 @@ export class ResidentService {
     };
     this.repositories.residents.updateResident(stopped);
     return stopped;
+  }
+
+  /**
+   * Stops the resident and forgets it. Its workspace goes too, and its files
+   * only with `deleteFiles`, under the same guards as removing a workspace.
+   */
+  async remove(
+    reference: string,
+    options: { deleteFiles?: boolean; force?: boolean },
+  ): Promise<{ resident: Resident; filesDeleted: boolean }> {
+    if (!options.force)
+      throw new DaedalusError(
+        "VALIDATION",
+        "Removing a resident requires --force",
+      );
+    const resident = await this.stop(reference);
+    this.repositories.residents.deleteResident(resident.id);
+    const { filesDeleted } = await this.workspaces.remove(
+      resident.workspaceId,
+      { deleteFiles: options.deleteFiles, force: true },
+    );
+    return { resident, filesDeleted };
   }
 
   pause(reference: string): Resident {

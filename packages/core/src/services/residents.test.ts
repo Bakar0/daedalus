@@ -184,6 +184,24 @@ describe("residents", () => {
       expect(
         await readFile(join(workspace.path, "BRIEF.md"), "utf8"),
       ).toContain("Argus reported");
+      // Apart from the user's projects.
+      expect(workspace.path).toBe(join(harness.home, "residents", "argus"));
+      const settings = JSON.parse(
+        await readFile(
+          join(workspace.path, ".claude", "settings.json"),
+          "utf8",
+        ),
+      );
+      expect(settings.permissions.deny).toEqual(["AskUserQuestion"]);
+      expect(settings.permissions.allow).toContain(
+        `Bash(${join(harness.home, "bin", "daedal")} routine:*)`,
+      );
+      const skill = await readFile(
+        join(workspace.path, ".claude/skills/daedalus-routine/SKILL.md"),
+        "utf8",
+      );
+      expect(skill).toContain(join(harness.home, "bin", "daedal"));
+      expect(skill).not.toContain("{{daedal}}");
       const resident = await context.residents.start("argus");
       expect(resident.state).toBe("on_duty");
       const session = await context.agents.get(resident.sessionId!);
@@ -419,10 +437,32 @@ describe("residents", () => {
   test("drains once a day for a fresh context", async () => {
     await withResidents(async (harness) => {
       const { context } = harness;
-      await argus(harness);
-      harness.clock.now = new Date(2026, 9, 1, 4, 0, 5);
+      const resident = await argus(harness);
+      // The session's start is real time, so the next 04:00 is found from it.
+      const started = new Date(
+        (await context.agents.get(resident.sessionId!)).startedAt,
+      );
+      const next = new Date(started.getTime());
+      next.setHours(4, 0, 5, 0);
+      if (next <= started) next.setDate(next.getDate() + 1);
+      harness.clock.now = next;
       await context.residents.tick(idle(harness));
       expect(context.residents.get("argus").state).toBe("draining");
+    });
+  });
+
+  test("remove stops the resident and keeps its files unless asked", async () => {
+    await withResidents(async (harness) => {
+      const { context } = harness;
+      await argus(harness);
+      const path = (await context.workspaces.get("argus")).path;
+      await expect(context.residents.remove("argus", {})).rejects.toThrow(
+        "requires --force",
+      );
+      const result = await context.residents.remove("argus", { force: true });
+      expect(result.filesDeleted).toBe(false);
+      expect(context.residents.list()).toEqual([]);
+      expect(await Bun.file(join(path, "CHARTER.md")).exists()).toBe(true);
     });
   });
 

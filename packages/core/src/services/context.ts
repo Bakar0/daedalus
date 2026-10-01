@@ -188,6 +188,10 @@ export async function createApplicationContext(
     agents,
     routines,
     findings,
+    {
+      root: join(config.home, "residents"),
+      daedal: join(config.home, "bin", "daedal"),
+    },
     options.now,
   );
   if (options.reconcile !== false) {

@@ -26,7 +26,9 @@ export const residentHelp = {
   daedal resident start|stop|pause|resume [<resident>]
   daedal resident update [<resident>] [--name <name>] [--model <model>|none]
       [--auto-handoff <percent>]
+  daedal resident remove <resident> [--delete-files] --force
 
+Resident workspaces live under <DAEDALUS_HOME>/residents, apart from projects.
 A resident is a named, long-lived agent that owns a workspace and runs
 routines on a clock the desktop app keeps. 'create' makes the workspace with
 its CHARTER.md, SERVICES.md, TOOLS.md, routines/ folder and skills; 'start'
@@ -214,6 +216,24 @@ export async function residentCommand(
             ? context.residents.pause(reference)
             : await context.residents.resume(reference);
     printResult({ resident }, json, () => console.log(residentLine(resident)));
+    return 0;
+  }
+  if (action === "remove") {
+    const parsed = parseArguments(args, [], ["delete-files", "force"]);
+    expectPositionals(
+      parsed.positionals,
+      1,
+      "daedal resident remove <resident> [--delete-files] --force",
+    );
+    const result = await context.residents.remove(parsed.positionals[0]!, {
+      deleteFiles: parsed.flags.has("delete-files"),
+      force: parsed.flags.has("force"),
+    });
+    printResult(result, json, () =>
+      console.log(
+        `Removed resident ${result.resident.name}${result.filesDeleted ? " and its files" : "; its files are kept"}`,
+      ),
+    );
     return 0;
   }
   if (action === "update") {
