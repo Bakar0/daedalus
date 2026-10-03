@@ -3,7 +3,7 @@ import { basename, join } from "node:path";
 import type {
   Routine,
   RoutineFileError,
-  RoutineFindings,
+  RoutineOutput,
   RoutineSchedule,
 } from "../domain";
 import { DaedalusError } from "../errors";
@@ -15,12 +15,22 @@ import { DaedalusError } from "../errors";
  */
 
 export const ROUTINES_DIRECTORY = "routines";
+/** The session-folder group under `worktrees/` that routine agents live in. */
+export const ROUTINE_AGENTS_GROUP = "agents";
+
+/** A routine agent's folder, which never moves: its memory is keyed to it. */
+export function routineAgentFolder(
+  workspacePath: string,
+  slug: string,
+): string {
+  return join(workspacePath, "worktrees", ROUTINE_AGENTS_GROUP, slug);
+}
 export const TEMPLATES_DIRECTORY = "templates";
 
 const ROUTINE_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
 const MIN_EVERY_MS = 60_000;
-const FINDINGS: readonly RoutineFindings[] = ["task", "notify", "none"];
+const OUTPUTS: readonly RoutineOutput[] = ["task", "notify", "none"];
 
 export function routineName(value: string): string {
   const name = value.trim();
@@ -332,11 +342,11 @@ export function parseRoutineFile(path: string, text: string): Routine {
   const untilText = stringValue(fields.until);
   const until = untilText ? parseLocalDateTime(untilText).toISOString() : null;
   const timeoutText = stringValue(fields.timeout);
-  const findings = (stringValue(fields.findings) ?? "none") as RoutineFindings;
-  if (!FINDINGS.includes(findings))
+  const output = (stringValue(fields.output) ?? "none") as RoutineOutput;
+  if (!OUTPUTS.includes(output))
     throw new DaedalusError(
       "VALIDATION",
-      `'findings' must be one of: ${FINDINGS.join(", ")}`,
+      `'output' must be one of: ${OUTPUTS.join(", ")}`,
     );
   const enabled = fields.enabled === undefined ? true : fields.enabled;
   if (typeof enabled !== "boolean")
@@ -375,7 +385,7 @@ export function parseRoutineFile(path: string, text: string): Routine {
     until,
     model: stringValue(fields.model) ?? null,
     timeoutMs: timeoutText ? parseDuration(timeoutText) : DEFAULT_TIMEOUT_MS,
-    findings,
+    output,
     enabled,
     vars,
     body,
@@ -397,7 +407,7 @@ export function renderRoutineFile(routine: Omit<Routine, "path">): string {
     ...(routine.until ? [`until: ${routine.until}`] : []),
     ...(routine.model ? [`model: ${yamlScalar(routine.model)}`] : []),
     `timeout: ${formatDuration(routine.timeoutMs).replace(" ", "")}`,
-    `findings: ${routine.findings}`,
+    `output: ${routine.output}`,
     `enabled: ${routine.enabled}`,
     ...(Object.keys(routine.vars).length
       ? [
@@ -458,7 +468,7 @@ interface CacheEntry {
 /**
  * Reads a routines folder, re-parsing only files whose modification time or
  * size changed. The scheduler reads it on every tick, which is how an edit
- * by hand, by the resident or by the app is picked up without a watcher.
+ * by hand, by the agent or by the app is picked up without a watcher.
  */
 export class RoutineFolderReader {
   private readonly cache = new Map<string, CacheEntry>();

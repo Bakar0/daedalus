@@ -22,7 +22,7 @@ import type {
   WorkspaceRepository,
   WorkspaceRepositoryAccess,
 } from "../domain";
-import { ResidentRepository } from "./residents";
+import { RoutineAgentRepository } from "./routine-agents";
 
 interface WorkspaceRow {
   id: string;
@@ -325,14 +325,14 @@ const pendingNotificationFromRow = (
 export class SqliteRepositories {
   readonly database: Database;
 
-  readonly residents: ResidentRepository;
+  readonly routineAgents: RoutineAgentRepository;
 
   constructor(databasePath: string) {
     this.database = new Database(databasePath, { create: true });
     this.database.exec(
       "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;",
     );
-    this.residents = new ResidentRepository(this.database);
+    this.routineAgents = new RoutineAgentRepository(this.database);
   }
 
   /**

@@ -1,3 +1,3 @@
 export * from "./migrations";
 export * from "./sqlite";
-export * from "./residents";
+export * from "./routine-agents";

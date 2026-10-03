@@ -740,9 +740,9 @@ export function buildAgentPrompt(input: {
 }
 
 /**
- * A resident's launch prompt. Thin on purpose: the charter and the skills in
- * its workspace carry the rest, and each routine run brings what it needs.
+ * A routine agent's launch prompt. Thin on purpose: AGENT.md and the skills
+ * in its folder carry the rest, and each routine run brings what it needs.
  */
-export function residentPrompt(name: string): string {
-  return `You are ${name}, a Daedalus resident. Read CHARTER.md in your working directory and follow it. Daedalus will type /daedalus-routine lines when routines are due, and the user may talk to you here. If SERVICES.md is still empty, set yourself up as the daedalus-resident skill describes, without asking the user anything.`;
+export function routineAgentPrompt(name: string): string {
+  return `You are ${name}, a Daedalus routine agent. Read AGENT.md in your working directory and follow the daedalus-routine-agent skill. Daedalus types /daedalus-routine lines when routines are due, and the user talks to you here to create and change them.`;
 }

@@ -14,8 +14,8 @@ import { JsonLogger } from "../logging";
 import { runMigrations } from "../repositories/migrations";
 import { SqliteRepositories } from "../repositories/sqlite";
 import { ActivityService } from "./activity";
-import { FindingService } from "./findings";
-import { ResidentService } from "./residents";
+import { RoutineAgentService } from "./routine-agents";
+import { RoutineReportService } from "./routine-reports";
 import { RoutineService } from "./routines";
 import { SkillService } from "./skills";
 import { AgentService } from "./agents";
@@ -53,9 +53,9 @@ export interface ApplicationContext {
   notifications: NotificationService;
   activity: ActivityService;
   skills: SkillService;
-  residents: ResidentService;
+  routineAgents: RoutineAgentService;
   routines: RoutineService;
-  findings: FindingService;
+  routineReports: RoutineReportService;
   /** Ends everything at once. Nothing else in the app reaches for it. */
   shutdown: ShutdownService;
   tmux: TmuxClient;
@@ -181,17 +181,18 @@ export async function createApplicationContext(
     },
     options.now,
   );
-  const findings = new FindingService(repositories, notifications, options.now);
-  const residents = new ResidentService(
+  const routineReports = new RoutineReportService(
+    repositories,
+    notifications,
+    options.now,
+  );
+  const routineAgents = new RoutineAgentService(
     repositories,
     workspaces,
     agents,
     routines,
-    findings,
-    {
-      root: join(config.home, "residents"),
-      daedal: join(config.home, "bin", "daedal"),
-    },
+    routineReports,
+    { daedal: join(config.home, "bin", "daedal") },
     options.now,
   );
   if (options.reconcile !== false) {
@@ -222,9 +223,9 @@ export async function createApplicationContext(
     notifications,
     activity,
     skills: new SkillService(config),
-    residents,
+    routineAgents,
     routines,
-    findings,
+    routineReports,
     shutdown: new ShutdownService(repositories, agents, terminals, tmux),
     tmux,
     // Watchers are kernel resources held outside the database, so they are

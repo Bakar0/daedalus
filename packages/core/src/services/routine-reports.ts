@@ -1,11 +1,9 @@
 import type {
-  Finding,
-  FindingSeverity,
-  FindingVerdict,
-  Resident,
-  RoutineFindings,
+  RoutineAgent,
+  RoutineOutput,
+  RoutineReport,
+  RoutineReportVerdict,
   Task,
-  TaskPriority,
   Workspace,
 } from "../domain";
 import { DaedalusError } from "../errors";
@@ -14,35 +12,20 @@ import type { NotificationService } from "./notifications";
 
 /** A key that comes back within this long reopens its old task. */
 export const REOPEN_WINDOW_MS = 14 * 86_400_000;
-/** A cleared finding nobody worked on closes its task after this long. */
-export const CLOSE_AFTER_CLEARED_MS = 24 * 3_600_000;
+/** A resolved report nobody worked on closes its task after this long. */
+export const CLOSE_AFTER_RESOLVED_MS = 24 * 3_600_000;
 
 const TASK_BRIEF_LIMIT = 20_000;
-const SEVERITIES: readonly FindingSeverity[] = ["info", "warn", "urgent"];
-const PRIORITY: Record<FindingSeverity, TaskPriority> = {
-  info: "low",
-  warn: "normal",
-  urgent: "high",
-};
 const APPENDED_SECTION =
-  /\n(?=## (?:Update |Came back at |Cleared at |Also seen by |Marked |Closed by ))/;
+  /\n(?=## (?:Update |Came back at |Resolved at |Also seen by |Marked |Verdict removed |Closed by ))/;
 const KEY = /^[\w.:/#@+-][\w .:/#@+=,()-]{0,239}$/;
 
-export function findingSeverity(value: string): FindingSeverity {
-  if (!SEVERITIES.includes(value as FindingSeverity))
-    throw new DaedalusError(
-      "VALIDATION",
-      `Severity must be one of: ${SEVERITIES.join(", ")}`,
-    );
-  return value as FindingSeverity;
-}
-
-export function findingKey(value: string): string {
+export function reportKey(value: string): string {
   const key = value.trim();
   if (!KEY.test(key))
     throw new DaedalusError(
       "VALIDATION",
-      "A finding key is 1-240 characters of letters, digits, spaces and :/#@.+-_=,()",
+      "A report key is 1-240 characters of letters, digits, spaces and :/#@.+-_=,()",
     );
   return key;
 }
@@ -84,21 +67,21 @@ export function appendToBrief(
   return `${result}\n`;
 }
 
-export interface FindingReport {
-  resident: Resident;
+export interface RoutineReportInput {
+  agent: RoutineAgent;
   workspace: Workspace;
   routine: string;
-  findings: RoutineFindings;
+  output: RoutineOutput;
   runId: number;
   key: string;
   sameAs?: string;
-  severity: FindingSeverity;
+  urgent: boolean;
   title: string;
   url?: string;
   body: string;
 }
 
-export type FindingAction =
+export type RoutineReportAction =
   | "opened"
   | "updated"
   | "reopened"
@@ -106,77 +89,76 @@ export type FindingAction =
   /** The user marked this key Noise: seen and recorded, nothing raised. */
   | "suppressed";
 
-export interface FindingReportResult {
-  action: FindingAction;
-  finding: Finding;
+export interface RoutineReportResult {
+  action: RoutineReportAction;
+  report: RoutineReport;
   task: Task | null;
   /** How the user was told, or why they were not. */
   notified: string | null;
 }
 
 /**
- * Findings and the tasks they open. Everything that decides whether a report
+ * Routine reports and the tasks they open. Everything that decides whether a report
  * is new, an update or a return happens in one immediate transaction, so two
  * runs reporting one key at the same moment produce one task: the second
  * waits for the first one's write and then finds its row.
  */
-export class FindingService {
+export class RoutineReportService {
   constructor(
     private readonly repositories: SqliteRepositories,
     private readonly notifications: NotificationService,
     private readonly now: () => Date = () => new Date(),
   ) {}
 
-  async report(input: FindingReport): Promise<FindingReportResult> {
-    const key = findingKey(input.key);
-    const sameAs = input.sameAs ? findingKey(input.sameAs) : undefined;
+  async report(input: RoutineReportInput): Promise<RoutineReportResult> {
+    const key = reportKey(input.key);
+    const sameAs = input.sameAs ? reportKey(input.sameAs) : undefined;
     const title = input.title.trim().slice(0, 240);
-    if (!title)
-      throw new DaedalusError("VALIDATION", "A finding needs a title");
-    if (input.findings === "none")
+    if (!title) throw new DaedalusError("VALIDATION", "A report needs a title");
+    if (input.output === "none")
       throw new DaedalusError(
         "VALIDATION",
-        `Routine '${input.routine}' has findings: none, so it cannot report`,
+        `Routine '${input.routine}' has output: none, so it cannot report`,
       );
     const url = input.url?.trim() || null;
     const at = this.now().toISOString();
-    const source = `Reported by ${input.resident.name} from routine \`${input.routine}\`, run ${input.runId}, at ${localTime(at)}.`;
+    const source = `Reported by ${input.agent.name} from routine \`${input.routine}\`, run ${input.runId}, at ${localTime(at)}.`;
     const evidence = [
       `> ${source}`,
-      `> Key: \`${key}\` · Severity: ${input.severity}${url ? ` · ${url}` : ""}`,
+      `> Key: \`${key}\`${input.urgent ? " · Urgent" : ""}${url ? ` · ${url}` : ""}`,
       "",
       input.body.trim(),
     ].join("\n");
     const result = this.repositories.immediateTransaction(
-      (): FindingReportResult => {
-        const residents = this.repositories.residents;
-        const latest = residents.findLatestFinding(input.resident.id, key);
+      (): RoutineReportResult => {
+        const store = this.repositories.routineAgents;
+        const latest = store.findLatestRoutineReport(input.agent.id, key);
         if (latest?.verdict === "noise") {
-          const seen: Finding = { ...latest, lastSeenAt: at };
-          residents.updateFinding(seen);
+          const seen: RoutineReport = { ...latest, lastSeenAt: at };
+          store.updateRoutineReport(seen);
           return {
             action: "suppressed",
-            finding: seen,
+            report: seen,
             task: null,
             notified: null,
           };
         }
-        const open = residents.findOpenFinding(input.resident.id, key);
+        const open = store.findOpenRoutineReport(input.agent.id, key);
         if (open) return this.update(open, input, evidence, at);
         if (sameAs) {
-          const target = residents.findOpenFinding(input.resident.id, sameAs);
+          const target = store.findOpenRoutineReport(input.agent.id, sameAs);
           if (!target)
             throw new DaedalusError(
               "NOT_FOUND",
-              `No open finding has key '${sameAs}'`,
+              `No open report has key '${sameAs}'`,
             );
-          const finding: Finding = {
+          const report: RoutineReport = {
             id: crypto.randomUUID(),
-            residentId: input.resident.id,
+            routineAgentId: input.agent.id,
             routine: input.routine,
             key,
             sameAs,
-            severity: input.severity,
+            urgent: input.urgent,
             title,
             url,
             taskId: target.taskId,
@@ -184,11 +166,11 @@ export class FindingService {
             verdict: null,
             openedAt: at,
             lastSeenAt: at,
-            clearedAt: null,
+            resolvedAt: null,
             closedAt: null,
             reopenCount: 0,
           };
-          residents.createFinding(finding);
+          store.createRoutineReport(report);
           const task = target.taskId
             ? this.appendSection(
                 target.taskId,
@@ -197,11 +179,11 @@ export class FindingService {
                 at,
               )
             : null;
-          return { action: "merged", finding, task, notified: null };
+          return { action: "merged", report, task, notified: null };
         }
         // Measured from when the issue went away, not from when its task
         // was closed a day later.
-        const endedAt = latest?.clearedAt ?? latest?.closedAt;
+        const endedAt = latest?.resolvedAt ?? latest?.closedAt;
         if (
           latest &&
           endedAt &&
@@ -219,14 +201,14 @@ export class FindingService {
   }
 
   private open(
-    input: FindingReport,
+    input: RoutineReportInput,
     key: string,
     title: string,
     url: string | null,
     evidence: string,
     at: string,
-    earlier: Finding | undefined,
-  ): FindingReportResult {
+    earlier: RoutineReport | undefined,
+  ): RoutineReportResult {
     const earlierTask = earlier?.taskId
       ? this.repositories.findTask(earlier.taskId)
       : undefined;
@@ -236,26 +218,26 @@ export class FindingService {
         : evidence
     }\n`;
     const task =
-      input.findings === "task"
+      input.output === "task"
         ? this.repositories.createNumberedTask({
             workspaceId: input.workspace.id,
             title,
             description: description.slice(0, TASK_BRIEF_LIMIT),
             status: "todo",
-            priority: PRIORITY[input.severity],
+            priority: input.urgent ? "high" : "normal",
             createdAt: at,
             updatedAt: at,
             completedAt: null,
             briefUpdatedAt: null,
           })
         : null;
-    const finding: Finding = {
+    const report: RoutineReport = {
       id: crypto.randomUUID(),
-      residentId: input.resident.id,
+      routineAgentId: input.agent.id,
       routine: input.routine,
       key,
       sameAs: null,
-      severity: input.severity,
+      urgent: input.urgent,
       title,
       url,
       taskId: task?.id ?? null,
@@ -263,12 +245,12 @@ export class FindingService {
       verdict: null,
       openedAt: at,
       lastSeenAt: at,
-      clearedAt: null,
+      resolvedAt: null,
       closedAt: null,
       reopenCount: 0,
     };
-    this.repositories.residents.createFinding(finding);
-    return { action: "opened", finding, task, notified: null };
+    this.repositories.routineAgents.createRoutineReport(report);
+    return { action: "opened", report, task, notified: null };
   }
 
   /**
@@ -277,11 +259,11 @@ export class FindingService {
    * the issue is still there, so the task comes back like a reopened one.
    */
   private update(
-    open: Finding,
-    input: FindingReport,
+    open: RoutineReport,
+    input: RoutineReportInput,
     evidence: string,
     at: string,
-  ): FindingReportResult {
+  ): RoutineReportResult {
     const current = open.taskId
       ? this.repositories.findTask(open.taskId)
       : undefined;
@@ -290,34 +272,34 @@ export class FindingService {
       (current.status === "done" || current.status === "cancelled")
     )
       return this.reopen(open, input, evidence, at);
-    const finding: Finding = {
+    const report: RoutineReport = {
       ...open,
-      severity: input.severity,
+      urgent: input.urgent,
       lastSeenAt: at,
     };
-    this.repositories.residents.updateFinding(finding);
+    this.repositories.routineAgents.updateRoutineReport(report);
     const task = current
       ? this.appendSection(current.id, `Update ${localTime(at)}`, evidence, at)
       : null;
-    return { action: "updated", finding, task, notified: null };
+    return { action: "updated", report, task, notified: null };
   }
 
   private reopen(
-    previous: Finding,
-    input: FindingReport,
+    previous: RoutineReport,
+    input: RoutineReportInput,
     evidence: string,
     at: string,
-  ): FindingReportResult {
-    const finding: Finding = {
+  ): RoutineReportResult {
+    const report: RoutineReport = {
       ...previous,
-      severity: input.severity,
+      urgent: input.urgent,
       state: "open",
       lastSeenAt: at,
-      clearedAt: null,
+      resolvedAt: null,
       closedAt: null,
       reopenCount: previous.reopenCount + 1,
     };
-    this.repositories.residents.updateFinding(finding);
+    this.repositories.routineAgents.updateRoutineReport(report);
     let task = previous.taskId
       ? this.appendSection(
           previous.taskId,
@@ -330,7 +312,7 @@ export class FindingService {
       task = { ...task, status: "todo", completedAt: null, updatedAt: at };
       this.repositories.updateTask(task);
     }
-    return { action: "reopened", finding, task, notified: null };
+    return { action: "reopened", report, task, notified: null };
   }
 
   private appendSection(
@@ -352,72 +334,77 @@ export class FindingService {
   }
 
   private async notify(
-    input: FindingReport,
-    result: FindingReportResult,
+    input: RoutineReportInput,
+    result: RoutineReportResult,
   ): Promise<string> {
     const where = result.task
       ? `${input.workspace.slug}#${result.task.number}`
       : input.routine;
     const decision = await this.notifications.notify({
-      sessionId: input.resident.sessionId,
+      sessionId: input.agent.sessionId,
       workspaceId: input.workspace.id,
-      level: input.severity === "urgent" ? "error" : "info",
-      title: `${input.resident.name} · ${where}`,
-      body: `${result.action === "reopened" ? "Came back: " : ""}${result.finding.title}`,
-      desktop: input.severity === "urgent",
-      urgent: input.severity === "urgent",
+      level: input.urgent ? "error" : "info",
+      title: `${input.agent.name} · ${where}`,
+      body: `${result.action === "reopened" ? "Came back: " : ""}${result.report.title}`,
+      desktop: input.urgent,
+      urgent: input.urgent,
       ...(result.task ? { taskId: result.task.id } : {}),
     });
     return decision.reason;
   }
 
   /**
-   * Marks an open finding cleared: its routine looked again and it was gone.
-   * Clearing a key that is not open does nothing, so a resident can clear
-   * without first checking.
+   * Marks an open report resolved: its routine looked again and it was
+   * gone. Resolving a key that is not open does nothing, so an agent can
+   * resolve without first checking.
    */
-  clear(resident: Resident, keyValue: string): Finding | null {
-    const key = findingKey(keyValue);
+  resolve(agent: RoutineAgent, keyValue: string): RoutineReport | null {
+    const key = reportKey(keyValue);
     const at = this.now().toISOString();
     return this.repositories.immediateTransaction(() => {
-      const open = this.repositories.residents.findOpenFinding(
-        resident.id,
+      const open = this.repositories.routineAgents.findOpenRoutineReport(
+        agent.id,
         key,
       );
       if (!open) return null;
-      const cleared: Finding = { ...open, state: "cleared", clearedAt: at };
-      this.repositories.residents.updateFinding(cleared);
+      const resolved: RoutineReport = {
+        ...open,
+        state: "resolved",
+        resolvedAt: at,
+      };
+      this.repositories.routineAgents.updateRoutineReport(resolved);
       if (open.taskId && !open.sameAs)
-        this.appendSection(open.taskId, `Cleared at ${localTime(at)}`, "", at);
-      return cleared;
+        this.appendSection(open.taskId, `Resolved at ${localTime(at)}`, "", at);
+      return resolved;
     });
   }
 
   /**
-   * The user's word on a finding. Noise also closes it if it is open, and
+   * The user's word on a report. Noise also closes it if it is open, and
    * from then on the key raises nothing: it is recorded as seen and dropped.
    * `null` undoes a verdict, so the key can open a task again. The task
    * itself is left as it is either way; its status is the user's.
    */
   verdict(
-    resident: Resident,
+    agent: RoutineAgent,
     id: string,
-    value: FindingVerdict | null,
+    value: RoutineReportVerdict | null,
     note?: string,
-  ): Finding {
-    const finding = this.repositories.residents.findFinding(id);
-    if (!finding || finding.residentId !== resident.id)
-      throw new DaedalusError("NOT_FOUND", `Finding '${id}' was not found`);
+    quiet = false,
+  ): RoutineReport {
+    const report = this.repositories.routineAgents.findRoutineReport(id);
+    if (!report || report.routineAgentId !== agent.id)
+      throw new DaedalusError("NOT_FOUND", `Report '${id}' was not found`);
     const at = this.now().toISOString();
-    const updated: Finding =
-      value === "noise" && finding.state !== "closed"
-        ? { ...finding, verdict: value, state: "closed", closedAt: at }
-        : { ...finding, verdict: value };
+    const updated: RoutineReport =
+      value === "noise" && report.state !== "closed"
+        ? { ...report, verdict: value, state: "closed", closedAt: at }
+        : { ...report, verdict: value };
     this.repositories.transaction(() => {
-      this.repositories.residents.updateFinding(updated);
-      if (finding.taskId)
+      this.repositories.routineAgents.updateRoutineReport(updated);
+      if (report.taskId && !quiet)
         this.appendSection(
-          finding.taskId,
+          report.taskId,
           value
             ? `Marked ${value} at ${localTime(at)}`
             : `Verdict removed at ${localTime(at)}`,
@@ -429,51 +416,83 @@ export class FindingService {
   }
 
   /**
-   * Closes what has ended. A finding whose task the user closed is closed
-   * with it. A finding cleared a day ago closes too, and if no agent was ever
+   * The user's word on a task a routine made, applied to every report filed
+   * on it, so Noise on a merged task silences each key that fed it.
+   */
+  feedbackForTask(
+    taskId: string,
+    value: RoutineReportVerdict | null,
+    note?: string,
+  ): RoutineReport[] {
+    const reports =
+      this.repositories.routineAgents.listRoutineReportsForTask(taskId);
+    if (!reports.length)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        "No routine report was filed on that task",
+      );
+    // Only the latest report per key counts; older rows are its history.
+    const latest = new Map<string, RoutineReport>();
+    for (const report of reports)
+      latest.set(`${report.routineAgentId}\0${report.key}`, report);
+    return [...latest.values()].map((report, index) => {
+      const agent = this.repositories.routineAgents.findRoutineAgent(
+        report.routineAgentId,
+      );
+      if (!agent)
+        throw new DaedalusError("NOT_FOUND", "The routine agent is gone");
+      // The task brief gets one line, not one per key.
+      return this.verdict(agent, report.id, value, note, index > 0);
+    });
+  }
+
+  /**
+   * Closes what has ended. A report whose task the user closed is closed
+   * with it. A report resolved a day ago closes too, and if no agent was ever
    * started on its task, the task moves to done: the one status change a
-   * resident makes, approved by the user as an exception to the rule that
+   * routine agent makes, approved by the user as an exception to the rule that
    * status is theirs.
    */
-  sweep(resident: Resident): { closedTasks: Task[] } {
+  sweep(agent: RoutineAgent): { closedTasks: Task[] } {
     const now = this.now();
     const at = now.toISOString();
     const closedTasks: Task[] = [];
     this.repositories.transaction(() => {
-      const residents = this.repositories.residents;
-      for (const finding of residents.listFindings(resident.id, {
-        states: ["open", "cleared"],
+      const store = this.repositories.routineAgents;
+      for (const report of store.listRoutineReports(agent.id, {
+        states: ["open", "resolved"],
       })) {
-        const task = finding.taskId
-          ? this.repositories.findTask(finding.taskId)
+        const task = report.taskId
+          ? this.repositories.findTask(report.taskId)
           : undefined;
         const taskEnded =
           task && (task.status === "done" || task.status === "cancelled");
-        if (finding.state === "open") {
+        if (report.state === "open") {
           // A task the user closed as done counts as useful; one they
           // cancelled says nothing either way.
           if (taskEnded)
-            residents.updateFinding({
-              ...finding,
+            store.updateRoutineReport({
+              ...report,
               state: "closed",
               closedAt: task.completedAt ?? at,
               verdict:
-                finding.verdict ?? (task.status === "done" ? "useful" : null),
+                report.verdict ?? (task.status === "done" ? "useful" : null),
             });
           continue;
         }
         if (
-          !finding.clearedAt ||
-          now.getTime() - Date.parse(finding.clearedAt) < CLOSE_AFTER_CLEARED_MS
+          !report.resolvedAt ||
+          now.getTime() - Date.parse(report.resolvedAt) <
+            CLOSE_AFTER_RESOLVED_MS
         )
           continue;
-        residents.updateFinding({ ...finding, state: "closed", closedAt: at });
+        store.updateRoutineReport({ ...report, state: "closed", closedAt: at });
         if (
           task &&
           !taskEnded &&
-          !finding.sameAs &&
-          !this.stillOpenOnTask(resident.id, task.id) &&
-          !residents.taskHasSessions(task.id)
+          !report.sameAs &&
+          !this.stillOpenOnTask(agent.id, task.id) &&
+          !store.taskHasSessions(task.id)
         ) {
           const closed: Task = {
             ...task,
@@ -483,7 +502,7 @@ export class FindingService {
             briefUpdatedAt: at,
             description: appendToBrief(
               task.description,
-              `Closed by ${resident.name}: cleared at ${localTime(finding.clearedAt)}, no action taken`,
+              `Closed by ${agent.name}: resolved at ${localTime(report.resolvedAt)}, no action taken`,
             ),
           };
           this.repositories.updateTask(closed);
@@ -494,10 +513,10 @@ export class FindingService {
     return { closedTasks };
   }
 
-  /** A merged finding still open keeps the shared task alive. */
-  private stillOpenOnTask(residentId: string, taskId: string): boolean {
-    return this.repositories.residents
-      .listFindings(residentId, { states: ["open"] })
-      .some((finding) => finding.taskId === taskId);
+  /** A merged report still open keeps the shared task alive. */
+  private stillOpenOnTask(routineAgentId: string, taskId: string): boolean {
+    return this.repositories.routineAgents
+      .listRoutineReports(routineAgentId, { states: ["open"] })
+      .some((report) => report.taskId === taskId);
   }
 }

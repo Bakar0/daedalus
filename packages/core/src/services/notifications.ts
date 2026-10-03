@@ -28,7 +28,7 @@ export interface NotificationRequest {
   /** Ask for the desktop channel regardless of where the user is. */
   desktop?: boolean;
   /**
-   * Gets through Focus mode. For a resident's urgent finding, which the user
+   * Gets through Focus mode. For a routine's urgent report, which the user
    * chose to be interrupted for; Focus mode still holds everything else.
    */
   urgent?: boolean;

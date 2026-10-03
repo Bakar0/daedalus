@@ -394,4 +394,4 @@ export interface PresenceState {
   observedAt: string;
 }
 
-export * from "./residents";
+export * from "./routine-agents";

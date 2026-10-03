@@ -94,7 +94,7 @@ name: ci-health
 schedule: every 30m
 model: sonnet
 timeout: 10m
-findings: task
+output: task
 vars:
   pr: Bakar0/daedalus#57
 ---
@@ -107,7 +107,7 @@ Check CI for {{pr}} since {{last_run}}. Keep {{unknown}}.
       name: "ci-health",
       model: "sonnet",
       timeoutMs: 600_000,
-      findings: "task",
+      output: "task",
       enabled: true,
       vars: { pr: "Bakar0/daedalus#57" },
     });
@@ -126,9 +126,9 @@ Check CI for {{pr}} since {{last_run}}. Keep {{unknown}}.
     expect(() =>
       parseRoutineFile(
         "/r/x.md",
-        "---\nname: x\nschedule: every 5m\nfindings: maybe\n---\nbody",
+        "---\nname: x\nschedule: every 5m\noutput: maybe\n---\nbody",
       ),
-    ).toThrow("'findings' must be one of");
+    ).toThrow("'output' must be one of");
     expect(() =>
       parseRoutineFile("/r/x.md", "---\nname: x\nschedule: every 5m\n---\n"),
     ).toThrow("no prompt");

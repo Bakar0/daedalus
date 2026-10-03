@@ -9,11 +9,11 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { askConfirm } from "./dialogs";
 import {
-  FindingDetails,
-  type FindingVerdictChoice,
-} from "./residents/FindingDetails";
+  ReportDetails,
+  type ReportVerdictChoice,
+} from "./routine-agents/ReportDetails";
 import type {
-  FindingDto,
+  RoutineReportDto,
   AgentActivityDto,
   AgentSessionDto,
   ProviderModelCatalogDto,
@@ -103,11 +103,13 @@ export interface BoardViewProps {
   onMarkDone: (task: TaskDto) => void;
   /** Sets the task blocked, which moves it to Parked. */
   onPark: (task: TaskDto) => void;
-  /** Findings by the task they opened, for a resident's board. */
-  findings?: ReadonlyMap<string, FindingDto>;
-  onFindingVerdict?: (
-    finding: FindingDto,
-    verdict: FindingVerdictChoice,
+  /** Routine reports by the task they opened. */
+  routineReports?: ReadonlyMap<string, RoutineReportDto>;
+  /** Routine agents' names by id, for the gold tag on their tasks. */
+  routineAgentNames?: ReadonlyMap<string, string>;
+  onReportVerdict?: (
+    report: RoutineReportDto,
+    verdict: ReportVerdictChoice,
   ) => void;
   onUpdateSettings: (changes: {
     startSetsInProgress?: boolean;
@@ -705,7 +707,7 @@ export function BoardView(props: BoardViewProps) {
       const target = tasksById.get(reference.taskId);
       return target ? [{ reference, target }] : [];
     });
-    const finding = props.findings?.get(task.id);
+    const report = props.routineReports?.get(task.id);
     return (
       <article
         aria-label={cardLabel}
@@ -729,12 +731,13 @@ export function BoardView(props: BoardViewProps) {
             </span>
           )}
         </div>
-        {finding && props.onFindingVerdict && (
-          <FindingDetails
+        {report && props.onReportVerdict && (
+          <ReportDetails
+            agentName={props.routineAgentNames?.get(report.routineAgentId)}
             busy={props.busy}
-            finding={finding}
             onOpenLink={props.onOpenLink}
-            onVerdict={props.onFindingVerdict}
+            onVerdict={props.onReportVerdict}
+            report={report}
           />
         )}
         {references.length > 0 && (

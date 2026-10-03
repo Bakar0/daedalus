@@ -507,45 +507,46 @@ export interface TaskTimelineDto {
   cost: TaskCostDto;
 }
 
-/** One resident at a glance, for the sidebar and the Resident page. */
-export interface ResidentOverviewDto {
+/** One routine agent at a glance, for its session card and terminal bar. */
+export interface RoutineAgentOverviewDto {
   id: string;
-  slug: string;
   name: string;
+  slug: string;
   workspaceId: string;
   workspaceSlug: string;
-  workspacePath: string;
-  state: "on_duty" | "draining" | "paused" | "stopped";
+  folder: string;
+  state: "on_duty" | "draining" | "paused";
   sessionId: string | null;
   sessionStatus: "starting" | "running" | "exited" | "lost" | null;
-  /** Most pressing first: an urgent finding, any finding, a run, nothing. */
-  lamp: "urgent" | "findings" | "running" | "quiet";
+  sessionArchived: boolean;
   nextRunAt: string | null;
   runsInFlight: number;
   runsQueued: number;
-  openFindings: number;
-  openFindingTasks: number;
+  openReports: number;
+  openUrgentReports: number;
+  openReportTasks: number;
+  routines: number;
   routineErrors: number;
   /** Why queued runs are waiting, when they are. */
   deliveryHold: string | null;
   autoHandoffPercent: number;
 }
 
-export interface FindingDto {
+export interface RoutineReportDto {
   id: string;
-  residentId: string;
+  routineAgentId: string;
   routine: string;
   key: string;
   sameAs: string | null;
-  severity: "info" | "warn" | "urgent";
+  urgent: boolean;
   title: string;
   url: string | null;
   taskId: string | null;
-  state: "open" | "cleared" | "closed";
+  state: "open" | "resolved" | "closed";
   verdict: "useful" | "noise" | null;
   openedAt: string;
   lastSeenAt: string;
-  clearedAt: string | null;
+  resolvedAt: string | null;
   closedAt: string | null;
   reopenCount: number;
 }
@@ -557,7 +558,7 @@ export interface RoutineDto {
   until: string | null;
   model: string | null;
   timeoutMs: number;
-  findings: "task" | "notify" | "none";
+  output: "task" | "notify" | "none";
   enabled: boolean;
   nextRunAt: string | null;
   lastRunAt: string | null;
@@ -580,15 +581,15 @@ export interface RoutineRunDto {
   alreadyQueued?: boolean;
 }
 
-export interface ResidentDetailDto {
+export interface RoutineAgentDetailDto {
   routines: RoutineDto[];
   /** Routine files that did not parse, with the reason. */
   errors: Array<{ name: string; path: string; error: string }>;
   runs: RoutineRunDto[];
 }
 
-export interface ResidentMemoryFileDto {
-  source: "workspace" | "memory";
+export interface RoutineAgentMemoryFileDto {
+  source: "folder" | "memory";
   name: string;
   path: string;
   content: string;
@@ -614,10 +615,10 @@ export interface DesktopSnapshotDto {
   /** Every merged pull request remembered, oldest first, for the World. */
   shipped: ShippedPullRequestDto[];
   toasts: ToastDto[];
-  /** Residents, which the sidebar shows apart from workspaces. */
-  residents: ResidentOverviewDto[];
-  /** Every finding that has a task, so a board card can show its details. */
-  findings: FindingDto[];
+  /** Routine agents, which their session cards and terminals mark. */
+  routineAgents: RoutineAgentOverviewDto[];
+  /** Every routine report that has a task, for the task's card and drawer. */
+  routineReports: RoutineReportDto[];
   settings: DesktopSettingsDto;
 }
 
@@ -645,20 +646,23 @@ export interface DesktopRpcSchema {
   bun: {
     requests: {
       snapshot: Request<Record<string, never>, DesktopSnapshotDto>;
-      residentDetail: Request<{ reference: string }, ResidentDetailDto>;
-      residentMemory: Request<{ reference: string }, ResidentMemoryFileDto[]>;
-      residentControl: Request<
-        { reference: string; action: "start" | "stop" | "pause" | "resume" },
-        { state: ResidentOverviewDto["state"] }
+      routineAgentDetail: Request<{ agent: string }, RoutineAgentDetailDto>;
+      routineAgentMemory: Request<
+        { agent: string },
+        RoutineAgentMemoryFileDto[]
+      >;
+      routineAgentControl: Request<
+        { agent: string; action: "pause" | "resume" },
+        { state: RoutineAgentOverviewDto["state"] }
       >;
       routineSetEnabled: Request<
-        { resident: string; name: string; enabled: boolean },
+        { agent: string; name: string; enabled: boolean },
         { name: string; enabled: boolean }
       >;
-      routineRunNow: Request<{ resident: string; name: string }, RoutineRunDto>;
-      findingVerdict: Request<
-        { resident: string; id: string; verdict: "useful" | "noise" | null },
-        FindingDto
+      routineRunNow: Request<{ agent: string; name: string }, RoutineRunDto>;
+      routineReportVerdict: Request<
+        { agent: string; id: string; verdict: "useful" | "noise" | null },
+        RoutineReportDto
       >;
       /**
        * The loopback WebSocket the renderer attaches terminals to. It carries
@@ -1047,7 +1051,7 @@ export interface DesktopRpcSchema {
        * Without the deep link people learn to ignore notifications.
        */
       focusSession: { sessionId: string };
-      /** The same, for a clicked finding notification: opens its task. */
+      /** The same, for a clicked routine notification: opens its task. */
       focusTask: { taskId: string };
       /**
        * Quit was requested while something was still live. The renderer draws

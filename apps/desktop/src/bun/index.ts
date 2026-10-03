@@ -677,7 +677,7 @@ setInterval(() => {
   void context.presence.keepAlive().catch(() => undefined);
 }, 1_200);
 
-// When the user last typed into each agent's terminal. A resident's routine
+// When the user last typed into each agent's terminal. A routine agent's
 // delivery holds for a minute after, so a line Daedalus types never lands in
 // the middle of what the user is writing.
 const lastTerminalInput = new Map<string, number>();
@@ -721,9 +721,9 @@ setInterval(async () => {
         context.agents.sweepAutoHandoffs(telemetry.sessionTelemetry),
       )
       .catch(() => undefined);
-    // Residents' routines ride the tick too: the clock lives in the app, so
+    // Routine agents ride the tick too: the clock lives in the app, so
     // nothing fires while it is closed.
-    if (context.residents.list().length) {
+    if (context.routineAgents.list().length) {
       const telemetry = await context.telemetry.read().catch(() => undefined);
       const contextUse = new Map(
         (telemetry?.sessionTelemetry ?? []).map((item) => [
@@ -731,13 +731,13 @@ setInterval(async () => {
           item.context?.usedPercent,
         ]),
       );
-      const residentTick = await context.residents.tick({
+      const routineTick = await context.routineAgents.tick({
         contextPercent: (sessionId) => contextUse.get(sessionId),
         lastInputAt: (sessionId) => lastTerminalInput.get(sessionId),
         activity: (sessionId) => context.activity.get(sessionId),
       });
-      for (const event of residentTick.events)
-        await context.logger.write("info", "resident", { event });
+      for (const event of routineTick.events)
+        await context.logger.write("info", "routine_agent", { event });
     }
     for (const [socket, connection] of connections) {
       const target =

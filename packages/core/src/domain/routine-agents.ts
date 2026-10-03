@@ -1,27 +1,27 @@
 import type { UUID } from "./index";
 
 /**
- * What the user chose for a resident, plus `draining`: the scheduler has
- * stopped delivering runs and waits for those in flight before a handoff.
+ * On duty or paused, plus `draining`: the scheduler has stopped delivering
+ * runs and waits for those in flight before a handoff.
  */
-export type ResidentState = "on_duty" | "draining" | "paused" | "stopped";
+export type RoutineAgentState = "on_duty" | "draining" | "paused";
 
 /**
- * A named, long-lived agent that owns a workspace. Its session runs at the
- * workspace root and never moves, so the provider's per-directory memory
- * carries across handoffs.
+ * A named Claude session in an ordinary workspace that runs routines. Its
+ * folder (`<workspace>/worktrees/agents/<slug>`) never moves, so Claude's
+ * per-directory memory carries across handoffs.
  */
-export interface Resident {
+export interface RoutineAgent {
   id: UUID;
+  workspaceId: UUID;
+  /** Unique within the workspace; names the folder. */
   slug: string;
   name: string;
-  workspaceId: UUID;
-  provider: "claude" | "codex";
   model: string | null;
-  /** Context share at which the resident drains and hands off. */
+  /** Context share at which the agent drains and hands off. */
   autoHandoffPercent: number;
-  state: ResidentState;
-  /** The session on duty; moves to the successor on every handoff. */
+  state: RoutineAgentState;
+  /** The current session; moves to the successor on every handoff. */
   sessionId: UUID | null;
   drainingSince: string | null;
   createdAt: string;
@@ -32,7 +32,11 @@ export type RoutineSchedule =
   | { kind: "cron"; expression: string; text: string }
   | { kind: "at"; at: string; text: string };
 
-export type RoutineFindings = "task" | "notify" | "none";
+/**
+ * What a routine's reports become: a task and a notification, a
+ * notification only, or nothing (a routine that only starts others).
+ */
+export type RoutineOutput = "task" | "notify" | "none";
 
 /** One routine file, parsed. The file is the definition; SQLite is not. */
 export interface Routine {
@@ -44,7 +48,7 @@ export interface Routine {
   until: string | null;
   model: string | null;
   timeoutMs: number;
-  findings: RoutineFindings;
+  output: RoutineOutput;
   enabled: boolean;
   vars: Record<string, string>;
   body: string;
@@ -58,7 +62,7 @@ export interface RoutineFileError {
 }
 
 export interface RoutineState {
-  residentId: UUID;
+  routineAgentId: UUID;
   name: string;
   nextRunAt: string | null;
   lastRunAt: string | null;
@@ -72,12 +76,12 @@ export type RoutineRunOutcome = "quiet" | "notified" | "task";
 
 export interface RoutineRun {
   id: number;
-  residentId: UUID;
+  routineAgentId: UUID;
   routine: string;
   sessionId: UUID | null;
   status: RoutineRunStatus;
   queuedAt: string;
-  /** When the line was typed into the resident's pane. */
+  /** When the line was typed into the agent's pane. */
   deliveredAt: string | null;
   startedAt: string | null;
   finishedAt: string | null;
@@ -87,26 +91,27 @@ export interface RoutineRun {
   missedMs: number;
 }
 
-export type FindingSeverity = "info" | "warn" | "urgent";
-export type FindingState = "open" | "cleared" | "closed";
-export type FindingVerdict = "useful" | "noise";
+export type RoutineReportState = "open" | "resolved" | "closed";
+export type RoutineReportVerdict = "useful" | "noise";
 
-export interface Finding {
+/** What a routine run handed back, one row per key over its life. */
+export interface RoutineReport {
   id: UUID;
-  residentId: UUID;
+  routineAgentId: UUID;
   routine: string;
   key: string;
-  /** The open finding this one was merged into. */
+  /** The open report this one was merged into. */
   sameAs: string | null;
-  severity: FindingSeverity;
+  /** Gets through Focus mode. */
+  urgent: boolean;
   title: string;
   url: string | null;
   taskId: UUID | null;
-  state: FindingState;
-  verdict: FindingVerdict | null;
+  state: RoutineReportState;
+  verdict: RoutineReportVerdict | null;
   openedAt: string;
   lastSeenAt: string;
-  clearedAt: string | null;
+  resolvedAt: string | null;
   closedAt: string | null;
   reopenCount: number;
 }

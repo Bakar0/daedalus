@@ -11,7 +11,7 @@ import {
   type PendingNotification,
   type PresenceState,
   type RepositoryLibraryEntry,
-  type ResidentOverview,
+  type RoutineAgentOverview,
   type RoutineRun,
   type SessionAttention,
   type Task,
@@ -30,8 +30,8 @@ import type {
   IntegratedTerminalDto,
   PresenceStateDto,
   RepositoryLibraryDto,
-  ResidentDetailDto,
-  ResidentOverviewDto,
+  RoutineAgentDetailDto,
+  RoutineAgentOverviewDto,
   RoutineRunDto,
   RpcResult,
   SessionAttentionDto,
@@ -196,14 +196,16 @@ export async function desktopSnapshot(
       .map((item) => ({ ...item })),
     attention: context.activity.listAttention().map(sessionAttentionDto),
     toasts: context.notifications.pending("toast").map(toastDto),
-    residents: (await context.residents.overviews()).map(residentOverviewDto),
-    findings: context.residents
+    routineAgents: (await context.routineAgents.overviews()).map(
+      routineAgentOverviewDto,
+    ),
+    routineReports: context.routineAgents
       .list()
-      .flatMap((resident) =>
-        context.repositories.residents.listFindings(resident.id),
+      .flatMap((agent) =>
+        context.repositories.routineAgents.listRoutineReports(agent.id),
       )
-      .filter((finding) => finding.taskId)
-      .map((finding) => ({ ...finding })),
+      .filter((report) => report.taskId)
+      .map((report) => ({ ...report })),
     settings: {
       version: packageJson.version,
       channel: channelName(context.config.home),
@@ -235,42 +237,48 @@ export function desktopDataFingerprint(context: ApplicationContext): string {
     activity: context.repositories.listAgentActivity(),
     attention: context.repositories.listSessionAttention(),
     notifications: context.repositories.listPendingNotifications(),
-    // A run starting or ending moves the lantern, so it reloads too. Routine
-    // files are not in SQLite; their state rows change when they are read.
-    residents: context.repositories.residents.listResidents().map((item) => ({
-      item,
-      runs: context.repositories.residents.listRoutineRuns(item.id, {
-        limit: 5,
-      }),
-      states: context.repositories.residents.listRoutineStates(item.id),
-      findings: context.repositories.residents.listFindings(item.id, {
-        states: ["open", "cleared"],
-      }),
-    })),
+    // A run starting or ending changes what the agent's card says, so it
+    // reloads too. Routine files are not in SQLite; their state rows change
+    // when they are read.
+    routineAgents: context.repositories.routineAgents
+      .listRoutineAgents()
+      .map((item) => ({
+        item,
+        runs: context.repositories.routineAgents.listRoutineRuns(item.id, {
+          limit: 5,
+        }),
+        states: context.repositories.routineAgents.listRoutineStates(item.id),
+        reports: context.repositories.routineAgents.listRoutineReports(
+          item.id,
+          { states: ["open", "resolved"] },
+        ),
+      })),
   });
 }
 
-const residentOverviewDto = (
-  overview: ResidentOverview,
-): ResidentOverviewDto => ({
-  id: overview.resident.id,
-  slug: overview.resident.slug,
-  name: overview.resident.name,
-  workspaceId: overview.resident.workspaceId,
+const routineAgentOverviewDto = (
+  overview: RoutineAgentOverview,
+): RoutineAgentOverviewDto => ({
+  id: overview.agent.id,
+  name: overview.agent.name,
+  slug: overview.agent.slug,
+  workspaceId: overview.agent.workspaceId,
   workspaceSlug: overview.workspaceSlug,
-  workspacePath: overview.workspacePath,
-  state: overview.resident.state,
-  sessionId: overview.resident.sessionId,
+  folder: overview.folder,
+  state: overview.agent.state,
+  sessionId: overview.agent.sessionId,
   sessionStatus: overview.sessionStatus,
-  lamp: overview.lamp,
+  sessionArchived: overview.sessionArchived,
   nextRunAt: overview.nextRunAt,
   runsInFlight: overview.runsInFlight,
   runsQueued: overview.runsQueued,
-  openFindings: overview.openFindings,
-  openFindingTasks: overview.openFindingTasks,
+  openReports: overview.openReports,
+  openUrgentReports: overview.openUrgentReports,
+  openReportTasks: overview.openReportTasks,
+  routines: overview.routines,
   routineErrors: overview.routineErrors,
   deliveryHold: overview.deliveryHold,
-  autoHandoffPercent: overview.resident.autoHandoffPercent,
+  autoHandoffPercent: overview.agent.autoHandoffPercent,
 });
 
 const routineRunDto = (run: RoutineRun): RoutineRunDto => ({
@@ -286,12 +294,12 @@ const routineRunDto = (run: RoutineRun): RoutineRunDto => ({
   missedMs: run.missedMs,
 });
 
-async function residentDetail(
+async function routineAgentDetail(
   context: ApplicationContext,
   reference: string,
-): Promise<ResidentDetailDto> {
-  const resident = context.residents.get(reference);
-  const { routines, errors } = await context.routines.list(resident);
+): Promise<RoutineAgentDetailDto> {
+  const agent = context.routineAgents.get(reference);
+  const { routines, errors } = await context.routines.list(agent);
   return {
     routines: routines.map(({ routine, state, lastRun }) => ({
       name: routine.name,
@@ -300,7 +308,7 @@ async function residentDetail(
       until: routine.until,
       model: routine.model,
       timeoutMs: routine.timeoutMs,
-      findings: routine.findings,
+      output: routine.output,
       enabled: routine.enabled,
       nextRunAt: routine.enabled ? (state?.nextRunAt ?? null) : null,
       lastRunAt: state?.lastRunAt ?? null,
@@ -308,7 +316,7 @@ async function residentDetail(
       lastRun: lastRun ? routineRunDto(lastRun) : null,
     })),
     errors: errors.map((error) => ({ ...error })),
-    runs: context.routines.runs(resident, { limit: 100 }).map(routineRunDto),
+    runs: context.routines.runs(agent, { limit: 100 }).map(routineRunDto),
   };
 }
 
@@ -345,42 +353,38 @@ export function createDesktopRequestHandlers(
 
   return {
     snapshot: () => result(() => desktopSnapshot(context)),
-    residentDetail: ({ reference }) =>
-      result(() => residentDetail(context, reference)),
-    residentMemory: ({ reference }) =>
+    routineAgentDetail: ({ agent }) =>
+      result(() => routineAgentDetail(context, agent)),
+    routineAgentMemory: ({ agent }) =>
       result(async () =>
         (
-          await context.residents.memory(
-            reference,
+          await context.routineAgents.memory(
+            agent,
             context.config.claudeProjectsDirectory,
           )
         ).map((file) => ({ ...file })),
       ),
-    residentControl: ({ reference, action }) =>
+    routineAgentControl: ({ agent, action }) =>
       mutate(async () => {
-        const resident =
-          action === "start"
-            ? await context.residents.start(reference)
-            : action === "stop"
-              ? await context.residents.stop(reference)
-              : action === "pause"
-                ? context.residents.pause(reference)
-                : await context.residents.resume(reference);
-        return { state: resident.state };
+        const updated =
+          action === "pause"
+            ? context.routineAgents.pause(agent)
+            : await context.routineAgents.resume(agent);
+        return { state: updated.state };
       }),
-    routineSetEnabled: ({ resident, name, enabled }) =>
+    routineSetEnabled: ({ agent, name, enabled }) =>
       mutate(async () => {
         const routine = await context.routines.setEnabled(
-          context.residents.get(resident),
+          context.routineAgents.get(agent),
           name,
           enabled,
         );
         return { name: routine.name, enabled: routine.enabled };
       }),
-    routineRunNow: ({ resident, name }) =>
+    routineRunNow: ({ agent, name }) =>
       mutate(async () => {
         const run = await context.routines.runNow(
-          context.residents.get(resident),
+          context.routineAgents.get(agent),
           name,
         );
         return {
@@ -388,10 +392,10 @@ export function createDesktopRequestHandlers(
           ...(run.alreadyQueued ? { alreadyQueued: true } : {}),
         };
       }),
-    findingVerdict: ({ resident, id, verdict }) =>
+    routineReportVerdict: ({ agent, id, verdict }) =>
       mutate(() => ({
-        ...context.findings.verdict(
-          context.residents.get(resident),
+        ...context.routineReports.verdict(
+          context.routineAgents.get(agent),
           id,
           verdict,
         ),

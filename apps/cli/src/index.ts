@@ -25,11 +25,10 @@ import {
   required,
 } from "./arguments";
 import {
-  findingCommand,
-  residentCommand,
-  residentHelp,
+  routineAgentCommand,
+  routineAgentHelp,
   routineCommand,
-} from "./residents";
+} from "./routine-agents";
 import { findTmuxExecutable, probeVersion } from "@daedalus/platform";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -119,11 +118,11 @@ async function captureAgentEvent(
       typeof payload.thread_id === "string"
         ? "codex"
         : "claude";
-    // A resident sits at its prompt between routines. Claude's minute-later
-    // idle notice is a question for a person, and nobody is at a resident's
-    // terminal, so it would only hold up the next routine and raise a badge.
+    // A routine agent sits at its prompt between routines. Claude's
+    // minute-later idle notice is a question for a person, who is usually not
+    // there, so it would only hold up the next routine and raise a badge.
     if (
-      process.env.DAEDALUS_RESIDENT === "1" &&
+      process.env.DAEDALUS_ROUTINE_AGENT === "1" &&
       event === "Notification" &&
       payload.notification_type === "idle_prompt"
     )
@@ -263,9 +262,8 @@ Usage:
   daedal repo <library|list|add|attach|sync|fetch|detach|worktree> ... [--json]
   daedal agent <spawn|list|get|wait|attach|send|archive|restore|revive|stop|remove> ... [--json]
   daedal skill <list|get|enable|disable|visibility|install|remove|sync|doctor> ... [--json]
-  daedal resident <create|list|get|start|stop|pause|resume|update> ... [--json]
-  daedal routine <add|list|get|enable|disable|run|remove|runs|start|done|fail> ... [--json]
-  daedal finding <report|list|clear|verdict> ... [--json]
+  daedal routine-agent <list|get|pause|resume|update|remove> ... [--json]
+  daedal routine <add|list|get|enable|disable|run|remove|runs|start|done|fail|report|resolve|reports|feedback> ... [--json]
   daedal attention "<reason>" [--session <agent-id>] [--clear] [--json]
   daedal notify "<message>" [--level info|success|error] [--desktop] [--json]
   daedal ui state [--json]
@@ -274,7 +272,7 @@ Usage:
 Run 'daedal <command> --help' for command details.`;
 
 const commandHelp: Record<string, string> = {
-  ...residentHelp,
+  ...routineAgentHelp,
   workspace: `Workspace commands:
   daedal workspace create <name> [--slug <slug>] [--path <path>]
   daedal workspace list [--archived]
@@ -332,6 +330,7 @@ it was cleared, journal entries whose heading names the task, and done.`,
   agent: `Agent commands:
   daedal agent models <codex|claude>
   daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>] [--draft-brief]
+  daedal agent spawn --workspace <workspace> --routine-agent --name <name> [--model <model>]
   daedal agent list [--workspace <workspace>] [--running|--archived]
   daedal agent reorder --workspace <workspace> <agent-id> [<agent-id>...]
   daedal agent get <agent-id>
@@ -362,6 +361,10 @@ workspace's --start-sets-in-progress setting is on, which is the default.
 --draft-brief links the session to the task but asks it to write the brief
 back with 'task update --description-file -' instead of doing the task, and
 leaves the status alone.
+
+'agent spawn --routine-agent' creates a routine agent: a Claude session named
+--name that lives in <workspace>/worktrees/agents/<name> and runs the routines
+the user asks it for. See 'daedal routine-agent --help'.
 
 'agent spawn' without --model starts with the workspace's default model when
 --provider is the workspace's default provider. Otherwise Claude is asked for
@@ -1042,14 +1045,45 @@ async function agentCommand(
     const parsed = parseArguments(
       args,
       ["workspace", "provider", "command", "task", "name", "model", "message"],
-      ["draft-brief"],
+      ["draft-brief", "routine-agent"],
     );
     expectPositionals(
       parsed.positionals,
       0,
-      "daedal agent spawn --workspace <workspace> (--provider <provider> | --command <name>)",
+      "daedal agent spawn --workspace <workspace> (--provider <provider> | --command <name> | --routine-agent --name <name>)",
     );
     const workspace = required(parsed.values.workspace, "--workspace");
+    if (parsed.flags.has("routine-agent")) {
+      for (const option of ["command", "task", "message"])
+        if (parsed.values[option] !== undefined)
+          throw new DaedalusError(
+            "VALIDATION",
+            `--routine-agent does not take --${option}`,
+          );
+      if (parsed.flags.has("draft-brief"))
+        throw new DaedalusError(
+          "VALIDATION",
+          "--routine-agent does not take --draft-brief",
+        );
+      if (parsed.values.provider && parsed.values.provider !== "claude")
+        throw new DaedalusError(
+          "VALIDATION",
+          "A routine agent runs on Claude for now",
+        );
+      const agent = await context.routineAgents.create({
+        workspace,
+        name: required(parsed.values.name, "--name"),
+        ...(parsed.values.model ? { model: parsed.values.model } : {}),
+      });
+      const session = await context.agents.get(agent.sessionId!);
+      printResult({ routineAgent: agent, session }, json, () => {
+        console.log(
+          `Spawned routine agent ${agent.name} in ${session.tmuxSession}`,
+        );
+        console.log(`Its folder is ${session.workingDirectory}`);
+      });
+      return 0;
+    }
     const task = parsed.values.task
       ? await resolveTaskReference(context, parsed.values.task, workspace)
       : undefined;
@@ -2367,9 +2401,8 @@ export async function runCli(
       "ui",
       "focus",
       "shutdown",
-      "resident",
+      "routine-agent",
       "routine",
-      "finding",
     ].includes(args[0]!)
   )
     throw new DaedalusError("VALIDATION", `Unknown command '${args[0]}'`);
@@ -2394,12 +2427,12 @@ export async function runCli(
       return await focusCommand(context, args.slice(1), json);
     if (args[0] === "shutdown")
       return await shutdownCommand(context, args.slice(1), json);
-    if (args[0] === "resident")
-      return await residentCommand(context, args.slice(1), json);
+    if (args[0] === "routine-agent")
+      return await routineAgentCommand(context, args.slice(1), json);
     if (args[0] === "routine")
-      return await routineCommand(context, args.slice(1), json);
-    if (args[0] === "finding")
-      return await findingCommand(context, args.slice(1), json);
+      return await routineCommand(context, args.slice(1), json, (reference) =>
+        resolveTaskReference(context, reference),
+      );
     return await agentCommand(context, args.slice(1), json, options);
   } finally {
     context.close();

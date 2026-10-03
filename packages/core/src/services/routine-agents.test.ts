@@ -8,11 +8,12 @@ import {
   claudeReady,
   composerText,
   createApplicationContext,
-  residentAtPrompt,
+  routineAgentAtPrompt,
+  routineAgentSlug,
   type AgentActivityState,
   type ApplicationContext,
-  type Resident,
-  type ResidentTickInput,
+  type RoutineAgent,
+  type RoutineAgentTickInput,
 } from "../index";
 
 class FakeTmux implements TmuxClient {
@@ -62,7 +63,7 @@ interface Harness {
   second(): Promise<ApplicationContext>;
 }
 
-async function withResidents(run: (harness: Harness) => Promise<void>) {
+async function withRoutineAgents(run: (harness: Harness) => Promise<void>) {
   await withTemporaryDaedalusHome(async (home) => {
     await Bun.write(
       join(home, "config.json"),
@@ -129,7 +130,7 @@ name: ${name}
 schedule: ${schedule}
 model: sonnet
 timeout: 10m
-findings: task
+output: task
 ${extra}---
 Check ${name} since {{last_run}}; missed {{missed}}.
 `;
@@ -137,8 +138,8 @@ Check ${name} since {{last_run}}; missed {{missed}}.
 /** A tick input for a session sitting idle at its prompt. */
 function idle(
   harness: Harness,
-  overrides: Partial<ResidentTickInput> = {},
-): ResidentTickInput {
+  overrides: Partial<RoutineAgentTickInput> = {},
+): RoutineAgentTickInput {
   return {
     contextPercent: () => 10,
     lastInputAt: () => undefined,
@@ -154,9 +155,12 @@ function idle(
   };
 }
 
-async function argus(harness: Harness): Promise<Resident> {
-  await harness.context.residents.create({ slug: "argus" });
-  return harness.context.residents.start("argus");
+async function argus(harness: Harness): Promise<RoutineAgent> {
+  await harness.context.workspaces.create({ name: "Ops", slug: "ops" });
+  return harness.context.routineAgents.create({
+    workspace: "ops",
+    name: "Argus",
+  });
 }
 
 const routineLines = (tmux: FakeTmux) =>
@@ -164,71 +168,85 @@ const routineLines = (tmux: FakeTmux) =>
     .map((item) => item.text)
     .filter((text) => text.startsWith("/daedalus-routine"));
 
-describe("residents", () => {
-  test("create writes the workspace and start launches at its root", async () => {
-    await withResidents(async (harness) => {
+describe("routine agents", () => {
+  test("create writes its folder in the workspace and launches there", async () => {
+    await withRoutineAgents(async (harness) => {
       const { context, tmux } = harness;
-      const created = await context.residents.create({ slug: "argus" });
-      expect(created).toMatchObject({ name: "Argus", state: "stopped" });
-      const workspace = await context.workspaces.get("argus");
+      const agent = await argus(harness);
+      expect(agent).toMatchObject({
+        name: "Argus",
+        slug: "argus",
+        state: "on_duty",
+      });
+      const workspace = await context.workspaces.get("ops");
+      const folder = join(workspace.path, "worktrees", "agents", "argus");
+      expect(await context.routineAgents.folder(agent)).toBe(folder);
       for (const file of [
-        "CHARTER.md",
-        "SERVICES.md",
-        "TOOLS.md",
-        "BRIEF.md",
+        "AGENT.md",
+        "routines/templates",
         ".claude/skills/daedalus-routine/SKILL.md",
-        ".claude/skills/daedalus-resident/SKILL.md",
+        ".claude/skills/daedalus-routine-agent/SKILL.md",
       ])
-        expect(await Bun.file(join(workspace.path, file)).exists()).toBe(true);
-      expect(
-        await readFile(join(workspace.path, "CHARTER.md"), "utf8"),
-      ).toContain("You are Argus");
-      expect(
-        await readFile(join(workspace.path, "BRIEF.md"), "utf8"),
-      ).toContain("Argus reported");
-      // Apart from the user's projects.
-      expect(workspace.path).toBe(join(harness.home, "residents", "argus"));
+        expect(await Bun.file(join(folder, file)).exists()).toBe(
+          !file.endsWith("templates"),
+        );
+      expect(await readFile(join(folder, "AGENT.md"), "utf8")).toContain(
+        "You are Argus",
+      );
       const settings = JSON.parse(
-        await readFile(
-          join(workspace.path, ".claude", "settings.json"),
-          "utf8",
-        ),
+        await readFile(join(folder, ".claude", "settings.json"), "utf8"),
       );
       expect(settings.permissions.deny).toEqual(["AskUserQuestion"]);
       expect(settings.permissions.allow).toContain(
         `Bash(${join(harness.home, "bin", "daedal")} routine:*)`,
       );
       const skill = await readFile(
-        join(workspace.path, ".claude/skills/daedalus-routine/SKILL.md"),
+        join(folder, ".claude/skills/daedalus-routine/SKILL.md"),
         "utf8",
       );
       expect(skill).toContain(join(harness.home, "bin", "daedal"));
       expect(skill).not.toContain("{{daedal}}");
-      const resident = await context.residents.start("argus");
-      expect(resident.state).toBe("on_duty");
-      const session = await context.agents.get(resident.sessionId!);
-      expect(session.workingDirectory).toBe(workspace.path);
+      const session = await context.agents.get(agent.sessionId!);
+      expect(session.workingDirectory).toBe(folder);
+      expect(session.workspaceId).toBe(workspace.id);
       expect(session.name).toBe("Argus");
       const launch = tmux.launches.at(-1)!;
-      expect(launch.cwd).toBe(workspace.path);
+      expect(launch.cwd).toBe(folder);
+      expect(launch.env?.DAEDALUS_ROUTINE_AGENT).toBe("1");
       expect(launch.args.join(" ")).toContain("--permission-mode auto");
       expect(launch.args.at(-1)).toContain("You are Argus");
-      // Starting again while on duty launches nothing new.
-      await context.residents.start("argus");
-      expect(tmux.launches).toHaveLength(1);
-      await expect(context.residents.create({ slug: "argus" })).rejects.toThrow(
-        "already exists",
+      // One name per workspace; another workspace may reuse it.
+      await expect(
+        context.routineAgents.create({ workspace: "ops", name: "argus" }),
+      ).rejects.toThrow("already has a routine agent");
+      await context.workspaces.create({ name: "Web", slug: "web" });
+      const second = await context.routineAgents.create({
+        workspace: "web",
+        name: "Argus",
+      });
+      expect(() => context.routineAgents.get("argus")).toThrow(
+        "pass --workspace",
       );
+      expect(context.routineAgents.get("argus", second.workspaceId).id).toBe(
+        second.id,
+      );
+      // Several agents in one workspace, each in its own folder.
+      const herald = await context.routineAgents.create({
+        workspace: "ops",
+        name: "Herald of Builds",
+      });
+      expect(herald.slug).toBe("herald-of-builds");
+      expect(context.routineAgents.list(workspace.id)).toHaveLength(2);
     });
   });
 
   test("delivers a due routine when the session is idle, and not otherwise", async () => {
-    await withResidents(async (harness) => {
+    await withRoutineAgents(async (harness) => {
       const { context, tmux } = harness;
-      const resident = await argus(harness);
-      await context.routines.add(resident, { text: routineFile("ci-health") });
+      const agent = await argus(harness);
+      await context.routines.add(agent, { text: routineFile("ci-health") });
       // Working on something of its own: queued, not typed.
-      await context.residents.tick(
+      await context.routineAgents.tick(
         idle(harness, {
           activity: (sessionId) => ({
             sessionId,
@@ -241,18 +259,18 @@ describe("residents", () => {
         }),
       );
       expect(routineLines(tmux)).toEqual([]);
-      const [queued] = context.routines.inFlightRuns(resident);
+      const [queued] = context.routines.inFlightRuns(agent);
       expect(queued).toMatchObject({ routine: "ci-health", status: "queued" });
       // The user typed 30 s ago: still held.
       harness.advance(1_000);
-      await context.residents.tick(
+      await context.routineAgents.tick(
         idle(harness, {
           lastInputAt: () => harness.clock.now.getTime() - 30_000,
         }),
       );
       expect(routineLines(tmux)).toEqual([]);
       // A real question on screen is never typed over.
-      await context.residents.tick(
+      await context.routineAgents.tick(
         idle(harness, {
           activity: (sessionId) => ({
             sessionId,
@@ -265,24 +283,24 @@ describe("residents", () => {
         }),
       );
       expect(routineLines(tmux)).toEqual([]);
-      await context.residents.tick(idle(harness));
+      await context.routineAgents.tick(idle(harness));
       expect(routineLines(tmux)).toEqual([`/daedalus-routine ${queued!.id}`]);
-      const started = await context.routines.start(resident, queued!.id);
+      const started = await context.routines.start(agent, queued!.id);
       expect(started.prompt).toBe(
         "Check ci-health since never (this is the first run; look back one schedule interval); missed 0m.",
       );
       expect(started.run.status).toBe("running");
-      await expect(
-        context.routines.start(resident, queued!.id),
-      ).rejects.toThrow("not queued");
+      await expect(context.routines.start(agent, queued!.id)).rejects.toThrow(
+        "not queued",
+      );
     });
   });
 
   test("holds delivery while text waits in the input box", async () => {
-    await withResidents(async (harness) => {
+    await withRoutineAgents(async (harness) => {
       const { context, tmux } = harness;
-      const resident = await argus(harness);
-      await context.routines.add(resident, { text: routineFile("ci-health") });
+      const agent = await argus(harness);
+      await context.routines.add(agent, { text: routineFile("ci-health") });
       tmux.screen = [
         "⏺ ci-health run 2 found nothing to report.",
         "──────────────────────────────── Argus ─",
@@ -290,32 +308,36 @@ describe("residents", () => {
         "────────────────────────────────",
         "  ⏵⏵ auto mode on (shift+tab to cycle)",
       ].join("\n");
-      await context.residents.tick(idle(harness));
+      await context.routineAgents.tick(idle(harness));
       expect(routineLines(tmux)).toEqual([]);
       // Said out loud, not a silent queue.
-      expect((await context.residents.overviews())[0]!.deliveryHold).toContain(
+      expect(
+        (await context.routineAgents.overviews())[0]!.deliveryHold,
+      ).toContain(
         'unsent text in Argus\'s input box: "run slack-needs-me now"',
       );
       // Run now asks for what is already waiting: no error, the same run.
-      const queued = context.routines.inFlightRuns(resident)[0]!;
-      const again = await context.routines.runNow(resident, "ci-health");
+      const queued = context.routines.inFlightRuns(agent)[0]!;
+      const again = await context.routines.runNow(agent, "ci-health");
       expect(again).toMatchObject({ id: queued.id, alreadyQueued: true });
       tmux.screen = tmux.screen.replace("❯ run slack-needs-me now", "❯ ");
       harness.advance(1_000);
-      await context.residents.tick(idle(harness));
+      await context.routineAgents.tick(idle(harness));
       expect(routineLines(tmux)).toHaveLength(1);
-      expect((await context.residents.overviews())[0]!.deliveryHold).toBeNull();
-      await expect(
-        context.routines.runNow(resident, "ci-health"),
-      ).rejects.toThrow("is running now");
+      expect(
+        (await context.routineAgents.overviews())[0]!.deliveryHold,
+      ).toBeNull();
+      await expect(context.routines.runNow(agent, "ci-health")).rejects.toThrow(
+        "is running now",
+      );
     });
   });
 
   test("an unknown reading falls back to what the pane shows", async () => {
-    await withResidents(async (harness) => {
+    await withRoutineAgents(async (harness) => {
       const { context, tmux } = harness;
-      const resident = await argus(harness);
-      await context.routines.add(resident, { text: routineFile("ci-health") });
+      const agent = await argus(harness);
+      await context.routines.add(agent, { text: routineFile("ci-health") });
       const unknown = idle(harness, {
         activity: (sessionId) => ({
           sessionId,
@@ -328,24 +350,24 @@ describe("residents", () => {
       });
       tmux.screen =
         "✻ Churning… (12s · esc to interrupt)\n────────────\n❯ \n────";
-      await context.residents.tick(unknown);
+      await context.routineAgents.tick(unknown);
       expect(routineLines(tmux)).toEqual([]);
-      expect((await context.residents.overviews())[0]!.deliveryHold).toBe(
+      expect((await context.routineAgents.overviews())[0]!.deliveryHold).toBe(
         "Argus is busy",
       );
       tmux.screen = "⏺ done\n────────────\n❯ \n────";
-      await context.residents.tick(unknown);
+      await context.routineAgents.tick(unknown);
       expect(routineLines(tmux)).toHaveLength(1);
     });
   });
 
-  test("Claude's idle notice does not hold a resident's routines", async () => {
-    await withResidents(async (harness) => {
+  test("Claude's idle notice does not hold a routine agent's routines", async () => {
+    await withRoutineAgents(async (harness) => {
       const { context, tmux } = harness;
-      const resident = await argus(harness);
-      expect(tmux.launches[0]!.env?.DAEDALUS_RESIDENT).toBe("1");
-      await context.routines.add(resident, { text: routineFile("ci-health") });
-      await context.residents.tick(
+      const agent = await argus(harness);
+      expect(tmux.launches[0]!.env?.DAEDALUS_ROUTINE_AGENT).toBe("1");
+      await context.routines.add(agent, { text: routineFile("ci-health") });
+      await context.routineAgents.tick(
         idle(harness, {
           activity: (sessionId) => ({
             sessionId,
@@ -362,11 +384,11 @@ describe("residents", () => {
   });
 
   test("keeps at most three runs in flight, one per routine", async () => {
-    await withResidents(async (harness) => {
+    await withRoutineAgents(async (harness) => {
       const { context, tmux } = harness;
-      const resident = await argus(harness);
+      const agent = await argus(harness);
       for (const name of ["one", "two", "three", "four"])
-        await context.routines.add(resident, { text: routineFile(name) });
+        await context.routines.add(agent, { text: routineFile(name) });
       // A Claude session with background agents running still takes lines.
       const waiting = idle(harness, {
         activity: (sessionId) => ({
@@ -379,126 +401,126 @@ describe("residents", () => {
         }),
       });
       for (let index = 0; index < 6; index += 1) {
-        await context.residents.tick(waiting);
+        await context.routineAgents.tick(waiting);
         harness.advance(16_000);
       }
       expect(routineLines(tmux)).toHaveLength(3);
-      expect(context.routines.deliveredRuns(resident)).toHaveLength(3);
+      expect(context.routines.deliveredRuns(agent)).toHaveLength(3);
       // One finishes: the fourth goes out.
-      const [first] = context.routines.deliveredRuns(resident);
-      await context.routines.start(resident, first!.id);
-      await context.routines.done(resident, first!.id, "quiet", "all green");
-      await context.residents.tick(waiting);
+      const [first] = context.routines.deliveredRuns(agent);
+      await context.routines.start(agent, first!.id);
+      await context.routines.done(agent, first!.id, "quiet", "all green");
+      await context.routineAgents.tick(waiting);
       expect(routineLines(tmux)).toHaveLength(4);
     });
   });
 
   test("skips a routine whose previous run has not ended", async () => {
-    await withResidents(async (harness) => {
+    await withRoutineAgents(async (harness) => {
       const { context } = harness;
-      const resident = await argus(harness);
-      await context.routines.add(resident, {
+      const agent = await argus(harness);
+      await context.routines.add(agent, {
         text: routineFile("slow", "", "every 5m"),
       });
-      await context.residents.tick(idle(harness));
+      await context.routineAgents.tick(idle(harness));
       harness.advance(5 * 60_000 + 1_000);
-      await context.residents.tick(
+      await context.routineAgents.tick(
         idle(harness, { activity: () => undefined }),
       );
-      const runs = context.routines.runs(resident);
+      const runs = context.routines.runs(agent);
       expect(runs.map((run) => run.status)).toEqual(["skipped", "queued"]);
       expect(runs[0]!.summary).toContain("previous run has not ended");
     });
   });
 
   test("an overdue routine fires once, with how late it was", async () => {
-    await withResidents(async (harness) => {
+    await withRoutineAgents(async (harness) => {
       const { context } = harness;
-      const resident = await argus(harness);
-      await context.routines.add(resident, {
+      const agent = await argus(harness);
+      await context.routines.add(agent, {
         text: routineFile("hourly", "", "every 1h"),
       });
-      await context.residents.tick(idle(harness));
-      const [first] = context.routines.inFlightRuns(resident);
-      await context.routines.start(resident, first!.id);
-      await context.routines.done(resident, first!.id, "quiet", "ok");
+      await context.routineAgents.tick(idle(harness));
+      const [first] = context.routines.inFlightRuns(agent);
+      await context.routines.start(agent, first!.id);
+      await context.routines.done(agent, first!.id, "quiet", "ok");
       // The app was closed for five hours.
       harness.advance(5 * 3_600_000);
-      await context.residents.tick(
+      await context.routineAgents.tick(
         idle(harness, { activity: () => undefined }),
       );
-      const queued = context.routines.inFlightRuns(resident);
+      const queued = context.routines.inFlightRuns(agent);
       expect(queued).toHaveLength(1);
-      const started = await context.routines.start(resident, queued[0]!.id);
+      const started = await context.routines.start(agent, queued[0]!.id);
       expect(started.prompt).toContain("missed 4h");
       expect(started.prompt).toContain("since 2026-09-30 10:00");
     });
   });
 
   test("times out a silent run and raises the badge after three failures", async () => {
-    await withResidents(async (harness) => {
+    await withRoutineAgents(async (harness) => {
       const { context } = harness;
-      const resident = await argus(harness);
-      await context.routines.add(resident, {
+      const agent = await argus(harness);
+      await context.routines.add(agent, {
         text: routineFile("flaky", "", "every 15m"),
       });
       for (let round = 0; round < 3; round += 1) {
-        await context.residents.tick(idle(harness));
+        await context.routineAgents.tick(idle(harness));
         harness.advance(11 * 60_000);
-        await context.residents.tick(
+        await context.routineAgents.tick(
           idle(harness, { activity: () => undefined }),
         );
         harness.advance(5 * 60_000);
       }
       const failed = context.routines
-        .runs(resident, { routine: "flaky" })
+        .runs(agent, { routine: "flaky" })
         .filter((run) => run.status === "failed");
       expect(failed).toHaveLength(3);
       expect(failed[0]!.summary).toContain("never started");
       expect(
         context.activity
-          .attentionFor(resident.sessionId!)
+          .attentionFor(agent.sessionId!)
           ?.reasons.map((reason) => reason.text)
           .join(" "),
       ).toContain("Routine 'flaky' failed 3 times in a row");
-      // The badge the resident carries does not stop delivery.
-      expect(residentAtPrompt(context.activity.get(resident.sessionId!))).toBe(
+      // The badge the agent carries does not stop delivery.
+      expect(routineAgentAtPrompt(context.activity.get(agent.sessionId!))).toBe(
         true,
       );
     });
   });
 
   test("drains before a handoff and moves the duty to the successor", async () => {
-    await withResidents(async (harness) => {
+    await withRoutineAgents(async (harness) => {
       const { context, tmux } = harness;
-      const resident = await argus(harness);
-      await context.routines.add(resident, { text: routineFile("ci-health") });
-      await context.routines.add(resident, { text: routineFile("merges") });
-      await context.residents.tick(idle(harness));
+      const agent = await argus(harness);
+      await context.routines.add(agent, { text: routineFile("ci-health") });
+      await context.routines.add(agent, { text: routineFile("merges") });
+      await context.routineAgents.tick(idle(harness));
       harness.advance(16_000);
-      expect(context.routines.deliveredRuns(resident)).toHaveLength(1);
+      expect(context.routines.deliveredRuns(agent)).toHaveLength(1);
       // Context passes 60%: drain, deliver nothing more, do not hand off yet.
       const full = idle(harness, { contextPercent: () => 72 });
-      await context.residents.tick(full);
-      expect(context.residents.get("argus").state).toBe("draining");
+      await context.routineAgents.tick(full);
+      expect(context.routineAgents.get("argus").state).toBe("draining");
       harness.advance(16_000);
-      await context.residents.tick(full);
+      await context.routineAgents.tick(full);
       expect(routineLines(tmux)).toHaveLength(1);
       expect(
         tmux.sent.some((item) => item.text.includes("daedalus-handoff")),
       ).toBe(false);
       // The run in flight ends: now the handoff.
-      const [inFlight] = context.routines.deliveredRuns(resident);
-      await context.routines.start(resident, inFlight!.id);
-      await context.routines.done(resident, inFlight!.id, "quiet", "ok");
-      await context.residents.tick(full);
+      const [inFlight] = context.routines.deliveredRuns(agent);
+      await context.routines.start(agent, inFlight!.id);
+      await context.routines.done(agent, inFlight!.id, "quiet", "ok");
+      await context.routineAgents.tick(full);
       expect(tmux.sent.at(-1)!.text).toContain("daedalus-handoff");
-      // The resident runs `daedal agent continue` itself.
+      // The agent runs `daedal agent continue` itself.
       const { session: successor } = await context.agents.continueSession({
-        id: resident.sessionId!,
+        id: agent.sessionId!,
         handoff: "Nothing in flight.",
       });
-      const after = context.residents.get("argus");
+      const after = context.routineAgents.get("argus");
       expect(after).toMatchObject({
         state: "on_duty",
         sessionId: successor.id,
@@ -506,12 +528,12 @@ describe("residents", () => {
       });
       expect(successor.name).toBe("Argus");
       expect(successor.workingDirectory).toBe(
-        (await context.workspaces.get("argus")).path,
+        await context.routineAgents.folder(agent),
       );
       expect(tmux.launches.at(-1)!.args.at(-1)).toContain("You are Argus");
       // The queued run goes to the successor.
       harness.advance(16_000);
-      await context.residents.tick(idle(harness));
+      await context.routineAgents.tick(idle(harness));
       expect(tmux.sent.at(-1)).toMatchObject({
         session: successor.tmuxSession,
         text: expect.stringMatching(/^\/daedalus-routine \d+$/),
@@ -519,101 +541,108 @@ describe("residents", () => {
     });
   });
 
-  test("drains once a day for a fresh context", async () => {
-    await withResidents(async (harness) => {
-      const { context } = harness;
-      const resident = await argus(harness);
-      // The session's start is real time, so the next 04:00 is found from it.
-      const started = new Date(
-        (await context.agents.get(resident.sessionId!)).startedAt,
+  test("archiving its session pauses the agent, and restoring resumes it", async () => {
+    await withRoutineAgents(async (harness) => {
+      const { context, tmux } = harness;
+      const agent = await argus(harness);
+      await context.routines.add(agent, { text: routineFile("ci-health") });
+      await context.routines.runNow(agent, "merges").catch(() => undefined);
+      await context.routines.runNow(agent, "ci-health");
+      await context.agents.archive(agent.sessionId!, true);
+      expect(context.routineAgents.get("argus").state).toBe("paused");
+      expect(context.routines.runs(agent, { limit: 1 })[0]!.summary).toContain(
+        "archived",
       );
-      const next = new Date(started.getTime());
-      next.setHours(4, 0, 5, 0);
-      if (next <= started) next.setDate(next.getDate() + 1);
-      harness.clock.now = next;
-      await context.residents.tick(idle(harness));
-      expect(context.residents.get("argus").state).toBe("draining");
-    });
-  });
-
-  test("a resident's session on duty is not archived on its own", async () => {
-    await withResidents(async (harness) => {
-      const { context } = harness;
-      const resident = await argus(harness);
-      await expect(
-        context.agents.archive(resident.sessionId!, true),
-      ).rejects.toThrow("is a resident on duty");
-      // Its successor takes over, after which the old session archives.
+      // Paused: no new session, nothing queued.
+      harness.advance(20 * 60_000);
+      await context.routineAgents.tick(idle(harness));
+      expect(tmux.launches).toHaveLength(1);
+      expect(context.routines.inFlightRuns(agent)).toEqual([]);
+      // Resume restores the archived session, which puts it back on duty.
+      const resumed = await context.routineAgents.resume("argus");
+      expect(resumed).toMatchObject({
+        state: "on_duty",
+        sessionId: agent.sessionId,
+      });
+      expect(
+        (await context.agents.get(agent.sessionId!)).archivedAt,
+      ).toBeNull();
+      // A handoff archives the predecessor without pausing the agent.
       const { session, predecessor } = await context.agents.continueSession({
-        id: resident.sessionId!,
+        id: agent.sessionId!,
       });
       expect(predecessor.archivedAt).not.toBeNull();
-      expect(context.residents.get("argus").sessionId).toBe(session.id);
+      expect(context.routineAgents.get("argus")).toMatchObject({
+        state: "on_duty",
+        sessionId: session.id,
+      });
     });
   });
 
-  test("remove stops the resident and keeps its files unless asked", async () => {
-    await withResidents(async (harness) => {
+  test("a session that exited is replaced in the same folder", async () => {
+    await withRoutineAgents(async (harness) => {
+      const { context, tmux } = harness;
+      const agent = await argus(harness);
+      const session = await context.agents.get(agent.sessionId!);
+      tmux.sessions.delete(session.tmuxSession);
+      context.repositories.updateAgent({ ...session, status: "exited" });
+      await context.routineAgents.tick(idle(harness));
+      expect(tmux.launches).toHaveLength(2);
+      const replaced = context.routineAgents.get("argus");
+      expect(replaced.sessionId).not.toBe(agent.sessionId);
+      expect(tmux.launches.at(-1)!.cwd).toBe(
+        await context.routineAgents.folder(agent),
+      );
+    });
+  });
+
+  test("remove forgets the agent and keeps its folder", async () => {
+    await withRoutineAgents(async (harness) => {
       const { context } = harness;
-      await argus(harness);
-      const path = (await context.workspaces.get("argus")).path;
-      await expect(context.residents.remove("argus", {})).rejects.toThrow(
+      const agent = await argus(harness);
+      const folder = await context.routineAgents.folder(agent);
+      await expect(context.routineAgents.remove("argus", {})).rejects.toThrow(
         "requires --force",
       );
-      const result = await context.residents.remove("argus", { force: true });
-      expect(result.filesDeleted).toBe(false);
-      expect(context.residents.list()).toEqual([]);
-      expect(await Bun.file(join(path, "CHARTER.md")).exists()).toBe(true);
-    });
-  });
-
-  test("a stopped resident's session is archived and relaunched on start", async () => {
-    await withResidents(async (harness) => {
-      const { context, tmux } = harness;
-      const resident = await argus(harness);
-      await context.residents.stop("argus");
+      await context.routineAgents.remove("argus", { force: true });
+      expect(context.routineAgents.list()).toEqual([]);
+      expect(await Bun.file(join(folder, "AGENT.md")).exists()).toBe(true);
       expect(
-        (await context.agents.get(resident.sessionId!)).archivedAt,
+        (await context.agents.get(agent.sessionId!)).archivedAt,
       ).not.toBeNull();
-      expect(context.residents.get("argus").state).toBe("stopped");
-      await context.residents.start("argus");
-      expect(tmux.launches).toHaveLength(2);
-      expect(context.residents.get("argus").sessionId).not.toBe(
-        resident.sessionId,
-      );
     });
   });
 });
 
-describe("findings", () => {
+describe("routine reports", () => {
   async function reportSetup(harness: Harness) {
-    const resident = await argus(harness);
-    await harness.context.routines.add(resident, {
+    const agent = await argus(harness);
+    await harness.context.routines.add(agent, {
       text: routineFile("ci-health"),
     });
-    await harness.context.routines.add(resident, {
-      text: routineFile("merges").replace("findings: task", "findings: notify"),
+    await harness.context.routines.add(agent, {
+      text: routineFile("merges").replace("output: task", "output: notify"),
     });
-    const run = await harness.context.routines.runNow(resident, "ci-health");
-    const workspace = await harness.context.workspaces.get("argus");
+    const run = await harness.context.routines.runNow(agent, "ci-health");
+    const workspace = await harness.context.workspaces.get("ops");
     const report = (overrides: Record<string, unknown> = {}) =>
-      harness.context.findings.report({
-        resident: harness.context.residents.get("argus"),
+      harness.context.routineReports.report({
+        agent: harness.context.routineAgents.get("argus"),
         workspace,
         routine: "ci-health",
-        findings: "task",
+        output: "task",
         runId: run.id,
         key: "ci-health:org/repo:main:CI:test",
-        severity: "warn",
+        urgent: false,
         title: "main red: test fails",
         body: "## Evidence\n\nexit 1",
         ...overrides,
       });
-    return { resident, workspace, run, report };
+    return { agent, workspace, run, report };
   }
 
   test("the same key again is an update, not a second task", async () => {
-    await withResidents(async (harness) => {
+    await withRoutineAgents(async (harness) => {
       const { context } = harness;
       const { workspace, report } = await reportSetup(harness);
       const first = await report();
@@ -624,7 +653,7 @@ describe("findings", () => {
       });
       expect(first.notified).not.toBeNull();
       harness.advance(30 * 60_000);
-      const second = await report({ severity: "urgent" });
+      const second = await report({ urgent: true });
       expect(second.action).toBe("updated");
       expect(second.notified).toBeNull();
       const tasks = context.repositories.listTasks({
@@ -632,23 +661,23 @@ describe("findings", () => {
       });
       expect(tasks).toHaveLength(1);
       expect(tasks[0]!.description).toContain("## Update 2026-09-30 10:30");
-      expect(tasks[0]!.description).toContain("Severity: urgent");
+      expect(tasks[0]!.description).toContain("· Urgent");
     });
   });
 
   test("two processes reporting one key at once make one task", async () => {
-    await withResidents(async (harness) => {
+    await withRoutineAgents(async (harness) => {
       const { context } = harness;
       const { workspace, report } = await reportSetup(harness);
       const other = await harness.second();
-      const otherReport = other.findings.report({
-        resident: other.residents.get("argus"),
+      const otherReport = other.routineReports.report({
+        agent: other.routineAgents.get("argus"),
         workspace,
         routine: "ci-health",
-        findings: "task",
+        output: "task",
         runId: 1,
         key: "ci-health:org/repo:main:CI:test",
-        severity: "warn",
+        urgent: false,
         title: "main red: test fails",
         body: "from the other run",
       });
@@ -661,15 +690,15 @@ describe("findings", () => {
         context.repositories.listTasks({ workspaceId: workspace.id }),
       ).toHaveLength(1);
       expect(
-        context.repositories.residents.listFindings(
-          results[0]!.finding.residentId,
+        context.repositories.routineAgents.listRoutineReports(
+          results[0]!.report.routineAgentId,
         ),
       ).toHaveLength(1);
     });
   });
 
   test("a second key with the same cause joins the first task", async () => {
-    await withResidents(async (harness) => {
+    await withRoutineAgents(async (harness) => {
       const { context } = harness;
       const { workspace, report } = await reportSetup(harness);
       await report();
@@ -697,35 +726,38 @@ describe("findings", () => {
       expect(again.task?.id).toBe(tasks[0]!.id);
       await expect(
         report({ key: "x:y", sameAs: "nothing:open" }),
-      ).rejects.toThrow("No open finding");
+      ).rejects.toThrow("No open report");
     });
   });
 
-  test("clears, closes after a day untouched, and reopens within 14 days", async () => {
-    await withResidents(async (harness) => {
+  test("resolves, closes after a day untouched, and reopens within 14 days", async () => {
+    await withRoutineAgents(async (harness) => {
       const { context } = harness;
       const { workspace, report } = await reportSetup(harness);
-      const resident = context.residents.get("argus");
+      const agent = context.routineAgents.get("argus");
       const opened = await report();
-      const cleared = context.findings.clear(
-        resident,
+      const resolved = context.routineReports.resolve(
+        agent,
         "ci-health:org/repo:main:CI:test",
       );
-      expect(cleared?.state).toBe("cleared");
+      expect(resolved?.state).toBe("resolved");
       expect(
-        context.findings.clear(resident, "ci-health:org/repo:main:CI:test"),
+        context.routineReports.resolve(
+          agent,
+          "ci-health:org/repo:main:CI:test",
+        ),
       ).toBeNull();
       harness.advance(23 * 3_600_000);
-      context.findings.sweep(resident);
+      context.routineReports.sweep(agent);
       expect(context.tasks.get(opened.task!.id).status).toBe("todo");
       harness.advance(2 * 3_600_000);
-      const { closedTasks } = context.findings.sweep(resident);
+      const { closedTasks } = context.routineReports.sweep(agent);
       expect(closedTasks).toHaveLength(1);
       const closed = context.tasks.get(opened.task!.id);
       expect(closed.status).toBe("done");
-      expect(closed.description).toContain("## Cleared at 2026-09-30 10:00");
+      expect(closed.description).toContain("## Resolved at 2026-09-30 10:00");
       expect(closed.description).toContain(
-        "## Closed by Argus: cleared at 2026-09-30 10:00, no action taken",
+        "## Closed by Argus: resolved at 2026-09-30 10:00, no action taken",
       );
       // Back five days later: the same task, back in todo, notified again.
       harness.advance(5 * 86_400_000);
@@ -733,20 +765,20 @@ describe("findings", () => {
       expect(back.action).toBe("reopened");
       expect(back.task?.id).toBe(opened.task!.id);
       expect(back.task?.status).toBe("todo");
-      expect(back.finding.reopenCount).toBe(1);
+      expect(back.report.reopenCount).toBe(1);
       expect(back.notified).not.toBeNull();
       expect(context.tasks.get(opened.task!.id).description).toContain(
         "## Came back at",
       );
-      // Cleared again and back after three weeks: a new task naming the old.
-      context.findings.clear(resident, "ci-health:org/repo:main:CI:test");
+      // Resolved again and back after three weeks: a new task naming the old.
+      context.routineReports.resolve(agent, "ci-health:org/repo:main:CI:test");
       harness.advance(21 * 86_400_000);
-      context.findings.sweep(resident);
+      context.routineReports.sweep(agent);
       const later = await report();
       expect(later.action).toBe("opened");
       expect(later.task?.id).not.toBe(opened.task!.id);
       expect(later.task?.description).toContain(
-        `The earlier task was argus#${opened.task!.number}`,
+        `The earlier task was ops#${opened.task!.number}`,
       );
       expect(
         context.repositories.listTasks({ workspaceId: workspace.id }),
@@ -754,27 +786,27 @@ describe("findings", () => {
     });
   });
 
-  test("a cleared task an agent worked on is left for the user", async () => {
-    await withResidents(async (harness) => {
+  test("a resolved task an agent worked on is left for the user", async () => {
+    await withRoutineAgents(async (harness) => {
       const { context } = harness;
       const { report } = await reportSetup(harness);
-      const resident = context.residents.get("argus");
+      const agent = context.routineAgents.get("argus");
       const opened = await report();
       await context.agents.spawn({
-        workspace: "argus",
+        workspace: "ops",
         taskId: opened.task!.id,
         provider: "claude",
       });
       const status = context.tasks.get(opened.task!.id).status;
-      context.findings.clear(resident, "ci-health:org/repo:main:CI:test");
+      context.routineReports.resolve(agent, "ci-health:org/repo:main:CI:test");
       harness.advance(25 * 3_600_000);
-      expect(context.findings.sweep(resident).closedTasks).toEqual([]);
+      expect(context.routineReports.sweep(agent).closedTasks).toEqual([]);
       expect(context.tasks.get(opened.task!.id).status).toBe(status);
     });
   });
 
   test("a task the user closed comes back when the issue is still there", async () => {
-    await withResidents(async (harness) => {
+    await withRoutineAgents(async (harness) => {
       const { context } = harness;
       const { report } = await reportSetup(harness);
       const opened = await report();
@@ -786,14 +818,14 @@ describe("findings", () => {
   });
 
   test("a key marked Noise raises nothing until the verdict is removed", async () => {
-    await withResidents(async (harness) => {
+    await withRoutineAgents(async (harness) => {
       const { context } = harness;
       const { workspace, report } = await reportSetup(harness);
-      const resident = context.residents.get("argus");
+      const agent = context.routineAgents.get("argus");
       const opened = await report();
-      const noise = context.findings.verdict(
-        resident,
-        opened.finding.id,
+      const noise = context.routineReports.verdict(
+        agent,
+        opened.report.id,
         "noise",
         "flaky runner",
       );
@@ -802,33 +834,65 @@ describe("findings", () => {
         "## Marked noise at",
       );
       harness.advance(3_600_000);
-      const quiet = await report({ severity: "urgent" });
+      const quiet = await report({ urgent: true });
       expect(quiet).toMatchObject({
         action: "suppressed",
         task: null,
         notified: null,
       });
-      expect(quiet.finding.lastSeenAt).toBe(harness.clock.now.toISOString());
+      expect(quiet.report.lastSeenAt).toBe(harness.clock.now.toISOString());
       expect(
         context.repositories.listTasks({ workspaceId: workspace.id }),
       ).toHaveLength(1);
-      context.findings.verdict(resident, opened.finding.id, null);
+      context.routineReports.verdict(agent, opened.report.id, null);
       const back = await report();
       expect(back.action).toBe("reopened");
       expect(back.task?.id).toBe(opened.task!.id);
     });
   });
 
-  test("a finding task the user closes as done counts as useful", async () => {
-    await withResidents(async (harness) => {
+  test("feedback on a task covers every key filed on it", async () => {
+    await withRoutineAgents(async (harness) => {
       const { context } = harness;
       const { report } = await reportSetup(harness);
-      const resident = context.residents.get("argus");
+      const opened = await report();
+      await report({
+        routine: "post-merge-watch",
+        key: "post-merge-watch:org/repo#57:deploy",
+        sameAs: "ci-health:org/repo:main:CI:test",
+        title: "deploy failed",
+      });
+      const marked = context.routineReports.feedbackForTask(
+        opened.task!.id,
+        "noise",
+        "not ours",
+      );
+      expect(marked.map((item) => item.verdict)).toEqual(["noise", "noise"]);
+      // One line in the brief, not one per key.
+      expect(
+        context.tasks
+          .get(opened.task!.id)
+          .description.match(/## Marked noise at/g),
+      ).toHaveLength(1);
+      expect((await report()).action).toBe("suppressed");
+      context.routineReports.feedbackForTask(opened.task!.id, null);
+      expect((await report()).action).toBe("reopened");
+      expect(() =>
+        context.routineReports.feedbackForTask("no-such-task", "useful"),
+      ).toThrow("No routine report");
+    });
+  });
+
+  test("a task the user closes as done counts as useful", async () => {
+    await withRoutineAgents(async (harness) => {
+      const { context } = harness;
+      const { report } = await reportSetup(harness);
+      const agent = context.routineAgents.get("argus");
       const opened = await report();
       context.tasks.setStatus(opened.task!.id, "done");
-      context.findings.sweep(resident);
+      context.routineReports.sweep(agent);
       expect(
-        context.repositories.residents.findFinding(opened.finding.id),
+        context.repositories.routineAgents.findRoutineReport(opened.report.id),
       ).toMatchObject({
         state: "closed",
         verdict: "useful",
@@ -836,8 +900,8 @@ describe("findings", () => {
     });
   });
 
-  test("an urgent finding gets through Focus mode and a warning does not", async () => {
-    await withResidents(async (harness) => {
+  test("an urgent report gets through Focus mode and others do not", async () => {
+    await withRoutineAgents(async (harness) => {
       const { context } = harness;
       const { report } = await reportSetup(harness);
       await context.presence.setFocusMode(true);
@@ -845,7 +909,7 @@ describe("findings", () => {
       expect(warning.notified).toBe("focus mode is on");
       const urgent = await report({
         key: "ci-health:org/repo:main:CI:deploy",
-        severity: "urgent",
+        urgent: true,
       });
       expect(urgent.notified).not.toBe("focus mode is on");
       expect(urgent.task?.priority).toBe("high");
@@ -853,12 +917,12 @@ describe("findings", () => {
   });
 
   test("a notify routine notifies and opens no task", async () => {
-    await withResidents(async (harness) => {
+    await withRoutineAgents(async (harness) => {
       const { context } = harness;
       const { workspace, report } = await reportSetup(harness);
       const result = await report({
         routine: "slack",
-        findings: "notify",
+        output: "notify",
         key: "slack:dm:123",
         title: "Dana asked about the deploy",
       });
@@ -871,67 +935,79 @@ describe("findings", () => {
         (
           await report({
             routine: "slack",
-            findings: "notify",
+            output: "notify",
             key: "slack:dm:123",
           })
         ).action,
       ).toBe("updated");
-      await expect(report({ findings: "none" })).rejects.toThrow(
-        "cannot report",
-      );
+      await expect(report({ output: "none" })).rejects.toThrow("cannot report");
     });
   });
 });
 
-describe("resident overview", () => {
-  test("the lantern shows the most pressing state, and memory lists files", async () => {
-    await withResidents(async (harness) => {
+describe("routine agent overview", () => {
+  test("counts what is open and in flight, and memory lists its files", async () => {
+    await withRoutineAgents(async (harness) => {
       const { context } = harness;
-      const resident = await argus(harness);
-      await context.routines.add(resident, { text: routineFile("ci-health") });
-      const quiet = (await context.residents.overviews())[0]!;
-      expect(quiet).toMatchObject({ lamp: "quiet", openFindings: 0 });
-      await context.residents.tick(idle(harness));
-      expect((await context.residents.overviews())[0]!.lamp).toBe("running");
-      const [run] = context.routines.deliveredRuns(resident);
-      const workspace = await context.workspaces.get("argus");
-      await context.findings.report({
-        resident: context.residents.get("argus"),
+      const agent = await argus(harness);
+      await context.routines.add(agent, { text: routineFile("ci-health") });
+      const quiet = (await context.routineAgents.overviews())[0]!;
+      expect(quiet).toMatchObject({
+        openReports: 0,
+        routines: 1,
+        runsInFlight: 0,
+        workspaceSlug: "ops",
+      });
+      await context.routineAgents.tick(idle(harness));
+      expect((await context.routineAgents.overviews())[0]!.runsInFlight).toBe(
+        1,
+      );
+      const [run] = context.routines.deliveredRuns(agent);
+      const workspace = await context.workspaces.get("ops");
+      await context.routineReports.report({
+        agent: context.routineAgents.get("argus"),
         workspace,
         routine: "ci-health",
-        findings: "task",
+        output: "task",
         runId: run!.id,
         key: "ci-health:a",
-        severity: "urgent",
+        urgent: true,
         title: "down",
         body: "",
       });
-      expect((await context.residents.overviews())[0]).toMatchObject({
-        lamp: "urgent",
-        openFindings: 1,
-        openFindingTasks: 1,
+      expect((await context.routineAgents.overviews())[0]).toMatchObject({
+        openReports: 1,
+        openUrgentReports: 1,
+        openReportTasks: 1,
       });
+      const folder = await context.routineAgents.folder(agent);
       const memoryDirectory = join(
         harness.home,
         "claude",
         "projects",
-        workspace.path.replace(/[^a-zA-Z0-9]/g, "-"),
+        folder.replace(/[^a-zA-Z0-9]/g, "-"),
         "memory",
       );
       await Bun.write(join(memoryDirectory, "cx.md"), "archive tier");
       await Bun.write(join(memoryDirectory, "MEMORY.md"), "- [cx](cx.md)");
-      const files = await context.residents.memory(
+      const files = await context.routineAgents.memory(
         "argus",
         context.config.claudeProjectsDirectory,
       );
       expect(files.map((file) => `${file.source}:${file.name}`)).toEqual([
-        "workspace:SERVICES.md",
-        "workspace:TOOLS.md",
-        "workspace:CHARTER.md",
+        "folder:AGENT.md",
         "memory:MEMORY.md",
         "memory:cx.md",
       ]);
     });
+  });
+});
+
+describe("routineAgentSlug", () => {
+  test("names the folder from the agent's name", () => {
+    expect(routineAgentSlug("Argus")).toBe("argus");
+    expect(routineAgentSlug("  Herald of Builds! ")).toBe("herald-of-builds");
+    expect(() => routineAgentSlug("!!!")).toThrow("letter or digit");
   });
 });
 
@@ -952,7 +1028,7 @@ describe("composerText", () => {
 });
 
 describe("claudeReady", () => {
-  test("recognises the default mode footer a resident starts with", () => {
+  test("recognises the default mode footer a routine agent starts with", () => {
     expect(claudeReady("❯ \n  ⏸ manual mode on · ← for agents")).toBe(true);
     expect(claudeReady("auto mode on (shift+tab to cycle)")).toBe(true);
     expect(claudeReady("Do you trust the files in this folder?")).toBe(false);
@@ -974,92 +1050,105 @@ describe("appendToBrief", () => {
 
 describe("routine files through the service", () => {
   test("templates copy with vars and delete themselves after until", async () => {
-    await withResidents(async (harness) => {
+    await withRoutineAgents(async (harness) => {
       const { context } = harness;
-      const resident = await argus(harness);
-      const workspace = await context.workspaces.get("argus");
+      const agent = await argus(harness);
+      const workspace = await context.workspaces.get("ops");
       await writeFile(
-        join(workspace.path, "routines", "templates", "post-merge-watch.md"),
+        join(
+          await context.routineAgents.folder(agent),
+          "routines",
+          "templates",
+          "post-merge-watch.md",
+        ),
         routineFile("post-merge-watch", "vars:\n  pr: none\n").replace(
           "Check post-merge-watch",
           "Watch {{pr}}",
         ),
       );
-      const routine = await context.routines.add(resident, {
+      const routine = await context.routines.add(agent, {
         template: "post-merge-watch",
         name: "watch-pr-57",
         vars: { pr: "org/repo#57" },
         until: "+60m",
       });
       expect(routine.vars.pr).toBe("org/repo#57");
-      await context.residents.tick(idle(harness));
-      const [run] = context.routines.inFlightRuns(resident);
-      expect(
-        (await context.routines.start(resident, run!.id)).prompt,
-      ).toContain("Watch org/repo#57");
-      await context.routines.done(resident, run!.id, "quiet", "clean");
+      await context.routineAgents.tick(idle(harness));
+      const [run] = context.routines.inFlightRuns(agent);
+      expect((await context.routines.start(agent, run!.id)).prompt).toContain(
+        "Watch org/repo#57",
+      );
+      await context.routines.done(agent, run!.id, "quiet", "clean");
       harness.advance(61 * 60_000);
-      await context.residents.tick(
+      await context.routineAgents.tick(
         idle(harness, { activity: () => undefined }),
       );
-      expect((await context.routines.list(resident)).routines).toEqual([]);
+      expect((await context.routines.list(agent)).routines).toEqual([]);
       expect(
         await Bun.file(
-          join(workspace.path, "routines", "watch-pr-57.md"),
+          join(
+            await context.routineAgents.folder(agent),
+            "routines",
+            "watch-pr-57.md",
+          ),
         ).exists(),
       ).toBe(false);
     });
   });
 
   test("a bad file is listed with its error and never runs", async () => {
-    await withResidents(async (harness) => {
+    await withRoutineAgents(async (harness) => {
       const { context } = harness;
-      const resident = await argus(harness);
-      const workspace = await context.workspaces.get("argus");
+      const agent = await argus(harness);
+      const workspace = await context.workspaces.get("ops");
       await writeFile(
-        join(workspace.path, "routines", "broken.md"),
+        join(
+          await context.routineAgents.folder(agent),
+          "routines",
+          "broken.md",
+        ),
         "---\nname: broken\nschedule: sometimes\n---\nbody\n",
       );
-      await context.residents.tick(idle(harness));
-      const { routines, errors } = await context.routines.list(resident);
+      await context.routineAgents.tick(idle(harness));
+      const { routines, errors } = await context.routines.list(agent);
       expect(routines).toEqual([]);
       expect(errors[0]).toMatchObject({ name: "broken" });
       expect(errors[0]!.error).toContain("is not one of");
-      expect(context.routines.runs(resident)).toEqual([]);
+      expect(context.routines.runs(agent)).toEqual([]);
       await expect(
-        context.routines.add(resident, { text: "---\nname: x\n---\nbody" }),
+        context.routines.add(agent, { text: "---\nname: x\n---\nbody" }),
       ).rejects.toThrow("'schedule' field is required");
     });
   });
 
   test("disabled routines do not run and enabling schedules them", async () => {
-    await withResidents(async (harness) => {
+    await withRoutineAgents(async (harness) => {
       const { context } = harness;
-      const resident = await argus(harness);
-      await context.routines.add(resident, {
+      const agent = await argus(harness);
+      await context.routines.add(agent, {
         text: routineFile("quiet", "enabled: false\n"),
       });
-      await context.residents.tick(idle(harness));
-      expect(context.routines.runs(resident)).toEqual([]);
-      await context.routines.setEnabled(resident, "quiet", true);
+      await context.routineAgents.tick(idle(harness));
+      expect(context.routines.runs(agent)).toEqual([]);
+      await context.routines.setEnabled(agent, "quiet", true);
       harness.advance(1_000);
-      await context.residents.tick(idle(harness));
-      expect(context.routines.runs(resident)).toHaveLength(1);
+      await context.routineAgents.tick(idle(harness));
+      expect(context.routines.runs(agent)).toHaveLength(1);
     });
   });
 
-  test("a paused resident queues nothing and fires once on resume", async () => {
-    await withResidents(async (harness) => {
+  test("a paused agent queues nothing and fires once on resume", async () => {
+    await withRoutineAgents(async (harness) => {
       const { context } = harness;
-      const resident = await argus(harness);
-      context.residents.pause("argus");
-      await context.routines.add(resident, { text: routineFile("ci-health") });
-      await context.residents.tick(idle(harness));
-      expect(context.routines.runs(resident)).toEqual([]);
-      await context.residents.resume("argus");
+      const agent = await argus(harness);
+      context.routineAgents.pause("argus");
+      await context.routines.add(agent, { text: routineFile("ci-health") });
+      await context.routineAgents.tick(idle(harness));
+      expect(context.routines.runs(agent)).toEqual([]);
+      await context.routineAgents.resume("argus");
       harness.advance(60 * 60_000);
-      await context.residents.tick(idle(harness));
-      expect(context.routines.runs(resident)).toHaveLength(1);
+      await context.routineAgents.tick(idle(harness));
+      expect(context.routines.runs(agent)).toHaveLength(1);
     });
   });
 });

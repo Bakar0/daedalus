@@ -323,8 +323,8 @@ const snapshot: DesktopSnapshotDto = {
   ],
   shipped: [],
   toasts: [],
-  residents: [],
-  findings: [],
+  routineAgents: [],
+  routineReports: [],
   settings: {
     version: "0.7.0",
     channel: "dev",

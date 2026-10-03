@@ -14,7 +14,7 @@ import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import {
   buildAgentPrompt,
-  residentPrompt,
+  routineAgentPrompt,
   buildHandoffRequest,
   catalogOffersModel,
   CLAUDE_DEFAULT_MODEL,
@@ -397,7 +397,7 @@ export async function hasPersistedCodexSession(input: {
 
 /**
  * Claude's footer once it is ready for input. The relaxed modes print
- * "shift+tab to cycle"; the default mode a resident starts in prints
+ * "shift+tab to cycle"; the default mode prints
  * "manual mode on" instead, and older versions "? for shortcuts".
  */
 export const claudeReady = (screen: string): boolean =>
@@ -430,13 +430,15 @@ export class AgentService {
   private async agentEnvironment(
     session: AgentSession,
     environment: Record<string, string> = {},
-    resident?: boolean,
+    routineAgent?: boolean,
   ): Promise<Record<string, string>> {
-    // Set on a resident's session, at spawn and on every relaunch, so its
-    // hooks can tell that sitting at the prompt is the resting state there.
-    const isResident =
-      resident ??
-      Boolean(this.repositories.residents.findResidentBySession(session.id));
+    // Set on a routine agent's session, at spawn and on every relaunch, so
+    // its hooks can tell that sitting at the prompt is the resting state.
+    const isRoutineAgent =
+      routineAgent ??
+      Boolean(
+        this.repositories.routineAgents.findRoutineAgentBySession(session.id),
+      );
     const task = session.taskId
       ? this.repositories.findTask(session.taskId)
       : undefined;
@@ -461,7 +463,7 @@ export class AgentService {
       DAEDALUS_HOME: this.config.home,
       DAEDALUS_SESSION_ID: session.id,
       DAEDALUS_WORKSPACE_ID: session.workspaceId,
-      ...(isResident ? { DAEDALUS_RESIDENT: "1" } : {}),
+      ...(isRoutineAgent ? { DAEDALUS_ROUTINE_AGENT: "1" } : {}),
       ...(task
         ? {
             DAEDALUS_TASK_ID: task.id,
@@ -738,11 +740,11 @@ export class AgentService {
     continueFrom?: AgentSession;
     handoff?: boolean;
     /**
-     * A resident's session: it runs at the workspace root, where its memory
-     * lives. It gets the same relaxed permission mode as every session; its
-     * deny list in the workspace settings is what keeps it read-only.
+     * A routine agent's folder. Its session always runs there, where its
+     * memory lives. It gets the same relaxed permission mode as every
+     * session; the deny list in the folder's settings keeps it read-only.
      */
-    resident?: boolean;
+    routineAgentFolder?: string;
   }): Promise<AgentSession> {
     const workspace = await this.workspaces.getActive(input.workspace);
     const task = input.taskId ? this.tasks.get(input.taskId) : undefined;
@@ -800,8 +802,7 @@ export class AgentService {
           sessionId: id,
           provider: provider?.name,
           workingDirectory:
-            input.continueFrom?.workingDirectory ??
-            (input.resident ? workspace.path : undefined),
+            input.continueFrom?.workingDirectory ?? input.routineAgentFolder,
         })
       : { workingDirectory: workspace.path, worktrees: [], references: [] };
     if (input.draftBrief && !task)
@@ -872,7 +873,11 @@ export class AgentService {
         args: launch.args,
         env: input.terminal
           ? launch.env
-          : await this.agentEnvironment(session, launch.env, input.resident),
+          : await this.agentEnvironment(
+              session,
+              launch.env,
+              Boolean(input.routineAgentFolder),
+            ),
       });
       if (!input.terminal)
         await this.confirmOwnedWorkspaceTrust(
@@ -997,8 +1002,8 @@ export class AgentService {
         agent.archivedAt ||
         agent.handoffRequestedAt ||
         (agent.provider !== "claude" && agent.provider !== "codex") ||
-        // A resident drains its routines first; its own scheduler decides.
-        this.repositories.residents.findResidentBySession(agent.id)
+        // A routine agent drains its runs first; its own scheduler decides.
+        this.repositories.routineAgents.findRoutineAgentBySession(agent.id)
       )
         continue;
       try {
@@ -1058,14 +1063,15 @@ export class AgentService {
         `${handoff}\n`,
         "utf8",
       );
-    const resident = this.repositories.residents.findResidentBySession(
-      predecessor.id,
-    );
+    const routineAgent =
+      this.repositories.routineAgents.findRoutineAgentBySession(predecessor.id);
     const session = await this.spawn({
       workspace: predecessor.workspaceId,
       taskId: predecessor.taskId ?? undefined,
-      // A resident keeps its own name; its sessions are one agent over time.
-      name: resident ? resident.name : handoffSessionName(predecessor.name),
+      // A routine agent keeps its name; its sessions are one agent over time.
+      name: routineAgent
+        ? routineAgent.name
+        : handoffSessionName(predecessor.name),
       provider,
       // A different provider would not understand the old one's model name.
       model:
@@ -1073,18 +1079,21 @@ export class AgentService {
         (provider === predecessor.provider
           ? sessionLaunchModel(predecessor.args)
           : undefined),
-      message: resident
-        ? [residentPrompt(resident.name), input.message?.trim()]
+      message: routineAgent
+        ? [routineAgentPrompt(routineAgent.name), input.message?.trim()]
             .filter(Boolean)
             .join("\n\n")
         : input.message,
       continueFrom: predecessor,
       handoff: Boolean(handoff),
-      resident: Boolean(resident),
+      ...(routineAgent
+        ? { routineAgentFolder: predecessor.workingDirectory }
+        : {}),
     });
-    // The duty moves with the work, so the scheduler follows the successor.
-    if (resident)
-      this.repositories.residents.transferResidentSession(
+    // The agent moves with the work, so the scheduler follows the successor,
+    // and archiving the predecessor below does not pause it.
+    if (routineAgent)
+      this.repositories.routineAgents.transferRoutineAgentSession(
         predecessor.id,
         session.id,
       );
@@ -1273,20 +1282,7 @@ export class AgentService {
     return agent;
   }
 
-  async archive(
-    id: string,
-    force = false,
-    options: { resident?: boolean } = {},
-  ): Promise<AgentSession> {
-    // A resident's session on duty is never archived on its own, or nobody
-    // would be on duty. Its successor replaces it (`agent continue`), or the
-    // resident is stopped, which archives it on purpose.
-    const resident = this.repositories.residents.findResidentBySession(id);
-    if (resident && !options.resident)
-      throw new DaedalusError(
-        "CONFLICT",
-        `${resident.name} is a resident on duty; continue it in a new session, or stop it with 'daedal resident stop ${resident.slug}'`,
-      );
+  async archive(id: string, force = false): Promise<AgentSession> {
     let agent = await this.get(id);
     if (agent.archivedAt) return agent;
     // Archivability is settled before anything is stopped, so a session that
@@ -1323,7 +1319,16 @@ export class AgentService {
         );
     }
     const archived = { ...agent, archivedAt: new Date().toISOString() };
-    this.repositories.updateAgent(archived);
+    this.repositories.transaction(() => {
+      this.repositories.updateAgent(archived);
+      // Archiving a routine agent's session pauses the agent; its routines,
+      // memory and tasks stay, and restoring the session resumes it.
+      this.repositories.routineAgents.pauseRoutineAgentBySession(
+        id,
+        archived.archivedAt,
+        "Skipped: the session was archived",
+      );
+    });
     // Working trees used to outlive every session that ever held one, which is
     // what made a repository permanently undetachable. Only trees that
     // provably hold nothing are cleared; anything with uncommitted or unpushed
@@ -1337,7 +1342,9 @@ export class AgentService {
     const agent = await this.get(id);
     if (!agent.archivedAt)
       throw new DaedalusError("CONFLICT", "Session is not archived");
-    return this.relaunch({ ...agent, resumeOnStart: false });
+    const restored = await this.relaunch({ ...agent, resumeOnStart: false });
+    this.repositories.routineAgents.resumeRoutineAgentBySession(id);
+    return restored;
   }
 
   /**
