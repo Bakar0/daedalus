@@ -530,6 +530,12 @@ export interface RoutineAgentOverviewDto {
   /** Why queued runs are waiting, when they are. */
   deliveryHold: string | null;
   autoHandoffPercent: number;
+  /** Who owns the input: the user, or Daedalus with the input locked. */
+  mode: "manual" | "auto";
+  /** When a manual agent returns to auto; null when it will not. */
+  autoAt: string | null;
+  /** Unsent text that unlocking types back. */
+  hasStashedDraft: boolean;
 }
 
 export interface RoutineReportDto {
@@ -652,8 +658,11 @@ export interface DesktopRpcSchema {
         RoutineAgentMemoryFileDto[]
       >;
       routineAgentControl: Request<
-        { agent: string; action: "pause" | "resume" },
-        { state: RoutineAgentOverviewDto["state"] }
+        { agent: string; action: "pause" | "resume" | "unlock" | "auto" },
+        {
+          state: RoutineAgentOverviewDto["state"];
+          mode: RoutineAgentOverviewDto["mode"];
+        }
       >;
       routineSetEnabled: Request<
         { agent: string; name: string; enabled: boolean },

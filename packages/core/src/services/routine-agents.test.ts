@@ -6,6 +6,7 @@ import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
   appendToBrief,
   claudeReady,
+  composerDraft,
   composerText,
   createApplicationContext,
   routineAgentAtPrompt,
@@ -40,7 +41,16 @@ class FakeTmux implements TmuxClient {
   async capture() {
     return this.screen;
   }
-  async sendKeys() {}
+  readonly keys: string[][] = [];
+  async sendKeys(_session: string, keys: string[]) {
+    this.keys.push(keys);
+    // Ctrl-C on a draft empties Claude's input box.
+    if (keys[0] === "C-c")
+      this.screen = this.screen.replace(
+        /^(\s*❯)[^\n]*((?:\n(?!\s*─)[^\n]*)*)/m,
+        "$1 ",
+      );
+  }
   async send(session: string, text: string) {
     this.sent.push({ session, text });
   }
@@ -142,7 +152,6 @@ function idle(
 ): RoutineAgentTickInput {
   return {
     contextPercent: () => 10,
-    lastInputAt: () => undefined,
     activity: (sessionId): AgentActivityState => ({
       sessionId,
       activity: "idle",
@@ -245,6 +254,7 @@ describe("routine agents", () => {
       const { context, tmux } = harness;
       const agent = await argus(harness);
       await context.routines.add(agent, { text: routineFile("ci-health") });
+      await context.routineAgents.autoNow(agent.id);
       // Working on something of its own: queued, not typed.
       await context.routineAgents.tick(
         idle(harness, {
@@ -261,14 +271,6 @@ describe("routine agents", () => {
       expect(routineLines(tmux)).toEqual([]);
       const [queued] = context.routines.inFlightRuns(agent);
       expect(queued).toMatchObject({ routine: "ci-health", status: "queued" });
-      // The user typed 30 s ago: still held.
-      harness.advance(1_000);
-      await context.routineAgents.tick(
-        idle(harness, {
-          lastInputAt: () => harness.clock.now.getTime() - 30_000,
-        }),
-      );
-      expect(routineLines(tmux)).toEqual([]);
       // A real question on screen is never typed over.
       await context.routineAgents.tick(
         idle(harness, {
@@ -296,40 +298,160 @@ describe("routine agents", () => {
     });
   });
 
-  test("holds delivery while text waits in the input box", async () => {
+  test("locks after five quiet minutes once idle, and saves the draft", async () => {
+    await withRoutineAgents(async (harness) => {
+      const { context, tmux } = harness;
+      const agent = await argus(harness);
+      const busy = idle(harness, {
+        activity: (sessionId) => ({
+          sessionId,
+          activity: "working",
+          detail: "Bash(ls)",
+          since: harness.clock.now.toISOString(),
+          observedAt: harness.clock.now.toISOString(),
+          source: "hook",
+        }),
+      });
+      // No routines: manual for good, no countdown.
+      await context.routineAgents.tick(idle(harness));
+      expect((await context.routineAgents.overviews())[0]).toMatchObject({
+        mode: "manual",
+        autoAt: null,
+      });
+      await expect(context.routineAgents.autoNow("argus")).rejects.toThrow(
+        "no enabled routines",
+      );
+      // The user talks it into a routine: the countdown runs from the last
+      // keystroke, and each keystroke restarts it.
+      await context.routines.add(agent, { text: routineFile("ci-health") });
+      context.routineAgents.noteInput(agent.sessionId!);
+      const typedAt = harness.clock.now.getTime();
+      await context.routineAgents.tick(idle(harness));
+      expect(routineLines(tmux)).toEqual([]);
+      const manual = (await context.routineAgents.overviews())[0]!;
+      expect(manual.mode).toBe("manual");
+      expect(Date.parse(manual.autoAt!)).toBe(typedAt + 5 * 60_000);
+      expect(manual.deliveryHold).toContain("manual mode until");
+      harness.advance(4 * 60_000);
+      context.routineAgents.noteInput(agent.sessionId!);
+      harness.advance(4 * 60_000);
+      await context.routineAgents.tick(idle(harness));
+      expect(context.routineAgents.get("argus").mode).toBe("manual");
+      // Five quiet minutes, but it is still answering: no cut-off.
+      harness.advance(2 * 60_000);
+      tmux.screen = [
+        "⏺ Added ci-health.",
+        "────────────────────────────────",
+        "❯ also watch the deploy",
+        "  every morning",
+        "────────────────────────────────",
+        "  ⏵⏵ auto mode on (shift+tab to cycle)",
+      ].join("\n");
+      await context.routineAgents.tick(busy);
+      expect(context.routineAgents.get("argus").mode).toBe("manual");
+      // Idle: it locks, saves and clears the draft, and runs the routine.
+      await context.routineAgents.tick(idle(harness));
+      const locked = context.routineAgents.get("argus");
+      expect(locked).toMatchObject({
+        mode: "auto",
+        stashedDraft: "also watch the deploy\nevery morning",
+      });
+      expect(tmux.keys).toContainEqual(["C-c"]);
+      expect(routineLines(tmux)).toHaveLength(1);
+      expect(context.routineAgents.inputLocked(agent.sessionId!)).toBe(true);
+      // Keystrokes while locked are not the user's and move nothing.
+      context.routineAgents.noteInput(agent.sessionId!);
+      expect(context.routineAgents.get("argus").lastInputAt).toBe(
+        locked.lastInputAt,
+      );
+      await expect(context.agents.send(agent.sessionId!, "hi")).rejects.toThrow(
+        "input is locked",
+      );
+      // Unlock: manual, the draft typed back, the countdown from now.
+      const unlocked = await context.routineAgents.unlock("argus");
+      expect(unlocked).toMatchObject({
+        mode: "manual",
+        stashedDraft: null,
+        lastInputAt: harness.clock.now.toISOString(),
+      });
+      expect(tmux.keys).toContainEqual(["-l", "--", "also watch the deploy\\"]);
+      expect(tmux.keys).toContainEqual(["-l", "--", "every morning"]);
+      await context.agents.send(agent.sessionId!, "and the alerts");
+      // Runs due in manual mode wait, one per routine, for auto.
+      const [run] = context.routines.deliveredRuns(agent);
+      await context.routines.start(agent, run!.id);
+      await context.routines.done(agent, run!.id, "quiet", "ok");
+      harness.advance(11 * 60_000);
+      context.routineAgents.noteInput(agent.sessionId!);
+      for (let index = 0; index < 3; index += 1) {
+        await context.routineAgents.tick(idle(harness));
+        harness.advance(60_000);
+      }
+      expect(routineLines(tmux)).toHaveLength(1);
+      expect(
+        context.routines
+          .inFlightRuns(agent)
+          .filter((item) => !item.deliveredAt),
+      ).toHaveLength(1);
+      // Auto now: back as soon as it is idle, and the waiting run goes out.
+      await context.routineAgents.autoNow("argus");
+      await context.routineAgents.tick(idle(harness));
+      expect(context.routineAgents.get("argus").mode).toBe("auto");
+      expect(routineLines(tmux)).toHaveLength(2);
+    });
+  });
+
+  test("a keystroke that races the lock keeps the agent in manual mode", async () => {
+    await withRoutineAgents(async (harness) => {
+      const { context } = harness;
+      const agent = await argus(harness);
+      await context.routines.add(agent, { text: routineFile("ci-health") });
+      const store = context.repositories.routineAgents;
+      store.noteRoutineAgentInput(agent.id, harness.clock.now.toISOString());
+      const quietSince = new Date(
+        harness.clock.now.getTime() - 60_000,
+      ).toISOString();
+      expect(store.lockRoutineAgent(agent.id, quietSince)).toBe(false);
+      expect(context.routineAgents.get("argus").mode).toBe("manual");
+    });
+  });
+
+  test("handoff waits for auto mode, and pausing hands the input back", async () => {
     await withRoutineAgents(async (harness) => {
       const { context, tmux } = harness;
       const agent = await argus(harness);
       await context.routines.add(agent, { text: routineFile("ci-health") });
-      tmux.screen = [
-        "⏺ ci-health run 2 found nothing to report.",
-        "──────────────────────────────── Argus ─",
-        "❯ run slack-needs-me now",
-        "────────────────────────────────",
-        "  ⏵⏵ auto mode on (shift+tab to cycle)",
-      ].join("\n");
-      await context.routineAgents.tick(idle(harness));
-      expect(routineLines(tmux)).toEqual([]);
-      // Said out loud, not a silent queue.
-      expect(
-        (await context.routineAgents.overviews())[0]!.deliveryHold,
-      ).toContain(
-        'unsent text in Argus\'s input box: "run slack-needs-me now"',
+      context.routineAgents.noteInput(agent.sessionId!);
+      const full = idle(harness, { contextPercent: () => 90 });
+      await context.routineAgents.tick(full);
+      expect(context.routineAgents.get("argus").state).toBe("on_duty");
+      await context.routineAgents.autoNow("argus");
+      await context.routineAgents.tick(full);
+      expect(context.routineAgents.get("argus")).toMatchObject({
+        mode: "auto",
+        state: "draining",
+      });
+      // Pausing: manual, nothing locked, and a saved draft typed back.
+      context.repositories.routineAgents.stashRoutineAgentDraft(
+        agent.id,
+        "half a thought",
       );
-      // Run now asks for what is already waiting: no error, the same run.
-      const queued = context.routines.inFlightRuns(agent)[0]!;
-      const again = await context.routines.runNow(agent, "ci-health");
-      expect(again).toMatchObject({ id: queued.id, alreadyQueued: true });
-      tmux.screen = tmux.screen.replace("❯ run slack-needs-me now", "❯ ");
-      harness.advance(1_000);
+      const paused = await context.routineAgents.pause("argus");
+      expect(paused).toMatchObject({
+        state: "paused",
+        mode: "manual",
+        stashedDraft: null,
+      });
+      expect(tmux.keys).toContainEqual(["-l", "--", "half a thought"]);
+      expect(context.routineAgents.inputLocked(agent.sessionId!)).toBe(false);
+      // Removing the last routine also hands the input back.
+      await context.routineAgents.resume("argus");
+      await context.routineAgents.autoNow("argus");
       await context.routineAgents.tick(idle(harness));
-      expect(routineLines(tmux)).toHaveLength(1);
-      expect(
-        (await context.routineAgents.overviews())[0]!.deliveryHold,
-      ).toBeNull();
-      await expect(context.routines.runNow(agent, "ci-health")).rejects.toThrow(
-        "is running now",
-      );
+      expect(context.routineAgents.get("argus").mode).toBe("auto");
+      await context.routines.remove(agent, "ci-health");
+      await context.routineAgents.tick(idle(harness));
+      expect(context.routineAgents.get("argus").mode).toBe("manual");
     });
   });
 
@@ -338,6 +460,7 @@ describe("routine agents", () => {
       const { context, tmux } = harness;
       const agent = await argus(harness);
       await context.routines.add(agent, { text: routineFile("ci-health") });
+      await context.routineAgents.autoNow(agent.id);
       const unknown = idle(harness, {
         activity: (sessionId) => ({
           sessionId,
@@ -352,9 +475,11 @@ describe("routine agents", () => {
         "✻ Churning… (12s · esc to interrupt)\n────────────\n❯ \n────";
       await context.routineAgents.tick(unknown);
       expect(routineLines(tmux)).toEqual([]);
-      expect((await context.routineAgents.overviews())[0]!.deliveryHold).toBe(
-        "Argus is busy",
-      );
+      // Still manual: it locks only once the agent is idle.
+      expect((await context.routineAgents.overviews())[0]).toMatchObject({
+        mode: "manual",
+        deliveryHold: "back to auto once Argus is idle",
+      });
       tmux.screen = "⏺ done\n────────────\n❯ \n────";
       await context.routineAgents.tick(unknown);
       expect(routineLines(tmux)).toHaveLength(1);
@@ -367,6 +492,7 @@ describe("routine agents", () => {
       const agent = await argus(harness);
       expect(tmux.launches[0]!.env?.DAEDALUS_ROUTINE_AGENT).toBe("1");
       await context.routines.add(agent, { text: routineFile("ci-health") });
+      await context.routineAgents.autoNow(agent.id);
       await context.routineAgents.tick(
         idle(harness, {
           activity: (sessionId) => ({
@@ -389,6 +515,7 @@ describe("routine agents", () => {
       const agent = await argus(harness);
       for (const name of ["one", "two", "three", "four"])
         await context.routines.add(agent, { text: routineFile(name) });
+      await context.routineAgents.autoNow(agent.id);
       // A Claude session with background agents running still takes lines.
       const waiting = idle(harness, {
         activity: (sessionId) => ({
@@ -464,6 +591,7 @@ describe("routine agents", () => {
       await context.routines.add(agent, {
         text: routineFile("flaky", "", "every 15m"),
       });
+      await context.routineAgents.autoNow(agent.id);
       for (let round = 0; round < 3; round += 1) {
         await context.routineAgents.tick(idle(harness));
         harness.advance(11 * 60_000);
@@ -495,7 +623,9 @@ describe("routine agents", () => {
       const { context, tmux } = harness;
       const agent = await argus(harness);
       await context.routines.add(agent, { text: routineFile("ci-health") });
+      await context.routineAgents.autoNow(agent.id);
       await context.routines.add(agent, { text: routineFile("merges") });
+      await context.routineAgents.autoNow(agent.id);
       await context.routineAgents.tick(idle(harness));
       harness.advance(16_000);
       expect(context.routines.deliveredRuns(agent)).toHaveLength(1);
@@ -546,6 +676,7 @@ describe("routine agents", () => {
       const { context, tmux } = harness;
       const agent = await argus(harness);
       await context.routines.add(agent, { text: routineFile("ci-health") });
+      await context.routineAgents.autoNow(agent.id);
       await context.routines.runNow(agent, "merges").catch(() => undefined);
       await context.routines.runNow(agent, "ci-health");
       await context.agents.archive(agent.sessionId!, true);
@@ -951,6 +1082,7 @@ describe("routine agent overview", () => {
       const { context } = harness;
       const agent = await argus(harness);
       await context.routines.add(agent, { text: routineFile("ci-health") });
+      await context.routineAgents.autoNow(agent.id);
       const quiet = (await context.routineAgents.overviews())[0]!;
       expect(quiet).toMatchObject({
         openReports: 0,
@@ -1008,6 +1140,22 @@ describe("routineAgentSlug", () => {
     expect(routineAgentSlug("Argus")).toBe("argus");
     expect(routineAgentSlug("  Herald of Builds! ")).toBe("herald-of-builds");
     expect(() => routineAgentSlug("!!!")).toThrow("letter or digit");
+  });
+});
+
+describe("composerDraft", () => {
+  test("reads every line of the input box", () => {
+    const screen = [
+      "⏺ done",
+      "────────────────────────────────",
+      "❯ first line",
+      "  second line",
+      "────────────────────────────────",
+      "  ? for shortcuts",
+    ].join("\n");
+    expect(composerDraft(screen)).toBe("first line\nsecond line");
+    expect(composerDraft("────────────────\n❯ \n────────────────")).toBe("");
+    expect(composerDraft("no box here")).toBeUndefined();
   });
 });
 
@@ -1141,8 +1289,11 @@ describe("routine files through the service", () => {
     await withRoutineAgents(async (harness) => {
       const { context } = harness;
       const agent = await argus(harness);
-      context.routineAgents.pause("argus");
+      await context.routineAgents.pause("argus");
       await context.routines.add(agent, { text: routineFile("ci-health") });
+      await expect(context.routineAgents.autoNow(agent.id)).rejects.toThrow(
+        "is paused",
+      );
       await context.routineAgents.tick(idle(harness));
       expect(context.routines.runs(agent)).toEqual([]);
       await context.routineAgents.resume("argus");

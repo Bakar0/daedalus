@@ -400,6 +400,9 @@ export async function hasPersistedCodexSession(input: {
  * "shift+tab to cycle"; the default mode prints
  * "manual mode on" instead, and older versions "? for shortcuts".
  */
+/** Between a draft line's backslash and the Enter that makes it a newline. */
+const DRAFT_NEWLINE_DELAY_MS = 60;
+
 export const claudeReady = (screen: string): boolean =>
   screen.includes("shift+tab to cycle") ||
   screen.includes("manual mode on") ||
@@ -951,7 +954,9 @@ export class AgentService {
         "CONFLICT",
         `The ${HANDOFF_SKILL} skill is not installed for ${agent.provider}. Turn it on in Settings, Skills, or with 'daedal skill enable ${HANDOFF_SKILL}'.`,
       );
-    await this.send(agent.id, buildHandoffRequest(agent.provider, skillName));
+    await this.send(agent.id, buildHandoffRequest(agent.provider, skillName), {
+      fromDaedalus: true,
+    });
     // In Codex, `$name` opens the skill mention popup, and the first Enter
     // only picks the skill from it. The second one submits. On an empty
     // composer an Enter does nothing, so this is safe if the popup changes.
@@ -1240,15 +1245,61 @@ export class AgentService {
     return this.tmux.capture(agent.tmuxSession);
   }
 
-  async send(id: string, text: string): Promise<AgentSession> {
+  /**
+   * Types a line and submits it. A routine agent in auto mode has its input
+   * locked: only Daedalus's own lines (`fromDaedalus`) reach it.
+   */
+  async send(
+    id: string,
+    text: string,
+    options: { fromDaedalus?: boolean } = {},
+  ): Promise<AgentSession> {
     if (!text)
       throw new DaedalusError(
         "VALIDATION",
         "Agent input text must not be empty",
       );
+    if (!options.fromDaedalus) this.refuseLockedInput(id);
     const agent = await this.requireRunning(id);
     await this.tmux.send(agent.tmuxSession, text);
     return agent;
+  }
+
+  private refuseLockedInput(id: string): void {
+    const routineAgent =
+      this.repositories.routineAgents.findRoutineAgentBySession(id);
+    if (routineAgent?.mode === "auto")
+      throw new DaedalusError(
+        "CONFLICT",
+        `${routineAgent.name} is in auto mode and its input is locked; unlock it first with 'daedal routine-agent unlock ${routineAgent.slug}'`,
+      );
+  }
+
+  /** Clears Claude's input box: Ctrl-C on a draft empties it. */
+  async clearInput(id: string): Promise<void> {
+    const agent = await this.requireRunning(id);
+    await this.tmux.sendKeys(agent.tmuxSession, ["C-c"]);
+  }
+
+  /**
+   * Types text into the input box without submitting it. A line break is
+   * typed as Claude's `\` then Enter, which inserts a newline.
+   */
+  async typeDraft(id: string, text: string): Promise<void> {
+    const agent = await this.requireRunning(id);
+    const lines = text.split("\n");
+    for (const [index, line] of lines.entries()) {
+      const last = index === lines.length - 1;
+      const typed = last ? line : `${line}\\`;
+      if (typed)
+        await this.tmux.sendKeys(agent.tmuxSession, ["-l", "--", typed]);
+      if (!last) {
+        // Apart from the text, or Claude reads the pair as a pasted
+        // backslash and newline rather than its newline shortcut.
+        await Bun.sleep(DRAFT_NEWLINE_DELAY_MS);
+        await this.tmux.sendKeys(agent.tmuxSession, ["Enter"]);
+      }
+    }
   }
 
   async stop(id: string, force = false): Promise<AgentSession> {
@@ -1343,7 +1394,10 @@ export class AgentService {
     if (!agent.archivedAt)
       throw new DaedalusError("CONFLICT", "Session is not archived");
     const restored = await this.relaunch({ ...agent, resumeOnStart: false });
-    this.repositories.routineAgents.resumeRoutineAgentBySession(id);
+    this.repositories.routineAgents.resumeRoutineAgentBySession(
+      id,
+      new Date().toISOString(),
+    );
     return restored;
   }
 

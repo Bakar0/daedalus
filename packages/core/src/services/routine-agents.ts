@@ -24,8 +24,10 @@ import type { WorkspaceService } from "./workspaces";
 
 /** At most this many runs are typed and unfinished at once. */
 export const MAX_RUNS_IN_FLIGHT = 3;
-/** Delivery holds while the user has typed into the agent this recently. */
-export const USER_TYPING_HOLD_MS = 60_000;
+/** After this long without a keystroke, an agent with routines locks. */
+export const AUTO_AFTER_MS = 5 * 60_000;
+/** Keystrokes are written to SQLite at most this often per agent. */
+const INPUT_NOTE_INTERVAL_MS = 2_000;
 /** A drain waits this long for runs in flight before handing off anyway. */
 export const DRAIN_LIMIT_MS = 10 * 60_000;
 /** A handoff the agent never completed is finished by Daedalus after this. */
@@ -99,6 +101,28 @@ export function composerText(screen: string): string | undefined {
 }
 
 /**
+ * Everything in the input box: the prompt line and the lines under it, down
+ * to the composer's closing rule. `undefined` when no input box shows.
+ */
+export function composerDraft(screen: string): string | undefined {
+  const lines = screen.split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const match = /^\s*[❯>]\s?(.*)$/.exec(lines[index]!);
+    if (!match || !/^\s*─{8,}/.test(lines[index - 1] ?? "")) continue;
+    const draft = [match[1]!];
+    for (const line of lines.slice(index + 1)) {
+      if (/^\s*─{3,}/.test(line)) break;
+      draft.push(line.replace(/^ {2}/, ""));
+    }
+    return draft
+      .map((line) => line.replace(/\u00a0/g, " ").trimEnd())
+      .join("\n")
+      .trim();
+  }
+  return undefined;
+}
+
+/**
  * The pane's own answer to "is it at its prompt": an input box is showing
  * and no turn is running (Claude shows "esc to interrupt" while it works).
  */
@@ -159,6 +183,15 @@ export interface RoutineAgentOverview {
    * loud, because a queue that silently stops looks like a broken feature.
    */
   deliveryHold: string | null;
+  /** Who owns the input now. */
+  mode: RoutineAgent["mode"];
+  /**
+   * When a manual agent goes back to auto, once it is idle. Null in auto,
+   * and in manual with nothing to run (no enabled routines, or paused).
+   */
+  autoAt: string | null;
+  /** Unsent text waiting to be typed back on unlock. */
+  hasStashedDraft: boolean;
 }
 
 export interface RoutineAgentMemoryFile {
@@ -175,8 +208,6 @@ const MEMORY_FILE_LIMIT = 64 * 1024;
 export interface RoutineAgentTickInput {
   /** Context use per session, from telemetry. */
   contextPercent: (sessionId: string) => number | undefined;
-  /** When the user last typed into a session's terminal, in ms. */
-  lastInputAt: (sessionId: string) => number | undefined;
   activity: (sessionId: string) => AgentActivityState | undefined;
 }
 
@@ -193,6 +224,8 @@ export interface RoutineAgentTickResult {
  */
 export class RoutineAgentService {
   private readonly lastRevive = new Map<string, number>();
+  /** When each agent's last keystroke was written, to throttle the writes. */
+  private readonly inputNoted = new Map<string, number>();
   /** The last tick's reason for holding delivery, per agent. */
   private readonly holds = new Map<string, string | null>();
 
@@ -308,6 +341,17 @@ export class RoutineAgentService {
           inFlight.length - running > 0
             ? (this.holds.get(agent.id) ?? null)
             : null,
+        mode: agent.mode,
+        autoAt:
+          agent.mode === "manual" &&
+          agent.state !== "paused" &&
+          enabled.size > 0
+            ? new Date(
+                Date.parse(agent.lastInputAt ?? this.now().toISOString()) +
+                  AUTO_AFTER_MS,
+              ).toISOString()
+            : null,
+        hasStashedDraft: Boolean(agent.stashedDraft),
       });
     }
     return overviews;
@@ -397,6 +441,9 @@ export class RoutineAgentService {
       state: "on_duty",
       sessionId: null,
       drainingSince: null,
+      mode: "manual",
+      lastInputAt: null,
+      stashedDraft: null,
       createdAt: this.now().toISOString(),
     };
     const session = await this.spawnSession(draft);
@@ -481,16 +528,86 @@ export class RoutineAgentService {
     return launched;
   }
 
-  pause(reference: string): RoutineAgent {
+  /** Stops delivery. Nothing will run, so the input is the user's again. */
+  async pause(reference: string): Promise<RoutineAgent> {
     const agent = this.get(reference);
     this.routines.skipUndelivered(agent, "Skipped: the agent was paused");
-    const paused: RoutineAgent = {
+    this.repositories.routineAgents.updateRoutineAgent({
       ...agent,
       state: "paused",
       drainingSince: null,
-    };
-    this.repositories.routineAgents.updateRoutineAgent(paused);
-    return paused;
+    });
+    await this.handBack(agent, agent.lastInputAt);
+    return this.get(agent.id);
+  }
+
+  /**
+   * Hands the input to the user: manual mode, with the countdown back to
+   * auto starting now, and any draft Daedalus cleared typed back in.
+   */
+  async unlock(reference: string): Promise<RoutineAgent> {
+    const agent = this.get(reference);
+    await this.handBack(agent, this.now().toISOString());
+    return this.get(agent.id);
+  }
+
+  /** Back to auto as soon as the agent is idle, without the countdown. */
+  async autoNow(reference: string): Promise<RoutineAgent> {
+    const agent = this.get(reference);
+    if (agent.state === "paused")
+      throw new DaedalusError("CONFLICT", `${agent.name} is paused`);
+    const { routines } = await this.routines.read(agent);
+    if (!routines.some((routine) => routine.enabled))
+      throw new DaedalusError(
+        "CONFLICT",
+        `${agent.name} has no enabled routines, so there is nothing to run in auto mode`,
+      );
+    if (agent.mode === "manual")
+      this.repositories.routineAgents.noteRoutineAgentInput(
+        agent.id,
+        new Date(this.now().getTime() - AUTO_AFTER_MS).toISOString(),
+      );
+    return this.get(agent.id);
+  }
+
+  private async handBack(
+    agent: RoutineAgent,
+    at: string | null,
+  ): Promise<void> {
+    const session = this.liveSession(agent);
+    const live = session?.status === "running";
+    const draft = this.repositories.routineAgents.unlockRoutineAgent(
+      agent.id,
+      at,
+      { keepDraft: !live },
+    );
+    if (draft && session) await this.agents.typeDraft(session.id, draft);
+  }
+
+  /**
+   * The user typed into a session's terminal. For a routine agent in manual
+   * mode that restarts the countdown to auto.
+   */
+  noteInput(sessionId: string): void {
+    const agent =
+      this.repositories.routineAgents.findRoutineAgentBySession(sessionId);
+    if (!agent || agent.mode !== "manual") return;
+    const now = this.now().getTime();
+    if (now - (this.inputNoted.get(agent.id) ?? 0) < INPUT_NOTE_INTERVAL_MS)
+      return;
+    this.inputNoted.set(agent.id, now);
+    this.repositories.routineAgents.noteRoutineAgentInput(
+      agent.id,
+      new Date(now).toISOString(),
+    );
+  }
+
+  /** Whether a session's input is locked: a routine agent in auto mode. */
+  inputLocked(sessionId: string): boolean {
+    return (
+      this.repositories.routineAgents.findRoutineAgentBySession(sessionId)
+        ?.mode === "auto"
+    );
   }
 
   /**
@@ -506,9 +623,16 @@ export class RoutineAgentService {
       await this.agents.restore(session.id);
       return this.get(agent.id);
     }
-    const onDuty: RoutineAgent = { ...agent, state: "on_duty" };
-    this.repositories.routineAgents.updateRoutineAgent(onDuty);
-    return onDuty;
+    this.repositories.routineAgents.updateRoutineAgent({
+      ...agent,
+      state: "on_duty",
+    });
+    // Resuming is the user acting on it; the countdown starts now.
+    this.repositories.routineAgents.noteRoutineAgentInput(
+      agent.id,
+      this.now().toISOString(),
+    );
+    return this.get(agent.id);
   }
 
   /**
@@ -618,6 +742,16 @@ export class RoutineAgentService {
       return;
     }
     if (session.status !== "running") return;
+    const { routines } = await this.routines.read(agent);
+    agent = await this.settleMode(
+      agent,
+      session.id,
+      routines.some((routine) => routine.enabled),
+      input,
+      result,
+    );
+    // Manual: the user owns the input. Runs wait, and so does a handoff.
+    if (agent.mode === "manual") return;
     const delivered = this.routines.deliveredRuns(agent);
 
     if (agent.state === "on_duty") {
@@ -661,9 +795,6 @@ export class RoutineAgentService {
       return this.hold(agent, `${agent.name} is handing off`);
     if (delivered.length >= MAX_RUNS_IN_FLIGHT)
       return this.hold(agent, `${MAX_RUNS_IN_FLIGHT} runs already in flight`);
-    const typedAt = input.lastInputAt(session.id);
-    if (typedAt !== undefined && now.getTime() - typedAt < USER_TYPING_HOLD_MS)
-      return this.hold(agent, "you typed in its terminal in the last minute");
     const busy = new Set(delivered.map((run) => run.routine));
     const next = this.routines
       .inFlightRuns(agent)
@@ -671,27 +802,20 @@ export class RoutineAgentService {
       .sort((left, right) => left.id - right.id)[0];
     if (!next) return this.hold(agent, null);
     const screen = await this.agents.screen(session.id).catch(() => "");
-    // Text left in the input box would be sent along with the routine line,
-    // so a draft holds delivery until it is sent or cleared.
-    const draft = composerText(screen);
-    if (draft)
-      return this.hold(
-        agent,
-        `unsent text in ${agent.name}'s input box: "${draft.slice(0, 40)}${draft.length > 40 ? "…" : ""}"`,
-      );
+    // The input is locked, but text can still reach the box from outside the
+    // app (a tmux attach). It would be sent along with the routine line, so
+    // it is stashed like a draft left at locking.
+    if (composerDraft(screen)) {
+      if (!(await this.stashDraft(agent, session.id, screen)))
+        return this.hold(
+          agent,
+          `could not clear the text in ${agent.name}'s input box`,
+        );
+      return this.hold(agent, null);
+    }
     const activity = input.activity(session.id);
-    // A reading that decayed to unknown says nothing; the pane does. An
-    // empty input box with no turn running is a prompt.
-    const unknown = !activity || activity.activity === "unknown";
-    if (!routineAgentAtPrompt(activity) && !(unknown && paneAtPrompt(screen)))
-      return this.hold(
-        agent,
-        activity?.activity === "needs_permission"
-          ? `${agent.name} is waiting on a permission prompt`
-          : activity?.activity === "needs_input"
-            ? `${agent.name} is waiting for an answer in its terminal`
-            : `${agent.name} is busy`,
-      );
+    if (!this.atPrompt(activity, screen))
+      return this.hold(agent, this.busyReason(agent, activity));
     const lastDelivery = Math.max(
       0,
       ...this.routines
@@ -708,8 +832,116 @@ export class RoutineAgentService {
     )
       return this.hold(agent, null);
     this.hold(agent, null);
-    await this.agents.send(session.id, `/daedalus-routine ${next.id}`);
+    await this.agents.send(session.id, `/daedalus-routine ${next.id}`, {
+      fromDaedalus: true,
+    });
     result.delivered.push(this.routines.markDelivered(next, session.id));
+  }
+
+  /**
+   * Moves the agent between manual and auto. With no enabled routine there
+   * is nothing to run, so it stays manual and unlocked. Otherwise a manual
+   * agent locks once the user has not typed for `AUTO_AFTER_MS` and it is
+   * idle at its prompt, so an answer is never cut off. A draft in the input
+   * box is stashed and cleared first, to be typed back on unlock.
+   */
+  private async settleMode(
+    agent: RoutineAgent,
+    sessionId: string,
+    hasRoutines: boolean,
+    input: RoutineAgentTickInput,
+    result: RoutineAgentTickResult,
+  ): Promise<RoutineAgent> {
+    const store = this.repositories.routineAgents;
+    const now = this.now();
+    if (!hasRoutines) {
+      if (agent.mode === "auto") {
+        await this.handBack(agent, now.toISOString());
+        result.events.push(`${agent.name}: no routines left, back to manual`);
+      }
+      this.hold(agent, null);
+      return this.get(agent.id);
+    }
+    if (agent.mode === "auto") return agent;
+    if (!agent.lastInputAt) {
+      // The first routine just appeared: the countdown starts now.
+      store.noteRoutineAgentInput(agent.id, now.toISOString());
+      this.hold(agent, `${agent.name} is in manual mode`);
+      return this.get(agent.id);
+    }
+    const autoAt = Date.parse(agent.lastInputAt) + AUTO_AFTER_MS;
+    if (now.getTime() < autoAt) {
+      this.hold(
+        agent,
+        `${agent.name} is in manual mode until ${new Date(autoAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+      );
+      return agent;
+    }
+    const screen = await this.agents.screen(sessionId).catch(() => "");
+    const activity = input.activity(sessionId);
+    if (!this.atPrompt(activity, screen)) {
+      this.hold(agent, `back to auto once ${agent.name} is idle`);
+      return agent;
+    }
+    // Locked first, so no keystroke lands between reading the box and
+    // clearing it. One that came after the countdown ran out wins instead.
+    if (
+      !store.lockRoutineAgent(
+        agent.id,
+        new Date(now.getTime() - AUTO_AFTER_MS).toISOString(),
+      )
+    )
+      return this.get(agent.id);
+    const locked = this.get(agent.id);
+    const draft = composerDraft(screen);
+    if (draft && !(await this.stashDraft(locked, sessionId, screen)))
+      this.hold(
+        locked,
+        `could not clear the text in ${agent.name}'s input box`,
+      );
+    result.events.push(
+      `${agent.name}: auto mode, input locked${draft ? "; its unsent text is saved for the next unlock" : ""}`,
+    );
+    return this.get(agent.id);
+  }
+
+  /** Clears the input box, keeping its text for the next unlock. */
+  private async stashDraft(
+    agent: RoutineAgent,
+    sessionId: string,
+    screen: string,
+  ): Promise<boolean> {
+    const draft = composerDraft(screen);
+    if (!draft) return true;
+    await this.agents.clearInput(sessionId);
+    const after = await this.agents.screen(sessionId).catch(() => "");
+    if (composerDraft(after)) return false;
+    this.repositories.routineAgents.stashRoutineAgentDraft(agent.id, draft);
+    return true;
+  }
+
+  /**
+   * Whether a typed line would start a turn. A reading that decayed to
+   * unknown says nothing; the pane does: an empty input box with no turn
+   * running is a prompt.
+   */
+  private atPrompt(
+    activity: AgentActivityState | undefined,
+    screen: string,
+  ): boolean {
+    const unknown = !activity || activity.activity === "unknown";
+    return routineAgentAtPrompt(activity) || (unknown && paneAtPrompt(screen));
+  }
+
+  private busyReason(
+    agent: RoutineAgent,
+    activity: AgentActivityState | undefined,
+  ): string {
+    return activity?.activity === "needs_permission"
+      ? `${agent.name} is waiting on a permission prompt`
+      : activity?.activity === "needs_input"
+        ? `${agent.name} is waiting for an answer in its terminal`
+        : `${agent.name} is busy`;
   }
 
   private hold(agent: RoutineAgent, reason: string | null): void {

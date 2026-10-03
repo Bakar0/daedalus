@@ -279,6 +279,9 @@ const routineAgentOverviewDto = (
   routineErrors: overview.routineErrors,
   deliveryHold: overview.deliveryHold,
   autoHandoffPercent: overview.agent.autoHandoffPercent,
+  mode: overview.mode,
+  autoAt: overview.autoAt,
+  hasStashedDraft: overview.hasStashedDraft,
 });
 
 const routineRunDto = (run: RoutineRun): RoutineRunDto => ({
@@ -368,9 +371,13 @@ export function createDesktopRequestHandlers(
       mutate(async () => {
         const updated =
           action === "pause"
-            ? context.routineAgents.pause(agent)
-            : await context.routineAgents.resume(agent);
-        return { state: updated.state };
+            ? await context.routineAgents.pause(agent)
+            : action === "resume"
+              ? await context.routineAgents.resume(agent)
+              : action === "unlock"
+                ? await context.routineAgents.unlock(agent)
+                : await context.routineAgents.autoNow(agent);
+        return { state: updated.state, mode: updated.mode };
       }),
     routineSetEnabled: ({ agent, name, enabled }) =>
       mutate(async () => {

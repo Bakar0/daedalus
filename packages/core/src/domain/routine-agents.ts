@@ -7,6 +7,12 @@ import type { UUID } from "./index";
 export type RoutineAgentState = "on_duty" | "draining" | "paused";
 
 /**
+ * Who owns the agent's input. In `manual` the user talks to it; in `auto`
+ * the input is locked and only Daedalus types, so routines run.
+ */
+export type RoutineAgentMode = "manual" | "auto";
+
+/**
  * A named Claude session in an ordinary workspace that runs routines. Its
  * folder (`<workspace>/worktrees/agents/<slug>`) never moves, so Claude's
  * per-directory memory carries across handoffs.
@@ -24,6 +30,11 @@ export interface RoutineAgent {
   /** The current session; moves to the successor on every handoff. */
   sessionId: UUID | null;
   drainingSince: string | null;
+  mode: RoutineAgentMode;
+  /** The user's last keystroke in its terminal; starts the countdown. */
+  lastInputAt: string | null;
+  /** Unsent text cleared from the input box on locking, restored on unlock. */
+  stashedDraft: string | null;
   createdAt: string;
 }
 

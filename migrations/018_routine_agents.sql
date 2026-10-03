@@ -14,6 +14,10 @@ DROP TABLE IF EXISTS residents;
 -- or paused, plus `draining`, which the scheduler sets while it waits for
 -- runs in flight to finish before a handoff. The folder is
 -- `<workspace>/worktrees/agents/<slug>` and never moves.
+-- `mode` is who owns the input: the user (`manual`) or Daedalus (`auto`,
+-- the input locked). `last_input_at` is the user's last keystroke, which
+-- starts the countdown back to auto; `stashed_draft` is unsent text Daedalus
+-- cleared from the input box when it locked, typed back on unlock.
 CREATE TABLE routine_agents (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -26,6 +30,9 @@ CREATE TABLE routine_agents (
     CHECK (state IN ('on_duty', 'draining', 'paused')),
   session_id TEXT REFERENCES agent_sessions(id) ON DELETE SET NULL,
   draining_since TEXT,
+  mode TEXT NOT NULL DEFAULT 'manual' CHECK (mode IN ('manual', 'auto')),
+  last_input_at TEXT,
+  stashed_draft TEXT,
   created_at TEXT NOT NULL,
   UNIQUE (workspace_id, slug)
 );

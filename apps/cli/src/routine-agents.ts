@@ -23,7 +23,7 @@ export const routineAgentHelp = {
   daedal agent spawn --workspace <workspace> --routine-agent --name <name> [--model <model>]
   daedal routine-agent list [--workspace <workspace>]
   daedal routine-agent get [<agent>] [--workspace <workspace>]
-  daedal routine-agent pause|resume [<agent>] [--workspace <workspace>]
+  daedal routine-agent pause|resume|unlock|auto [<agent>] [--workspace <workspace>]
   daedal routine-agent update [<agent>] [--name <name>] [--model <model>|none]
       [--auto-handoff <percent>] [--workspace <workspace>]
   daedal routine-agent remove <agent> --force [--workspace <workspace>]
@@ -34,8 +34,14 @@ purpose by asking it for routines. It lives in
 <workspace>/worktrees/agents/<name>, with AGENT.md, its routines/ folder and
 its skills, and that folder never moves, so its memory carries across
 handoffs. Its reports become tasks on the workspace's board.
-'pause' stops delivery and 'resume' starts it again; archiving the agent's
-session pauses it, and restoring the session resumes it. It hands off at
+Once the agent has an enabled routine, it switches to auto mode 5 minutes
+after the user's last keystroke in its terminal, when it is idle. In auto
+mode its input is locked and it runs routines; unsent text in its input box
+is saved and cleared. 'unlock' puts it in manual mode, types the saved text
+back, and starts the 5-minute countdown again. 'auto' skips the countdown.
+'pause' stops delivery and leaves it in manual mode; 'resume' starts it
+again. Archiving the agent's session pauses it, and restoring the session
+resumes it. It hands off at
 --auto-handoff percent of its context (60 by default). 'remove' forgets the
 agent and archives its session; its folder and its tasks stay. Routines run
 only while the app is open.`,
@@ -151,7 +157,7 @@ const localTime = (iso: string | null | undefined): string => {
 };
 
 const agentLine = (agent: RoutineAgent, workspaceSlug?: string) =>
-  `${agent.name}\t${agent.state}\t${workspaceSlug ?? agent.workspaceId}\tsession ${agent.sessionId ?? "—"}`;
+  `${agent.name}\t${agent.state}\t${agent.mode}\t${workspaceSlug ?? agent.workspaceId}\tsession ${agent.sessionId ?? "—"}`;
 
 const runLine = (run: RoutineRun) =>
   `${run.id}\t${run.routine}\t${run.status}${run.outcome ? ` (${run.outcome})` : ""}\t${localTime(run.queuedAt)}${run.summary ? `\t${run.summary}` : ""}`;
@@ -218,15 +224,19 @@ export async function routineAgentCommand(
     );
     return 0;
   }
-  if (action === "pause" || action === "resume") {
+  if (["pause", "resume", "unlock", "auto"].includes(action)) {
     const parsed = parseArguments(args, ["workspace"]);
     const reference = (
       await agentFor(context, parsed.values, parsed.positionals[0])
     ).id;
     const agent =
       action === "pause"
-        ? context.routineAgents.pause(reference)
-        : await context.routineAgents.resume(reference);
+        ? await context.routineAgents.pause(reference)
+        : action === "resume"
+          ? await context.routineAgents.resume(reference)
+          : action === "unlock"
+            ? await context.routineAgents.unlock(reference)
+            : await context.routineAgents.autoNow(reference);
     printResult({ routineAgent: agent }, json, () =>
       console.log(agentLine(agent, slugOf(agent.workspaceId))),
     );

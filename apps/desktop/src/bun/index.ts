@@ -44,6 +44,7 @@ import { createDesktopRequestHandlers, desktopDataFingerprint } from "./rpc";
 import {
   authorizeTerminalRequest,
   isTyping,
+  passesInputLock,
   TerminalConnection,
 } from "./terminal";
 
@@ -253,8 +254,13 @@ const server = Bun.serve<SocketData>({
               terminalTmux.executable,
             ),
           onInput: (data) => {
-            if (socket.data.targetKind === "agent" && isTyping(data))
-              lastTerminalInput.set(target.id, Date.now());
+            if (socket.data.targetKind !== "agent") return true;
+            // A routine agent in auto mode has its input locked: only
+            // Daedalus types there. Scrolling and selecting still work.
+            if (context.routineAgents.inputLocked(target.id))
+              return passesInputLock(data);
+            if (isTyping(data)) context.routineAgents.noteInput(target.id);
+            return true;
           },
           onError: (error) =>
             void context.logger.write("error", "terminal_connection_failed", {
@@ -677,11 +683,6 @@ setInterval(() => {
   void context.presence.keepAlive().catch(() => undefined);
 }, 1_200);
 
-// When the user last typed into each agent's terminal. A routine agent's
-// delivery holds for a minute after, so a line Daedalus types never lands in
-// the middle of what the user is writing.
-const lastTerminalInput = new Map<string, number>();
-
 let checkingForExternalChanges = false;
 setInterval(async () => {
   if (checkingForExternalChanges) return;
@@ -733,7 +734,6 @@ setInterval(async () => {
       );
       const routineTick = await context.routineAgents.tick({
         contextPercent: (sessionId) => contextUse.get(sessionId),
-        lastInputAt: (sessionId) => lastTerminalInput.get(sessionId),
         activity: (sessionId) => context.activity.get(sessionId),
       });
       for (const event of routineTick.events)

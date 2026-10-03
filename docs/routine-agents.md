@@ -71,15 +71,42 @@ an edit by hand, by the agent or by the app takes effect within a couple of
 seconds. A file that does not parse is listed with its error by
 `daedal routine list` and never runs.
 
+## Manual and auto mode
+
+An agent is in manual mode while the user talks to it, and in auto mode
+while it runs routines with its input locked.
+
+- With no enabled routine, or while paused, it stays in manual mode with no
+  countdown.
+- Once it has an enabled routine, it switches to auto 5 minutes after the
+  user's last keystroke in its terminal. Scrolling and selecting do not count.
+  The switch waits until the agent is idle at its prompt, so it never cuts
+  off an answer.
+- At the switch, unsent text in the input box is saved and cleared with
+  Ctrl-C. The next unlock types it back.
+- In auto mode the app drops keystrokes on the agent's terminal. Only
+  terminal replies and mouse reports pass, so scrolling still works.
+  `daedal agent send` is refused. Only Daedalus types there.
+- `daedal routine-agent unlock` puts it back in manual mode, types the saved
+  text back, and restarts the countdown. `daedal routine-agent auto` skips
+  the countdown.
+- Runs that come due in manual mode wait, at most one per routine, and go
+  out once it is back in auto. Runs already in flight finish and report.
+- The mode is stored, so it survives an app restart. A manual agent whose
+  last keystroke is more than 5 minutes old locks on the first tick.
+
+The mode, the countdown and the saved text are written with guarded updates,
+so a keystroke that arrives while the scheduler is locking wins.
+
 ## How a run happens
 
 1. The host tick queues each due routine once, however late it is. A routine
    whose previous run has not ended gets a `skipped` run instead.
 2. A queued run is typed into the agent's pane as `/daedalus-routine <id>`
-   when all of these hold: the agent is on duty, its session is running and
-   at its prompt (idle, or waiting on background agents), no handoff is
-   pending, fewer than 3 runs are in flight, and the user has not typed into
-   that terminal in the last minute. Lines are at least 15 seconds apart.
+   when all of these hold: the agent is on duty and in auto mode, its session
+   is running and at its prompt (idle, or waiting on background agents), no
+   handoff is pending, and fewer than 3 runs are in flight. Lines are at
+   least 15 seconds apart.
 3. The agent runs `daedal routine start <id>`, hands the prompt to a
    background subagent, and ends its turn. When the result comes back it files
    reports, resolves what went away, and closes the run with
@@ -121,8 +148,9 @@ Focus mode, and it still says nothing about a session already on screen.
 `daedal routine-agent pause` stops delivery and keeps the session; `resume`
 starts it again. Archiving the agent's session pauses it and keeps its
 routines, tasks and memory; restoring the session, or `resume`, brings it
-back. The scheduler drains an agent when its context passes `--auto-handoff`
-percent (60 by default): it stops delivering, waits up to 10 minutes for runs
+back. The scheduler drains an agent in auto mode when its context passes
+`--auto-handoff` percent (60 by default), so a handoff never interrupts a
+conversation: it stops delivering, waits up to 10 minutes for runs
 in flight, then asks for a handoff. When the agent runs
 `daedal agent continue`, the successor starts in the same folder with the same
 name and prompt and takes over the routines. A handoff the agent never

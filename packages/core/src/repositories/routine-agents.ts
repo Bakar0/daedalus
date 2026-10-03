@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type {
   RoutineAgent,
+  RoutineAgentMode,
   RoutineAgentState,
   RoutineReport,
   RoutineReportState,
@@ -21,6 +22,9 @@ interface RoutineAgentRow {
   state: RoutineAgentState;
   session_id: string | null;
   draining_since: string | null;
+  mode: RoutineAgentMode;
+  last_input_at: string | null;
+  stashed_draft: string | null;
   created_at: string;
 }
 
@@ -77,6 +81,9 @@ const routineAgentFromRow = (row: RoutineAgentRow): RoutineAgent => ({
   state: row.state,
   sessionId: row.session_id,
   drainingSince: row.draining_since,
+  mode: row.mode,
+  lastInputAt: row.last_input_at,
+  stashedDraft: row.stashed_draft,
   createdAt: row.created_at,
 });
 
@@ -139,8 +146,9 @@ export class RoutineAgentRepository {
       .query(
         `INSERT INTO routine_agents
          (id, workspace_id, slug, name, model, auto_handoff_percent, state,
-          session_id, draining_since, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          session_id, draining_since, mode, last_input_at, stashed_draft,
+          created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         agent.id,
@@ -152,10 +160,18 @@ export class RoutineAgentRepository {
         agent.state,
         agent.sessionId,
         agent.drainingSince,
+        agent.mode,
+        agent.lastInputAt,
+        agent.stashedDraft,
         agent.createdAt,
       );
   }
 
+  /**
+   * Saves everything but the mode, the last keystroke and the stashed draft.
+   * Those change from the terminal while the scheduler holds an older copy
+   * of the row, so each has its own guarded write below.
+   */
   updateRoutineAgent(agent: RoutineAgent): void {
     this.database
       .query(
@@ -172,6 +188,71 @@ export class RoutineAgentRepository {
         agent.drainingSince,
         agent.id,
       );
+  }
+
+  /** Records a keystroke; one while the input is locked is not the user's. */
+  noteRoutineAgentInput(id: string, at: string): void {
+    this.database
+      .query(
+        `UPDATE routine_agents SET last_input_at = ?
+         WHERE id = ? AND mode = 'manual'`,
+      )
+      .run(at, id);
+  }
+
+  /**
+   * Locks the input, unless the user typed after `quietSince`. Returns
+   * whether it locked, so a keystroke that raced the scheduler wins.
+   */
+  lockRoutineAgent(id: string, quietSince: string): boolean {
+    return (
+      this.database
+        .query(
+          `UPDATE routine_agents SET mode = 'auto'
+           WHERE id = ? AND mode = 'manual'
+           AND (last_input_at IS NULL OR last_input_at <= ?)`,
+        )
+        .run(id, quietSince).changes > 0
+    );
+  }
+
+  /** Adds text cleared from the input box to what is already stashed. */
+  stashRoutineAgentDraft(id: string, draft: string): void {
+    this.database
+      .query(
+        `UPDATE routine_agents SET stashed_draft =
+           CASE WHEN stashed_draft IS NULL OR stashed_draft = '' THEN ?
+           ELSE stashed_draft || char(10) || ? END
+         WHERE id = ?`,
+      )
+      .run(draft, draft, id);
+  }
+
+  /**
+   * Hands the input back to the user and starts the countdown at `at`.
+   * Returns the stashed draft, which is cleared here: whoever unlocks types
+   * it back. `keepDraft` leaves it stashed for a session that cannot take it.
+   */
+  unlockRoutineAgent(
+    id: string,
+    at: string | null,
+    options: { keepDraft?: boolean } = {},
+  ): string | null {
+    return this.database.transaction(() => {
+      const row = this.database
+        .query<{ stashed_draft: string | null }, [string]>(
+          "SELECT stashed_draft FROM routine_agents WHERE id = ?",
+        )
+        .get(id);
+      this.database
+        .query(
+          `UPDATE routine_agents SET mode = 'manual', last_input_at = ?,
+           stashed_draft = CASE WHEN ? THEN stashed_draft ELSE NULL END
+           WHERE id = ?`,
+        )
+        .run(at, options.keepDraft ? 1 : 0, id);
+      return options.keepDraft ? null : (row?.stashed_draft ?? null);
+    })();
   }
 
   listRoutineAgents(workspaceId?: string): RoutineAgent[] {
@@ -253,21 +334,35 @@ export class RoutineAgentRepository {
   ): RoutineAgent | undefined {
     const agent = this.findRoutineAgentBySession(sessionId);
     if (!agent) return undefined;
+    // A paused agent runs nothing, so its input is the user's again. Its
+    // session is being archived, so a stashed draft waits for a later unlock.
     const paused: RoutineAgent = {
       ...agent,
       state: "paused",
       drainingSince: null,
+      mode: "manual",
     };
     this.updateRoutineAgent(paused);
+    this.unlockRoutineAgent(agent.id, agent.lastInputAt, { keepDraft: true });
     this.skipUndeliveredRuns(agent.id, at, reason);
     return paused;
   }
 
-  resumeRoutineAgentBySession(sessionId: string): RoutineAgent | undefined {
+  resumeRoutineAgentBySession(
+    sessionId: string,
+    at: string,
+  ): RoutineAgent | undefined {
     const agent = this.findRoutineAgentBySession(sessionId);
     if (!agent || agent.state !== "paused") return agent;
-    const resumed: RoutineAgent = { ...agent, state: "on_duty" };
+    // Back from a pause, the user has just acted on it: the countdown to
+    // auto starts now rather than from a keystroke days ago.
+    const resumed: RoutineAgent = {
+      ...agent,
+      state: "on_duty",
+      lastInputAt: at,
+    };
     this.updateRoutineAgent(resumed);
+    this.noteRoutineAgentInput(agent.id, at);
     return resumed;
   }
 
