@@ -3,7 +3,7 @@
  * has the first three; abilities are offered on Claude and Codex agents.
  */
 import type { SessionColorDto } from "@daedalus/protocol";
-import { Menu, MenuCheck } from "./Menu";
+import { Menu } from "./Menu";
 
 export const SESSION_COLORS: readonly SessionColorDto[] = [
   "red",
@@ -135,7 +135,12 @@ export function SessionMenu({
             type="button"
           >
             <span className="menu-item-label">Routines</span>
-            {routines && <MenuCheck />}
+            {/* The look of the skills switch; the item itself is the control. */}
+            <span
+              aria-hidden="true"
+              className="menu-switch"
+              data-on={routines ? "true" : undefined}
+            />
           </button>
         </>
       )}

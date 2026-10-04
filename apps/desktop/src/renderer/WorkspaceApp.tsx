@@ -1772,7 +1772,6 @@ export function WorkspaceApp({
     path: string;
     name: string;
   }>();
-  const [sessionFilter, setSessionFilter] = useState<"all" | "needs-me">("all");
   const [modal, setModal] = useState<
     "workspace" | "task" | "session" | "repository" | "settings" | undefined
   >(initialModal);
@@ -2798,18 +2797,11 @@ export function WorkspaceApp({
         (item) => item.workspaceId === workspaceId,
       );
   const activeSessions = workspaceSessions.filter((item) => !item.archivedAt);
-  const attentionSessionIds = new Set(
-    activeSessions
-      .filter((item) => statusViewFor(item).attention)
-      .map((item) => item.id),
-  );
   // Blocked sessions used to float to the top here. They no longer do: once
   // the order is something the user placed, moving a card out from under them
-  // is the bug, not the feature. The "Needs me" filter, the card tone and the
-  // workspace roll-up count all still surface a blocked session in place.
-  const sessions = activeSessions.filter(
-    (item) => sessionFilter === "all" || attentionSessionIds.has(item.id),
-  );
+  // is the bug, not the feature. The card tone and the workspace roll-up
+  // count still surface a blocked session in place.
+  const sessions = activeSessions;
   const sessionReorder = useListReorder({
     ids: sessions.map((item) => item.id),
     // A position is an order within one workspace, so the all-workspaces
@@ -5617,27 +5609,6 @@ export function WorkspaceApp({
                   <span className="count-badge">
                     {sessions.length + visibleSessionLaunches.length}
                   </span>
-                  <button
-                    aria-pressed={sessionFilter === "needs-me"}
-                    className={`quiet session-filter-toggle${sessionFilter === "needs-me" ? " active" : ""}`}
-                    disabled={
-                      attentionSessionIds.size === 0 && sessionFilter === "all"
-                    }
-                    onClick={() =>
-                      setSessionFilter((current) =>
-                        current === "needs-me" ? "all" : "needs-me",
-                      )
-                    }
-                    title="Show only sessions waiting on you"
-                    type="button"
-                  >
-                    Needs me
-                    {attentionSessionIds.size > 0 && (
-                      <span className="session-filter-count">
-                        {attentionSessionIds.size}
-                      </span>
-                    )}
-                  </button>
                 </div>
                 <div className="panel-heading-actions">
                   <CreateButton
@@ -5663,18 +5634,12 @@ export function WorkspaceApp({
                 data-reordering={sessionReorder.draggingId ? "true" : undefined}
               >
                 {sessions.length === 0 &&
-                  visibleSessionLaunches.length === 0 &&
-                  (sessionFilter === "needs-me" ? (
-                    <div className="empty large">
-                      <strong>Nothing is waiting on you</strong>
-                      <span>Every session is working or finished.</span>
-                    </div>
-                  ) : (
+                  visibleSessionLaunches.length === 0 && (
                     <div className="empty large">
                       <strong>No sessions yet</strong>
                       <span>Create an agent or free terminal.</span>
                     </div>
-                  ))}
+                  )}
                 {visibleSessionLaunches.map((launch) => (
                   <div
                     aria-busy={launch.status === "starting"}
@@ -5849,6 +5814,27 @@ export function WorkspaceApp({
                         </button>
                       )}
                       <span className="workspace-card-actions" data-no-drag>
+                        <SessionMenu
+                          color={session.color}
+                          name={sessionName(session)}
+                          offerAbilities={
+                            session.kind === "agent" &&
+                            (session.provider === "claude" ||
+                              session.provider === "codex")
+                          }
+                          onColor={(color) =>
+                            void updateSession(session, { color })
+                          }
+                          onPin={(pinned) =>
+                            void updateSession(session, { pinned })
+                          }
+                          onRename={() => void renameSession(session)}
+                          onRoutines={(granted) =>
+                            void setRoutinesAbility(session, granted)
+                          }
+                          pinned={Boolean(session.pinnedAt)}
+                          routines={holdsRoutines}
+                        />
                         {session.kind === "agent" &&
                           (session.provider === "claude" ||
                             session.provider === "codex") && (
@@ -5872,27 +5858,6 @@ export function WorkspaceApp({
                               <HandoffIcon />
                             </button>
                           )}
-                        <SessionMenu
-                          color={session.color}
-                          name={sessionName(session)}
-                          offerAbilities={
-                            session.kind === "agent" &&
-                            (session.provider === "claude" ||
-                              session.provider === "codex")
-                          }
-                          onColor={(color) =>
-                            void updateSession(session, { color })
-                          }
-                          onPin={(pinned) =>
-                            void updateSession(session, { pinned })
-                          }
-                          onRename={() => void renameSession(session)}
-                          onRoutines={(granted) =>
-                            void setRoutinesAbility(session, granted)
-                          }
-                          pinned={Boolean(session.pinnedAt)}
-                          routines={holdsRoutines}
-                        />
                         <button
                           aria-label={`Archive ${sessionName(session)} session`}
                           className="session-card-action"
@@ -6748,7 +6713,7 @@ export function WorkspaceApp({
               </div>
             </fieldset>
             {sessionType !== "terminal" && (
-              <label className="session-model-picker">
+              <div className="session-model-picker">
                 <span>
                   <strong>Model</strong>
                   <small>
@@ -6760,6 +6725,7 @@ export function WorkspaceApp({
                   </small>
                 </span>
                 <select
+                  aria-label="Model"
                   disabled={sessionModelCatalogPending || modelCatalogLoading}
                   onChange={(event) => setSessionModel(event.target.value)}
                   value={sessionModel}
@@ -6811,27 +6777,27 @@ export function WorkspaceApp({
                     Model list unavailable: {modelCatalogError}
                   </small>
                 )}
-              </label>
-            )}
-            {sessionType !== "terminal" && !sessionChoiceIsWorkspaceDefault && (
-              <label className="session-model-remember">
-                <input
-                  checked={rememberSessionModel}
-                  onChange={(event) =>
-                    setRememberSessionModel(event.target.checked)
-                  }
-                  type="checkbox"
-                />
-                <span>
-                  Remember{" "}
-                  <strong>
-                    {providerLabel(sessionType)} ·{" "}
-                    {selectedSessionModel?.label ??
-                      (sessionModel || "provider default")}
-                  </strong>{" "}
-                  as this workspace&apos;s default
-                </span>
-              </label>
+                {!sessionChoiceIsWorkspaceDefault && (
+                  <label className="session-model-remember">
+                    <input
+                      checked={rememberSessionModel}
+                      onChange={(event) =>
+                        setRememberSessionModel(event.target.checked)
+                      }
+                      type="checkbox"
+                    />
+                    <span>
+                      Remember{" "}
+                      <strong>
+                        {providerLabel(sessionType)} ·{" "}
+                        {selectedSessionModel?.label ??
+                          (sessionModel || "provider default")}
+                      </strong>{" "}
+                      as this workspace&apos;s default
+                    </span>
+                  </label>
+                )}
+              </div>
             )}
             <div className="session-color-picker">
               <span>
@@ -6847,8 +6813,17 @@ export function WorkspaceApp({
             </div>
             {sessionType !== "terminal" && (
               <label className="session-ability-option">
+                <span>
+                  <strong>Routines</strong>
+                  <small>
+                    Checks this session runs on a schedule while the app is
+                    open. Ask it for routines once it starts.
+                  </small>
+                </span>
                 <input
+                  aria-label="Routines enabled"
                   checked={Boolean(sessionForm.routines)}
+                  className="switch"
                   onChange={(event) =>
                     setSessionForm({
                       ...sessionForm,
@@ -6857,24 +6832,8 @@ export function WorkspaceApp({
                   }
                   type="checkbox"
                 />
-                <span>
-                  <strong>Routines</strong>
-                  <small>
-                    Checks this session runs on a schedule while the app is
-                    open. Ask it for routines once it starts.
-                  </small>
-                </span>
               </label>
             )}
-            <div className="session-workspace-note">
-              <span className="workspace-icon">
-                {sessionWorkspace.name.slice(0, 1).toUpperCase()}
-              </span>
-              <span>
-                <strong>{sessionWorkspace.name}</strong>
-                <small>Opens in {sessionWorkspace.path}</small>
-              </span>
-            </div>
             <div className="modal-actions">
               <button
                 className="quiet"

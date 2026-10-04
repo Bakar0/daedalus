@@ -1643,7 +1643,7 @@ describe("desktop application shell", () => {
     expect(html).toContain('viewBox="0 0 24 24"');
     expect(html).not.toContain(">CX<");
     expect(html).not.toContain(">CL<");
-    expect(html).toContain("Opens in /tmp/demo");
+    expect(html).not.toContain("Opens in /tmp/demo");
     expect(html).not.toContain("Linked task");
     expect(html).not.toContain("Activity");
   });
@@ -2186,12 +2186,11 @@ describe("session status indicators", () => {
     expect(html).toContain("Bash(git push)");
     // It no longer floats above the working session. The list order became the
     // user's when it became draggable, and moving a card out from under them
-    // to make a point they can already see — tone, badge, roll-up, filter — is
+    // to make a point they can already see — tone, badge, roll-up — is
     // the behaviour a manual order exists to stop.
     expect(html.indexOf(`data-session-id="${liveSession.id}"`)).toBeLessThan(
       html.indexOf(`data-session-id="${blocked.id}"`),
     );
-    expect(html).toContain("session-filter-toggle");
   });
 
   test("renders queued toasts and never more than the cap", () => {

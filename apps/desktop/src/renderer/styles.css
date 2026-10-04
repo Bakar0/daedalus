@@ -870,29 +870,6 @@ button:not(
   margin-left: 6px;
   padding: 0 5px;
 }
-/* Sits beside the session count in a panel that can be 250px wide, so it
-   never wraps and never competes with New for room. */
-.session-filter-toggle {
-  background: var(--raised);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  color: var(--secondary);
-  flex: 0 0 auto;
-  font-size: 11px;
-  padding: 3px 7px;
-  white-space: nowrap;
-}
-.session-filter-toggle.active {
-  background: rgb(255 130 130 / 0.14);
-  border-color: rgb(255 130 130 / 0.45);
-  color: #ff8987;
-}
-.session-filter-count {
-  background: rgb(255 130 130 / 0.22);
-  border-radius: 999px;
-  margin-left: 5px;
-  padding: 0 5px;
-}
 
 /* The blocked session's wait and its way out, inline in the status line.
    There is no reason panel: this surface only renders for the session already
@@ -1669,14 +1646,18 @@ button:not(
   grid-column: 1 / -1;
   line-height: 1.35;
 }
+/* A line at the foot of the model box, under the description. */
 .session-model-remember {
   align-items: center;
+  border-top: 1px solid var(--line);
   color: var(--muted);
+  cursor: pointer;
   display: flex !important;
   flex-direction: row !important;
   font-size: 11px;
-  gap: 8px;
-  margin-top: 8px;
+  gap: 7px;
+  grid-column: 1 / -1;
+  padding-top: 7px;
 }
 .session-model-remember input {
   margin: 0;
@@ -1700,30 +1681,6 @@ button:not(
 }
 .app[data-theme="light"] .session-tool-icon.tool-terminal {
   color: #187a59;
-}
-.session-workspace-note {
-  align-items: center;
-  background: rgb(0 0 0 / 0.11);
-  border-radius: 10px;
-  display: flex;
-  gap: 10px;
-  padding: 10px;
-}
-.app[data-theme="light"] .session-workspace-note {
-  background: rgb(75 95 128 / 0.055);
-}
-.session-workspace-note > span:last-child {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-.session-workspace-note strong {
-  font-size: 11px;
-}
-.session-workspace-note small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .session-launch-spinner {
   animation: repository-progress-spin 800ms linear infinite;
@@ -5457,7 +5414,6 @@ dd {
   display: flex;
   gap: 10px;
   justify-content: space-between;
-  margin-top: 10px;
   padding: 9px 10px;
 }
 .session-color-picker > span:first-child {
@@ -5484,18 +5440,48 @@ dd {
     0 0 0 3.5px var(--text);
 }
 .session-ability-option {
-  align-items: flex-start;
+  align-items: center;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
   display: flex !important;
   flex-direction: row !important;
-  gap: 8px;
-  margin-top: 10px;
-}
-.session-ability-option input {
-  margin: 2px 0 0;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 9px 10px;
 }
 .session-ability-option > span {
   display: grid;
   gap: 2px;
+}
+/* The skills switch, drawn inside a menu item that is itself the control. */
+.menu-switch {
+  background: var(--line-strong);
+  border-radius: 999px;
+  flex: none;
+  height: 16px;
+  position: relative;
+  transition: background 140ms ease;
+  width: 28px;
+}
+.menu-switch::after {
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
+  content: "";
+  height: 12px;
+  left: 2px;
+  position: absolute;
+  top: 2px;
+  transition: transform 140ms ease;
+  width: 12px;
+}
+.menu-switch[data-on="true"] {
+  background: var(--accent);
+}
+.menu-switch[data-on="true"]::after {
+  transform: translateX(12px);
 }
 
 /* The routine bar above the terminal of a session holding routines. */
