@@ -37,7 +37,9 @@ import type {
   SessionWorktreeDto,
   QuitChoice,
   RepositoryDiscoveryDto,
+  RoutinesDetailDto,
   RpcResult,
+  SessionColorDto,
   SessionAttentionDto,
   ShutdownPlanDto,
   TaskDto,
@@ -62,6 +64,9 @@ import { TaskActionBar } from "./TaskActionBar";
 import { askConfirm, askText, DialogHost } from "./dialogs";
 import { buildWorldModel, worldInputFromSnapshot } from "./world/world-model";
 import { TaskPriorityMenu, TaskStatusMenu } from "./TaskStatusMenu";
+import { ColorSwatches, SessionMenu } from "./SessionMenu";
+import { RoutineBar } from "./routines/RoutineBar";
+import { RoutinesPanel } from "./routines/RoutinesPanel";
 import {
   AgentStatusDot,
   compactTokenLabel,
@@ -1813,7 +1818,15 @@ export function WorkspaceApp({
   const [sessionForm, setSessionForm] = useState<{
     name: string;
     taskId?: string;
+    color?: SessionColorDto;
+    routines?: boolean;
   }>({ name: "" });
+  // The Routines drawer on the selected session, and what it last read.
+  const [routinesPanel, setRoutinesPanel] = useState<{
+    sessionId: string;
+    detail?: RoutinesDetailDto;
+    error?: string;
+  }>();
   const [sessionLaunches, setSessionLaunches] = useState<SessionLaunchState[]>(
     initialSessionLaunches,
   );
@@ -2813,10 +2826,12 @@ export function WorkspaceApp({
         }),
       ),
   });
-  // Sessions holding routines, which their cards and archive dialog mark.
-  const routineSessionIds = new Set(
-    (snapshot?.routines ?? []).map((status) => status.sessionId),
+  // Sessions holding routines, which their cards and archive dialog mark,
+  // and the bar above each one's terminal.
+  const routinesBySession = new Map(
+    (snapshot?.routines ?? []).map((status) => [status.sessionId, status]),
   );
+  const routineSessionIds = new Set(routinesBySession.keys());
   // Pinned sessions sit above the rest, in the order they were pinned; the
   // manual order holds within each group.
   const orderedSessions = sessionReorder.order
@@ -2896,6 +2911,29 @@ export function WorkspaceApp({
   const activeSessionRepository = workspaceContent?.repositories.find(
     (item) => item.id === activeSessionWorktree?.repositoryId,
   );
+  const activeSessionRoutines = snapshot?.routines.find(
+    (status) => status.sessionId === activeSession?.id,
+  );
+  // The drawer reads its runs on request, so it reads again whenever the
+  // session's routine status moves: a run went in, finished or was queued.
+  const openRoutinesStatus =
+    routinesPanel &&
+    snapshot?.routines.find(
+      (status) => status.sessionId === routinesPanel.sessionId,
+    );
+  const openRoutinesFingerprint = openRoutinesStatus
+    ? JSON.stringify([
+        openRoutinesStatus.waiting.map((run) => run.runId),
+        openRoutinesStatus.running,
+        openRoutinesStatus.paused,
+        openRoutinesStatus.nextRun,
+        openRoutinesStatus.routines,
+      ])
+    : undefined;
+  useEffect(() => {
+    if (routinesPanel && openRoutinesFingerprint)
+      void loadRoutinesDetail(routinesPanel.sessionId);
+  }, [openRoutinesFingerprint]);
   const activeSessionWorkspace = activeSession
     ? workspaceById.get(activeSession.workspaceId)
     : undefined;
@@ -3321,6 +3359,7 @@ export function WorkspaceApp({
     event.preventDefault();
     if (!sessionWorkspace) return;
     const isTerminal = sessionType === "terminal";
+    const { color, routines } = sessionForm;
     const launch: SessionLaunchState = {
       key: crypto.randomUUID(),
       workspaceId: sessionWorkspace.id,
@@ -3354,6 +3393,10 @@ export function WorkspaceApp({
         terminal: isTerminal || undefined,
         provider: isTerminal ? undefined : (sessionType as "codex" | "claude"),
         model: isTerminal || !sessionModel ? undefined : sessionModel,
+        ...(color ? { color } : {}),
+        ...(routines && !isTerminal
+          ? { abilities: ["routines" as const] }
+          : {}),
       });
       if (response.ok) {
         setSessionLaunches((current) =>
@@ -3940,6 +3983,87 @@ export function WorkspaceApp({
       client.request.agentContinue({ id: session.id }),
     );
     if (successor) openSession(successor.id);
+  }
+
+  async function updateSession(
+    session: AgentSessionDto,
+    change: { name?: string; pinned?: boolean; color?: SessionColorDto | null },
+  ) {
+    await perform(
+      client.request.sessionUpdate({ sessionId: session.id, ...change }),
+    );
+  }
+
+  async function renameSession(session: AgentSessionDto) {
+    const name = await askText({
+      title: "Rename session",
+      message: "The name shows on the card, the terminal and the World.",
+      initial: session.name,
+      confirmLabel: "Rename",
+    });
+    const trimmed = name?.trim();
+    if (trimmed && trimmed !== session.name)
+      await updateSession(session, { name: trimmed });
+  }
+
+  async function setRoutinesAbility(
+    session: AgentSessionDto,
+    granted: boolean,
+  ) {
+    if (
+      !granted &&
+      !(await askConfirm({
+        title: `Revoke routines from ${sessionName(session)}?`,
+        message:
+          "No more runs go in and waiting runs are dropped. The routines and their purpose are kept, and come back if routines are granted again.",
+        confirmLabel: "Revoke",
+      }))
+    )
+      return;
+    await perform(
+      client.request.sessionAbility({
+        sessionId: session.id,
+        ability: "routines",
+        granted,
+      }),
+    );
+    if (!granted && routinesPanel?.sessionId === session.id)
+      setRoutinesPanel(undefined);
+  }
+
+  async function loadRoutinesDetail(sessionId: string) {
+    try {
+      const response = await client.request.routinesDetail({ sessionId });
+      setRoutinesPanel((current) =>
+        current?.sessionId !== sessionId
+          ? current
+          : response.ok
+            ? { sessionId, detail: response.data }
+            : { sessionId, error: response.error.message },
+      );
+    } catch (cause) {
+      setRoutinesPanel((current) =>
+        current?.sessionId === sessionId
+          ? { sessionId, error: errorMessage(cause) }
+          : current,
+      );
+    }
+  }
+
+  function openRoutinesPanel(sessionId: string) {
+    setRoutinesPanel({ sessionId });
+    void loadRoutinesDetail(sessionId);
+  }
+
+  /** A routines request from the bar or the drawer, then a fresh drawer. */
+  async function routinesAction<T>(
+    sessionId: string,
+    operation: Promise<RpcResult<T>>,
+  ) {
+    const result = await perform(operation);
+    if (routinesPanel?.sessionId === sessionId)
+      await loadRoutinesDetail(sessionId);
+    return result;
   }
 
   async function restoreSession(session: AgentSessionDto) {
@@ -5608,6 +5732,8 @@ export function WorkspaceApp({
                   const startupError = sessionStartupErrors.get(session.id);
                   const view = statusViewFor(session);
                   const holdsRoutines = routineSessionIds.has(session.id);
+                  const waitingRuns =
+                    routinesBySession.get(session.id)?.waiting.length ?? 0;
                   return (
                     <div
                       className={`session-card tone-${view.tone} ${session.id === activeSessionId ? "selected" : ""}`}
@@ -5659,6 +5785,14 @@ export function WorkspaceApp({
                             {holdsRoutines ? (
                               <span className="session-routines-badge">
                                 Routines
+                                {waitingRuns > 0 && (
+                                  <span
+                                    className="session-waiting-badge"
+                                    title="Routine runs waiting to go in"
+                                  >
+                                    {waitingRuns} waiting
+                                  </span>
+                                )}
                               </span>
                             ) : (
                               (task?.title ?? "Workspace session")
@@ -5738,6 +5872,27 @@ export function WorkspaceApp({
                               <HandoffIcon />
                             </button>
                           )}
+                        <SessionMenu
+                          color={session.color}
+                          name={sessionName(session)}
+                          offerAbilities={
+                            session.kind === "agent" &&
+                            (session.provider === "claude" ||
+                              session.provider === "codex")
+                          }
+                          onColor={(color) =>
+                            void updateSession(session, { color })
+                          }
+                          onPin={(pinned) =>
+                            void updateSession(session, { pinned })
+                          }
+                          onRename={() => void renameSession(session)}
+                          onRoutines={(granted) =>
+                            void setRoutinesAbility(session, granted)
+                          }
+                          pinned={Boolean(session.pinnedAt)}
+                          routines={holdsRoutines}
+                        />
                         <button
                           aria-label={`Archive ${sessionName(session)} session`}
                           className="session-card-action"
@@ -5922,30 +6077,101 @@ export function WorkspaceApp({
               </div>
               {activeSession && <small>{activeSession.status}</small>}
             </div>
-            {activeSession ? (
-              <TerminalSurface
-                activity={activityById.get(activeSession.id)}
-                attention={attentionById.get(activeSession.id)}
-                terminalEndpoint={terminalEndpoint}
-                focused={shouldFocusSession(focusedSessionId, activeSession.id)}
-                fitRevision={terminalFitRevision}
-                id={activeSession.id}
-                key={`${activeSession.id}:${terminalMountRevision}`}
-                label={sessionName(activeSession)}
-                locationLabel={
-                  activeSessionRepository?.name ??
-                  activeSessionWorkspace?.name ??
-                  workspace.name
+            {activeSessionRoutines && activeSession && (
+              <RoutineBar
+                busy={busy}
+                color={activeSession.color}
+                onOpenPanel={() => openRoutinesPanel(activeSession.id)}
+                onRunNow={() =>
+                  void routinesAction(
+                    activeSession.id,
+                    client.request.routineRunNow({
+                      sessionId: activeSession.id,
+                    }),
+                  )
                 }
-                onClearAttention={() => void clearAttention(activeSession.id)}
-                onFocused={clearSessionFocusRequest}
-                onOpenLink={openTerminalLink}
-                session={activeSession}
-                status={activeSession.status}
-                target="agent"
-                telemetry={activeSessionTelemetry}
-                worktree={activeSessionWorktree}
+                onTogglePause={() =>
+                  void routinesAction(
+                    activeSession.id,
+                    client.request.routinesControl({
+                      sessionId: activeSession.id,
+                      action: activeSessionRoutines.paused ? "resume" : "pause",
+                    }),
+                  )
+                }
+                status={activeSessionRoutines}
               />
+            )}
+            {activeSession ? (
+              // The drawer sits over the terminal, below the routine bar, so
+              // the bar's buttons stay in reach while it is open.
+              <div className="terminal-stage">
+                {activeSessionRoutines &&
+                  routinesPanel?.sessionId === activeSession.id && (
+                    <RoutinesPanel
+                      busy={busy}
+                      detail={routinesPanel.detail}
+                      error={routinesPanel.error}
+                      now={now}
+                      onClose={() => setRoutinesPanel(undefined)}
+                      onRunNow={(name) =>
+                        void routinesAction(
+                          activeSession.id,
+                          client.request.routineRunNow({
+                            sessionId: activeSession.id,
+                            name,
+                          }),
+                        )
+                      }
+                      onSavePurpose={(purpose) =>
+                        void routinesAction(
+                          activeSession.id,
+                          client.request.routinesPurpose({
+                            sessionId: activeSession.id,
+                            purpose,
+                          }),
+                        )
+                      }
+                      onSetEnabled={(name, enabled) =>
+                        void routinesAction(
+                          activeSession.id,
+                          client.request.routineSetEnabled({
+                            sessionId: activeSession.id,
+                            name,
+                            enabled,
+                          }),
+                        )
+                      }
+                      sessionName={sessionName(activeSession)}
+                    />
+                  )}
+                <TerminalSurface
+                  activity={activityById.get(activeSession.id)}
+                  attention={attentionById.get(activeSession.id)}
+                  terminalEndpoint={terminalEndpoint}
+                  focused={shouldFocusSession(
+                    focusedSessionId,
+                    activeSession.id,
+                  )}
+                  fitRevision={terminalFitRevision}
+                  id={activeSession.id}
+                  key={`${activeSession.id}:${terminalMountRevision}`}
+                  label={sessionName(activeSession)}
+                  locationLabel={
+                    activeSessionRepository?.name ??
+                    activeSessionWorkspace?.name ??
+                    workspace.name
+                  }
+                  onClearAttention={() => void clearAttention(activeSession.id)}
+                  onFocused={clearSessionFocusRequest}
+                  onOpenLink={openTerminalLink}
+                  session={activeSession}
+                  status={activeSession.status}
+                  target="agent"
+                  telemetry={activeSessionTelemetry}
+                  worktree={activeSessionWorktree}
+                />
+              </div>
             ) : (
               <div className="terminal-empty">
                 <strong>Select a session</strong>
@@ -6604,6 +6830,39 @@ export function WorkspaceApp({
                       (sessionModel || "provider default")}
                   </strong>{" "}
                   as this workspace&apos;s default
+                </span>
+              </label>
+            )}
+            <div className="session-color-picker">
+              <span>
+                <strong>Color</strong>
+                <small>On the card&apos;s edge and the World figure</small>
+              </span>
+              <ColorSwatches
+                onChange={(color) =>
+                  setSessionForm({ ...sessionForm, color: color ?? undefined })
+                }
+                value={sessionForm.color ?? null}
+              />
+            </div>
+            {sessionType !== "terminal" && (
+              <label className="session-ability-option">
+                <input
+                  checked={Boolean(sessionForm.routines)}
+                  onChange={(event) =>
+                    setSessionForm({
+                      ...sessionForm,
+                      routines: event.target.checked,
+                    })
+                  }
+                  type="checkbox"
+                />
+                <span>
+                  <strong>Routines</strong>
+                  <small>
+                    Checks this session runs on a schedule while the app is
+                    open. Ask it for routines once it starts.
+                  </small>
                 </span>
               </label>
             )}
