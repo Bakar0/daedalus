@@ -1,3 +1,5 @@
+import type { SessionColor } from "./abilities";
+
 export type UUID = string;
 export type TaskStatus =
   "todo" | "in_progress" | "blocked" | "done" | "cancelled";
@@ -95,6 +97,10 @@ export interface AgentSession {
   handoffRequestedAt: string | null;
   /** Where the user put this session within its workspace. See `Workspace`. */
   position: number;
+  /** When the user pinned it to the top of its workspace's list, or null. */
+  pinnedAt: string | null;
+  /** The mark on its card, its World figure and its routines' tasks. */
+  color: SessionColor | null;
 }
 
 export interface IntegratedTerminal {
@@ -393,3 +399,5 @@ export interface PresenceState {
   userIdleSeconds: number;
   observedAt: string;
 }
+
+export * from "./abilities";

@@ -870,29 +870,6 @@ button:not(
   margin-left: 6px;
   padding: 0 5px;
 }
-/* Sits beside the session count in a panel that can be 250px wide, so it
-   never wraps and never competes with New for room. */
-.session-filter-toggle {
-  background: var(--raised);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  color: var(--secondary);
-  flex: 0 0 auto;
-  font-size: 11px;
-  padding: 3px 7px;
-  white-space: nowrap;
-}
-.session-filter-toggle.active {
-  background: rgb(255 130 130 / 0.14);
-  border-color: rgb(255 130 130 / 0.45);
-  color: #ff8987;
-}
-.session-filter-count {
-  background: rgb(255 130 130 / 0.22);
-  border-radius: 999px;
-  margin-left: 5px;
-  padding: 0 5px;
-}
 
 /* The blocked session's wait and its way out, inline in the status line.
    There is no reason panel: this surface only renders for the session already
@@ -1669,14 +1646,18 @@ button:not(
   grid-column: 1 / -1;
   line-height: 1.35;
 }
+/* A line at the foot of the model box, under the description. */
 .session-model-remember {
   align-items: center;
+  border-top: 1px solid var(--line);
   color: var(--muted);
+  cursor: pointer;
   display: flex !important;
   flex-direction: row !important;
   font-size: 11px;
-  gap: 8px;
-  margin-top: 8px;
+  gap: 7px;
+  grid-column: 1 / -1;
+  padding-top: 7px;
 }
 .session-model-remember input {
   margin: 0;
@@ -1700,30 +1681,6 @@ button:not(
 }
 .app[data-theme="light"] .session-tool-icon.tool-terminal {
   color: #187a59;
-}
-.session-workspace-note {
-  align-items: center;
-  background: rgb(0 0 0 / 0.11);
-  border-radius: 10px;
-  display: flex;
-  gap: 10px;
-  padding: 10px;
-}
-.app[data-theme="light"] .session-workspace-note {
-  background: rgb(75 95 128 / 0.055);
-}
-.session-workspace-note > span:last-child {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-.session-workspace-note strong {
-  font-size: 11px;
-}
-.session-workspace-note small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .session-launch-spinner {
   animation: repository-progress-spin 800ms linear infinite;
@@ -5301,4 +5258,480 @@ dd {
   padding: 8px;
   width: auto;
   z-index: 40;
+}
+
+/* ---------------------------------------------------------------------------
+   Session colors (#49). Any session can carry one: it marks the card's left
+   edge, the chip on tasks its routines file, and its World figure.
+   ------------------------------------------------------------------------ */
+.app {
+  --session-red: #e5675f;
+  --session-orange: #e8894a;
+  --session-gold: #f0b44c;
+  --session-green: #5fb878;
+  --session-teal: #4cb5ad;
+  --session-blue: #5b9be6;
+  --session-purple: #a07ee0;
+  --session-pink: #e076b0;
+}
+.app[data-theme="light"] {
+  --session-red: #c2413a;
+  --session-orange: #bf5f1d;
+  --session-gold: #b4740b;
+  --session-green: #2f8a4c;
+  --session-teal: #1f857e;
+  --session-blue: #2f6fc0;
+  --session-purple: #7651c0;
+  --session-pink: #b8448a;
+}
+[data-color="red"] {
+  --session-color: var(--session-red);
+}
+[data-color="orange"] {
+  --session-color: var(--session-orange);
+}
+[data-color="gold"] {
+  --session-color: var(--session-gold);
+}
+[data-color="green"] {
+  --session-color: var(--session-green);
+}
+[data-color="teal"] {
+  --session-color: var(--session-teal);
+}
+[data-color="blue"] {
+  --session-color: var(--session-blue);
+}
+[data-color="purple"] {
+  --session-color: var(--session-purple);
+}
+[data-color="pink"] {
+  --session-color: var(--session-pink);
+}
+.session-card[data-color] {
+  box-shadow: inset 3px 0 0 var(--session-color);
+}
+.session-routines-badge {
+  color: var(--session-color, var(--muted));
+  font-weight: 600;
+}
+
+.session-waiting-badge {
+  background: var(--accent-wash);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 10px;
+  margin-left: 6px;
+  padding: 1px 6px;
+}
+
+/* The card menu: rename, pin, color and abilities. The card clips its
+   contents for the rounded edge, so it lets the open menu out. */
+.workspace-card-actions > .session-card-menu {
+  display: flex;
+  flex: 1;
+}
+.session-card-menu > summary.session-card-action {
+  align-items: center;
+  display: flex;
+  flex: 1;
+  justify-content: center;
+  min-height: 28px;
+}
+.session-card-menu > summary svg {
+  display: block;
+  height: 16px;
+  width: 16px;
+}
+.session-card:has(.session-card-menu[open]) {
+  overflow: visible;
+  position: relative;
+  z-index: 5;
+}
+.session-card-menu .menu-popover {
+  min-width: 240px;
+  top: 4px;
+  right: calc(100% + 4px);
+}
+.menu-heading {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 4px 9px 2px;
+  text-transform: uppercase;
+}
+
+.color-swatches {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 5px;
+  padding: 4px 9px 6px;
+}
+.color-swatch {
+  background: var(--session-color, transparent) !important;
+  border: 1px solid var(--line-strong) !important;
+  border-radius: 999px !important;
+  height: 18px;
+  padding: 0 !important;
+  position: relative;
+  width: 18px;
+}
+.color-swatch[data-color] {
+  border-color: transparent !important;
+}
+/* None: an empty ring with a slash through it. It sits inside a colored
+   card, so it drops the color it would inherit. */
+.color-swatch:not([data-color]) {
+  --session-color: transparent;
+}
+.color-swatch:not([data-color])::after {
+  background: var(--muted);
+  content: "";
+  height: 1px;
+  left: 2px;
+  position: absolute;
+  top: 50%;
+  transform: rotate(-45deg);
+  width: 12px;
+}
+.color-swatch[aria-checked="true"] {
+  box-shadow:
+    0 0 0 2px var(--overlay),
+    0 0 0 3.5px var(--text);
+}
+.color-swatch:focus-visible {
+  outline-offset: 3px;
+}
+
+/* The New session dialog's color row and ability option. */
+.session-color-picker {
+  align-items: center;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 9px 10px;
+}
+.session-color-picker > span:first-child {
+  display: grid;
+  gap: 2px;
+}
+.session-color-picker strong,
+.session-ability-option strong {
+  color: var(--secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+.session-color-picker small,
+.session-ability-option small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.session-color-picker .color-swatches {
+  padding: 0;
+}
+.session-color-picker .color-swatch[aria-checked="true"] {
+  box-shadow:
+    0 0 0 2px var(--elevated),
+    0 0 0 3.5px var(--text);
+}
+.session-ability-option {
+  align-items: center;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex !important;
+  flex-direction: row !important;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 9px 10px;
+}
+.session-ability-option > span {
+  display: grid;
+  gap: 2px;
+}
+/* A switch like the skills panel's, drawn inside a menu item that is itself
+   the control. */
+.menu-switch {
+  background: var(--line-strong);
+  border-radius: 999px;
+  flex: none;
+  height: 16px;
+  position: relative;
+  transition: background 140ms ease;
+  width: 28px;
+}
+.menu-switch::after {
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
+  content: "";
+  height: 12px;
+  left: 2px;
+  position: absolute;
+  top: 2px;
+  transition: transform 140ms ease;
+  width: 12px;
+}
+.menu-switch[data-on="true"] {
+  background: var(--accent);
+}
+.menu-switch[data-on="true"]::after {
+  transform: translateX(12px);
+}
+
+/* The routine bar above the terminal of a session holding routines. */
+.routine-bar {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--session-color, var(--line-strong));
+  border-radius: 9px;
+  font-size: 12px;
+  margin-bottom: 8px;
+  padding: 6px 8px 6px 10px;
+}
+.routine-bar[data-held="true"] {
+  border-color: rgb(240 180 76 / 0.45);
+  border-left-color: var(--session-color, var(--session-gold));
+}
+.routine-bar-row {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+.routine-bar-text {
+  color: var(--secondary);
+  flex: 1;
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.routine-bar[data-paused="true"] .routine-bar-text {
+  color: var(--muted);
+}
+.routine-bar-notice {
+  color: var(--danger);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.routine-bar-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+.routine-bar-actions button {
+  font-size: 11px !important;
+  padding: 3px 8px !important;
+}
+.routine-bar-waiting {
+  margin-top: 4px;
+}
+.routine-bar-waiting > summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  width: max-content;
+}
+.routine-bar-waiting ul {
+  display: grid;
+  gap: 2px;
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+.routine-bar-waiting li {
+  display: flex;
+  gap: 8px;
+}
+.routine-bar-waiting small {
+  color: var(--muted);
+}
+
+/* The Routines drawer, over the right of the terminal. */
+.terminal-stage {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+}
+.routines-panel {
+  background: var(--overlay);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  bottom: 8px;
+  box-shadow: 0 18px 50px rgb(0 0 0 / 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: calc(100% - 16px);
+  overflow-y: auto;
+  padding: 14px 16px;
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  width: 400px;
+  z-index: 20;
+}
+.app[data-theme="light"] .routines-panel {
+  box-shadow: 0 14px 40px rgb(75 95 128 / 0.28);
+}
+.routines-panel-heading {
+  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+}
+.routines-panel-heading h2 {
+  font-size: 16px;
+  margin: 2px 0 0;
+}
+.routines-panel h3 {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin: 6px 0 0;
+  text-transform: uppercase;
+}
+.routines-panel-purpose {
+  display: grid;
+  gap: 6px;
+  justify-items: end;
+}
+.routines-panel-purpose label {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+}
+.routines-panel-purpose strong {
+  color: var(--secondary);
+  font-size: 12px;
+}
+.routines-panel-purpose small,
+.routines-panel-empty {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  margin: 0;
+}
+.routines-panel-purpose textarea {
+  font: inherit;
+  font-size: 12px;
+  margin-top: 4px;
+  resize: vertical;
+}
+.routines-panel-error {
+  color: var(--danger);
+  font-size: 12px;
+  margin: 0;
+}
+.routines-panel-list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.routines-panel-list li {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+}
+.routines-panel-list li[data-enabled="false"] {
+  opacity: 0.6;
+}
+.routines-panel-list li[data-failing="true"] {
+  border-color: rgb(255 137 135 / 0.5);
+}
+.routine-row-head {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+.routine-row-head strong {
+  font-size: 13px;
+}
+.routine-row-head code {
+  color: var(--muted);
+  font-size: 11px;
+}
+.routine-row-meta {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.routine-row-failures {
+  color: var(--danger);
+  font-size: 11px;
+}
+.routine-row-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+}
+.routine-row-actions button {
+  font-size: 11px !important;
+  padding: 3px 8px !important;
+}
+
+/* A routine report's strip on a board card */
+.report-details {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 11px;
+  gap: 6px;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+.report-source,
+.report-verdict {
+  align-items: center;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.report-session {
+  border: 1px solid var(--session-color, var(--muted));
+  border-radius: 4px;
+  color: var(--session-color, var(--muted));
+  font-weight: 650;
+  padding: 0 5px;
+}
+.report-urgent {
+  background: var(--danger);
+  border-radius: 4px;
+  color: #fff;
+  font-weight: 650;
+  padding: 0 5px;
+  text-transform: uppercase;
+}
+.report-routine {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.report-resolved {
+  color: var(--success);
+}
+.report-reopened {
+  color: var(--session-gold);
+}
+.report-details button {
+  font-size: 11px;
+  margin: 0;
+  padding: 2px 8px;
+}
+.report-verdict-label {
+  color: var(--muted);
 }

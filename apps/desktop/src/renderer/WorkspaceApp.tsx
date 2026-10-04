@@ -37,7 +37,9 @@ import type {
   SessionWorktreeDto,
   QuitChoice,
   RepositoryDiscoveryDto,
+  RoutinesDetailDto,
   RpcResult,
+  SessionColorDto,
   SessionAttentionDto,
   ShutdownPlanDto,
   TaskDto,
@@ -62,6 +64,9 @@ import { TaskActionBar } from "./TaskActionBar";
 import { askConfirm, askText, DialogHost } from "./dialogs";
 import { buildWorldModel, worldInputFromSnapshot } from "./world/world-model";
 import { TaskPriorityMenu, TaskStatusMenu } from "./TaskStatusMenu";
+import { ColorSwatches, SessionMenu } from "./SessionMenu";
+import { RoutineBar } from "./routines/RoutineBar";
+import { RoutinesPanel } from "./routines/RoutinesPanel";
 import {
   AgentStatusDot,
   compactTokenLabel,
@@ -1767,7 +1772,6 @@ export function WorkspaceApp({
     path: string;
     name: string;
   }>();
-  const [sessionFilter, setSessionFilter] = useState<"all" | "needs-me">("all");
   const [modal, setModal] = useState<
     "workspace" | "task" | "session" | "repository" | "settings" | undefined
   >(initialModal);
@@ -1813,7 +1817,15 @@ export function WorkspaceApp({
   const [sessionForm, setSessionForm] = useState<{
     name: string;
     taskId?: string;
+    color?: SessionColorDto;
+    routines?: boolean;
   }>({ name: "" });
+  // The Routines drawer on the selected session, and what it last read.
+  const [routinesPanel, setRoutinesPanel] = useState<{
+    sessionId: string;
+    detail?: RoutinesDetailDto;
+    error?: string;
+  }>();
   const [sessionLaunches, setSessionLaunches] = useState<SessionLaunchState[]>(
     initialSessionLaunches,
   );
@@ -2366,6 +2378,20 @@ export function WorkspaceApp({
       }),
     [client, openSession],
   );
+  // A clicked routine notification lands on its task, on its board.
+  useEffect(
+    () =>
+      client.subscribeFocusTask?.((taskId) => {
+        const task = snapshotRef.current?.tasks.find(
+          (item) => item.id === taskId,
+        );
+        if (!task) return;
+        enterWorkspace(task.workspaceId, "board");
+        setSelectedTaskId(task.id);
+        setEditingTask(false);
+      }),
+    [client],
+  );
   // The host may have checked before this window existed, so ask once, then
   // follow its messages.
   useEffect(() => {
@@ -2770,27 +2796,17 @@ export function WorkspaceApp({
     : (snapshot?.agents ?? []).filter(
         (item) => item.workspaceId === workspaceId,
       );
-  const activeSessions = workspaceSessions.filter((item) => !item.archivedAt);
-  const attentionSessionIds = new Set(
-    activeSessions
-      .filter((item) => statusViewFor(item).attention)
-      .map((item) => item.id),
-  );
   // Blocked sessions used to float to the top here. They no longer do: once
   // the order is something the user placed, moving a card out from under them
-  // is the bug, not the feature. The "Needs me" filter, the card tone and the
-  // workspace roll-up count all still surface a blocked session in place.
-  const sessions = activeSessions.filter(
-    (item) => sessionFilter === "all" || attentionSessionIds.has(item.id),
-  );
+  // is the bug, not the feature. The card tone and the workspace roll-up
+  // count still surface a blocked session in place.
+  const sessions = workspaceSessions.filter((item) => !item.archivedAt);
   const sessionReorder = useListReorder({
     ids: sessions.map((item) => item.id),
     // A position is an order within one workspace, so the all-workspaces
     // list is read-only: there is no one list on the server for a drag
     // across it to write.
     disabled: showingAll,
-    // Only the visible sessions are named, so a drag inside the "Needs me"
-    // filter leaves the sessions it is hiding exactly where they were.
     onCommit: (sessionIds) =>
       perform(
         client.request.agentReorder({
@@ -2799,9 +2815,19 @@ export function WorkspaceApp({
         }),
       ),
   });
-  const orderedSessions = sessionReorder.order.flatMap(
-    (id) => sessions.find((item) => item.id === id) ?? [],
+  // Sessions holding routines, which their cards and archive dialog mark.
+  const routinesBySession = new Map(
+    (snapshot?.routines ?? []).map((status) => [status.sessionId, status]),
   );
+  // Pinned sessions sit above the rest, in the order they were pinned; the
+  // manual order holds within each group.
+  const orderedSessions = sessionReorder.order
+    .flatMap((id) => sessions.find((item) => item.id === id) ?? [])
+    .sort((left, right) =>
+      left.pinnedAt && right.pinnedAt
+        ? left.pinnedAt.localeCompare(right.pinnedAt)
+        : Number(Boolean(right.pinnedAt)) - Number(Boolean(left.pinnedAt)),
+    );
   const workspaceSessionLaunches = sessionLaunches.filter((item) =>
     inScope(item.workspaceId),
   );
@@ -2836,9 +2862,7 @@ export function WorkspaceApp({
   );
   // Deliberately not the filtered list: hiding a session from the list must
   // not tear down the terminal the user is sitting in.
-  const activeSession = activeSessions.find(
-    (item) => item.id === activeSessionId,
-  );
+  const activeSession = sessions.find((item) => item.id === activeSessionId);
   // A session that was asked to hand off, by a click or by the automatic
   // sweep, is followed to its successor: the fresh session in the same
   // working directory that started after the request. Looked up across the
@@ -2848,7 +2872,7 @@ export function WorkspaceApp({
     (item) => item.id === activeSessionId && item.handoffRequestedAt,
   );
   const handoffSuccessor = viewedHandoff
-    ? activeSessions.find(
+    ? sessions.find(
         (item) =>
           item.id !== viewedHandoff.id &&
           item.workingDirectory === viewedHandoff.workingDirectory &&
@@ -2872,6 +2896,29 @@ export function WorkspaceApp({
   const activeSessionRepository = workspaceContent?.repositories.find(
     (item) => item.id === activeSessionWorktree?.repositoryId,
   );
+  const activeSessionRoutines = snapshot?.routines.find(
+    (status) => status.sessionId === activeSession?.id,
+  );
+  // The drawer reads its runs on request, so it reads again whenever the
+  // session's routine status moves: a run went in, finished or was queued.
+  const openRoutinesStatus =
+    routinesPanel &&
+    snapshot?.routines.find(
+      (status) => status.sessionId === routinesPanel.sessionId,
+    );
+  const openRoutinesFingerprint = openRoutinesStatus
+    ? JSON.stringify([
+        openRoutinesStatus.waiting.map((run) => run.runId),
+        openRoutinesStatus.running,
+        openRoutinesStatus.paused,
+        openRoutinesStatus.nextRun,
+        openRoutinesStatus.routines,
+      ])
+    : undefined;
+  useEffect(() => {
+    if (routinesPanel && openRoutinesFingerprint)
+      void loadRoutinesDetail(routinesPanel.sessionId);
+  }, [openRoutinesFingerprint]);
   const activeSessionWorkspace = activeSession
     ? workspaceById.get(activeSession.workspaceId)
     : undefined;
@@ -3297,6 +3344,7 @@ export function WorkspaceApp({
     event.preventDefault();
     if (!sessionWorkspace) return;
     const isTerminal = sessionType === "terminal";
+    const { color, routines } = sessionForm;
     const launch: SessionLaunchState = {
       key: crypto.randomUUID(),
       workspaceId: sessionWorkspace.id,
@@ -3330,6 +3378,10 @@ export function WorkspaceApp({
         terminal: isTerminal || undefined,
         provider: isTerminal ? undefined : (sessionType as "codex" | "claude"),
         model: isTerminal || !sessionModel ? undefined : sessionModel,
+        ...(color ? { color } : {}),
+        ...(routines && !isTerminal
+          ? { abilities: ["routines" as const] }
+          : {}),
       });
       if (response.ok) {
         setSessionLaunches((current) =>
@@ -3916,6 +3968,87 @@ export function WorkspaceApp({
       client.request.agentContinue({ id: session.id }),
     );
     if (successor) openSession(successor.id);
+  }
+
+  async function updateSession(
+    session: AgentSessionDto,
+    change: { name?: string; pinned?: boolean; color?: SessionColorDto | null },
+  ) {
+    await perform(
+      client.request.sessionUpdate({ sessionId: session.id, ...change }),
+    );
+  }
+
+  async function renameSession(session: AgentSessionDto) {
+    const name = await askText({
+      title: "Rename session",
+      message: "The name shows on the card, the terminal and the World.",
+      initial: session.name,
+      confirmLabel: "Rename",
+    });
+    const trimmed = name?.trim();
+    if (trimmed && trimmed !== session.name)
+      await updateSession(session, { name: trimmed });
+  }
+
+  async function setRoutinesAbility(
+    session: AgentSessionDto,
+    granted: boolean,
+  ) {
+    if (
+      !granted &&
+      !(await askConfirm({
+        title: `Revoke routines from ${sessionName(session)}?`,
+        message:
+          "No more runs go in and waiting runs are dropped. The routines and their purpose are kept, and come back if routines are granted again.",
+        confirmLabel: "Revoke",
+      }))
+    )
+      return;
+    await perform(
+      client.request.sessionAbility({
+        sessionId: session.id,
+        ability: "routines",
+        granted,
+      }),
+    );
+    if (!granted && routinesPanel?.sessionId === session.id)
+      setRoutinesPanel(undefined);
+  }
+
+  async function loadRoutinesDetail(sessionId: string) {
+    try {
+      const response = await client.request.routinesDetail({ sessionId });
+      setRoutinesPanel((current) =>
+        current?.sessionId !== sessionId
+          ? current
+          : response.ok
+            ? { sessionId, detail: response.data }
+            : { sessionId, error: response.error.message },
+      );
+    } catch (cause) {
+      setRoutinesPanel((current) =>
+        current?.sessionId === sessionId
+          ? { sessionId, error: errorMessage(cause) }
+          : current,
+      );
+    }
+  }
+
+  function openRoutinesPanel(sessionId: string) {
+    setRoutinesPanel({ sessionId });
+    void loadRoutinesDetail(sessionId);
+  }
+
+  /** A routines request from the bar or the drawer, then a fresh drawer. */
+  async function routinesAction<T>(
+    sessionId: string,
+    operation: Promise<RpcResult<T>>,
+  ) {
+    const result = await perform(operation);
+    if (routinesPanel?.sessionId === sessionId)
+      await loadRoutinesDetail(sessionId);
+    return result;
   }
 
   async function restoreSession(session: AgentSessionDto) {
@@ -4598,6 +4731,118 @@ export function WorkspaceApp({
         </div>
       );
     });
+
+  const reportsByTask = new Map(
+    (snapshot?.routineReports ?? []).flatMap((report) =>
+      report.taskId ? [[report.taskId, report] as const] : [],
+    ),
+  );
+  const sessionsById = new Map(
+    (snapshot?.agents ?? []).map((session) => [session.id, session]),
+  );
+  const routineOwners = new Map(
+    (snapshot?.abilities ?? []).flatMap((ability) => {
+      const session = sessionsById.get(ability.sessionId);
+      return session
+        ? [[ability.id, { name: session.name, color: session.color }] as const]
+        : [];
+    }),
+  );
+  const boardView = workspace ? (
+    <BoardView
+      activity={activityById}
+      attention={attentionById}
+      availableProviders={availableBoardProviders}
+      busy={busy}
+      launches={workspaceSessionLaunches}
+      modelCatalogs={modelCatalogs}
+      now={now}
+      onCreateTask={() => setModal("task")}
+      onDismissLaunch={dismissSessionLaunch}
+      onDraftBrief={(task) => void startTaskSession(task, { draftBrief: true })}
+      onQuickCapture={quickCaptureTask}
+      onAnswer={async (session, text) =>
+        Boolean(
+          await perform(client.request.agentSend({ id: session.id, text })),
+        )
+      }
+      onMarkDone={(task) =>
+        void perform(
+          client.request.taskSetStatus({ id: task.id, status: "done" }),
+        )
+      }
+      onOpenWorktree={(worktree) =>
+        void perform(
+          client.request.sessionWorktreeOpen({
+            session: worktree.sessionId,
+            repository: worktree.repositoryId,
+          }),
+        )
+      }
+      routineReports={reportsByTask}
+      routineOwners={routineOwners}
+      onReportVerdict={(report, verdict) =>
+        void perform(
+          client.request.routineReportVerdict({
+            id: report.id,
+            verdict,
+          }),
+        )
+      }
+      onPark={(task) =>
+        void perform(
+          client.request.taskSetStatus({
+            id: task.id,
+            status: "blocked",
+          }),
+        )
+      }
+      onSecondOpinion={(task, provider) =>
+        void startTaskSession(task, { provider })
+      }
+      onStartNext={(task) => void startTaskSession(task)}
+      onNeedModels={ensureModelCatalog}
+      onOpenLink={openTerminalLink}
+      onOpenSession={(session) => {
+        // The Sessions view lists this scope's sessions, so the
+        // scope stays; the workspace underneath follows the session
+        // so the terminal heading and the content loaders agree.
+        setWorkspaceId(session.workspaceId);
+        openSession(session.id);
+        setView("sessions");
+      }}
+      onSelectTask={(task) => {
+        setSelectedTaskId(task.id);
+        setEditingTask(false);
+      }}
+      onSetInProgress={(task) =>
+        void perform(
+          client.request.taskSetStatus({
+            id: task.id,
+            status: "in_progress",
+          }),
+        )
+      }
+      onStart={(task) => void startTaskSession(task)}
+      onStartWith={(task) => openSessionModal(task)}
+      onUpdateSettings={(changes) =>
+        void perform(
+          client.request.workspaceUpdate({
+            reference: workspace.id,
+            ...changes,
+          }),
+        )
+      }
+      selectedTaskId={selectedTaskId}
+      sessions={workspaceSessions}
+      tasks={allTasks}
+      telemetry={telemetryById}
+      tmuxAvailable={Boolean(snapshot?.settings.tmuxAvailable)}
+      workspace={showingAll ? undefined : workspace}
+      workspaces={activeWorkspaces}
+      worktrees={workspaceWorktrees}
+    />
+  ) : null;
 
   return (
     <main
@@ -5348,93 +5593,7 @@ export function WorkspaceApp({
               />
             </Suspense>
           ) : view === "board" ? (
-            <BoardView
-              activity={activityById}
-              attention={attentionById}
-              availableProviders={availableBoardProviders}
-              busy={busy}
-              launches={workspaceSessionLaunches}
-              modelCatalogs={modelCatalogs}
-              now={now}
-              onCreateTask={() => setModal("task")}
-              onDismissLaunch={dismissSessionLaunch}
-              onDraftBrief={(task) =>
-                void startTaskSession(task, { draftBrief: true })
-              }
-              onQuickCapture={quickCaptureTask}
-              onAnswer={async (session, text) =>
-                Boolean(
-                  await perform(
-                    client.request.agentSend({ id: session.id, text }),
-                  ),
-                )
-              }
-              onMarkDone={(task) =>
-                void perform(
-                  client.request.taskSetStatus({ id: task.id, status: "done" }),
-                )
-              }
-              onOpenWorktree={(worktree) =>
-                void perform(
-                  client.request.sessionWorktreeOpen({
-                    session: worktree.sessionId,
-                    repository: worktree.repositoryId,
-                  }),
-                )
-              }
-              onPark={(task) =>
-                void perform(
-                  client.request.taskSetStatus({
-                    id: task.id,
-                    status: "blocked",
-                  }),
-                )
-              }
-              onSecondOpinion={(task, provider) =>
-                void startTaskSession(task, { provider })
-              }
-              onStartNext={(task) => void startTaskSession(task)}
-              onNeedModels={ensureModelCatalog}
-              onOpenLink={openTerminalLink}
-              onOpenSession={(session) => {
-                // The Sessions view lists this scope's sessions, so the
-                // scope stays; the workspace underneath follows the session
-                // so the terminal heading and the content loaders agree.
-                setWorkspaceId(session.workspaceId);
-                openSession(session.id);
-                setView("sessions");
-              }}
-              onSelectTask={(task) => {
-                setSelectedTaskId(task.id);
-                setEditingTask(false);
-              }}
-              onSetInProgress={(task) =>
-                void perform(
-                  client.request.taskSetStatus({
-                    id: task.id,
-                    status: "in_progress",
-                  }),
-                )
-              }
-              onStart={(task) => void startTaskSession(task)}
-              onStartWith={(task) => openSessionModal(task)}
-              onUpdateSettings={(changes) =>
-                void perform(
-                  client.request.workspaceUpdate({
-                    reference: workspace.id,
-                    ...changes,
-                  }),
-                )
-              }
-              selectedTaskId={selectedTaskId}
-              sessions={workspaceSessions}
-              tasks={allTasks}
-              telemetry={telemetryById}
-              tmuxAvailable={Boolean(snapshot?.settings.tmuxAvailable)}
-              workspace={showingAll ? undefined : workspace}
-              workspaces={activeWorkspaces}
-              worktrees={workspaceWorktrees}
-            />
+            boardView
           ) : (
             <>
               <div className="sessions-toolbar">
@@ -5443,27 +5602,6 @@ export function WorkspaceApp({
                   <span className="count-badge">
                     {sessions.length + visibleSessionLaunches.length}
                   </span>
-                  <button
-                    aria-pressed={sessionFilter === "needs-me"}
-                    className={`quiet session-filter-toggle${sessionFilter === "needs-me" ? " active" : ""}`}
-                    disabled={
-                      attentionSessionIds.size === 0 && sessionFilter === "all"
-                    }
-                    onClick={() =>
-                      setSessionFilter((current) =>
-                        current === "needs-me" ? "all" : "needs-me",
-                      )
-                    }
-                    title="Show only sessions waiting on you"
-                    type="button"
-                  >
-                    Needs me
-                    {attentionSessionIds.size > 0 && (
-                      <span className="session-filter-count">
-                        {attentionSessionIds.size}
-                      </span>
-                    )}
-                  </button>
                 </div>
                 <div className="panel-heading-actions">
                   <CreateButton
@@ -5489,18 +5627,12 @@ export function WorkspaceApp({
                 data-reordering={sessionReorder.draggingId ? "true" : undefined}
               >
                 {sessions.length === 0 &&
-                  visibleSessionLaunches.length === 0 &&
-                  (sessionFilter === "needs-me" ? (
-                    <div className="empty large">
-                      <strong>Nothing is waiting on you</strong>
-                      <span>Every session is working or finished.</span>
-                    </div>
-                  ) : (
+                  visibleSessionLaunches.length === 0 && (
                     <div className="empty large">
                       <strong>No sessions yet</strong>
                       <span>Create an agent or free terminal.</span>
                     </div>
-                  ))}
+                  )}
                 {visibleSessionLaunches.map((launch) => (
                   <div
                     aria-busy={launch.status === "starting"}
@@ -5557,9 +5689,14 @@ export function WorkspaceApp({
                   const timestamp = session.endedAt ?? session.startedAt;
                   const startupError = sessionStartupErrors.get(session.id);
                   const view = statusViewFor(session);
+                  const holdsRoutines = routinesBySession.has(session.id);
+                  const waitingRuns =
+                    routinesBySession.get(session.id)?.waiting.length ?? 0;
                   return (
                     <div
                       className={`session-card tone-${view.tone} ${session.id === activeSessionId ? "selected" : ""}`}
+                      data-color={session.color ?? undefined}
+                      data-pinned={session.pinnedAt ? "true" : undefined}
                       data-attention={view.attention ? "true" : undefined}
                       data-dragging={
                         sessionReorder.draggingId === session.id
@@ -5603,7 +5740,21 @@ export function WorkspaceApp({
                                 {" · "}
                               </span>
                             )}
-                            {task?.title ?? "Workspace session"}
+                            {holdsRoutines ? (
+                              <span className="session-routines-badge">
+                                Routines
+                                {waitingRuns > 0 && (
+                                  <span
+                                    className="session-waiting-badge"
+                                    title="Routine runs waiting to go in"
+                                  >
+                                    {waitingRuns} waiting
+                                  </span>
+                                )}
+                              </span>
+                            ) : (
+                              (task?.title ?? "Workspace session")
+                            )}
                           </small>
                           <em>
                             <AgentStatusDot
@@ -5656,6 +5807,27 @@ export function WorkspaceApp({
                         </button>
                       )}
                       <span className="workspace-card-actions" data-no-drag>
+                        <SessionMenu
+                          color={session.color}
+                          name={sessionName(session)}
+                          offerAbilities={
+                            session.kind === "agent" &&
+                            (session.provider === "claude" ||
+                              session.provider === "codex")
+                          }
+                          onColor={(color) =>
+                            void updateSession(session, { color })
+                          }
+                          onPin={(pinned) =>
+                            void updateSession(session, { pinned })
+                          }
+                          onRename={() => void renameSession(session)}
+                          onRoutines={(granted) =>
+                            void setRoutinesAbility(session, granted)
+                          }
+                          pinned={Boolean(session.pinnedAt)}
+                          routines={holdsRoutines}
+                        />
                         {session.kind === "agent" &&
                           (session.provider === "claude" ||
                             session.provider === "codex") && (
@@ -5683,7 +5855,11 @@ export function WorkspaceApp({
                           aria-label={`Archive ${sessionName(session)} session`}
                           className="session-card-action"
                           onClick={() => setSessionAction({ session })}
-                          title="Archive session"
+                          title={
+                            holdsRoutines
+                              ? "Archive session and pause its routines"
+                              : "Archive session"
+                          }
                           type="button"
                         >
                           <ArchiveIcon />
@@ -5859,30 +6035,101 @@ export function WorkspaceApp({
               </div>
               {activeSession && <small>{activeSession.status}</small>}
             </div>
-            {activeSession ? (
-              <TerminalSurface
-                activity={activityById.get(activeSession.id)}
-                attention={attentionById.get(activeSession.id)}
-                terminalEndpoint={terminalEndpoint}
-                focused={shouldFocusSession(focusedSessionId, activeSession.id)}
-                fitRevision={terminalFitRevision}
-                id={activeSession.id}
-                key={`${activeSession.id}:${terminalMountRevision}`}
-                label={sessionName(activeSession)}
-                locationLabel={
-                  activeSessionRepository?.name ??
-                  activeSessionWorkspace?.name ??
-                  workspace.name
+            {activeSessionRoutines && activeSession && (
+              <RoutineBar
+                busy={busy}
+                color={activeSession.color}
+                onOpenPanel={() => openRoutinesPanel(activeSession.id)}
+                onRunNow={() =>
+                  void routinesAction(
+                    activeSession.id,
+                    client.request.routineRunNow({
+                      sessionId: activeSession.id,
+                    }),
+                  )
                 }
-                onClearAttention={() => void clearAttention(activeSession.id)}
-                onFocused={clearSessionFocusRequest}
-                onOpenLink={openTerminalLink}
-                session={activeSession}
-                status={activeSession.status}
-                target="agent"
-                telemetry={activeSessionTelemetry}
-                worktree={activeSessionWorktree}
+                onTogglePause={() =>
+                  void routinesAction(
+                    activeSession.id,
+                    client.request.routinesControl({
+                      sessionId: activeSession.id,
+                      action: activeSessionRoutines.paused ? "resume" : "pause",
+                    }),
+                  )
+                }
+                status={activeSessionRoutines}
               />
+            )}
+            {activeSession ? (
+              // The drawer sits over the terminal, below the routine bar, so
+              // the bar's buttons stay in reach while it is open.
+              <div className="terminal-stage">
+                {activeSessionRoutines &&
+                  routinesPanel?.sessionId === activeSession.id && (
+                    <RoutinesPanel
+                      busy={busy}
+                      detail={routinesPanel.detail}
+                      error={routinesPanel.error}
+                      now={now}
+                      onClose={() => setRoutinesPanel(undefined)}
+                      onRunNow={(name) =>
+                        void routinesAction(
+                          activeSession.id,
+                          client.request.routineRunNow({
+                            sessionId: activeSession.id,
+                            name,
+                          }),
+                        )
+                      }
+                      onSavePurpose={(purpose) =>
+                        void routinesAction(
+                          activeSession.id,
+                          client.request.routinesPurpose({
+                            sessionId: activeSession.id,
+                            purpose,
+                          }),
+                        )
+                      }
+                      onSetEnabled={(name, enabled) =>
+                        void routinesAction(
+                          activeSession.id,
+                          client.request.routineSetEnabled({
+                            sessionId: activeSession.id,
+                            name,
+                            enabled,
+                          }),
+                        )
+                      }
+                      sessionName={sessionName(activeSession)}
+                    />
+                  )}
+                <TerminalSurface
+                  activity={activityById.get(activeSession.id)}
+                  attention={attentionById.get(activeSession.id)}
+                  terminalEndpoint={terminalEndpoint}
+                  focused={shouldFocusSession(
+                    focusedSessionId,
+                    activeSession.id,
+                  )}
+                  fitRevision={terminalFitRevision}
+                  id={activeSession.id}
+                  key={`${activeSession.id}:${terminalMountRevision}`}
+                  label={sessionName(activeSession)}
+                  locationLabel={
+                    activeSessionRepository?.name ??
+                    activeSessionWorkspace?.name ??
+                    workspace.name
+                  }
+                  onClearAttention={() => void clearAttention(activeSession.id)}
+                  onFocused={clearSessionFocusRequest}
+                  onOpenLink={openTerminalLink}
+                  session={activeSession}
+                  status={activeSession.status}
+                  target="agent"
+                  telemetry={activeSessionTelemetry}
+                  worktree={activeSessionWorktree}
+                />
+              </div>
             ) : (
               <div className="terminal-empty">
                 <strong>Select a session</strong>
@@ -6459,7 +6706,7 @@ export function WorkspaceApp({
               </div>
             </fieldset>
             {sessionType !== "terminal" && (
-              <label className="session-model-picker">
+              <div className="session-model-picker">
                 <span>
                   <strong>Model</strong>
                   <small>
@@ -6471,6 +6718,7 @@ export function WorkspaceApp({
                   </small>
                 </span>
                 <select
+                  aria-label="Model"
                   disabled={sessionModelCatalogPending || modelCatalogLoading}
                   onChange={(event) => setSessionModel(event.target.value)}
                   value={sessionModel}
@@ -6522,37 +6770,63 @@ export function WorkspaceApp({
                     Model list unavailable: {modelCatalogError}
                   </small>
                 )}
-              </label>
+                {!sessionChoiceIsWorkspaceDefault && (
+                  <label className="session-model-remember">
+                    <input
+                      checked={rememberSessionModel}
+                      onChange={(event) =>
+                        setRememberSessionModel(event.target.checked)
+                      }
+                      type="checkbox"
+                    />
+                    <span>
+                      Remember{" "}
+                      <strong>
+                        {providerLabel(sessionType)} ·{" "}
+                        {selectedSessionModel?.label ??
+                          (sessionModel || "provider default")}
+                      </strong>{" "}
+                      as this workspace&apos;s default
+                    </span>
+                  </label>
+                )}
+              </div>
             )}
-            {sessionType !== "terminal" && !sessionChoiceIsWorkspaceDefault && (
-              <label className="session-model-remember">
+            <div className="session-color-picker">
+              <span>
+                <strong>Color</strong>
+                <small>On the card&apos;s edge and the World figure</small>
+              </span>
+              <ColorSwatches
+                onChange={(color) =>
+                  setSessionForm({ ...sessionForm, color: color ?? undefined })
+                }
+                value={sessionForm.color ?? null}
+              />
+            </div>
+            {sessionType !== "terminal" && (
+              <label className="session-ability-option">
+                <span>
+                  <strong>Routines</strong>
+                  <small>
+                    Checks this session runs on a schedule while the app is
+                    open. Ask it for routines once it starts.
+                  </small>
+                </span>
                 <input
-                  checked={rememberSessionModel}
+                  aria-label="Routines enabled"
+                  checked={Boolean(sessionForm.routines)}
+                  className="switch"
                   onChange={(event) =>
-                    setRememberSessionModel(event.target.checked)
+                    setSessionForm({
+                      ...sessionForm,
+                      routines: event.target.checked,
+                    })
                   }
                   type="checkbox"
                 />
-                <span>
-                  Remember{" "}
-                  <strong>
-                    {providerLabel(sessionType)} ·{" "}
-                    {selectedSessionModel?.label ??
-                      (sessionModel || "provider default")}
-                  </strong>{" "}
-                  as this workspace&apos;s default
-                </span>
               </label>
             )}
-            <div className="session-workspace-note">
-              <span className="workspace-icon">
-                {sessionWorkspace.name.slice(0, 1).toUpperCase()}
-              </span>
-              <span>
-                <strong>{sessionWorkspace.name}</strong>
-                <small>Opens in {sessionWorkspace.path}</small>
-              </span>
-            </div>
             <div className="modal-actions">
               <button
                 className="quiet"
@@ -6681,6 +6955,12 @@ export function WorkspaceApp({
               Running work will stop, but its conversation can be restored and
               resumed later.
             </p>
+            {routinesBySession.has(sessionAction.session.id) && (
+              <p>
+                This session runs routines. Archiving pauses them and keeps them
+                and their tasks. Restoring the session resumes them.
+              </p>
+            )}
             <div className="modal-actions">
               <button
                 className="quiet"

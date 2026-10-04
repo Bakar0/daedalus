@@ -1,5 +1,6 @@
 import {
   mkdir,
+  readdir,
   readFile,
   readlink,
   rm,
@@ -85,6 +86,29 @@ describe("skill frontmatter", () => {
   });
 });
 
+describe("built-in skill text", () => {
+  // A session's environment cannot be trusted: Claude can move a session into
+  // the background and run its commands with another Claude process's
+  // environment. The CLI is reached by `{{daedal}}` and works out the session
+  // from the working directory, so no skill reads these variables.
+  test("never reads the session's environment", async () => {
+    const root = join(import.meta.dir, "../../../../skills");
+    const files = (await readdir(root, { recursive: true })).filter((file) =>
+      file.endsWith(".md"),
+    );
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      const text = await readFile(join(root, file), "utf8");
+      expect(
+        text.match(
+          /DAEDALUS_(HOME|SESSION_ID|TASK_ID|TASK_NUMBER|WORKSPACE_ID)/g,
+        ),
+        file,
+      ).toBeNull();
+    }
+  });
+});
+
 describe("SkillService", () => {
   test("a fresh install arrives with every shipped capability on", async () => {
     await withSkillHomes(
@@ -99,8 +123,15 @@ describe("SkillService", () => {
         expect(handoff).toContain("name: daedalus-handoff");
         expect(handoff).toContain("$ARGUMENTS");
         expect(handoff).toContain(
-          '"$DAEDALUS_HOME/bin/daedal" agent continue --handoff-file',
+          `"${join(home, "bin", "daedal")}" agent continue --handoff-file`,
         );
+        // The routine skills name this home's CLI by its full path.
+        const routine = await readFile(
+          join(claudeHome, "skills", "daedalus-routine", "SKILL.md"),
+          "utf8",
+        );
+        expect(routine).toContain(`"${join(home, "bin", "daedal")}"`);
+        expect(routine).not.toContain("{{daedal}}");
         expect(
           await readlink(join(agentsHome, "skills", "daedalus-handoff")),
         ).toBe(join(home, "skills", "daedalus-handoff"));

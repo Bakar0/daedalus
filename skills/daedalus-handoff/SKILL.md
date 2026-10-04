@@ -17,11 +17,9 @@ $ARGUMENTS
 
 ## Resolve the CLI once
 
-Use `"$DAEDALUS_HOME/bin/daedal"`. Daedalus sets `DAEDALUS_HOME` in every
-session it starts, and the `daedal` on `PATH` can belong to a different
-Daedalus build, one that does not know this session. Only when `DAEDALUS_HOME`
-is unset, use `daedal` from `PATH`. Use the same executable for every command
-below.
+Use `"{{daedal}}"` for every command below, exactly that path. It is this
+Daedalus build's CLI, and it works out which session you are from your
+working directory, so no command here needs a session id.
 
 ## 1. Stop
 
@@ -56,10 +54,10 @@ Do not restate the task brief; the next agent reads it. Do not paste output.
 
 ## 3. Continue
 
-Run, as your last action:
+Run, as your last action, from your working directory:
 
 ```sh
-"$DAEDALUS_HOME/bin/daedal" agent continue --handoff-file "$PWD/HANDOFF.md"
+"{{daedal}}" agent continue --handoff-file "$PWD/HANDOFF.md"
 ```
 
 Pass the user's extra instructions with `--message "<text>"` as well, so they

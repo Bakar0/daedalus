@@ -13,6 +13,14 @@ describe("bundled CLI shim", () => {
     );
   });
 
+  test("pins its own home, whatever DAEDALUS_HOME it inherits", () => {
+    expect(
+      cliShimContents("/bun", "/app/cli/daedal.js", "/Users/me/.daedalus-dev"),
+    ).toBe(
+      "#!/bin/sh\nDAEDALUS_HOME='/Users/me/.daedalus-dev' exec '/bun' '/app/cli/daedal.js' \"$@\"\n",
+    );
+  });
+
   test("quotes paths without allowing shell interpolation", () => {
     expect(cliShimContents("/tmp/bun's", "/tmp/app's/cli.js")).toContain(
       "'/tmp/bun'\\''s' '/tmp/app'\\''s/cli.js'",

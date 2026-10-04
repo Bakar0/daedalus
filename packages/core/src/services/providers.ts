@@ -113,13 +113,14 @@ const withoutSettingsArgument = (args: string[]): string[] => {
 export async function claudeDaedalusSettingsArgs(
   config: DaedalusConfig,
   existingArgs: string[],
+  sessionId?: string,
 ): Promise<string[]> {
   // The skill system contributes two keys here: `outputStyle`, which is what
   // actually turns an installed writing style on, and `skillOverrides` for
   // skills the user switched off. Both ride the settings argument Daedalus
   // already passes, so neither one edits the user's own settings file.
   const daedalus: ClaudeSettings = {
-    ...daedalusClaudeSettings(daedalExecutable(config)),
+    ...daedalusClaudeSettings(daedalExecutable(config), sessionId),
     ...new SkillService(config).claudeSkillSettings(),
   };
   const existingValue = settingsArgumentValue(existingArgs);
@@ -595,7 +596,11 @@ class ConfiguredProvider implements AgentProvider {
       args.splice(
         0,
         args.length,
-        ...(await claudeDaedalusSettingsArgs(this.config, args)),
+        ...(await claudeDaedalusSettingsArgs(
+          this.config,
+          args,
+          input.sessionId,
+        )),
       );
     if (this.promptArgument && this.name === "claude" && input.sessionId) {
       providerSessionId = input.sessionId;
@@ -704,7 +709,17 @@ export function buildHandoffRequest(
   provider: "claude" | "codex",
   skillName: string,
 ): string {
-  return provider === "claude" ? `/${skillName}` : `$${skillName}`;
+  return buildSkillInvocation(provider, skillName);
+}
+
+/** A skill typed into a session: `/name args` in Claude, `$name args` in Codex. */
+export function buildSkillInvocation(
+  provider: "claude" | "codex",
+  skillName: string,
+  args = "",
+): string {
+  const invocation = provider === "claude" ? `/${skillName}` : `$${skillName}`;
+  return args.trim() ? `${invocation} ${args.trim()}` : invocation;
 }
 
 export function buildAgentPrompt(input: {

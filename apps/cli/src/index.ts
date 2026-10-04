@@ -10,14 +10,24 @@ import {
   observeCodexHook,
   pendingBackgroundAgents,
   resolveAgentExecutable,
+  sessionColor,
   sweepProviderActivity,
   writeActivityRecord,
   type ActivityObservation,
   type AgentActivityState,
+  type AgentSession,
   type ApplicationContext,
   type TaskCost,
   type ManagedSkillStatus,
 } from "@daedalus/core";
+import {
+  expectPositionals,
+  parseArguments,
+  printResult,
+  required,
+} from "./arguments";
+import { callerSession } from "./caller";
+import { routineCommand, routineHelp, sessionCommand } from "./routines";
 import { findTmuxExecutable, probeVersion } from "@daedalus/platform";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -37,9 +47,19 @@ const VERIFIED_BUN_RUNTIMES = [VERIFIED_BUN, BUNDLED_BUN];
 const SESSION_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-async function captureClaudeTelemetry(): Promise<number> {
+/**
+ * The session a hook reports for: `--session <id>` on its command when
+ * Daedalus wrote one there, which Claude cannot swap out the way it can the
+ * environment of a session it moved into the background.
+ */
+function hookSession(args: string[]): string | undefined {
+  const index = args.indexOf("--session");
+  return index === -1 ? undefined : args[index + 1];
+}
+
+async function captureClaudeTelemetry(session?: string): Promise<number> {
   try {
-    const sessionId = process.env.DAEDALUS_SESSION_ID;
+    const sessionId = session ?? process.env.DAEDALUS_SESSION_ID;
     const home = process.env.DAEDALUS_HOME;
     if (!sessionId || !SESSION_ID.test(sessionId) || !home) return 0;
     const input = await Bun.stdin.text();
@@ -92,9 +112,10 @@ async function captureClaudeTelemetry(): Promise<number> {
 async function captureAgentEvent(
   event: string,
   migrationsDirectory?: string,
+  session?: string,
 ): Promise<number> {
   try {
-    const sessionId = process.env.DAEDALUS_SESSION_ID;
+    const sessionId = session ?? process.env.DAEDALUS_SESSION_ID;
     const home = process.env.DAEDALUS_HOME;
     if (!sessionId || !SESSION_ID.test(sessionId) || !home) return 0;
     const input = await Bun.stdin.text();
@@ -107,6 +128,15 @@ async function captureAgentEvent(
       typeof payload.thread_id === "string"
         ? "codex"
         : "claude";
+    // A session with routines sits at its prompt after every run. Claude's
+    // minute-later idle notice would raise a badge each time, for a prompt
+    // nobody needs to answer, so it is dropped for those sessions.
+    if (
+      event === "Notification" &&
+      payload.notification_type === "idle_prompt" &&
+      (await holdsRoutines(sessionId, migrationsDirectory))
+    )
+      return 0;
     const observation =
       provider === "codex"
         ? observeCodexHook(event, payload)
@@ -127,6 +157,25 @@ async function captureAgentEvent(
     // An activity hook must never interfere with the provider session.
   }
   return 0;
+}
+
+/** Whether a session holds the routines ability now. Never throws. */
+async function holdsRoutines(
+  sessionId: string,
+  migrationsDirectory?: string,
+): Promise<boolean> {
+  let context: ApplicationContext | undefined;
+  try {
+    context = await createApplicationContext({
+      reconcile: false,
+      ...(migrationsDirectory ? { migrationsDirectory } : {}),
+    });
+    return Boolean(context.abilities.held(sessionId, "routines"));
+  } catch {
+    return false;
+  } finally {
+    context?.close();
+  }
 }
 
 /**
@@ -242,14 +291,17 @@ Usage:
   daedal repo <library|list|add|attach|sync|fetch|detach|worktree> ... [--json]
   daedal agent <spawn|list|get|wait|attach|send|archive|restore|revive|stop|remove> ... [--json]
   daedal skill <list|get|enable|disable|visibility|install|remove|sync|doctor> ... [--json]
+  daedal session <rename|pin|unpin|color|abilities|grant|revoke> ... [--json]
+  daedal routine <add|list|get|enable|disable|run|remove|purpose|pause|resume|runs|start|done|fail|report|resolve|reports|feedback> ... [--json]
   daedal attention "<reason>" [--session <agent-id>] [--clear] [--json]
   daedal notify "<message>" [--level info|success|error] [--desktop] [--json]
   daedal ui state [--json]
-  daedal focus <agent-id> [--json]
+  daedal focus <agent-id> | --task <task-id> [--json]
 
 Run 'daedal <command> --help' for command details.`;
 
 const commandHelp: Record<string, string> = {
+  ...routineHelp,
   workspace: `Workspace commands:
   daedal workspace create <name> [--slug <slug>] [--path <path>]
   daedal workspace list [--archived]
@@ -307,6 +359,7 @@ it was cleared, journal entries whose heading names the task, and done.`,
   agent: `Agent commands:
   daedal agent models <codex|claude>
   daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>] [--draft-brief]
+  daedal agent spawn ... [--ability <ability>[,<ability>]] [--color <color>] [--pin]
   daedal agent list [--workspace <workspace>] [--running|--archived]
   daedal agent reorder --workspace <workspace> <agent-id> [<agent-id>...]
   daedal agent get <agent-id>
@@ -337,6 +390,11 @@ workspace's --start-sets-in-progress setting is on, which is the default.
 --draft-brief links the session to the task but asks it to write the brief
 back with 'task update --description-file -' instead of doing the task, and
 leaves the status alone.
+
+'agent spawn --ability routines' starts a session that holds the routines
+ability: the user asks it for routines and Daedalus types their runs into
+it. --color and --pin mark the session's card. See 'daedal session --help'
+and 'daedal routine --help'.
 
 'agent spawn' without --model starts with the workspace's default model when
 --provider is the workspace's default provider. Otherwise Claude is asked for
@@ -377,7 +435,7 @@ elsewhere, a desktop notification when it is backgrounded or they are idle.
 --desktop forces the desktop channel. Use 'daedal attention' instead when the
 session is blocked and the alert has to persist.`,
   focus: `Focus command:
-  daedal focus <agent-id>
+  daedal focus <agent-id> | --task <task-id>
 
 Raises the Daedalus window and selects that session. This is what a clicked
 notification runs, and it works whether or not the app is already open.`,
@@ -420,50 +478,6 @@ Reports where the user is — app running, foreground, which workspace and
 session, seconds idle, and whether Focus mode is on — so an agent can choose
 its own channel before pinging.`,
 };
-
-interface ParsedArguments {
-  positionals: string[];
-  values: Record<string, string>;
-  flags: Set<string>;
-}
-
-function parseArguments(
-  args: string[],
-  valueOptions: string[],
-  booleanOptions: string[] = [],
-): ParsedArguments {
-  const values: Record<string, string> = {};
-  const flags = new Set<string>();
-  const positionals: string[] = [];
-  for (let index = 0; index < args.length; index += 1) {
-    const argument = args[index]!;
-    if (!argument.startsWith("--")) {
-      positionals.push(argument);
-      continue;
-    }
-    const name = argument.slice(2);
-    if (booleanOptions.includes(name)) {
-      flags.add(name);
-      continue;
-    }
-    if (!valueOptions.includes(name))
-      throw new DaedalusError("VALIDATION", `Unknown option '--${name}'`);
-    const value = args[index + 1];
-    if (value === undefined || value.startsWith("--"))
-      throw new DaedalusError(
-        "VALIDATION",
-        `Option '--${name}' requires a value`,
-      );
-    if (values[name] !== undefined)
-      throw new DaedalusError(
-        "VALIDATION",
-        `Option '--${name}' was provided more than once`,
-      );
-    values[name] = value;
-    index += 1;
-  }
-  return { positionals, values, flags };
-}
 
 const durationLabel = (milliseconds: number) => {
   const minutes = Math.max(0, Math.floor(milliseconds / 60_000));
@@ -511,26 +525,6 @@ async function descriptionOption(
       `Description file '${file}' was not found`,
     );
   return source.text();
-}
-
-function required(value: string | undefined, description: string): string {
-  if (value === undefined)
-    throw new DaedalusError("VALIDATION", `${description} is required`);
-  return value;
-}
-
-function expectPositionals(
-  values: string[],
-  count: number,
-  usage: string,
-): void {
-  if (values.length !== count)
-    throw new DaedalusError("VALIDATION", `Usage: ${usage}`);
-}
-
-function printResult(data: unknown, json: boolean, human: () => void): void {
-  if (json) console.log(JSON.stringify({ ok: true, data }));
-  else human();
 }
 
 /**
@@ -812,13 +806,12 @@ async function workspaceCommand(
 }
 
 async function currentSessionTask(context: ApplicationContext) {
-  const taskId = process.env.DAEDALUS_TASK_ID;
+  // The session first: `DAEDALUS_TASK_ID` can come from another session's
+  // environment (see `callerSession`).
+  const session = await callerSession(context);
+  if (session?.taskId) return context.tasks.get(session.taskId);
+  const taskId = session ? undefined : process.env.DAEDALUS_TASK_ID;
   if (taskId) return context.tasks.get(taskId);
-  const sessionId = process.env.DAEDALUS_SESSION_ID;
-  if (sessionId) {
-    const session = await context.agents.get(sessionId);
-    if (session.taskId) return context.tasks.get(session.taskId);
-  }
   throw new DaedalusError(
     "VALIDATION",
     "No task is assigned to the current Daedalus session",
@@ -839,11 +832,8 @@ async function resolveTaskReference(
 
   const number = Number(scoped?.[2] ?? numeric?.[1]);
   let workspace = scoped?.[1] ?? workspaceReference;
+  if (!workspace) workspace = (await callerSession(context))?.workspaceId;
   if (!workspace) workspace = process.env.DAEDALUS_WORKSPACE_ID;
-  if (!workspace && process.env.DAEDALUS_SESSION_ID) {
-    const session = await context.agents.get(process.env.DAEDALUS_SESSION_ID);
-    workspace = session.workspaceId;
-  }
   if (!workspace && process.env.DAEDALUS_TASK_ID) {
     workspace = context.tasks.get(process.env.DAEDALUS_TASK_ID).workspaceId;
   }
@@ -1080,8 +1070,18 @@ async function agentCommand(
   if (action === "spawn") {
     const parsed = parseArguments(
       args,
-      ["workspace", "provider", "command", "task", "name", "model", "message"],
-      ["draft-brief"],
+      [
+        "workspace",
+        "provider",
+        "command",
+        "task",
+        "name",
+        "model",
+        "message",
+        "ability",
+        "color",
+      ],
+      ["draft-brief", "pin"],
     );
     expectPositionals(
       parsed.positionals,
@@ -1101,6 +1101,18 @@ async function agentCommand(
       model: parsed.values.model,
       message: parsed.values.message,
       draftBrief: parsed.flags.has("draft-brief") || undefined,
+      ...(parsed.values.ability
+        ? {
+            abilities: parsed.values.ability
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean),
+          }
+        : {}),
+      ...(parsed.values.color
+        ? { color: sessionColor(parsed.values.color) }
+        : {}),
+      ...(parsed.flags.has("pin") ? { pinned: true } : {}),
     });
     printResult(result, json, () =>
       console.log(
@@ -1288,17 +1300,25 @@ async function agentContinueCommand(
   json: boolean,
   options: CliOptions,
 ): Promise<number> {
-  const parsed = parseArguments(args, [
-    "handoff-file",
-    "provider",
-    "model",
-    "message",
-  ]);
+  const parsed = parseArguments(
+    args,
+    ["handoff-file", "provider", "model", "message"],
+    ["self"],
+  );
   const usage =
-    "daedal agent continue [<agent-id>] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--message <text>]";
-  if (parsed.positionals.length > 1)
+    "daedal agent continue [<agent-id> | --self] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--message <text>]";
+  if (
+    parsed.positionals.length > 1 ||
+    (parsed.flags.has("self") && parsed.positionals.length)
+  )
     throw new DaedalusError("VALIDATION", `Usage: ${usage}`);
-  const id = parsed.positionals[0] ?? process.env.DAEDALUS_SESSION_ID;
+  // `--self` is what the bare form already means; it stays accepted for
+  // handoff skills installed before it became the default.
+  const named = parsed.positionals[0];
+  const caller = named
+    ? await callerSession(context).catch(() => undefined)
+    : await callerSession(context);
+  const id = named ?? caller?.id;
   if (!id)
     throw new DaedalusError(
       "VALIDATION",
@@ -1323,7 +1343,7 @@ async function agentContinueCommand(
     handoff = await source.text();
   }
   const predecessor = await context.agents.get(id);
-  const self = predecessor.id === process.env.DAEDALUS_SESSION_ID;
+  const self = predecessor.id === caller?.id;
   const result = await context.agents.continueSession({
     id: predecessor.id,
     handoff,
@@ -1515,9 +1535,7 @@ async function agentWaitCommand(
     ? await currentSessionId(context, parsed.values.session)
     : parsed.values.workspace
       ? undefined
-      : process.env.DAEDALUS_SESSION_ID
-        ? await currentSessionId(context)
-        : undefined;
+      : (await callerSession(context))?.id;
   if (!sessionId && !parsed.values.workspace)
     throw new DaedalusError(
       "VALIDATION",
@@ -1611,20 +1629,20 @@ const ATTENTION_ACTIVITY = new Set(["needs_permission", "needs_input"]);
 
 /**
  * Resolves the session the caller is speaking for. An agent almost never
- * passes `--session`: it is running inside one, and `DAEDALUS_SESSION_ID` is
- * the whole point of the environment contract.
+ * passes `--session`: it is running inside one, and `callerSession` finds it.
  */
 async function currentSessionId(
   context: ApplicationContext,
   explicit?: string,
 ): Promise<string> {
-  const reference = explicit ?? process.env.DAEDALUS_SESSION_ID;
-  if (!reference)
+  if (explicit) return (await context.agents.get(explicit)).id;
+  const caller = await callerSession(context);
+  if (!caller)
     throw new DaedalusError(
       "VALIDATION",
       "No Daedalus session; pass --session <agent-id>",
     );
-  return (await context.agents.get(reference)).id;
+  return caller.id;
 }
 
 async function attentionCommand(
@@ -1704,11 +1722,9 @@ async function notifyCommand(
       "VALIDATION",
       "Level must be one of info, success, error",
     );
-  const sessionReference =
-    parsed.values.session ?? process.env.DAEDALUS_SESSION_ID;
-  const session = sessionReference
-    ? await context.agents.get(sessionReference)
-    : undefined;
+  const session = parsed.values.session
+    ? await context.agents.get(parsed.values.session)
+    : await callerSession(context);
   const workspace = session
     ? await context.workspaces.get(session.workspaceId)
     : undefined;
@@ -1737,7 +1753,20 @@ async function focusCommand(
   args: string[],
   json: boolean,
 ): Promise<number> {
-  const parsed = parseArguments(args, []);
+  const parsed = parseArguments(args, ["task"]);
+  if (parsed.values.task !== undefined) {
+    expectPositionals(parsed.positionals, 0, "daedal focus --task <task-id>");
+    const task = context.tasks.get(parsed.values.task);
+    const result = await context.presence.requestTaskFocus(task.id);
+    printResult({ taskId: task.id, ...result }, json, () =>
+      console.log(
+        result.raised
+          ? `Focused task ${task.id}`
+          : `Requested focus for task ${task.id}; could not raise the app`,
+      ),
+    );
+    return 0;
+  }
   expectPositionals(parsed.positionals, 1, "daedal focus <agent-id>");
   const session = await context.agents.get(parsed.positionals[0]!);
   const result = await context.presence.requestFocus(session.id);
@@ -2358,9 +2387,13 @@ export async function runCli(
   const json = inputArgs.includes("--json");
   const args = inputArgs.filter((argument) => argument !== "--json");
   if (args[0] === "agent" && args[1] === "telemetry")
-    return captureClaudeTelemetry();
+    return captureClaudeTelemetry(hookSession(args.slice(2)));
   if (args[0] === "agent" && args[1] === "event" && args[2])
-    return captureAgentEvent(args[2], options.migrationsDirectory);
+    return captureAgentEvent(
+      args[2],
+      options.migrationsDirectory,
+      hookSession(args.slice(3)),
+    );
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
     console.log(help);
     return 0;
@@ -2393,6 +2426,8 @@ export async function runCli(
       "ui",
       "focus",
       "shutdown",
+      "session",
+      "routine",
     ].includes(args[0]!)
   )
     throw new DaedalusError("VALIDATION", `Unknown command '${args[0]}'`);
@@ -2417,6 +2452,12 @@ export async function runCli(
       return await focusCommand(context, args.slice(1), json);
     if (args[0] === "shutdown")
       return await shutdownCommand(context, args.slice(1), json);
+    if (args[0] === "session")
+      return await sessionCommand(context, args.slice(1), json);
+    if (args[0] === "routine")
+      return await routineCommand(context, args.slice(1), json, (reference) =>
+        resolveTaskReference(context, reference),
+      );
     return await agentCommand(context, args.slice(1), json, options);
   } finally {
     context.close();

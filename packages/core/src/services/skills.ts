@@ -62,6 +62,8 @@ import unslopSkillTemplate from "../../../../skills/unslop/SKILL.md" with { type
 import handoffSkillTemplate from "../../../../skills/daedalus-handoff/SKILL.md" with { type: "text" };
 import handoffOpenAiMetadata from "../../../../skills/daedalus-handoff/agents/openai.yaml" with { type: "text" };
 import unslopStyleTemplate from "../../../../styles/Unslop.md" with { type: "text" };
+import routinesSkillTemplate from "../../../../skills/daedalus-routines/SKILL.md" with { type: "text" };
+import routineRunSkillTemplate from "../../../../skills/daedalus-routine/SKILL.md" with { type: "text" };
 
 export type SkillProvider = "claude" | "codex" | "cursor";
 export type SkillOrigin = "daedalus" | "user" | "plugin";
@@ -140,6 +142,26 @@ export const MANAGED_SKILLS: readonly ManagedSkillDefinition[] = [
       { path: "SKILL.md", contents: handoffSkillTemplate },
       { path: "agents/openai.yaml", contents: handoffOpenAiMetadata },
     ],
+  },
+  {
+    id: "daedalus-routines",
+    title: "Routines",
+    summary:
+      "Lets a session that holds the routines ability create and change its routines when the user asks for them. Sessions without the ability cannot use it.",
+    supportsAlways: false,
+    defaultEnabled: true,
+    defaultMode: "on-demand",
+    skillFiles: [{ path: "SKILL.md", contents: routinesSkillTemplate }],
+  },
+  {
+    id: "daedalus-routine",
+    title: "Routine run",
+    summary:
+      "What a session with the routines ability does when Daedalus types a routine run into it: run the check, file what it finds as tasks, and close the run.",
+    supportsAlways: false,
+    defaultEnabled: true,
+    defaultMode: "on-demand",
+    skillFiles: [{ path: "SKILL.md", contents: routineRunSkillTemplate }],
   },
   {
     id: "unslop",
@@ -745,17 +767,16 @@ export class SkillService {
     style?: { fileName: string; styleName: string; contents: string };
   } {
     const linkName = channelArtifactName(this.config, definition.id);
-    const skillFiles =
-      linkName === definition.id
-        ? definition.skillFiles
-        : definition.skillFiles.map((file) =>
-            file.path === "SKILL.md"
-              ? {
-                  ...file,
-                  contents: withFrontmatterName(file.contents, linkName),
-                }
-              : file,
-          );
+    // `{{daedal}}` in a built-in skill is this home's CLI, by full path. The
+    // skill cannot work it out from `DAEDALUS_HOME`: a Claude session moved
+    // into the background runs commands with another process's environment.
+    const daedal = join(this.config.home, "bin", "daedal");
+    const skillFiles = definition.skillFiles.map((file) => {
+      const contents = file.contents.replaceAll("{{daedal}}", daedal);
+      return file.path === "SKILL.md" && linkName !== definition.id
+        ? { ...file, contents: withFrontmatterName(contents, linkName) }
+        : { ...file, contents };
+    });
     if (!definition.style) return { id: definition.id, linkName, skillFiles };
     const styleName = channelArtifactName(
       this.config,

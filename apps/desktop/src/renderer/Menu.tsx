@@ -18,8 +18,11 @@ import {
   type ReactNode,
 } from "react";
 
-const ITEMS =
-  '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled)';
+const ITEMS = [
+  '[role="menuitem"]:not(:disabled)',
+  '[role="menuitemradio"]:not(:disabled)',
+  '[role="menuitemcheckbox"]:not(:disabled)',
+].join(", ");
 
 export function Menu({
   align = "start",

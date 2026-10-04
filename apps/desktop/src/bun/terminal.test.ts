@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
   authorizeTerminalRequest,
   BoundedTerminalBuffer,
+  isTyping,
   TerminalConnection,
 } from "./terminal";
 
@@ -165,5 +166,25 @@ describe("terminal connection lifecycle", () => {
     );
     expect(closeBridge).toHaveBeenCalledOnce();
     expect(closeSocket).toHaveBeenCalledOnce();
+  });
+});
+
+describe("isTyping", () => {
+  test("a keystroke is typing; the terminal answering for itself is not", () => {
+    expect(isTyping("a")).toBe(true);
+    expect(isTyping("\r")).toBe(true);
+    expect(isTyping("\x1b")).toBe(true);
+    // Focus reports, a cursor position report and a device attributes answer.
+    expect(isTyping("\x1b[I")).toBe(false);
+    expect(isTyping("\x1b[O")).toBe(false);
+    expect(isTyping("\x1b[12;40R")).toBe(false);
+    expect(isTyping("\x1b[?62;22c")).toBe(false);
+    expect(isTyping("\x1b]11;rgb:0000/0000/0000\x07")).toBe(false);
+    // A DCS answer, such as xterm.js's reply to a version query.
+    expect(isTyping("\x1bP>|xterm.js(5.5.0)\x1b\\")).toBe(false);
+    expect(isTyping("\x1b[Ix")).toBe(true);
+    // Mouse reports scroll and select; they are not typing.
+    expect(isTyping("\x1b[<64;10;5M\x1b[<65;10;5M")).toBe(false);
+    expect(isTyping("\x1b[M`!!")).toBe(false);
   });
 });

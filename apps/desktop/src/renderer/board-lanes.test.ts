@@ -55,6 +55,8 @@ const session = (
   lostReason: null,
   handoffRequestedAt: null,
   position: 0,
+  pinnedAt: null,
+  color: null,
   ...overrides,
 });
 

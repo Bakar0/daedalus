@@ -73,6 +73,8 @@ export interface WorldActor {
   unconfirmed: boolean;
   contextPercent: number | null;
   model: string | null;
+  /** The session's color, which its figure wears as trim. */
+  color: AgentSessionDto["color"];
 }
 
 export interface WorldZone {
@@ -418,6 +420,7 @@ export function buildWorldModel(input: WorldModelInput): WorldModel {
       unconfirmed: view.unconfirmed,
       contextPercent: telemetry?.context?.usedPercent ?? null,
       model: telemetry?.model ?? null,
+      color: session.color,
     });
   }
   const wins = trophiesByZone(input.tasks, input.shipped);

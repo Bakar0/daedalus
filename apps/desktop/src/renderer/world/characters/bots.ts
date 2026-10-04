@@ -4,11 +4,14 @@ import type { ActorFrame, WorldCharacter, WorldLook } from "../world-theme";
 import { COSTUMES, type Costume, type CostumeFrame } from "./costumes";
 import { ATTENTION, blinking, DONE, ERROR, FigureBase } from "./parts";
 import { personaFor, type Persona } from "./personas";
+import { SESSION_COLOR_HEX } from "../session-color";
 
 /**
  * Little hovering robots. The screen is the face, the antenna light is the
  * state, and the thruster cuts out when the bot is idle and lands. Claude's
- * are cream with coral trim, Codex's are graphite with a green glow. Each
+ * are cream with coral trim, Codex's are graphite with a green glow. A
+ * session given a color wears it as its trim, the band and arms, so it is
+ * the same color as its card's edge; the shell keeps the provider's. Each
  * one is dressed as a figure from Greek myth (see `personas.ts`), and the
  * costume never covers the face or the light.
  */
@@ -35,16 +38,22 @@ const TOP = -56;
 
 class Bot extends FigureBase {
   private readonly g = new Graphics();
-  private readonly finish: Finish;
+  private readonly base: Finish;
   readonly persona: Persona;
   private readonly costume: Costume;
 
   constructor(actor: WorldActor, look: WorldLook, persona?: Persona) {
     super(actor, look, TOP);
-    this.finish = FINISHES[actor.provider] ?? OTHER;
+    this.base = FINISHES[actor.provider] ?? OTHER;
     this.persona = persona ?? personaFor(actor.sessionId);
     this.costume = COSTUMES[this.persona.id];
     this.body.addChild(this.g);
+  }
+
+  /** Read every frame, so a color picked on the card shows at once. */
+  private get finish(): Finish {
+    const color = this.actor.color;
+    return color ? { ...this.base, trim: SESSION_COLOR_HEX[color] } : this.base;
   }
 
   protected pose(t: number, { walking }: ActorFrame) {

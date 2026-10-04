@@ -45,10 +45,10 @@ export const IDLE_SECONDS_THRESHOLD = 300;
 /** A focus request older than this is stale and is dropped rather than obeyed. */
 export const FOCUS_REQUEST_MAX_AGE_MS = 60_000;
 
-export interface FocusRequest {
-  sessionId: string;
-  requestedAt: string;
-}
+/** What to select: a session, or a task on its board. */
+export type FocusRequest =
+  | { sessionId: string; taskId?: undefined; requestedAt: string }
+  | { taskId: string; sessionId?: undefined; requestedAt: string };
 
 export interface PresenceReport {
   appForeground: boolean;
@@ -252,20 +252,22 @@ export class PresenceService {
    * notification, running `daedal focus` — is almost never the app itself.
    */
   async requestFocus(sessionId: string): Promise<{ raised: boolean }> {
+    return this.parkFocus({ sessionId, requestedAt: new Date().toISOString() });
+  }
+
+  /** The same for a task, which is what a routine's notification opens. */
+  async requestTaskFocus(taskId: string): Promise<{ raised: boolean }> {
+    return this.parkFocus({ taskId, requestedAt: new Date().toISOString() });
+  }
+
+  private async parkFocus(request: FocusRequest): Promise<{ raised: boolean }> {
     await ensureDirectory(this.config.home);
     const temporaryPath = join(
       this.config.home,
       `focus-request.${crypto.randomUUID()}.tmp`,
     );
     try {
-      await writeFile(
-        temporaryPath,
-        JSON.stringify({
-          sessionId,
-          requestedAt: new Date().toISOString(),
-        } satisfies FocusRequest),
-        { flag: "wx" },
-      );
+      await writeFile(temporaryPath, JSON.stringify(request), { flag: "wx" });
       await rename(temporaryPath, this.focusRequestPath);
     } finally {
       await rm(temporaryPath, { force: true });

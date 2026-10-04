@@ -17,11 +17,12 @@ async function cli(
   args: string[],
   env: Record<string, string> = {},
   stdin?: string,
+  cwd = join(import.meta.dir, "../../.."),
 ): Promise<CliResult> {
   const child = Bun.spawn(
     [process.execPath, "run", join(import.meta.dir, "index.ts"), ...args],
     {
-      cwd: join(import.meta.dir, "../../.."),
+      cwd,
       env: { ...process.env, DAEDALUS_HOME: home, ...env },
       stdin: stdin === undefined ? "ignore" : new Blob([stdin]),
       stdout: "pipe",
@@ -447,6 +448,58 @@ describe("daedal CLI contract", () => {
     });
   });
 
+  test("session and routine commands check their input before starting anything", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const workspace = await cli(home, [
+        "workspace",
+        "create",
+        "Ops",
+        "--json",
+      ]);
+      expect(workspace.exitCode).toBe(0);
+      const spawn = (...extra: string[]) =>
+        cli(home, [
+          "agent",
+          "spawn",
+          "--workspace",
+          "ops",
+          "--provider",
+          "claude",
+          ...extra,
+          "--json",
+        ]);
+      const unknown = await spawn("--ability", "oracle");
+      expect(JSON.parse(unknown.stderr).error.message).toContain(
+        "Unknown ability 'oracle'",
+      );
+      const color = await spawn("--color", "mauve");
+      expect(JSON.parse(color.stderr).error.message).toContain(
+        "Color must be one of",
+      );
+      // Outside a session there is no session to default to.
+      const none = await cli(home, ["routine", "list", "--json"], {
+        DAEDALUS_SESSION_ID: "",
+      });
+      expect(JSON.parse(none.stderr).error.message).toContain("Pass --session");
+      const missing = await cli(home, [
+        "session",
+        "grant",
+        "Argus",
+        "routines",
+        "--json",
+      ]);
+      expect(JSON.parse(missing.stderr).error.message).toContain(
+        "Session 'Argus' was not found",
+      );
+      const help = await cli(home, ["routine", "--help"]);
+      expect(help.stdout).toContain("daedal routine report --run <run-id>");
+      expect(help.stdout).not.toMatch(/finding|resident|routine agent/i);
+      expect((await cli(home, ["session", "--help"])).stdout).toContain(
+        "daedal session grant <session> <ability>",
+      );
+    });
+  });
+
   test("shuts everything down, and refuses to race the app while it is open", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       await Bun.write(
@@ -594,11 +647,15 @@ describe("daedal CLI contract", () => {
         workingDirectory: string;
       };
 
+      // As the handoff skill runs it: from the session's own directory, with
+      // an environment that names some other session, the way a Claude
+      // session moved into the background sees it.
       const continued = await cli(
         home,
         ["agent", "continue", "--handoff-file", "-", "--json"],
-        { ...env, DAEDALUS_SESSION_ID: first.id },
+        { ...env, DAEDALUS_SESSION_ID: crypto.randomUUID() },
         "Next: finish step 2.",
+        first.workingDirectory,
       );
       expect(continued.stderr).toBe("");
       expect(continued.exitCode).toBe(0);
@@ -630,6 +687,16 @@ describe("daedal CLI contract", () => {
       await cli(home, ["shutdown", "--json"]);
     });
   }, 30_000);
+
+  test("continue refuses outside every session's directory", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const result = await cli(home, ["agent", "continue", "--self"], {
+        DAEDALUS_SESSION_ID: crypto.randomUUID(),
+      });
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("Pass the session to continue");
+    });
+  });
 
   test("reports presence so an agent can pick its own channel", async () => {
     await withTemporaryDaedalusHome(async (home) => {

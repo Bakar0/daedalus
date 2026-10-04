@@ -41,7 +41,11 @@ import { installCliShim } from "./cli-shim";
 import { QuitController } from "./quit";
 import { UpdateController } from "./updates";
 import { createDesktopRequestHandlers, desktopDataFingerprint } from "./rpc";
-import { authorizeTerminalRequest, TerminalConnection } from "./terminal";
+import {
+  authorizeTerminalRequest,
+  isTyping,
+  TerminalConnection,
+} from "./terminal";
 
 interface SocketData {
   initialSize?: { cols: number; rows: number };
@@ -156,6 +160,7 @@ if (await pathExists(cliEntrypoint))
     path: join(context.config.home, "bin", "daedal"),
     bunExecutable: process.execPath,
     cliEntrypoint,
+    home: context.config.home,
   });
 // Skills are installed from here rather than from the application context,
 // so a CLI run never writes into the user's provider directories as a side
@@ -248,6 +253,12 @@ const server = Bun.serve<SocketData>({
               socket.data.initialSize,
               terminalTmux.executable,
             ),
+          onInput: (data) => {
+            // A real keystroke holds Daedalus's own typing into this
+            // session for a while, so a routine never lands in a draft.
+            if (socket.data.targetKind === "agent" && isTyping(data))
+              context.deliveryGate.noteKeystroke(target.id);
+          },
           onError: (error) =>
             void context.logger.write("error", "terminal_connection_failed", {
               targetId: target.id,
@@ -708,6 +719,24 @@ setInterval(async () => {
         context.agents.sweepAutoHandoffs(telemetry.sessionTelemetry),
       )
       .catch(() => undefined);
+    // Routines ride the tick too: the clock lives in the app, so nothing
+    // fires while it is closed. Grant and revoke notes go through the same
+    // delivery rule.
+    if (context.repositories.abilities.list().length) {
+      const telemetry = await context.telemetry.read().catch(() => undefined);
+      const contextUse = new Map(
+        (telemetry?.sessionTelemetry ?? []).map((item) => [
+          item.sessionId,
+          item.context?.usedPercent,
+        ]),
+      );
+      const routineTick = await context.routineDelivery.tick({
+        contextPercent: (sessionId) => contextUse.get(sessionId),
+        activity: (sessionId) => context.activity.get(sessionId),
+      });
+      for (const event of routineTick.events)
+        await context.logger.write("info", "routines", { event });
+    }
     for (const [socket, connection] of connections) {
       const target =
         socket.data.targetKind === "agent"
@@ -724,7 +753,9 @@ setInterval(async () => {
     // `daedal focus` parks a request and raises the app; the window learns
     // which session to select here.
     const focusRequest = await context.presence.takeFocusRequest();
-    if (focusRequest)
+    if (focusRequest?.taskId)
+      rpc.send.focusTask({ taskId: focusRequest.taskId });
+    else if (focusRequest?.sessionId)
       rpc.send.focusSession({ sessionId: focusRequest.sessionId });
     // A session asked for from the World window while the main one was
     // closed: sent once the reopened window has had a tick to load.

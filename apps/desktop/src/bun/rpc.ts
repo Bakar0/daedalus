@@ -11,6 +11,10 @@ import {
   type PendingNotification,
   type PresenceState,
   type RepositoryLibraryEntry,
+  type Routine,
+  type RoutineRun,
+  type RoutinesStatus,
+  type SessionAbility,
   type SessionAttention,
   type Task,
   type Workspace,
@@ -28,6 +32,11 @@ import type {
   IntegratedTerminalDto,
   PresenceStateDto,
   RepositoryLibraryDto,
+  RoutineDto,
+  RoutineRunDto,
+  RoutinesDetailDto,
+  RoutinesStatusDto,
+  SessionAbilityDto,
   RpcResult,
   SessionAttentionDto,
   TaskDto,
@@ -191,6 +200,15 @@ export async function desktopSnapshot(
       .map((item) => ({ ...item })),
     attention: context.activity.listAttention().map(sessionAttentionDto),
     toasts: context.notifications.pending("toast").map(toastDto),
+    abilities: context.repositories.abilities.list().map(sessionAbilityDto),
+    routines: context.abilities
+      .holders("routines")
+      .map((ability) =>
+        routinesStatusDto(context.routineDelivery.status(ability)),
+      ),
+    routineReports: context.repositories.routines
+      .listReportsWithTasks()
+      .map((report) => ({ ...report })),
     settings: {
       version: packageJson.version,
       channel: channelName(context.config.home),
@@ -222,7 +240,115 @@ export function desktopDataFingerprint(context: ApplicationContext): string {
     activity: context.repositories.listAgentActivity(),
     attention: context.repositories.listSessionAttention(),
     notifications: context.repositories.listPendingNotifications(),
+    // A run starting or ending, or a hold changing, changes what the
+    // session's bar says, so it reloads too.
+    abilities: context.repositories.abilities.list().map((ability) => ({
+      ability,
+      ...(ability.enabled && ability.ability === "routines"
+        ? {
+            status: fingerprintStatus(context.routineDelivery.status(ability)),
+            routines: context.repositories.routines.list(ability.id),
+            reports: context.repositories.routines.listReports(ability.id, {
+              states: ["open", "resolved"],
+            }),
+          }
+        : {}),
+    })),
   });
+}
+
+/**
+ * A routines status as the fingerprint sees it. Every keystroke moves the
+ * quiet time, so the times are rounded to ten seconds: a reload per tick
+ * while the user types would resend the whole snapshot for nothing.
+ */
+const fingerprintStatus = (status: RoutinesStatus) => ({
+  ...status,
+  lastKeystrokeAt: null,
+  hold: status.hold
+    ? {
+        ...status.hold,
+        until: status.hold.until
+          ? Math.floor(Date.parse(status.hold.until) / 10_000)
+          : undefined,
+      }
+    : null,
+});
+
+const sessionAbilityDto = (ability: SessionAbility): SessionAbilityDto => ({
+  id: ability.id,
+  sessionId: ability.sessionId,
+  ability: ability.ability,
+  enabled: ability.enabled,
+  paused: ability.paused,
+  purpose: ability.config.purpose ?? null,
+  noteWaiting: Boolean(ability.pendingNote),
+  grantedAt: ability.grantedAt,
+});
+
+const routinesStatusDto = (status: RoutinesStatus): RoutinesStatusDto => ({
+  abilityId: status.ability.id,
+  sessionId: status.ability.sessionId,
+  paused: status.ability.paused,
+  waiting: status.waiting.map((run) => ({
+    runId: run.id,
+    routine: run.routine,
+    queuedAt: run.queuedAt,
+  })),
+  running: status.running,
+  hold: status.hold ? { ...status.hold } : null,
+  nextRun: status.nextRun ? { ...status.nextRun } : null,
+  lastKeystrokeAt: status.lastKeystrokeAt,
+  routines: status.routines,
+  openReports: status.openReports,
+  openUrgentReports: status.openUrgentReports,
+  openReportTasks: status.openReportTasks,
+});
+
+const routineRunDto = (run: RoutineRun): RoutineRunDto => ({
+  id: run.id,
+  routine: run.routine,
+  status: run.status,
+  queuedAt: run.queuedAt,
+  deliveredAt: run.deliveredAt,
+  startedAt: run.startedAt,
+  finishedAt: run.finishedAt,
+  outcome: run.outcome,
+  summary: run.summary,
+  missedMs: run.missedMs,
+});
+
+const routineDto = (
+  routine: Routine,
+  lastRun: RoutineRun | null,
+): RoutineDto => ({
+  name: routine.name,
+  schedule: routine.schedule.text,
+  until: routine.until,
+  model: routine.model,
+  timeoutMs: routine.timeoutMs,
+  output: routine.output,
+  enabled: routine.enabled,
+  nextRunAt: routine.enabled ? routine.nextRunAt : null,
+  lastRunAt: routine.lastRunAt,
+  consecutiveFailures: routine.consecutiveFailures,
+  lastRun: lastRun ? routineRunDto(lastRun) : null,
+});
+
+function routinesDetail(
+  context: ApplicationContext,
+  sessionId: string,
+): RoutinesDetailDto {
+  const ability = context.abilities.require(sessionId, "routines");
+  const { routines, templates } = context.routines.list(ability);
+  return {
+    purpose: ability.config.purpose ?? null,
+    routines: routines.map(({ routine, lastRun }) =>
+      routineDto(routine, lastRun),
+    ),
+    templates: templates.map((template) => routineDto(template, null)),
+    runs: context.routines.runs(ability, { limit: 100 }).map(routineRunDto),
+  };
 }
 
 /**
@@ -258,6 +384,76 @@ export function createDesktopRequestHandlers(
 
   return {
     snapshot: () => result(() => desktopSnapshot(context)),
+    sessionUpdate: ({ sessionId, name, pinned, color }) =>
+      mutate(async () => {
+        if (name !== undefined) await context.agents.rename(sessionId, name);
+        if (pinned !== undefined)
+          await context.agents.setPinned(sessionId, pinned);
+        if (color !== undefined)
+          await context.agents.setColor(sessionId, color);
+        return agentDto(await context.agents.get(sessionId));
+      }),
+    sessionAbility: ({ sessionId, ability, granted }) =>
+      mutate(() =>
+        sessionAbilityDto(
+          granted
+            ? context.abilities.grant(sessionId, ability, { live: true })
+            : context.abilities.revoke(sessionId, ability),
+        ),
+      ),
+    routinesDetail: ({ sessionId }) =>
+      result(() => routinesDetail(context, sessionId)),
+    routinesControl: ({ sessionId, action }) =>
+      mutate(() =>
+        sessionAbilityDto(
+          context.abilities.setPaused(
+            sessionId,
+            "routines",
+            action === "pause",
+          ),
+        ),
+      ),
+    routinesPurpose: ({ sessionId, purpose }) =>
+      mutate(() =>
+        sessionAbilityDto(
+          context.abilities.configure(
+            sessionId,
+            "routines",
+            "purpose",
+            purpose,
+          ),
+        ),
+      ),
+    routineSetEnabled: ({ sessionId, name, enabled }) =>
+      mutate(() => {
+        const routine = context.routines.setEnabled(
+          context.abilities.require(sessionId, "routines"),
+          name,
+          enabled,
+        );
+        return { name: routine.name, enabled: routine.enabled };
+      }),
+    routineRunNow: ({ sessionId, name }) =>
+      mutate(() => {
+        const run = context.routineDelivery.runNow(
+          context.abilities.require(sessionId, "routines"),
+          name,
+        );
+        return {
+          ...routineRunDto(run),
+          ...(run.alreadyQueued ? { alreadyQueued: true } : {}),
+        };
+      }),
+    routineReportVerdict: ({ id, verdict }) =>
+      mutate(() => {
+        const report = context.repositories.routines.findReport(id);
+        const ability = report
+          ? context.repositories.abilities.find(report.abilityId)
+          : undefined;
+        if (!ability)
+          throw new DaedalusError("NOT_FOUND", `Report '${id}' was not found`);
+        return { ...context.routineReports.verdict(ability, id, verdict) };
+      }),
     windowRole: () => result(() => ({ role: windows.role })),
     worldWindowOpen: () =>
       result(() => {

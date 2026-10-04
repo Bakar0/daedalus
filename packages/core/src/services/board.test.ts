@@ -421,6 +421,8 @@ describe("task timeline", () => {
     handoffRequestedAt: null,
     resumeOnStart: false,
     position: 0,
+    pinnedAt: null,
+    color: null,
   };
 
   test("orders a join over sessions, worktrees, attention and the journal", () => {
@@ -695,6 +697,8 @@ describe("task cost", () => {
       handoffRequestedAt: null,
       resumeOnStart: false,
       position: 0,
+      pinnedAt: null,
+      color: null,
     };
     const stopped = {
       ...base,

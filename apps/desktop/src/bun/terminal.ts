@@ -114,6 +114,11 @@ export interface TerminalConnectionOptions {
   status: "live" | "reconnected";
   createBridge: (onOutput: (output: Uint8Array) => void) => TerminalBridge;
   onError?: (error: unknown) => void;
+  /**
+   * Called on every input frame, before it reaches the terminal, so the host
+   * knows when the user last typed in a session.
+   */
+  onInput?: (data: string) => void;
 }
 
 export class TerminalConnection {
@@ -158,6 +163,7 @@ export class TerminalConnection {
             TERMINAL_INPUT_LIMIT
         )
           throw new Error("Terminal input frame is too large");
+        this.options.onInput?.(message.data);
         const operation = this.#inputChain.then(() => {
           this.bridge.write(message.data);
         });
@@ -226,4 +232,28 @@ export class TerminalConnection {
   private sendJson(message: TerminalServerMessage): void {
     if (!this.#closed) this.options.socket.send(JSON.stringify(message));
   }
+}
+
+/**
+ * Whether an input frame is the user typing, as opposed to the terminal
+ * talking for itself. xterm sends focus reports when a TUI asks for them,
+ * and answers cursor and device queries on its own; those are escape
+ * sequences with nothing else in the frame. A frame with anything left once
+ * they are removed is a keystroke.
+ */
+export function isTyping(data: string): boolean {
+  const rest = data
+    // X10 mouse reports carry three raw bytes after ESC [ M; scrolling and
+    // selecting are not typing.
+    .replace(/\x1b\[M[\s\S]{3}/g, "")
+    // OSC: ESC ] ... BEL or ESC \
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    // DCS, SOS, PM and APC: ESC P|X|^|_ ... ESC \. xterm answers a version or
+    // setting query with a DCS string, and an answer is not typing.
+    .replace(/\x1b[PX^_][\s\S]*?\x1b\\/g, "")
+    // CSI: ESC [ params intermediates final, including focus ESC[I / ESC[O
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    // SS3 and other two-byte escapes
+    .replace(/\x1b[O@-_][^\x1b]?/g, "");
+  return rest.length > 0;
 }

@@ -14,6 +14,11 @@ import { JsonLogger } from "../logging";
 import { runMigrations } from "../repositories/migrations";
 import { SqliteRepositories } from "../repositories/sqlite";
 import { ActivityService } from "./activity";
+import { AbilityService } from "./abilities";
+import { DeliveryGate } from "./delivery";
+import { RoutineDelivery } from "./routine-delivery";
+import { RoutineReportService } from "./routine-reports";
+import { RoutineService } from "./routines";
 import { SkillService } from "./skills";
 import { AgentService } from "./agents";
 import { IntegratedTerminalService } from "./integrated-terminals";
@@ -50,6 +55,13 @@ export interface ApplicationContext {
   notifications: NotificationService;
   activity: ActivityService;
   skills: SkillService;
+  abilities: AbilityService;
+  routines: RoutineService;
+  routineReports: RoutineReportService;
+  /** The routine clock; only the desktop host ticks it. */
+  routineDelivery: RoutineDelivery;
+  /** Keystrokes per session, and the rule for typing into a session. */
+  deliveryGate: DeliveryGate;
   /** Ends everything at once. Nothing else in the app reaches for it. */
   shutdown: ShutdownService;
   tmux: TmuxClient;
@@ -107,6 +119,7 @@ export async function createApplicationContext(
     );
   let agents!: AgentService;
   let activity!: ActivityService;
+  const abilities = new AbilityService(repositories, config, options.now);
   const workspaces = new WorkspaceService(
     repositories,
     config.workspaceRoot,
@@ -131,6 +144,7 @@ export async function createApplicationContext(
     tasks,
     tmux,
     config,
+    abilities,
     (sessionId) => activity.forget(sessionId),
   );
   const terminals = new IntegratedTerminalService(
@@ -167,6 +181,31 @@ export async function createApplicationContext(
     home: config.home,
     ...(options.now ? { now: options.now } : {}),
   });
+  const routines = new RoutineService(
+    repositories,
+    async (sessionId, reason) => {
+      await activity.raise({ sessionId, reason });
+    },
+    options.now,
+  );
+  abilities.onRevoke("routines", (ability) =>
+    routines.skipUndelivered(ability, "Skipped: the ability was revoked"),
+  );
+  const routineReports = new RoutineReportService(
+    repositories,
+    notifications,
+    options.now,
+  );
+  const deliveryGate = new DeliveryGate(options.now);
+  const routineDelivery = new RoutineDelivery(
+    repositories,
+    abilities,
+    agents,
+    routines,
+    routineReports,
+    deliveryGate,
+    options.now,
+  );
   if (options.reconcile !== false) {
     // A clone only lives as long as the process running it, so anything still
     // marked as preparing belongs to a run that is over.
@@ -195,6 +234,11 @@ export async function createApplicationContext(
     notifications,
     activity,
     skills: new SkillService(config),
+    abilities,
+    routines,
+    routineReports,
+    routineDelivery,
+    deliveryGate,
     shutdown: new ShutdownService(repositories, agents, terminals, tmux),
     tmux,
     // Watchers are kernel resources held outside the database, so they are

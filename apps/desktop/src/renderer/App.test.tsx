@@ -53,6 +53,9 @@ const base: DesktopSnapshotDto = {
   worktrees: [],
   shipped: [],
   toasts: [],
+  abilities: [],
+  routines: [],
+  routineReports: [],
   settings: {
     version: "0.3.0",
     channel: "stable",
@@ -289,6 +292,8 @@ describe("desktop application shell", () => {
           lostReason: null,
           handoffRequestedAt: null,
           position: 1,
+          pinnedAt: null,
+          color: null,
         },
       ),
     ).toBe(true);
@@ -462,6 +467,8 @@ describe("desktop application shell", () => {
       lostReason: null,
       handoffRequestedAt: null,
       position: 0,
+      pinnedAt: null,
+      color: null,
     });
     const two: DesktopSnapshotDto = {
       ...base,
@@ -1082,6 +1089,8 @@ describe("desktop application shell", () => {
           lostReason: null,
           handoffRequestedAt: null,
           position: 1,
+          pinnedAt: null,
+          color: null,
         },
         {
           id: "agent-needs-attention",
@@ -1104,6 +1113,8 @@ describe("desktop application shell", () => {
           lostReason: null,
           handoffRequestedAt: null,
           position: 1,
+          pinnedAt: null,
+          color: null,
         },
       ],
       settings: {
@@ -1338,6 +1349,8 @@ describe("desktop application shell", () => {
       lostReason: null,
       handoffRequestedAt: null,
       position: 0,
+      pinnedAt: null,
+      color: null,
     });
     const html = renderToStaticMarkup(
       <App
@@ -1493,6 +1506,8 @@ describe("desktop application shell", () => {
       lostReason: null,
       handoffRequestedAt: null,
       position: 1,
+      pinnedAt: null,
+      color: null,
     };
     const snapshot: DesktopSnapshotDto = {
       ...base,
@@ -1602,6 +1617,8 @@ describe("desktop application shell", () => {
           lostReason: null,
           handoffRequestedAt: null,
           position: 1,
+          pinnedAt: null,
+          color: null,
         },
       ],
     };
@@ -1626,7 +1643,7 @@ describe("desktop application shell", () => {
     expect(html).toContain('viewBox="0 0 24 24"');
     expect(html).not.toContain(">CX<");
     expect(html).not.toContain(">CL<");
-    expect(html).toContain("Opens in /tmp/demo");
+    expect(html).not.toContain("Opens in /tmp/demo");
     expect(html).not.toContain("Linked task");
     expect(html).not.toContain("Activity");
   });
@@ -1673,6 +1690,8 @@ describe("desktop application shell", () => {
           lostReason: null,
           handoffRequestedAt: null,
           position: 1,
+          pinnedAt: null,
+          color: null,
         },
       ],
       settings: { ...base.settings, tmuxAvailable: true },
@@ -1788,6 +1807,8 @@ describe("desktop application shell", () => {
           lostReason: null,
           handoffRequestedAt: null,
           position: 1,
+          pinnedAt: null,
+          color: null,
         },
       ],
     };
@@ -1942,6 +1963,8 @@ const liveSession: AgentSessionDto = {
   lostReason: null,
   handoffRequestedAt: null,
   position: 1,
+  pinnedAt: null,
+  color: null,
 };
 
 const at = (iso: string) => Date.parse(iso);
@@ -2163,12 +2186,11 @@ describe("session status indicators", () => {
     expect(html).toContain("Bash(git push)");
     // It no longer floats above the working session. The list order became the
     // user's when it became draggable, and moving a card out from under them
-    // to make a point they can already see — tone, badge, roll-up, filter — is
+    // to make a point they can already see — tone, badge, roll-up — is
     // the behaviour a manual order exists to stop.
     expect(html.indexOf(`data-session-id="${liveSession.id}"`)).toBeLessThan(
       html.indexOf(`data-session-id="${blocked.id}"`),
     );
-    expect(html).toContain("session-filter-toggle");
   });
 
   test("renders queued toasts and never more than the cap", () => {

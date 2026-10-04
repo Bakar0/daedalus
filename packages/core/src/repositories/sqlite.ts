@@ -12,6 +12,7 @@ import type {
   PendingNotification,
   RepositoryLibraryEntry,
   SessionAttention,
+  SessionColor,
   SessionWorktree,
   WorkspaceRepositoryStatus,
   StoredAgentActivity,
@@ -22,6 +23,7 @@ import type {
   WorkspaceRepository,
   WorkspaceRepositoryAccess,
 } from "../domain";
+import { AbilityRepository, RoutineRepository } from "./abilities";
 
 interface WorkspaceRow {
   id: string;
@@ -78,6 +80,8 @@ interface AgentRow {
   resume_on_start: number;
   handoff_requested_at: string | null;
   position: number;
+  pinned_at: string | null;
+  color: SessionColor | null;
 }
 
 interface IntegratedTerminalRow {
@@ -179,6 +183,8 @@ const agentFromRow = (row: AgentRow): AgentSession => ({
   resumeOnStart: row.resume_on_start === 1,
   handoffRequestedAt: row.handoff_requested_at,
   position: row.position,
+  pinnedAt: row.pinned_at,
+  color: row.color,
 });
 
 const integratedTerminalFromRow = (
@@ -324,11 +330,16 @@ const pendingNotificationFromRow = (
 export class SqliteRepositories {
   readonly database: Database;
 
+  readonly abilities: AbilityRepository;
+  readonly routines: RoutineRepository;
+
   constructor(databasePath: string) {
     this.database = new Database(databasePath, { create: true });
     this.database.exec(
       "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;",
     );
+    this.abilities = new AbilityRepository(this.database);
+    this.routines = new RoutineRepository(this.database);
   }
 
   /**
@@ -345,6 +356,17 @@ export class SqliteRepositories {
 
   transaction<T>(operation: () => T): T {
     return this.database.transaction(operation)();
+  }
+
+  /**
+   * A transaction that takes the write lock before it reads. Two processes
+   * that both read and then write under a deferred transaction can each see
+   * the other's row missing; under WAL the second one's upgrade then fails
+   * outright instead of waiting. Taking the lock first makes the second
+   * process wait for the busy timeout and read the first one's row.
+   */
+  immediateTransaction<T>(operation: () => T): T {
+    return this.database.transaction(operation).immediate();
   }
 
   createWorkspace(workspace: Workspace): void {
@@ -757,8 +779,8 @@ export class SqliteRepositories {
          (id, workspace_id, task_id, name, provider, kind, tmux_session, command, args,
           working_directory, status, exit_code, started_at, ended_at,
           provider_session_id, archived_at, resume_count, lost_reason,
-          resume_on_start, handoff_requested_at, position)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          resume_on_start, handoff_requested_at, position, pinned_at, color)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         agent.id,
@@ -782,7 +804,32 @@ export class SqliteRepositories {
         agent.resumeOnStart ? 1 : 0,
         agent.handoffRequestedAt,
         agent.position,
+        agent.pinnedAt,
+        agent.color,
       );
+  }
+
+  /**
+   * The user's labels on a session. Each is its own write, because the
+   * scheduler and the reconcile pass save whole rows from older copies and
+   * `updateAgent` leaves these columns alone.
+   */
+  renameAgent(id: string, name: string): void {
+    this.database
+      .query("UPDATE agent_sessions SET name = ? WHERE id = ?")
+      .run(name, id);
+  }
+
+  setAgentPinned(id: string, pinnedAt: string | null): void {
+    this.database
+      .query("UPDATE agent_sessions SET pinned_at = ? WHERE id = ?")
+      .run(pinnedAt, id);
+  }
+
+  setAgentColor(id: string, color: SessionColor | null): void {
+    this.database
+      .query("UPDATE agent_sessions SET color = ? WHERE id = ?")
+      .run(color, id);
   }
 
   /** The slot a newly started session takes. See `nextWorkspacePosition`. */

@@ -46,6 +46,8 @@ const snapshot: DesktopSnapshotDto = {
       lostReason: null,
       handoffRequestedAt: null,
       position: 1,
+      pinnedAt: null,
+      color: null,
     },
     {
       id: "panel-test-blocked",
@@ -68,6 +70,8 @@ const snapshot: DesktopSnapshotDto = {
       lostReason: null,
       handoffRequestedAt: null,
       position: 1,
+      pinnedAt: null,
+      color: null,
     },
     // A fourth card, still starting. Opening a session that has not finished
     // starting is the ordinary way to open a new one, and the transition to
@@ -94,6 +98,8 @@ const snapshot: DesktopSnapshotDto = {
       lostReason: null,
       handoffRequestedAt: null,
       position: 4,
+      pinnedAt: null,
+      color: null,
     },
     // A third card, so a drag has somewhere to travel and the reorder check
     // can move one past two others rather than just swapping a pair.
@@ -118,6 +124,8 @@ const snapshot: DesktopSnapshotDto = {
       lostReason: null,
       handoffRequestedAt: null,
       position: 3,
+      pinnedAt: null,
+      color: null,
     },
   ],
   terminals: [],
@@ -195,6 +203,9 @@ const snapshot: DesktopSnapshotDto = {
   ],
   shipped: [],
   toasts: [],
+  abilities: [],
+  routines: [],
+  routineReports: [],
   settings: {
     version: "0.3.0",
     channel: "stable",

@@ -8,7 +8,13 @@
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { askConfirm } from "./dialogs";
+import {
+  ReportDetails,
+  type ReportOwner,
+  type ReportVerdictChoice,
+} from "./routines/ReportDetails";
 import type {
+  RoutineReportDto,
   AgentActivityDto,
   AgentSessionDto,
   ProviderModelCatalogDto,
@@ -98,6 +104,14 @@ export interface BoardViewProps {
   onMarkDone: (task: TaskDto) => void;
   /** Sets the task blocked, which moves it to Parked. */
   onPark: (task: TaskDto) => void;
+  /** Routine reports by the task they opened. */
+  routineReports?: ReadonlyMap<string, RoutineReportDto>;
+  /** The session behind each routines ability, for the chip on its tasks. */
+  routineOwners?: ReadonlyMap<string, ReportOwner>;
+  onReportVerdict?: (
+    report: RoutineReportDto,
+    verdict: ReportVerdictChoice,
+  ) => void;
   onUpdateSettings: (changes: {
     startSetsInProgress?: boolean;
     autoHandoffPercent?: number | null;
@@ -694,6 +708,7 @@ export function BoardView(props: BoardViewProps) {
       const target = tasksById.get(reference.taskId);
       return target ? [{ reference, target }] : [];
     });
+    const report = props.routineReports?.get(task.id);
     return (
       <article
         aria-label={cardLabel}
@@ -717,6 +732,15 @@ export function BoardView(props: BoardViewProps) {
             </span>
           )}
         </div>
+        {report && props.onReportVerdict && (
+          <ReportDetails
+            owner={props.routineOwners?.get(report.abilityId)}
+            busy={props.busy}
+            onOpenLink={props.onOpenLink}
+            onVerdict={props.onReportVerdict}
+            report={report}
+          />
+        )}
         {references.length > 0 && (
           <div aria-label="Referenced tasks" className="board-card-chips">
             {references.map(({ reference, target }) => (

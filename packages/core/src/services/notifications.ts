@@ -27,6 +27,13 @@ export interface NotificationRequest {
   blocking?: boolean;
   /** Ask for the desktop channel regardless of where the user is. */
   desktop?: boolean;
+  /**
+   * Gets through Focus mode. For a routine's urgent report, which the user
+   * chose to be interrupted for; Focus mode still holds everything else.
+   */
+  urgent?: boolean;
+  /** A clicked desktop alert opens this task rather than the session. */
+  taskId?: string;
 }
 
 export type NotificationSuppression =
@@ -69,7 +76,8 @@ export function routeNotification(
   // user is looking at is what teaches people to dismiss alerts unread.
   if (watching && !request.desktop)
     return { channel: null, suppressed: "on_screen" };
-  if (focusMode) return { channel: null, suppressed: "focus_mode" };
+  if (focusMode && !request.urgent)
+    return { channel: null, suppressed: "focus_mode" };
   const away = !present || !presence.appForeground;
   return {
     channel: request.desktop || away ? "desktop" : "toast",
@@ -166,11 +174,13 @@ export class NotificationService {
       title: request.title,
       ...(request.subtitle ? { subtitle: request.subtitle } : {}),
       body: request.body,
-      ...(this.cliExecutable && request.sessionId
+      ...(this.cliExecutable && (request.taskId || request.sessionId)
         ? {
             activate: {
               executable: this.cliExecutable,
-              args: ["focus", request.sessionId],
+              args: request.taskId
+                ? ["focus", "--task", request.taskId]
+                : ["focus", request.sessionId!],
             },
           }
         : {}),

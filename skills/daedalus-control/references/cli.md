@@ -57,7 +57,7 @@ library ID.
 
 ```text
 daedal agent models <codex|claude>
-daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <configured-name>) [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>] [--draft-brief]
+daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <configured-name>) [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>] [--draft-brief] [--ability routines] [--color <color>] [--pin]
 daedal agent list [--workspace <workspace>] [--running|--archived]
 daedal agent get <agent-id>
 daedal agent attach <agent-id>
@@ -68,7 +68,18 @@ daedal agent continue [<agent-id>] [--handoff-file <path|->] [--provider <codex|
 daedal agent restore <agent-id>
 daedal agent stop <agent-id> [--force]
 daedal agent remove <agent-id>
+daedal session rename <session> <name>
+daedal session pin|unpin <session>
+daedal session color <session> <red|orange|gold|green|teal|blue|purple|pink|none>
+daedal session abilities <session>
+daedal session grant|revoke <session> <ability>
 ```
+
+`<session>` is a session id, or its name when only one live session has it.
+An ability adds something to a session; `routines` is the only one. A session
+that holds it runs routines on a schedule while the app is open; the
+`daedalus-routines` skill and `daedal routine --help` describe them. A
+handoff moves a session's abilities, name, pin and color to the successor.
 
 `agent spawn --task` moves a `todo` or `blocked` task to `in_progress` when the
 workspace's `--start-sets-in-progress` setting is on (the default); do not set
@@ -99,10 +110,11 @@ daedal attention "<reason>" [--session <agent-id>]
 daedal attention --clear [--session <agent-id>]
 daedal notify "<message>" [--level info|success|error] [--desktop] [--session <agent-id>]
 daedal ui state [--json]
-daedal focus <agent-id>
+daedal focus <agent-id> | --task <task-id>
 ```
 
-`--session` defaults to `DAEDALUS_SESSION_ID`. Raising attention accumulates
+`--session` defaults to the session the command is run from, found by its
+working directory. Raising attention accumulates
 reasons on one badge — identical text collapses, the newest five are kept — so
 repeated calls never produce repeated alerts. `--clear` drops all reasons at
 once and is never suppressed. `notify` picks its channel from `ui state`;

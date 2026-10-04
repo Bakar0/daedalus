@@ -84,7 +84,15 @@ export interface AgentSessionDto {
   handoffRequestedAt: string | null;
   /** Manual list order within the workspace, ascending. */
   position: number;
+  /** When it was pinned to the top of its workspace's list, or null. */
+  pinnedAt: string | null;
+  color: SessionColorDto | null;
 }
+
+export type SessionColorDto =
+  "red" | "orange" | "gold" | "green" | "teal" | "blue" | "purple" | "pink";
+
+export type AbilityIdDto = "routines";
 
 export interface IntegratedTerminalDto {
   id: string;
@@ -507,6 +515,110 @@ export interface TaskTimelineDto {
   cost: TaskCostDto;
 }
 
+/** An ability a session holds, or held before a revoke. */
+export interface SessionAbilityDto {
+  id: string;
+  sessionId: string;
+  ability: AbilityIdDto;
+  enabled: boolean;
+  paused: boolean;
+  /** For routines: what the session's routines are for. */
+  purpose: string | null;
+  /** A grant or revoke note is still waiting to be typed in. */
+  noteWaiting: boolean;
+  grantedAt: string;
+}
+
+export type DeliveryHoldReasonDto =
+  | "paused"
+  | "stopped"
+  | "handoff"
+  | "typing"
+  | "busy"
+  | "waiting-on-user"
+  | "input-text"
+  | "in-flight-limit"
+  | "skill-missing";
+
+/** What the routine bar above a session's terminal shows. */
+export interface RoutinesStatusDto {
+  abilityId: string;
+  sessionId: string;
+  paused: boolean;
+  /** Runs waiting to be typed in, oldest first. */
+  waiting: Array<{ runId: number; routine: string; queuedAt: string }>;
+  /** Runs typed in and not finished. */
+  running: number;
+  /** Why the waiting runs are not going in, when they are not. */
+  hold: {
+    reason: DeliveryHoldReasonDto;
+    text: string;
+    /** For `typing`: when the quiet time after a keystroke ends. */
+    until?: string;
+  } | null;
+  nextRun: { routine: string; at: string } | null;
+  lastKeystrokeAt: string | null;
+  routines: number;
+  openReports: number;
+  openUrgentReports: number;
+  openReportTasks: number;
+}
+
+export interface RoutineReportDto {
+  id: string;
+  abilityId: string;
+  routine: string;
+  key: string;
+  sameAs: string | null;
+  urgent: boolean;
+  title: string;
+  url: string | null;
+  taskId: string | null;
+  state: "open" | "resolved" | "closed";
+  verdict: "useful" | "noise" | null;
+  openedAt: string;
+  lastSeenAt: string;
+  resolvedAt: string | null;
+  closedAt: string | null;
+  reopenCount: number;
+}
+
+export interface RoutineDto {
+  name: string;
+  schedule: string;
+  until: string | null;
+  model: string | null;
+  timeoutMs: number;
+  output: "task" | "notify" | "none";
+  enabled: boolean;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  consecutiveFailures: number;
+  lastRun: RoutineRunDto | null;
+}
+
+export interface RoutineRunDto {
+  id: number;
+  routine: string;
+  status: "queued" | "running" | "done" | "failed" | "skipped";
+  queuedAt: string;
+  deliveredAt: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  outcome: "quiet" | "notified" | "task" | null;
+  summary: string | null;
+  missedMs: number;
+  /** Set by Run now when the routine already had a run waiting. */
+  alreadyQueued?: boolean;
+}
+
+export interface RoutinesDetailDto {
+  purpose: string | null;
+  routines: RoutineDto[];
+  templates: RoutineDto[];
+  runs: RoutineRunDto[];
+}
+
 export interface DesktopSnapshotDto {
   workspaces: WorkspaceDto[];
   tasks: TaskDto[];
@@ -526,6 +638,12 @@ export interface DesktopSnapshotDto {
   /** Every merged pull request remembered, oldest first, for the World. */
   shipped: ShippedPullRequestDto[];
   toasts: ToastDto[];
+  /** Every ability row, granted or revoked, for the session cards. */
+  abilities: SessionAbilityDto[];
+  /** One entry per session holding routines, for its bar and card badge. */
+  routines: RoutinesStatusDto[];
+  /** Every routine report that has a task, for the task's card and drawer. */
+  routineReports: RoutineReportDto[];
   settings: DesktopSettingsDto;
 }
 
@@ -553,6 +671,49 @@ export interface DesktopRpcSchema {
   bun: {
     requests: {
       snapshot: Request<Record<string, never>, DesktopSnapshotDto>;
+      /** Name, pin and color, any of them, on any session. */
+      sessionUpdate: Request<
+        {
+          sessionId: string;
+          name?: string;
+          pinned?: boolean;
+          color?: SessionColorDto | null;
+        },
+        AgentSessionDto
+      >;
+      sessionAbility: Request<
+        { sessionId: string; ability: AbilityIdDto; granted: boolean },
+        SessionAbilityDto
+      >;
+      routinesDetail: Request<{ sessionId: string }, RoutinesDetailDto>;
+      routinesControl: Request<
+        {
+          sessionId: string;
+          action: "pause" | "resume";
+        },
+        SessionAbilityDto
+      >;
+      routinesPurpose: Request<
+        { sessionId: string; purpose: string },
+        SessionAbilityDto
+      >;
+      routineSetEnabled: Request<
+        { sessionId: string; name: string; enabled: boolean },
+        { name: string; enabled: boolean }
+      >;
+      /**
+       * Run now. With a name, queues that routine; without one, the oldest
+       * waiting run. Either way the next line skips the quiet time after
+       * typing, and every other rule still holds.
+       */
+      routineRunNow: Request<
+        { sessionId: string; name?: string },
+        RoutineRunDto
+      >;
+      routineReportVerdict: Request<
+        { id: string; verdict: "useful" | "noise" | null },
+        RoutineReportDto
+      >;
       /**
        * The loopback WebSocket the renderer attaches terminals to. It carries
        * a per-launch token, and the `views://` handler resolves a URL as a
@@ -856,6 +1017,9 @@ export interface DesktopRpcSchema {
           message?: string;
           command?: string;
           terminal?: boolean;
+          abilities?: AbilityIdDto[];
+          color?: SessionColorDto;
+          pinned?: boolean;
         },
         AgentSessionDto
       >;
@@ -940,6 +1104,8 @@ export interface DesktopRpcSchema {
        * Without the deep link people learn to ignore notifications.
        */
       focusSession: { sessionId: string };
+      /** The same, for a clicked routine notification: opens its task. */
+      focusTask: { taskId: string };
       /**
        * Quit was requested while something was still live. The renderer draws
        * the dialog and answers with `quitDecision`; the host has already
