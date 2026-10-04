@@ -82,6 +82,8 @@ export class RoutineDelivery {
   >();
   /** When a line was last typed into each session. */
   private readonly lastTyped = new Map<string, number>();
+  /** Hold changes since the last tick returned, for the host's log. */
+  private holdEvents: string[] = [];
 
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -124,6 +126,8 @@ export class RoutineDelivery {
         result.events.push(`${this.name(ability)}: ${message(error)}`);
       }
     }
+    result.events.push(...this.holdEvents);
+    this.holdEvents = [];
     return result;
   }
 
@@ -356,8 +360,17 @@ export class RoutineDelivery {
     this.gate.delivered(sessionId);
   }
 
+  /**
+   * Records why delivery is held, and logs when the reason changes, so a run
+   * that never goes in can be explained after the fact.
+   */
   private hold(ability: SessionAbility, hold: DeliveryHold | null): void {
+    const before = this.holds.get(ability.id);
     this.holds.set(ability.id, hold);
+    if ((before?.reason ?? null) !== (hold?.reason ?? null))
+      this.holdEvents.push(
+        `${this.name(ability)}: ${hold ? `holding, ${hold.text}` : "not holding"}`,
+      );
   }
 
   private name(ability: SessionAbility): string {

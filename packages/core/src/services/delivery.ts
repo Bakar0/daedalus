@@ -225,8 +225,19 @@ export class DeliveryGate {
         until: until.toISOString(),
       };
     const unknown = !activity || activity.activity === "unknown";
+    // Claude draws a question or permission dialog in place of its input
+    // box. With the box showing, a needs_input badge is not a question this
+    // prompt is asking: it is an idle notice, or one of the session's
+    // background agents asking through the agent view. The badge stays; the
+    // line may still go in.
+    const notAsking =
+      session.provider === "claude" &&
+      activity?.activity === "needs_input" &&
+      activity.source !== "pane" &&
+      paneAtPrompt(screen, session.provider);
     const atPrompt =
       activityAtPrompt(activity) ||
+      notAsking ||
       (unknown && paneAtPrompt(screen, session.provider));
     if (!atPrompt)
       return activity?.activity === "needs_permission" ||

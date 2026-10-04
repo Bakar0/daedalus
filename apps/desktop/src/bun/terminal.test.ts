@@ -180,6 +180,8 @@ describe("isTyping", () => {
     expect(isTyping("\x1b[12;40R")).toBe(false);
     expect(isTyping("\x1b[?62;22c")).toBe(false);
     expect(isTyping("\x1b]11;rgb:0000/0000/0000\x07")).toBe(false);
+    // A DCS answer, such as xterm.js's reply to a version query.
+    expect(isTyping("\x1bP>|xterm.js(5.5.0)\x1b\\")).toBe(false);
     expect(isTyping("\x1b[Ix")).toBe(true);
     // Mouse reports scroll and select; they are not typing.
     expect(isTyping("\x1b[<64;10;5M\x1b[<65;10;5M")).toBe(false);

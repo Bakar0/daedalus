@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { TmuxClient, TmuxLaunch } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
+import { DeliveryGate } from "./delivery";
 import {
   activityAtPrompt,
   appendToBrief,
@@ -1276,6 +1277,42 @@ describe("input box", () => {
         "codex",
       ),
     ).toBe("fix  build");
+  });
+
+  test("a background agent's notice does not hold delivery; a dialog does", () => {
+    const gate = new DeliveryGate();
+    const session = {
+      id: "s1",
+      provider: "claude",
+      status: "running",
+      archivedAt: null,
+      handoffRequestedAt: null,
+    } as unknown as AgentSession;
+    const asking = (source: AgentActivityState["source"]) =>
+      ({
+        sessionId: "s1",
+        activity: "needs_input",
+        detail: "Argus build needs your input",
+        since: "2026-10-04T08:31:10.576Z",
+        observedAt: "2026-10-04T08:31:10.576Z",
+        source,
+      }) satisfies AgentActivityState;
+    // The input box shows, so the prompt itself is not asking anything.
+    expect(
+      gate.check({
+        session,
+        activity: asking("hook"),
+        screen: CLAUDE_SUGGESTION_SCREEN,
+      }),
+    ).toBeNull();
+    // A question dialog replaces the box: that one is held.
+    expect(
+      gate.check({
+        session,
+        activity: asking("hook"),
+        screen: "⏺ Which branch?\n  1. main\n  2. dev\n  Enter to select",
+      })?.reason,
+    ).toBe("waiting-on-user");
   });
 
   test("reads Codex's box by its placeholder and prompt line", () => {

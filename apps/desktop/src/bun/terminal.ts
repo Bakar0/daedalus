@@ -248,6 +248,9 @@ export function isTyping(data: string): boolean {
     .replace(/\x1b\[M[\s\S]{3}/g, "")
     // OSC: ESC ] ... BEL or ESC \
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    // DCS, SOS, PM and APC: ESC P|X|^|_ ... ESC \. xterm answers a version or
+    // setting query with a DCS string, and an answer is not typing.
+    .replace(/\x1b[PX^_][\s\S]*?\x1b\\/g, "")
     // CSI: ESC [ params intermediates final, including focus ESC[I / ESC[O
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
     // SS3 and other two-byte escapes
