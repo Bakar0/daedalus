@@ -1,3 +1,4 @@
+import { callerSession } from "./caller";
 import { basename, resolve } from "node:path";
 import {
   ABILITY_IDS,
@@ -126,13 +127,14 @@ async function routinesFor(
   context: ApplicationContext,
   values: Record<string, string>,
 ): Promise<{ session: AgentSession; ability: SessionAbility }> {
-  const reference = values.session ?? process.env.DAEDALUS_SESSION_ID;
-  if (!reference)
+  const session = values.session
+    ? await resolveSession(context, values.session)
+    : await callerSession(context);
+  if (!session)
     throw new DaedalusError(
       "VALIDATION",
       "Pass --session <session>; outside a session there is no default",
     );
-  const session = await resolveSession(context, reference);
   return {
     session,
     ability: context.abilities.require(session.id, "routines"),

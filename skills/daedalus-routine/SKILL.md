@@ -12,10 +12,10 @@ may not be watching. Say at most one short line in the conversation, and
 nothing when the run is quiet. Never ask the user anything during a run; if
 something is missing, fail the run and say what.
 
-Use `"{{daedal}}"`, exactly that path. Do not build it from
-`DAEDALUS_HOME` or take `daedal` from `PATH`: either can belong to another
-Daedalus build or another session. Below, `daedal` means that executable.
-Every command here names the run, so none needs a session.
+Use `"{{daedal}}"` for every command below, exactly that path. It is this
+Daedalus build's CLI, and it works out which session you are from your
+working directory, so no command here needs a session id. Below, `daedal`
+means that executable.
 
 ## 1. Start the run
 

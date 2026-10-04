@@ -823,10 +823,7 @@ export class AgentService {
       );
     const launchPrompt = buildAgentPrompt({
       taskNumber: task?.number,
-      message: [
-        ...this.abilities.launchLines(abilities, id),
-        input.message?.trim(),
-      ]
+      message: [...this.abilities.launchLines(abilities), input.message?.trim()]
         .filter(Boolean)
         .join("\n\n"),
       mode: input.continueFrom
@@ -1606,7 +1603,11 @@ export class AgentService {
             "This session predates native resume support and cannot be resumed safely",
           );
         args = [
-          ...(await claudeDaedalusSettingsArgs(this.config, definition.args)),
+          ...(await claudeDaedalusSettingsArgs(
+            this.config,
+            definition.args,
+            agent.id,
+          )),
           ...modelArgs,
           ...additionalDirectories,
           "--resume",

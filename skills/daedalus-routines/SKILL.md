@@ -19,16 +19,10 @@ in a bar above your terminal.
 
 ## Resolve the CLI once
 
-Use `"{{daedal}}"`, exactly that path. Do not build it from
-`DAEDALUS_HOME` or take `daedal` from `PATH`: either can belong to another
-Daedalus build. Below, `daedal` means that executable.
-
-Pass `--session <id>` to every `daedal routine` command that takes it, with
-the session id Daedalus gave you when it started this session or granted it
-routines. Do not rely on `DAEDALUS_SESSION_ID`: Claude can run your commands
-with another session's environment, and the commands would then act on that
-session's routines. If you do not have the id, run `daedal agent list --running`
-and find the session whose working directory is your own.
+Use `"{{daedal}}"` for every command below, exactly that path. It is this
+Daedalus build's CLI, and it works out which session you are from your
+working directory, so no command here needs a session id. Below, `daedal`
+means that executable.
 
 ## Where things live
 

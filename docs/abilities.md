@@ -140,14 +140,11 @@ grant and revoke notes, and the handoff below, go in under the same rule.
 Each change in why a session's runs are held is logged as a `routines` event
 in the app log, such as "Argus: holding, you typed in this session".
 
-The skills never take the session or the CLI from the environment. Claude
-can move a session into the background for its agent view, and from then on
-its commands run with another Claude process's environment, including that
-session's `DAEDALUS_HOME` and `DAEDALUS_SESSION_ID`. So the routine skills
-call this home's `bin/daedal` by full path, written into the skill when it is
-installed. That shim sets its own `DAEDALUS_HOME`. The run commands find the
-session from the run id, and the launch line and grant note tell the session
-its id for the commands that take `--session`.
+The skills never take the session or the CLI from the environment, which
+Claude can swap for another session's (see "The calling session" in
+`docs/cli.md`). They call this home's `bin/daedal` by full path, and the CLI
+finds the session from the working directory. The run commands also find it
+from the run id.
 
 The routine bar above the session's terminal (phase 2) shows what waits and
 why: "2 waiting · you typed 0:40 ago · resumes in 1:20", or busy, the input

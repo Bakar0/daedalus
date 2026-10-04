@@ -113,7 +113,8 @@ daedal ui state [--json]
 daedal focus <agent-id>
 ```
 
-`--session` defaults to `DAEDALUS_SESSION_ID`. Raising attention accumulates
+`--session` defaults to the session the command is run from, found by its
+working directory. Raising attention accumulates
 reasons on one badge — identical text collapses, the newest five are kept — so
 repeated calls never produce repeated alerts. `--clear` drops all reasons at
 once and is never suppressed. `notify` picks its channel from `ui state`;

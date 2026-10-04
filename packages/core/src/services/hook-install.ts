@@ -2,8 +2,10 @@
  * Injecting the activity hooks into each provider at launch.
  *
  * Both providers are given the same event set pointing at the same sink,
- * `daedal agent event <Event>`, which reads `DAEDALUS_SESSION_ID` out of the
- * session environment exactly as the status-line sink already does. Nothing
+ * `daedal agent event <Event>`. Claude's hooks and status line also carry
+ * `--session <id>`, because Claude can run a background session's hooks with
+ * another process's environment; Codex's are global and read
+ * `DAEDALUS_SESSION_ID` from the session environment. Nothing
  * here is installed globally: a hook that outlived the session that needed it
  * would fire for every session the user ever starts.
  */
@@ -75,7 +77,12 @@ export const isDaedalusHookEntry = (entry: ClaudeHookEntry): boolean =>
  */
 export function daedalusClaudeSettings(
   daedalExecutable: string,
+  sessionId?: string,
 ): ClaudeSettings {
+  // The session rides on the command, not only in the environment: Claude
+  // can move a session into the background and run its hooks with another
+  // Claude process's environment, `DAEDALUS_SESSION_ID` included.
+  const session = sessionId ? ["--session", sessionId] : [];
   const hooks: Record<string, ClaudeHookEntry[]> = {};
   for (const event of CLAUDE_HOOK_EVENTS) {
     hooks[event] = [
@@ -84,7 +91,7 @@ export function daedalusClaudeSettings(
           {
             type: "command",
             command: daedalExecutable,
-            args: ["agent", "event", event],
+            args: ["agent", "event", event, ...session],
             timeout: timeoutFor(event),
             async: true,
           },
@@ -95,7 +102,7 @@ export function daedalusClaudeSettings(
   return {
     statusLine: {
       type: "command",
-      command: `${daedalExecutable} agent telemetry`,
+      command: `${daedalExecutable} agent telemetry${sessionId ? ` --session ${sessionId}` : ""}`,
       padding: 0,
     },
     hooks,

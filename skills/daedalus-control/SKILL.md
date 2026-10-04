@@ -9,11 +9,11 @@ Use `daedal` as the public interface to Daedalus. Prefer `--json` for every
 non-interactive command, parse the `{ "ok", "data" }` envelope, and report the
 identifiers and paths that a later command needs.
 
-Before the first command, resolve the CLI once. Use `daedal` when
-`command -v daedal` succeeds. Otherwise, use the executable at
-`${DAEDALUS_HOME:-$HOME/.daedalus}/bin/daedal`. If neither exists, report that
-the Daedalus app must be opened once to install its CLI shim. Use the resolved
-executable consistently for the rest of the request.
+Use `"{{daedal}}"` for every command, exactly that path. It is this Daedalus
+build's CLI; the `daedal` on `PATH` can belong to another build. If it does
+not exist, report that the Daedalus app must be opened once to install it.
+Inside a session, the CLI works out which session it is from the working
+directory, so commands about "this session" need no session id.
 
 ## Establish context
 
@@ -23,9 +23,7 @@ list`, `repo list`, or `agent list`.
    on, with numbering scoped to each workspace. Outside a session, use
    `<workspace>#<number>` or pass the number with `--workspace`.
 3. In an agent session, use `task current` to read its assigned task. The
-   environment exposes `DAEDALUS_SESSION_ID`, `DAEDALUS_WORKSPACE_ID`,
-   `DAEDALUS_TASK_ID`, and `DAEDALUS_TASK_NUMBER` for automation. The internal
-   task ID is not the human-facing task number.
+   internal task ID is not the human-facing task number.
 4. Run `daedal --version --json` and `daedal <area> help` when compatibility is
    in doubt. Treat the resolved CLI's actual help as authoritative; report a
    missing command or option specifically rather than guessing that the build

@@ -26,9 +26,10 @@ import {
   printResult,
   required,
 } from "./arguments";
+import { callerSession } from "./caller";
 import { routineCommand, routineHelp, sessionCommand } from "./routines";
 import { findTmuxExecutable, probeVersion } from "@daedalus/platform";
-import { mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { DoctorCheck } from "@daedalus/protocol";
 import packageJson from "../../../package.json";
@@ -46,9 +47,19 @@ const VERIFIED_BUN_RUNTIMES = [VERIFIED_BUN, BUNDLED_BUN];
 const SESSION_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-async function captureClaudeTelemetry(): Promise<number> {
+/**
+ * The session a hook reports for: `--session <id>` on its command when
+ * Daedalus wrote one there, which Claude cannot swap out the way it can the
+ * environment of a session it moved into the background.
+ */
+function hookSession(args: string[]): string | undefined {
+  const index = args.indexOf("--session");
+  return index === -1 ? undefined : args[index + 1];
+}
+
+async function captureClaudeTelemetry(session?: string): Promise<number> {
   try {
-    const sessionId = process.env.DAEDALUS_SESSION_ID;
+    const sessionId = session ?? process.env.DAEDALUS_SESSION_ID;
     const home = process.env.DAEDALUS_HOME;
     if (!sessionId || !SESSION_ID.test(sessionId) || !home) return 0;
     const input = await Bun.stdin.text();
@@ -101,9 +112,10 @@ async function captureClaudeTelemetry(): Promise<number> {
 async function captureAgentEvent(
   event: string,
   migrationsDirectory?: string,
+  session?: string,
 ): Promise<number> {
   try {
-    const sessionId = process.env.DAEDALUS_SESSION_ID;
+    const sessionId = session ?? process.env.DAEDALUS_SESSION_ID;
     const home = process.env.DAEDALUS_HOME;
     if (!sessionId || !SESSION_ID.test(sessionId) || !home) return 0;
     const input = await Bun.stdin.text();
@@ -794,13 +806,12 @@ async function workspaceCommand(
 }
 
 async function currentSessionTask(context: ApplicationContext) {
-  const taskId = process.env.DAEDALUS_TASK_ID;
+  // The session first: `DAEDALUS_TASK_ID` can come from another session's
+  // environment (see `callerSession`).
+  const session = await callerSession(context);
+  if (session?.taskId) return context.tasks.get(session.taskId);
+  const taskId = session ? undefined : process.env.DAEDALUS_TASK_ID;
   if (taskId) return context.tasks.get(taskId);
-  const sessionId = process.env.DAEDALUS_SESSION_ID;
-  if (sessionId) {
-    const session = await context.agents.get(sessionId);
-    if (session.taskId) return context.tasks.get(session.taskId);
-  }
   throw new DaedalusError(
     "VALIDATION",
     "No task is assigned to the current Daedalus session",
@@ -821,11 +832,8 @@ async function resolveTaskReference(
 
   const number = Number(scoped?.[2] ?? numeric?.[1]);
   let workspace = scoped?.[1] ?? workspaceReference;
+  if (!workspace) workspace = (await callerSession(context))?.workspaceId;
   if (!workspace) workspace = process.env.DAEDALUS_WORKSPACE_ID;
-  if (!workspace && process.env.DAEDALUS_SESSION_ID) {
-    const session = await context.agents.get(process.env.DAEDALUS_SESSION_ID);
-    workspace = session.workspaceId;
-  }
   if (!workspace && process.env.DAEDALUS_TASK_ID) {
     workspace = context.tasks.get(process.env.DAEDALUS_TASK_ID).workspaceId;
   }
@@ -1304,10 +1312,13 @@ async function agentContinueCommand(
     (parsed.flags.has("self") && parsed.positionals.length)
   )
     throw new DaedalusError("VALIDATION", `Usage: ${usage}`);
-  const asSelf = parsed.flags.has("self");
-  const id = asSelf
-    ? (await sessionInDirectory(context, process.cwd())).id
-    : (parsed.positionals[0] ?? process.env.DAEDALUS_SESSION_ID);
+  // `--self` is what the bare form already means; it stays accepted for
+  // handoff skills installed before it became the default.
+  const named = parsed.positionals[0];
+  const caller = named
+    ? await callerSession(context).catch(() => undefined)
+    : await callerSession(context);
+  const id = named ?? caller?.id;
   if (!id)
     throw new DaedalusError(
       "VALIDATION",
@@ -1332,7 +1343,7 @@ async function agentContinueCommand(
     handoff = await source.text();
   }
   const predecessor = await context.agents.get(id);
-  const self = asSelf || predecessor.id === process.env.DAEDALUS_SESSION_ID;
+  const self = predecessor.id === caller?.id;
   const result = await context.agents.continueSession({
     id: predecessor.id,
     handoff,
@@ -1356,43 +1367,6 @@ async function agentContinueCommand(
       console.log(`The old session was not archived: ${result.archiveError}`);
   });
   return 0;
-}
-
-/**
- * The running session whose working directory is `directory`: the session a
- * command was run from, found without its environment. A Claude session moved
- * into the background runs its commands with another Claude process's
- * environment, so `DAEDALUS_SESSION_ID` there can name a different session,
- * and continuing that one would archive the wrong agent. The working
- * directory stays the session's own. When two sessions share it, the
- * environment's id breaks the tie only if it is one of them.
- */
-async function sessionInDirectory(
-  context: ApplicationContext,
-  directory: string,
-): Promise<AgentSession> {
-  const real = (path: string) => realpath(path).catch(() => resolve(path));
-  const here = await real(directory);
-  const matches: AgentSession[] = [];
-  for (const session of context.repositories.listAgents())
-    if (
-      !session.archivedAt &&
-      session.kind === "agent" &&
-      (session.status === "running" || session.status === "starting") &&
-      (await real(session.workingDirectory)) === here
-    )
-      matches.push(session);
-  if (matches.length === 1) return matches[0]!;
-  const named = matches.find(
-    (session) => session.id === process.env.DAEDALUS_SESSION_ID,
-  );
-  if (named) return named;
-  throw new DaedalusError(
-    matches.length ? "CONFLICT" : "NOT_FOUND",
-    matches.length
-      ? `${matches.length} running sessions work in ${here}; pass the session id instead of --self`
-      : `No running Daedalus session works in ${here}; run this from the session's working directory`,
-  );
 }
 
 /**
@@ -1561,9 +1535,7 @@ async function agentWaitCommand(
     ? await currentSessionId(context, parsed.values.session)
     : parsed.values.workspace
       ? undefined
-      : process.env.DAEDALUS_SESSION_ID
-        ? await currentSessionId(context)
-        : undefined;
+      : (await callerSession(context))?.id;
   if (!sessionId && !parsed.values.workspace)
     throw new DaedalusError(
       "VALIDATION",
@@ -1664,13 +1636,14 @@ async function currentSessionId(
   context: ApplicationContext,
   explicit?: string,
 ): Promise<string> {
-  const reference = explicit ?? process.env.DAEDALUS_SESSION_ID;
-  if (!reference)
+  if (explicit) return (await context.agents.get(explicit)).id;
+  const caller = await callerSession(context);
+  if (!caller)
     throw new DaedalusError(
       "VALIDATION",
       "No Daedalus session; pass --session <agent-id>",
     );
-  return (await context.agents.get(reference)).id;
+  return caller.id;
 }
 
 async function attentionCommand(
@@ -1750,11 +1723,9 @@ async function notifyCommand(
       "VALIDATION",
       "Level must be one of info, success, error",
     );
-  const sessionReference =
-    parsed.values.session ?? process.env.DAEDALUS_SESSION_ID;
-  const session = sessionReference
-    ? await context.agents.get(sessionReference)
-    : undefined;
+  const session = parsed.values.session
+    ? await context.agents.get(parsed.values.session)
+    : await callerSession(context);
   const workspace = session
     ? await context.workspaces.get(session.workspaceId)
     : undefined;
@@ -2417,9 +2388,13 @@ export async function runCli(
   const json = inputArgs.includes("--json");
   const args = inputArgs.filter((argument) => argument !== "--json");
   if (args[0] === "agent" && args[1] === "telemetry")
-    return captureClaudeTelemetry();
+    return captureClaudeTelemetry(hookSession(args.slice(2)));
   if (args[0] === "agent" && args[1] === "event" && args[2])
-    return captureAgentEvent(args[2], options.migrationsDirectory);
+    return captureAgentEvent(
+      args[2],
+      options.migrationsDirectory,
+      hookSession(args.slice(3)),
+    );
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
     console.log(help);
     return 0;

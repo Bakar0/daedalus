@@ -244,6 +244,23 @@ describe("Claude settings merging", () => {
     ).toBe(false);
   });
 
+  test("the hooks and status line name their session on the command", () => {
+    // Claude can run a background session's hooks with another process's
+    // environment, so the id cannot live only in DAEDALUS_SESSION_ID.
+    const named = daedalusClaudeSettings("/home/.daedalus/bin/daedal", "s-1");
+    expect(named.hooks!.Stop![0]!.hooks[0]!.args).toEqual([
+      "agent",
+      "event",
+      "Stop",
+      "--session",
+      "s-1",
+    ]);
+    expect(isDaedalusHookEntry(named.hooks!.Stop![0]!)).toBe(true);
+    expect(named.statusLine).toMatchObject({
+      command: "/home/.daedalus/bin/daedal agent telemetry --session s-1",
+    });
+  });
+
   test("a relaunch strips the previous Daedalus entries instead of stacking them", () => {
     const once = mergeClaudeSettings({}, ours);
     const twice = mergeClaudeSettings(once, ours);

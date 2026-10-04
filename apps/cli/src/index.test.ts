@@ -648,11 +648,11 @@ describe("daedal CLI contract", () => {
       };
 
       // As the handoff skill runs it: from the session's own directory, with
-      // `--self`, and an environment that names some other session, the way
-      // a Claude session moved into the background sees it.
+      // an environment that names some other session, the way a Claude
+      // session moved into the background sees it.
       const continued = await cli(
         home,
-        ["agent", "continue", "--self", "--handoff-file", "-", "--json"],
+        ["agent", "continue", "--handoff-file", "-", "--json"],
         { ...env, DAEDALUS_SESSION_ID: crypto.randomUUID() },
         "Next: finish step 2.",
         first.workingDirectory,
@@ -688,13 +688,13 @@ describe("daedal CLI contract", () => {
     });
   }, 30_000);
 
-  test("continue --self refuses outside every session's directory", async () => {
+  test("continue refuses outside every session's directory", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const result = await cli(home, ["agent", "continue", "--self"], {
         DAEDALUS_SESSION_ID: crypto.randomUUID(),
       });
       expect(result.exitCode).not.toBe(0);
-      expect(result.stderr).toContain("No running Daedalus session works in");
+      expect(result.stderr).toContain("Pass the session to continue");
     });
   });
 

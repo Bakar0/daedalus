@@ -286,10 +286,6 @@ describe("abilities", () => {
         live: true,
       });
       expect(granted.pendingNote).toContain("now holds the routines ability");
-      // It names the session: the environment cannot be trusted to.
-      expect(granted.pendingNote).toContain(
-        `Your Daedalus session id is ${session.id}`,
-      );
       // The user is typing: the note waits.
       await tick(harness);
       expect(tmux.sent).toEqual([]);
