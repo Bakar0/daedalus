@@ -767,17 +767,16 @@ export class SkillService {
     style?: { fileName: string; styleName: string; contents: string };
   } {
     const linkName = channelArtifactName(this.config, definition.id);
-    const skillFiles =
-      linkName === definition.id
-        ? definition.skillFiles
-        : definition.skillFiles.map((file) =>
-            file.path === "SKILL.md"
-              ? {
-                  ...file,
-                  contents: withFrontmatterName(file.contents, linkName),
-                }
-              : file,
-          );
+    // `{{daedal}}` in a built-in skill is this home's CLI, by full path. The
+    // skill cannot work it out from `DAEDALUS_HOME`: a Claude session moved
+    // into the background runs commands with another process's environment.
+    const daedal = join(this.config.home, "bin", "daedal");
+    const skillFiles = definition.skillFiles.map((file) => {
+      const contents = file.contents.replaceAll("{{daedal}}", daedal);
+      return file.path === "SKILL.md" && linkName !== definition.id
+        ? { ...file, contents: withFrontmatterName(contents, linkName) }
+        : { ...file, contents };
+    });
     if (!definition.style) return { id: definition.id, linkName, skillFiles };
     const styleName = channelArtifactName(
       this.config,

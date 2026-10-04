@@ -115,8 +115,14 @@ run into the session when all of these hold:
 
 1. The ability is enabled and not paused, and the session is running.
 2. The session is idle. Activity comes from the provider's hooks; when it is
-   unknown, the pane decides (an input box and no "esc to interrupt").
-3. Its input box is empty. Daedalus reads the pane just before typing.
+   unknown, the pane decides (an input box and no "esc to interrupt"). For
+   Claude, a `needs_input` badge with the input box showing does not count as
+   a question: Claude draws a real question or permission dialog in place of
+   the box. Such a badge comes from Claude's idle notice or from one of the
+   session's background agents. The badge stays on the card.
+3. Its input box is empty. Daedalus reads the pane with its escape codes just
+   before typing and ignores dim text, which is a placeholder: Claude's
+   suggested next prompt, or Codex's "Ask Codex to do anything".
 4. Nobody pressed a key in the session's terminal in the last 2 minutes.
    Scrolling and selecting are not keystrokes. The host keeps this in memory,
    so after an app restart nothing holds.
@@ -130,6 +136,18 @@ The line is `/daedalus-routine <run-id>` for Claude and
 `$daedalus-routine <run-id>` for Codex, followed by a second Enter that
 Codex's skill popup needs. A dev build's skills carry its channel suffix. The
 grant and revoke notes, and the handoff below, go in under the same rule.
+
+Each change in why a session's runs are held is logged as a `routines` event
+in the app log, such as "Argus: holding, you typed in this session".
+
+The skills never take the session or the CLI from the environment. Claude
+can move a session into the background for its agent view, and from then on
+its commands run with another Claude process's environment, including that
+session's `DAEDALUS_HOME` and `DAEDALUS_SESSION_ID`. So the routine skills
+call this home's `bin/daedal` by full path, written into the skill when it is
+installed. That shim sets its own `DAEDALUS_HOME`. The run commands find the
+session from the run id, and the launch line and grant note tell the session
+its id for the commands that take `--session`.
 
 The routine bar above the session's terminal (phase 2) shows what waits and
 why: "2 waiting · you typed 0:40 ago · resumes in 1:20", or busy, the input

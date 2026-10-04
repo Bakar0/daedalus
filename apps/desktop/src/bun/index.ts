@@ -160,6 +160,7 @@ if (await pathExists(cliEntrypoint))
     path: join(context.config.home, "bin", "daedal"),
     bunExecutable: process.execPath,
     cliEntrypoint,
+    home: context.config.home,
   });
 // Skills are installed from here rather than from the application context,
 // so a CLI run never writes into the user's provider directories as a side

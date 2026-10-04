@@ -25,10 +25,15 @@ export interface AbilityDefinition {
   label: string;
   summary: string;
   providers: ReadonlyArray<Extract<AgentProviderName, "claude" | "codex">>;
-  /** Added to the launch prompt of a session that holds it. */
-  launchLine(skill: (id: string) => string): string;
+  /**
+   * Added to the launch prompt of a session that holds it. Both this and the
+   * grant note name the session's id: a Claude session moved into the
+   * background runs its commands with another process's environment, so
+   * `DAEDALUS_SESSION_ID` cannot be trusted to name it.
+   */
+  launchLine(skill: (id: string) => string, sessionId: string): string;
   /** Typed into a running session the ability was just granted to. */
-  grantNote(skill: (id: string) => string): string;
+  grantNote(skill: (id: string) => string, sessionId: string): string;
   /** Typed into a running session the ability was just taken from. */
   revokeNote(skill: (id: string) => string): string;
 }
@@ -40,10 +45,10 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilityDefinition>> = {
     summary:
       "Checks the session runs on a schedule while the app is open. Their reports become tasks on the board.",
     providers: ["claude", "codex"],
-    launchLine: (skill) =>
-      `You hold the Daedalus routines ability: the user can ask you for routines, checks that run on a schedule. Create and change them with the ${skill(ROUTINES_SKILL)} skill. When Daedalus types a ${skill(ROUTINE_RUN_SKILL)} line with a run id, carry out that run with the ${skill(ROUTINE_RUN_SKILL)} skill.`,
-    grantNote: (skill) =>
-      `Daedalus: this session now holds the routines ability. Read the ${skill(ROUTINES_SKILL)} skill now, then wait for the user. When Daedalus types a ${skill(ROUTINE_RUN_SKILL)} line with a run id, carry out that run with the ${skill(ROUTINE_RUN_SKILL)} skill.`,
+    launchLine: (skill, sessionId) =>
+      `You hold the Daedalus routines ability: the user can ask you for routines, checks that run on a schedule. Create and change them with the ${skill(ROUTINES_SKILL)} skill. When Daedalus types a ${skill(ROUTINE_RUN_SKILL)} line with a run id, carry out that run with the ${skill(ROUTINE_RUN_SKILL)} skill. Your Daedalus session id is ${sessionId}; pass it as --session to every daedal routine command that takes one.`,
+    grantNote: (skill, sessionId) =>
+      `Daedalus: this session now holds the routines ability. Your Daedalus session id is ${sessionId}; pass it as --session to every daedal routine command that takes one. Read the ${skill(ROUTINES_SKILL)} skill now, then wait for the user. When Daedalus types a ${skill(ROUTINE_RUN_SKILL)} line with a run id, carry out that run with the ${skill(ROUTINE_RUN_SKILL)} skill.`,
     revokeNote: () =>
       "Daedalus: the routines ability was removed from this session. Daedalus will not deliver routine runs here any more; do not run routine commands.",
   },
@@ -140,9 +145,9 @@ export class AbilityService {
   }
 
   /** What a session holding these abilities is told at launch. */
-  launchLines(abilities: readonly AbilityId[]): string[] {
+  launchLines(abilities: readonly AbilityId[], sessionId: string): string[] {
     return abilities.map((id) =>
-      ABILITIES[id].launchLine((skill) => this.skillName(skill)),
+      ABILITIES[id].launchLine((skill) => this.skillName(skill), sessionId),
     );
   }
 
@@ -168,7 +173,7 @@ export class AbilityService {
     const [ability] = this.validate(session, [abilityId]) as [AbilityId];
     const definition = ABILITIES[ability];
     const note = options.live
-      ? definition.grantNote((skill) => this.skillName(skill))
+      ? definition.grantNote((skill) => this.skillName(skill), sessionId)
       : null;
     const at = this.now().toISOString();
     const existing = this.repositories.abilities.findForSession(

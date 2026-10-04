@@ -12,8 +12,10 @@ may not be watching. Say at most one short line in the conversation, and
 nothing when the run is quiet. Never ask the user anything during a run; if
 something is missing, fail the run and say what.
 
-Use `"$DAEDALUS_HOME/bin/daedal"`, or `daedal` from `PATH` only when
-`DAEDALUS_HOME` is unset. Below, `daedal` means that executable.
+Use `"{{daedal}}"`, exactly that path. Do not build it from
+`DAEDALUS_HOME` or take `daedal` from `PATH`: either can belong to another
+Daedalus build or another session. Below, `daedal` means that executable.
+Every command here names the run, so none needs a session.
 
 ## 1. Start the run
 
@@ -100,7 +102,7 @@ this routine, that the check covered (it is in `checked`) and that it did not
 report again:
 
 ```
-daedal routine resolve "<key>"
+daedal routine resolve "<key>" --run $ARGUMENTS
 ```
 
 Do not resolve a key the check did not look at this time.

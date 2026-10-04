@@ -58,7 +58,7 @@ Archiving a session pauses its abilities; restoring it resumes them.`,
   daedal routine fail <run-id> --summary <text>
   daedal routine report --run <run-id> --key <key> --title <title> [--urgent]
       [--url <url>] [--same-as <key>] (--body <text> | --body-file <path|->)
-  daedal routine resolve <key> [--session <s>]
+  daedal routine resolve <key> [--run <run-id> | --session <s>]
   daedal routine reports [--state open|resolved|closed|all] [--since <7d>] [--session <s>]
   daedal routine feedback <task-ref> useful|noise|none [--note <text>]
 
@@ -572,9 +572,18 @@ export async function routineCommand(
     return 0;
   }
   if (action === "resolve") {
-    const parsed = parseArguments(inputArgs, ["session"]);
-    expectPositionals(parsed.positionals, 1, "daedal routine resolve <key>");
-    const { ability } = await routinesFor(context, parsed.values);
+    const parsed = parseArguments(inputArgs, ["session", "run"]);
+    const usage =
+      "daedal routine resolve <key> [--run <run-id> | --session <s>]";
+    expectPositionals(parsed.positionals, 1, usage);
+    // During a run, the run names the session; nothing in the environment has
+    // to be right for it.
+    const ability = parsed.values.run
+      ? abilityForRun(
+          context,
+          context.routines.requireRun(runId(parsed.values.run, usage)),
+        )
+      : (await routinesFor(context, parsed.values)).ability;
     const report = context.routineReports.resolve(
       ability,
       parsed.positionals[0]!,
