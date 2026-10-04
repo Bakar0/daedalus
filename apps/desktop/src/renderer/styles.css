@@ -4627,6 +4627,18 @@ dd {
 .menu-align-end {
   right: 0;
 }
+/* Open, the popover sits in the top layer and Menu sets its top and left.
+   Drop the browser's popover box (centered, inset, its own colors) and the
+   offsets above, which only apply where the Popover API is missing. */
+.menu-popover:popover-open {
+  bottom: auto;
+  color: inherit;
+  margin: 0;
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+  position: fixed;
+  right: auto;
+}
 .menu-item {
   align-items: center;
   border-radius: 6px !important;
@@ -5325,8 +5337,8 @@ dd {
   padding: 1px 6px;
 }
 
-/* The card menu: rename, pin, color and abilities. The card clips its
-   contents for the rounded edge, so it lets the open menu out. */
+/* The card menu: rename, pin, color and abilities. It opens beside the
+   card, in the top layer, so neither the card nor the list clips it. */
 .workspace-card-actions > .session-card-menu {
   display: flex;
   flex: 1;
@@ -5343,15 +5355,8 @@ dd {
   height: 16px;
   width: 16px;
 }
-.session-card:has(.session-card-menu[open]) {
-  overflow: visible;
-  position: relative;
-  z-index: 5;
-}
 .session-card-menu .menu-popover {
   min-width: 240px;
-  top: 4px;
-  right: calc(100% + 4px);
 }
 .menu-heading {
   color: var(--muted);

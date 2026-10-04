@@ -9,9 +9,14 @@
  * window, where the task drawer listens for Escape to close itself. The
  * drawer skips handled events, so Escape inside a menu closes the menu and
  * leaves the drawer open.
+ *
+ * The popover opens in the top layer (the Popover API), so a scrolling list
+ * or a clipping card around the trigger cannot cut it off. `placeMenu` puts it
+ * next to the trigger and keeps it inside the window.
  */
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -24,6 +29,63 @@ const ITEMS = [
   '[role="menuitemcheckbox"]:not(:disabled)',
 ].join(", ");
 
+export interface MenuRect {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+}
+
+/** Space kept between the popover and the trigger, and the window edge. */
+const GAP = 5;
+const MARGIN = 8;
+
+/**
+ * Where the popover goes, in window coordinates. `below` opens under the
+ * trigger, lined up with its `align` edge, and above it when there is no room
+ * below. `left` opens beside the trigger on its left, and on its right when
+ * there is no room on the left. Either way the result is kept inside the
+ * window.
+ */
+export function placeMenu({
+  align,
+  menu,
+  placement,
+  trigger,
+  viewport,
+}: {
+  align: "start" | "end";
+  menu: { width: number; height: number };
+  placement: "below" | "left";
+  trigger: MenuRect;
+  viewport: { width: number; height: number };
+}): { top: number; left: number } {
+  const right = trigger.left + trigger.width;
+  const bottom = trigger.top + trigger.height;
+  let top: number;
+  let left: number;
+  if (placement === "left") {
+    top = trigger.top;
+    left = trigger.left - GAP - menu.width;
+    if (left < MARGIN && right + GAP + menu.width <= viewport.width - MARGIN)
+      left = right + GAP;
+  } else {
+    left = align === "start" ? trigger.left : right - menu.width;
+    top = bottom + GAP;
+    if (
+      top + menu.height > viewport.height - MARGIN &&
+      trigger.top - GAP - menu.height >= MARGIN
+    )
+      top = trigger.top - GAP - menu.height;
+  }
+  const clamp = (value: number, size: number, limit: number) =>
+    Math.max(MARGIN, Math.min(value, limit - MARGIN - size));
+  return {
+    top: clamp(top, menu.height, viewport.height),
+    left: clamp(left, menu.width, viewport.width),
+  };
+}
+
 export function Menu({
   align = "start",
   children,
@@ -31,6 +93,7 @@ export function Menu({
   describedBy,
   label,
   menuLabel,
+  placement = "below",
   summary,
   summaryClassName,
   title,
@@ -45,11 +108,14 @@ export function Menu({
   label: string;
   /** Accessible name of the list of items. */
   menuLabel: string;
+  /** Under the trigger, or beside it on its left. */
+  placement?: "below" | "left";
   summary: ReactNode;
   summaryClassName?: string;
   title?: string;
 }) {
   const ref = useRef<HTMLDetailsElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
 
   const items = () =>
@@ -62,6 +128,40 @@ export function Menu({
     details.open = false;
     if (returnFocus) details.querySelector("summary")?.focus();
   };
+
+  // Into the top layer while open, placed against the trigger, and placed
+  // again when the window resizes or anything around the trigger scrolls.
+  useLayoutEffect(() => {
+    const popover = popoverRef.current;
+    const trigger = ref.current?.querySelector("summary");
+    if (!open || !popover || !trigger || !("showPopover" in popover)) return;
+    popover.showPopover();
+    const place = () => {
+      const box = trigger.getBoundingClientRect();
+      const { top, left } = placeMenu({
+        align,
+        menu: { width: popover.offsetWidth, height: popover.offsetHeight },
+        placement,
+        trigger: {
+          top: box.top,
+          left: box.left,
+          width: box.width,
+          height: box.height,
+        },
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+      });
+      popover.style.top = `${top}px`;
+      popover.style.left = `${left}px`;
+    };
+    place();
+    window.addEventListener("resize", place);
+    document.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      document.removeEventListener("scroll", place, true);
+      if (popover.matches(":popover-open")) popover.hidePopover();
+    };
+  }, [open, align, placement]);
 
   useEffect(() => {
     if (!open) return;
@@ -132,11 +232,13 @@ export function Menu({
       <div
         aria-label={menuLabel}
         className={`menu-popover menu-align-${align}`}
+        popover="manual"
         // Choosing an item closes the menu; the item's own click has already
         // run by the time this sees the event.
         onClick={(event) => {
           if ((event.target as Element).closest(ITEMS)) close(true);
         }}
+        ref={popoverRef}
         role="menu"
       >
         {children}
