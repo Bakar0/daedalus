@@ -87,16 +87,16 @@ For each problem give a key, a title, a link and the evidence.
 Return {"reports": []} when nothing needs attention.
 ```
 
-| Field      | Meaning                                                                                                                      | Example                                                                 |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `name`     | Unique within the session's routines, also the key prefix                                                                    | `ci-health`                                                             |
-| `schedule` | `every <n>m                                                                                                                  | h`, `cron "<5 fields>"`(local time), or`at <local datetime>` (one-shot) | `cron "50 8 * * 1-5"` |
-| `until`    | The routine deletes itself after this time                                                                                   | `2026-09-30T15:40`                                                      |
-| `model`    | Model for a Claude session's subagent                                                                                        | `sonnet`, `haiku`                                                       |
-| `timeout`  | A run with no result after this is marked failed                                                                             | `10m`                                                                   |
-| `output`   | `task`: each report becomes a tagged task and a notification. `notify`: notification only. `none`: the routine cannot report | `task`                                                                  |
-| `enabled`  | Pause one routine without deleting it                                                                                        | `true`                                                                  |
-| `vars`     | Values filled into `{{name}}` in the body                                                                                    | `pr: Bakar0/daedalus#57`                                                |
+| Field      | Meaning                                                                                                                      | Example                  |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| `name`     | Unique within the session's routines, also the key prefix                                                                    | `ci-health`              |
+| `schedule` | `every <n>m` or `every <n>h`, `cron "<5 fields>"` (local time), or `at <local datetime>` (one-shot)                          | `cron "50 8 * * 1-5"`    |
+| `until`    | The routine deletes itself after this time                                                                                   | `2026-09-30T15:40`       |
+| `model`    | Model for a Claude session's subagent                                                                                        | `sonnet`, `haiku`        |
+| `timeout`  | A run with no result after this is marked failed                                                                             | `10m`                    |
+| `output`   | `task`: each report becomes a tagged task and a notification. `notify`: notification only. `none`: the routine cannot report | `task`                   |
+| `enabled`  | Pause one routine without deleting it                                                                                        | `true`                   |
+| `vars`     | Values filled into `{{name}}` in the body                                                                                    | `pr: Bakar0/daedalus#57` |
 
 Daedalus fills `{{last_run}}`, `{{run_id}}`, `{{now}}` and `{{missed}}` into
 every body. A template (`routine add --file - --template`) never fires;
@@ -110,8 +110,8 @@ most one run per routine waits: a slot that comes due while a run waits adds
 nothing, and the run counts the wait in `{{missed}}`. A slot that comes due
 while the routine's run is running is skipped.
 
-There are no modes and nothing is locked. Daedalus types the oldest waiting
-run into the session when all of these hold:
+Daedalus types the oldest waiting run into the session when all of these
+hold:
 
 1. The ability is enabled and not paused, and the session is running.
 2. The session is idle. Activity comes from the provider's hooks; when it is
