@@ -674,6 +674,10 @@ describe("daedal CLI contract", () => {
       for (let attempt = 0; attempt < 100 && !archivedAt; attempt += 1) {
         await Bun.sleep(100);
         const current = await cli(home, ["agent", "get", first.id, "--json"]);
+        // This read races the archive running in its own tmux session, and it
+        // has failed in CI with empty output; say why rather than fail to parse.
+        expect(current.stderr).toBe("");
+        expect(current.exitCode).toBe(0);
         archivedAt = JSON.parse(current.stdout).data.archivedAt;
       }
       expect(archivedAt).not.toBeNull();
