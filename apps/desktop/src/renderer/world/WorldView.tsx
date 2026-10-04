@@ -426,6 +426,19 @@ export default function WorldView(props: WorldViewProps) {
                 Pop
               </button>
               <button
+                aria-pressed={Boolean(preview.colors)}
+                onClick={() =>
+                  setPreview((current) => ({
+                    ...current,
+                    colors: !current.colors,
+                  }))
+                }
+                title="Give every agent a session color, one each"
+                type="button"
+              >
+                Colors
+              </button>
+              <button
                 disabled={preview.crateStep !== null || !model.actors.length}
                 onClick={() =>
                   setPreview((current) => ({ ...current, crateStep: 0 }))

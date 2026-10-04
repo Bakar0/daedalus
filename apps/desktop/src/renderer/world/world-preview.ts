@@ -1,3 +1,4 @@
+import type { SessionColorDto } from "@daedalus/protocol";
 import type { WorldCrate, WorldCrateStage, WorldModel } from "./world-model";
 
 /**
@@ -42,9 +43,23 @@ export interface WorldPreview {
    * once its successor has started. Null for none.
    */
   handoffStep?: 0 | 1 | null;
+  /** Every agent wears a session color, one each in turn. */
+  colors?: boolean;
 }
 
 export const NO_PREVIEW: WorldPreview = { context: "off", crateStep: null };
+
+/** The colors the preview hands out, in the card menu's order. */
+const PREVIEW_COLORS: readonly SessionColorDto[] = [
+  "red",
+  "orange",
+  "gold",
+  "green",
+  "teal",
+  "blue",
+  "purple",
+  "pink",
+];
 
 /** Seconds each pretend handoff step lasts, long enough to watch. */
 export const HANDOFF_STEPS = [15, 10];
@@ -63,7 +78,8 @@ export function previewModel(
   if (
     preview.context === "off" &&
     preview.crateStep === null &&
-    handoffStep === null
+    handoffStep === null &&
+    !preview.colors
   )
     return model;
   const { context, crateStep } = preview;
@@ -75,6 +91,11 @@ export function previewModel(
           contextPercent:
             context === "spread" ? SPREAD[index % SPREAD.length]! : context,
         }));
+  if (preview.colors)
+    actors = actors.map((actor, index) => ({
+      ...actor,
+      color: PREVIEW_COLORS[index % PREVIEW_COLORS.length]!,
+    }));
   const owner = model.actors[0];
   // The first agent hands off: nearly out of context, it waits at the
   // machine writing, then a fresh successor takes its place.

@@ -197,6 +197,15 @@ describe("buildWorldModel", () => {
     });
   });
 
+  test("an agent carries its session's color, or none", () => {
+    const model = buildWorldModel(
+      input({
+        sessions: [session("a", { color: "teal" }), session("b")],
+      }),
+    );
+    expect(model.actors.map((actor) => actor.color)).toEqual(["teal", null]);
+  });
+
   test("a waiting agent stays at the station it asked from and is counted", () => {
     const attention: SessionAttentionDto = {
       sessionId: "a",
@@ -950,6 +959,21 @@ describe("preview", () => {
   test("off leaves the model alone", () => {
     const real = model();
     expect(previewModel(real, NO_PREVIEW)).toBe(real);
+  });
+
+  test("colors hands every agent a session color, one each", () => {
+    const shown = previewModel(model(), {
+      context: "off",
+      crateStep: null,
+      colors: true,
+    });
+    expect(shown.actors.map((actor) => actor.color)).toEqual([
+      "red",
+      "orange",
+      "gold",
+      "green",
+      "teal",
+    ]);
   });
 
   test("one level each puts an agent past every threshold", () => {
