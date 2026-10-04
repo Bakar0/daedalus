@@ -33,8 +33,9 @@ machine that has never set it.
 `/daedalus-handoff` in Claude Code, or `$daedalus-handoff` in a Codex message, makes the agent
 finish the edit it is in, write `HANDOFF.md` in its working directory in a
 fixed order (goal, done, in progress, next, decisions, unverified, and the
-user's own words), and run `daedal agent continue --handoff-file` as its last
-action. Words after the command reach the skill as `$ARGUMENTS` in Claude and
+user's own words), and run `daedal agent continue --self --handoff-file` as
+its last action, calling this home's `bin/daedal` by the full path written into
+the skill at install. Words after the command reach the skill as `$ARGUMENTS` in Claude and
 as the rest of the message in Codex; the skill puts them in the note and
 passes them with `--message`, so the next agent sees them in its launch
 prompt too. A dev build installs it as `/daedalus-handoff-dev`.

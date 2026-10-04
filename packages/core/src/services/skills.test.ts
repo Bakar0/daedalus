@@ -99,7 +99,7 @@ describe("SkillService", () => {
         expect(handoff).toContain("name: daedalus-handoff");
         expect(handoff).toContain("$ARGUMENTS");
         expect(handoff).toContain(
-          '"$DAEDALUS_HOME/bin/daedal" agent continue --handoff-file',
+          `"${join(home, "bin", "daedal")}" agent continue --self --handoff-file`,
         );
         // The routine skills name this home's CLI by its full path.
         const routine = await readFile(

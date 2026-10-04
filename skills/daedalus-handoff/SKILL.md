@@ -17,11 +17,11 @@ $ARGUMENTS
 
 ## Resolve the CLI once
 
-Use `"$DAEDALUS_HOME/bin/daedal"`. Daedalus sets `DAEDALUS_HOME` in every
-session it starts, and the `daedal` on `PATH` can belong to a different
-Daedalus build, one that does not know this session. Only when `DAEDALUS_HOME`
-is unset, use `daedal` from `PATH`. Use the same executable for every command
-below.
+Use `"{{daedal}}"`, exactly that path, for every command below. Do not
+build it from `DAEDALUS_HOME` or take `daedal` from `PATH`: Claude can run
+your commands with another session's environment, and the `daedal` on `PATH`
+can belong to a different Daedalus build, one that does not know this
+session.
 
 ## 1. Stop
 
@@ -56,11 +56,16 @@ Do not restate the task brief; the next agent reads it. Do not paste output.
 
 ## 3. Continue
 
-Run, as your last action:
+Run, as your last action, from your working directory:
 
 ```sh
-"$DAEDALUS_HOME/bin/daedal" agent continue --handoff-file "$PWD/HANDOFF.md"
+"{{daedal}}" agent continue --self --handoff-file "$PWD/HANDOFF.md"
 ```
+
+`--self` finds this session by its working directory, not by
+`DAEDALUS_SESSION_ID`, which can belong to another session. If it says
+several sessions share the directory, pass this session's id in place of
+`--self`.
 
 Pass the user's extra instructions with `--message "<text>"` as well, so they
 reach the next agent in its launch prompt, not only in the note.

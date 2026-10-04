@@ -15,6 +15,7 @@ import {
   writeActivityRecord,
   type ActivityObservation,
   type AgentActivityState,
+  type AgentSession,
   type ApplicationContext,
   type TaskCost,
   type ManagedSkillStatus,
@@ -27,7 +28,7 @@ import {
 } from "./arguments";
 import { routineCommand, routineHelp, sessionCommand } from "./routines";
 import { findTmuxExecutable, probeVersion } from "@daedalus/platform";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { DoctorCheck } from "@daedalus/protocol";
 import packageJson from "../../../package.json";
@@ -1291,17 +1292,22 @@ async function agentContinueCommand(
   json: boolean,
   options: CliOptions,
 ): Promise<number> {
-  const parsed = parseArguments(args, [
-    "handoff-file",
-    "provider",
-    "model",
-    "message",
-  ]);
+  const parsed = parseArguments(
+    args,
+    ["handoff-file", "provider", "model", "message"],
+    ["self"],
+  );
   const usage =
-    "daedal agent continue [<agent-id>] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--message <text>]";
-  if (parsed.positionals.length > 1)
+    "daedal agent continue [<agent-id> | --self] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--message <text>]";
+  if (
+    parsed.positionals.length > 1 ||
+    (parsed.flags.has("self") && parsed.positionals.length)
+  )
     throw new DaedalusError("VALIDATION", `Usage: ${usage}`);
-  const id = parsed.positionals[0] ?? process.env.DAEDALUS_SESSION_ID;
+  const asSelf = parsed.flags.has("self");
+  const id = asSelf
+    ? (await sessionInDirectory(context, process.cwd())).id
+    : (parsed.positionals[0] ?? process.env.DAEDALUS_SESSION_ID);
   if (!id)
     throw new DaedalusError(
       "VALIDATION",
@@ -1326,7 +1332,7 @@ async function agentContinueCommand(
     handoff = await source.text();
   }
   const predecessor = await context.agents.get(id);
-  const self = predecessor.id === process.env.DAEDALUS_SESSION_ID;
+  const self = asSelf || predecessor.id === process.env.DAEDALUS_SESSION_ID;
   const result = await context.agents.continueSession({
     id: predecessor.id,
     handoff,
@@ -1350,6 +1356,43 @@ async function agentContinueCommand(
       console.log(`The old session was not archived: ${result.archiveError}`);
   });
   return 0;
+}
+
+/**
+ * The running session whose working directory is `directory`: the session a
+ * command was run from, found without its environment. A Claude session moved
+ * into the background runs its commands with another Claude process's
+ * environment, so `DAEDALUS_SESSION_ID` there can name a different session,
+ * and continuing that one would archive the wrong agent. The working
+ * directory stays the session's own. When two sessions share it, the
+ * environment's id breaks the tie only if it is one of them.
+ */
+async function sessionInDirectory(
+  context: ApplicationContext,
+  directory: string,
+): Promise<AgentSession> {
+  const real = (path: string) => realpath(path).catch(() => resolve(path));
+  const here = await real(directory);
+  const matches: AgentSession[] = [];
+  for (const session of context.repositories.listAgents())
+    if (
+      !session.archivedAt &&
+      session.kind === "agent" &&
+      (session.status === "running" || session.status === "starting") &&
+      (await real(session.workingDirectory)) === here
+    )
+      matches.push(session);
+  if (matches.length === 1) return matches[0]!;
+  const named = matches.find(
+    (session) => session.id === process.env.DAEDALUS_SESSION_ID,
+  );
+  if (named) return named;
+  throw new DaedalusError(
+    matches.length ? "CONFLICT" : "NOT_FOUND",
+    matches.length
+      ? `${matches.length} running sessions work in ${here}; pass the session id instead of --self`
+      : `No running Daedalus session works in ${here}; run this from the session's working directory`,
+  );
 }
 
 /**

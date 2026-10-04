@@ -93,7 +93,7 @@ daedal agent attach <agent-id>
 daedal agent send <agent-id> <text>
 daedal agent archive <agent-id> [--force]
 daedal agent handoff <agent-id>
-daedal agent continue [<agent-id>] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--message <text>]
+daedal agent continue [<agent-id> | --self] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--message <text>]
 daedal agent restore <agent-id>
 daedal agent revive <agent-id> | --all | --workspace <workspace>
 daedal agent stop <agent-id> [--force]
@@ -106,7 +106,7 @@ Built-in provider definitions come from `config.json`. Named custom definitions 
 
 `agent continue` hands a session's work to a fresh session with an empty context. The new session gets the same task and runs in the old one's working directory, and the old session's worktree rows move to it before the provider starts, so it never tries to create them again. It keeps the provider and the `--model` the old session launched with unless `--provider` or `--model` say otherwise. `--handoff-file` (or `-` for stdin) is written to `HANDOFF.md` in that directory, and the launch prompt tells the new agent to read it and check git before relying on it. Without a note the prompt points it at the brief, `JOURNAL.md` and git instead. The old session is then archived, so its conversation stays restorable, and it leaves the task's status alone.
 
-With no id, `agent continue` means the session named by `DAEDALUS_SESSION_ID`. An agent cannot archive itself from inside its own tmux session: `stop` sends Ctrl-C, which interrupts the very command doing the archiving. So in that case the command starts a detached `agent archive <id>` that waits for the command to exit before it runs, and the JSON result reports the old session as not yet archived.
+With no id, `agent continue` means the session named by `DAEDALUS_SESSION_ID`. `--self` means the running session whose working directory is the current one, and that it is the caller. The handoff skill uses `--self`: Claude can move a session into the background and run its commands with another Claude process's environment, where `DAEDALUS_SESSION_ID` names a different session. If several running sessions share the directory, `--self` picks the one `DAEDALUS_SESSION_ID` names only when it is among them, and otherwise refuses. An agent cannot archive itself from inside its own tmux session: `stop` sends Ctrl-C, which interrupts the very command doing the archiving. So in that case the command starts a detached `agent archive <id>` that waits for the command to exit before it runs, and the JSON result reports the old session as not yet archived.
 
 `agent handoff <agent-id>` is the one-click path. It sends a running agent a request to write the note to `HANDOFF.md` in its working directory and then run `agent continue --handoff-file` on itself. The desktop app's "Continue in new agent" button in the terminal heading sends it and switches the terminal to the new session once it appears. The same dialog's "Start fresh" continues without a note, for an agent that can no longer answer or a session that is not running.
 

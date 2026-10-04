@@ -17,11 +17,12 @@ async function cli(
   args: string[],
   env: Record<string, string> = {},
   stdin?: string,
+  cwd = join(import.meta.dir, "../../.."),
 ): Promise<CliResult> {
   const child = Bun.spawn(
     [process.execPath, "run", join(import.meta.dir, "index.ts"), ...args],
     {
-      cwd: join(import.meta.dir, "../../.."),
+      cwd,
       env: { ...process.env, DAEDALUS_HOME: home, ...env },
       stdin: stdin === undefined ? "ignore" : new Blob([stdin]),
       stdout: "pipe",
@@ -646,11 +647,15 @@ describe("daedal CLI contract", () => {
         workingDirectory: string;
       };
 
+      // As the handoff skill runs it: from the session's own directory, with
+      // `--self`, and an environment that names some other session, the way
+      // a Claude session moved into the background sees it.
       const continued = await cli(
         home,
-        ["agent", "continue", "--handoff-file", "-", "--json"],
-        { ...env, DAEDALUS_SESSION_ID: first.id },
+        ["agent", "continue", "--self", "--handoff-file", "-", "--json"],
+        { ...env, DAEDALUS_SESSION_ID: crypto.randomUUID() },
         "Next: finish step 2.",
+        first.workingDirectory,
       );
       expect(continued.stderr).toBe("");
       expect(continued.exitCode).toBe(0);
@@ -682,6 +687,16 @@ describe("daedal CLI contract", () => {
       await cli(home, ["shutdown", "--json"]);
     });
   }, 30_000);
+
+  test("continue --self refuses outside every session's directory", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const result = await cli(home, ["agent", "continue", "--self"], {
+        DAEDALUS_SESSION_ID: crypto.randomUUID(),
+      });
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("No running Daedalus session works in");
+    });
+  });
 
   test("reports presence so an agent can pick its own channel", async () => {
     await withTemporaryDaedalusHome(async (home) => {
