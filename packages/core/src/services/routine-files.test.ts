@@ -147,5 +147,11 @@ Check CI for {{pr}} since {{last_run}}. Keep {{unknown}}.
     );
     expect(disabled.enabled).toBe(false);
     expect(disabled.body).toBe(routine.body);
+    for (const timeoutMs of [90 * 60_000, 3 * 86_400_000, 45_000]) {
+      const timed = parseRoutineFile(
+        renderRoutineFile({ ...routine, timeoutMs }),
+      );
+      expect(timed.timeoutMs).toBe(timeoutMs);
+    }
   });
 });

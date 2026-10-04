@@ -67,7 +67,7 @@ These work on a session that holds the routines ability. Inside that
 session, --session defaults to it.
 
 A routine is written as Markdown: frontmatter with name, schedule
-(every <n>m, cron "<5 fields>", at <date and time>), until, model, timeout,
+(every <n>m|h, cron "<5 fields>", at <date and time>), until, model, timeout,
 output (task, notify or none), enabled and vars, and the prompt as the body.
 'add --file' stores it in Daedalus; nothing is written into the session's
 folder. 'get --text' prints it back in the same form, so a change is

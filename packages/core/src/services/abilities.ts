@@ -23,7 +23,6 @@ export const ROUTINE_RUN_SKILL = "daedalus-routine";
 export interface AbilityDefinition {
   id: AbilityId;
   label: string;
-  summary: string;
   providers: ReadonlyArray<Extract<AgentProviderName, "claude" | "codex">>;
   /** Added to the launch prompt of a session that holds it. */
   launchLine(skill: (id: string) => string): string;
@@ -37,8 +36,6 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilityDefinition>> = {
   routines: {
     id: "routines",
     label: "Routines",
-    summary:
-      "Checks the session runs on a schedule while the app is open. Their reports become tasks on the board.",
     providers: ["claude", "codex"],
     launchLine: (skill) =>
       `You hold the Daedalus routines ability: the user can ask you for routines, checks that run on a schedule. Create and change them with the ${skill(ROUTINES_SKILL)} skill. When Daedalus types a ${skill(ROUTINE_RUN_SKILL)} line with a run id, carry out that run with the ${skill(ROUTINE_RUN_SKILL)} skill.`,
@@ -121,7 +118,7 @@ export class AbilityService {
 
   /** Refuses abilities a session of this kind and provider cannot hold. */
   validate(
-    session: Pick<AgentSession, "kind" | "provider" | "name">,
+    session: Pick<AgentSession, "kind" | "provider">,
     abilities: readonly string[],
   ): AbilityId[] {
     const ids = [...new Set(abilities)].map((id) => abilityDefinition(id).id);
@@ -129,7 +126,7 @@ export class AbilityService {
       const definition = ABILITIES[id];
       if (
         session.kind !== "agent" ||
-        !definition.providers.includes(session.provider as "claude")
+        !(definition.providers as readonly string[]).includes(session.provider)
       )
         throw new DaedalusError(
           "VALIDATION",

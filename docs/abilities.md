@@ -87,16 +87,16 @@ For each problem give a key, a title, a link and the evidence.
 Return {"reports": []} when nothing needs attention.
 ```
 
-| Field      | Meaning                                                                                   | Example                  |
-| ---------- | ----------------------------------------------------------------------------------------- | ------------------------ |
-| `name`     | Unique within the session's routines, also the key prefix                                 | `ci-health`              |
-| `schedule` | `every <n>m/h`, `cron "<5 fields>"` (local time), or `at <local datetime>` (one-shot)     | `cron "50 8 * * 1-5"`    |
-| `until`    | The routine deletes itself after this time                                                | `2026-09-30T15:40`       |
-| `model`    | Model for a Claude session's subagent                                                     | `sonnet`, `haiku`        |
-| `timeout`  | A run with no result after this is marked failed                                          | `10m`                    |
-| `output`   | `task`: each report becomes a tagged task and a notification. `notify`: notification only | `task`                   |
-| `enabled`  | Pause one routine without deleting it                                                     | `true`                   |
-| `vars`     | Values filled into `{{name}}` in the body                                                 | `pr: Bakar0/daedalus#57` |
+| Field      | Meaning                                                                                                                      | Example                                                                 |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `name`     | Unique within the session's routines, also the key prefix                                                                    | `ci-health`                                                             |
+| `schedule` | `every <n>m                                                                                                                  | h`, `cron "<5 fields>"`(local time), or`at <local datetime>` (one-shot) | `cron "50 8 * * 1-5"` |
+| `until`    | The routine deletes itself after this time                                                                                   | `2026-09-30T15:40`                                                      |
+| `model`    | Model for a Claude session's subagent                                                                                        | `sonnet`, `haiku`                                                       |
+| `timeout`  | A run with no result after this is marked failed                                                                             | `10m`                                                                   |
+| `output`   | `task`: each report becomes a tagged task and a notification. `notify`: notification only. `none`: the routine cannot report | `task`                                                                  |
+| `enabled`  | Pause one routine without deleting it                                                                                        | `true`                                                                  |
+| `vars`     | Values filled into `{{name}}` in the body                                                                                    | `pr: Bakar0/daedalus#57`                                                |
 
 Daedalus fills `{{last_run}}`, `{{run_id}}`, `{{now}}` and `{{missed}}` into
 every body. A template (`routine add --file - --template`) never fires;
@@ -146,7 +146,7 @@ Claude can swap for another session's (see "The calling session" in
 finds the session from the working directory. The run commands also find it
 from the run id.
 
-The routine bar above the session's terminal (phase 2) shows what waits and
+The routine bar above the session's terminal shows what waits and
 why: "2 waiting · you typed 0:40 ago · resumes in 1:20", or busy, the input
 box has text, the runs in flight, a handoff, or paused. Run now
 (`routineRunNow` over RPC) skips only the 2-minute wait for the next line.

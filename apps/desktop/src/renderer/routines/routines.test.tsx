@@ -39,7 +39,7 @@ describe("a routine report on its card", () => {
         onVerdict={() => {}}
       />,
     );
-    expect(html).toContain('report-agent" data-color="teal">Argus<');
+    expect(html).toContain('report-session" data-color="teal">Argus<');
     expect(html).toContain("report-urgent");
     expect(html).toContain("ci-health");
     expect(html).toContain("Resolved");

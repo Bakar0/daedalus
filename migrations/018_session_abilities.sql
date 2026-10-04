@@ -2,8 +2,8 @@
 -- can hold abilities such as routines. Routines run on a clock Daedalus keeps
 -- and are typed into the session that holds them.
 
--- Development builds of #49 created other tables under the same version
--- number. No release shipped them, so they are dropped rather than migrated.
+-- Development builds of #49 created other tables in earlier 018 migrations.
+-- No release shipped them, so they are dropped rather than migrated.
 DROP TABLE IF EXISTS findings;
 DROP TABLE IF EXISTS routine_reports;
 DROP TABLE IF EXISTS routine_runs;

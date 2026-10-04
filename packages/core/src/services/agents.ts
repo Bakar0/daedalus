@@ -152,7 +152,7 @@ export function isMissingCodexConversationError(message: string): boolean {
   );
 }
 
-export function claudeProjectKey(workingDirectory: string): string {
+function claudeProjectKey(workingDirectory: string): string {
   return workingDirectory.replace(/[^a-zA-Z0-9]/g, "-");
 }
 
@@ -785,7 +785,6 @@ export class AgentService {
           {
             kind: input.terminal ? "terminal" : "agent",
             provider: provider?.name ?? "custom",
-            name: requestedName ?? "",
           },
           input.abilities ?? [],
         );

@@ -2796,20 +2796,17 @@ export function WorkspaceApp({
     : (snapshot?.agents ?? []).filter(
         (item) => item.workspaceId === workspaceId,
       );
-  const activeSessions = workspaceSessions.filter((item) => !item.archivedAt);
   // Blocked sessions used to float to the top here. They no longer do: once
   // the order is something the user placed, moving a card out from under them
   // is the bug, not the feature. The card tone and the workspace roll-up
   // count still surface a blocked session in place.
-  const sessions = activeSessions;
+  const sessions = workspaceSessions.filter((item) => !item.archivedAt);
   const sessionReorder = useListReorder({
     ids: sessions.map((item) => item.id),
     // A position is an order within one workspace, so the all-workspaces
     // list is read-only: there is no one list on the server for a drag
     // across it to write.
     disabled: showingAll,
-    // Only the visible sessions are named, so a drag inside the "Needs me"
-    // filter leaves the sessions it is hiding exactly where they were.
     onCommit: (sessionIds) =>
       perform(
         client.request.agentReorder({
@@ -2818,12 +2815,10 @@ export function WorkspaceApp({
         }),
       ),
   });
-  // Sessions holding routines, which their cards and archive dialog mark,
-  // and the bar above each one's terminal.
+  // Sessions holding routines, which their cards and archive dialog mark.
   const routinesBySession = new Map(
     (snapshot?.routines ?? []).map((status) => [status.sessionId, status]),
   );
-  const routineSessionIds = new Set(routinesBySession.keys());
   // Pinned sessions sit above the rest, in the order they were pinned; the
   // manual order holds within each group.
   const orderedSessions = sessionReorder.order
@@ -2867,9 +2862,7 @@ export function WorkspaceApp({
   );
   // Deliberately not the filtered list: hiding a session from the list must
   // not tear down the terminal the user is sitting in.
-  const activeSession = activeSessions.find(
-    (item) => item.id === activeSessionId,
-  );
+  const activeSession = sessions.find((item) => item.id === activeSessionId);
   // A session that was asked to hand off, by a click or by the automatic
   // sweep, is followed to its successor: the fresh session in the same
   // working directory that started after the request. Looked up across the
@@ -2879,7 +2872,7 @@ export function WorkspaceApp({
     (item) => item.id === activeSessionId && item.handoffRequestedAt,
   );
   const handoffSuccessor = viewedHandoff
-    ? activeSessions.find(
+    ? sessions.find(
         (item) =>
           item.id !== viewedHandoff.id &&
           item.workingDirectory === viewedHandoff.workingDirectory &&
@@ -5696,7 +5689,7 @@ export function WorkspaceApp({
                   const timestamp = session.endedAt ?? session.startedAt;
                   const startupError = sessionStartupErrors.get(session.id);
                   const view = statusViewFor(session);
-                  const holdsRoutines = routineSessionIds.has(session.id);
+                  const holdsRoutines = routinesBySession.has(session.id);
                   const waitingRuns =
                     routinesBySession.get(session.id)?.waiting.length ?? 0;
                   return (
@@ -6962,7 +6955,7 @@ export function WorkspaceApp({
               Running work will stop, but its conversation can be restored and
               resumed later.
             </p>
-            {routineSessionIds.has(sessionAction.session.id) && (
+            {routinesBySession.has(sessionAction.session.id) && (
               <p>
                 This session runs routines. Archiving pauses them and keeps them
                 and their tasks. Restoring the session resumes them.

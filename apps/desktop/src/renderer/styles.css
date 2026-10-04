@@ -5273,7 +5273,6 @@ dd {
   --session-blue: #5b9be6;
   --session-purple: #a07ee0;
   --session-pink: #e076b0;
-  --lamp-amber: var(--session-gold);
 }
 .app[data-theme="light"] {
   --session-red: #c2413a;
@@ -5455,7 +5454,8 @@ dd {
   display: grid;
   gap: 2px;
 }
-/* The skills switch, drawn inside a menu item that is itself the control. */
+/* A switch like the skills panel's, drawn inside a menu item that is itself
+   the control. */
 .menu-switch {
   background: var(--line-strong);
   border-radius: 999px;
@@ -5702,7 +5702,7 @@ dd {
   flex-wrap: wrap;
   gap: 6px;
 }
-.report-agent {
+.report-session {
   border: 1px solid var(--session-color, var(--muted));
   border-radius: 4px;
   color: var(--session-color, var(--muted));
@@ -5725,7 +5725,7 @@ dd {
   color: var(--success);
 }
 .report-reopened {
-  color: var(--lamp-amber);
+  color: var(--session-gold);
 }
 .report-details button {
   font-size: 11px;

@@ -32,7 +32,10 @@ export function ReportDetails({
     <div className="report-details" onClick={stop}>
       <span className="report-source">
         {owner && (
-          <span className="report-agent" data-color={owner.color ?? undefined}>
+          <span
+            className="report-session"
+            data-color={owner.color ?? undefined}
+          >
             {owner.name}
           </span>
         )}

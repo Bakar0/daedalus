@@ -50,6 +50,13 @@ export function formatDuration(milliseconds: number): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
+/** A duration as `parseDuration` reads it back, exactly. */
+function durationText(milliseconds: number): string {
+  if (milliseconds % 3_600_000 === 0) return `${milliseconds / 3_600_000}h`;
+  if (milliseconds % 60_000 === 0) return `${milliseconds / 60_000}m`;
+  return `${Math.round(milliseconds / 1_000)}s`;
+}
+
 /**
  * A local date and time, `2026-09-30T15:40` or `2026-09-30 15:40`, read in
  * the machine's time zone the way the user wrote it. An explicit offset or
@@ -248,7 +255,7 @@ export function parseSchedule(value: string): RoutineSchedule {
     };
   throw new DaedalusError(
     "VALIDATION",
-    `Schedule '${value}' is not one of: every <n>m, cron "<5 fields>", at <date and time>`,
+    `Schedule '${value}' is not one of: every <n>m|h, cron "<5 fields>", at <date and time>`,
   );
 }
 
@@ -398,7 +405,7 @@ export function renderRoutineFile(routine: RoutineDefinition): string {
     `schedule: ${yamlScalar(routine.schedule.text)}`,
     ...(routine.until ? [`until: ${routine.until}`] : []),
     ...(routine.model ? [`model: ${yamlScalar(routine.model)}`] : []),
-    `timeout: ${formatDuration(routine.timeoutMs).replace(" ", "")}`,
+    `timeout: ${durationText(routine.timeoutMs)}`,
     `output: ${routine.output}`,
     `enabled: ${routine.enabled}`,
     ...(Object.keys(routine.vars).length

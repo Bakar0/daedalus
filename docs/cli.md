@@ -352,7 +352,7 @@ daedal attention "<reason>" [--session <agent-id>]
 daedal attention --clear [--session <agent-id>]
 daedal notify "<message>" [--level info|success|error] [--desktop] [--session <agent-id>]
 daedal ui state [--json]
-daedal focus <agent-id>
+daedal focus <agent-id> | --task <task-id>
 ```
 
 These are how an agent reports on itself. Inference from hooks can tell you a

@@ -24,7 +24,8 @@ function lastRunLabel(routine: RoutineDto, now: number): string {
 /**
  * The drawer on a session holding routines: what they are for and each
  * routine's schedule and last run. The user changes routines by talking to
- * the session, so the drawer only runs, enables and disables them.
+ * the session, so the drawer only edits the purpose and runs, enables and
+ * disables them.
  */
 export function RoutinesPanel({
   sessionName,

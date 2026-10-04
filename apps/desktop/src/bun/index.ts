@@ -258,7 +258,6 @@ const server = Bun.serve<SocketData>({
             // session for a while, so a routine never lands in a draft.
             if (socket.data.targetKind === "agent" && isTyping(data))
               context.deliveryGate.noteKeystroke(target.id);
-            return true;
           },
           onError: (error) =>
             void context.logger.write("error", "terminal_connection_failed", {

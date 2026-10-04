@@ -435,7 +435,7 @@ elsewhere, a desktop notification when it is backgrounded or they are idle.
 --desktop forces the desktop channel. Use 'daedal attention' instead when the
 session is blocked and the alert has to persist.`,
   focus: `Focus command:
-  daedal focus <agent-id>
+  daedal focus <agent-id> | --task <task-id>
 
 Raises the Daedalus window and selects that session. This is what a clicked
 notification runs, and it works whether or not the app is already open.`,
@@ -1629,8 +1629,7 @@ const ATTENTION_ACTIVITY = new Set(["needs_permission", "needs_input"]);
 
 /**
  * Resolves the session the caller is speaking for. An agent almost never
- * passes `--session`: it is running inside one, and `DAEDALUS_SESSION_ID` is
- * the whole point of the environment contract.
+ * passes `--session`: it is running inside one, and `callerSession` finds it.
  */
 async function currentSessionId(
   context: ApplicationContext,

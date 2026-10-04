@@ -2,10 +2,9 @@ import type { AgentActivityState, AgentSession } from "../domain";
 
 /**
  * When Daedalus may type a line into a session the user may also be typing
- * in. There are no modes and nothing is locked: a line goes in only when the
- * session is idle at its prompt, its input box is empty, and nobody pressed a
- * key in its terminal for `QUIET_AFTER_TYPING_MS`. Everything else waits, and
- * says why.
+ * in. A line goes in only when the session is idle at its prompt, its input
+ * box is empty, and nobody pressed a key in its terminal for
+ * `QUIET_AFTER_TYPING_MS`. Everything else waits, and says why.
  */
 
 /** After a keystroke in a session's terminal, Daedalus types nothing for this long. */
