@@ -1,31 +1,16 @@
-import { readdir, readFile, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
 import type {
-  Routine,
-  RoutineFileError,
+  RoutineDefinition,
   RoutineOutput,
   RoutineSchedule,
 } from "../domain";
 import { DaedalusError } from "../errors";
 
 /**
- * Routine files: one Markdown file per routine, the schedule and limits in
- * YAML frontmatter and the prompt as the body. Daedalus knows nothing about
- * what a routine checks; that is all in the body.
+ * The text form of a routine: the schedule and limits in YAML frontmatter
+ * and the prompt as the body. A session writes this to add a routine, and
+ * `routine get --text` prints it back. Daedalus stores the parsed routine in
+ * SQLite and knows nothing about what it checks; that is all in the body.
  */
-
-export const ROUTINES_DIRECTORY = "routines";
-/** The session-folder group under `worktrees/` that routine agents live in. */
-export const ROUTINE_AGENTS_GROUP = "agents";
-
-/** A routine agent's folder, which never moves: its memory is keyed to it. */
-export function routineAgentFolder(
-  workspacePath: string,
-  slug: string,
-): string {
-  return join(workspacePath, "worktrees", ROUTINE_AGENTS_GROUP, slug);
-}
-export const TEMPLATES_DIRECTORY = "templates";
 
 const ROUTINE_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
@@ -309,8 +294,15 @@ const stringValue = (value: unknown): string | undefined => {
   return undefined;
 };
 
-/** Parses a routine file. Throws a `VALIDATION` error that names the field. */
-export function parseRoutineFile(path: string, text: string): Routine {
+/**
+ * Parses a routine's text. Throws a `VALIDATION` error that names the field.
+ * `fallbackName` names a routine whose frontmatter has no `name`, such as
+ * one read from a file named after it.
+ */
+export function parseRoutineFile(
+  text: string,
+  fallbackName?: string,
+): RoutineDefinition {
   const match = FRONTMATTER.exec(text);
   if (!match)
     throw new DaedalusError(
@@ -332,9 +324,10 @@ export function parseRoutineFile(path: string, text: string): Routine {
       "Frontmatter must be a set of fields",
     );
   const fields = data as Record<string, unknown>;
-  const name = routineName(
-    stringValue(fields.name) ?? basename(path).replace(/\.md$/, ""),
-  );
+  const nameText = stringValue(fields.name) ?? fallbackName;
+  if (!nameText)
+    throw new DaedalusError("VALIDATION", "The 'name' field is required");
+  const name = routineName(nameText);
   const scheduleText = stringValue(fields.schedule);
   if (!scheduleText)
     throw new DaedalusError("VALIDATION", "The 'schedule' field is required");
@@ -380,7 +373,6 @@ export function parseRoutineFile(path: string, text: string): Routine {
     );
   return {
     name,
-    path,
     schedule,
     until,
     model: stringValue(fields.model) ?? null,
@@ -398,8 +390,8 @@ const yamlScalar = (value: string): string =>
     ? value
     : JSON.stringify(value);
 
-/** Renders a routine back to its file form. */
-export function renderRoutineFile(routine: Omit<Routine, "path">): string {
+/** Renders a routine back to its text form. */
+export function renderRoutineFile(routine: RoutineDefinition): string {
   const lines = [
     "---",
     `name: ${routine.name}`,
@@ -424,22 +416,6 @@ export function renderRoutineFile(routine: Omit<Routine, "path">): string {
   return lines.join("\n");
 }
 
-/** Sets one frontmatter field in a file's text, leaving the rest alone. */
-export function setFrontmatterField(
-  text: string,
-  field: string,
-  value: string,
-): string {
-  const match = FRONTMATTER.exec(text);
-  if (!match)
-    throw new DaedalusError("VALIDATION", "The file has no frontmatter");
-  const lines = match[1]!.split(/\r?\n/);
-  const index = lines.findIndex((line) => line.startsWith(`${field}:`));
-  if (index === -1) lines.push(`${field}: ${value}`);
-  else lines[index] = `${field}: ${value}`;
-  return `---\n${lines.join("\n")}\n---\n${match[2]}`;
-}
-
 /**
  * Fills `{{name}}` from the routine's vars and Daedalus's own values. An
  * unknown name is left as it is, so a typo shows in the prompt rather than
@@ -452,95 +428,4 @@ export function fillPlaceholders(
   return body.replace(/\{\{\s*([\w-]+)\s*\}\}/g, (whole, key: string) =>
     Object.hasOwn(values, key) ? values[key]! : whole,
   );
-}
-
-export interface RoutineFolder {
-  routines: Routine[];
-  errors: RoutineFileError[];
-}
-
-interface CacheEntry {
-  mtimeMs: number;
-  size: number;
-  result: Routine | RoutineFileError;
-}
-
-/**
- * Reads a routines folder, re-parsing only files whose modification time or
- * size changed. The scheduler reads it on every tick, which is how an edit
- * by hand, by the agent or by the app is picked up without a watcher.
- */
-export class RoutineFolderReader {
-  private readonly cache = new Map<string, CacheEntry>();
-
-  async read(directory: string): Promise<RoutineFolder> {
-    let entries: string[];
-    try {
-      entries = (await readdir(directory)).filter((name) =>
-        name.endsWith(".md"),
-      );
-    } catch {
-      return { routines: [], errors: [] };
-    }
-    const routines: Routine[] = [];
-    const errors: RoutineFileError[] = [];
-    const seen = new Set<string>();
-    for (const entry of entries.sort()) {
-      const path = join(directory, entry);
-      seen.add(path);
-      let info;
-      try {
-        info = await stat(path);
-      } catch {
-        continue;
-      }
-      if (!info.isFile()) continue;
-      const cached = this.cache.get(path);
-      let result: Routine | RoutineFileError;
-      if (
-        cached &&
-        cached.mtimeMs === info.mtimeMs &&
-        cached.size === info.size
-      )
-        result = cached.result;
-      else {
-        try {
-          result = parseRoutineFile(path, await readFile(path, "utf8"));
-        } catch (error) {
-          result = {
-            path,
-            name: entry.replace(/\.md$/, ""),
-            error: error instanceof Error ? error.message : String(error),
-          };
-        }
-        this.cache.set(path, {
-          mtimeMs: info.mtimeMs,
-          size: info.size,
-          result,
-        });
-      }
-      if ("error" in result) errors.push(result);
-      else routines.push(result);
-    }
-    for (const path of this.cache.keys())
-      if (path.startsWith(directory) && !seen.has(path))
-        this.cache.delete(path);
-    // Two files that claim one name: the first by file name wins, and the
-    // other is shown as an error rather than silently shadowed.
-    const unique: Routine[] = [];
-    const names = new Set<string>();
-    for (const routine of routines) {
-      if (names.has(routine.name)) {
-        errors.push({
-          path: routine.path,
-          name: routine.name,
-          error: `Another file already defines routine '${routine.name}'`,
-        });
-        continue;
-      }
-      names.add(routine.name);
-      unique.push(routine);
-    }
-    return { routines: unique, errors };
-  }
 }

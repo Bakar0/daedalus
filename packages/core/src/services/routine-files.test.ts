@@ -7,7 +7,6 @@ import {
   parseRoutineFile,
   parseSchedule,
   renderRoutineFile,
-  setFrontmatterField,
 } from "./routine-files";
 
 const local = (text: string) => new Date(text);
@@ -88,7 +87,7 @@ describe("routine schedules", () => {
   });
 });
 
-describe("routine files", () => {
+describe("routine text", () => {
   const file = `---
 name: ci-health
 schedule: every 30m
@@ -102,7 +101,7 @@ Check CI for {{pr}} since {{last_run}}. Keep {{unknown}}.
 `;
 
   test("parses frontmatter and body", () => {
-    const routine = parseRoutineFile("/r/ci-health.md", file);
+    const routine = parseRoutineFile(file);
     expect(routine).toMatchObject({
       name: "ci-health",
       model: "sonnet",
@@ -117,33 +116,34 @@ Check CI for {{pr}} since {{last_run}}. Keep {{unknown}}.
   });
 
   test("names the field that is wrong", () => {
-    expect(() => parseRoutineFile("/r/x.md", "no frontmatter")).toThrow(
+    expect(() => parseRoutineFile("no frontmatter")).toThrow(
       "starts with frontmatter",
     );
+    expect(() => parseRoutineFile("---\nname: x\n---\nbody")).toThrow(
+      "'schedule' field is required",
+    );
     expect(() =>
-      parseRoutineFile("/r/x.md", "---\nname: x\n---\nbody"),
-    ).toThrow("'schedule' field is required");
+      parseRoutineFile("---\nschedule: every 5m\n---\nbody"),
+    ).toThrow("'name' field is required");
+    expect(
+      parseRoutineFile("---\nschedule: every 5m\n---\nbody", "from-file").name,
+    ).toBe("from-file");
     expect(() =>
       parseRoutineFile(
-        "/r/x.md",
         "---\nname: x\nschedule: every 5m\noutput: maybe\n---\nbody",
       ),
     ).toThrow("'output' must be one of");
     expect(() =>
-      parseRoutineFile("/r/x.md", "---\nname: x\nschedule: every 5m\n---\n"),
+      parseRoutineFile("---\nname: x\nschedule: every 5m\n---\n"),
     ).toThrow("no prompt");
   });
 
   test("renders a file that parses back to the same routine", () => {
-    const routine = parseRoutineFile("/r/ci-health.md", file);
-    const again = parseRoutineFile(
-      "/r/ci-health.md",
-      renderRoutineFile(routine),
-    );
-    expect({ ...again, path: "" }).toEqual({ ...routine, path: "" });
+    const routine = parseRoutineFile(file);
+    const again = parseRoutineFile(renderRoutineFile(routine));
+    expect(again).toEqual(routine);
     const disabled = parseRoutineFile(
-      "/r/ci-health.md",
-      setFrontmatterField(file, "enabled", "false"),
+      renderRoutineFile({ ...routine, enabled: false }),
     );
     expect(disabled.enabled).toBe(false);
     expect(disabled.body).toBe(routine.body);

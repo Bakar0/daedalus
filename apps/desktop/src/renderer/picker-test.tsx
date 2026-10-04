@@ -47,7 +47,8 @@ const snapshot = {
   agentActivity: [],
   sessionAttention: [],
   toasts: [],
-  routineAgents: [],
+  abilities: [],
+  routines: [],
   routineReports: [],
   presence: {
     appForeground: true,

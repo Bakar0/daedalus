@@ -11,8 +11,10 @@ import {
   type PendingNotification,
   type PresenceState,
   type RepositoryLibraryEntry,
-  type RoutineAgentOverview,
+  type Routine,
   type RoutineRun,
+  type RoutinesStatus,
+  type SessionAbility,
   type SessionAttention,
   type Task,
   type Workspace,
@@ -30,9 +32,11 @@ import type {
   IntegratedTerminalDto,
   PresenceStateDto,
   RepositoryLibraryDto,
-  RoutineAgentDetailDto,
-  RoutineAgentOverviewDto,
+  RoutineDto,
   RoutineRunDto,
+  RoutinesDetailDto,
+  RoutinesStatusDto,
+  SessionAbilityDto,
   RpcResult,
   SessionAttentionDto,
   TaskDto,
@@ -196,15 +200,14 @@ export async function desktopSnapshot(
       .map((item) => ({ ...item })),
     attention: context.activity.listAttention().map(sessionAttentionDto),
     toasts: context.notifications.pending("toast").map(toastDto),
-    routineAgents: (await context.routineAgents.overviews()).map(
-      routineAgentOverviewDto,
-    ),
-    routineReports: context.routineAgents
-      .list()
-      .flatMap((agent) =>
-        context.repositories.routineAgents.listRoutineReports(agent.id),
-      )
-      .filter((report) => report.taskId)
+    abilities: context.repositories.abilities.list().map(sessionAbilityDto),
+    routines: context.abilities
+      .holders("routines")
+      .map((ability) =>
+        routinesStatusDto(context.routineDelivery.status(ability)),
+      ),
+    routineReports: context.repositories.routines
+      .listReportsWithTasks()
       .map((report) => ({ ...report })),
     settings: {
       version: packageJson.version,
@@ -237,51 +240,69 @@ export function desktopDataFingerprint(context: ApplicationContext): string {
     activity: context.repositories.listAgentActivity(),
     attention: context.repositories.listSessionAttention(),
     notifications: context.repositories.listPendingNotifications(),
-    // A run starting or ending changes what the agent's card says, so it
-    // reloads too. Routine files are not in SQLite; their state rows change
-    // when they are read.
-    routineAgents: context.repositories.routineAgents
-      .listRoutineAgents()
-      .map((item) => ({
-        item,
-        runs: context.repositories.routineAgents.listRoutineRuns(item.id, {
-          limit: 5,
-        }),
-        states: context.repositories.routineAgents.listRoutineStates(item.id),
-        reports: context.repositories.routineAgents.listRoutineReports(
-          item.id,
-          { states: ["open", "resolved"] },
-        ),
-      })),
+    // A run starting or ending, or a hold changing, changes what the
+    // session's bar says, so it reloads too.
+    abilities: context.repositories.abilities.list().map((ability) => ({
+      ability,
+      ...(ability.enabled && ability.ability === "routines"
+        ? {
+            status: fingerprintStatus(context.routineDelivery.status(ability)),
+            routines: context.repositories.routines.list(ability.id),
+            reports: context.repositories.routines.listReports(ability.id, {
+              states: ["open", "resolved"],
+            }),
+          }
+        : {}),
+    })),
   });
 }
 
-const routineAgentOverviewDto = (
-  overview: RoutineAgentOverview,
-): RoutineAgentOverviewDto => ({
-  id: overview.agent.id,
-  name: overview.agent.name,
-  slug: overview.agent.slug,
-  workspaceId: overview.agent.workspaceId,
-  workspaceSlug: overview.workspaceSlug,
-  folder: overview.folder,
-  state: overview.agent.state,
-  sessionId: overview.agent.sessionId,
-  sessionStatus: overview.sessionStatus,
-  sessionArchived: overview.sessionArchived,
-  nextRunAt: overview.nextRunAt,
-  runsInFlight: overview.runsInFlight,
-  runsQueued: overview.runsQueued,
-  openReports: overview.openReports,
-  openUrgentReports: overview.openUrgentReports,
-  openReportTasks: overview.openReportTasks,
-  routines: overview.routines,
-  routineErrors: overview.routineErrors,
-  deliveryHold: overview.deliveryHold,
-  autoHandoffPercent: overview.agent.autoHandoffPercent,
-  mode: overview.mode,
-  autoAt: overview.autoAt,
-  hasStashedDraft: overview.hasStashedDraft,
+/**
+ * A routines status as the fingerprint sees it. Every keystroke moves the
+ * quiet time, so the times are rounded to ten seconds: a reload per tick
+ * while the user types would resend the whole snapshot for nothing.
+ */
+const fingerprintStatus = (status: RoutinesStatus) => ({
+  ...status,
+  lastKeystrokeAt: null,
+  hold: status.hold
+    ? {
+        ...status.hold,
+        until: status.hold.until
+          ? Math.floor(Date.parse(status.hold.until) / 10_000)
+          : undefined,
+      }
+    : null,
+});
+
+const sessionAbilityDto = (ability: SessionAbility): SessionAbilityDto => ({
+  id: ability.id,
+  sessionId: ability.sessionId,
+  ability: ability.ability,
+  enabled: ability.enabled,
+  paused: ability.paused,
+  purpose: ability.config.purpose ?? null,
+  noteWaiting: Boolean(ability.pendingNote),
+  grantedAt: ability.grantedAt,
+});
+
+const routinesStatusDto = (status: RoutinesStatus): RoutinesStatusDto => ({
+  abilityId: status.ability.id,
+  sessionId: status.ability.sessionId,
+  paused: status.ability.paused,
+  waiting: status.waiting.map((run) => ({
+    runId: run.id,
+    routine: run.routine,
+    queuedAt: run.queuedAt,
+  })),
+  running: status.running,
+  hold: status.hold ? { ...status.hold } : null,
+  nextRun: status.nextRun ? { ...status.nextRun } : null,
+  lastKeystrokeAt: status.lastKeystrokeAt,
+  routines: status.routines,
+  openReports: status.openReports,
+  openUrgentReports: status.openUrgentReports,
+  openReportTasks: status.openReportTasks,
 });
 
 const routineRunDto = (run: RoutineRun): RoutineRunDto => ({
@@ -297,29 +318,36 @@ const routineRunDto = (run: RoutineRun): RoutineRunDto => ({
   missedMs: run.missedMs,
 });
 
-async function routineAgentDetail(
+const routineDto = (
+  routine: Routine,
+  lastRun: RoutineRun | null,
+): RoutineDto => ({
+  name: routine.name,
+  schedule: routine.schedule.text,
+  until: routine.until,
+  model: routine.model,
+  timeoutMs: routine.timeoutMs,
+  output: routine.output,
+  enabled: routine.enabled,
+  nextRunAt: routine.enabled ? routine.nextRunAt : null,
+  lastRunAt: routine.lastRunAt,
+  consecutiveFailures: routine.consecutiveFailures,
+  lastRun: lastRun ? routineRunDto(lastRun) : null,
+});
+
+function routinesDetail(
   context: ApplicationContext,
-  reference: string,
-): Promise<RoutineAgentDetailDto> {
-  const agent = context.routineAgents.get(reference);
-  const { routines, errors } = await context.routines.list(agent);
+  sessionId: string,
+): RoutinesDetailDto {
+  const ability = context.abilities.require(sessionId, "routines");
+  const { routines, templates } = context.routines.list(ability);
   return {
-    routines: routines.map(({ routine, state, lastRun }) => ({
-      name: routine.name,
-      path: routine.path,
-      schedule: routine.schedule.text,
-      until: routine.until,
-      model: routine.model,
-      timeoutMs: routine.timeoutMs,
-      output: routine.output,
-      enabled: routine.enabled,
-      nextRunAt: routine.enabled ? (state?.nextRunAt ?? null) : null,
-      lastRunAt: state?.lastRunAt ?? null,
-      consecutiveFailures: state?.consecutiveFailures ?? 0,
-      lastRun: lastRun ? routineRunDto(lastRun) : null,
-    })),
-    errors: errors.map((error) => ({ ...error })),
-    runs: context.routines.runs(agent, { limit: 100 }).map(routineRunDto),
+    purpose: ability.config.purpose ?? null,
+    routines: routines.map(({ routine, lastRun }) =>
+      routineDto(routine, lastRun),
+    ),
+    templates: templates.map((template) => routineDto(template, null)),
+    runs: context.routines.runs(ability, { limit: 100 }).map(routineRunDto),
   };
 }
 
@@ -356,42 +384,59 @@ export function createDesktopRequestHandlers(
 
   return {
     snapshot: () => result(() => desktopSnapshot(context)),
-    routineAgentDetail: ({ agent }) =>
-      result(() => routineAgentDetail(context, agent)),
-    routineAgentMemory: ({ agent }) =>
-      result(async () =>
-        (
-          await context.routineAgents.memory(
-            agent,
-            context.config.claudeProjectsDirectory,
-          )
-        ).map((file) => ({ ...file })),
-      ),
-    routineAgentControl: ({ agent, action }) =>
+    sessionUpdate: ({ sessionId, name, pinned, color }) =>
       mutate(async () => {
-        const updated =
-          action === "pause"
-            ? await context.routineAgents.pause(agent)
-            : action === "resume"
-              ? await context.routineAgents.resume(agent)
-              : action === "unlock"
-                ? await context.routineAgents.unlock(agent)
-                : await context.routineAgents.autoNow(agent);
-        return { state: updated.state, mode: updated.mode };
+        if (name !== undefined) await context.agents.rename(sessionId, name);
+        if (pinned !== undefined)
+          await context.agents.setPinned(sessionId, pinned);
+        if (color !== undefined)
+          await context.agents.setColor(sessionId, color);
+        return agentDto(await context.agents.get(sessionId));
       }),
-    routineSetEnabled: ({ agent, name, enabled }) =>
-      mutate(async () => {
-        const routine = await context.routines.setEnabled(
-          context.routineAgents.get(agent),
+    sessionAbility: ({ sessionId, ability, granted }) =>
+      mutate(() =>
+        sessionAbilityDto(
+          granted
+            ? context.abilities.grant(sessionId, ability, { live: true })
+            : context.abilities.revoke(sessionId, ability),
+        ),
+      ),
+    routinesDetail: ({ sessionId }) =>
+      result(() => routinesDetail(context, sessionId)),
+    routinesControl: ({ sessionId, action }) =>
+      mutate(() =>
+        sessionAbilityDto(
+          context.abilities.setPaused(
+            sessionId,
+            "routines",
+            action === "pause",
+          ),
+        ),
+      ),
+    routinesPurpose: ({ sessionId, purpose }) =>
+      mutate(() =>
+        sessionAbilityDto(
+          context.abilities.configure(
+            sessionId,
+            "routines",
+            "purpose",
+            purpose,
+          ),
+        ),
+      ),
+    routineSetEnabled: ({ sessionId, name, enabled }) =>
+      mutate(() => {
+        const routine = context.routines.setEnabled(
+          context.abilities.require(sessionId, "routines"),
           name,
           enabled,
         );
         return { name: routine.name, enabled: routine.enabled };
       }),
-    routineRunNow: ({ agent, name }) =>
-      mutate(async () => {
-        const run = await context.routines.runNow(
-          context.routineAgents.get(agent),
+    routineRunNow: ({ sessionId, name }) =>
+      mutate(() => {
+        const run = context.routineDelivery.runNow(
+          context.abilities.require(sessionId, "routines"),
           name,
         );
         return {
@@ -399,14 +444,16 @@ export function createDesktopRequestHandlers(
           ...(run.alreadyQueued ? { alreadyQueued: true } : {}),
         };
       }),
-    routineReportVerdict: ({ agent, id, verdict }) =>
-      mutate(() => ({
-        ...context.routineReports.verdict(
-          context.routineAgents.get(agent),
-          id,
-          verdict,
-        ),
-      })),
+    routineReportVerdict: ({ id, verdict }) =>
+      mutate(() => {
+        const report = context.repositories.routines.findReport(id);
+        const ability = report
+          ? context.repositories.abilities.find(report.abilityId)
+          : undefined;
+        if (!ability)
+          throw new DaedalusError("NOT_FOUND", `Report '${id}' was not found`);
+        return { ...context.routineReports.verdict(ability, id, verdict) };
+      }),
     windowRole: () => result(() => ({ role: windows.role })),
     worldWindowOpen: () =>
       result(() => {

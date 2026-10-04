@@ -62,6 +62,8 @@ import unslopSkillTemplate from "../../../../skills/unslop/SKILL.md" with { type
 import handoffSkillTemplate from "../../../../skills/daedalus-handoff/SKILL.md" with { type: "text" };
 import handoffOpenAiMetadata from "../../../../skills/daedalus-handoff/agents/openai.yaml" with { type: "text" };
 import unslopStyleTemplate from "../../../../styles/Unslop.md" with { type: "text" };
+import routinesSkillTemplate from "../../../../skills/daedalus-routines/SKILL.md" with { type: "text" };
+import routineRunSkillTemplate from "../../../../skills/daedalus-routine/SKILL.md" with { type: "text" };
 
 export type SkillProvider = "claude" | "codex" | "cursor";
 export type SkillOrigin = "daedalus" | "user" | "plugin";
@@ -140,6 +142,26 @@ export const MANAGED_SKILLS: readonly ManagedSkillDefinition[] = [
       { path: "SKILL.md", contents: handoffSkillTemplate },
       { path: "agents/openai.yaml", contents: handoffOpenAiMetadata },
     ],
+  },
+  {
+    id: "daedalus-routines",
+    title: "Routines",
+    summary:
+      "Lets a session that holds the routines ability create and change its routines when the user asks for them. Sessions without the ability cannot use it.",
+    supportsAlways: false,
+    defaultEnabled: true,
+    defaultMode: "on-demand",
+    skillFiles: [{ path: "SKILL.md", contents: routinesSkillTemplate }],
+  },
+  {
+    id: "daedalus-routine",
+    title: "Routine run",
+    summary:
+      "What a session with the routines ability does when Daedalus types a routine run into it: run the check, file what it finds as tasks, and close the run.",
+    supportsAlways: false,
+    defaultEnabled: true,
+    defaultMode: "on-demand",
+    skillFiles: [{ path: "SKILL.md", contents: routineRunSkillTemplate }],
   },
   {
     id: "unslop",

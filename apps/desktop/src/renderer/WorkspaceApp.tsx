@@ -2813,19 +2813,18 @@ export function WorkspaceApp({
         }),
       ),
   });
-  // A routine agent's session is pinned above the rest: it runs for weeks,
-  // and the agents below it are often working on the tasks it made.
-  const routineAgentSessionIds = new Set(
-    (snapshot?.routineAgents ?? []).flatMap((agent) =>
-      agent.sessionId ? [agent.sessionId] : [],
-    ),
+  // Sessions holding routines, which their cards and archive dialog mark.
+  const routineSessionIds = new Set(
+    (snapshot?.routines ?? []).map((status) => status.sessionId),
   );
+  // Pinned sessions sit above the rest, in the order they were pinned; the
+  // manual order holds within each group.
   const orderedSessions = sessionReorder.order
     .flatMap((id) => sessions.find((item) => item.id === id) ?? [])
-    .sort(
-      (left, right) =>
-        Number(routineAgentSessionIds.has(right.id)) -
-        Number(routineAgentSessionIds.has(left.id)),
+    .sort((left, right) =>
+      left.pinnedAt && right.pinnedAt
+        ? left.pinnedAt.localeCompare(right.pinnedAt)
+        : Number(Boolean(right.pinnedAt)) - Number(Boolean(left.pinnedAt)),
     );
   const workspaceSessionLaunches = sessionLaunches.filter((item) =>
     inScope(item.workspaceId),
@@ -4629,8 +4628,16 @@ export function WorkspaceApp({
       report.taskId ? [[report.taskId, report] as const] : [],
     ),
   );
-  const routineAgentNames = new Map(
-    (snapshot?.routineAgents ?? []).map((agent) => [agent.id, agent.name]),
+  const sessionsById = new Map(
+    (snapshot?.agents ?? []).map((session) => [session.id, session]),
+  );
+  const routineOwners = new Map(
+    (snapshot?.abilities ?? []).flatMap((ability) => {
+      const session = sessionsById.get(ability.sessionId);
+      return session
+        ? [[ability.id, { name: session.name, color: session.color }] as const]
+        : [];
+    }),
   );
   const boardView = workspace ? (
     <BoardView
@@ -4664,11 +4671,10 @@ export function WorkspaceApp({
         )
       }
       routineReports={reportsByTask}
-      routineAgentNames={routineAgentNames}
+      routineOwners={routineOwners}
       onReportVerdict={(report, verdict) =>
         void perform(
           client.request.routineReportVerdict({
-            agent: report.routineAgentId,
             id: report.id,
             verdict,
           }),
@@ -5601,10 +5607,12 @@ export function WorkspaceApp({
                   const timestamp = session.endedAt ?? session.startedAt;
                   const startupError = sessionStartupErrors.get(session.id);
                   const view = statusViewFor(session);
-                  const isRoutineAgent = routineAgentSessionIds.has(session.id);
+                  const holdsRoutines = routineSessionIds.has(session.id);
                   return (
                     <div
-                      className={`session-card tone-${view.tone} ${session.id === activeSessionId ? "selected" : ""} ${isRoutineAgent ? "session-card-routine-agent" : ""}`}
+                      className={`session-card tone-${view.tone} ${session.id === activeSessionId ? "selected" : ""}`}
+                      data-color={session.color ?? undefined}
+                      data-pinned={session.pinnedAt ? "true" : undefined}
                       data-attention={view.attention ? "true" : undefined}
                       data-dragging={
                         sessionReorder.draggingId === session.id
@@ -5648,9 +5656,9 @@ export function WorkspaceApp({
                                 {" · "}
                               </span>
                             )}
-                            {isRoutineAgent ? (
-                              <span className="session-routine-agent-badge">
-                                Routine agent
+                            {holdsRoutines ? (
+                              <span className="session-routines-badge">
+                                Routines
                               </span>
                             ) : (
                               (task?.title ?? "Workspace session")
@@ -5735,7 +5743,7 @@ export function WorkspaceApp({
                           className="session-card-action"
                           onClick={() => setSessionAction({ session })}
                           title={
-                            isRoutineAgent
+                            holdsRoutines
                               ? "Archive session and pause its routines"
                               : "Archive session"
                           }
@@ -6736,11 +6744,10 @@ export function WorkspaceApp({
               Running work will stop, but its conversation can be restored and
               resumed later.
             </p>
-            {routineAgentSessionIds.has(sessionAction.session.id) && (
+            {routineSessionIds.has(sessionAction.session.id) && (
               <p>
-                This is a routine agent. Archiving pauses its routines and keeps
-                them, its memory and its tasks. Restoring the session resumes
-                them.
+                This session runs routines. Archiving pauses them and keeps them
+                and their tasks. Restoring the session resumes them.
               </p>
             )}
             <div className="modal-actions">

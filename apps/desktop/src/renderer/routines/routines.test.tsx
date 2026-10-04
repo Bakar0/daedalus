@@ -10,7 +10,7 @@ const report = (
   overrides: Partial<RoutineReportDto> = {},
 ): RoutineReportDto => ({
   id: "report-1",
-  routineAgentId: "agent-argus",
+  abilityId: "ability-argus",
   routine: "ci-health",
   key: "ci-health:org/repo:main:CI:test",
   sameAs: null,
@@ -29,17 +29,17 @@ const report = (
 });
 
 describe("a routine report on its card", () => {
-  test("shows the agent, where it came from, and offers the verdicts", () => {
+  test("shows the session, where it came from, and offers the verdicts", () => {
     const html = renderToStaticMarkup(
       <ReportDetails
-        agentName="Argus"
+        owner={{ name: "Argus", color: "teal" }}
         busy={false}
         report={report({ urgent: true, state: "resolved", reopenCount: 2 })}
         onOpenLink={() => {}}
         onVerdict={() => {}}
       />,
     );
-    expect(html).toContain('report-agent">Argus<');
+    expect(html).toContain('report-agent" data-color="teal">Argus<');
     expect(html).toContain("report-urgent");
     expect(html).toContain("ci-health");
     expect(html).toContain("Resolved");
@@ -51,7 +51,7 @@ describe("a routine report on its card", () => {
   test("a judged report offers undo instead", () => {
     const html = renderToStaticMarkup(
       <ReportDetails
-        agentName="Argus"
+        owner={{ name: "Argus", color: null }}
         busy={false}
         report={report({ verdict: "noise" })}
         onOpenLink={() => {}}

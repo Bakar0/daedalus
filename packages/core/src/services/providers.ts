@@ -704,7 +704,17 @@ export function buildHandoffRequest(
   provider: "claude" | "codex",
   skillName: string,
 ): string {
-  return provider === "claude" ? `/${skillName}` : `$${skillName}`;
+  return buildSkillInvocation(provider, skillName);
+}
+
+/** A skill typed into a session: `/name args` in Claude, `$name args` in Codex. */
+export function buildSkillInvocation(
+  provider: "claude" | "codex",
+  skillName: string,
+  args = "",
+): string {
+  const invocation = provider === "claude" ? `/${skillName}` : `$${skillName}`;
+  return args.trim() ? `${invocation} ${args.trim()}` : invocation;
 }
 
 export function buildAgentPrompt(input: {
@@ -737,12 +747,4 @@ export function buildAgentPrompt(input: {
       : `Execute task #${input.taskNumber}. Do not merely summarize or restate it; complete the task.`;
   const message = input.message?.trim() || undefined;
   return [taskInstruction, message].filter(Boolean).join("\n\n") || undefined;
-}
-
-/**
- * A routine agent's launch prompt. Thin on purpose: AGENT.md and the skills
- * in its folder carry the rest, and each routine run brings what it needs.
- */
-export function routineAgentPrompt(name: string): string {
-  return `You are ${name}, a Daedalus routine agent. Read AGENT.md in your working directory and follow the daedalus-routine-agent skill. Daedalus types /daedalus-routine lines when routines are due, and the user talks to you here to create and change them.`;
 }

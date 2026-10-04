@@ -44,7 +44,6 @@ import { createDesktopRequestHandlers, desktopDataFingerprint } from "./rpc";
 import {
   authorizeTerminalRequest,
   isTyping,
-  passesInputLock,
   TerminalConnection,
 } from "./terminal";
 
@@ -254,12 +253,10 @@ const server = Bun.serve<SocketData>({
               terminalTmux.executable,
             ),
           onInput: (data) => {
-            if (socket.data.targetKind !== "agent") return true;
-            // A routine agent in auto mode has its input locked: only
-            // Daedalus types there. Scrolling and selecting still work.
-            if (context.routineAgents.inputLocked(target.id))
-              return passesInputLock(data);
-            if (isTyping(data)) context.routineAgents.noteInput(target.id);
+            // A real keystroke holds Daedalus's own typing into this
+            // session for a while, so a routine never lands in a draft.
+            if (socket.data.targetKind === "agent" && isTyping(data))
+              context.deliveryGate.noteKeystroke(target.id);
             return true;
           },
           onError: (error) =>
@@ -722,9 +719,10 @@ setInterval(async () => {
         context.agents.sweepAutoHandoffs(telemetry.sessionTelemetry),
       )
       .catch(() => undefined);
-    // Routine agents ride the tick too: the clock lives in the app, so
-    // nothing fires while it is closed.
-    if (context.routineAgents.list().length) {
+    // Routines ride the tick too: the clock lives in the app, so nothing
+    // fires while it is closed. Grant and revoke notes go through the same
+    // delivery rule.
+    if (context.repositories.abilities.list().length) {
       const telemetry = await context.telemetry.read().catch(() => undefined);
       const contextUse = new Map(
         (telemetry?.sessionTelemetry ?? []).map((item) => [
@@ -732,12 +730,12 @@ setInterval(async () => {
           item.context?.usedPercent,
         ]),
       );
-      const routineTick = await context.routineAgents.tick({
+      const routineTick = await context.routineDelivery.tick({
         contextPercent: (sessionId) => contextUse.get(sessionId),
         activity: (sessionId) => context.activity.get(sessionId),
       });
       for (const event of routineTick.events)
-        await context.logger.write("info", "routine_agent", { event });
+        await context.logger.write("info", "routines", { event });
     }
     for (const [socket, connection] of connections) {
       const target =

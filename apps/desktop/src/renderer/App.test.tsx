@@ -53,7 +53,8 @@ const base: DesktopSnapshotDto = {
   worktrees: [],
   shipped: [],
   toasts: [],
-  routineAgents: [],
+  abilities: [],
+  routines: [],
   routineReports: [],
   settings: {
     version: "0.3.0",
@@ -291,6 +292,8 @@ describe("desktop application shell", () => {
           lostReason: null,
           handoffRequestedAt: null,
           position: 1,
+          pinnedAt: null,
+          color: null,
         },
       ),
     ).toBe(true);
@@ -464,6 +467,8 @@ describe("desktop application shell", () => {
       lostReason: null,
       handoffRequestedAt: null,
       position: 0,
+      pinnedAt: null,
+      color: null,
     });
     const two: DesktopSnapshotDto = {
       ...base,
@@ -1084,6 +1089,8 @@ describe("desktop application shell", () => {
           lostReason: null,
           handoffRequestedAt: null,
           position: 1,
+          pinnedAt: null,
+          color: null,
         },
         {
           id: "agent-needs-attention",
@@ -1106,6 +1113,8 @@ describe("desktop application shell", () => {
           lostReason: null,
           handoffRequestedAt: null,
           position: 1,
+          pinnedAt: null,
+          color: null,
         },
       ],
       settings: {
@@ -1340,6 +1349,8 @@ describe("desktop application shell", () => {
       lostReason: null,
       handoffRequestedAt: null,
       position: 0,
+      pinnedAt: null,
+      color: null,
     });
     const html = renderToStaticMarkup(
       <App
@@ -1495,6 +1506,8 @@ describe("desktop application shell", () => {
       lostReason: null,
       handoffRequestedAt: null,
       position: 1,
+      pinnedAt: null,
+      color: null,
     };
     const snapshot: DesktopSnapshotDto = {
       ...base,
@@ -1604,6 +1617,8 @@ describe("desktop application shell", () => {
           lostReason: null,
           handoffRequestedAt: null,
           position: 1,
+          pinnedAt: null,
+          color: null,
         },
       ],
     };
@@ -1675,6 +1690,8 @@ describe("desktop application shell", () => {
           lostReason: null,
           handoffRequestedAt: null,
           position: 1,
+          pinnedAt: null,
+          color: null,
         },
       ],
       settings: { ...base.settings, tmuxAvailable: true },
@@ -1790,6 +1807,8 @@ describe("desktop application shell", () => {
           lostReason: null,
           handoffRequestedAt: null,
           position: 1,
+          pinnedAt: null,
+          color: null,
         },
       ],
     };
@@ -1944,6 +1963,8 @@ const liveSession: AgentSessionDto = {
   lostReason: null,
   handoffRequestedAt: null,
   position: 1,
+  pinnedAt: null,
+  color: null,
 };
 
 const at = (iso: string) => Date.parse(iso);

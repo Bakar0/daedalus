@@ -5304,20 +5304,59 @@ dd {
 }
 
 /* ---------------------------------------------------------------------------
-   Routine agents (#49). Their session card and the tasks their routines make
-   carry a gold mark; everything else about them is an ordinary session.
+   Session colors (#49). Any session can carry one: it marks the card's left
+   edge, the chip on tasks its routines file, and its World figure.
    ------------------------------------------------------------------------ */
 .app {
-  --lamp-amber: #f0b44c;
+  --session-red: #e5675f;
+  --session-orange: #e8894a;
+  --session-gold: #f0b44c;
+  --session-green: #5fb878;
+  --session-teal: #4cb5ad;
+  --session-blue: #5b9be6;
+  --session-purple: #a07ee0;
+  --session-pink: #e076b0;
+  --lamp-amber: var(--session-gold);
 }
 .app[data-theme="light"] {
-  --lamp-amber: #b4740b;
+  --session-red: #c2413a;
+  --session-orange: #bf5f1d;
+  --session-gold: #b4740b;
+  --session-green: #2f8a4c;
+  --session-teal: #1f857e;
+  --session-blue: #2f6fc0;
+  --session-purple: #7651c0;
+  --session-pink: #b8448a;
 }
-.session-card-routine-agent {
-  box-shadow: inset 3px 0 0 var(--lamp-amber);
+[data-color="red"] {
+  --session-color: var(--session-red);
 }
-.session-routine-agent-badge {
-  color: var(--lamp-amber);
+[data-color="orange"] {
+  --session-color: var(--session-orange);
+}
+[data-color="gold"] {
+  --session-color: var(--session-gold);
+}
+[data-color="green"] {
+  --session-color: var(--session-green);
+}
+[data-color="teal"] {
+  --session-color: var(--session-teal);
+}
+[data-color="blue"] {
+  --session-color: var(--session-blue);
+}
+[data-color="purple"] {
+  --session-color: var(--session-purple);
+}
+[data-color="pink"] {
+  --session-color: var(--session-pink);
+}
+.session-card[data-color] {
+  box-shadow: inset 3px 0 0 var(--session-color);
+}
+.session-routines-badge {
+  color: var(--session-color, var(--muted));
   font-weight: 600;
 }
 
@@ -5339,9 +5378,9 @@ dd {
   gap: 6px;
 }
 .report-agent {
-  border: 1px solid var(--lamp-amber);
+  border: 1px solid var(--session-color, var(--muted));
   border-radius: 4px;
-  color: var(--lamp-amber);
+  color: var(--session-color, var(--muted));
   font-weight: 650;
   padding: 0 5px;
 }

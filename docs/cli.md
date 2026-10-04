@@ -84,6 +84,7 @@ daedal agent spawn --workspace <workspace> --provider codex [--task <task-ref>] 
 daedal agent spawn --workspace <workspace> --provider claude [--task <task-ref>] [--model <model>] [--message <text>]
 daedal agent spawn --workspace <workspace> --command <configured-name> [--task <task-ref>] [--message <text>]
 daedal agent spawn --workspace <workspace> --provider <codex|claude> --task <task-ref> --draft-brief
+daedal agent spawn ... [--ability routines] [--color <color>] [--pin]
 daedal agent list [--workspace <workspace>] [--running]
 daedal agent reorder --workspace <workspace> <agent-id> [<agent-id>...]
 daedal agent get <agent-id>
@@ -120,6 +121,18 @@ Each launch gets a durable `daedalus_<uuid>` tmux session on a Daedalus server i
 Sessions outlive the process that started them, and the app. The tmux server is keyed to `DAEDALUS_HOME` rather than owned by either adapter, so closing the terminal that ran `agent spawn` leaves the agent running, and so does quitting the desktop app — the app is an optional view onto sessions it does not own. Ending them is always explicit: `agent stop`, `agent archive`, or `daedal shutdown` for all of them at once.
 
 Startup reconciliation compares SQLite with tmux. Missing live sessions become `lost`; existing starting sessions become `running`. Reconciliation observes and never starts anything: it runs on nearly every command, so revival is always an explicit call and `agent list` never spawns. The desktop app runs one sweep when it starts, before anything else, unless **Bring sessions back on startup** is turned off in Settings; a lock file under `DAEDALUS_HOME` keeps that sweep and a concurrent CLI one from creating two runtimes for the same conversation. Integrated terminals are reopened by the same sweep as fresh login shells in the same directory — there is no conversation to resume, so their scrollback is genuinely lost and their tab says so. A `lost` session keeps its activity reading and its attention badge, because it is coming back to the same point it stopped at. If tmux itself is unavailable, reconciliation leaves persisted state unchanged and agent lifecycle commands report exit code 5 where applicable.
+
+## Session
+
+```text
+daedal session rename <session> <name>
+daedal session pin|unpin <session>
+daedal session color <session> <red|orange|gold|green|teal|blue|purple|pink|none>
+daedal session abilities <session>
+daedal session grant|revoke <session> <ability>
+```
+
+Names, pins, colors and abilities, for any session. `<session>` is an id, or a name that only one live session has. The `routines` ability and the `daedal routine` commands are in [abilities.md](abilities.md).
 
 ## Shutdown
 

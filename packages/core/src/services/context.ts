@@ -14,7 +14,9 @@ import { JsonLogger } from "../logging";
 import { runMigrations } from "../repositories/migrations";
 import { SqliteRepositories } from "../repositories/sqlite";
 import { ActivityService } from "./activity";
-import { RoutineAgentService } from "./routine-agents";
+import { AbilityService } from "./abilities";
+import { DeliveryGate } from "./delivery";
+import { RoutineDelivery } from "./routine-delivery";
 import { RoutineReportService } from "./routine-reports";
 import { RoutineService } from "./routines";
 import { SkillService } from "./skills";
@@ -53,9 +55,13 @@ export interface ApplicationContext {
   notifications: NotificationService;
   activity: ActivityService;
   skills: SkillService;
-  routineAgents: RoutineAgentService;
+  abilities: AbilityService;
   routines: RoutineService;
   routineReports: RoutineReportService;
+  /** The routine clock; only the desktop host ticks it. */
+  routineDelivery: RoutineDelivery;
+  /** Keystrokes per session, and the rule for typing into a session. */
+  deliveryGate: DeliveryGate;
   /** Ends everything at once. Nothing else in the app reaches for it. */
   shutdown: ShutdownService;
   tmux: TmuxClient;
@@ -113,6 +119,7 @@ export async function createApplicationContext(
     );
   let agents!: AgentService;
   let activity!: ActivityService;
+  const abilities = new AbilityService(repositories, config, options.now);
   const workspaces = new WorkspaceService(
     repositories,
     config.workspaceRoot,
@@ -137,6 +144,7 @@ export async function createApplicationContext(
     tasks,
     tmux,
     config,
+    abilities,
     (sessionId) => activity.forget(sessionId),
   );
   const terminals = new IntegratedTerminalService(
@@ -175,24 +183,27 @@ export async function createApplicationContext(
   });
   const routines = new RoutineService(
     repositories,
-    workspaces,
     async (sessionId, reason) => {
       await activity.raise({ sessionId, reason });
     },
     options.now,
+  );
+  abilities.onRevoke("routines", (ability) =>
+    routines.skipUndelivered(ability, "Skipped: the ability was revoked"),
   );
   const routineReports = new RoutineReportService(
     repositories,
     notifications,
     options.now,
   );
-  const routineAgents = new RoutineAgentService(
+  const deliveryGate = new DeliveryGate(options.now);
+  const routineDelivery = new RoutineDelivery(
     repositories,
-    workspaces,
+    abilities,
     agents,
     routines,
     routineReports,
-    { daedal: join(config.home, "bin", "daedal") },
+    deliveryGate,
     options.now,
   );
   if (options.reconcile !== false) {
@@ -223,9 +234,11 @@ export async function createApplicationContext(
     notifications,
     activity,
     skills: new SkillService(config),
-    routineAgents,
+    abilities,
     routines,
     routineReports,
+    routineDelivery,
+    deliveryGate,
     shutdown: new ShutdownService(repositories, agents, terminals, tmux),
     tmux,
     // Watchers are kernel resources held outside the database, so they are

@@ -1,41 +1,44 @@
 import type { UUID } from "./index";
 
-/**
- * On duty or paused, plus `draining`: the scheduler has stopped delivering
- * runs and waits for those in flight before a handoff.
- */
-export type RoutineAgentState = "on_duty" | "draining" | "paused";
+/** The colors a session can be marked with. */
+export const SESSION_COLORS = [
+  "red",
+  "orange",
+  "gold",
+  "green",
+  "teal",
+  "blue",
+  "purple",
+  "pink",
+] as const;
+
+export type SessionColor = (typeof SESSION_COLORS)[number];
 
 /**
- * Who owns the agent's input. In `manual` the user talks to it; in `auto`
- * the input is locked and only Daedalus types, so routines run.
+ * What a session can be granted on top of being a session. Routines is the
+ * only one so far.
  */
-export type RoutineAgentMode = "manual" | "auto";
+export type AbilityId = "routines";
 
 /**
- * A named Claude session in an ordinary workspace that runs routines. Its
- * folder (`<workspace>/worktrees/agents/<slug>`) never moves, so Claude's
- * per-directory memory carries across handoffs.
+ * An ability a session holds. Its data hangs off `id`, which stays the same
+ * when a handoff moves the ability to the successor session.
  */
-export interface RoutineAgent {
+export interface SessionAbility {
   id: UUID;
-  workspaceId: UUID;
-  /** Unique within the workspace; names the folder. */
-  slug: string;
-  name: string;
-  model: string | null;
-  /** Context share at which the agent drains and hands off. */
-  autoHandoffPercent: number;
-  state: RoutineAgentState;
-  /** The current session; moves to the successor on every handoff. */
-  sessionId: UUID | null;
-  drainingSince: string | null;
-  mode: RoutineAgentMode;
-  /** The user's last keystroke in its terminal; starts the countdown. */
-  lastInputAt: string | null;
-  /** Unsent text cleared from the input box on locking, restored on unlock. */
-  stashedDraft: string | null;
-  createdAt: string;
+  /** The current session; a handoff moves it to the successor. */
+  sessionId: UUID;
+  ability: AbilityId;
+  /** False after a revoke. The row and its data stay for a later grant. */
+  enabled: boolean;
+  /** The user's Pause: delivery stops, the ability stays granted. */
+  paused: boolean;
+  /** For routines: `purpose`, what the session's routines are for. */
+  config: Record<string, string>;
+  /** A line Daedalus still has to type into the session. */
+  pendingNote: string | null;
+  grantedAt: string;
+  revokedAt: string | null;
 }
 
 export type RoutineSchedule =
@@ -49,11 +52,9 @@ export type RoutineSchedule =
  */
 export type RoutineOutput = "task" | "notify" | "none";
 
-/** One routine file, parsed. The file is the definition; SQLite is not. */
-export interface Routine {
+/** What a routine is, as the user and the session wrote it. */
+export interface RoutineDefinition {
   name: string;
-  /** Absolute path of the file it was read from. */
-  path: string;
   schedule: RoutineSchedule;
   /** The routine deletes itself after this time. */
   until: string | null;
@@ -65,20 +66,18 @@ export interface Routine {
   body: string;
 }
 
-/** A routine file that did not parse, shown with its error. */
-export interface RoutineFileError {
-  path: string;
-  name: string;
-  error: string;
-}
-
-export interface RoutineState {
-  routineAgentId: UUID;
-  name: string;
+/** A routine as stored: its definition and the scheduler's state. */
+export interface Routine extends RoutineDefinition {
+  id: UUID;
+  abilityId: UUID;
+  /** A template never fires; `routine add --from` copies it. */
+  isTemplate: boolean;
   nextRunAt: string | null;
   lastRunAt: string | null;
   lastSuccessAt: string | null;
   consecutiveFailures: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type RoutineRunStatus =
@@ -87,12 +86,12 @@ export type RoutineRunOutcome = "quiet" | "notified" | "task";
 
 export interface RoutineRun {
   id: number;
-  routineAgentId: UUID;
+  abilityId: UUID;
   routine: string;
   sessionId: UUID | null;
   status: RoutineRunStatus;
   queuedAt: string;
-  /** When the line was typed into the agent's pane. */
+  /** When the line was typed into the session. */
   deliveredAt: string | null;
   startedAt: string | null;
   finishedAt: string | null;
@@ -108,7 +107,7 @@ export type RoutineReportVerdict = "useful" | "noise";
 /** What a routine run handed back, one row per key over its life. */
 export interface RoutineReport {
   id: UUID;
-  routineAgentId: UUID;
+  abilityId: UUID;
   routine: string;
   key: string;
   /** The open report this one was merged into. */

@@ -3,7 +3,6 @@ import {
   authorizeTerminalRequest,
   BoundedTerminalBuffer,
   isTyping,
-  passesInputLock,
   TerminalConnection,
 } from "./terminal";
 
@@ -182,42 +181,8 @@ describe("isTyping", () => {
     expect(isTyping("\x1b[?62;22c")).toBe(false);
     expect(isTyping("\x1b]11;rgb:0000/0000/0000\x07")).toBe(false);
     expect(isTyping("\x1b[Ix")).toBe(true);
-  });
-});
-
-describe("passesInputLock", () => {
-  test("lets the terminal and the mouse through, and no keystroke", () => {
-    // Terminal replies and mouse reports, alone or batched.
-    expect(passesInputLock("\x1b[I")).toBe(true);
-    expect(passesInputLock("\x1b[12;40R\x1b[?62;22c")).toBe(true);
-    expect(passesInputLock("\x1b]11;rgb:0000/0000/0000\x07")).toBe(true);
-    expect(passesInputLock("\x1b[<64;10;5M\x1b[<65;10;5M")).toBe(true);
-    expect(passesInputLock("\x1b[<0;3;4m")).toBe(true);
-    // Typing, Enter, arrows (which recall history), Ctrl-C and Escape.
-    for (const key of ["a", "\r", "\x1b[A", "\x03", "\x1b", "\x1b[<0;3;4mx"])
-      expect(passesInputLock(key)).toBe(false);
-  });
-});
-
-describe("a locked terminal connection", () => {
-  test("drops a frame its input handler refuses", async () => {
-    const written: string[] = [];
-    const connection = new TerminalConnection({
-      agentId: AGENT_ID,
-      socket: { send() {}, close() {} },
-      status: "live",
-      createBridge: () => ({
-        start: async () => {},
-        write: (data: string) => void written.push(data),
-        resize() {},
-        close() {},
-      }),
-      onInput: (data) => passesInputLock(data),
-    });
-    await connection.message(JSON.stringify({ type: "input", data: "x" }));
-    await connection.message(
-      JSON.stringify({ type: "input", data: "\x1b[<64;1;1M" }),
-    );
-    expect(written).toEqual(["\x1b[<64;1;1M"]);
+    // Mouse reports scroll and select; they are not typing.
+    expect(isTyping("\x1b[<64;10;5M\x1b[<65;10;5M")).toBe(false);
+    expect(isTyping("\x1b[M`!!")).toBe(false);
   });
 });

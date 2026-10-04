@@ -84,7 +84,15 @@ export interface AgentSessionDto {
   handoffRequestedAt: string | null;
   /** Manual list order within the workspace, ascending. */
   position: number;
+  /** When it was pinned to the top of its workspace's list, or null. */
+  pinnedAt: string | null;
+  color: SessionColorDto | null;
 }
+
+export type SessionColorDto =
+  "red" | "orange" | "gold" | "green" | "teal" | "blue" | "purple" | "pink";
+
+export type AbilityIdDto = "routines";
 
 export interface IntegratedTerminalDto {
   id: string;
@@ -507,40 +515,58 @@ export interface TaskTimelineDto {
   cost: TaskCostDto;
 }
 
-/** One routine agent at a glance, for its session card and terminal bar. */
-export interface RoutineAgentOverviewDto {
+/** An ability a session holds, or held before a revoke. */
+export interface SessionAbilityDto {
   id: string;
-  name: string;
-  slug: string;
-  workspaceId: string;
-  workspaceSlug: string;
-  folder: string;
-  state: "on_duty" | "draining" | "paused";
-  sessionId: string | null;
-  sessionStatus: "starting" | "running" | "exited" | "lost" | null;
-  sessionArchived: boolean;
-  nextRunAt: string | null;
-  runsInFlight: number;
-  runsQueued: number;
+  sessionId: string;
+  ability: AbilityIdDto;
+  enabled: boolean;
+  paused: boolean;
+  /** For routines: what the session's routines are for. */
+  purpose: string | null;
+  /** A grant or revoke note is still waiting to be typed in. */
+  noteWaiting: boolean;
+  grantedAt: string;
+}
+
+export type DeliveryHoldReasonDto =
+  | "paused"
+  | "stopped"
+  | "handoff"
+  | "typing"
+  | "busy"
+  | "waiting-on-user"
+  | "input-text"
+  | "in-flight-limit"
+  | "skill-missing";
+
+/** What the routine bar above a session's terminal shows. */
+export interface RoutinesStatusDto {
+  abilityId: string;
+  sessionId: string;
+  paused: boolean;
+  /** Runs waiting to be typed in, oldest first. */
+  waiting: Array<{ runId: number; routine: string; queuedAt: string }>;
+  /** Runs typed in and not finished. */
+  running: number;
+  /** Why the waiting runs are not going in, when they are not. */
+  hold: {
+    reason: DeliveryHoldReasonDto;
+    text: string;
+    /** For `typing`: when the quiet time after a keystroke ends. */
+    until?: string;
+  } | null;
+  nextRun: { routine: string; at: string } | null;
+  lastKeystrokeAt: string | null;
+  routines: number;
   openReports: number;
   openUrgentReports: number;
   openReportTasks: number;
-  routines: number;
-  routineErrors: number;
-  /** Why queued runs are waiting, when they are. */
-  deliveryHold: string | null;
-  autoHandoffPercent: number;
-  /** Who owns the input: the user, or Daedalus with the input locked. */
-  mode: "manual" | "auto";
-  /** When a manual agent returns to auto; null when it will not. */
-  autoAt: string | null;
-  /** Unsent text that unlocking types back. */
-  hasStashedDraft: boolean;
 }
 
 export interface RoutineReportDto {
   id: string;
-  routineAgentId: string;
+  abilityId: string;
   routine: string;
   key: string;
   sameAs: string | null;
@@ -559,7 +585,6 @@ export interface RoutineReportDto {
 
 export interface RoutineDto {
   name: string;
-  path: string;
   schedule: string;
   until: string | null;
   model: string | null;
@@ -587,19 +612,11 @@ export interface RoutineRunDto {
   alreadyQueued?: boolean;
 }
 
-export interface RoutineAgentDetailDto {
+export interface RoutinesDetailDto {
+  purpose: string | null;
   routines: RoutineDto[];
-  /** Routine files that did not parse, with the reason. */
-  errors: Array<{ name: string; path: string; error: string }>;
+  templates: RoutineDto[];
   runs: RoutineRunDto[];
-}
-
-export interface RoutineAgentMemoryFileDto {
-  source: "folder" | "memory";
-  name: string;
-  path: string;
-  content: string;
-  truncated: boolean;
 }
 
 export interface DesktopSnapshotDto {
@@ -621,8 +638,10 @@ export interface DesktopSnapshotDto {
   /** Every merged pull request remembered, oldest first, for the World. */
   shipped: ShippedPullRequestDto[];
   toasts: ToastDto[];
-  /** Routine agents, which their session cards and terminals mark. */
-  routineAgents: RoutineAgentOverviewDto[];
+  /** Every ability row, granted or revoked, for the session cards. */
+  abilities: SessionAbilityDto[];
+  /** One entry per session holding routines, for its bar and card badge. */
+  routines: RoutinesStatusDto[];
   /** Every routine report that has a task, for the task's card and drawer. */
   routineReports: RoutineReportDto[];
   settings: DesktopSettingsDto;
@@ -652,25 +671,47 @@ export interface DesktopRpcSchema {
   bun: {
     requests: {
       snapshot: Request<Record<string, never>, DesktopSnapshotDto>;
-      routineAgentDetail: Request<{ agent: string }, RoutineAgentDetailDto>;
-      routineAgentMemory: Request<
-        { agent: string },
-        RoutineAgentMemoryFileDto[]
-      >;
-      routineAgentControl: Request<
-        { agent: string; action: "pause" | "resume" | "unlock" | "auto" },
+      /** Name, pin and color, any of them, on any session. */
+      sessionUpdate: Request<
         {
-          state: RoutineAgentOverviewDto["state"];
-          mode: RoutineAgentOverviewDto["mode"];
-        }
+          sessionId: string;
+          name?: string;
+          pinned?: boolean;
+          color?: SessionColorDto | null;
+        },
+        AgentSessionDto
+      >;
+      sessionAbility: Request<
+        { sessionId: string; ability: AbilityIdDto; granted: boolean },
+        SessionAbilityDto
+      >;
+      routinesDetail: Request<{ sessionId: string }, RoutinesDetailDto>;
+      routinesControl: Request<
+        {
+          sessionId: string;
+          action: "pause" | "resume";
+        },
+        SessionAbilityDto
+      >;
+      routinesPurpose: Request<
+        { sessionId: string; purpose: string },
+        SessionAbilityDto
       >;
       routineSetEnabled: Request<
-        { agent: string; name: string; enabled: boolean },
+        { sessionId: string; name: string; enabled: boolean },
         { name: string; enabled: boolean }
       >;
-      routineRunNow: Request<{ agent: string; name: string }, RoutineRunDto>;
+      /**
+       * Run now. With a name, queues that routine; without one, the oldest
+       * waiting run. Either way the next line skips the quiet time after
+       * typing, and every other rule still holds.
+       */
+      routineRunNow: Request<
+        { sessionId: string; name?: string },
+        RoutineRunDto
+      >;
       routineReportVerdict: Request<
-        { agent: string; id: string; verdict: "useful" | "noise" | null },
+        { id: string; verdict: "useful" | "noise" | null },
         RoutineReportDto
       >;
       /**
@@ -976,6 +1017,9 @@ export interface DesktopRpcSchema {
           message?: string;
           command?: string;
           terminal?: boolean;
+          abilities?: AbilityIdDto[];
+          color?: SessionColorDto;
+          pinned?: boolean;
         },
         AgentSessionDto
       >;

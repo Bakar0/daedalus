@@ -63,7 +63,8 @@ const snapshot: DesktopSnapshotDto = {
   worktrees: [],
   shipped: [],
   toasts: [],
-  routineAgents: [],
+  abilities: [],
+  routines: [],
   routineReports: [],
   settings: {
     version: "0.6.0",

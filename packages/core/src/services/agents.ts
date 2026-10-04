@@ -9,13 +9,17 @@ import {
   type TmuxClient,
 } from "@daedalus/platform";
 import type { DaedalusConfig } from "../config";
-import type { AgentSession, Workspace } from "../domain";
+import {
+  SESSION_COLORS,
+  type AgentSession,
+  type SessionColor,
+  type Workspace,
+} from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import {
   buildAgentPrompt,
-  routineAgentPrompt,
-  buildHandoffRequest,
+  buildSkillInvocation,
   catalogOffersModel,
   CLAUDE_DEFAULT_MODEL,
   claudeDaedalusSettingsArgs,
@@ -36,6 +40,7 @@ import {
   skillLinkPaths,
   type SkillProvider,
 } from "./skills";
+import type { AbilityService } from "./abilities";
 import { applyManualOrder } from "./ordering";
 import type { TaskService } from "./tasks";
 import type { WorkspaceService } from "./workspaces";
@@ -400,9 +405,6 @@ export async function hasPersistedCodexSession(input: {
  * "shift+tab to cycle"; the default mode prints
  * "manual mode on" instead, and older versions "? for shortcuts".
  */
-/** Between a draft line's backslash and the Enter that makes it a newline. */
-const DRAFT_NEWLINE_DELAY_MS = 60;
-
 export const claudeReady = (screen: string): boolean =>
   screen.includes("shift+tab to cycle") ||
   screen.includes("manual mode on") ||
@@ -416,6 +418,7 @@ export class AgentService {
     private readonly tasks: TaskService,
     private readonly tmux: TmuxClient,
     private readonly config: DaedalusConfig,
+    private readonly abilities: AbilityService,
     /**
      * Called when a session is *over* — stopped, archived, removed. An
      * attention badge on a session that is over is the purest form of a badge
@@ -433,15 +436,7 @@ export class AgentService {
   private async agentEnvironment(
     session: AgentSession,
     environment: Record<string, string> = {},
-    routineAgent?: boolean,
   ): Promise<Record<string, string>> {
-    // Set on a routine agent's session, at spawn and on every relaunch, so
-    // its hooks can tell that sitting at the prompt is the resting state.
-    const isRoutineAgent =
-      routineAgent ??
-      Boolean(
-        this.repositories.routineAgents.findRoutineAgentBySession(session.id),
-      );
     const task = session.taskId
       ? this.repositories.findTask(session.taskId)
       : undefined;
@@ -466,7 +461,6 @@ export class AgentService {
       DAEDALUS_HOME: this.config.home,
       DAEDALUS_SESSION_ID: session.id,
       DAEDALUS_WORKSPACE_ID: session.workspaceId,
-      ...(isRoutineAgent ? { DAEDALUS_ROUTINE_AGENT: "1" } : {}),
       ...(task
         ? {
             DAEDALUS_TASK_ID: task.id,
@@ -742,12 +736,10 @@ export class AgentService {
      */
     continueFrom?: AgentSession;
     handoff?: boolean;
-    /**
-     * A routine agent's folder. Its session always runs there, where its
-     * memory lives. It gets the same relaxed permission mode as every
-     * session; the deny list in the folder's settings keeps it read-only.
-     */
-    routineAgentFolder?: string;
+    /** Abilities the session holds from the start, such as `routines`. */
+    abilities?: string[];
+    color?: SessionColor;
+    pinned?: boolean;
   }): Promise<AgentSession> {
     const workspace = await this.workspaces.getActive(input.workspace);
     const task = input.taskId ? this.tasks.get(input.taskId) : undefined;
@@ -780,6 +772,23 @@ export class AgentService {
     const provider = input.terminal
       ? undefined
       : resolveProvider(this.config, input);
+    if (input.color !== undefined) sessionColor(input.color);
+    // Checked before anything is prepared, so a session that cannot hold an
+    // ability is refused without leaving a worktree behind. A successor
+    // holds what its predecessor held.
+    const abilities = input.continueFrom
+      ? this.abilities
+          .list(input.continueFrom.id)
+          .filter((row) => row.enabled)
+          .map((row) => row.ability)
+      : this.abilities.validate(
+          {
+            kind: input.terminal ? "terminal" : "agent",
+            provider: provider?.name ?? "custom",
+            name: requestedName ?? "",
+          },
+          input.abilities ?? [],
+        );
     if (provider) {
       const availability = await provider.adapter.probe();
       if (!availability.available)
@@ -804,8 +813,7 @@ export class AgentService {
           task,
           sessionId: id,
           provider: provider?.name,
-          workingDirectory:
-            input.continueFrom?.workingDirectory ?? input.routineAgentFolder,
+          workingDirectory: input.continueFrom?.workingDirectory,
         })
       : { workingDirectory: workspace.path, worktrees: [], references: [] };
     if (input.draftBrief && !task)
@@ -815,7 +823,9 @@ export class AgentService {
       );
     const launchPrompt = buildAgentPrompt({
       taskNumber: task?.number,
-      message: input.message,
+      message: [...this.abilities.launchLines(abilities), input.message?.trim()]
+        .filter(Boolean)
+        .join("\n\n"),
       mode: input.continueFrom
         ? "continue"
         : input.draftBrief
@@ -859,8 +869,17 @@ export class AgentService {
       resumeOnStart: false,
       // Top of its workspace's list, leaving any manual order below it intact.
       position: this.repositories.nextAgentPosition(workspace.id),
+      pinnedAt:
+        input.continueFrom?.pinnedAt ??
+        (input.pinned ? new Date().toISOString() : null),
+      color: input.continueFrom?.color ?? input.color ?? null,
     };
-    this.repositories.createAgent(session);
+    this.repositories.transaction(() => {
+      this.repositories.createAgent(session);
+      if (!input.continueFrom)
+        for (const ability of abilities)
+          this.abilities.grant(session.id, ability, { live: false });
+    });
     // Moved before the provider starts, so the new agent never sees a
     // worktree directory that no row claims and tries to create it again.
     if (input.continueFrom)
@@ -876,11 +895,7 @@ export class AgentService {
         args: launch.args,
         env: input.terminal
           ? launch.env
-          : await this.agentEnvironment(
-              session,
-              launch.env,
-              Boolean(input.routineAgentFolder),
-            ),
+          : await this.agentEnvironment(session, launch.env),
       });
       if (!input.terminal)
         await this.confirmOwnedWorkspaceTrust(
@@ -940,23 +955,44 @@ export class AgentService {
    */
   async requestHandoff(id: string): Promise<AgentSession> {
     const agent = await this.requireContinuable(id);
+    await this.invokeSkill(agent.id, HANDOFF_SKILL);
+    const requested = {
+      ...agent,
+      handoffRequestedAt: new Date().toISOString(),
+    };
+    this.repositories.updateAgent(requested);
+    return requested;
+  }
+
+  /**
+   * Types a Daedalus managed skill into a Claude or Codex session, with its
+   * arguments: `/name args` for Claude, `$name args` for Codex. Refuses with
+   * `CONFLICT` when the skill is not installed for the session's provider.
+   */
+  async invokeSkill(
+    id: string,
+    skillId: string,
+    args = "",
+  ): Promise<AgentSession> {
+    const agent = await this.requireRunning(id);
     if (agent.provider !== "claude" && agent.provider !== "codex")
       throw new DaedalusError(
         "CONFLICT",
-        "Only Claude and Codex sessions can run the handoff skill",
+        "Only Claude and Codex sessions can run Daedalus skills",
       );
-    const skillName = channelArtifactName(this.config, HANDOFF_SKILL);
+    const skillName = channelArtifactName(this.config, skillId);
     const installed = skillLinkPaths(this.config, skillName).find((link) =>
       link.providers.includes(agent.provider as SkillProvider),
     );
     if (!installed || !(await pathExists(join(installed.path, "SKILL.md"))))
       throw new DaedalusError(
         "CONFLICT",
-        `The ${HANDOFF_SKILL} skill is not installed for ${agent.provider}. Turn it on in Settings, Skills, or with 'daedal skill enable ${HANDOFF_SKILL}'.`,
+        `The ${skillId} skill is not installed for ${agent.provider}. Turn it on in Settings, Skills, or with 'daedal skill enable ${skillId}'.`,
       );
-    await this.send(agent.id, buildHandoffRequest(agent.provider, skillName), {
-      fromDaedalus: true,
-    });
+    await this.send(
+      agent.id,
+      buildSkillInvocation(agent.provider, skillName, args),
+    );
     // In Codex, `$name` opens the skill mention popup, and the first Enter
     // only picks the skill from it. The second one submits. On an empty
     // composer an Enter does nothing, so this is safe if the popup changes.
@@ -964,12 +1000,7 @@ export class AgentService {
       await Bun.sleep(CODEX_MENTION_SETTLE_MS);
       await this.tmux.sendKeys(agent.tmuxSession, ["Enter"]);
     }
-    const requested = {
-      ...agent,
-      handoffRequestedAt: new Date().toISOString(),
-    };
-    this.repositories.updateAgent(requested);
-    return requested;
+    return agent;
   }
 
   /**
@@ -1007,8 +1038,9 @@ export class AgentService {
         agent.archivedAt ||
         agent.handoffRequestedAt ||
         (agent.provider !== "claude" && agent.provider !== "codex") ||
-        // A routine agent drains its runs first; its own scheduler decides.
-        this.repositories.routineAgents.findRoutineAgentBySession(agent.id)
+        // A session running routines drains its runs first, and hands off
+        // under the delivery rule; the routine clock decides.
+        this.abilities.held(agent.id, "routines")?.paused === false
       )
         continue;
       try {
@@ -1068,14 +1100,16 @@ export class AgentService {
         `${handoff}\n`,
         "utf8",
       );
-    const routineAgent =
-      this.repositories.routineAgents.findRoutineAgentBySession(predecessor.id);
+    // A session holding an ability keeps its name: it is one agent over
+    // time, and the name is how its tasks and notifications are signed.
+    const holdsAbilities = this.abilities
+      .list(predecessor.id)
+      .some((row) => row.enabled);
     const session = await this.spawn({
       workspace: predecessor.workspaceId,
       taskId: predecessor.taskId ?? undefined,
-      // A routine agent keeps its name; its sessions are one agent over time.
-      name: routineAgent
-        ? routineAgent.name
+      name: holdsAbilities
+        ? predecessor.name
         : handoffSessionName(predecessor.name),
       provider,
       // A different provider would not understand the old one's model name.
@@ -1084,24 +1118,13 @@ export class AgentService {
         (provider === predecessor.provider
           ? sessionLaunchModel(predecessor.args)
           : undefined),
-      message: routineAgent
-        ? [routineAgentPrompt(routineAgent.name), input.message?.trim()]
-            .filter(Boolean)
-            .join("\n\n")
-        : input.message,
+      message: input.message,
       continueFrom: predecessor,
       handoff: Boolean(handoff),
-      ...(routineAgent
-        ? { routineAgentFolder: predecessor.workingDirectory }
-        : {}),
     });
-    // The agent moves with the work, so the scheduler follows the successor,
-    // and archiving the predecessor below does not pause it.
-    if (routineAgent)
-      this.repositories.routineAgents.transferRoutineAgentSession(
-        predecessor.id,
-        session.id,
-      );
+    // Abilities move with the work, so the routine clock follows the
+    // successor, and archiving the predecessor below does not pause them.
+    this.repositories.abilities.moveToSession(predecessor.id, session.id);
     if (input.archive === "later") return { session, predecessor };
     try {
       return {
@@ -1245,61 +1268,48 @@ export class AgentService {
     return this.tmux.capture(agent.tmuxSession);
   }
 
-  /**
-   * Types a line and submits it. A routine agent in auto mode has its input
-   * locked: only Daedalus's own lines (`fromDaedalus`) reach it.
-   */
-  async send(
-    id: string,
-    text: string,
-    options: { fromDaedalus?: boolean } = {},
-  ): Promise<AgentSession> {
+  async send(id: string, text: string): Promise<AgentSession> {
     if (!text)
       throw new DaedalusError(
         "VALIDATION",
         "Agent input text must not be empty",
       );
-    if (!options.fromDaedalus) this.refuseLockedInput(id);
     const agent = await this.requireRunning(id);
     await this.tmux.send(agent.tmuxSession, text);
     return agent;
   }
 
-  private refuseLockedInput(id: string): void {
-    const routineAgent =
-      this.repositories.routineAgents.findRoutineAgentBySession(id);
-    if (routineAgent?.mode === "auto")
+  /** Renames a session. Its tasks and notifications use the new name. */
+  async rename(id: string, name: string): Promise<AgentSession> {
+    const agent = await this.get(id);
+    const trimmed = name.trim();
+    if (!trimmed)
+      throw new DaedalusError("VALIDATION", "A session name must not be empty");
+    if (trimmed.length > 240)
       throw new DaedalusError(
-        "CONFLICT",
-        `${routineAgent.name} is in auto mode and its input is locked; unlock it first with 'daedal routine-agent unlock ${routineAgent.slug}'`,
+        "VALIDATION",
+        "Session name must contain at most 240 characters",
       );
+    this.repositories.renameAgent(agent.id, trimmed);
+    return { ...agent, name: trimmed };
   }
 
-  /** Clears Claude's input box: Ctrl-C on a draft empties it. */
-  async clearInput(id: string): Promise<void> {
-    const agent = await this.requireRunning(id);
-    await this.tmux.sendKeys(agent.tmuxSession, ["C-c"]);
+  /** Pins a session to the top of its workspace's list, or unpins it. */
+  async setPinned(id: string, pinned: boolean): Promise<AgentSession> {
+    const agent = await this.get(id);
+    const pinnedAt = pinned
+      ? (agent.pinnedAt ?? new Date().toISOString())
+      : null;
+    this.repositories.setAgentPinned(agent.id, pinnedAt);
+    return { ...agent, pinnedAt };
   }
 
-  /**
-   * Types text into the input box without submitting it. A line break is
-   * typed as Claude's `\` then Enter, which inserts a newline.
-   */
-  async typeDraft(id: string, text: string): Promise<void> {
-    const agent = await this.requireRunning(id);
-    const lines = text.split("\n");
-    for (const [index, line] of lines.entries()) {
-      const last = index === lines.length - 1;
-      const typed = last ? line : `${line}\\`;
-      if (typed)
-        await this.tmux.sendKeys(agent.tmuxSession, ["-l", "--", typed]);
-      if (!last) {
-        // Apart from the text, or Claude reads the pair as a pasted
-        // backslash and newline rather than its newline shortcut.
-        await Bun.sleep(DRAFT_NEWLINE_DELAY_MS);
-        await this.tmux.sendKeys(agent.tmuxSession, ["Enter"]);
-      }
-    }
+  /** Marks a session with one of the fixed colors, or clears it with null. */
+  async setColor(id: string, color: string | null): Promise<AgentSession> {
+    const agent = await this.get(id);
+    const value = color === null ? null : sessionColor(color);
+    this.repositories.setAgentColor(agent.id, value);
+    return { ...agent, color: value };
   }
 
   async stop(id: string, force = false): Promise<AgentSession> {
@@ -1372,13 +1382,9 @@ export class AgentService {
     const archived = { ...agent, archivedAt: new Date().toISOString() };
     this.repositories.transaction(() => {
       this.repositories.updateAgent(archived);
-      // Archiving a routine agent's session pauses the agent; its routines,
-      // memory and tasks stay, and restoring the session resumes it.
-      this.repositories.routineAgents.pauseRoutineAgentBySession(
-        id,
-        archived.archivedAt,
-        "Skipped: the session was archived",
-      );
+      // Archiving pauses what the session holds; its routines and their
+      // tasks stay, and restoring the session resumes them.
+      this.repositories.abilities.setPausedForSession(id, true);
     });
     // Working trees used to outlive every session that ever held one, which is
     // what made a repository permanently undetachable. Only trees that
@@ -1393,12 +1399,7 @@ export class AgentService {
     const agent = await this.get(id);
     if (!agent.archivedAt)
       throw new DaedalusError("CONFLICT", "Session is not archived");
-    const restored = await this.relaunch({ ...agent, resumeOnStart: false });
-    this.repositories.routineAgents.resumeRoutineAgentBySession(
-      id,
-      new Date().toISOString(),
-    );
-    return restored;
+    return this.relaunch({ ...agent, resumeOnStart: false });
   }
 
   /**
@@ -1651,6 +1652,9 @@ export class AgentService {
         archivedAt: null,
         resumeCount: agent.resumeCount + 1,
       };
+      // Back from the archive: what archiving paused runs again.
+      if (agent.archivedAt)
+        this.repositories.abilities.setPausedForSession(agent.id, false);
       if (agent.provider === "codex" && !restored.providerSessionId) {
         const recoveredId = await recoverCodexSessionId({
           sessionsDirectory: this.config.codexSessionsDirectory,
@@ -1873,4 +1877,14 @@ export class AgentService {
       );
     return agent;
   }
+}
+
+/** A session color, or a clear refusal naming the ones there are. */
+export function sessionColor(value: string): SessionColor {
+  if (!(SESSION_COLORS as readonly string[]).includes(value))
+    throw new DaedalusError(
+      "VALIDATION",
+      `Color must be one of: ${SESSION_COLORS.join(", ")}`,
+    );
+  return value as SessionColor;
 }

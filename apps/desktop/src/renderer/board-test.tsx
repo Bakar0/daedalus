@@ -81,6 +81,8 @@ const session = (
   lostReason: null,
   handoffRequestedAt: null,
   position: sequence++,
+  pinnedAt: null,
+  color: null,
   ...overrides,
 });
 
@@ -323,7 +325,8 @@ const snapshot: DesktopSnapshotDto = {
   ],
   shipped: [],
   toasts: [],
-  routineAgents: [],
+  abilities: [],
+  routines: [],
   routineReports: [],
   settings: {
     version: "0.7.0",

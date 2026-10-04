@@ -115,10 +115,10 @@ export interface TerminalConnectionOptions {
   createBridge: (onOutput: (output: Uint8Array) => void) => TerminalBridge;
   onError?: (error: unknown) => void;
   /**
-   * Called on every input frame, before it reaches the terminal. Returning
-   * false drops the frame: a routine agent's input is locked in auto mode.
+   * Called on every input frame, before it reaches the terminal, so the host
+   * knows when the user last typed in a session.
    */
-  onInput?: (data: string) => boolean | void;
+  onInput?: (data: string) => void;
 }
 
 export class TerminalConnection {
@@ -163,7 +163,7 @@ export class TerminalConnection {
             TERMINAL_INPUT_LIMIT
         )
           throw new Error("Terminal input frame is too large");
-        if (this.options.onInput?.(message.data) === false) return;
+        this.options.onInput?.(message.data);
         const operation = this.#inputChain.then(() => {
           this.bridge.write(message.data);
         });
@@ -243,6 +243,9 @@ export class TerminalConnection {
  */
 export function isTyping(data: string): boolean {
   const rest = data
+    // X10 mouse reports carry three raw bytes after ESC [ M; scrolling and
+    // selecting are not typing.
+    .replace(/\x1b\[M[\s\S]{3}/g, "")
     // OSC: ESC ] ... BEL or ESC \
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
     // CSI: ESC [ params intermediates final, including focus ESC[I / ESC[O
@@ -250,32 +253,4 @@ export function isTyping(data: string): boolean {
     // SS3 and other two-byte escapes
     .replace(/\x1b[O@-_][^\x1b]?/g, "");
   return rest.length > 0;
-}
-
-/** What the terminal sends on its own, and the mouse; never a keystroke. */
-const TERMINAL_REPLIES = [
-  // OSC answers: ESC ] ... BEL or ESC \
-  /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g,
-  // Focus reports
-  /\x1b\[[IO]/g,
-  // Cursor position reports
-  /\x1b\[\d+;\d+R/g,
-  // Device attributes
-  /\x1b\[[?>=]?[\d;]*c/g,
-  // Mode reports
-  /\x1b\[\?[\d;]*\$y/g,
-  // SGR and X10 mouse reports, which scroll and select in tmux
-  /\x1b\[<\d+;\d+;\d+[Mm]/g,
-  /\x1b\[M[\s\S]{3}/g,
-];
-
-/**
- * Whether a frame may reach a locked terminal: only the terminal answering
- * queries and the mouse, so the user can still scroll and select while
- * nothing they type reaches the agent. Arrow keys and Enter are keystrokes.
- */
-export function passesInputLock(data: string): boolean {
-  let rest = data;
-  for (const pattern of TERMINAL_REPLIES) rest = rest.replace(pattern, "");
-  return rest.length === 0;
 }

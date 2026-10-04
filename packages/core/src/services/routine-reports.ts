@@ -1,8 +1,8 @@
 import type {
-  RoutineAgent,
   RoutineOutput,
   RoutineReport,
   RoutineReportVerdict,
+  SessionAbility,
   Task,
   Workspace,
 } from "../domain";
@@ -68,7 +68,7 @@ export function appendToBrief(
 }
 
 export interface RoutineReportInput {
-  agent: RoutineAgent;
+  ability: SessionAbility;
   workspace: Workspace;
   routine: string;
   output: RoutineOutput;
@@ -122,7 +122,7 @@ export class RoutineReportService {
       );
     const url = input.url?.trim() || null;
     const at = this.now().toISOString();
-    const source = `Reported by ${input.agent.name} from routine \`${input.routine}\`, run ${input.runId}, at ${localTime(at)}.`;
+    const source = `Reported by ${this.ownerName(input.ability)} from routine \`${input.routine}\`, run ${input.runId}, at ${localTime(at)}.`;
     const evidence = [
       `> ${source}`,
       `> Key: \`${key}\`${input.urgent ? " · Urgent" : ""}${url ? ` · ${url}` : ""}`,
@@ -131,11 +131,11 @@ export class RoutineReportService {
     ].join("\n");
     const result = this.repositories.immediateTransaction(
       (): RoutineReportResult => {
-        const store = this.repositories.routineAgents;
-        const latest = store.findLatestRoutineReport(input.agent.id, key);
+        const store = this.repositories.routines;
+        const latest = store.findLatestReport(input.ability.id, key);
         if (latest?.verdict === "noise") {
           const seen: RoutineReport = { ...latest, lastSeenAt: at };
-          store.updateRoutineReport(seen);
+          store.updateReport(seen);
           return {
             action: "suppressed",
             report: seen,
@@ -143,10 +143,10 @@ export class RoutineReportService {
             notified: null,
           };
         }
-        const open = store.findOpenRoutineReport(input.agent.id, key);
+        const open = store.findOpenReport(input.ability.id, key);
         if (open) return this.update(open, input, evidence, at);
         if (sameAs) {
-          const target = store.findOpenRoutineReport(input.agent.id, sameAs);
+          const target = store.findOpenReport(input.ability.id, sameAs);
           if (!target)
             throw new DaedalusError(
               "NOT_FOUND",
@@ -154,7 +154,7 @@ export class RoutineReportService {
             );
           const report: RoutineReport = {
             id: crypto.randomUUID(),
-            routineAgentId: input.agent.id,
+            abilityId: input.ability.id,
             routine: input.routine,
             key,
             sameAs,
@@ -170,7 +170,7 @@ export class RoutineReportService {
             closedAt: null,
             reopenCount: 0,
           };
-          store.createRoutineReport(report);
+          store.createReport(report);
           const task = target.taskId
             ? this.appendSection(
                 target.taskId,
@@ -233,7 +233,7 @@ export class RoutineReportService {
         : null;
     const report: RoutineReport = {
       id: crypto.randomUUID(),
-      routineAgentId: input.agent.id,
+      abilityId: input.ability.id,
       routine: input.routine,
       key,
       sameAs: null,
@@ -249,7 +249,7 @@ export class RoutineReportService {
       closedAt: null,
       reopenCount: 0,
     };
-    this.repositories.routineAgents.createRoutineReport(report);
+    this.repositories.routines.createReport(report);
     return { action: "opened", report, task, notified: null };
   }
 
@@ -277,7 +277,7 @@ export class RoutineReportService {
       urgent: input.urgent,
       lastSeenAt: at,
     };
-    this.repositories.routineAgents.updateRoutineReport(report);
+    this.repositories.routines.updateReport(report);
     const task = current
       ? this.appendSection(current.id, `Update ${localTime(at)}`, evidence, at)
       : null;
@@ -299,7 +299,7 @@ export class RoutineReportService {
       closedAt: null,
       reopenCount: previous.reopenCount + 1,
     };
-    this.repositories.routineAgents.updateRoutineReport(report);
+    this.repositories.routines.updateReport(report);
     let task = previous.taskId
       ? this.appendSection(
           previous.taskId,
@@ -341,10 +341,10 @@ export class RoutineReportService {
       ? `${input.workspace.slug}#${result.task.number}`
       : input.routine;
     const decision = await this.notifications.notify({
-      sessionId: input.agent.sessionId,
+      sessionId: input.ability.sessionId,
       workspaceId: input.workspace.id,
       level: input.urgent ? "error" : "info",
-      title: `${input.agent.name} · ${where}`,
+      title: `${this.ownerName(input.ability)} · ${where}`,
       body: `${result.action === "reopened" ? "Came back: " : ""}${result.report.title}`,
       desktop: input.urgent,
       urgent: input.urgent,
@@ -358,21 +358,18 @@ export class RoutineReportService {
    * gone. Resolving a key that is not open does nothing, so an agent can
    * resolve without first checking.
    */
-  resolve(agent: RoutineAgent, keyValue: string): RoutineReport | null {
+  resolve(ability: SessionAbility, keyValue: string): RoutineReport | null {
     const key = reportKey(keyValue);
     const at = this.now().toISOString();
     return this.repositories.immediateTransaction(() => {
-      const open = this.repositories.routineAgents.findOpenRoutineReport(
-        agent.id,
-        key,
-      );
+      const open = this.repositories.routines.findOpenReport(ability.id, key);
       if (!open) return null;
       const resolved: RoutineReport = {
         ...open,
         state: "resolved",
         resolvedAt: at,
       };
-      this.repositories.routineAgents.updateRoutineReport(resolved);
+      this.repositories.routines.updateReport(resolved);
       if (open.taskId && !open.sameAs)
         this.appendSection(open.taskId, `Resolved at ${localTime(at)}`, "", at);
       return resolved;
@@ -386,14 +383,14 @@ export class RoutineReportService {
    * itself is left as it is either way; its status is the user's.
    */
   verdict(
-    agent: RoutineAgent,
+    ability: SessionAbility,
     id: string,
     value: RoutineReportVerdict | null,
     note?: string,
     quiet = false,
   ): RoutineReport {
-    const report = this.repositories.routineAgents.findRoutineReport(id);
-    if (!report || report.routineAgentId !== agent.id)
+    const report = this.repositories.routines.findReport(id);
+    if (!report || report.abilityId !== ability.id)
       throw new DaedalusError("NOT_FOUND", `Report '${id}' was not found`);
     const at = this.now().toISOString();
     const updated: RoutineReport =
@@ -401,7 +398,7 @@ export class RoutineReportService {
         ? { ...report, verdict: value, state: "closed", closedAt: at }
         : { ...report, verdict: value };
     this.repositories.transaction(() => {
-      this.repositories.routineAgents.updateRoutineReport(updated);
+      this.repositories.routines.updateReport(updated);
       if (report.taskId && !quiet)
         this.appendSection(
           report.taskId,
@@ -424,8 +421,7 @@ export class RoutineReportService {
     value: RoutineReportVerdict | null,
     note?: string,
   ): RoutineReport[] {
-    const reports =
-      this.repositories.routineAgents.listRoutineReportsForTask(taskId);
+    const reports = this.repositories.routines.listReportsForTask(taskId);
     if (!reports.length)
       throw new DaedalusError(
         "NOT_FOUND",
@@ -434,32 +430,30 @@ export class RoutineReportService {
     // Only the latest report per key counts; older rows are its history.
     const latest = new Map<string, RoutineReport>();
     for (const report of reports)
-      latest.set(`${report.routineAgentId}\0${report.key}`, report);
+      latest.set(`${report.abilityId}\0${report.key}`, report);
     return [...latest.values()].map((report, index) => {
-      const agent = this.repositories.routineAgents.findRoutineAgent(
-        report.routineAgentId,
-      );
-      if (!agent)
-        throw new DaedalusError("NOT_FOUND", "The routine agent is gone");
+      const ability = this.repositories.abilities.find(report.abilityId);
+      if (!ability)
+        throw new DaedalusError("NOT_FOUND", "The routines ability is gone");
       // The task brief gets one line, not one per key.
-      return this.verdict(agent, report.id, value, note, index > 0);
+      return this.verdict(ability, report.id, value, note, index > 0);
     });
   }
 
   /**
    * Closes what has ended. A report whose task the user closed is closed
    * with it. A report resolved a day ago closes too, and if no agent was ever
-   * started on its task, the task moves to done: the one status change a
-   * routine agent makes, approved by the user as an exception to the rule that
+   * started on its task, the task moves to done: the one status change
+   * routines make, approved by the user as an exception to the rule that
    * status is theirs.
    */
-  sweep(agent: RoutineAgent): { closedTasks: Task[] } {
+  sweep(ability: SessionAbility): { closedTasks: Task[] } {
     const now = this.now();
     const at = now.toISOString();
     const closedTasks: Task[] = [];
     this.repositories.transaction(() => {
-      const store = this.repositories.routineAgents;
-      for (const report of store.listRoutineReports(agent.id, {
+      const store = this.repositories.routines;
+      for (const report of store.listReports(ability.id, {
         states: ["open", "resolved"],
       })) {
         const task = report.taskId
@@ -471,7 +465,7 @@ export class RoutineReportService {
           // A task the user closed as done counts as useful; one they
           // cancelled says nothing either way.
           if (taskEnded)
-            store.updateRoutineReport({
+            store.updateReport({
               ...report,
               state: "closed",
               closedAt: task.completedAt ?? at,
@@ -486,12 +480,12 @@ export class RoutineReportService {
             CLOSE_AFTER_RESOLVED_MS
         )
           continue;
-        store.updateRoutineReport({ ...report, state: "closed", closedAt: at });
+        store.updateReport({ ...report, state: "closed", closedAt: at });
         if (
           task &&
           !taskEnded &&
           !report.sameAs &&
-          !this.stillOpenOnTask(agent.id, task.id) &&
+          !this.stillOpenOnTask(ability.id, task.id) &&
           !store.taskHasSessions(task.id)
         ) {
           const closed: Task = {
@@ -502,7 +496,7 @@ export class RoutineReportService {
             briefUpdatedAt: at,
             description: appendToBrief(
               task.description,
-              `Closed by ${agent.name}: resolved at ${localTime(report.resolvedAt)}, no action taken`,
+              `Closed by ${this.ownerName(ability)}: resolved at ${localTime(report.resolvedAt)}, no action taken`,
             ),
           };
           this.repositories.updateTask(closed);
@@ -514,9 +508,14 @@ export class RoutineReportService {
   }
 
   /** A merged report still open keeps the shared task alive. */
-  private stillOpenOnTask(routineAgentId: string, taskId: string): boolean {
-    return this.repositories.routineAgents
-      .listRoutineReports(routineAgentId, { states: ["open"] })
+  private stillOpenOnTask(abilityId: string, taskId: string): boolean {
+    return this.repositories.routines
+      .listReports(abilityId, { states: ["open"] })
       .some((report) => report.taskId === taskId);
+  }
+
+  /** The session's name, which is how its reports are signed. */
+  private ownerName(ability: SessionAbility): string {
+    return this.repositories.findAgent(ability.sessionId)?.name ?? "Routines";
   }
 }

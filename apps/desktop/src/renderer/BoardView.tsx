@@ -10,8 +10,9 @@ import { useEffect, useState, type ReactNode } from "react";
 import { askConfirm } from "./dialogs";
 import {
   ReportDetails,
+  type ReportOwner,
   type ReportVerdictChoice,
-} from "./routine-agents/ReportDetails";
+} from "./routines/ReportDetails";
 import type {
   RoutineReportDto,
   AgentActivityDto,
@@ -105,8 +106,8 @@ export interface BoardViewProps {
   onPark: (task: TaskDto) => void;
   /** Routine reports by the task they opened. */
   routineReports?: ReadonlyMap<string, RoutineReportDto>;
-  /** Routine agents' names by id, for the gold tag on their tasks. */
-  routineAgentNames?: ReadonlyMap<string, string>;
+  /** The session behind each routines ability, for the chip on its tasks. */
+  routineOwners?: ReadonlyMap<string, ReportOwner>;
   onReportVerdict?: (
     report: RoutineReportDto,
     verdict: ReportVerdictChoice,
@@ -733,7 +734,7 @@ export function BoardView(props: BoardViewProps) {
         </div>
         {report && props.onReportVerdict && (
           <ReportDetails
-            agentName={props.routineAgentNames?.get(report.routineAgentId)}
+            owner={props.routineOwners?.get(report.abilityId)}
             busy={props.busy}
             onOpenLink={props.onOpenLink}
             onVerdict={props.onReportVerdict}

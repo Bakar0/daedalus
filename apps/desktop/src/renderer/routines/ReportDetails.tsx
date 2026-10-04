@@ -1,22 +1,28 @@
-import type { RoutineReportDto } from "@daedalus/protocol";
+import type { RoutineReportDto, SessionColorDto } from "@daedalus/protocol";
 
 export type ReportVerdictChoice = "useful" | "noise" | null;
 
+/** The session whose routine filed a report, as its chip shows it. */
+export interface ReportOwner {
+  name: string;
+  color: SessionColorDto | null;
+}
+
 /**
- * What a board card adds for a task a routine made: which agent and routine
- * it came from, whether it went away, and the two buttons the agent learns
- * from.
+ * What a board card adds for a task a routine made: which session and
+ * routine it came from, whether it went away, and the two buttons the
+ * session learns from.
  */
 export function ReportDetails({
   report,
-  agentName,
+  owner,
   busy,
   onVerdict,
   onOpenLink,
 }: {
   report: RoutineReportDto;
-  /** The routine agent's name, shown as the card's gold tag. */
-  agentName: string | undefined;
+  /** The session's name, shown as the card's chip in the session's color. */
+  owner: ReportOwner | undefined;
   busy: boolean;
   onVerdict: (report: RoutineReportDto, verdict: ReportVerdictChoice) => void;
   onOpenLink: (url: string) => void;
@@ -25,7 +31,11 @@ export function ReportDetails({
   return (
     <div className="report-details" onClick={stop}>
       <span className="report-source">
-        {agentName && <span className="report-agent">{agentName}</span>}
+        {owner && (
+          <span className="report-agent" data-color={owner.color ?? undefined}>
+            {owner.name}
+          </span>
+        )}
         {report.urgent && <span className="report-urgent">urgent</span>}
         <span className="report-routine">{report.routine}</span>
         {report.state === "resolved" && (

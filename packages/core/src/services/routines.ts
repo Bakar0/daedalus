@@ -1,13 +1,10 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import type {
-  RoutineReport,
-  RoutineAgent,
   Routine,
-  RoutineFileError,
+  RoutineDefinition,
+  RoutineReport,
   RoutineRun,
   RoutineRunOutcome,
-  RoutineState,
+  SessionAbility,
 } from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
@@ -20,26 +17,17 @@ import {
   parseUntil,
   renderRoutineFile,
   routineName,
-  ROUTINES_DIRECTORY,
-  routineAgentFolder,
-  RoutineFolderReader,
-  setFrontmatterField,
-  TEMPLATES_DIRECTORY,
 } from "./routine-files";
-import type { WorkspaceService } from "./workspaces";
 
-/** Failures in a row after which the agent's session gets a badge. */
+/** Failures in a row after which the session gets a badge. */
 export const FAILURE_BADGE_THRESHOLD = 3;
 /** A run overdue by less than this was on time, as far as `{{missed}}` goes. */
 const MISSED_GRACE_MS = 90_000;
-/** A queued run nobody could deliver for this long is dropped. */
-const UNDELIVERED_LIMIT_MS = 60 * 60_000;
 const OUTCOMES: readonly RoutineRunOutcome[] = ["quiet", "notified", "task"];
 
 export interface RoutineView {
   routine: Routine;
-  state: RoutineState | null;
-  /** The newest run of this routine, if it has one. */
+  /** The newest run of this routine that was not skipped, if any. */
   lastRun: RoutineRun | null;
 }
 
@@ -47,9 +35,22 @@ export interface RoutineStart {
   run: RoutineRun;
   routine: Pick<Routine, "name" | "model" | "timeoutMs" | "output">;
   prompt: string;
-  /** Every open report of the agent, so one cause is reported once. */
+  /** What the session's routines are for, as it wrote it. */
+  purpose: string | null;
+  /** Every open report of the session, so one cause is reported once. */
   openReports: RoutineReport[];
 }
+
+export type RoutineAddInput =
+  | { text: string; replace?: boolean; template?: boolean; name?: string }
+  | {
+      from: string;
+      name?: string;
+      vars?: Record<string, string>;
+      until?: string;
+      schedule?: string;
+      enabled?: boolean;
+    };
 
 const localTime = (iso: string): string => {
   const date = new Date(iso);
@@ -57,24 +58,15 @@ const localTime = (iso: string): string => {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
 
-async function writeAtomically(path: string, contents: string): Promise<void> {
-  const temporary = `${path}.${crypto.randomUUID()}.tmp`;
-  await writeFile(temporary, contents, "utf8");
-  await rename(temporary, path);
-}
-
 /**
- * A routine agent's routines: the files that define them and the runs they make.
- * The files are the source of truth, so every change here is a file write
- * and the scheduler picks it up on its next read.
+ * The routines a session holds and the runs they make. Everything lives in
+ * SQLite under the ability's id, so the routines follow the ability through
+ * every handoff and nothing is written into the session's folder.
  */
 export class RoutineService {
-  private readonly reader = new RoutineFolderReader();
-
   constructor(
     private readonly repositories: SqliteRepositories,
-    private readonly workspaces: WorkspaceService,
-    /** Raises the agent's badge after repeated failures. */
+    /** Raises the session's badge after repeated failures. */
     private readonly raiseAttention: (
       sessionId: string,
       reason: string,
@@ -82,36 +74,16 @@ export class RoutineService {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
-  async directory(agent: RoutineAgent): Promise<string> {
-    const workspace = await this.workspaces.get(agent.workspaceId);
-    return join(
-      routineAgentFolder(workspace.path, agent.slug),
-      ROUTINES_DIRECTORY,
-    );
-  }
-
-  async read(
-    agent: RoutineAgent,
-  ): Promise<{ routines: Routine[]; errors: RoutineFileError[] }> {
-    return this.reader.read(await this.directory(agent));
-  }
-
-  async list(
-    agent: RoutineAgent,
-  ): Promise<{ routines: RoutineView[]; errors: RoutineFileError[] }> {
-    const { routines, errors } = await this.read(agent);
-    const states = new Map(
-      this.repositories.routineAgents
-        .listRoutineStates(agent.id)
-        .map((state) => [state.name, state]),
-    );
-    const runs = this.repositories.routineAgents.listRoutineRuns(agent.id, {
+  list(ability: SessionAbility): {
+    routines: RoutineView[];
+    templates: Routine[];
+  } {
+    const runs = this.repositories.routines.listRuns(ability.id, {
       limit: 500,
     });
     return {
-      routines: routines.map((routine) => ({
+      routines: this.repositories.routines.list(ability.id).map((routine) => ({
         routine,
-        state: states.get(routine.name) ?? null,
         // Overlap skips are newer than the run they were skipped for, and
         // say nothing about it, so the row shows the run that is real.
         lastRun:
@@ -119,131 +91,143 @@ export class RoutineService {
             (run) => run.routine === routine.name && run.status !== "skipped",
           ) ?? null,
       })),
-      errors,
+      templates: this.repositories.routines.list(ability.id, {
+        templates: true,
+      }),
     };
   }
 
-  async get(agent: RoutineAgent, name: string): Promise<RoutineView> {
-    const view = (await this.list(agent)).routines.find(
-      (item) => item.routine.name === name,
-    );
-    if (!view)
-      throw new DaedalusError("NOT_FOUND", `Routine '${name}' was not found`);
-    return view;
+  get(
+    ability: SessionAbility,
+    name: string,
+    options: { template?: boolean } = {},
+  ): Routine {
+    const routine = this.repositories.routines.find(ability.id, name, options);
+    if (!routine)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `${options.template ? "Template" : "Routine"} '${name}' was not found`,
+      );
+    return routine;
+  }
+
+  /** The routine in the text form a session writes, for reading back. */
+  text(routine: Routine): string {
+    return renderRoutineFile(routine);
   }
 
   /**
-   * Adds a routine from a whole file, or from a template with vars filled in.
-   * The file is validated before anything is written, so a bad schedule is
-   * refused here rather than shown as a broken file later.
+   * Adds a routine from its text, or from a template with vars filled in.
+   * The text is validated before anything is stored, so a bad schedule is
+   * refused here rather than shown as a broken routine later.
    */
-  async add(
-    agent: RoutineAgent,
-    input:
-      | { text: string; replace?: boolean }
-      | {
-          template: string;
-          name?: string;
-          vars?: Record<string, string>;
-          until?: string;
-          schedule?: string;
-          enabled?: boolean;
-        },
-  ): Promise<Routine> {
-    const directory = await this.directory(agent);
-    let routine: Routine;
+  add(ability: SessionAbility, input: RoutineAddInput): Routine {
+    const now = this.now();
+    let definition: RoutineDefinition;
+    let template = false;
     if ("text" in input) {
-      routine = parseRoutineFile(join(directory, "new.md"), input.text);
+      definition = parseRoutineFile(input.text, input.name);
+      template = Boolean(input.template);
     } else {
-      const templateName = routineName(input.template);
-      const templatePath = join(
-        directory,
-        TEMPLATES_DIRECTORY,
-        `${templateName}.md`,
-      );
-      let text: string;
-      try {
-        text = await readFile(templatePath, "utf8");
-      } catch {
-        throw new DaedalusError(
-          "NOT_FOUND",
-          `Template '${templateName}' was not found in ${join(ROUTINES_DIRECTORY, TEMPLATES_DIRECTORY)}`,
-        );
-      }
-      const template = parseRoutineFile(templatePath, text);
-      const vars = { ...template.vars, ...input.vars };
-      routine = {
-        ...template,
+      const source = this.get(ability, routineName(input.from), {
+        template: true,
+      });
+      const vars = { ...source.vars, ...input.vars };
+      definition = {
         name: routineName(
           input.name ??
-            `${templateName}-${Bun.hash(JSON.stringify(vars)).toString(36).slice(0, 6)}`,
+            `${source.name}-${Bun.hash(JSON.stringify(vars)).toString(36).slice(0, 6)}`,
         ),
-        vars,
         schedule: input.schedule
           ? parseSchedule(input.schedule)
-          : template.schedule,
+          : source.schedule,
         until: input.until
-          ? parseUntil(input.until, this.now()).toISOString()
-          : template.until,
+          ? parseUntil(input.until, now).toISOString()
+          : source.until,
+        model: source.model,
+        timeoutMs: source.timeoutMs,
+        output: source.output,
         enabled: input.enabled ?? true,
+        vars,
+        body: source.body,
       };
     }
-    const path = join(directory, `${routine.name}.md`);
-    const existing = (await this.read(agent)).routines.find(
-      (item) => item.name === routine.name,
+    const existing = this.repositories.routines.find(
+      ability.id,
+      definition.name,
+      { template },
     );
-    const replace = "text" in input && input.replace;
-    if (existing && !replace)
-      throw new DaedalusError(
-        "CONFLICT",
-        `Routine '${routine.name}' already exists; pass --replace to overwrite it`,
-      );
-    await mkdir(join(directory, TEMPLATES_DIRECTORY), { recursive: true });
-    const target = existing?.path ?? path;
-    await writeAtomically(
-      target,
-      "text" in input
-        ? `${input.text.trimEnd()}\n`
-        : renderRoutineFile(routine),
-    );
-    return { ...routine, path: target };
-  }
-
-  async setEnabled(
-    agent: RoutineAgent,
-    name: string,
-    enabled: boolean,
-  ): Promise<Routine> {
-    const { routine } = await this.get(agent, name);
-    const text = await readFile(routine.path, "utf8");
-    await writeAtomically(
-      routine.path,
-      setFrontmatterField(text, "enabled", String(enabled)),
-    );
-    if (enabled) {
-      // Enabling is the user deciding the routine should run now, on its
-      // schedule, not "catch up on everything since it was switched off".
-      const state = this.repositories.routineAgents.findRoutineState(
-        agent.id,
-        name,
-      );
-      if (state)
-        this.repositories.routineAgents.saveRoutineState({
-          ...state,
-          nextRunAt:
-            nextRunTime(routine.schedule, {
-              now: this.now(),
-              lastRunAt: state.lastRunAt,
-            })?.toISOString() ?? null,
-        });
+    const at = now.toISOString();
+    if (existing) {
+      if (!("text" in input) || !input.replace)
+        throw new DaedalusError(
+          "CONFLICT",
+          `${template ? "Template" : "Routine"} '${definition.name}' already exists; pass --replace to overwrite it`,
+        );
+      const scheduleChanged =
+        existing.schedule.text !== definition.schedule.text;
+      const replaced: Routine = {
+        ...existing,
+        ...definition,
+        // A new schedule starts from now; the old one's next slot is stale.
+        nextRunAt: scheduleChanged
+          ? (nextRunTime(definition.schedule, {
+              now,
+              lastRunAt: existing.lastRunAt,
+            })?.toISOString() ?? null)
+          : existing.nextRunAt,
+        updatedAt: at,
+      };
+      this.repositories.routines.update(replaced);
+      return replaced;
     }
-    return { ...routine, enabled };
+    const routine: Routine = {
+      ...definition,
+      id: crypto.randomUUID(),
+      abilityId: ability.id,
+      isTemplate: template,
+      nextRunAt: template
+        ? null
+        : (nextRunTime(definition.schedule, {
+            now,
+            lastRunAt: null,
+          })?.toISOString() ?? null),
+      lastRunAt: null,
+      lastSuccessAt: null,
+      consecutiveFailures: 0,
+      createdAt: at,
+      updatedAt: at,
+    };
+    this.repositories.routines.create(routine);
+    return routine;
   }
 
-  async remove(agent: RoutineAgent, name: string): Promise<Routine> {
-    const { routine } = await this.get(agent, name);
-    await rm(routine.path, { force: true });
-    this.repositories.routineAgents.deleteRoutineState(agent.id, name);
+  setEnabled(ability: SessionAbility, name: string, enabled: boolean): Routine {
+    const routine = this.get(ability, name);
+    const updated: Routine = {
+      ...routine,
+      enabled,
+      // Enabling is the user deciding the routine should run on its schedule
+      // from now, not "catch up on everything since it was switched off".
+      nextRunAt: enabled
+        ? (nextRunTime(routine.schedule, {
+            now: this.now(),
+            lastRunAt: routine.lastRunAt,
+          })?.toISOString() ?? null)
+        : routine.nextRunAt,
+      updatedAt: this.now().toISOString(),
+    };
+    this.repositories.routines.update(updated);
+    return updated;
+  }
+
+  remove(
+    ability: SessionAbility,
+    name: string,
+    options: { template?: boolean } = {},
+  ): Routine {
+    const routine = this.get(ability, name, options);
+    this.repositories.routines.delete(routine.id);
     return routine;
   }
 
@@ -252,12 +236,12 @@ export class RoutineService {
    * be typed in is the same request, so it is returned rather than refused;
    * only a run that is running now is a conflict.
    */
-  async runNow(
-    agent: RoutineAgent,
+  runNow(
+    ability: SessionAbility,
     name: string,
-  ): Promise<RoutineRun & { alreadyQueued?: boolean }> {
-    const { routine } = await this.get(agent, name);
-    const existing = this.inFlightRuns(agent).find(
+  ): RoutineRun & { alreadyQueued?: boolean } {
+    const routine = this.get(ability, name);
+    const existing = this.inFlightRuns(ability).find(
       (run) => run.routine === routine.name,
     );
     if (existing?.deliveredAt)
@@ -266,8 +250,8 @@ export class RoutineService {
         `Routine '${name}' is running now (run ${existing.id})`,
       );
     if (existing) return { ...existing, alreadyQueued: true };
-    return this.repositories.routineAgents.createRoutineRun({
-      routineAgentId: agent.id,
+    return this.repositories.routines.createRun({
+      abilityId: ability.id,
       routine: routine.name,
       sessionId: null,
       status: "queued",
@@ -282,55 +266,62 @@ export class RoutineService {
   }
 
   /** Queued and running runs, including those not yet typed. */
-  inFlightRuns(agent: RoutineAgent): RoutineRun[] {
-    return this.repositories.routineAgents.listRoutineRuns(agent.id, {
+  inFlightRuns(ability: SessionAbility): RoutineRun[] {
+    return this.repositories.routines.listRuns(ability.id, {
       statuses: ["queued", "running"],
       limit: 100,
     });
   }
 
-  /** Runs that were typed into the pane and have not ended. */
-  deliveredRuns(agent: RoutineAgent): RoutineRun[] {
-    return this.inFlightRuns(agent).filter((run) => run.deliveredAt);
+  /** Runs that were typed into the session and have not ended. */
+  deliveredRuns(ability: SessionAbility): RoutineRun[] {
+    return this.inFlightRuns(ability).filter((run) => run.deliveredAt);
+  }
+
+  /** Runs waiting to be typed in, oldest first. */
+  waitingRuns(ability: SessionAbility): RoutineRun[] {
+    return this.inFlightRuns(ability)
+      .filter((run) => !run.deliveredAt)
+      .sort((left, right) => left.id - right.id);
   }
 
   runs(
-    agent: RoutineAgent,
+    ability: SessionAbility,
     filters: { routine?: string; limit?: number } = {},
-  ) {
-    return this.repositories.routineAgents.listRoutineRuns(agent.id, filters);
+  ): RoutineRun[] {
+    return this.repositories.routines.listRuns(ability.id, filters);
   }
 
-  requireRun(id: number, agent?: RoutineAgent): RoutineRun {
-    const run = this.repositories.routineAgents.findRoutineRun(id);
-    if (!run || (agent && run.routineAgentId !== agent.id))
+  requireRun(id: number, ability?: SessionAbility): RoutineRun {
+    const run = this.repositories.routines.findRun(id);
+    if (!run || (ability && run.abilityId !== ability.id))
       throw new DaedalusError("NOT_FOUND", `Routine run ${id} was not found`);
     return run;
   }
 
   /**
-   * The agent's side of step 4: marks the run running and hands back the
+   * The session's first step of a run: marks it running and hands back the
    * prompt it should give its subagent, with every placeholder filled in.
    */
-  async start(agent: RoutineAgent, id: number): Promise<RoutineStart> {
-    const run = this.requireRun(id, agent);
+  start(ability: SessionAbility, id: number): RoutineStart {
+    const run = this.requireRun(id, ability);
     if (run.status !== "queued")
       throw new DaedalusError(
         "CONFLICT",
         `Run ${id} is ${run.status}, not queued`,
       );
-    const { routines } = await this.read(agent);
-    const routine = routines.find((item) => item.name === run.routine);
+    const routine = this.repositories.routines.find(ability.id, run.routine);
     if (!routine) {
-      this.finish(run, "skipped", null, "The routine file is gone");
+      this.finish(run, "skipped", null, "The routine is gone");
       throw new DaedalusError(
         "NOT_FOUND",
         `Routine '${run.routine}' no longer exists`,
       );
     }
-    const now = this.now().toISOString();
-    const previous = this.repositories.routineAgents
-      .listRoutineRuns(agent.id, {
+    const nowDate = this.now();
+    const now = nowDate.toISOString();
+    const previous = this.repositories.routines
+      .listRuns(ability.id, {
         routine: run.routine,
         statuses: ["done"],
         limit: 1,
@@ -341,9 +332,12 @@ export class RoutineService {
       status: "running",
       startedAt: now,
       deliveredAt: run.deliveredAt ?? now,
-      sessionId: run.sessionId ?? agent.sessionId,
+      sessionId: run.sessionId ?? ability.sessionId,
     };
-    this.repositories.routineAgents.updateRoutineRun(started);
+    this.repositories.routines.updateRun(started);
+    // A run that waited behind the user's typing is late by that wait too.
+    const missedMs =
+      run.missedMs + (nowDate.getTime() - Date.parse(run.queuedAt));
     const prompt = fillPlaceholders(routine.body, {
       ...routine.vars,
       last_run: previous?.startedAt
@@ -351,7 +345,7 @@ export class RoutineService {
         : "never (this is the first run; look back one schedule interval)",
       run_id: String(run.id),
       now: localTime(now),
-      missed: run.missedMs ? formatDuration(run.missedMs) : "0m",
+      missed: missedMs > MISSED_GRACE_MS ? formatDuration(missedMs) : "0m",
     });
     return {
       run: started,
@@ -362,17 +356,15 @@ export class RoutineService {
         output: routine.output,
       },
       prompt,
-      openReports: this.repositories.routineAgents.listRoutineReports(
-        agent.id,
-        {
-          states: ["open"],
-        },
-      ),
+      purpose: ability.config.purpose ?? null,
+      openReports: this.repositories.routines.listReports(ability.id, {
+        states: ["open"],
+      }),
     };
   }
 
   async done(
-    agent: RoutineAgent,
+    ability: SessionAbility,
     id: number,
     outcomeValue: string,
     summary: string,
@@ -382,7 +374,7 @@ export class RoutineService {
         "VALIDATION",
         `Outcome must be one of: ${OUTCOMES.join(", ")}`,
       );
-    const run = this.requireRun(id, agent);
+    const run = this.requireRun(id, ability);
     if (run.status !== "running" && run.status !== "queued")
       throw new DaedalusError("CONFLICT", `Run ${id} already ended`);
     const finished = this.finish(
@@ -391,21 +383,21 @@ export class RoutineService {
       outcomeValue as RoutineRunOutcome,
       summary,
     );
-    await this.removeFinishedOneShot(agent, run.routine);
+    this.removeFinishedOneShot(ability, run.routine);
     return finished;
   }
 
   async fail(
-    agent: RoutineAgent,
+    ability: SessionAbility,
     id: number,
     summary: string,
   ): Promise<RoutineRun> {
-    const run = this.requireRun(id, agent);
+    const run = this.requireRun(id, ability);
     if (run.status !== "running" && run.status !== "queued")
       throw new DaedalusError("CONFLICT", `Run ${id} already ended`);
     const failed = this.finish(run, "failed", null, summary);
-    await this.afterFailure(agent, failed);
-    await this.removeFinishedOneShot(agent, run.routine);
+    await this.afterFailure(ability, failed);
+    this.removeFinishedOneShot(ability, run.routine);
     return failed;
   }
 
@@ -424,118 +416,92 @@ export class RoutineService {
       finishedAt: now,
     };
     this.repositories.transaction(() => {
-      this.repositories.routineAgents.updateRoutineRun(finished);
-      const state = this.repositories.routineAgents.findRoutineState(
-        run.routineAgentId,
+      this.repositories.routines.updateRun(finished);
+      const routine = this.repositories.routines.find(
+        run.abilityId,
         run.routine,
       );
-      if (state && status !== "skipped")
-        this.repositories.routineAgents.saveRoutineState({
-          ...state,
-          lastSuccessAt: status === "done" ? now : state.lastSuccessAt,
+      if (routine && status !== "skipped")
+        this.repositories.routines.update({
+          ...routine,
+          lastSuccessAt: status === "done" ? now : routine.lastSuccessAt,
           consecutiveFailures:
-            status === "done" ? 0 : state.consecutiveFailures + 1,
+            status === "done" ? 0 : routine.consecutiveFailures + 1,
         });
     });
     return finished;
   }
 
   private async afterFailure(
-    agent: RoutineAgent,
+    ability: SessionAbility,
     run: RoutineRun,
   ): Promise<void> {
-    const state = this.repositories.routineAgents.findRoutineState(
-      agent.id,
-      run.routine,
-    );
-    if (
-      !agent.sessionId ||
-      !state ||
-      state.consecutiveFailures !== FAILURE_BADGE_THRESHOLD
-    )
+    const routine = this.repositories.routines.find(ability.id, run.routine);
+    if (!routine || routine.consecutiveFailures !== FAILURE_BADGE_THRESHOLD)
       return;
     await this.raiseAttention(
-      agent.sessionId,
+      ability.sessionId,
       `Routine '${run.routine}' failed ${FAILURE_BADGE_THRESHOLD} times in a row: ${run.summary ?? "no result"}`,
     ).catch(() => undefined);
   }
 
   /** A one-shot `at` routine is done with once its run has ended. */
-  private async removeFinishedOneShot(
-    agent: RoutineAgent,
-    name: string,
-  ): Promise<void> {
-    const routine = (await this.read(agent)).routines.find(
-      (item) => item.name === name,
-    );
-    if (routine?.schedule.kind !== "at") return;
-    await rm(routine.path, { force: true });
-    this.repositories.routineAgents.deleteRoutineState(agent.id, name);
+  private removeFinishedOneShot(ability: SessionAbility, name: string): void {
+    const routine = this.repositories.routines.find(ability.id, name);
+    if (routine?.schedule.kind === "at")
+      this.repositories.routines.delete(routine.id);
   }
 
   /**
-   * The clock. Queues every routine that is due, once however late it is,
-   * skips one whose previous run has not ended, removes routines past their
-   * `until`, and fails runs past their timeout. Returns the runs it queued.
+   * The clock. Queues every routine that is due, once however late it is.
+   * A routine whose run still waits to be typed in queues nothing more: the
+   * waiting run goes in once, late. One whose run is running is skipped.
+   * Removes routines past their `until` and fails runs past their timeout.
+   * Returns the runs it queued.
    */
   async schedule(
-    agent: RoutineAgent,
+    ability: SessionAbility,
     options: { queue: boolean },
   ): Promise<RoutineRun[]> {
     const now = this.now();
     const at = now.toISOString();
-    const { routines } = await this.read(agent);
-    const byName = new Map(routines.map((routine) => [routine.name, routine]));
-    await this.expire(agent, byName, now);
-    const store = this.repositories.routineAgents;
-    const states = new Map(
-      store.listRoutineStates(agent.id).map((state) => [state.name, state]),
+    const store = this.repositories.routines;
+    const inFlight = this.inFlightRuns(ability);
+    const running = new Set(
+      inFlight.filter((run) => run.deliveredAt).map((run) => run.routine),
     );
-    for (const name of states.keys())
-      if (!byName.has(name)) store.deleteRoutineState(agent.id, name);
+    const waiting = new Set(
+      inFlight.filter((run) => !run.deliveredAt).map((run) => run.routine),
+    );
     const queued: RoutineRun[] = [];
-    const inFlight = new Set(
-      this.inFlightRuns(agent).map((run) => run.routine),
-    );
-    for (const routine of routines) {
-      if (routine.until && Date.parse(routine.until) <= now.getTime()) continue;
-      let state = states.get(routine.name);
-      if (!state) {
-        state = {
-          routineAgentId: agent.id,
-          name: routine.name,
-          nextRunAt:
-            nextRunTime(routine.schedule, {
-              now,
-              lastRunAt: null,
-            })?.toISOString() ?? null,
-          lastRunAt: null,
-          lastSuccessAt: null,
-          consecutiveFailures: 0,
-        };
-        store.saveRoutineState(state);
+    for (const routine of store.list(ability.id)) {
+      if (routine.until && Date.parse(routine.until) <= now.getTime()) {
+        // Past its `until`: it deletes itself once nothing is in flight.
+        if (!running.has(routine.name) && !waiting.has(routine.name))
+          store.delete(routine.id);
+        continue;
       }
       if (
         !options.queue ||
         !routine.enabled ||
-        !state.nextRunAt ||
-        Date.parse(state.nextRunAt) > now.getTime()
+        !routine.nextRunAt ||
+        Date.parse(routine.nextRunAt) > now.getTime()
       )
         continue;
-      const missedMs = now.getTime() - Date.parse(state.nextRunAt);
+      const missedMs = now.getTime() - Date.parse(routine.nextRunAt);
       const next = nextRunTime(routine.schedule, { now, lastRunAt: at });
-      const advanced: RoutineState = {
-        ...state,
+      store.update({
+        ...routine,
         lastRunAt: at,
         nextRunAt:
           next && next.getTime() <= now.getTime()
             ? new Date(now.getTime() + 60_000).toISOString()
             : (next?.toISOString() ?? null),
-      };
-      store.saveRoutineState(advanced);
-      if (inFlight.has(routine.name)) {
-        store.createRoutineRun({
-          routineAgentId: agent.id,
+      });
+      if (waiting.has(routine.name)) continue;
+      if (running.has(routine.name)) {
+        store.createRun({
+          abilityId: ability.id,
           routine: routine.name,
           sessionId: null,
           status: "skipped",
@@ -550,8 +516,8 @@ export class RoutineService {
         continue;
       }
       queued.push(
-        store.createRoutineRun({
-          routineAgentId: agent.id,
+        store.createRun({
+          abilityId: ability.id,
           routine: routine.name,
           sessionId: null,
           status: "queued",
@@ -564,77 +530,46 @@ export class RoutineService {
           missedMs: missedMs > MISSED_GRACE_MS ? missedMs : 0,
         }),
       );
-      inFlight.add(routine.name);
+      waiting.add(routine.name);
     }
-    await this.timeOut(agent, byName, now);
+    await this.timeOut(ability, now);
     return queued;
   }
 
-  /** Routines past their `until` delete themselves, once nothing is in flight. */
-  private async expire(
-    agent: RoutineAgent,
-    routines: Map<string, Routine>,
-    now: Date,
-  ): Promise<void> {
-    const inFlight = new Set(
-      this.inFlightRuns(agent).map((run) => run.routine),
-    );
-    for (const routine of routines.values()) {
-      if (!routine.until || Date.parse(routine.until) > now.getTime()) continue;
-      if (inFlight.has(routine.name)) continue;
-      await rm(routine.path, { force: true });
-      this.repositories.routineAgents.deleteRoutineState(
-        agent.id,
-        routine.name,
+  /** A typed run with no result after its routine's timeout has failed. */
+  private async timeOut(ability: SessionAbility, now: Date): Promise<void> {
+    for (const run of this.deliveredRuns(ability)) {
+      const routine = this.repositories.routines.find(ability.id, run.routine);
+      const timeoutMs = routine?.timeoutMs ?? 10 * 60_000;
+      const since = Date.parse(run.startedAt ?? run.deliveredAt!);
+      if (now.getTime() - since <= timeoutMs) continue;
+      const failed = this.finish(
+        run,
+        "failed",
+        null,
+        run.startedAt
+          ? `Timed out after ${formatDuration(timeoutMs)} with no result`
+          : "Delivered but never started",
       );
-      routines.delete(routine.name);
+      await this.afterFailure(ability, failed);
+      this.removeFinishedOneShot(ability, run.routine);
     }
   }
 
-  private async timeOut(
-    agent: RoutineAgent,
-    routines: Map<string, Routine>,
-    now: Date,
-  ): Promise<void> {
-    for (const run of this.inFlightRuns(agent)) {
-      const timeoutMs = routines.get(run.routine)?.timeoutMs ?? 10 * 60_000;
-      if (run.deliveredAt) {
-        const since = Date.parse(run.startedAt ?? run.deliveredAt);
-        if (now.getTime() - since <= timeoutMs) continue;
-        const failed = this.finish(
-          run,
-          "failed",
-          null,
-          run.startedAt
-            ? `Timed out after ${formatDuration(timeoutMs)} with no result`
-            : "Delivered but never started",
-        );
-        await this.afterFailure(agent, failed);
-        await this.removeFinishedOneShot(agent, run.routine);
-      } else if (
-        now.getTime() - Date.parse(run.queuedAt) >
-        UNDELIVERED_LIMIT_MS
-      ) {
-        this.finish(run, "skipped", null, "Not delivered within an hour");
-        await this.removeFinishedOneShot(agent, run.routine);
-      }
-    }
-  }
-
-  /** Marks a run as typed into the agent's pane. */
+  /** Marks a run as typed into the session. */
   markDelivered(run: RoutineRun, sessionId: string): RoutineRun {
     const delivered: RoutineRun = {
       ...run,
       sessionId,
       deliveredAt: this.now().toISOString(),
     };
-    this.repositories.routineAgents.updateRoutineRun(delivered);
+    this.repositories.routines.updateRun(delivered);
     return delivered;
   }
 
-  /** Drops queued runs nobody will deliver: the agent was paused. */
-  skipUndelivered(agent: RoutineAgent, reason: string): number {
-    const pending = this.inFlightRuns(agent).filter((run) => !run.deliveredAt);
+  /** Drops queued runs nobody will deliver: the ability was revoked. */
+  skipUndelivered(ability: SessionAbility, reason: string): number {
+    const pending = this.waitingRuns(ability);
     for (const run of pending) this.finish(run, "skipped", null, reason);
     return pending.length;
   }
