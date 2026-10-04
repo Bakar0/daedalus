@@ -93,6 +93,7 @@ export function SessionMenu({
       className="session-card-menu"
       label={`More actions for ${name}`}
       menuLabel={`Actions for ${name}`}
+      placement="left"
       summary={<MenuDots />}
       summaryClassName="session-card-action"
       title="Rename, pin, color and abilities"
