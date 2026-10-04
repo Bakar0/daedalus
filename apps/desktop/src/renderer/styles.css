@@ -4629,10 +4629,13 @@ dd {
 }
 /* Open, the popover sits in the top layer and Menu sets its top and left.
    Drop the browser's popover box (centered, inset, its own colors) and the
-   offsets above, which only apply where the Popover API is missing. */
+   offsets above, which only apply where the Popover API is missing. The
+   system WKWebView grows a fixed grid with the default `height:
+   fit-content` to its max-height, so the height is `auto`. */
 .menu-popover:popover-open {
   bottom: auto;
   color: inherit;
+  height: auto;
   margin: 0;
   max-height: calc(100vh - 16px);
   overflow: auto;
