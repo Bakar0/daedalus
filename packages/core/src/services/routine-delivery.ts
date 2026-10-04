@@ -252,7 +252,9 @@ export class RoutineDelivery {
     if (!next) return this.hold(ability, null);
     const activity = input.activity(session.id);
     if (!this.settled(session.id, activity)) return;
-    const screen = await this.agents.screen(session.id).catch(() => "");
+    const screen = await this.agents
+      .screen(session.id, { styled: true })
+      .catch(() => "");
     const hold = this.gate.check({ session, activity, screen });
     if (hold) return this.hold(ability, hold);
     try {
@@ -303,7 +305,9 @@ export class RoutineDelivery {
     if (delivered.length && now - drain.since < DRAIN_LIMIT_MS) return;
     const activity = input.activity(session.id);
     if (!this.settled(session.id, activity)) return;
-    const screen = await this.agents.screen(session.id).catch(() => "");
+    const screen = await this.agents
+      .screen(session.id, { styled: true })
+      .catch(() => "");
     if (this.gate.check({ session, activity, screen })) return;
     await this.agents.requestHandoff(session.id);
     this.typed(session.id);
@@ -320,7 +324,9 @@ export class RoutineDelivery {
       return false;
     const activity = input.activity(session.id);
     if (!this.settled(session.id, activity)) return false;
-    const screen = await this.agents.screen(session.id).catch(() => "");
+    const screen = await this.agents
+      .screen(session.id, { styled: true })
+      .catch(() => "");
     if (this.gate.check({ session, activity, screen })) return false;
     await this.agents.send(session.id, note);
     this.abilities.noteDelivered(row, note);

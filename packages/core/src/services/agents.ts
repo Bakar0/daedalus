@@ -1262,10 +1262,17 @@ export class AgentService {
     return this.tmux.attach(agent.tmuxSession);
   }
 
-  /** What the session's pane shows right now, as text. */
-  async screen(id: string): Promise<string> {
+  /**
+   * What the session's pane shows right now, as text. `styled` keeps the
+   * escape codes, which is how a dim placeholder in an input box is told
+   * apart from text someone typed.
+   */
+  async screen(
+    id: string,
+    options: { styled?: boolean } = {},
+  ): Promise<string> {
     const agent = await this.requireRunning(id);
-    return this.tmux.capture(agent.tmuxSession);
+    return this.tmux.capture(agent.tmuxSession, options);
   }
 
   async send(id: string, text: string): Promise<AgentSession> {

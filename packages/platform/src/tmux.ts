@@ -44,7 +44,8 @@ export interface TmuxClient {
   hasSession(session: string): Promise<boolean>;
   listSessions(): Promise<string[]>;
   attach(session: string): Promise<number>;
-  capture(session: string): Promise<string>;
+  /** `styled` keeps the escape codes, so dim text can be told apart. */
+  capture(session: string, options?: { styled?: boolean }): Promise<string>;
   sendKeys(session: string, keys: string[]): Promise<void>;
   send(session: string, text: string): Promise<void>;
   stop(session: string, force?: boolean): Promise<void>;
@@ -302,8 +303,18 @@ export class CommandTmuxClient implements TmuxClient {
     return result.exitCode;
   }
 
-  async capture(session: string): Promise<string> {
-    const result = await this.run(["capture-pane", "-p", "-J", "-t", session]);
+  async capture(
+    session: string,
+    options: { styled?: boolean } = {},
+  ): Promise<string> {
+    const result = await this.run([
+      "capture-pane",
+      "-p",
+      ...(options.styled ? ["-e"] : []),
+      "-J",
+      "-t",
+      session,
+    ]);
     if (result.exitCode !== 0)
       throw new Error(result.stderr.trim() || "tmux capture failed");
     return result.stdout;

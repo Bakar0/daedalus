@@ -26,6 +26,18 @@ const CLAUDE_IDLE_SCREEN = [
   "  ⏵⏵ auto mode on (shift+tab to cycle)",
 ].join("\n");
 
+/**
+ * An empty box as Claude draws it after a turn, from a real styled capture:
+ * its suggested next prompt sits in the box, dim. It is not text.
+ */
+const CLAUDE_SUGGESTION_SCREEN = [
+  "⏺ I added testroutine.",
+  "\u001b[38;5;244m────────────────────────────────",
+  "\u001b[39m❯\u00a0\u001b[2mshow me the runs so far\u001b[0m",
+  "\u001b[38;5;244m────────────────────────────────",
+  "\u001b[39m  \u001b[38;5;220m⏵⏵ auto mode on\u001b[39m",
+].join("\n");
+
 const claudeScreen = (draft: string) =>
   CLAUDE_IDLE_SCREEN.replace("❯ ", `❯ ${draft}`);
 
@@ -51,8 +63,11 @@ class FakeTmux implements TmuxClient {
   async attach() {
     return 0;
   }
-  async capture() {
-    return this.screen;
+  // Like tmux: the escape codes come back only when asked for.
+  async capture(_session: string, options: { styled?: boolean } = {}) {
+    return options.styled
+      ? this.screen
+      : this.screen.replace(/\u001b\[[0-9;:]*[A-Za-z]/g, "");
   }
   async sendKeys(session: string, keys: string[]) {
     this.keys.push({ session, keys });
@@ -450,7 +465,8 @@ describe("routine delivery", () => {
       expect(context.routineDelivery.status(ability).hold?.reason).toBe(
         "input-text",
       );
-      tmux.screen = CLAUDE_IDLE_SCREEN;
+      // Claude's dim prompt suggestion is an empty box, not text.
+      tmux.screen = CLAUDE_SUGGESTION_SCREEN;
       await tick(harness);
       expect(routineLines(tmux)).toHaveLength(1);
       expect(routineLines(tmux)[0]).toMatch(
@@ -1235,6 +1251,31 @@ describe("input box", () => {
     expect(composerText(claudeScreen("draft here"))).toBe("draft here");
     expect(composerText(CLAUDE_IDLE_SCREEN)).toBe("");
     expect(composerText("no composer at all")).toBeUndefined();
+  });
+
+  test("treats a dim placeholder as an empty box, and typed text as text", () => {
+    expect(composerText(CLAUDE_SUGGESTION_SCREEN)).toBe("");
+    // Typed over the suggestion: normal text, then the suggestion's dim tail.
+    expect(
+      composerText(
+        CLAUDE_SUGGESTION_SCREEN.replace(
+          "\u001b[2mshow me the runs so far",
+          "show\u001b[2m me the runs so far",
+        ),
+      ),
+    ).toBe("show");
+    expect(
+      inputBoxText(
+        "\u001b[1m›\u001b[0m \u001b[2mAsk Codex to do anything",
+        "codex",
+      ),
+    ).toBe("");
+    expect(
+      inputBoxText(
+        "\u001b[1m›\u001b[0m fix \u001b[2mthe\u001b[22m build",
+        "codex",
+      ),
+    ).toBe("fix  build");
   });
 
   test("reads Codex's box by its placeholder and prompt line", () => {

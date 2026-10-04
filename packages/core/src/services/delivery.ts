@@ -17,17 +17,59 @@ export const CLAUDE_IDLE_NOTICE = "Claude is waiting for your input";
 /** Codex's placeholder, shown only while its input box is empty. */
 const CODEX_EMPTY_COMPOSER = "Ask Codex to do anything";
 
+/** The escape sequences tmux emits in a styled capture. */
+const ESCAPE = /\u001b\[[0-9;:]*[A-Za-z]/g;
+
+/** A pane line as plain text. */
+const plain = (line: string) => line.replace(ESCAPE, "");
+
+/**
+ * A pane line without its dim runs, as plain text. Both providers draw an
+ * empty input box's placeholder dim: Claude's suggested next prompt and
+ * Codex's "Ask Codex to do anything". Typed text is never dim. A capture
+ * without escape codes has no dim runs, so for it this is `plain`.
+ */
+function typedText(line: string): string {
+  let out = "";
+  let dim = false;
+  let last = 0;
+  for (const match of line.matchAll(ESCAPE)) {
+    if (!dim) out += line.slice(last, match.index);
+    last = match.index + match[0].length;
+    if (!match[0].endsWith("m")) continue;
+    // SGR 2 starts dim; a reset (0 or empty) and 22 end it.
+    for (const code of match[0].slice(2, -1).split(/[;:]/)) {
+      if (code === "2") dim = true;
+      else if (code === "" || code === "0" || code === "22") dim = false;
+    }
+  }
+  if (!dim) out += line.slice(last);
+  return out;
+}
+
+/** What follows a prompt marker on a line, without dim text, trimmed. */
+function promptText(line: string, marker: RegExp): string {
+  const match = new RegExp(`^\\s*${marker.source}\\s?(.*)$`).exec(
+    typedText(line),
+  );
+  return (match?.[1] ?? "").replace(/ /g, " ").trim();
+}
+
 /**
  * The text in Claude's input box, if the pane shows one: the last prompt line
  * under Claude's composer rule. `undefined` when no prompt line is found,
- * which says nothing either way.
+ * which says nothing either way. In a styled capture, Claude's dim prompt
+ * suggestion counts as an empty box.
  */
 export function composerText(screen: string): string | undefined {
   const lines = screen.split(/\r?\n/);
   for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const match = /^\s*[❯>]\s?(.*)$/.exec(lines[index]!);
-    if (match && /^\s*─{8,}/.test(lines[index - 1] ?? ""))
-      return match[1]!.replace(/ /g, " ").trim();
+    const line = lines[index]!;
+    if (
+      /^\s*[❯>]/.test(plain(line)) &&
+      /^\s*─{8,}/.test(plain(lines[index - 1] ?? ""))
+    )
+      return promptText(line, /[❯>]/);
   }
   return undefined;
 }
@@ -43,11 +85,12 @@ export function inputBoxText(
   provider: AgentSession["provider"],
 ): string | undefined {
   if (provider !== "codex") return composerText(screen);
-  if (screen.includes(CODEX_EMPTY_COMPOSER)) return "";
   const lines = screen.split(/\r?\n/);
+  if (lines.some((line) => plain(line).includes(CODEX_EMPTY_COMPOSER)))
+    return "";
   for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const match = /^\s*[›▌]\s?(.*)$/.exec(lines[index]!);
-    if (match) return match[1]!.replace(/ /g, " ").trim();
+    const line = lines[index]!;
+    if (/^\s*[›▌]/.test(plain(line))) return promptText(line, /[›▌]/);
   }
   return undefined;
 }
@@ -63,7 +106,7 @@ export function paneAtPrompt(
 ): boolean {
   return (
     inputBoxText(screen, provider) !== undefined &&
-    !/esc to interrupt/i.test(screen)
+    !/esc to interrupt/i.test(plain(screen))
   );
 }
 
