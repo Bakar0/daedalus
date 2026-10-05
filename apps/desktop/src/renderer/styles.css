@@ -679,10 +679,6 @@ button:not(
 .workspace-sessions .session-card-main time {
   display: none;
 }
-.workspace-sessions .session-archive-list {
-  margin-top: 4px;
-  padding-top: 2px;
-}
 
 /* Compact cards in the left column (#55). The actions are one row in the
    card's top-right corner, and only the title line makes room for them, so
@@ -3366,6 +3362,10 @@ dd {
 }
 .workspace-archive-list {
   margin-top: auto;
+}
+/* The two archives stack at the bottom of the column. */
+.workspace-archive-list + .workspace-archive-list {
+  margin-top: 0;
 }
 .session-archive-list {
   max-height: 280px;

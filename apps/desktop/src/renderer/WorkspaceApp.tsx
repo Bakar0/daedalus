@@ -4722,19 +4722,11 @@ export function WorkspaceApp({
       (session) => session.workspaceId === item.id,
     );
     const liveSessions = itemSessions.filter((session) => !session.archivedAt);
-    // Under every workspace, always: showing it only for the one in focus
-    // moved every workspace below it whenever the focus changed.
-    const archived = itemSessions.filter((session) => session.archivedAt);
     const launches = pendingSessionLaunches(
       sessionLaunches.filter((launch) => launch.workspaceId === item.id),
       itemSessions,
     );
-    if (
-      liveSessions.length === 0 &&
-      launches.length === 0 &&
-      archived.length === 0
-    )
-      return null;
+    if (liveSessions.length === 0 && launches.length === 0) return null;
     return (
       <ReorderGroup
         ids={liveSessions.map((session) => session.id)}
@@ -4770,30 +4762,6 @@ export function WorkspaceApp({
                 {launches.map(renderLaunchCard)}
                 {ordered.map((session) => renderSessionCard(session, reorder))}
               </div>
-              {archived.length > 0 && (
-                <details className="archive-list session-archive-list">
-                  <summary>Archived sessions ({archived.length})</summary>
-                  <div className="item-list">
-                    {archived.map((session) => (
-                      <div className="archived-item" key={session.id}>
-                        <span>
-                          <strong>{sessionName(session)}</strong>
-                          <small>
-                            {session.provider} · archived{" "}
-                            {new Date(session.archivedAt!).toLocaleDateString()}
-                          </small>
-                        </span>
-                        <button
-                          disabled={busy}
-                          onClick={() => void restoreSession(session)}
-                        >
-                          Restore &amp; resume
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </details>
-              )}
             </div>
           );
         }}
@@ -4801,6 +4769,9 @@ export function WorkspaceApp({
     );
   };
 
+  const archivedSessionsInFocus = workspaceSessions.filter(
+    (session) => session.archivedAt,
+  );
   const anyWorkspaceExpanded = activeWorkspaces.some(
     (item) => !collapsedWorkspaceIds.has(item.id),
   );
@@ -5577,6 +5548,41 @@ export function WorkspaceApp({
               );
             })}
           </nav>
+          {/* Archived sessions live at the bottom of the column, not under
+              their workspace: a row that came and went inside the list
+              moved every workspace below it (#55). They are the focused
+              workspace's, or every workspace's in the all scope. */}
+          {archivedSessionsInFocus.length > 0 && (
+            <details className="archive-list workspace-archive-list session-archive-list">
+              <summary>
+                {showingAll || !workspace
+                  ? "Archived sessions"
+                  : `Archived in ${workspace.name}`}{" "}
+                ({archivedSessionsInFocus.length})
+              </summary>
+              <div className="item-list">
+                {archivedSessionsInFocus.map((session) => (
+                  <div className="archived-item" key={session.id}>
+                    <span>
+                      <strong>{sessionName(session)}</strong>
+                      <small>
+                        {showingAll &&
+                          `${workspaceById.get(session.workspaceId)?.slug ?? session.workspaceId} · `}
+                        {session.provider} · archived{" "}
+                        {new Date(session.archivedAt!).toLocaleDateString()}
+                      </small>
+                    </span>
+                    <button
+                      disabled={busy}
+                      onClick={() => void restoreSession(session)}
+                    >
+                      Restore &amp; resume
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
           {archivedWorkspaces.length > 0 && (
             <details className="archive-list workspace-archive-list">
               <summary>
