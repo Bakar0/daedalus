@@ -598,7 +598,7 @@ describe("desktop application shell", () => {
       );
     });
 
-    test("archived sessions are offered only under the workspace in focus", () => {
+    test("every workspace offers its own archived sessions", () => {
       const withArchived: DesktopSnapshotDto = {
         ...two,
         agents: [
@@ -613,26 +613,17 @@ describe("desktop application shell", () => {
           },
         ],
       };
-      const html = renderToStaticMarkup(
-        <App injectedClient={client} initialSnapshot={withArchived} />,
-      );
-      // Alpha is the selected workspace; Beta's archive stays out of sight.
-      expect(html.match(/Archived sessions \(1\)/g)?.length).toBe(1);
-      const archive = html.indexOf("Archived sessions (1)");
-      expect(archive).toBeGreaterThan(
-        html.indexOf('aria-label="Sessions in Alpha"'),
-      );
-      expect(archive).toBeLessThan(
-        html.indexOf('aria-label="Sessions in Beta"'),
-      );
-      const all = renderToStaticMarkup(
-        <App
-          injectedClient={client}
-          initialScope="all"
-          initialSnapshot={withArchived}
-        />,
-      );
-      expect(all).not.toContain("Archived sessions");
+      // Whatever is in focus, so the list never shifts when focus moves.
+      for (const scope of ["workspace", "all"] as const) {
+        const html = renderToStaticMarkup(
+          <App
+            injectedClient={client}
+            initialScope={scope}
+            initialSnapshot={withArchived}
+          />,
+        );
+        expect(html.match(/Archived sessions \(1\)/g)?.length).toBe(2);
+      }
     });
 
     test("every workspace at once has no session view", () => {

@@ -4722,11 +4722,9 @@ export function WorkspaceApp({
       (session) => session.workspaceId === item.id,
     );
     const liveSessions = itemSessions.filter((session) => !session.archivedAt);
-    // Archived sessions are only offered for the workspace in focus.
-    const archived =
-      !showingAll && item.id === workspaceId
-        ? itemSessions.filter((session) => session.archivedAt)
-        : [];
+    // Under every workspace, always: showing it only for the one in focus
+    // moved every workspace below it whenever the focus changed.
+    const archived = itemSessions.filter((session) => session.archivedAt);
     const launches = pendingSessionLaunches(
       sessionLaunches.filter((launch) => launch.workspaceId === item.id),
       itemSessions,
