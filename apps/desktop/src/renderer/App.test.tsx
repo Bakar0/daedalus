@@ -2257,6 +2257,14 @@ describe("session status indicators", () => {
     expect(html.indexOf(`data-session-id="${liveSession.id}"`)).toBeLessThan(
       html.indexOf(`data-session-id="${blocked.id}"`),
     );
+    // Only the card that needs you offers to dismiss it, from the card.
+    expect(
+      html.match(/class="session-card-action session-attention-dismiss"/g)
+        ?.length,
+    ).toBe(1);
+    expect(html.indexOf("session-attention-dismiss")).toBeGreaterThan(
+      html.indexOf(`data-session-id="${blocked.id}"`),
+    );
   });
 
   test("renders queued toasts and never more than the cap", () => {

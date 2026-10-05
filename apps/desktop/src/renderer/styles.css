@@ -785,10 +785,20 @@ button:not(
   padding-right: 26px;
 }
 .workspace-sessions
-  .session-card:has([aria-label^="Revive"])
+  .session-card:is(
+    :has([aria-label^="Revive"]),
+    :has(.session-attention-dismiss)
+  )
   .session-card-main
   strong {
   padding-right: 50px;
+}
+/* In the alert's own color, so it reads as answering it. */
+.workspace-sessions .session-attention-dismiss {
+  color: #ff8987 !important;
+}
+.workspace-sessions .session-attention-dismiss:hover:not(:disabled) {
+  background: rgb(255 130 130 / 0.14) !important;
 }
 /* Hand off and archive come in on hover, over the end of the name. A
    requested handoff stays visible until the successor takes over. */

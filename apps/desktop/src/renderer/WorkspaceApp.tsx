@@ -508,6 +508,27 @@ function PanelCollapseButton({
   );
 }
 
+/** A bell struck through: the alert is seen, stop asking. */
+function DismissAlertIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="dismiss-alert-icon"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <path d="M9 3.6A6 6 0 0 1 18 8.5c0 3 .6 5 1.4 6.5" />
+      <path d="M16.5 17.5H4s2.5-2 2.5-8a6 6 0 0 1 .4-2.1" />
+      <path d="M10 20.5a2.3 2.3 0 0 0 4 0" />
+      <path d="M3 3l18 18" />
+    </svg>
+  );
+}
+
 /** A baton passing forward: the work continues with someone new. */
 function HandoffIcon() {
   return (
@@ -4672,6 +4693,20 @@ export function WorkspaceApp({
           >
             <ArchiveIcon />
           </button>
+          {/* Only while something the agent or its pane raised is open: a
+              lost session needs reviving, not dismissing. */}
+          {statusView.reasons.length > 0 && (
+            <button
+              aria-label={`Dismiss ${sessionName(session)}'s needs-you alert`}
+              className="session-card-action session-attention-dismiss"
+              disabled={busy}
+              onClick={() => void clearAttention(session.id)}
+              title="Dismiss: mark the alert as seen"
+              type="button"
+            >
+              <DismissAlertIcon />
+            </button>
+          )}
           {/* Last, so hand off and archive open to its left on hover. */}
           <SessionMenu
             color={session.color}
