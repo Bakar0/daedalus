@@ -1709,6 +1709,49 @@ button:not(
   min-height: 0;
   overflow: hidden;
 }
+/* A hovered link only looks clickable while Cmd is held. The underline is
+   .terminal-link-layer's, so xterm's own is undone: its DOM renderer draws it
+   as an inline text-decoration that turns any line on the cell solid, so a
+   cell with no underline of its own loses it, and one with an
+   xterm-underline-* class, as xterm gives every OSC 8 link, gets back its own
+   style. */
+.terminal .xterm-rows span[style*="underline"] {
+  text-decoration-line: none !important;
+}
+.terminal .xterm-rows span[style*="underline"][class*="xterm-underline-"] {
+  text-decoration-line: underline !important;
+}
+.terminal .xterm-rows span[style*="underline"].xterm-underline-2 {
+  text-decoration-style: double !important;
+}
+.terminal .xterm-rows span[style*="underline"].xterm-underline-3 {
+  text-decoration-style: wavy !important;
+}
+.terminal .xterm-rows span[style*="underline"].xterm-underline-4 {
+  text-decoration-style: dotted !important;
+}
+.terminal .xterm-rows span[style*="underline"].xterm-underline-5 {
+  text-decoration-style: dashed !important;
+}
+.terminal-link-layer {
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 5;
+}
+.terminal-link-layer > div {
+  border-bottom: 1px solid #8ed6c3;
+  position: absolute;
+}
+.terminal:not(.links-armed) .xterm.xterm-cursor-pointer {
+  cursor: text;
+}
+.terminal:not(.links-armed) .xterm.enable-mouse-events.xterm-cursor-pointer {
+  cursor: default;
+}
+.terminal:not(.links-armed) .xterm .xterm-cursor-pointer {
+  cursor: inherit;
+}
 .terminal-status {
   align-items: center;
   background: #111728;
