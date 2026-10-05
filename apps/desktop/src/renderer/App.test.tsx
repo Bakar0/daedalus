@@ -598,6 +598,43 @@ describe("desktop application shell", () => {
       );
     });
 
+    test("archived sessions are offered only under the workspace in focus", () => {
+      const withArchived: DesktopSnapshotDto = {
+        ...two,
+        agents: [
+          ...two.agents,
+          {
+            ...session("s-a-old", "alpha", "a-1"),
+            archivedAt: "2026-09-04T00:00:00.000Z",
+          },
+          {
+            ...session("s-b-old", "beta", "b-1"),
+            archivedAt: "2026-09-04T00:00:00.000Z",
+          },
+        ],
+      };
+      const html = renderToStaticMarkup(
+        <App injectedClient={client} initialSnapshot={withArchived} />,
+      );
+      // Alpha is the selected workspace; Beta's archive stays out of sight.
+      expect(html.match(/Archived sessions \(1\)/g)?.length).toBe(1);
+      const archive = html.indexOf("Archived sessions (1)");
+      expect(archive).toBeGreaterThan(
+        html.indexOf('aria-label="Sessions in Alpha"'),
+      );
+      expect(archive).toBeLessThan(
+        html.indexOf('aria-label="Sessions in Beta"'),
+      );
+      const all = renderToStaticMarkup(
+        <App
+          injectedClient={client}
+          initialScope="all"
+          initialSnapshot={withArchived}
+        />,
+      );
+      expect(all).not.toContain("Archived sessions");
+    });
+
     test("every workspace at once has no session view", () => {
       const html = renderToStaticMarkup(
         <App

@@ -4216,7 +4216,9 @@ export function WorkspaceApp({
     // satisfied by a session the user never opened. Switching workspaces is
     // not an intent to type into whatever is restored.
     clearSessionFocusRequest();
-    setView(preferredWorkspaceView(rememberedWorkspaceView(id)));
+    // A workspace's card opens its board; its sessions are listed right
+    // under the card (#55).
+    setView("board");
   }
 
   /** The card above the workspaces: every workspace's board and sessions. */
@@ -4720,7 +4722,11 @@ export function WorkspaceApp({
       (session) => session.workspaceId === item.id,
     );
     const liveSessions = itemSessions.filter((session) => !session.archivedAt);
-    const archived = itemSessions.filter((session) => session.archivedAt);
+    // Archived sessions are only offered for the workspace in focus.
+    const archived =
+      !showingAll && item.id === workspaceId
+        ? itemSessions.filter((session) => session.archivedAt)
+        : [];
     const launches = pendingSessionLaunches(
       sessionLaunches.filter((launch) => launch.workspaceId === item.id),
       itemSessions,
@@ -5316,35 +5322,7 @@ export function WorkspaceApp({
       <div className={`workspace-shell mode-${view}`}>
         <aside className="workspace-column">
           <div className="section-heading workspace-column-heading">
-            {/* Fold-all sits in line with each workspace's own arrow. */}
             <div className="workspace-column-title">
-              {activeWorkspaces.length > 0 && (
-                <button
-                  aria-label={
-                    anyWorkspaceExpanded
-                      ? "Collapse all session lists"
-                      : "Expand all session lists"
-                  }
-                  className="quiet workspace-fold-all"
-                  onClick={() =>
-                    setCollapsedWorkspaceIds(
-                      anyWorkspaceExpanded
-                        ? new Set(activeWorkspaces.map((item) => item.id))
-                        : new Set(),
-                    )
-                  }
-                  title={anyWorkspaceExpanded ? "Collapse all" : "Expand all"}
-                  type="button"
-                >
-                  <svg aria-hidden="true" viewBox="0 0 16 16">
-                    {anyWorkspaceExpanded ? (
-                      <path d="M5 2.5l3 3 3-3M5 13.5l3-3 3 3" />
-                    ) : (
-                      <path d="M5 5.5l3-3 3 3M5 10.5l3 3 3-3" />
-                    )}
-                  </svg>
-                </button>
-              )}
               <h1>Workspaces</h1>
             </div>
             <div className="panel-heading-actions">
@@ -5375,6 +5353,35 @@ export function WorkspaceApp({
                 </div>
               )}
             {allWorkspacesCard}
+            {/* Under All workspaces, its arrow in line with each
+                workspace's own. */}
+            {activeWorkspaces.length > 0 && (
+              <button
+                aria-label={
+                  anyWorkspaceExpanded
+                    ? "Collapse all session lists"
+                    : "Expand all session lists"
+                }
+                className="quiet workspace-fold-all"
+                onClick={() =>
+                  setCollapsedWorkspaceIds(
+                    anyWorkspaceExpanded
+                      ? new Set(activeWorkspaces.map((item) => item.id))
+                      : new Set(),
+                  )
+                }
+                type="button"
+              >
+                <svg aria-hidden="true" viewBox="0 0 16 16">
+                  {anyWorkspaceExpanded ? (
+                    <path d="M5 2.5l3 3 3-3M5 13.5l3-3 3 3" />
+                  ) : (
+                    <path d="M5 5.5l3-3 3 3M5 10.5l3 3 3-3" />
+                  )}
+                </svg>
+                {anyWorkspaceExpanded ? "Collapse all" : "Expand all"}
+              </button>
+            )}
             {orderedWorkspaces.map((item) => {
               const itemSessions = (snapshot?.agents ?? []).filter(
                 (session) =>
