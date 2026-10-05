@@ -1352,6 +1352,35 @@ try {
     "the Daedalus board again",
   );
 
+  // A workspace's card opens its board, even when that workspace was last
+  // left on one of its sessions: open an Atlas session, go to Daedalus, then
+  // click Atlas.
+  step = "workspace click opens the board";
+  const workspaceItem = (name: string) =>
+    `[...document.querySelectorAll('.workspace-group .workspace-item')].find((item) => item.querySelector('.workspace-card-name span')?.textContent === '${name}')`;
+  await evaluate(
+    "document.querySelector('[aria-label=\"Sessions in Atlas\"] .session-card-main').click()",
+  );
+  await waitFor(
+    "document.querySelector('.workspace-shell.mode-session')",
+    "an Atlas session",
+  );
+  await evaluate(`${workspaceItem("Daedalus")}.click()`);
+  await waitFor(
+    "document.querySelector('.workspace-shell.mode-board') && document.querySelector('.workspace-main-header h1')?.textContent === 'Daedalus'",
+    "the Daedalus board after leaving an Atlas session",
+  );
+  await evaluate(`${workspaceItem("Atlas")}.click()`);
+  await waitFor(
+    "document.querySelector('.workspace-shell.mode-board') && document.querySelector('.workspace-main-header h1')?.textContent === 'Atlas'",
+    "the Atlas board, not its last session",
+  );
+  await evaluate(`${workspaceItem("Daedalus")}.click()`);
+  await waitFor(
+    "document.querySelector('.board-detail-column') && document.querySelector('.workspace-main-header h1')?.textContent === 'Daedalus'",
+    "the Daedalus board again",
+  );
+
   step = "compact width";
   await evaluate(
     "[...document.querySelectorAll('.app-mode-switcher button')].find((b) => b.textContent === 'Board').click()",
