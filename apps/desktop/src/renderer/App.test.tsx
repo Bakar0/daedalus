@@ -419,7 +419,8 @@ describe("desktop application shell", () => {
     expect(html).not.toContain("No session selected");
     expect(html).toContain("No workspaces yet");
     expect(html).toContain('aria-label="Create workspace"');
-    expect(html).toContain('class="create-button"');
+    // A plain + like a workspace's own new-session button (#55).
+    expect(html).toContain('class="quiet workspace-heading-create"');
     expect(html).toContain('aria-label="Open settings"');
     expect(html).toContain('src="/daedalus-app-icon.png"');
     expect(html).not.toContain('class="brand-mark">D');

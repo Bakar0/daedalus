@@ -600,13 +600,39 @@ button:not(
 .workspace-disclosure:disabled {
   visibility: hidden;
 }
-.workspace-fold-all {
+/* The column's heading: one short row right above the list. */
+.workspace-column:not(.panel-compact) {
+  padding-top: 14px;
+}
+.workspace-column-heading {
+  margin-bottom: 6px;
+  min-height: 26px;
+}
+.workspace-column-heading h1 {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+.workspace-column-heading .panel-heading-actions {
+  gap: 1px;
+}
+.workspace-fold-all,
+.workspace-heading-create,
+.workspace-column-heading .panel-collapse-button {
   align-items: center;
   display: flex;
-  height: 28px;
+  flex: none;
+  height: 24px;
   justify-content: center;
   padding: 0 !important;
-  width: 28px;
+  width: 24px;
+}
+.workspace-heading-create {
+  font-size: 17px !important;
+  line-height: 1;
+}
+.workspace-column-heading .panel-collapse-button {
+  font-size: 16px !important;
 }
 .workspace-fold-all svg {
   fill: none;
@@ -692,7 +718,32 @@ button:not(
   padding: 6px 8px !important;
 }
 .workspace-sessions .session-card-main strong {
-  padding-right: 72px;
+  /* Room for the … menu, the one action always showing. */
+  padding-right: 26px;
+}
+.workspace-sessions
+  .session-card:has([aria-label^="Revive"])
+  .session-card-main
+  strong {
+  padding-right: 50px;
+}
+/* Hand off and archive come in on hover, over the end of the name. A
+   requested handoff stays visible until the successor takes over. */
+.workspace-sessions .session-card-hover-action {
+  display: none !important;
+}
+.workspace-sessions
+  .session-card:is(:hover, :focus-within)
+  .session-card-hover-action,
+.workspace-sessions .session-handoff-action[data-handoff-requested] {
+  display: flex !important;
+}
+.workspace-sessions
+  .session-card:is(:hover, :focus-within)
+  > .workspace-card-actions {
+  background: var(--elevated);
+  border-radius: 6px;
+  box-shadow: 0 0 0 1px var(--line);
 }
 .workspace-sessions .session-card-main > span:last-child {
   gap: 1px;
@@ -3487,6 +3538,7 @@ dd {
 }
 .workspace-column.panel-compact .section-heading > div:first-child,
 .workspace-column.panel-compact .create-button,
+.workspace-column.panel-compact .workspace-heading-create,
 .workspace-column.panel-compact .workspace-card-content,
 .workspace-column.panel-compact .workspace-card-actions,
 .workspace-column.panel-compact .workspace-archive-list,

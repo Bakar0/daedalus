@@ -72,7 +72,6 @@ import {
   AgentStatusDot,
   compactTokenLabel,
   lifecycleTone,
-  CreateButton,
   providerLabel,
   SessionLaunchIcon,
   sessionConfiguredModel,
@@ -4628,7 +4627,7 @@ export function WorkspaceApp({
             (session.provider === "claude" || session.provider === "codex") && (
               <button
                 aria-label={`Continue ${sessionName(session)} in a new agent`}
-                className="session-card-action session-handoff-action"
+                className="session-card-action session-card-hover-action session-handoff-action"
                 data-handoff-requested={
                   session.handoffRequestedAt ? "true" : undefined
                 }
@@ -4648,7 +4647,7 @@ export function WorkspaceApp({
             )}
           <button
             aria-label={`Archive ${sessionName(session)} session`}
-            className="session-card-action"
+            className="session-card-action session-card-hover-action"
             onClick={() => setSessionAction({ session })}
             title={
               holdsRoutines
@@ -5313,9 +5312,8 @@ export function WorkspaceApp({
         <aside
           className={`workspace-column ${workspacePanelWidth < PANEL_COMPACT_THRESHOLD ? "panel-compact" : ""}`}
         >
-          <div className="section-heading">
+          <div className="section-heading workspace-column-heading">
             <div>
-              <span className="eyebrow">Projects</span>
               <h1>Workspaces</h1>
             </div>
             <div className="panel-heading-actions">
@@ -5346,10 +5344,15 @@ export function WorkspaceApp({
                   </svg>
                 </button>
               )}
-              <CreateButton
-                label="Create workspace"
+              <button
+                aria-label="Create workspace"
+                className="quiet workspace-heading-create"
                 onClick={() => setModal("workspace")}
-              />
+                title="New workspace"
+                type="button"
+              >
+                +
+              </button>
               <PanelCollapseButton
                 collapsed={workspacePanelWidth < PANEL_COMPACT_THRESHOLD}
                 label="workspace"
@@ -5370,7 +5373,7 @@ export function WorkspaceApp({
               archivedWorkspaces.length === 0 && (
                 <div className="empty large">
                   <strong>No workspaces yet</strong>
-                  <span>Use New to create one.</span>
+                  <span>Use + to create one.</span>
                 </div>
               )}
             {allWorkspacesCard}
