@@ -54,6 +54,7 @@ import type { DesktopClient } from "./client-types";
 import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import { UpdateBanner } from "./UpdateBanner";
 import { runWithConcurrency } from "./concurrency";
+import { wholeLinkRows, type LinkRange } from "./terminal-links";
 import { repositoryFuzzyScore } from "./repository-search";
 import { ReorderGroup } from "./ReorderGroup";
 import { useListReorder, type ReorderHandles } from "./use-list-reorder";
@@ -1296,6 +1297,60 @@ function TerminalSurface({
       if (frame === undefined) frame = requestAnimationFrame(drain);
     };
 
+    // A link looks clickable only while Cmd is held, as in iTerm2. The
+    // underline is drawn here rather than by xterm, which underlines only the
+    // row under the mouse when a program broke a long URL across rows.
+    let linksArmed = false;
+    let hoveredLink: { url: string; range: LinkRange } | undefined;
+    const linkLayer = document.createElement("div");
+    linkLayer.className = "terminal-link-layer";
+    const drawLink = () => {
+      linkLayer.replaceChildren();
+      const screen = linkLayer.parentElement;
+      if (!linksArmed || !hoveredLink || !terminal || !screen) return;
+      const buffer = terminal.buffer.active;
+      const cellWidth = screen.clientWidth / terminal.cols;
+      const cellHeight = screen.clientHeight / terminal.rows;
+      for (const row of wholeLinkRows(
+        hoveredLink.url,
+        hoveredLink.range,
+        terminal.cols,
+        (y) => buffer.getLine(y - 1)?.translateToString(),
+      )) {
+        const top = row.y - 1 - buffer.viewportY;
+        if (top < 0 || top >= terminal.rows) continue;
+        const line = document.createElement("div");
+        line.style.left = `${(row.x1 - 1) * cellWidth}px`;
+        line.style.top = `${top * cellHeight}px`;
+        line.style.width = `${(row.x2 - row.x1 + 1) * cellWidth}px`;
+        line.style.height = `${cellHeight}px`;
+        linkLayer.append(line);
+      }
+    };
+    const armLinks = (event: KeyboardEvent | MouseEvent) => {
+      if (event.metaKey === linksArmed) return;
+      linksArmed = event.metaKey;
+      container.classList.toggle("links-armed", linksArmed);
+      drawLink();
+    };
+    const disarmLinks = () => {
+      linksArmed = false;
+      container.classList.remove("links-armed");
+      drawLink();
+    };
+    const hoverLink = (_event: MouseEvent, url: string, range: LinkRange) => {
+      hoveredLink = { url, range };
+      drawLink();
+    };
+    const leaveLink = () => {
+      hoveredLink = undefined;
+      drawLink();
+    };
+    window.addEventListener("keydown", armLinks, true);
+    window.addEventListener("keyup", armLinks, true);
+    window.addEventListener("blur", disarmLinks);
+    container.addEventListener("mousemove", armLinks);
+
     void (async () => {
       if (disposed) return;
       terminal = new Terminal({
@@ -1314,6 +1369,8 @@ function TerminalSurface({
           activate: (event, url) => {
             if (event.metaKey) onOpenLink(url);
           },
+          hover: hoverLink,
+          leave: leaveLink,
         },
         // Shell prompts commonly use Nerd Font private-use glyphs. Prefer the
         // user's installed Nerd Font while retaining native monospace fallbacks.
@@ -1333,10 +1390,13 @@ function TerminalSurface({
       const fitAddon = new FitAddon();
       terminal.loadAddon(fitAddon);
       terminal.loadAddon(
-        new WebLinksAddon((event, url) => {
-          event.preventDefault();
-          if (event.metaKey) onOpenLink(url);
-        }),
+        new WebLinksAddon(
+          (event, url) => {
+            event.preventDefault();
+            if (event.metaKey) onOpenLink(url);
+          },
+          { hover: hoverLink, leave: leaveLink },
+        ),
       );
       // How a program in the terminal copies: tmux after a drag in a plain
       // shell, and anything else that writes OSC 52. Only a write is honoured;
@@ -1355,6 +1415,10 @@ function TerminalSurface({
         return true;
       });
       terminal.open(container);
+      container.querySelector(".xterm-screen")?.append(linkLayer);
+      terminal.onRender(() => {
+        if (hoveredLink) drawLink();
+      });
       focusRef.current = () => terminal?.focus();
       inputRef.current = (data) => {
         if (socket?.readyState === WebSocket.OPEN)
@@ -1512,6 +1576,12 @@ function TerminalSurface({
           windowResizeListener,
         );
       }
+      window.removeEventListener("keydown", armLinks, true);
+      window.removeEventListener("keyup", armLinks, true);
+      window.removeEventListener("blur", disarmLinks);
+      container.removeEventListener("mousemove", armLinks);
+      linkLayer.remove();
+      container.classList.remove("links-armed");
       socket?.close();
       terminal?.dispose();
     };
