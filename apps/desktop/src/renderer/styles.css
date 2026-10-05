@@ -618,7 +618,7 @@ button:not(
   width: 14px;
 }
 .workspace-sessions {
-  padding: 4px 0 6px 18px;
+  padding: 3px 0 5px 14px;
 }
 .workspace-sessions .session-grid {
   gap: 4px;
@@ -636,6 +636,89 @@ button:not(
 .workspace-sessions .session-archive-list {
   margin-top: 4px;
   padding-top: 2px;
+}
+
+/* Compact cards in the left column (#55). The actions are one row in the
+   card's top-right corner, and only the title line makes room for them, so
+   every line below it keeps the card's full width. */
+.workspace-group > .workspace-card,
+.workspace-sessions .session-card {
+  position: relative;
+}
+.workspace-group > .workspace-card > .workspace-card-actions,
+.workspace-sessions .session-card > .workspace-card-actions {
+  align-items: center;
+  flex: none;
+  flex-direction: row;
+  gap: 1px;
+  position: absolute;
+  right: 4px;
+  top: 4px;
+}
+.workspace-group .workspace-card-actions .session-card-action,
+.workspace-sessions .workspace-card-actions > .session-card-menu,
+.workspace-sessions .session-card-menu > summary.session-card-action {
+  align-items: center;
+  border-radius: 5px !important;
+  display: flex;
+  flex: none;
+  height: 22px;
+  justify-content: center;
+  min-height: 0;
+  padding: 0 !important;
+  width: 22px;
+}
+.workspace-group .workspace-card-actions svg,
+.workspace-group .session-card-action .archive-icon,
+.workspace-group .session-card-menu > summary svg {
+  height: 14px;
+  width: 14px;
+}
+.workspace-column:not(.panel-compact) .workspace-group .workspace-icon {
+  display: none;
+}
+.workspace-column:not(.panel-compact) .workspace-group .workspace-item {
+  gap: 0;
+  padding: 6px 8px 6px 2px;
+}
+.workspace-group .workspace-card-name {
+  padding-right: 70px;
+}
+.workspace-group .workspace-session-insights {
+  margin-top: 1px;
+}
+.workspace-sessions .session-card-main {
+  gap: 7px;
+  padding: 6px 8px !important;
+}
+.workspace-sessions .session-card-main strong {
+  padding-right: 72px;
+}
+.workspace-sessions .session-card-main > span:last-child {
+  gap: 1px;
+}
+.workspace-sessions .session-kind-icon {
+  height: 18px;
+  width: 18px;
+}
+.workspace-sessions .session-kind-icon svg {
+  height: 16px;
+  width: 16px;
+}
+/* One line each: the status, then what the agent is doing. */
+.workspace-sessions .session-card-main em {
+  min-height: 14px;
+  min-width: 0;
+}
+.workspace-sessions .session-status-label,
+.workspace-sessions .session-status-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-sessions .session-status-detail {
+  display: block;
 }
 .workspace-card-archive,
 .workspace-terminal-action {

@@ -4598,19 +4598,18 @@ export function WorkspaceApp({
             </time>
           </span>
         </button>
-        {session.status === "lost" && (
-          <button
-            aria-label={`Revive ${sessionName(session)} session`}
-            className="session-card-action"
-            data-no-drag
-            disabled={busy}
-            onClick={() => void reviveSession(session)}
-            title="Resume this conversation in a new terminal"
-          >
-            ↻
-          </button>
-        )}
         <span className="workspace-card-actions" data-no-drag>
+          {session.status === "lost" && (
+            <button
+              aria-label={`Revive ${sessionName(session)} session`}
+              className="session-card-action"
+              disabled={busy}
+              onClick={() => void reviveSession(session)}
+              title="Resume this conversation in a new terminal"
+            >
+              ↻
+            </button>
+          )}
           <SessionMenu
             color={session.color}
             name={sessionName(session)}
@@ -5472,11 +5471,11 @@ export function WorkspaceApp({
                             </span>
                           )}
                         </strong>
-                        <small>
-                          {item.available
-                            ? item.slug
-                            : `${item.slug} · folder missing`}
-                        </small>
+                        {/* The slug is in the main header; the card only
+                            speaks up when the folder is gone. */}
+                        {!item.available && (
+                          <small>{item.slug} · folder missing</small>
+                        )}
                         <span
                           aria-label={insightLabel}
                           className="workspace-session-insights"
