@@ -4833,6 +4833,53 @@ export function WorkspaceApp({
     );
   };
 
+  // The focus mark on the column's edge (see `.workspace-column[data-focus]`).
+  // It follows the card through scrolling, folding and every render, and is
+  // written straight to the element so measuring never re-renders the app.
+  const workspaceColumnRef = useRef<HTMLElement>(null);
+  const focusSelector =
+    view === "session"
+      ? ".workspace-sessions .session-card.selected"
+      : ".workspace-group > .workspace-card.selected";
+  useLayoutEffect(() => {
+    const column = workspaceColumnRef.current;
+    const list = column?.querySelector<HTMLElement>(":scope > .item-list");
+    if (!column || !list) return;
+    const place = () => {
+      const card = list.querySelector<HTMLElement>(focusSelector);
+      if (!card) {
+        column.removeAttribute("data-focus");
+        return;
+      }
+      const columnTop = column.getBoundingClientRect().top;
+      const cardBox = card.getBoundingClientRect();
+      const listBox = list.getBoundingClientRect();
+      const top = Math.max(cardBox.top, listBox.top);
+      const bottom = Math.min(cardBox.bottom, listBox.bottom);
+      if (bottom - top < 4) {
+        column.removeAttribute("data-focus");
+        return;
+      }
+      column.style.setProperty("--focus-top", `${top - columnTop}px`);
+      column.style.setProperty("--focus-height", `${bottom - top}px`);
+      column.setAttribute("data-focus", "true");
+    };
+    place();
+    let frame = 0;
+    const schedule = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(place);
+    };
+    list.addEventListener("scroll", schedule, { passive: true });
+    const resize = new ResizeObserver(schedule);
+    resize.observe(list);
+    return () => {
+      cancelAnimationFrame(frame);
+      list.removeEventListener("scroll", schedule);
+      resize.disconnect();
+    };
+  });
+
   const anyWorkspaceExpanded = activeWorkspaces.some(
     (item) => !collapsedWorkspaceIds.has(item.id),
   );
@@ -5350,7 +5397,7 @@ export function WorkspaceApp({
       </div>
 
       <div className={`workspace-shell mode-${view}`}>
-        <aside className="workspace-column">
+        <aside className="workspace-column" ref={workspaceColumnRef}>
           <div className="section-heading workspace-column-heading">
             <div className="workspace-column-title">
               <h1>Workspaces</h1>
