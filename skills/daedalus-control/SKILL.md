@@ -100,7 +100,10 @@ Daedalus can see that a session exists; it cannot see why one is stuck. Tell it.
 - **MUST** run `daedal attention "<reason>"` when you are blocked on the user —
   a decision you cannot make, a question you need answered, an approval you are
   waiting on. Write the reason as the thing the user has to resolve
-  ("Need a decision on the schema"), not as a status ("waiting").
+  ("Need a decision on the schema"), not as a status ("waiting"). Daedalus
+  never reads your reply for questions: one asked only in text shows as done.
+- Do not call it to say you finished. The end of your turn marks the session
+  done on its own.
 - Reasons accumulate on one badge and identical text collapses, so calling it
   again with more context is safe and is the intended use. Repeated calls never
   produce repeated alerts.

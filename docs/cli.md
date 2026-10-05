@@ -411,9 +411,10 @@ and whether Focus mode is on — enough for an agent to choose its own channel
 before pinging. `focus` raises the app and selects a session; it is what a
 clicked notification runs.
 
-Discipline, and it matters more than the mechanism: ping when blocked, or when
-something important finished or broke. Never ping for per-step progress,
-routine tool calls, or anything already on screen.
+Discipline, and it matters more than the mechanism: raise attention when
+blocked on the user, and use `notify` when something worth seeing finished or
+broke. A finished turn is marked `done` without a call. Never ping for
+per-step progress, routine tool calls, or anything already on screen.
 
 ## Repository worktrees
 

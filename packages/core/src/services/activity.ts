@@ -59,6 +59,13 @@ export const ACTIVITY_STALE_AFTER_MS = 10 * 60_000;
 
 const DECAYS: readonly AgentActivity[] = ["working"];
 
+/**
+ * How often a heartbeat may rewrite a reading. The pane is read every five
+ * seconds while a session works; one write a minute is plenty against a
+ * ten-minute decay, and the rest would only churn SQLite and the record file.
+ */
+export const HEARTBEAT_INTERVAL_MS = 60_000;
+
 export interface RecordActivityInput {
   sessionId: string;
   activity: AgentActivity;
@@ -352,6 +359,8 @@ export class ActivityService {
       this.forget(input.sessionId);
       return undefined;
     }
+    if (observation.heartbeat)
+      return this.heartbeat(input.sessionId, observation.ifActivity);
     return this.record({
       sessionId: input.sessionId,
       activity: observation.activity,
@@ -369,9 +378,36 @@ export class ActivityService {
   }
 
   /**
+   * Keeps a reading from decaying without changing it. Not a write in the
+   * ranked sense: it claims nothing new, so it is never outranked, and it
+   * keeps the stored source, detail and `since` exactly as they were.
+   */
+  private async heartbeat(
+    sessionId: string,
+    ifActivity: readonly AgentActivity[] | undefined,
+  ): Promise<ActivityOutcome | undefined> {
+    const stored = this.repositories.findAgentActivity(sessionId);
+    if (!stored || (ifActivity && !ifActivity.includes(stored.activity)))
+      return undefined;
+    const at = this.now();
+    if (at.getTime() - Date.parse(stored.observedAt) < HEARTBEAT_INTERVAL_MS)
+      return undefined;
+    const next: StoredAgentActivity = {
+      ...stored,
+      observedAt: at.toISOString(),
+    };
+    this.repositories.saveAgentActivity(next);
+    const state = publicState(next);
+    await writeActivityRecord(this.home, state).catch(() => undefined);
+    return { state, applied: true, transitioned: false };
+  }
+
+  /**
    * Silence is not evidence of work. A `working` reading with a stale
    * `observedAt` decays to `unknown` rather than being believed forever —
    * the kill -9 case, where the last thing anyone saw was a PreToolUse.
+   * Heartbeats, from subagent hooks and the pane's live timer, keep a long
+   * but healthy turn from getting here.
    */
   async decay(): Promise<AgentActivityState[]> {
     const cutoff = this.now().getTime() - ACTIVITY_STALE_AFTER_MS;
@@ -581,13 +617,14 @@ export class ActivityService {
     const existing = this.repositories.findSessionAttention(sessionId);
     this.clearAttentionRecords(sessionId);
     const stored = this.repositories.findAgentActivity(sessionId);
-    // The block is over, but nothing here knows what the session moved on to.
-    // `unknown` says that honestly; a detector will overwrite it shortly.
+    // The block is over and nobody has given the session anything new, so it
+    // is back to waiting for a prompt. If it carries on working instead, the
+    // next tool hook overwrites this within seconds.
     if (stored && isAttentionActivity(stored.activity)) {
       const now = this.now().toISOString();
       const next: StoredAgentActivity = {
         ...stored,
-        activity: "unknown",
+        activity: "idle",
         detail: null,
         since: now,
         observedAt: now,

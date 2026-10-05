@@ -290,6 +290,8 @@ describe("ActivityService", () => {
       // All-or-nothing: there is no per-reason resolution.
       expect(context.activity.clear(sessionId)).toEqual({ cleared: 2 });
       expect(context.activity.attentionFor(sessionId)).toBeUndefined();
+      // Dismissed, the session is back to waiting for a prompt.
+      expect(context.activity.get(sessionId)?.activity).toBe("idle");
       // Without the purge the badge resurrects when the queue flushes.
       expect(
         context.notifications

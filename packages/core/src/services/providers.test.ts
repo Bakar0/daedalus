@@ -7,6 +7,9 @@ import { saveSkillOverride } from "../config";
 import {
   catalogOffersModel,
   claudeDaedalusSettingsArgs,
+  codexConfigPath,
+  DAEDALUS_STATUS_INSTRUCTIONS,
+  daedalusInstructionArgs,
   ensureCodexHooks,
   isValidModelName,
   modelArgument,
@@ -261,6 +264,67 @@ describe("permissionModeArgs", () => {
 
   test("a provider with no relaxed mode of its own gets nothing", () => {
     expect(permissionModeArgs("custom")).toEqual([]);
+  });
+});
+
+describe("daedalusInstructionArgs", () => {
+  const isolated = async (home: string) =>
+    loadConfig({ DAEDALUS_HOME: home, CODEX_HOME: join(home, "codex") });
+
+  test("Claude is told through --append-system-prompt", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await isolated(home);
+      expect(await daedalusInstructionArgs(config, "claude", ["run"])).toEqual([
+        "run",
+        "--append-system-prompt",
+        DAEDALUS_STATUS_INSTRUCTIONS,
+      ]);
+      // A user's own appended prompt is kept, with ours after it.
+      const joined = await daedalusInstructionArgs(config, "claude", [
+        "--append-system-prompt",
+        "Be terse.",
+      ]);
+      expect(joined).toEqual([
+        "--append-system-prompt",
+        `Be terse.\n\n${DAEDALUS_STATUS_INSTRUCTIONS}`,
+      ]);
+      // A prompt file cannot be joined, so it is left alone.
+      const file = ["--append-system-prompt-file", "/tmp/p.md"];
+      expect(await daedalusInstructionArgs(config, "claude", file)).toEqual(
+        file,
+      );
+    });
+  });
+
+  test("Codex is told through developer_instructions unless the user set it", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await isolated(home);
+      const args = await daedalusInstructionArgs(config, "codex", []);
+      expect(args[0]).toBe("-c");
+      expect(args[1]).toBe(
+        `developer_instructions=${JSON.stringify(DAEDALUS_STATUS_INSTRUCTIONS)}`,
+      );
+      await mkdir(join(home, "codex"), { recursive: true });
+      await writeFile(
+        codexConfigPath(config),
+        'developer_instructions = "Mine."\n',
+      );
+      expect(await daedalusInstructionArgs(config, "codex", ["x"])).toEqual([
+        "x",
+      ]);
+    });
+  });
+
+  test("a spawned session carries them, and a custom command does not", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await isolated(home);
+      const claude = resolveProvider(config, { provider: "claude" });
+      const { args } = await claude.adapter.buildLaunch({});
+      expect(args).toContain(DAEDALUS_STATUS_INSTRUCTIONS);
+      expect(await daedalusInstructionArgs(config, "custom", ["x"])).toEqual([
+        "x",
+      ]);
+    });
   });
 });
 

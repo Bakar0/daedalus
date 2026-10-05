@@ -23,6 +23,7 @@ import {
   catalogOffersModel,
   CLAUDE_DEFAULT_MODEL,
   claudeDaedalusSettingsArgs,
+  daedalusInstructionArgs,
   ensureCodexHooks,
   CODEX_DAEDALUS_TUI_ARGS,
   discoverProviderModels,
@@ -1574,9 +1575,11 @@ export class AgentService {
               );
           }
           args = [
-            ...definition.args,
-            ...CODEX_DAEDALUS_TUI_ARGS,
-            ...(await ensureCodexHooks(this.config, executable)),
+            ...(await daedalusInstructionArgs(this.config, "codex", [
+              ...definition.args,
+              ...CODEX_DAEDALUS_TUI_ARGS,
+              ...(await ensureCodexHooks(this.config, executable)),
+            ])),
             ...modelArgs,
             ...additionalDirectories,
             "resume",
@@ -1587,9 +1590,11 @@ export class AgentService {
           // not persist an empty conversation. Restoring such an archived
           // session correctly starts a new empty native session.
           args = [
-            ...definition.args,
-            ...CODEX_DAEDALUS_TUI_ARGS,
-            ...(await ensureCodexHooks(this.config, executable)),
+            ...(await daedalusInstructionArgs(this.config, "codex", [
+              ...definition.args,
+              ...CODEX_DAEDALUS_TUI_ARGS,
+              ...(await ensureCodexHooks(this.config, executable)),
+            ])),
             ...modelArgs,
             ...additionalDirectories,
           ];
@@ -1602,10 +1607,14 @@ export class AgentService {
             "This session predates native resume support and cannot be resumed safely",
           );
         args = [
-          ...(await claudeDaedalusSettingsArgs(
+          ...(await daedalusInstructionArgs(
             this.config,
-            definition.args,
-            agent.id,
+            "claude",
+            await claudeDaedalusSettingsArgs(
+              this.config,
+              definition.args,
+              agent.id,
+            ),
           )),
           ...modelArgs,
           ...additionalDirectories,

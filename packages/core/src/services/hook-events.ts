@@ -31,6 +31,13 @@ export interface ActivityObservation {
   authoritative?: boolean;
   /** Drops the record entirely; lifecycle takes over from here. */
   clear?: boolean;
+  /**
+   * Evidence that the stored activity is still true, not a new reading. It
+   * refreshes the timestamp the ten-minute decay reads and changes nothing
+   * else: not the activity, the detail line, or the source. Applies only when
+   * the stored activity is in `ifActivity`.
+   */
+  heartbeat?: boolean;
 }
 
 /**
@@ -45,6 +52,14 @@ const ATTENTION: readonly AgentActivity[] = ["needs_permission", "needs_input"];
  * abandoned turn reports idle while the next turn is already working.
  */
 const RUNNING: readonly AgentActivity[] = ["working", "unknown", "error"];
+
+/**
+ * What a turn's end may replace: a running turn, or an `idle` the pane set a
+ * moment earlier. The pane is polled and `Stop` is an async hook, so the pane
+ * can see the new `done` line first. Claude fires no `Stop` for an interrupted
+ * turn, so this cannot turn an interrupt into `done`.
+ */
+const TURN_END: readonly AgentActivity[] = [...RUNNING, "idle"];
 
 const MAX_DETAIL = 120;
 
@@ -122,9 +137,10 @@ export function askSummary(toolInput: unknown): string | undefined {
 }
 
 /**
- * Subagent chatter is deliberately invisible. A parent that flips to working
- * every time a subagent picks up a tool tells the user nothing they did not
- * already know, and hides the parent's real state while it does.
+ * Subagent chatter never changes what the parent shows. A parent that flips to
+ * working every time a subagent picks up a tool tells the user nothing they did
+ * not already know, and hides the parent's real state while it does. Claude
+ * still counts it as a heartbeat for a parent already `working`.
  */
 const isSubagentPayload = (payload: Record<string, unknown>): boolean =>
   Boolean(text(payload.agent_id) ?? text(payload.agent_type)) ||
@@ -142,6 +158,17 @@ const isSubagentPayload = (payload: Record<string, unknown>): boolean =>
  * the idle alert, which is the behaviour from before this existed.
  */
 export const BACKGROUND_AGENT_MAX_AGE_MS = 3 * 60 * 60_000;
+
+/**
+ * The detail on a turn that ended with background agents still out. Delivery
+ * reads it to know the session is really at its prompt, so both sides go
+ * through these two rather than each spelling the wording.
+ */
+export const backgroundWaitDetail = (count: number): string =>
+  `Waiting for ${count} background agent${count === 1 ? "" : "s"}`;
+
+export const isBackgroundWait = (detail: string | null | undefined): boolean =>
+  /^Waiting for \d+ background agents?$/.test(detail ?? "");
 
 /** The entries a background agent's report arrives in; see below. */
 const TASK_ID = /<task-id>([^<]+)<\/task-id>/g;
@@ -230,6 +257,34 @@ export function pendingBackgroundAgents(
 export interface ClaudeHookContext {
   /** Background agents still out, from `pendingBackgroundAgents`. */
   backgroundAgents?: number;
+  /**
+   * The session holds routines. It sits at its prompt after every run, and a
+   * run ending is not a result to review, so its turns end `idle`.
+   */
+  routines?: boolean;
+}
+
+/**
+ * Where a turn that finished on its own lands: `done`, a result to look at.
+ *
+ * The final message is deliberately not read for questions. Telling "here is
+ * what I did" from "what should I do?" in free text is a guess, and a wrong
+ * Needs me teaches people to ignore it. An agent that needs the user says so
+ * through a structured channel (`AskUserQuestion`, `request_user_input`, a
+ * permission dialog, or `daedal attention`), and only those raise the badge.
+ */
+function turnEnded(
+  payload: Record<string, unknown>,
+  source: AgentActivitySource,
+  routines: boolean,
+): ActivityObservation {
+  const last = text(payload.last_assistant_message);
+  return {
+    activity: routines ? "idle" : "done",
+    source,
+    ...(last ? { detail: shorten(last) } : {}),
+    ifActivity: TURN_END,
+  };
 }
 
 /**
@@ -243,7 +298,17 @@ export function observeClaudeHook(
   payload: Record<string, unknown>,
   context: ClaudeHookContext = {},
 ): ActivityObservation | undefined {
-  if (isSubagentPayload(payload)) return undefined;
+  // A subagent's own events never change what the parent shows, but they are
+  // proof the parent's turn is alive. A foreground subagent can run for half
+  // an hour while the parent fires nothing, and without this the parent
+  // decays to `unknown` in the middle of it.
+  if (isSubagentPayload(payload))
+    return {
+      activity: "working",
+      source: "hook",
+      heartbeat: true,
+      ifActivity: ["working"],
+    };
   const source: AgentActivitySource = "hook";
   const toolName = text(payload.tool_name);
   const tool = summarizeTool(toolName, payload.tool_input);
@@ -302,15 +367,11 @@ export function observeClaudeHook(
                 ifNotActivity: ["needs_input"],
               };
         case "idle_prompt":
-          // Claude sends this after a minute at the prompt, including while
-          // it waits for its own background agents. That wait ends without
-          // the user, so it is not a question and must not raise the badge.
-          if (background > 0) return undefined;
-          return {
-            activity: "needs_input",
-            source,
-            detail: shorten(message ?? "Waiting for your answer"),
-          };
+          // Claude sends this after a minute at the prompt, whatever the turn
+          // ended with: a question, a finished result, or its own background
+          // agents. `Stop` already told those apart when the turn ended, so
+          // this says nothing new and must not overwrite it.
+          return undefined;
         case "agent_needs_input":
           return {
             activity: "needs_input",
@@ -334,16 +395,10 @@ export function observeClaudeHook(
         return {
           activity: "working",
           source,
-          detail: `Waiting for ${background} background agent${background === 1 ? "" : "s"}`,
+          detail: backgroundWaitDetail(background),
           ifActivity: RUNNING,
         };
-      const last = text(payload.last_assistant_message);
-      return {
-        activity: "idle",
-        source,
-        ...(last ? { detail: shorten(last) } : {}),
-        ifActivity: RUNNING,
-      };
+      return turnEnded(payload, source, Boolean(context.routines));
     }
     case "StopFailure":
       return {
@@ -368,6 +423,7 @@ export function observeClaudeHook(
 export function observeCodexHook(
   event: string,
   payload: Record<string, unknown>,
+  context: Pick<ClaudeHookContext, "routines"> = {},
 ): ActivityObservation | undefined {
   if (isSubagentPayload(payload)) return undefined;
   const source: AgentActivitySource = "hook";
@@ -407,15 +463,8 @@ export function observeCodexHook(
     case "PreCompact":
     case "PostCompact":
       return { activity: "working", source, detail: "Compacting context" };
-    case "Stop": {
-      const last = text(payload.last_assistant_message);
-      return {
-        activity: "idle",
-        source,
-        ...(last ? { detail: shorten(last) } : {}),
-        ifActivity: RUNNING,
-      };
-    }
+    case "Stop":
+      return turnEnded(payload, source, Boolean(context.routines));
     case "Interrupt":
       // Codex's Interrupt has no Claude equivalent. The turn is over and
       // nothing is blocked, so it retracts a badge the way a new prompt does.
@@ -434,8 +483,9 @@ export function observeCodexHook(
  * Approvals never reach the rollout, so this tier genuinely cannot report
  * `needs_permission`. That limitation is the whole reason hooks are the
  * primary path, and reporting `working` for a session that is actually waiting
- * would be the worst outcome available — hence `task_complete` maps to `idle`
- * and never to `done`. "The turn ended" is not "the work is finished".
+ * would be the worst outcome available. `task_complete` maps to `done`, the
+ * same as the `Stop` hook, so a session reads the same whichever tier saw the
+ * turn end.
  */
 export function observeCodexRollout(
   text_: string,
@@ -474,7 +524,7 @@ export function observeCodexRollout(
       };
     if (kind === "task_complete")
       return {
-        activity: "idle",
+        activity: "done",
         source,
         ...(detail ? { detail } : {}),
         ifActivity: RUNNING,
@@ -586,6 +636,22 @@ const CLAUDE_PANE_INTERRUPTED = /^\s*⎿\s+Interrupted\b/;
 const CLAUDE_PANE_BUSY = /^\S .*\((?:\d+h\s*)?(?:\d+m\s*)?\d+s\b[^)]*\)$/;
 
 /**
+ * The spinner in the half second before its timer is drawn: "✻ Schlepping…".
+ * Without this the scan read past it to the previous turn's `done` line and
+ * retracted a turn that had only just started.
+ */
+const CLAUDE_PANE_SPINNER = /^\S \S+…$/;
+
+/**
+ * A prompt the user submitted, as Claude echoes it into the transcript. The
+ * input box draws the same `❯ text`, but always directly under a rule, so a
+ * line that is not under one is the echo. Anything above it, a `done` line
+ * included, belongs to an earlier turn.
+ */
+const CLAUDE_PANE_PROMPT = /^❯ \S/;
+const CLAUDE_PANE_RULE = /^─/;
+
+/**
  * "✻ Waiting for 1 background agent to finish": the turn has ended, but the
  * session resumes by itself when the agent reports. That is still work, so it
  * stops the scan the way a live timer does rather than letting it read past to
@@ -603,10 +669,11 @@ const CLAUDE_PANE_BACKGROUND =
  * then the sole evidence that the turn is over, and it is unambiguous — a
  * finished turn says `done`, a live one is still counting.
  *
- * It may only ever *retract* a `working` reading, never create one. A stale or
- * misread pane that could invent work, or speak for a session blocked on the
- * user, is the failure this tier is ranked lowest to avoid; retracting a
- * `working` that no hook is coming to retract is the one thing it can do that
+ * It may only *retract* a `working` reading or keep one alive, never create
+ * one. A stale or misread pane that could invent work, or speak for a session
+ * blocked on the user, is the failure this tier is ranked lowest to avoid.
+ * Retracting a `working` that no hook is coming to retract, and vouching for
+ * one that no hook is coming to refresh, are the two things it can do that
  * nothing else can.
  */
 export function observeClaudePane(
@@ -617,20 +684,44 @@ export function observeClaudePane(
     const line = lines[index]!.trimEnd();
     // A live timer is the newest word on the turn: whatever sits above it is
     // older, so the scan stops rather than reading past it to a stale `done`.
-    if (CLAUDE_PANE_BUSY.test(line) || CLAUDE_PANE_BACKGROUND.test(line))
-      return undefined;
+    // It is also the best proof of work there is, for a long tool call or a
+    // long answer that fires no hook for minutes, so it keeps `working` alive.
+    if (
+      CLAUDE_PANE_BUSY.test(line) ||
+      CLAUDE_PANE_SPINNER.test(line) ||
+      CLAUDE_PANE_BACKGROUND.test(line)
+    )
+      return {
+        activity: "working",
+        source: "pane",
+        heartbeat: true,
+        ifActivity: ["working"],
+      };
     const interrupted = CLAUDE_PANE_INTERRUPTED.test(line);
     if (interrupted || CLAUDE_PANE_DONE.test(line))
       return {
+        // `idle`, not `done`, even for a `done` line. A turn that really
+        // finished fired `Stop`, which already said `done`; the pane is only
+        // still reading `working` here when no hook came. That is an escape
+        // before the first token, which leaves the *previous* turn's `done`
+        // line as the newest one on screen.
         activity: "idle",
         source: "pane",
-        // A `done` line cannot say *why* the turn ended, so it says nothing.
-        // The interrupt line can, and matches what the transcript tier calls
-        // the same event.
+        // The interrupt line says why, and matches what the transcript tier
+        // calls the same event. A `done` line cannot.
         ...(interrupted ? { detail: "Interrupted" } : {}),
         ifActivity: ["working"],
         authoritative: true,
       };
+    // A submitted prompt with no `done` or interrupt below it is a turn in
+    // progress, typically while its answer streams and no status line shows.
+    // An instant escape never gets here: Claude puts the prompt back in the
+    // input box rather than leaving it echoed above.
+    if (
+      CLAUDE_PANE_PROMPT.test(line) &&
+      !CLAUDE_PANE_RULE.test(lines[index - 1] ?? "")
+    )
+      return undefined;
   }
   return undefined;
 }

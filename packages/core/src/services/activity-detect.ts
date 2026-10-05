@@ -198,8 +198,8 @@ export async function sweepProviderActivity(input: {
               input.repositories,
             );
       // The pane is asked only when the cheaper tiers had nothing and the
-      // session is still reading `working` — the one state it may retract,
-      // and the one an instant escape leaves behind.
+      // session is still reading `working`: the one state it may retract or
+      // keep alive, and the one an instant escape leaves behind.
       if (
         !observation &&
         input.tmux &&

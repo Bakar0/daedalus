@@ -186,6 +186,69 @@ export const codexConfigPath = (config: DaedalusConfig): string =>
   join(dirname(config.codexSessionsDirectory), "config.toml");
 
 /**
+ * What every agent is told at launch about reporting its own state.
+ *
+ * Daedalus raises Needs me only from structured signals, never from reading
+ * the agent's prose, so an agent that asks a question in plain text shows as
+ * `done`. This is what makes the structured channels the ones it reaches for.
+ * It travels with the launch rather than in `AGENTS.md`, which is the user's
+ * to edit and which a session started outside the workspace never reads.
+ */
+export const DAEDALUS_STATUS_INSTRUCTIONS = `You are running inside Daedalus, which shows the user whether each session is working, done, or needs them.
+- When you need the user to decide, answer, or approve something before you can continue, run \`daedal attention "<what you need from them>"\`. If you have a tool for asking the user a question (AskUserQuestion), you may use that instead. A question written only in your reply is shown as done, not as waiting on the user.
+- Run \`daedal attention --clear\` as soon as that is resolved.
+- When you finish what you were asked, just end your turn. Daedalus marks it done.`;
+
+const CLAUDE_APPEND_PROMPT = "--append-system-prompt";
+
+/**
+ * The status instructions as launch arguments for one provider.
+ *
+ * Claude gets them through `--append-system-prompt`, joined onto any value
+ * the user already passes there. Codex gets them as `developer_instructions`,
+ * which has no append form, so a user who set their own in `config.toml`
+ * keeps it and goes without.
+ */
+export async function daedalusInstructionArgs(
+  config: DaedalusConfig,
+  provider: string,
+  existingArgs: readonly string[],
+): Promise<string[]> {
+  if (provider === "claude") {
+    if (
+      existingArgs.some((argument) =>
+        argument.startsWith(`${CLAUDE_APPEND_PROMPT}-file`),
+      )
+    )
+      return [...existingArgs];
+    const index = existingArgs.indexOf(CLAUDE_APPEND_PROMPT);
+    if (index >= 0 && index + 1 < existingArgs.length) {
+      const args = [...existingArgs];
+      args[index + 1] = `${args[index + 1]}\n\n${DAEDALUS_STATUS_INSTRUCTIONS}`;
+      return args;
+    }
+    return [
+      ...existingArgs,
+      CLAUDE_APPEND_PROMPT,
+      DAEDALUS_STATUS_INSTRUCTIONS,
+    ];
+  }
+  if (provider === "codex") {
+    const own = await Bun.file(codexConfigPath(config))
+      .text()
+      .catch(() => "");
+    if (/^\s*developer_instructions\s*=/m.test(own)) return [...existingArgs];
+    return [
+      ...existingArgs,
+      "-c",
+      // A JSON string is a valid TOML basic string, escapes included.
+      `developer_instructions=${JSON.stringify(DAEDALUS_STATUS_INSTRUCTIONS)}`,
+    ];
+  }
+  return [...existingArgs];
+}
+
+/**
  * Writes Daedalus's block into the user's Codex configuration and returns the
  * launch arguments that go with it.
  *
@@ -592,6 +655,12 @@ class ConfiguredProvider implements AgentProvider {
           )),
         );
     }
+    if (this.promptArgument && this.config)
+      args.splice(
+        0,
+        args.length,
+        ...(await daedalusInstructionArgs(this.config, this.name, args)),
+      );
     if (this.promptArgument && this.name === "claude" && this.config)
       args.splice(
         0,
