@@ -1629,8 +1629,10 @@ describe("desktop application shell", () => {
     );
     expect(html).toContain("Terminal task");
     expect(html).toContain("Review terminal task");
-    expect(html).toContain("running · 111111");
-    expect(html).toContain("running · 222222");
+    // The status line; the session id moved to the card's tooltip (#55).
+    expect(html).toContain('class="session-status-label">running</span>');
+    expect(html).toContain("11111111 · started");
+    expect(html).toContain("22222222 · started");
     expect(html).toContain("Terminal for Terminal task 11111111");
     expect(html).toContain("mode-session");
     // The terminal takes the main column: no Sessions column beside it.
@@ -1639,7 +1641,7 @@ describe("desktop application shell", () => {
     expect(html).not.toContain("board-detail-column");
   });
 
-  test("renders free terminals with lifecycle timestamps in Sessions", () => {
+  test("renders free terminals with lifecycle timestamps in their tooltip", () => {
     const snapshot: DesktopSnapshotDto = {
       ...base,
       workspaces: [
@@ -1696,8 +1698,8 @@ describe("desktop application shell", () => {
     );
     expect(html).toContain("Workspace session");
     expect(html).toContain("session-kind-icon tool-terminal");
-    expect(html).toContain("Started ·");
-    expect(html).toContain("1/1/2026");
+    // The lifecycle time is in the card's tooltip, not a row (#55).
+    expect(html).toMatch(/title="[^"]*· started [^"]*1\/1\/2026/);
     expect(html).toContain('role="radiogroup"');
     expect(html).toContain("Session name");
     expect(html).toContain("session-tool-icon tool-terminal");

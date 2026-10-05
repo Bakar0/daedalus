@@ -4550,6 +4550,17 @@ export function WorkspaceApp({
           data-provider={session.provider}
           data-session-id={session.id}
           onClick={() => showSession(session.id, session.workspaceId)}
+          // What the three rows leave out, or cut short.
+          title={[
+            sessionName(session),
+            `${session.id.slice(0, 8)} · ${session.endedAt ? "ended" : "started"} ${new Date(timestamp).toLocaleString()}`,
+            startupError ?? statusView.detail,
+            statusView.unconfirmed
+              ? "Status read from the terminal pane, not reported by the agent"
+              : undefined,
+          ]
+            .filter(Boolean)
+            .join("\n")}
           onKeyDown={(event) => {
             if (!event.altKey) return;
             const direction =
@@ -4584,40 +4595,34 @@ export function WorkspaceApp({
                 (task?.title ?? "Workspace session")
               )}
             </small>
-            <em>
+            {/* Always three rows: name, what it is for, and one line of
+                live status with what the agent is doing, so every card is
+                the same height (#55). A failed start takes the status line. */}
+            <em
+              className="session-card-status"
+              data-error={startupError ? "true" : undefined}
+            >
               <AgentStatusDot
                 count={statusView.reasons.length}
                 label={statusAriaLabel(session, statusView, now)}
                 view={statusView}
               />
-              <span className="session-status-label">
-                {startupError ? "failed to start" : statusView.label}
-                {statusView.attention && statusView.since
-                  ? ` · waiting ${waitingLabel(statusView.since, now)}`
-                  : ""}{" "}
-                · {session.id.slice(0, 6)}
+              <span
+                className="session-status-label"
+                role={startupError ? "alert" : undefined}
+              >
+                {startupError
+                  ? `failed to start · ${startupError}`
+                  : [
+                      statusView.attention && statusView.since
+                        ? `${statusView.label} ${waitingLabel(statusView.since, now)}`
+                        : statusView.label,
+                      statusView.detail,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
               </span>
-              {statusView.unconfirmed && (
-                <span
-                  className="session-status-unconfirmed"
-                  title="Read from the terminal pane, not reported by the agent"
-                >
-                  unconfirmed
-                </span>
-              )}
             </em>
-            {statusView.detail && (
-              <em className="session-status-detail">{statusView.detail}</em>
-            )}
-            {startupError && (
-              <em className="session-startup-error" role="alert">
-                {startupError}
-              </em>
-            )}
-            <time dateTime={timestamp}>
-              {session.endedAt ? "Ended" : "Started"} ·{" "}
-              {new Date(timestamp).toLocaleString()}
-            </time>
           </span>
         </button>
         <span className="workspace-card-actions" data-no-drag>

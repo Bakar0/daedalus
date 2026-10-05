@@ -707,7 +707,7 @@ button:not(
 .workspace-sessions .session-card {
   min-height: 0;
 }
-/* Lean: the start time is the one line a card under its workspace drops. */
+/* A launch card's request time; a session card has no time row. */
 .workspace-sessions .session-card-main time {
   display: none;
 }
@@ -819,20 +819,25 @@ button:not(
   height: 16px;
   width: 16px;
 }
-/* One line each: the status, then what the agent is doing. */
-.workspace-sessions .session-card-main em {
-  min-height: 14px;
+/* Three rows of fixed height, so every card is the same height. */
+.workspace-sessions .session-card-main strong {
+  line-height: 15px;
+}
+.workspace-sessions .session-card-main small {
+  line-height: 14px;
+}
+.workspace-sessions .session-card-status {
+  height: 14px;
   min-width: 0;
 }
-.workspace-sessions .session-status-label,
-.workspace-sessions .session-status-detail {
+.workspace-sessions .session-status-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.workspace-sessions .session-status-detail {
-  display: block;
+.workspace-sessions .session-card-status[data-error] .session-status-label {
+  color: var(--danger);
 }
 .workspace-card-archive,
 .workspace-terminal-action {
