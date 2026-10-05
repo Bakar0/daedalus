@@ -229,6 +229,42 @@ describe("desktop RPC handlers", () => {
     });
   });
 
+  test("a terminal copy reaches the clipboard, within a size limit", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const context = await createApplicationContext({
+        env: { ...process.env, DAEDALUS_HOME: home },
+        tmux: new FakeTmux(),
+      });
+      const copied: string[] = [];
+      const rpc = createDesktopRequestHandlers(
+        context,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        (text) => {
+          copied.push(text);
+          return true;
+        },
+      );
+      try {
+        expect(await rpc.clipboardWrite({ text: "one line\nanother" })).toEqual(
+          { ok: true, data: { written: true } },
+        );
+        expect(copied).toEqual(["one line\nanother"]);
+        const refused = await rpc.clipboardWrite({
+          text: "x".repeat(1024 * 1024 + 1),
+        });
+        expect(refused.ok).toBe(false);
+        expect(copied).toHaveLength(1);
+      } finally {
+        context.close();
+      }
+    });
+  });
+
   test("snapshot reports configuration and dependency availability", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const context = await createApplicationContext({

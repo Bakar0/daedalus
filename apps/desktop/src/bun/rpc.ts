@@ -367,6 +367,9 @@ const MAIN_WINDOW_ONLY: DesktopWindowHost = {
   focusSession: () => {},
 };
 
+/** A terminal copy past this is a runaway program, not a selection. */
+const MAX_CLIPBOARD_TEXT = 1024 * 1024;
+
 export function createDesktopRequestHandlers(
   context: ApplicationContext,
   onMutation: () => void = () => {},
@@ -375,6 +378,7 @@ export function createDesktopRequestHandlers(
   quit: DesktopQuitHost = { dialogShown: () => {}, decide: async () => {} },
   updates: DesktopUpdateHost = NO_UPDATES,
   windows: DesktopWindowHost = MAIN_WINDOW_ONLY,
+  clipboardWrite: (text: string) => boolean = () => false,
 ): DesktopRequestHandlers {
   const mutate = async <T>(operation: () => T | Promise<T>) => {
     const response = await result(operation);
@@ -475,6 +479,12 @@ export function createDesktopRequestHandlers(
             "Only HTTP and HTTPS links can be opened",
           );
         return { opened: openExternal(parsed.href) };
+      }),
+    clipboardWrite: ({ text }) =>
+      result(() => {
+        if (text.length > MAX_CLIPBOARD_TEXT)
+          throw new DaedalusError("VALIDATION", "That copy is too large");
+        return { written: clipboardWrite(text) };
       }),
     workspaceCreate: (params) =>
       mutate(async () => workspaceDto(await context.workspaces.create(params))),

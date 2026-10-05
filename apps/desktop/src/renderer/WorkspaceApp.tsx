@@ -1182,6 +1182,7 @@ function TerminalSurface({
   label,
   locationLabel,
   onClearAttention,
+  onCopy,
   onFocused,
   onOpenLink,
   status,
@@ -1199,6 +1200,7 @@ function TerminalSurface({
   label: string;
   locationLabel?: string;
   onClearAttention?: () => void;
+  onCopy: (text: string) => void;
   onFocused?: () => void;
   onOpenLink: (url: string) => void;
   status: AgentSessionDto["status"];
@@ -1298,10 +1300,21 @@ function TerminalSurface({
       if (disposed) return;
       terminal = new Terminal({
         cursorBlink: true,
-        // Keep ordinary drag selection available while tmux owns mouse mode.
-        // Holding Alt passes clicks and drags through to the terminal app;
-        // wheel events continue to use tmux's native scrolling behavior.
-        mouseEventsRequireAlt: true,
+        // Clicks and drags go to the program, as in any terminal: Claude
+        // Code selects in its own layout and copies the text it wrapped, so
+        // a copy has no breaks where the screen did, and in a plain shell
+        // tmux selects. Option and drag is the native selection, the way it
+        // is in iTerm2.
+        macOptionClickForcesSelection: true,
+        // OSC 8 links, which Claude Code sends when told it may: the whole
+        // URL rides on every row it was wrapped across, so a link split over
+        // two lines opens whole. Cmd and click, like a native terminal; a
+        // plain click belongs to the program.
+        linkHandler: {
+          activate: (event, url) => {
+            if (event.metaKey) onOpenLink(url);
+          },
+        },
         // Shell prompts commonly use Nerd Font private-use glyphs. Prefer the
         // user's installed Nerd Font while retaining native monospace fallbacks.
         fontFamily: '"MesloLGS NF", "SF Mono", Menlo, monospace',
@@ -1322,9 +1335,25 @@ function TerminalSurface({
       terminal.loadAddon(
         new WebLinksAddon((event, url) => {
           event.preventDefault();
-          onOpenLink(url);
+          if (event.metaKey) onOpenLink(url);
         }),
       );
+      // How a program in the terminal copies: tmux after a drag in a plain
+      // shell, and anything else that writes OSC 52. Only a write is honoured;
+      // a `?` query would hand the clipboard to whatever runs in the pane.
+      terminal.parser.registerOscHandler(52, (data) => {
+        const encoded = data.slice(data.indexOf(";") + 1);
+        if (!encoded || encoded === "?") return true;
+        try {
+          const bytes = Uint8Array.from(atob(encoded), (char) =>
+            char.charCodeAt(0),
+          );
+          onCopy(new TextDecoder().decode(bytes));
+        } catch {
+          // Not base64: nothing a program meant to copy.
+        }
+        return true;
+      });
       terminal.open(container);
       focusRef.current = () => terminal?.focus();
       inputRef.current = (data) => {
@@ -1616,6 +1645,7 @@ function IntegratedTerminalSurface({
   active,
   fitRevision,
   mountRevision,
+  onCopy,
   onOpenLink,
   terminal,
   terminalEndpoint,
@@ -1623,6 +1653,7 @@ function IntegratedTerminalSurface({
   active: boolean;
   fitRevision: number;
   mountRevision: number;
+  onCopy: (text: string) => void;
   onOpenLink: (url: string) => void;
   terminal: IntegratedTerminalDto;
   terminalEndpoint?: string;
@@ -1646,6 +1677,7 @@ function IntegratedTerminalSurface({
           id={terminal.id}
           key={`${terminal.id}:${mountRevision}`}
           label={terminal.name}
+          onCopy={onCopy}
           onOpenLink={onOpenLink}
           status={terminal.status}
           target="integrated"
@@ -2061,6 +2093,15 @@ export function WorkspaceApp({
         if (!response.ok) setError(response.error.message);
         else if (!response.data.opened)
           setError("The link could not be opened in the default browser");
+      });
+    },
+    [client],
+  );
+
+  const copyTerminalText = useCallback(
+    (text: string) => {
+      void client.request.clipboardWrite({ text }).then((response) => {
+        if (!response.ok) setError(response.error.message);
       });
     },
     [client],
@@ -6383,6 +6424,7 @@ export function WorkspaceApp({
                     workspace.name
                   }
                   onClearAttention={() => void clearAttention(activeSession.id)}
+                  onCopy={copyTerminalText}
                   onFocused={clearSessionFocusRequest}
                   onOpenLink={openTerminalLink}
                   session={activeSession}
@@ -6528,6 +6570,7 @@ export function WorkspaceApp({
                     fitRevision={terminalFitRevision}
                     key={terminal.id}
                     mountRevision={terminalMountRevision}
+                    onCopy={copyTerminalText}
                     onOpenLink={openTerminalLink}
                     terminal={terminal}
                   />
