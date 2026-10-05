@@ -5494,38 +5494,39 @@ export function WorkspaceApp({
                           className="workspace-session-insights"
                         >
                           {/* An open list shows each session itself. */}
-                          {!(expanded && sessionList) && (
-                            <span className="workspace-session-icons">
-                              {itemViews
-                                .slice(0, 5)
-                                .map(({ session, view }) => {
-                                  const tool = sessionTool(session);
-                                  return (
-                                    <span
-                                      className={`workspace-session-indicator tool-${tool}`}
-                                      data-attention={
-                                        view.attention ? "true" : undefined
-                                      }
-                                      key={session.id}
-                                      title={statusAriaLabel(
-                                        session,
-                                        view,
-                                        now,
-                                      )}
-                                    >
-                                      <ToolIcon tool={tool} />
-                                      <AgentStatusDot
-                                        count={view.reasons.length}
-                                        view={view}
-                                      />
-                                    </span>
-                                  );
-                                })}
-                              {itemSessions.length > 5 && (
-                                <small>+{itemSessions.length - 5}</small>
-                              )}
-                            </span>
-                          )}
+                          {!(expanded && sessionList) &&
+                            itemViews.length > 0 && (
+                              <span className="workspace-session-icons">
+                                {itemViews
+                                  .slice(0, 5)
+                                  .map(({ session, view }) => {
+                                    const tool = sessionTool(session);
+                                    return (
+                                      <span
+                                        className={`workspace-session-indicator tool-${tool}`}
+                                        data-attention={
+                                          view.attention ? "true" : undefined
+                                        }
+                                        key={session.id}
+                                        title={statusAriaLabel(
+                                          session,
+                                          view,
+                                          now,
+                                        )}
+                                      >
+                                        <ToolIcon tool={tool} />
+                                        <AgentStatusDot
+                                          count={view.reasons.length}
+                                          view={view}
+                                        />
+                                      </span>
+                                    );
+                                  })}
+                                {itemSessions.length > 5 && (
+                                  <small>+{itemSessions.length - 5}</small>
+                                )}
+                              </span>
+                            )}
                           <small
                             className={
                               attentionCount > 0
