@@ -800,6 +800,44 @@ button:not(
   strong {
   padding-right: 50px;
 }
+/* Clear sits on the status row where its dot was: the dot, then "Clear",
+   in one pill. The row's own dot steps aside and its text starts after. */
+.workspace-sessions .session-attention-clear {
+  align-items: center;
+  background: rgb(255 130 130 / 0.14) !important;
+  border: 1px solid rgb(255 130 130 / 0.4) !important;
+  border-radius: 999px !important;
+  bottom: 5px;
+  color: #ff8987 !important;
+  display: flex;
+  font-size: 9px !important;
+  font-weight: 650 !important;
+  gap: 5px;
+  height: 16px;
+  left: 31px;
+  padding: 0 7px 0 4px !important;
+  position: absolute;
+}
+.workspace-sessions .session-attention-clear:hover:not(:disabled) {
+  background: rgb(255 130 130 / 0.26) !important;
+  border-color: rgb(255 130 130 / 0.7) !important;
+}
+.workspace-sessions .session-attention-clear .agent-dot.tone-attention {
+  height: 6px;
+  outline-offset: 1px;
+  outline-width: 1.5px;
+  width: 6px;
+}
+/* The pill is the count's place no more: it would poke out above it. */
+.workspace-sessions .session-attention-clear .agent-dot-count {
+  display: none;
+}
+.workspace-sessions .session-card-status[data-clearable] > .agent-dot {
+  display: none;
+}
+.workspace-sessions .session-card-status[data-clearable] {
+  padding-left: 50px;
+}
 /* Hand off and archive come in on hover, over the end of the name. A
    requested handoff stays visible until the successor takes over. */
 .workspace-sessions .session-card-hover-action {
@@ -1137,10 +1175,6 @@ button:not(
   white-space: nowrap;
 }
 
-.session-card[data-attention="true"] {
-  border-color: rgb(255 130 130 / 0.5);
-  box-shadow: 0 0 0 1px rgb(255 130 130 / 0.16);
-}
 .session-status-label {
   min-width: 0;
   overflow-wrap: anywhere;

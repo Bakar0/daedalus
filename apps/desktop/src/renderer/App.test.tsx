@@ -2262,6 +2262,11 @@ describe("session status indicators", () => {
     expect(html.indexOf(`data-session-id="${liveSession.id}"`)).toBeLessThan(
       html.indexOf(`data-session-id="${blocked.id}"`),
     );
+    // Only the card that needs you offers to clear it, on its status row.
+    expect(html.match(/class="session-attention-clear"/g)?.length).toBe(1);
+    expect(html.indexOf("session-attention-clear")).toBeGreaterThan(
+      html.indexOf(`data-session-id="${blocked.id}"`),
+    );
   });
 
   test("renders queued toasts and never more than the cap", () => {

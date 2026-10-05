@@ -312,6 +312,16 @@ const client = {
       ok: true,
       data: { endpoint: "ws://127.0.0.1:1/panel-test" },
     }),
+    // The card's dismiss button clears a session's needs-you alert.
+    attentionClear: async ({ sessionId }: { sessionId: string }) => {
+      current = {
+        ...current,
+        attention: current.attention.filter(
+          (item) => item.sessionId !== sessionId,
+        ),
+      };
+      return { ok: true, data: {} };
+    },
     presencePublish: async () => ({ ok: true, data: {} }),
     toastsAcknowledge: async () => ({ ok: true, data: { acknowledged: 0 } }),
     workspaceWatchSet: async () => ({ ok: true, data: { watching: [] } }),

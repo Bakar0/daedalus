@@ -4600,6 +4600,11 @@ export function WorkspaceApp({
                 the same height (#55). A failed start takes the status line. */}
             <em
               className="session-card-status"
+              data-clearable={
+                statusView.reasons.length > 0 && !startupError
+                  ? "true"
+                  : undefined
+              }
               data-error={startupError ? "true" : undefined}
             >
               <AgentStatusDot
@@ -4625,6 +4630,31 @@ export function WorkspaceApp({
             </em>
           </span>
         </button>
+        {/* The alert's own dot, made into a pill that clears it, over the
+            status row's dot: a button cannot sit inside the card's button.
+            Only while something the agent or its pane raised is open; a
+            lost session needs reviving, not clearing. */}
+        {statusView.reasons.length > 0 && !startupError && (
+          <button
+            aria-label={`Clear ${sessionName(session)}'s needs-you alert`}
+            className="session-attention-clear"
+            data-no-drag
+            disabled={busy}
+            onClick={() => void clearAttention(session.id)}
+            title={
+              statusView.reasons.length > 1
+                ? `Mark as seen: clear these ${statusView.reasons.length} alerts`
+                : "Mark as seen: clear this alert"
+            }
+            type="button"
+          >
+            <AgentStatusDot
+              count={statusView.reasons.length}
+              view={statusView}
+            />
+            Clear
+          </button>
+        )}
         <span className="workspace-card-actions" data-no-drag>
           {session.status === "lost" && (
             <button
