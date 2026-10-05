@@ -2245,7 +2245,12 @@ describe("session status indicators", () => {
     // The workspace list carries the roll-up, so a blocked session in a
     // background workspace is discoverable without clicking in.
     expect(html).toContain("1 needs you");
-    expect(html).toContain("workspace-attention-badge");
+    // The line says it, so the workspace card has no count badge; only All
+    // workspaces, which has no such line, keeps one.
+    expect(html.match(/class="workspace-attention-badge"/g)?.length).toBe(1);
+    expect(html.indexOf("workspace-attention-badge")).toBeLessThan(
+      html.indexOf('class="workspace-group"'),
+    );
     // The row itself is the loud one.
     expect(html).toContain("agent-dot tone-attention");
     expect(html).toContain("needs permission");

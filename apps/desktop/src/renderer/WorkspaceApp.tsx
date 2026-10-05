@@ -5495,19 +5495,6 @@ export function WorkspaceApp({
                       <span className="workspace-card-content">
                         <strong className="workspace-card-name">
                           <span>{item.name}</span>
-                          {/* A session blocked in a workspace nobody is looking
-                            at has to be discoverable without clicking in. The
-                            badge is a bare count so it survives a 210px
-                            column; the line below spells it out. */}
-                          {attentionCount > 0 && (
-                            <span
-                              aria-label={`${attentionCount} ${attentionCount === 1 ? "session needs" : "sessions need"} you in ${item.name}`}
-                              className="workspace-attention-badge"
-                              title={`${attentionCount} ${attentionCount === 1 ? "session needs" : "sessions need"} you`}
-                            >
-                              {attentionCount}
-                            </span>
-                          )}
                         </strong>
                         {/* The slug is in the main header; the card only
                             speaks up when the folder is gone. */}

@@ -753,8 +753,18 @@ button:not(
   padding: 6px 8px 6px 2px;
 }
 .workspace-group .workspace-card-name {
+  align-items: center;
+  display: flex;
+  min-width: 0;
   /* Room for the +, the one action always showing. */
   padding-right: 26px;
+}
+/* A long name is cut short with an ellipsis. */
+.workspace-group .workspace-card-name > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* Terminal and archive come in on hover, to the left of the +. */
 .workspace-group .workspace-terminal-action,
