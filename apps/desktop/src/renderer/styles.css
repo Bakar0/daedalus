@@ -270,8 +270,8 @@ small,
   flex: 1;
   /* The scrollbar sits in the column's right padding, clear of the cards,
      without widening the column. */
-  margin-right: -12px;
-  padding-right: 12px;
+  margin-right: -16px;
+  padding-right: 16px;
 }
 .task-column {
   padding-left: 20px;
@@ -477,6 +477,24 @@ button:not(
 .workspace-card.selected {
   background: var(--accent-wash);
   box-shadow: inset 0 0 0 1px rgb(69 150 254 / 0.18);
+}
+/* What the main area shows is joined to it: a bar runs from the card's right
+   edge to the column's, like a tab on its page. A session's card in the
+   session view, the workspace's card otherwise, never both. The bar is the
+   card's own shadow, offset right and shrunk, so the card clips nothing and
+   nothing is painted under it. The 28px offset less the 9px it shrinks is
+   the group's inset plus the list's right padding. */
+.workspace-shell:not(.mode-session)
+  .workspace-group
+  > .workspace-card.selected {
+  box-shadow:
+    inset 0 0 0 1px rgb(69 150 254 / 0.18),
+    28px 0 0 -9px var(--accent);
+}
+.workspace-shell.mode-session .workspace-sessions .session-card.selected {
+  box-shadow:
+    inset 3px 0 0 var(--session-color, transparent),
+    28px 0 0 -9px var(--accent);
 }
 .workspace-item {
   align-items: center;
