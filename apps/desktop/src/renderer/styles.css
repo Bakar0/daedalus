@@ -666,6 +666,17 @@ button:not(
   margin: 3px 0 6px 9px;
   padding: 0 0 0 5px;
 }
+/* A workspace's archived sessions, under its list. The row keeps its space
+   when it is not the workspace in focus, so the list never shifts. */
+.workspace-sessions .session-archive-list {
+  border-top: 0;
+  margin-top: 2px;
+  padding-top: 0;
+}
+.workspace-sessions .session-archive-list:not([data-in-focus]) {
+  pointer-events: none;
+  visibility: hidden;
+}
 .workspace-sessions .session-grid {
   gap: 4px;
   grid-template-columns: 1fr;
@@ -3363,10 +3374,7 @@ dd {
 .workspace-archive-list {
   margin-top: auto;
 }
-/* The two archives stack at the bottom of the column. */
-.workspace-archive-list + .workspace-archive-list {
-  margin-top: 0;
-}
+
 .session-archive-list {
   max-height: 280px;
 }

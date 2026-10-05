@@ -598,7 +598,7 @@ describe("desktop application shell", () => {
       );
     });
 
-    test("archived sessions sit at the bottom of the column, not in the list", () => {
+    test("archived sessions show under the focused workspace and keep their space under the others", () => {
       const withArchived: DesktopSnapshotDto = {
         ...two,
         agents: [
@@ -613,16 +613,21 @@ describe("desktop application shell", () => {
           },
         ],
       };
-      // A row coming and going inside the list moved every workspace below
-      // it; at the bottom it moves nothing.
-      const one = renderToStaticMarkup(
+      const html = renderToStaticMarkup(
         <App injectedClient={client} initialSnapshot={withArchived} />,
       );
-      expect(one).toContain("Archived in Alpha (1)");
-      expect(one).not.toContain("Archived sessions");
-      expect(one.indexOf("Archived in Alpha")).toBeGreaterThan(
-        one.indexOf('aria-label="Sessions in Beta"'),
-      );
+      // Both rows are there, so focus moving shifts nothing; only Alpha's,
+      // the workspace in focus, is visible and reachable.
+      expect(html.match(/Archived sessions \(1\)/g)?.length).toBe(2);
+      const alpha = html.indexOf('aria-label="Sessions in Alpha"');
+      const beta = html.indexOf('aria-label="Sessions in Beta"');
+      const focused = html.indexOf('data-in-focus="true"');
+      expect(focused).toBeGreaterThan(alpha);
+      expect(focused).toBeLessThan(beta);
+      expect(html.match(/data-in-focus="true"/g)?.length).toBe(1);
+      expect(
+        html.match(/aria-hidden="true" class="archive-list/g)?.length,
+      ).toBe(1);
       const all = renderToStaticMarkup(
         <App
           injectedClient={client}
@@ -630,8 +635,7 @@ describe("desktop application shell", () => {
           initialSnapshot={withArchived}
         />,
       );
-      expect(all).toContain("Archived sessions (2)");
-      expect(all).toContain("beta · ");
+      expect(all).not.toContain('data-in-focus="true"');
     });
 
     test("every workspace at once has no session view", () => {
@@ -1881,7 +1885,7 @@ describe("desktop application shell", () => {
     );
     expect(html).toContain("Archived workspaces (1)");
     expect(html).toContain("Archived project");
-    expect(html).toContain("Archived in Active (1)");
+    expect(html).toContain("Archived sessions (1)");
     expect(html).toContain("Archived conversation");
     expect(html).toContain("Restore &amp; resume");
     expect(html).toContain('aria-label="Archive Active workspace"');
