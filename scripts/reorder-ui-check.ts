@@ -162,7 +162,7 @@ try {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     if (
       await evaluate(
-        "Boolean([...document.querySelectorAll('.app-mode-switcher button')].find((b) => b.textContent === 'Sessions'))",
+        "document.querySelectorAll('.workspace-sessions .session-card').length >= 3",
       )
     ) {
       ready = true;
@@ -178,20 +178,22 @@ try {
       `Daedalus renderer did not become ready: ${body || "empty document"}${rendererErrors.length ? `\n${rendererErrors.join("\n")}` : ""}`,
     );
   }
-  // Clicked in a retry loop rather than once: the switcher exists a frame
-  // before the app settles, and a single shot races the next render.
+  // The sessions are listed under their workspace in the left column (#55);
+  // opening the first one is what marks its card selected. Clicked in a
+  // retry loop rather than once: the list exists a frame before the app
+  // settles, and a single shot races the next render.
   let inSessionsMode = false;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (
-      (await evaluate<number>(
-        "document.querySelectorAll('.session-grid .session-card').length",
-      )) >= 3
+      await evaluate<boolean>(
+        "Boolean(document.querySelector('.workspace-shell.mode-session')) && document.querySelectorAll('.session-grid .session-card').length >= 3",
+      )
     ) {
       inSessionsMode = true;
       break;
     }
     await evaluate(
-      "[...document.querySelectorAll('.app-mode-switcher button')].find((b) => b.textContent === 'Sessions')?.click() ?? null",
+      "document.querySelector('.session-grid .session-card .session-card-main')?.click() ?? null",
     );
     await Bun.sleep(50);
   }

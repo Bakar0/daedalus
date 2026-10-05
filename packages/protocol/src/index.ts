@@ -1130,7 +1130,7 @@ export const OPEN_WORLD_WINDOW_MENU_ACTION = "open-world-window";
 
 export const DESKTOP_COMMANDS = [
   "view-board",
-  "view-sessions",
+  "view-session",
   "view-workspace",
   "view-world",
   "toggle-terminal",

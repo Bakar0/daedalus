@@ -62,8 +62,8 @@ export const APPLICATION_MENU: ApplicationMenuItemConfig[] = [
       },
       { label: "Board", action: "view-board", accelerator: "Command+2" },
       {
-        label: "Sessions",
-        action: "view-sessions",
+        label: "Session",
+        action: "view-session",
         accelerator: "Command+3",
       },
       { label: "World", action: "view-world", accelerator: "Command+4" },

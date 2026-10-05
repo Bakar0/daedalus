@@ -146,7 +146,7 @@ try {
     await Bun.sleep(50);
   }
 
-  // The secondary panel only exists beside the board and the sessions. The
+  // The secondary panel only exists beside the board. The
   // view under test is chosen rather than inherited from whichever tab happens
   // to be first, so a change to the default (#27 made it the board) does not
   // silently change what this checks.
@@ -290,8 +290,9 @@ try {
       `Expand failed: ${collapsed.width}px -> ${expandedWidth}px`,
     );
 
+  // The session is opened from its card under the workspace (#55).
   await evaluate(
-    "[...document.querySelectorAll('.app-mode-switcher button')].find((b) => b.textContent === 'Sessions').click()",
+    "document.querySelector('.session-card-main[data-session-id=\"panel-test-agent\"]').click()",
   );
   await Bun.sleep(250);
   const statusTelemetry = await evaluate<{
@@ -318,7 +319,13 @@ try {
       `Claude context is missing or malformed: ${statusTelemetry.context}`,
     );
   for (const expected of ["Codex 5h 28% · 7d 61%", "Claude 5h 34% · 7d 47%"])
-    if (!statusTelemetry.usage.includes(expected))
+    // Compared without spaces: the usage meters are separate elements, so
+    // textContent runs their labels together.
+    if (
+      !statusTelemetry.usage
+        .replace(/\s+/g, "")
+        .includes(expected.replace(/\s+/g, ""))
+    )
       throw new Error(
         `Provider usage is missing ${expected}: ${statusTelemetry.usage}`,
       );
@@ -370,7 +377,76 @@ try {
       );
     return { beforeCols, afterCols };
   };
-  const sessionsCollapse = await collapseAndMeasureTerminal("sessions");
+  // Folding a workspace's session list, one at a time and all at once, and
+  // the fold surviving a reload (#55). The terminal stays: folding a list is
+  // not leaving the session.
+  const fold = () =>
+    evaluate<{
+      expanded: string | null;
+      cards: number;
+      icons: number;
+      all: string | null;
+      terminal: boolean;
+    }>(`(() => ({
+      expanded: document.querySelector('.workspace-disclosure')?.getAttribute('aria-expanded') ?? null,
+      cards: document.querySelectorAll('.workspace-sessions .session-card').length,
+      icons: document.querySelectorAll('.workspace-session-icons').length,
+      all: document.querySelector('.workspace-fold-all')?.getAttribute('aria-label') ?? null,
+      terminal: Boolean(document.querySelector('.workspace-shell.mode-session .terminal-column')),
+    }))()`);
+  const unfolded = await fold();
+  if (
+    unfolded.expanded !== "true" ||
+    unfolded.cards < 3 ||
+    unfolded.icons !== 0
+  )
+    throw new Error(
+      `The session list did not start open: ${JSON.stringify(unfolded)}`,
+    );
+  await evaluate("document.querySelector('.workspace-disclosure').click()");
+  await Bun.sleep(100);
+  const folded = await fold();
+  if (
+    folded.expanded !== "false" ||
+    folded.cards !== 0 ||
+    folded.icons !== 1 ||
+    folded.all !== "Expand all session lists" ||
+    !folded.terminal
+  )
+    throw new Error(`Folding the list failed: ${JSON.stringify(folded)}`);
+  await send("Page.reload");
+  // The old document answers until the new one replaces it.
+  await Bun.sleep(400);
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (
+      await evaluate("Boolean(document.querySelector('.workspace-disclosure'))")
+    )
+      break;
+    await Bun.sleep(50);
+  }
+  const reloaded = await fold();
+  if (reloaded.expanded !== "false" || reloaded.cards !== 0)
+    throw new Error(
+      `The fold did not survive a reload: ${JSON.stringify(reloaded)}`,
+    );
+  await evaluate("document.querySelector('.workspace-fold-all').click()");
+  await Bun.sleep(100);
+  const expandedAll = await fold();
+  if (expandedAll.expanded !== "true" || expandedAll.cards < 3)
+    throw new Error(`Expand all failed: ${JSON.stringify(expandedAll)}`);
+  await evaluate(
+    "document.querySelector('.session-card-main[data-session-id=\"panel-test-agent\"]').click()",
+  );
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (
+      await evaluate(
+        "Boolean(document.querySelector('.xterm-rows') && document.querySelector('.terminal')?.dataset.terminalCols)",
+      )
+    )
+      break;
+    await Bun.sleep(50);
+  }
+
   const workspaceCollapse = await collapseAndMeasureTerminal("workspace");
 
   const terminalBeforeResize = await evaluate<{ cols: number; width: number }>(
@@ -424,7 +500,7 @@ try {
     `Terminal resize check passed: ${terminalBeforeResize.width}px/${terminalBeforeResize.cols} cols -> ${terminalAfterResize.width}px/${terminalAfterResize.cols} cols`,
   );
   console.log(
-    `Terminal panel-collapse checks passed: sessions ${sessionsCollapse.beforeCols} -> ${sessionsCollapse.afterCols} cols; workspace ${workspaceCollapse.beforeCols} -> ${workspaceCollapse.afterCols} cols`,
+    `Terminal panel-collapse check passed: workspace ${workspaceCollapse.beforeCols} -> ${workspaceCollapse.afterCols} cols; session lists fold, unfold and stay folded across a reload`,
   );
   console.log(
     `Status telemetry check passed: ${statusTelemetry.status}; ${statusTelemetry.context}; ${statusTelemetry.usage}`,

@@ -151,7 +151,7 @@ try {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     if (
       await evaluate(
-        "Boolean([...document.querySelectorAll('.app-mode-switcher button')].find((b) => b.textContent === 'Sessions'))",
+        "Boolean(document.querySelector('.session-card-main[data-session-id=\"panel-test-agent\"]'))",
       )
     ) {
       rendererReady = true;
@@ -167,8 +167,9 @@ try {
       `Daedalus renderer did not become ready: ${body || "empty document"}${rendererErrors.length ? `\n${rendererErrors.join("\n")}` : ""}`,
     );
   }
+  // The session is opened from its card under the workspace (#55).
   await evaluate(
-    "[...document.querySelectorAll('.app-mode-switcher button')].find((b) => b.textContent === 'Sessions').click()",
+    "document.querySelector('.session-card-main[data-session-id=\"panel-test-agent\"]').click()",
   );
 
   let telemetry:

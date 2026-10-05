@@ -73,7 +73,7 @@ describe("desktop application menu", () => {
     expect(Object.fromEntries(shortcuts ?? [])).toEqual({
       "view-workspace": "Command+1",
       "view-board": "Command+2",
-      "view-sessions": "Command+3",
+      "view-session": "Command+3",
       "view-world": "Command+4",
       "open-world-window": "Command+Option+4",
       "toggle-terminal": "Control+`",

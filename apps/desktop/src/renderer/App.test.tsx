@@ -15,6 +15,7 @@ import {
   EXPLORER_MAX_WIDTH,
   EXPLORER_MIN_WIDTH,
   lifecycleTone,
+  parseCollapsedWorkspaces,
   parseRememberedDirectories,
   planExplorerRefresh,
   MAX_VISIBLE_TOASTS,
@@ -142,6 +143,19 @@ describe("desktop application shell", () => {
     expect(clampExplorerWidth(400, 40)).toBe(EXPLORER_MIN_WIDTH);
     expect(EXPLORER_MIN_WIDTH).toBeLessThan(EXPLORER_DEFAULT_WIDTH);
     expect(EXPLORER_DEFAULT_WIDTH).toBeLessThan(EXPLORER_MAX_WIDTH);
+  });
+
+  test("restores folded session lists, and survives junk (#55)", () => {
+    expect([
+      ...parseCollapsedWorkspaces(JSON.stringify(["w1", "w2", "w1"])),
+    ]).toEqual(["w1", "w2"]);
+    // Lists start open, so anything unreadable means "nothing folded".
+    expect(parseCollapsedWorkspaces(null).size).toBe(0);
+    expect(parseCollapsedWorkspaces("not json").size).toBe(0);
+    expect(parseCollapsedWorkspaces(JSON.stringify({ w1: true })).size).toBe(0);
+    expect([...parseCollapsedWorkspaces(JSON.stringify(["w1", 7]))]).toEqual([
+      "w1",
+    ]);
   });
 
   test("restores remembered folders parents first, and survives junk", () => {
@@ -358,7 +372,9 @@ describe("desktop application shell", () => {
   });
 
   test("restores a remembered workspace mode and opens on the board otherwise", () => {
-    expect(preferredWorkspaceView("sessions")).toBe("sessions");
+    // The Sessions tab is gone (#55); a workspace left on it opens its session.
+    expect(preferredWorkspaceView("sessions")).toBe("session");
+    expect(preferredWorkspaceView("session")).toBe("session");
     expect(preferredWorkspaceView("workspace")).toBe("workspace");
     expect(preferredWorkspaceView("board")).toBe("board");
     expect(preferredWorkspaceView("world")).toBe("world");
@@ -367,7 +383,7 @@ describe("desktop application shell", () => {
     expect(preferredWorkspaceView()).toBe("board");
   });
 
-  test("renders Board, Sessions, and Workspace as complete workspace modes", () => {
+  test("renders Board and Workspace as complete workspace modes", () => {
     const html = renderToStaticMarkup(
       <App
         injectedClient={client}
@@ -377,11 +393,11 @@ describe("desktop application shell", () => {
     );
     expect(html).toContain("Workspaces");
     expect(html).toContain("Board");
-    expect(html).toContain("Sessions");
     expect(html).toContain("Workspace");
     expect(html).not.toContain("Activity");
     expect(html).toContain('aria-label="Workspace mode"');
-    // Board first (#27): the switcher reads Board, Sessions, Workspace.
+    // Board first (#27): the switcher reads Board, Workspace. Sessions are
+    // listed under their workspaces instead of in a tab (#55).
     const switcherStart = html.indexOf('aria-label="Workspace mode"');
     const switcher = html.slice(
       switcherStart,
@@ -389,11 +405,9 @@ describe("desktop application shell", () => {
     );
     expect(switcher.indexOf(">Board<")).toBeGreaterThan(-1);
     expect(switcher.indexOf(">Board<")).toBeLessThan(
-      switcher.indexOf(">Sessions<"),
-    );
-    expect(switcher.indexOf(">Sessions<")).toBeLessThan(
       switcher.indexOf(">Workspace<"),
     );
+    expect(switcher).not.toContain("Sessions");
     // The World spans every workspace, so it is not one of the modes: its
     // button sits apart, at the right end of the top bar.
     expect(switcher).not.toContain("World");
@@ -554,46 +568,53 @@ describe("desktop application shell", () => {
       expect(switcher).not.toMatch(/disabled=""[^>]*>Board</);
     });
 
-    test("the Sessions view lists every session, named by workspace", () => {
+    test("every workspace lists its own sessions under it (#55)", () => {
       const html = renderToStaticMarkup(
         <App
           injectedClient={client}
           initialSnapshot={two}
           initialScope="all"
-          initialWorkspaceView="sessions"
         />,
       );
       expect(html).toContain('data-session-id="s-a"');
       expect(html).toContain('data-session-id="s-b"');
+      // An archived workspace has no card, so no list either.
       expect(html).not.toContain('data-session-id="s-g"');
-      expect(html).toContain(
-        '<span class="session-card-workspace">alpha · </span>alpha task 1',
-      );
-      expect(html).toContain(
-        '<span class="session-card-workspace">beta · </span>beta task 1',
-      );
-      // New needs a workspace to open in.
+      // Each card sits in its workspace's group, which already names it.
+      expect(html).not.toContain("session-card-workspace");
+      const alpha = html.indexOf('aria-label="Sessions in Alpha"');
+      const beta = html.indexOf('aria-label="Sessions in Beta"');
+      expect(alpha).toBeGreaterThan(-1);
+      expect(html.indexOf('data-session-id="s-a"')).toBeGreaterThan(alpha);
+      expect(html.indexOf('data-session-id="s-a"')).toBeLessThan(beta);
+      expect(html.indexOf('data-session-id="s-b"')).toBeGreaterThan(beta);
+      // Each workspace starts its own sessions, whatever the scope.
+      expect(html).toContain('aria-label="Create session in Alpha"');
+      expect(html).toContain('aria-label="Create session in Beta"');
+      expect(html).toContain('aria-label="Collapse all session lists"');
       expect(html).toMatch(
-        /aria-label="Create session"[^>]*disabled=""[^>]*title="Pick a workspace to start a session in/,
+        /aria-expanded="true"[^>]*aria-label="Collapse Alpha sessions"/,
       );
     });
 
-    test("a workspace's own view names no workspace on its cards", () => {
+    test("every workspace at once has no session view", () => {
       const html = renderToStaticMarkup(
         <App
           injectedClient={client}
           initialSnapshot={two}
-          initialWorkspaceView="sessions"
+          initialScope="all"
+          initialWorkspaceView="session"
         />,
       );
-      expect(html).toContain('data-session-id="s-a"');
-      expect(html).not.toContain('data-session-id="s-b"');
-      expect(html).not.toContain("session-card-workspace");
+      expect(html).toContain("mode-board");
+      expect(html).not.toContain("terminal-column");
     });
 
-    test("the scope's views fall back from Workspace to Board", () => {
+    test("the scope's views fall back to Board", () => {
       expect(preferredScopeView("all", "workspace")).toBe("board");
-      expect(preferredScopeView("all", "sessions")).toBe("sessions");
+      expect(preferredScopeView("all", "session")).toBe("board");
+      expect(preferredScopeView("all", "sessions")).toBe("board");
+      expect(preferredScopeView("workspace", "session")).toBe("session");
       expect(preferredScopeView("all", "world")).toBe("world");
       expect(preferredScopeView("workspace", "workspace")).toBe("workspace");
       expect(preferredScopeView("all", null)).toBe("board");
@@ -1484,7 +1505,7 @@ describe("desktop application shell", () => {
     expect(html).toContain("folder missing");
   });
 
-  test("renders an active terminal beside the Sessions view cards", () => {
+  test("renders the active session's terminal as the main column", () => {
     const running = {
       id: "11111111-1111-4111-8111-111111111111",
       workspaceId: "w1",
@@ -1562,7 +1583,7 @@ describe("desktop application shell", () => {
         initialDetailView="terminal"
         initialSelectedTaskId="t1"
         initialSnapshot={snapshot}
-        initialWorkspaceView="sessions"
+        initialWorkspaceView="session"
       />,
     );
     expect(html).toContain("Terminal task");
@@ -1570,8 +1591,10 @@ describe("desktop application shell", () => {
     expect(html).toContain("running · 111111");
     expect(html).toContain("running · 222222");
     expect(html).toContain("Terminal for Terminal task 11111111");
-    expect(html).toContain("session-navigator");
-    expect(html).toContain('aria-label="Resize sessions panel"');
+    expect(html).toContain("mode-session");
+    // The terminal takes the main column: no Sessions column beside it.
+    expect(html).not.toContain("workspace-main");
+    expect(html).not.toContain("secondary-panel-resize-handle");
     expect(html).not.toContain("board-detail-column");
   });
 
@@ -1627,7 +1650,7 @@ describe("desktop application shell", () => {
         injectedClient={client}
         initialModal="session"
         initialSnapshot={snapshot}
-        initialWorkspaceView="sessions"
+        initialWorkspaceView="session"
       />,
     );
     expect(html).toContain("Workspace session");
@@ -1700,7 +1723,7 @@ describe("desktop application shell", () => {
       <App
         injectedClient={client}
         initialSnapshot={snapshot}
-        initialWorkspaceView="sessions"
+        initialWorkspaceView="session"
       />,
     );
     // Cards carry no drag affordance at all — no grip, no grab cursor — by
@@ -1816,7 +1839,7 @@ describe("desktop application shell", () => {
       <App
         injectedClient={client}
         initialSnapshot={snapshot}
-        initialWorkspaceView="sessions"
+        initialWorkspaceView="session"
       />,
     );
     expect(html).toContain("Archived workspaces (1)");
@@ -1929,7 +1952,7 @@ describe("desktop application shell", () => {
           workspaces: [workspace],
           settings: { ...base.settings, tmuxAvailable: true },
         }}
-        initialWorkspaceView="sessions"
+        initialWorkspaceView="session"
       />,
     );
     expect(html).toContain("session-card-starting");
@@ -2173,7 +2196,7 @@ describe("session status indicators", () => {
           ],
           settings: { ...base.settings, tmuxAvailable: true },
         }}
-        initialWorkspaceView="sessions"
+        initialWorkspaceView="session"
       />,
     );
     // The workspace list carries the roll-up, so a blocked session in a

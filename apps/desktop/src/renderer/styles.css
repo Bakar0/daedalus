@@ -557,7 +557,85 @@ button:not(
 }
 .workspace-card-actions .session-card-action {
   flex: 1;
-  min-height: 28px;
+  min-height: 22px;
+}
+.workspace-session-create {
+  font-size: 16px !important;
+  line-height: 1;
+  opacity: 0.48;
+}
+.workspace-card:hover .workspace-session-create,
+.workspace-session-create:focus-visible {
+  opacity: 1;
+}
+
+/* A workspace and the sessions listed under it (#55). */
+.workspace-group {
+  margin: 2px 0;
+}
+.workspace-group > .workspace-card {
+  margin: 0;
+}
+.workspace-disclosure {
+  align-items: center;
+  border-radius: 0 !important;
+  display: flex;
+  flex: 0 0 18px;
+  justify-content: center;
+  padding: 0 !important;
+}
+.workspace-disclosure svg {
+  fill: none;
+  height: 12px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+  transition: transform 120ms ease;
+  width: 12px;
+}
+.workspace-disclosure[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+.workspace-disclosure:disabled {
+  visibility: hidden;
+}
+.workspace-fold-all {
+  align-items: center;
+  display: flex;
+  height: 28px;
+  justify-content: center;
+  padding: 0 !important;
+  width: 28px;
+}
+.workspace-fold-all svg {
+  fill: none;
+  height: 14px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+  width: 14px;
+}
+.workspace-sessions {
+  padding: 4px 0 6px 18px;
+}
+.workspace-sessions .session-grid {
+  gap: 4px;
+  grid-template-columns: 1fr;
+  overflow: visible;
+  padding: 0;
+}
+.workspace-sessions .session-card {
+  min-height: 0;
+}
+/* Lean: the start time is the one line a card under its workspace drops. */
+.workspace-sessions .session-card-main time {
+  display: none;
+}
+.workspace-sessions .session-archive-list {
+  margin-top: 4px;
+  padding-top: 2px;
 }
 .workspace-card-archive,
 .workspace-terminal-action {
@@ -2058,10 +2136,13 @@ dd {
     var(--workspace-panel-width) 6px minmax(320px, 1fr) 6px
     var(--board-detail-panel-width);
 }
-.workspace-shell.mode-sessions {
-  grid-template-columns:
-    var(--workspace-panel-width) 6px var(--sessions-panel-width) 6px
-    minmax(320px, 1fr);
+/* One session's terminal beside the left column, which lists the sessions
+   under their workspaces (#55). */
+.workspace-shell.mode-session {
+  grid-template-columns: var(--workspace-panel-width) 6px minmax(320px, 1fr);
+}
+.workspace-shell.mode-session .terminal-column {
+  grid-column: 3 / -1;
 }
 .workspace-shell.mode-workspace,
 .workspace-shell.mode-world {
@@ -3120,12 +3201,6 @@ dd {
 .session-archive-list {
   max-height: 280px;
 }
-.mode-sessions .session-grid {
-  grid-template-columns: 1fr;
-}
-.mode-sessions .session-card {
-  min-height: 92px;
-}
 .session-card {
   align-items: stretch;
   background: var(--raised);
@@ -3222,11 +3297,6 @@ dd {
 }
 .session-card-main strong {
   font-size: 11px;
-}
-/* The session's workspace, only in the all-workspaces list (#35). */
-.session-card-workspace {
-  color: var(--secondary);
-  font-weight: 600;
 }
 .session-card-main em {
   align-items: center;
@@ -3336,7 +3406,10 @@ dd {
 .workspace-column.panel-compact .create-button,
 .workspace-column.panel-compact .workspace-card-content,
 .workspace-column.panel-compact .workspace-card-actions,
-.workspace-column.panel-compact .workspace-archive-list {
+.workspace-column.panel-compact .workspace-archive-list,
+.workspace-column.panel-compact .workspace-disclosure,
+.workspace-column.panel-compact .workspace-fold-all,
+.workspace-column.panel-compact .workspace-sessions {
   display: none;
 }
 .workspace-column.panel-compact .section-heading {
@@ -3352,31 +3425,6 @@ dd {
 }
 .workspace-column.panel-compact .workspace-icon {
   flex: 0 0 auto;
-}
-.session-navigator.panel-compact {
-  padding-left: 7px;
-  padding-right: 7px;
-}
-.session-navigator.panel-compact .workspace-main-header,
-.session-navigator.panel-compact .sessions-toolbar > div:first-child,
-.session-navigator.panel-compact .create-button,
-.session-navigator.panel-compact .session-card-main > span:last-child,
-.session-navigator.panel-compact .session-card-action,
-.session-navigator.panel-compact .session-archive-list {
-  display: none;
-}
-.session-navigator.panel-compact .workspace-main-header,
-.session-navigator.panel-compact .sessions-toolbar {
-  justify-content: center;
-}
-.session-navigator.panel-compact .session-grid {
-  grid-template-columns: 1fr;
-  padding-left: 0;
-  padding-right: 0;
-}
-.session-navigator.panel-compact .session-card-main {
-  justify-content: center;
-  padding: 9px 5px !important;
 }
 .board-detail-column.panel-compact {
   align-items: center;
@@ -3411,7 +3459,7 @@ dd {
 }
 @media (max-width: 820px) {
   .workspace-shell.mode-board,
-  .workspace-shell.mode-sessions,
+  .workspace-shell.mode-session,
   .workspace-shell.mode-workspace,
   .workspace-shell.mode-world {
     grid-template-columns:
@@ -3428,6 +3476,10 @@ dd {
   .terminal-column,
   .secondary-panel-resize-handle {
     display: none;
+  }
+  /* In the session view the terminal is the main column, not a side one. */
+  .workspace-shell.mode-session .terminal-column {
+    display: flex;
   }
 }
 
