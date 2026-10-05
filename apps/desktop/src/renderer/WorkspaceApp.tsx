@@ -2,8 +2,6 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { basicSetup, EditorView } from "codemirror";
-import { markdown } from "@codemirror/lang-markdown";
 import {
   lazy,
   Suspense,
@@ -18,8 +16,6 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
 } from "react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import type {
   AppUpdateDto,
   TaskTimelineDto,
@@ -44,9 +40,6 @@ import type {
   ShutdownPlanDto,
   TaskDto,
   WorkspaceContentDto,
-  WorkspaceFileChangeDto,
-  WorkspaceFileDto,
-  WorkspaceFileEntryDto,
   WorkspaceDto,
   ToastDto,
 } from "@daedalus/protocol";
@@ -64,6 +57,8 @@ import { taskActions } from "./task-actions";
 import { TaskCostLine, TaskTimeline } from "./TaskTimeline";
 import { TaskActionBar } from "./TaskActionBar";
 import { askConfirm, askText, DialogHost } from "./dialogs";
+import { FilesView } from "./files/FilesView";
+import { MarkdownPreview } from "./markdown-preview";
 import { buildWorldModel, worldInputFromSnapshot } from "./world/world-model";
 import { TaskPriorityMenu, TaskStatusMenu } from "./TaskStatusMenu";
 import { ColorSwatches, SessionMenu } from "./SessionMenu";
@@ -89,6 +84,8 @@ import {
 // Pixi is about 290 kB (87 kB gzipped) that the app only needs once someone
 // opens the World, so the view and everything under it load on first open.
 const WorldView = lazy(() => import("./world/WorldView"));
+
+export { MarkdownPreview };
 
 // The indicator vocabulary moved to `session-view.tsx`; these stay importable
 // from here because the tests and harnesses have always found them here.
@@ -123,17 +120,15 @@ const storedPanelSize = (key: string, fallback: number) => {
   return Number.isFinite(stored) && stored > 0 ? stored : fallback;
 };
 
-export const EXPLORER_MIN_WIDTH = 170;
-export const EXPLORER_MAX_WIDTH = 560;
-export const EXPLORER_DEFAULT_WIDTH = 255;
-// The file viewer next to the explorer stops being a viewer below this.
-const EXPLORER_VIEWER_MIN_WIDTH = 300;
-
-export const clampExplorerWidth = (width: number, available: number) =>
-  Math.min(
-    Math.max(EXPLORER_MIN_WIDTH, Math.round(width)),
-    Math.max(EXPLORER_MIN_WIDTH, Math.min(EXPLORER_MAX_WIDTH, available)),
-  );
+export {
+  clampExplorerWidth,
+  EXPLORER_DEFAULT_WIDTH,
+  EXPLORER_MAX_WIDTH,
+  EXPLORER_MIN_WIDTH,
+  type ExplorerRefreshPlan,
+  parseRememberedDirectories,
+  planExplorerRefresh,
+} from "./files/explorer-state";
 
 const COLLAPSED_WORKSPACES_STORAGE_KEY = "daedalus.workspaces.collapsed";
 
@@ -168,58 +163,6 @@ const rememberedCollapsedWorkspaces = () => {
 
 const lastSessionStorageKey = (workspaceId: string) =>
   `daedalus.session.last.${workspaceId}`;
-
-const expandedDirectoriesStorageKey = (workspaceId: string) =>
-  `daedalus.explorer.expanded.${workspaceId}`;
-
-// Every remembered folder costs one directory listing on the way back into a
-// workspace, and a tree nobody could have opened by hand is not worth paying
-// for. The cap keeps the shallowest, because a child whose parent was dropped
-// would not be reachable anyway.
-const MAX_REMEMBERED_DIRECTORIES = 200;
-
-export function parseRememberedDirectories(raw: string | null): string[] {
-  if (!raw) return [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return [];
-  }
-  if (!Array.isArray(parsed)) return [];
-  const paths = parsed.filter(
-    (entry): entry is string => typeof entry === "string" && entry.length > 0,
-  );
-  return [...new Set(paths)]
-    .sort((a, b) => a.split("/").length - b.split("/").length)
-    .slice(0, MAX_REMEMBERED_DIRECTORIES);
-}
-
-const rememberedExpandedDirectories = (workspaceId: string) => {
-  if (typeof window === "undefined") return [];
-  try {
-    return parseRememberedDirectories(
-      window.localStorage.getItem(expandedDirectoriesStorageKey(workspaceId)),
-    );
-  } catch {
-    return [];
-  }
-};
-
-const rememberExpandedDirectories = (
-  workspaceId: string,
-  directories: Iterable<string>,
-) => {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(
-      expandedDirectoriesStorageKey(workspaceId),
-      JSON.stringify([...directories]),
-    );
-  } catch {
-    // A disabled or full store is not worth failing a disclosure triangle over.
-  }
-};
 
 const lastViewStorageKey = (workspaceId: string) =>
   `daedalus.view.last.${workspaceId}`;
@@ -422,60 +365,6 @@ const elapsedLabel = (
   const remainder = minutes % 60;
   return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
 };
-
-const workspaceParentPath = (path: string) => {
-  const separator = path.lastIndexOf("/");
-  return separator < 0 ? "" : path.slice(0, separator);
-};
-
-export interface ExplorerRefreshPlan {
-  /** Folders whose listing is now wrong and has to be fetched again. */
-  relist: string[];
-  /** Folders that are gone: drop their cached listing and their expansion. */
-  dropped: string[];
-}
-
-/**
- * Turns a batch of filesystem changes into the smallest amount of work the
- * explorer has to do.
- *
- * It answers in folders, never in rows, and deliberately never touches the
- * DOM. Re-listing the affected folders and writing the result back into the
- * directory cache is what lets expansion, selection, scroll position and an
- * unsaved draft survive a change on disk — replacing the tree would lose all
- * four.
- *
- * Only folders the explorer has already listed are re-listed. A change deep
- * inside a folder nobody has opened is real, but there is nothing on screen
- * that is wrong because of it, and listing it would be work for no one.
- */
-export function planExplorerRefresh(input: {
-  known: readonly string[];
-  changes: readonly WorkspaceFileChangeDto[];
-  overflow: boolean;
-}): ExplorerRefreshPlan {
-  const known = new Set(input.known);
-  // Past the overflow limit the host stops describing individual paths, so
-  // the only correct answer is to re-read everything that is on screen.
-  if (input.overflow) return { relist: [...known], dropped: [] };
-
-  const dropped = new Set<string>();
-  for (const change of input.changes) {
-    if (change.kind !== "deleted") continue;
-    for (const folder of known)
-      if (folder === change.path || folder.startsWith(`${change.path}/`))
-        dropped.add(folder);
-  }
-
-  const relist = new Set<string>();
-  for (const change of input.changes) {
-    const parent = workspaceParentPath(change.path);
-    // A folder that is itself gone is not worth re-listing; its own parent is
-    // already in the set and will report it missing.
-    if (known.has(parent) && !dropped.has(parent)) relist.add(parent);
-  }
-  return { relist: [...relist], dropped: [...dropped] };
-}
 
 function PanelCollapseButton({
   collapsed,
@@ -957,120 +846,6 @@ const taskExcerpt = (markdown: string) =>
     .replace(/[*_~`]/g, "")
     .replace(/\s+/g, " ")
     .trim();
-
-export function MarkdownPreview({ source }: { source: string }) {
-  if (!source.trim())
-    return (
-      <div className="brief-placeholder">
-        <strong>No task brief yet</strong>
-        <span>Add goals, context, and acceptance criteria for the agent.</span>
-      </div>
-    );
-  return (
-    <div className="markdown-body">
-      <Markdown remarkPlugins={[remarkGfm]}>{source}</Markdown>
-    </div>
-  );
-}
-
-function WorkspaceFileEditor({
-  file,
-  onChange,
-  onSave,
-  readOnly,
-  theme,
-}: {
-  file: WorkspaceFileDto;
-  onChange: (value: string) => void;
-  onSave: () => void;
-  readOnly: boolean;
-  theme: "dark" | "light";
-}) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const editorRef = useRef<EditorView | undefined>(undefined);
-  const changeRef = useRef(onChange);
-  const saveRef = useRef(onSave);
-  changeRef.current = onChange;
-  saveRef.current = onSave;
-
-  useEffect(() => {
-    const parent = containerRef.current;
-    if (!parent) return;
-    const editor = new EditorView({
-      doc: file.content,
-      parent,
-      extensions: [
-        basicSetup,
-        EditorView.editable.of(!readOnly),
-        EditorView.lineWrapping,
-        ...(file.format === "markdown" ? [markdown()] : []),
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged) changeRef.current(update.state.doc.toString());
-        }),
-        EditorView.theme(
-          {
-            "&": {
-              backgroundColor: "transparent",
-              color: theme === "dark" ? "#dce5f5" : "#1d2738",
-              height: "100%",
-            },
-            ".cm-content": {
-              caretColor: theme === "dark" ? "#9fc5ff" : "#2563a9",
-              fontFamily: '"SFMono-Regular", Menlo, monospace',
-              fontSize: "12px",
-              lineHeight: "1.6",
-              padding: "12px 0 28px",
-            },
-            ".cm-cursor, .cm-dropCursor": {
-              borderLeftColor: theme === "dark" ? "#9fc5ff" : "#2563a9",
-            },
-            ".cm-gutters": {
-              backgroundColor: "transparent",
-              border: "none",
-              color: theme === "dark" ? "#56657d" : "#8b98aa",
-            },
-            ".cm-activeLine, .cm-activeLineGutter": {
-              backgroundColor: theme === "dark" ? "#ffffff08" : "#315d9510",
-            },
-            ".cm-scroller": { overflow: "auto" },
-            "&.cm-focused": { outline: "none" },
-          },
-          { dark: theme === "dark" },
-        ),
-      ],
-    });
-    editorRef.current = editor;
-    editor.focus();
-    return () => {
-      editorRef.current = undefined;
-      editor.destroy();
-    };
-  }, [file.format, file.path, readOnly, theme]);
-
-  useEffect(() => {
-    const editor = editorRef.current;
-    if (!editor || editor.state.doc.toString() === file.content) return;
-    editor.dispatch({
-      changes: { from: 0, to: editor.state.doc.length, insert: file.content },
-    });
-  }, [file.content]);
-
-  return (
-    <div
-      className="workspace-code-editor"
-      onKeyDown={(event) => {
-        if (
-          (event.metaKey || event.ctrlKey) &&
-          event.key.toLowerCase() === "s"
-        ) {
-          event.preventDefault();
-          saveRef.current();
-        }
-      }}
-      ref={containerRef}
-    />
-  );
-}
 
 const plural = (count: number, noun: string) =>
   `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -1866,108 +1641,6 @@ export function WorkspaceApp({
   const [workspaceContent, setWorkspaceContent] = useState(
     initialWorkspaceContent,
   );
-  const [workspaceDirectories, setWorkspaceDirectories] = useState<
-    Record<string, WorkspaceFileEntryDto[]>
-  >(() =>
-    initialWorkspaceContent
-      ? { "": initialWorkspaceContent.files }
-      : ({} as Record<string, WorkspaceFileEntryDto[]>),
-  );
-  const [expandedWorkspaceDirectories, setExpandedWorkspaceDirectories] =
-    useState<ReadonlySet<string>>(() => new Set());
-  const [selectedWorkspaceFile, setSelectedWorkspaceFile] =
-    useState<WorkspaceFileDto | null>(() =>
-      initialWorkspaceContent
-        ? {
-            name: "BRIEF.md",
-            path: "BRIEF.md",
-            content: initialWorkspaceContent.brief,
-            format: "markdown",
-          }
-        : null,
-    );
-  const [workspaceDraft, setWorkspaceDraft] = useState(
-    initialWorkspaceContent?.brief ?? "",
-  );
-  const [workspaceFileMode, setWorkspaceFileMode] = useState<
-    "edit" | "preview"
-  >("edit");
-  // The filesystem subscription is established once per workspace and must not
-  // be torn down and rebuilt every time a listing lands, so it reads the cache
-  // and the open file through refs rather than closing over them.
-  const workspaceDirectoriesRef = useRef(workspaceDirectories);
-  workspaceDirectoriesRef.current = workspaceDirectories;
-  const selectedWorkspaceFileRef = useRef(selectedWorkspaceFile);
-  selectedWorkspaceFileRef.current = selectedWorkspaceFile;
-  const workspaceDraftRef = useRef(workspaceDraft);
-  workspaceDraftRef.current = workspaceDraft;
-  /**
-   * What a change on disk does to the file the viewer has open.
-   *
-   * An unsaved draft is never touched. Someone typing into the editor while an
-   * agent writes the same file would lose their work, and a stale draft the
-   * user can still see and save is strictly better than a silent overwrite —
-   * `workspaceFileWrite` compares against `expectedContent`, so the conflict
-   * is caught at save time and reported rather than lost here.
-   */
-  const reconcileOpenFile = useCallback(
-    async (changes: readonly WorkspaceFileChangeDto[], overflow: boolean) => {
-      const open = selectedWorkspaceFileRef.current;
-      if (!open || !workspaceId) return;
-      if (workspaceDraftRef.current !== open.content) return;
-      const touched = overflow
-        ? undefined
-        : changes.find((change) => change.path === open.path);
-      if (!overflow && !touched) return;
-      if (touched?.kind === "deleted") {
-        setSelectedWorkspaceFile(null);
-        setWorkspaceDraft("");
-        return;
-      }
-      const reread = await client.request.workspaceFileRead({
-        workspace: workspaceId,
-        path: open.path,
-      });
-      // Still the same file, and still unedited — checked again because the
-      // read was a round trip and the user may have started typing during it.
-      if (
-        selectedWorkspaceFileRef.current?.path !== open.path ||
-        workspaceDraftRef.current !== open.content
-      )
-        return;
-      if (!reread.ok) {
-        // An overflow says nothing about this file in particular, so a read
-        // that fails under one is the only evidence that it is gone.
-        if (overflow) {
-          setSelectedWorkspaceFile(null);
-          setWorkspaceDraft("");
-        }
-        return;
-      }
-      if (reread.data.content === open.content) return;
-      setSelectedWorkspaceFile(reread.data);
-      setWorkspaceDraft(reread.data.content);
-    },
-    [client, workspaceId],
-  );
-  const [selectedWorkspaceDirectory, setSelectedWorkspaceDirectory] =
-    useState("");
-  const [newWorkspaceEntry, setNewWorkspaceEntry] = useState<{
-    kind: "file" | "directory";
-    name: string;
-  }>();
-  // The context menu is positioned at the pointer rather than anchored to the
-  // row, which is what every file explorer does and what makes it reachable
-  // for a row scrolled to the edge of the tree.
-  const [entryMenu, setEntryMenu] = useState<{
-    entry: WorkspaceFileEntryDto;
-    x: number;
-    y: number;
-  }>();
-  const [renamingEntry, setRenamingEntry] = useState<{
-    path: string;
-    name: string;
-  }>();
   const [modal, setModal] = useState<
     "workspace" | "task" | "session" | "repository" | "settings" | undefined
   >(initialModal);
@@ -1978,12 +1651,8 @@ export function WorkspaceApp({
   const [editingTask, setEditingTask] = useState(false);
   const [taskTimeline, setTaskTimeline] = useState<TaskTimelineDto>();
   const [taskTimelineLoading, setTaskTimelineLoading] = useState(false);
-  // A journal heading the workspace view should scroll to once it has opened
-  // JOURNAL.md. Read through a ref by the view's loader, which must not
-  // re-run just because a link was followed.
+  // A journal heading the workspace view should open JOURNAL.md at, once.
   const [journalTarget, setJournalTarget] = useState<string>();
-  const journalTargetRef = useRef(journalTarget);
-  journalTargetRef.current = journalTarget;
   // The quit dialog is driven entirely by the host: it arrives with the plan
   // already computed, and every button answers back over `quitDecision`.
   const [quitRequest, setQuitRequest] = useState<ShutdownPlanDto>();
@@ -2049,19 +1718,6 @@ export function WorkspaceApp({
   const [fetchOutcomes, setFetchOutcomes] = useState<
     Readonly<Record<string, RepositoryFetchOutcomeDto>>
   >({});
-  const [journalForm, setJournalForm] = useState<{
-    kind:
-      | "decision"
-      | "progress"
-      | "blocker"
-      | "question"
-      | "handoff"
-      | "completed";
-    summary: string;
-  }>({
-    kind: "progress",
-    summary: "",
-  });
   const [worktreeAction, setWorktreeAction] = useState<{
     worktree: SessionWorktreeDto;
     repositoryName: string;
@@ -2123,9 +1779,6 @@ export function WorkspaceApp({
   );
   const [boardDetailPanelWidth, setBoardDetailPanelWidth] = useState(() =>
     storedPanelSize("daedalus.panel.board-detail-width", 340),
-  );
-  const [explorerWidth, setExplorerWidth] = useState(() =>
-    storedPanelSize("daedalus.panel.explorer-width", EXPLORER_DEFAULT_WIDTH),
   );
   const boardDetailExpandedWidth = useRef(
     boardDetailPanelWidth >= PANEL_COMPACT_THRESHOLD
@@ -2273,48 +1926,6 @@ export function WorkspaceApp({
     [boardDetailPanelWidth, view, workspacePanelWidth],
   );
 
-  // The explorer's own two borders. They are deliberately not the column
-  // resizer above: that one divides the whole shell, and the maxima here are
-  // the file viewer beside the explorer and the file tree above the
-  // repositories, neither of which the shell knows about.
-  const startExplorerWidthResize = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      const browser = event.currentTarget.closest(".workspace-browser");
-      if (!(browser instanceof HTMLElement)) return;
-      const startX = event.clientX;
-      const aside = browser.querySelector<HTMLElement>(".workspace-explorer");
-      const startWidth = aside?.offsetWidth ?? explorerWidth;
-      const available =
-        browser.clientWidth -
-        EXPLORER_VIEWER_MIN_WIDTH -
-        event.currentTarget.offsetWidth;
-
-      const handle = event.currentTarget;
-      handle.classList.add("dragging");
-      document.body.classList.add("resizing-column-panel");
-      const move = (moveEvent: PointerEvent) => {
-        setExplorerWidth(
-          clampExplorerWidth(
-            startWidth + moveEvent.clientX - startX,
-            available,
-          ),
-        );
-      };
-      const stop = () => {
-        handle.classList.remove("dragging");
-        document.body.classList.remove("resizing-column-panel");
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", stop);
-        window.removeEventListener("pointercancel", stop);
-      };
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", stop);
-      window.addEventListener("pointercancel", stop);
-    },
-    [explorerWidth],
-  );
-
   const toggleBoardDetailPanel = useCallback(() => {
     setBoardDetailPanelWidth((width) => {
       if (width < PANEL_COMPACT_THRESHOLD)
@@ -2387,10 +1998,6 @@ export function WorkspaceApp({
       .then((response) => {
         if (cancelled || !response.ok) return;
         setWorkspaceContent(response.data);
-        setWorkspaceDirectories((current) => ({
-          ...current,
-          "": response.data.files,
-        }));
       });
     return () => {
       cancelled = true;
@@ -2409,10 +2016,6 @@ export function WorkspaceApp({
       .then((response) => {
         if (cancelled || !response.ok) return;
         setWorkspaceContent(response.data);
-        setWorkspaceDirectories((current) => ({
-          ...current,
-          "": response.data.files,
-        }));
       });
     return () => {
       cancelled = true;
@@ -2481,31 +2084,6 @@ export function WorkspaceApp({
       cancelled = true;
     };
   }, [client, dataRevision, selectedTaskId, view]);
-
-  // Once the journal is rendered, bring the linked entry into view. Matched on
-  // the heading's text, which is what the timeline carries, and dropped after
-  // one attempt so a later visit to the journal is not yanked back to it.
-  useEffect(() => {
-    if (
-      !journalTarget ||
-      view !== "workspace" ||
-      selectedWorkspaceFile?.path !== "JOURNAL.md" ||
-      workspaceFileMode !== "preview"
-    )
-      return;
-    const frame = requestAnimationFrame(() => {
-      const heading = [
-        ...document.querySelectorAll<HTMLElement>(
-          ".workspace-viewer-content h2, .workspace-viewer-content h3",
-        ),
-      ].find((element) => element.textContent?.trim() === journalTarget);
-      // The class carries the scroll margin, so it goes on before the scroll.
-      heading?.classList.add("journal-target");
-      heading?.scrollIntoView({ block: "start" });
-      setJournalTarget(undefined);
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [journalTarget, selectedWorkspaceFile, view, workspaceFileMode]);
 
   const setFocusMode = useCallback(
     async (enabled: boolean) => {
@@ -2697,71 +2275,12 @@ export function WorkspaceApp({
           return;
         }
         setWorkspaceContent(response.data);
-        setWorkspaceDirectories({ "": response.data.files });
-        // A journal link from the task timeline lands on the entry, rendered,
-        // rather than on the brief the view opens by default.
-        const journal = Boolean(journalTargetRef.current);
-        setSelectedWorkspaceFile({
-          name: journal ? "JOURNAL.md" : "BRIEF.md",
-          path: journal ? "JOURNAL.md" : "BRIEF.md",
-          content: journal ? response.data.journal : response.data.brief,
-          format: "markdown",
-        });
-        setWorkspaceDraft(
-          journal ? response.data.journal : response.data.brief,
-        );
-        setWorkspaceFileMode(journal ? "preview" : "edit");
-        setSelectedWorkspaceDirectory("");
-        setNewWorkspaceEntry(undefined);
         setError(undefined);
-
-        // Folders the user opened stay open across a workspace switch, a trip
-        // to the board, and a restart. Each one is listed again rather than
-        // trusted: a folder can be gone, or no longer a folder, between two
-        // visits, and an entry that cannot be listed is simply forgotten.
-        const remembered = rememberedExpandedDirectories(workspaceId);
-        if (remembered.length === 0) {
-          setExpandedWorkspaceDirectories(new Set());
-          return;
-        }
-        const listings = await Promise.all(
-          remembered.map(async (path) => {
-            const listing = await client.request.workspaceDirectoryList({
-              workspace: workspaceId,
-              path,
-            });
-            return listing.ok ? ([path, listing.data] as const) : undefined;
-          }),
-        );
-        if (cancelled) return;
-        const restored = listings.filter((entry) => entry !== undefined);
-        setWorkspaceDirectories((current) => ({
-          ...current,
-          ...Object.fromEntries(restored),
-        }));
-        const paths = restored.map(([path]) => path);
-        setExpandedWorkspaceDirectories(new Set(paths));
-        if (paths.length !== remembered.length)
-          rememberExpandedDirectories(workspaceId, paths);
       });
     return () => {
       cancelled = true;
     };
   }, [client, view, workspaceId]);
-
-  useEffect(() => {
-    if (!entryMenu) return;
-    const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setEntryMenu(undefined);
-    };
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  }, [entryMenu]);
-  // A menu and a half-typed rename both belong to a tree that is on screen.
-  useEffect(() => {
-    setEntryMenu(undefined);
-    setRenamingEntry(undefined);
-  }, [view, workspaceId]);
 
   // The host watches whichever workspace this window is actually showing, and
   // nothing when it is showing something else. A watcher is a kernel resource
@@ -2777,66 +2296,6 @@ export function WorkspaceApp({
     };
   }, [client, view, workspaceId]);
 
-  // Changes on disk are reconciled into the directory cache, never applied to
-  // the tree directly. Re-listing the affected folders is what lets expansion,
-  // selection and an unsaved draft survive a file appearing underneath them.
-  useEffect(() => {
-    if (!workspaceId) return;
-    let cancelled = false;
-    const unsubscribe = client.subscribeWorkspaceFiles(
-      ({ workspaceId: changed, changes, overflow }) => {
-        if (changed !== workspaceId) return;
-        void (async () => {
-          const plan = planExplorerRefresh({
-            known: Object.keys(workspaceDirectoriesRef.current),
-            changes,
-            overflow,
-          });
-          if (plan.dropped.length > 0) {
-            setWorkspaceDirectories((current) => {
-              const next = { ...current };
-              for (const folder of plan.dropped) delete next[folder];
-              return next;
-            });
-            // A folder that no longer exists cannot be open. Forgetting it here
-            // also keeps it out of what is remembered for the next visit.
-            setExpandedWorkspaceDirectories((current) => {
-              if (!plan.dropped.some((folder) => current.has(folder)))
-                return current;
-              const next = new Set(current);
-              for (const folder of plan.dropped) next.delete(folder);
-              rememberExpandedDirectories(workspaceId, next);
-              return next;
-            });
-          }
-          const listings = await Promise.all(
-            plan.relist.map(async (path) => {
-              const listing = await client.request.workspaceDirectoryList({
-                workspace: workspaceId,
-                path: path || undefined,
-              });
-              // A folder that vanished between the event and this call simply
-              // has no listing; its own parent is in the same batch and will
-              // report it gone.
-              return listing.ok ? ([path, listing.data] as const) : undefined;
-            }),
-          );
-          if (cancelled) return;
-          const refreshed = listings.filter((entry) => entry !== undefined);
-          if (refreshed.length > 0)
-            setWorkspaceDirectories((current) => ({
-              ...current,
-              ...Object.fromEntries(refreshed),
-            }));
-          await reconcileOpenFile(changes, overflow);
-        })();
-      },
-    );
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
-  }, [client, workspaceId, reconcileOpenFile]);
   useEffect(() => {
     const stored = window.localStorage.getItem("daedalus.theme");
     if (stored === "dark" || stored === "light") setTheme(stored);
@@ -2855,12 +2314,6 @@ export function WorkspaceApp({
       String(boardDetailPanelWidth),
     );
   }, [boardDetailPanelWidth]);
-  useEffect(() => {
-    window.localStorage.setItem(
-      "daedalus.panel.explorer-width",
-      String(explorerWidth),
-    );
-  }, [explorerWidth]);
   useEffect(() => {
     if (!snapshot || sessionType === "terminal") return;
     const selected = snapshot.settings.providers.find(
@@ -3266,11 +2719,6 @@ export function WorkspaceApp({
     if (left.kind !== right.kind) return left.kind === "library" ? -1 : 1;
     return left.order - right.order;
   });
-  const workspaceSelectionReadOnly =
-    selectedWorkspaceDirectory === "repos" ||
-    selectedWorkspaceDirectory.startsWith("repos/");
-  const selectedWorkspaceFileReadOnly =
-    selectedWorkspaceFile?.path.startsWith("repos/") ?? false;
   const canSubmitRepositoryPicker =
     looksLikeRepositorySource(repositoryForm.search) ||
     [...selectedRepositoryIds].filter(
@@ -3704,10 +3152,6 @@ export function WorkspaceApp({
       });
       if (!content.ok) throw new Error(content.error.message);
       setWorkspaceContent(content.data);
-      setWorkspaceDirectories((current) => ({
-        ...current,
-        "": content.data.files,
-      }));
       await refresh();
     } catch (cause) {
       setError(errorMessage(cause));
@@ -3800,355 +3244,6 @@ export function WorkspaceApp({
     });
     if (!content.ok) return;
     setWorkspaceContent(content.data);
-    setWorkspaceDirectories((current) => ({
-      ...current,
-      "": content.data.files,
-    }));
-  }
-
-  async function appendJournal(event: React.FormEvent) {
-    event.preventDefault();
-    if (!workspace) return;
-    const content = await perform(
-      client.request.workspaceJournalAppend({
-        workspace: workspace.id,
-        kind: journalForm.kind,
-        summary: journalForm.summary,
-      }),
-    );
-    if (content) {
-      setWorkspaceContent(content);
-      setWorkspaceDirectories((current) => ({ ...current, "": content.files }));
-      if (selectedWorkspaceFile?.path === "JOURNAL.md")
-        setSelectedWorkspaceFile({
-          name: "JOURNAL.md",
-          path: "JOURNAL.md",
-          content: content.journal,
-          format: "markdown",
-        });
-      if (selectedWorkspaceFile?.path === "JOURNAL.md")
-        setWorkspaceDraft(content.journal);
-      setJournalForm({ kind: "progress", summary: "" });
-    }
-  }
-
-  function confirmDiscardDraft() {
-    return askConfirm({
-      title: "Unsaved changes",
-      message: "Discard the unsaved changes in the current file?",
-      confirmLabel: "Discard",
-      danger: true,
-    });
-  }
-
-  async function openWorkspaceFile(path: string) {
-    if (!workspace) return;
-    if (
-      selectedWorkspaceFile &&
-      workspaceDraft !== selectedWorkspaceFile.content &&
-      !(await confirmDiscardDraft())
-    )
-      return;
-    const response = await client.request.workspaceFileRead({
-      workspace: workspace.id,
-      path,
-    });
-    if (response.ok) {
-      setSelectedWorkspaceFile(response.data);
-      setWorkspaceDraft(response.data.content);
-      setWorkspaceFileMode("edit");
-      setSelectedWorkspaceDirectory(workspaceParentPath(response.data.path));
-      setError(undefined);
-    } else setError(response.error.message);
-  }
-
-  async function saveWorkspaceFile() {
-    if (
-      !workspace ||
-      !selectedWorkspaceFile ||
-      workspaceDraft === selectedWorkspaceFile.content
-    )
-      return;
-    const saved = await perform(
-      client.request.workspaceFileWrite({
-        workspace: workspace.id,
-        path: selectedWorkspaceFile.path,
-        content: workspaceDraft,
-        expectedContent: selectedWorkspaceFile.content,
-      }),
-    );
-    if (!saved) return;
-    setSelectedWorkspaceFile(saved);
-    setWorkspaceDraft(saved.content);
-    if (saved.path === "BRIEF.md")
-      setWorkspaceContent((current) =>
-        current ? { ...current, brief: saved.content } : current,
-      );
-    if (saved.path === "JOURNAL.md")
-      setWorkspaceContent((current) =>
-        current ? { ...current, journal: saved.content } : current,
-      );
-  }
-
-  async function createWorkspaceEntry(event: React.FormEvent) {
-    event.preventDefault();
-    if (!workspace || !newWorkspaceEntry) return;
-    if (
-      selectedWorkspaceFile &&
-      workspaceDraft !== selectedWorkspaceFile.content &&
-      !(await confirmDiscardDraft())
-    )
-      return;
-    const created = await perform(
-      client.request.workspaceEntryCreate({
-        workspace: workspace.id,
-        parentPath: selectedWorkspaceDirectory || undefined,
-        name: newWorkspaceEntry.name,
-        kind: newWorkspaceEntry.kind,
-      }),
-    );
-    if (!created) return;
-    const listing = await client.request.workspaceDirectoryList({
-      workspace: workspace.id,
-      path: selectedWorkspaceDirectory || undefined,
-    });
-    if (listing.ok)
-      setWorkspaceDirectories((current) => ({
-        ...current,
-        [selectedWorkspaceDirectory]: listing.data,
-        ...(created.kind === "directory" ? { [created.path]: [] } : {}),
-      }));
-    setNewWorkspaceEntry(undefined);
-    if (created.kind === "directory") {
-      setSelectedWorkspaceDirectory(created.path);
-      setExpandedWorkspaceDirectories((current) => {
-        const next = new Set(current)
-          .add(selectedWorkspaceDirectory)
-          .add(created.path);
-        // The root is expanded by definition and is not a path anyone can
-        // close, so it never belongs in what is remembered.
-        next.delete("");
-        rememberExpandedDirectories(workspace.id, next);
-        return next;
-      });
-    } else {
-      const opened = await client.request.workspaceFileRead({
-        workspace: workspace.id,
-        path: created.path,
-      });
-      if (opened.ok) {
-        setSelectedWorkspaceFile(opened.data);
-        setWorkspaceDraft(opened.data.content);
-        setWorkspaceFileMode("edit");
-        setSelectedWorkspaceDirectory(workspaceParentPath(opened.data.path));
-      } else setError(opened.error.message);
-    }
-  }
-
-  /** Fetches the named folders again and writes them back into the cache. */
-  async function relistDirectories(paths: readonly string[]) {
-    if (!workspace || paths.length === 0) return;
-    const listings = await Promise.all(
-      paths.map(async (path) => {
-        const listing = await client.request.workspaceDirectoryList({
-          workspace: workspace.id,
-          path: path || undefined,
-        });
-        return listing.ok ? ([path, listing.data] as const) : undefined;
-      }),
-    );
-    const refreshed = listings.filter((entry) => entry !== undefined);
-    if (refreshed.length > 0)
-      setWorkspaceDirectories((current) => ({
-        ...current,
-        ...Object.fromEntries(refreshed),
-      }));
-  }
-
-  /**
-   * Follows an entry that moved, so the explorer ends up in the state the user
-   * left it in rather than collapsing whatever they had open.
-   *
-   * The watcher would eventually re-list both parents on its own, but it would
-   * leave the renamed folder closed and the open file unselected — it reports
-   * two unrelated paths, and nothing on disk says they are the same entry.
-   * Only the caller knows that, so only the caller can carry the state across.
-   */
-  async function followMovedEntry(from: string, to: string) {
-    if (!workspace) return;
-    const repath = (path: string) =>
-      path === from
-        ? to
-        : path.startsWith(`${from}/`)
-          ? to + path.slice(from.length)
-          : path;
-    const moved = [...expandedWorkspaceDirectories].filter(
-      (path) => path === from || path.startsWith(`${from}/`),
-    );
-    if (moved.length > 0)
-      setExpandedWorkspaceDirectories((current) => {
-        const next = new Set([...current].map(repath));
-        rememberExpandedDirectories(workspace.id, next);
-        return next;
-      });
-    setWorkspaceDirectories((current) => {
-      const next: Record<string, WorkspaceFileEntryDto[]> = {};
-      for (const [path, entries] of Object.entries(current))
-        if (path !== from && !path.startsWith(`${from}/`)) next[path] = entries;
-      return next;
-    });
-    if (
-      selectedWorkspaceDirectory === from ||
-      selectedWorkspaceDirectory.startsWith(`${from}/`)
-    )
-      setSelectedWorkspaceDirectory(repath(selectedWorkspaceDirectory));
-    const open = selectedWorkspaceFile;
-    if (open && (open.path === from || open.path.startsWith(`${from}/`))) {
-      const reopened = await client.request.workspaceFileRead({
-        workspace: workspace.id,
-        path: repath(open.path),
-      });
-      if (reopened.ok) {
-        const wasEdited = workspaceDraft !== open.content;
-        setSelectedWorkspaceFile(reopened.data);
-        // A draft in progress belongs to the user, not to the path it was
-        // opened from. It follows the file rather than being discarded.
-        if (!wasEdited) setWorkspaceDraft(reopened.data.content);
-      }
-    }
-    await relistDirectories([
-      ...new Set([
-        workspaceParentPath(from),
-        workspaceParentPath(to),
-        ...moved.map(repath),
-      ]),
-    ]);
-  }
-
-  async function renameWorkspaceEntry(path: string, name: string) {
-    if (!workspace) return;
-    const trimmed = name.trim();
-    setRenamingEntry(undefined);
-    if (!trimmed || trimmed === path.slice(path.lastIndexOf("/") + 1)) return;
-    const renamed = await perform(
-      client.request.workspaceEntryRename({
-        workspace: workspace.id,
-        path,
-        name: trimmed,
-      }),
-    );
-    if (renamed) await followMovedEntry(path, renamed.path);
-  }
-
-  async function moveWorkspaceEntry(entry: WorkspaceFileEntryDto) {
-    if (!workspace) return;
-    const from = workspaceParentPath(entry.path);
-    const destination = await askText({
-      title: `Move ${entry.name}`,
-      message: "Move into which folder? Leave empty for the workspace root.",
-      initial: from,
-      confirmLabel: "Move",
-    });
-    if (destination === null) return;
-    const moved = await perform(
-      client.request.workspaceEntryMove({
-        workspace: workspace.id,
-        path: entry.path,
-        destinationPath: destination.trim().replace(/^\/+|\/+$/g, ""),
-      }),
-    );
-    if (moved) await followMovedEntry(entry.path, moved.path);
-  }
-
-  async function removeWorkspaceEntry(entry: WorkspaceFileEntryDto) {
-    if (!workspace) return;
-    if (
-      !(await askConfirm({
-        title: entry.kind === "directory" ? "Delete folder" : "Delete file",
-        message:
-          entry.kind === "directory"
-            ? `Delete the folder ${entry.name} and everything inside it? This cannot be undone.`
-            : `Delete ${entry.name}? This cannot be undone.`,
-        confirmLabel: "Delete",
-        danger: true,
-      }))
-    )
-      return;
-    const removed = await perform(
-      client.request.workspaceEntryRemove({
-        workspace: workspace.id,
-        path: entry.path,
-      }),
-    );
-    if (!removed) return;
-    setWorkspaceDirectories((current) => {
-      const next: Record<string, WorkspaceFileEntryDto[]> = {};
-      for (const [path, entries] of Object.entries(current))
-        if (path !== entry.path && !path.startsWith(`${entry.path}/`))
-          next[path] = entries;
-      return next;
-    });
-    setExpandedWorkspaceDirectories((current) => {
-      const next = new Set(
-        [...current].filter(
-          (path) => path !== entry.path && !path.startsWith(`${entry.path}/`),
-        ),
-      );
-      rememberExpandedDirectories(workspace.id, next);
-      return next;
-    });
-    if (
-      selectedWorkspaceFile &&
-      (selectedWorkspaceFile.path === entry.path ||
-        selectedWorkspaceFile.path.startsWith(`${entry.path}/`))
-    ) {
-      setSelectedWorkspaceFile(null);
-      setWorkspaceDraft("");
-    }
-    if (
-      selectedWorkspaceDirectory === entry.path ||
-      selectedWorkspaceDirectory.startsWith(`${entry.path}/`)
-    )
-      setSelectedWorkspaceDirectory(workspaceParentPath(entry.path));
-    await relistDirectories([workspaceParentPath(entry.path)]);
-  }
-
-  async function toggleWorkspaceDirectory(path: string) {
-    if (!workspace) return;
-    const isExpanded = expandedWorkspaceDirectories.has(path);
-    if (isExpanded) {
-      setExpandedWorkspaceDirectories((current) => {
-        const next = new Set(current);
-        next.delete(path);
-        // Closing a folder closes what is inside it. Leaving the descendants
-        // remembered would reopen them the next time the parent is opened,
-        // which is not what closing a folder means.
-        for (const entry of current)
-          if (entry.startsWith(`${path}/`)) next.delete(entry);
-        rememberExpandedDirectories(workspace.id, next);
-        return next;
-      });
-      return;
-    }
-    if (!workspaceDirectories[path]) {
-      const response = await client.request.workspaceDirectoryList({
-        workspace: workspace.id,
-        path,
-      });
-      if (!response.ok) {
-        setError(response.error.message);
-        return;
-      }
-      setWorkspaceDirectories((current) => ({
-        ...current,
-        [path]: response.data,
-      }));
-    }
-    setExpandedWorkspaceDirectories((current) => {
-      const next = new Set(current).add(path);
-      rememberExpandedDirectories(workspace.id, next);
-      return next;
-    });
   }
 
   async function updateTask(event: React.FormEvent<HTMLFormElement>) {
@@ -5251,113 +4346,6 @@ export function WorkspaceApp({
     setSelectedTaskId(undefined);
   }
 
-  /**
-   * Entries Daedalus keeps pointing at by path. The service refuses these too
-   * — it has to, because the RPC surface is reachable without the UI — but a
-   * menu item that is going to fail is better greyed out than clickable.
-   */
-  /**
-   * The service decides, and says so on every row it lists. The renderer used
-   * to keep its own copy of the rule, and the copy drifted: it greyed out the
-   * three managed folders but not the files Daedalus regenerates, so Delete
-   * was offered on BRIEF.md, succeeded, and the content refetch that follows
-   * every mutation put the file back before the tree redrew.
-   */
-  const workspaceEntryMutable = (entry: WorkspaceFileEntryDto) => entry.mutable;
-
-  const renderWorkspaceDirectory = (
-    directory = "",
-    depth = 0,
-  ): React.ReactNode =>
-    (workspaceDirectories[directory] ?? []).map((entry) => {
-      const expanded = expandedWorkspaceDirectories.has(entry.path);
-      const selected =
-        entry.kind === "directory"
-          ? selectedWorkspaceDirectory === entry.path
-          : selectedWorkspaceFile?.path === entry.path;
-      const renaming = renamingEntry?.path === entry.path;
-      return (
-        <div className="workspace-tree-entry" key={entry.path}>
-          {renaming ? (
-            // Deliberately not a <form>. The explorer's "new entry" field is
-            // one, but a form here submits on Enter through the browser's own
-            // implicit-submission path, which wedged the renderer outright in
-            // the browser check — the handler never ran and the page stopped
-            // answering. An input with its own keys has no such path, and it
-            // is what the editor this imitates does anyway.
-            <div
-              className="workspace-tree-rename"
-              style={{ paddingLeft: `${8 + depth * 14}px` }}
-            >
-              <input
-                aria-label={`Rename ${entry.name}`}
-                autoFocus
-                onBlur={() =>
-                  void renameWorkspaceEntry(entry.path, renamingEntry.name)
-                }
-                onChange={(event) =>
-                  setRenamingEntry({
-                    path: entry.path,
-                    name: event.target.value,
-                  })
-                }
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    void renameWorkspaceEntry(entry.path, renamingEntry.name);
-                    return;
-                  }
-                  if (event.key !== "Escape") return;
-                  // Escape has to win over the blur that follows it, or
-                  // cancelling would commit whatever was half-typed.
-                  event.preventDefault();
-                  setRenamingEntry(undefined);
-                }}
-                value={renamingEntry.name}
-              />
-            </div>
-          ) : (
-            <button
-              aria-expanded={entry.kind === "directory" ? expanded : undefined}
-              className={selected ? "selected" : ""}
-              disabled={entry.kind === "symlink"}
-              onClick={() => {
-                if (entry.kind === "directory") {
-                  setSelectedWorkspaceDirectory(entry.path);
-                  void toggleWorkspaceDirectory(entry.path);
-                } else if (entry.kind === "file")
-                  void openWorkspaceFile(entry.path);
-              }}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                setEntryMenu({ entry, x: event.clientX, y: event.clientY });
-              }}
-              style={{ paddingLeft: `${8 + depth * 14}px` }}
-              title={entry.path}
-              type="button"
-            >
-              <span
-                className={`workspace-tree-icon ${entry.kind}`}
-                aria-hidden="true"
-              >
-                {entry.kind === "directory"
-                  ? expanded
-                    ? "⌄"
-                    : "›"
-                  : entry.kind === "symlink"
-                    ? "↗"
-                    : ""}
-              </span>
-              <span>{entry.name}</span>
-            </button>
-          )}
-          {entry.kind === "directory" && expanded && (
-            <div>{renderWorkspaceDirectory(entry.path, depth + 1)}</div>
-          )}
-        </div>
-      );
-    });
-
   const reportsByTask = new Map(
     (snapshot?.routineReports ?? []).flatMap((report) =>
       report.taskId ? [[report.taskId, report] as const] : [],
@@ -5895,365 +4883,19 @@ export function WorkspaceApp({
                 workspaceContent.workspaceId !== workspace.id ? (
                   <div className="empty large">Loading workspace content…</div>
                 ) : (
-                  <div
-                    className="workspace-browser"
-                    style={
-                      {
-                        "--explorer-width": `${explorerWidth}px`,
-                      } as CSSProperties
+                  <FilesView
+                    client={client}
+                    initialRoot={workspaceContent.files}
+                    key={workspace.id}
+                    onError={setError}
+                    onJournalTargetShown={() => setJournalTarget(undefined)}
+                    onWorkspaceDocumentSaved={() =>
+                      void refreshWorkspaceContent()
                     }
-                  >
-                    <aside className="workspace-explorer">
-                      <div className="workspace-explorer-heading">
-                        <div>
-                          <span>Explorer</span>
-                          <small>{workspace.name}</small>
-                        </div>
-                        <div className="workspace-explorer-actions">
-                          <button
-                            aria-label="New file"
-                            disabled={workspaceSelectionReadOnly}
-                            onClick={() =>
-                              setNewWorkspaceEntry({ kind: "file", name: "" })
-                            }
-                            title="New file"
-                            type="button"
-                          >
-                            <svg
-                              aria-hidden="true"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 16 16"
-                            >
-                              <path d="M3 1.5h6l4 4v9H3zM9 1.5v4h4M8 8v4M6 10h4" />
-                            </svg>
-                          </button>
-                          <button
-                            aria-label="New folder"
-                            disabled={workspaceSelectionReadOnly}
-                            onClick={() =>
-                              setNewWorkspaceEntry({
-                                kind: "directory",
-                                name: "",
-                              })
-                            }
-                            title="New folder"
-                            type="button"
-                          >
-                            <svg
-                              aria-hidden="true"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 16 16"
-                            >
-                              <path d="M1.5 3h5l1.5 2h6.5v8.5h-13zM9 7.5v4M7 9.5h4" />
-                            </svg>
-                          </button>
-                        </div>
-                      </div>
-                      {newWorkspaceEntry && (
-                        <form
-                          className="workspace-new-entry"
-                          onSubmit={createWorkspaceEntry}
-                        >
-                          <small title={selectedWorkspaceDirectory || "/"}>
-                            {selectedWorkspaceDirectory || "/"}
-                          </small>
-                          <input
-                            aria-label={`New ${newWorkspaceEntry.kind} name`}
-                            autoFocus
-                            onBlur={() => {
-                              if (!newWorkspaceEntry.name)
-                                setNewWorkspaceEntry(undefined);
-                            }}
-                            onChange={(event) =>
-                              setNewWorkspaceEntry({
-                                ...newWorkspaceEntry,
-                                name: event.target.value,
-                              })
-                            }
-                            onKeyDown={(event) => {
-                              if (event.key === "Escape")
-                                setNewWorkspaceEntry(undefined);
-                            }}
-                            placeholder={
-                              newWorkspaceEntry.kind === "file"
-                                ? "filename.md"
-                                : "folder name"
-                            }
-                            required
-                            value={newWorkspaceEntry.name}
-                          />
-                        </form>
-                      )}
-                      <nav
-                        aria-label="Workspace files"
-                        className="workspace-tree"
-                      >
-                        {renderWorkspaceDirectory()}
-                      </nav>
-                      {entryMenu && (
-                        <>
-                          {/*
-                            A full-window backdrop, so the next click anywhere
-                            closes the menu. Without it the menu survives a click
-                            on the tree behind it and two can be open at once.
-                          */}
-                          <div
-                            className="workspace-tree-menu-backdrop"
-                            onContextMenu={(event) => {
-                              event.preventDefault();
-                              setEntryMenu(undefined);
-                            }}
-                            onPointerDown={() => setEntryMenu(undefined)}
-                          />
-                          <div
-                            aria-label={`Actions for ${entryMenu.entry.name}`}
-                            className="workspace-tree-menu"
-                            // Opened at the pointer, then pulled back inside the
-                            // window if it would hang off the bottom or the
-                            // right. Measured rather than estimated: the menu's
-                            // size depends on its labels and the theme's font.
-                            ref={(node) => {
-                              if (!node) return;
-                              const box = node.getBoundingClientRect();
-                              const overflowX =
-                                box.right - window.innerWidth + 8;
-                              const overflowY =
-                                box.bottom - window.innerHeight + 8;
-                              if (overflowX > 0)
-                                node.style.left = `${Math.max(8, entryMenu.x - overflowX)}px`;
-                              if (overflowY > 0)
-                                node.style.top = `${Math.max(8, entryMenu.y - overflowY)}px`;
-                            }}
-                            role="menu"
-                            style={{ left: entryMenu.x, top: entryMenu.y }}
-                          >
-                            {entryMenu.entry.immutableReason && (
-                              // Greyed-out items with no explanation read as
-                              // broken ones. This was reported as "delete does
-                              // nothing", and it was the menu's silence, not the
-                              // action, that was wrong.
-                              <small className="workspace-tree-menu-reason">
-                                {entryMenu.entry.immutableReason}
-                              </small>
-                            )}
-                            <button
-                              disabled={!workspaceEntryMutable(entryMenu.entry)}
-                              onClick={() => {
-                                setRenamingEntry({
-                                  path: entryMenu.entry.path,
-                                  name: entryMenu.entry.name,
-                                });
-                                setEntryMenu(undefined);
-                              }}
-                              role="menuitem"
-                              type="button"
-                            >
-                              Rename
-                            </button>
-                            <button
-                              disabled={!workspaceEntryMutable(entryMenu.entry)}
-                              onClick={() => {
-                                const target = entryMenu.entry;
-                                setEntryMenu(undefined);
-                                void moveWorkspaceEntry(target);
-                              }}
-                              role="menuitem"
-                              type="button"
-                            >
-                              Move to…
-                            </button>
-                            <button
-                              className="destructive"
-                              disabled={!workspaceEntryMutable(entryMenu.entry)}
-                              onClick={() => {
-                                const target = entryMenu.entry;
-                                setEntryMenu(undefined);
-                                void removeWorkspaceEntry(target);
-                              }}
-                              role="menuitem"
-                              type="button"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </>
-                      )}
-                    </aside>
-
-                    <div
-                      aria-label="Resize explorer"
-                      aria-orientation="vertical"
-                      aria-valuemax={EXPLORER_MAX_WIDTH}
-                      aria-valuemin={EXPLORER_MIN_WIDTH}
-                      aria-valuenow={explorerWidth}
-                      className="column-resize-handle explorer-resize-handle"
-                      onKeyDown={(event) => {
-                        if (
-                          event.key !== "ArrowLeft" &&
-                          event.key !== "ArrowRight"
-                        )
-                          return;
-                        event.preventDefault();
-                        setExplorerWidth((width) =>
-                          clampExplorerWidth(
-                            width +
-                              (event.key === "ArrowRight"
-                                ? PANEL_STEP
-                                : -PANEL_STEP),
-                            EXPLORER_MAX_WIDTH,
-                          ),
-                        );
-                      }}
-                      onPointerDown={startExplorerWidthResize}
-                      role="separator"
-                      tabIndex={0}
-                    />
-
-                    <section className="workspace-viewer">
-                      <div className="workspace-viewer-tabbar">
-                        {selectedWorkspaceFile ? (
-                          <span className="workspace-viewer-tab">
-                            <span aria-hidden="true">
-                              {selectedWorkspaceFile.format === "markdown"
-                                ? "M↓"
-                                : "≡"}
-                            </span>
-                            <strong>{selectedWorkspaceFile.name}</strong>
-                          </span>
-                        ) : (
-                          <span className="workspace-viewer-tab muted">
-                            No file selected
-                          </span>
-                        )}
-                        {selectedWorkspaceFile && (
-                          <div className="workspace-viewer-actions">
-                            {selectedWorkspaceFileReadOnly && (
-                              <span>Reference checkout · read-only</span>
-                            )}
-                            {workspaceDraft !==
-                              selectedWorkspaceFile.content && (
-                              <span>Unsaved</span>
-                            )}
-                            {selectedWorkspaceFile.format === "markdown" && (
-                              <button
-                                aria-pressed={workspaceFileMode === "preview"}
-                                className={
-                                  workspaceFileMode === "preview"
-                                    ? "active"
-                                    : ""
-                                }
-                                onClick={() =>
-                                  setWorkspaceFileMode((current) =>
-                                    current === "edit" ? "preview" : "edit",
-                                  )
-                                }
-                                type="button"
-                              >
-                                {workspaceFileMode === "edit"
-                                  ? "Preview"
-                                  : "Edit"}
-                              </button>
-                            )}
-                            <button
-                              disabled={
-                                busy ||
-                                selectedWorkspaceFileReadOnly ||
-                                workspaceDraft === selectedWorkspaceFile.content
-                              }
-                              onClick={() => void saveWorkspaceFile()}
-                              title="Save (⌘S)"
-                              type="button"
-                            >
-                              Save
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                      {selectedWorkspaceFile ? (
-                        <>
-                          <div className="workspace-viewer-breadcrumb">
-                            {selectedWorkspaceFile.path
-                              .split("/")
-                              .join("  ›  ")}
-                          </div>
-                          {selectedWorkspaceFile.format === "markdown" &&
-                          workspaceFileMode === "preview" ? (
-                            <div className="workspace-viewer-content markdown">
-                              <MarkdownPreview source={workspaceDraft} />
-                            </div>
-                          ) : (
-                            <WorkspaceFileEditor
-                              file={{
-                                ...selectedWorkspaceFile,
-                                content: workspaceDraft,
-                              }}
-                              onChange={setWorkspaceDraft}
-                              onSave={() => void saveWorkspaceFile()}
-                              readOnly={selectedWorkspaceFileReadOnly}
-                              theme={theme}
-                            />
-                          )}
-                          {selectedWorkspaceFile.path === "JOURNAL.md" &&
-                            workspaceDraft ===
-                              selectedWorkspaceFile.content && (
-                              <form
-                                className="journal-entry-form"
-                                onSubmit={appendJournal}
-                              >
-                                <select
-                                  aria-label="Journal entry type"
-                                  value={journalForm.kind}
-                                  onChange={(event) =>
-                                    setJournalForm({
-                                      ...journalForm,
-                                      kind: event.target
-                                        .value as typeof journalForm.kind,
-                                    })
-                                  }
-                                >
-                                  {[
-                                    "decision",
-                                    "progress",
-                                    "blocker",
-                                    "question",
-                                    "handoff",
-                                    "completed",
-                                  ].map((kind) => (
-                                    <option key={kind} value={kind}>
-                                      {kind}
-                                    </option>
-                                  ))}
-                                </select>
-                                <input
-                                  aria-label="Journal entry"
-                                  placeholder="Record a meaningful update…"
-                                  required
-                                  value={journalForm.summary}
-                                  onChange={(event) =>
-                                    setJournalForm({
-                                      ...journalForm,
-                                      summary: event.target.value,
-                                    })
-                                  }
-                                />
-                                <button disabled={busy} type="submit">
-                                  Add
-                                </button>
-                              </form>
-                            )}
-                        </>
-                      ) : (
-                        <div className="workspace-viewer-empty">
-                          <strong>Select a file</strong>
-                          <span>
-                            Choose a text or Markdown file from the explorer.
-                          </span>
-                        </div>
-                      )}
-                    </section>
-                  </div>
+                    journalTarget={journalTarget}
+                    theme={theme}
+                    workspace={workspace}
+                  />
                 )}
               </>
             ) : view === "world" ? (

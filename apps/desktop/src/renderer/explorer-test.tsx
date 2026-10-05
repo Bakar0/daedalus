@@ -40,7 +40,10 @@ const snapshot: DesktopSnapshotDto = {
       id: workspaceId,
       slug: "explorer-test",
       name: "Explorer test",
-      path: "/tmp/explorer-test",
+      // The real directory when the check passes it, so copied paths exist.
+      path:
+        new URLSearchParams(location.search).get("path") ??
+        "/tmp/explorer-test",
       createdAt: "2026-09-19T00:00:00.000Z",
       updatedAt: "2026-09-19T00:00:00.000Z",
       archivedAt: null,
@@ -196,6 +199,9 @@ const client = {
     workspaceEntryRename: (params: unknown) => call("/rename", params),
     workspaceEntryMove: (params: unknown) => call("/move", params),
     workspaceEntryRemove: (params: unknown) => call("/remove", params),
+    workspaceEntriesCopy: (params: unknown) => call("/copy", params),
+    clipboardFilesRead: () => call("/pb-read", {}),
+    clipboardFilesWrite: (params: unknown) => call("/pb-write", params),
     workspaceWatchSet: (params: unknown) => call("/watch", params),
     agentModels: async ({ provider }: { provider: "codex" | "claude" }) => ({
       ok: true,
@@ -206,6 +212,7 @@ const client = {
       data: { endpoint: "ws://127.0.0.1:1/explorer-test" },
     }),
     presencePublish: async () => ({ ok: true, data: {} }),
+    clipboardWrite: async () => ({ ok: true, data: { written: true } }),
     toastsAcknowledge: async () => ({ ok: true, data: { acknowledged: 0 } }),
   },
   subscribe: (listener: () => void) => {

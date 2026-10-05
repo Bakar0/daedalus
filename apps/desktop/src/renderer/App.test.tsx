@@ -1001,10 +1001,14 @@ describe("desktop application shell", () => {
     expect(html).toContain("mode-workspace");
     expect(html).toContain("Explorer");
     expect(html).toContain("workspace-viewer");
-    expect(html).toContain("BRIEF.md");
-    expect(html).toContain("JOURNAL.md");
-    expect(html).toContain("workspace-code-editor");
-    expect(html).toContain("Preview");
+    // The tree builds its rows once mounted, and the editor is a lazy chunk
+    // (Monaco and dockview need a browser), so a static render shows the
+    // explorer's frame and the editor's placeholder. The rows and tabs are
+    // `test:explorer-ui`'s to check.
+    expect(html).toContain('aria-label="Workspace files"');
+    // The editor itself is a lazy chunk (Monaco and dockview need a
+    // browser), so a static render shows its placeholder.
+    expect(html).toContain("Loading the editor");
     expect(html).toContain('aria-label="New file"');
     expect(html).toContain('aria-label="New folder"');
     // Since #27 the explorer is the file tree alone; the repositories are in

@@ -1,5 +1,6 @@
 import {
   appendFile,
+  cp,
   lstat,
   readlink,
   readdir,
@@ -2573,6 +2574,72 @@ export class WorkspaceContentService {
     );
     await rm(source.target, { recursive: true, force: false });
     return entry;
+  }
+
+  /**
+   * Copies files or folders into a workspace folder: entries of this
+   * workspace, or anything on disk the user copied in Finder. Sources are
+   * absolute paths, because a paste from Finder has no workspace to be
+   * relative to. A name that is taken gets VS Code's suffix, `name copy.ext`
+   * then `name copy 2.ext`, so a paste never overwrites.
+   */
+  async copyEntries(input: {
+    workspace: string;
+    sources: readonly string[];
+    destinationPath: string;
+  }): Promise<WorkspaceFileEntry[]> {
+    const workspace = await this.workspaces.getActive(input.workspace);
+    const folder = await this.resolveVisiblePath(
+      workspace,
+      input.destinationPath,
+    );
+    this.assertWritable(folder.relativePath);
+    if (!(await lstat(folder.target)).isDirectory())
+      throw new DaedalusError(
+        "VALIDATION",
+        `'${input.destinationPath}' is not a folder`,
+      );
+    const copied: WorkspaceFileEntry[] = [];
+    for (const source of input.sources) {
+      if (!isAbsolute(source))
+        throw new DaedalusError("VALIDATION", "Copy sources must be absolute");
+      if (!(await pathExists(source)))
+        throw new DaedalusError("NOT_FOUND", `'${source}' was not found`);
+      const sourceReal = await canonicalPath(source);
+      const folderReal = await canonicalPath(folder.target);
+      if (folderReal === sourceReal || isPathInside(sourceReal, folderReal))
+        throw new DaedalusError(
+          "VALIDATION",
+          "A folder cannot be copied inside itself",
+        );
+      const name = await this.vacantCopyName(folder.target, basename(source));
+      const relativePath = join(folder.relativePath, name);
+      if (folder.relativePath === "" && name === ".daedalus")
+        throw new DaedalusError(
+          "VALIDATION",
+          "The .daedalus directory is reserved",
+        );
+      const target = join(folder.target, name);
+      await cp(source, target, {
+        recursive: true,
+        errorOnExist: true,
+        force: false,
+        verbatimSymlinks: true,
+      });
+      copied.push(await this.describeEntry(workspace.id, target, relativePath));
+    }
+    return copied;
+  }
+
+  private async vacantCopyName(folder: string, name: string): Promise<string> {
+    if (!(await pathExists(join(folder, name)))) return name;
+    const extension = extname(name);
+    const stem = extension ? name.slice(0, -extension.length) : name;
+    for (let attempt = 1; attempt < 1000; attempt += 1) {
+      const candidate = `${stem} copy${attempt === 1 ? "" : ` ${attempt}`}${extension}`;
+      if (!(await pathExists(join(folder, candidate)))) return candidate;
+    }
+    throw new DaedalusError("CONFLICT", `No free name for a copy of '${name}'`);
   }
 
   /**

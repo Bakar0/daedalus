@@ -962,6 +962,86 @@ Before working in this workspace:
       });
     });
 
+    test("copies entries in with a VS Code copy suffix when the name is taken", async () => {
+      await withWorkspace(async ({ context, workspaceId, workspacePath }) => {
+        await context.workspaceContent.createEntry({
+          workspace: workspaceId,
+          name: "inbox",
+          kind: "directory",
+        });
+        await context.workspaceContent.createEntry({
+          workspace: workspaceId,
+          parentPath: "inbox",
+          name: "note.md",
+          kind: "file",
+        });
+        const copy = () =>
+          context.workspaceContent.copyEntries({
+            workspace: workspaceId,
+            sources: [join(workspacePath, "inbox/note.md")],
+            destinationPath: "inbox",
+          });
+        expect((await copy()).map((entry) => entry.path)).toEqual([
+          "inbox/note copy.md",
+        ]);
+        expect((await copy()).map((entry) => entry.path)).toEqual([
+          "inbox/note copy 2.md",
+        ]);
+        // A folder, recursively, into the root.
+        expect(
+          await context.workspaceContent.copyEntries({
+            workspace: workspaceId,
+            sources: [join(workspacePath, "inbox")],
+            destinationPath: "",
+          }),
+        ).toEqual([
+          {
+            name: "inbox copy",
+            path: "inbox copy",
+            kind: "directory",
+            mutable: true,
+          },
+        ]);
+        expect(
+          await readFile(
+            join(workspacePath, "inbox copy", "note copy 2.md"),
+            "utf8",
+          ),
+        ).toBe("");
+      });
+    });
+
+    test("refuses to copy into repos/, inside itself, or from a relative path", async () => {
+      await withWorkspace(async ({ context, workspaceId, workspacePath }) => {
+        await context.workspaceContent.createEntry({
+          workspace: workspaceId,
+          name: "outer",
+          kind: "directory",
+        });
+        await expect(
+          context.workspaceContent.copyEntries({
+            workspace: workspaceId,
+            sources: [join(workspacePath, "outer")],
+            destinationPath: "outer",
+          }),
+        ).rejects.toMatchObject({ code: "VALIDATION" });
+        await expect(
+          context.workspaceContent.copyEntries({
+            workspace: workspaceId,
+            sources: ["outer"],
+            destinationPath: "",
+          }),
+        ).rejects.toMatchObject({ code: "VALIDATION" });
+        await expect(
+          context.workspaceContent.copyEntries({
+            workspace: workspaceId,
+            sources: [join(workspacePath, "outer")],
+            destinationPath: "repos",
+          }),
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+      });
+    });
+
     test("removes a file, and a folder with everything under it", async () => {
       await withWorkspace(async ({ context, workspaceId, workspacePath }) => {
         await context.workspaceContent.createEntry({

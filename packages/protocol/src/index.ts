@@ -794,6 +794,14 @@ export interface DesktopRpcSchema {
         WorkspaceFileEntryDto
       >;
       /**
+       * Copies absolute paths (workspace entries or files from Finder) into a
+       * workspace folder; a taken name gets a " copy" suffix.
+       */
+      workspaceEntriesCopy: Request<
+        { workspace: string; sources: string[]; destinationPath: string },
+        WorkspaceFileEntryDto[]
+      >;
+      /**
        * Names the workspaces whose files the window is showing, which is the
        * only thing the host needs in order to watch the right trees. An empty
        * list stops watching — a view that is not the explorer has no tree to
@@ -1066,6 +1074,10 @@ export interface DesktopRpcSchema {
        * that does not come straight from a click, which this never does.
        */
       clipboardWrite: Request<{ text: string }, { written: boolean }>;
+      /** The files on the macOS pasteboard, as Finder's Copy leaves them. */
+      clipboardFilesRead: Request<Record<string, never>, { paths: string[] }>;
+      /** Puts files on the macOS pasteboard, so Finder can paste them. */
+      clipboardFilesWrite: Request<{ paths: string[] }, { written: number }>;
       /**
        * Which window is asking: the main app, or the World on its own. Both
        * load the same page, and a `views://` URL carries no parameters, so a

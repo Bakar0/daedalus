@@ -1,4 +1,6 @@
+import { isAbsolute } from "node:path";
 import packageJson from "../../../../package.json";
+import { readPasteboardFiles, writePasteboardFiles } from "@daedalus/platform";
 import {
   channelName,
   DaedalusError,
@@ -480,6 +482,18 @@ export function createDesktopRequestHandlers(
           );
         return { opened: openExternal(parsed.href) };
       }),
+    clipboardFilesRead: () =>
+      result(async () => ({ paths: await readPasteboardFiles() })),
+    clipboardFilesWrite: ({ paths }) =>
+      result(async () => {
+        if (paths.some((path) => !isAbsolute(path)))
+          throw new DaedalusError(
+            "VALIDATION",
+            "Pasteboard paths must be absolute",
+          );
+        await writePasteboardFiles(paths);
+        return { written: paths.length };
+      }),
     clipboardWrite: ({ text }) =>
       result(() => {
         if (text.length > MAX_CLIPBOARD_TEXT)
@@ -555,6 +569,12 @@ export function createDesktopRequestHandlers(
       mutate(async () => ({
         ...(await context.workspaceContent.removeEntry(params)),
       })),
+    workspaceEntriesCopy: (params) =>
+      mutate(async () =>
+        (await context.workspaceContent.copyEntries(params)).map((entry) => ({
+          ...entry,
+        })),
+      ),
     // Deliberately not a `mutate`: nothing about the snapshot changes, and
     // announcing would make every view switch redraw the whole window.
     workspaceWatchSet: ({ workspaces }) =>
