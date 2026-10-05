@@ -684,12 +684,8 @@ button:not(
   stroke-width: 1.5;
   width: 18px;
 }
-/* A guide line from under the arrow to the last session shows where the
-   list ends. */
 .workspace-sessions {
-  border-left: 1px solid var(--line);
-  margin: 3px 0 6px 9px;
-  padding: 0 0 0 5px;
+  margin: 3px 0 4px 15px;
 }
 /* A workspace's archived sessions, under its list. The row keeps its space
    when it is not the workspace in focus, so the list never shifts. */
