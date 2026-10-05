@@ -574,8 +574,29 @@ button:not(
 }
 
 /* A workspace and the sessions listed under it (#55). */
+/* Each workspace and its sessions in one bordered box, so it is clear
+   where a workspace starts and ends. */
 .workspace-group {
-  margin: 2px 0;
+  background: rgb(255 255 255 / 0.018);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 0 0 6px;
+  padding: 2px;
+}
+.app[data-theme="light"] .workspace-group {
+  background: rgb(255 255 255 / 0.45);
+}
+.workspace-folder-icon {
+  align-self: flex-start;
+  color: var(--accent);
+  display: flex;
+  flex: none;
+  margin: 1px 6px 0 0;
+  opacity: 0.85;
+}
+.workspace-folder-icon svg {
+  height: 15px;
+  width: 15px;
 }
 .workspace-group > .workspace-card {
   margin: 0;

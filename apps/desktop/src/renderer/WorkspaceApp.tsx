@@ -528,6 +528,23 @@ function HandoffIcon() {
   );
 }
 
+/** A folder: one workspace, beside its name in the left column (#55). */
+function WorkspaceFolderIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z" />
+    </svg>
+  );
+}
+
 /** Four tiles: every workspace at once. */
 function AllWorkspacesIcon() {
   return (
@@ -5467,6 +5484,9 @@ export function WorkspaceApp({
                           event.preventDefault();
                       }}
                     >
+                      <span className="workspace-folder-icon">
+                        <WorkspaceFolderIcon />
+                      </span>
                       <span className="workspace-card-content">
                         <strong className="workspace-card-name">
                           <span>{item.name}</span>
