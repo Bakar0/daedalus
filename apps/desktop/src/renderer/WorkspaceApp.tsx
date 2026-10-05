@@ -109,6 +109,13 @@ const PANEL_STEP = 24;
 export const clampPanelSize = (size: number, maximum: number) =>
   Math.min(Math.max(PANEL_RAIL_WIDTH, Math.round(size)), maximum);
 
+// The workspace column holds the session lists (#55), so it no longer folds
+// to a rail; this is as narrow as it goes.
+export const WORKSPACE_PANEL_MIN_WIDTH = 200;
+const WORKSPACE_PANEL_DEFAULT_WIDTH = 248;
+export const clampWorkspacePanelSize = (size: number, maximum: number) =>
+  Math.min(Math.max(WORKSPACE_PANEL_MIN_WIDTH, Math.round(size)), maximum);
+
 const storedPanelSize = (key: string, fallback: number) => {
   if (typeof window === "undefined") return fallback;
   const stored = Number(window.localStorage.getItem(key));
@@ -1931,9 +1938,16 @@ export function WorkspaceApp({
   );
   // Wide enough by default for the session cards listed under each
   // workspace, which used to have a column of their own (#55).
-  const [workspacePanelWidth, setWorkspacePanelWidth] = useState(() =>
-    storedPanelSize("daedalus.panel.workspace-width", 248),
-  );
+  const [workspacePanelWidth, setWorkspacePanelWidth] = useState(() => {
+    const stored = storedPanelSize(
+      "daedalus.panel.workspace-width",
+      WORKSPACE_PANEL_DEFAULT_WIDTH,
+    );
+    // A width left over from the rail opens at the default instead.
+    return stored < WORKSPACE_PANEL_MIN_WIDTH
+      ? WORKSPACE_PANEL_DEFAULT_WIDTH
+      : stored;
+  });
   const [collapsedWorkspaceIds, setCollapsedWorkspaceIds] = useState<
     ReadonlySet<string>
   >(rememberedCollapsedWorkspaces);
@@ -1968,9 +1982,6 @@ export function WorkspaceApp({
   );
   const [explorerWidth, setExplorerWidth] = useState(() =>
     storedPanelSize("daedalus.panel.explorer-width", EXPLORER_DEFAULT_WIDTH),
-  );
-  const workspaceExpandedWidth = useRef(
-    workspacePanelWidth >= PANEL_COMPACT_THRESHOLD ? workspacePanelWidth : 248,
   );
   const boardDetailExpandedWidth = useRef(
     boardDetailPanelWidth >= PANEL_COMPACT_THRESHOLD
@@ -2085,7 +2096,10 @@ export function WorkspaceApp({
         const movement = moveEvent.clientX - startX;
         if (panel === "workspace")
           setWorkspacePanelWidth(
-            clampPanelSize(workspaceWidth + movement, workspaceMaximum),
+            clampWorkspacePanelSize(
+              workspaceWidth + movement,
+              workspaceMaximum,
+            ),
           );
         else
           setBoardDetailPanelWidth(
@@ -2148,14 +2162,6 @@ export function WorkspaceApp({
     [explorerWidth],
   );
 
-  const toggleWorkspacePanel = useCallback(() => {
-    setWorkspacePanelWidth((width) => {
-      if (width < PANEL_COMPACT_THRESHOLD)
-        return workspaceExpandedWidth.current;
-      workspaceExpandedWidth.current = width;
-      return PANEL_RAIL_WIDTH;
-    });
-  }, []);
   const toggleBoardDetailPanel = useCallback(() => {
     setBoardDetailPanelWidth((width) => {
       if (width < PANEL_COMPACT_THRESHOLD)
@@ -2683,8 +2689,6 @@ export function WorkspaceApp({
     if (stored === "dark" || stored === "light") setTheme(stored);
   }, []);
   useEffect(() => {
-    if (workspacePanelWidth >= PANEL_COMPACT_THRESHOLD)
-      workspaceExpandedWidth.current = workspacePanelWidth;
     window.localStorage.setItem(
       "daedalus.panel.workspace-width",
       String(workspacePanelWidth),
@@ -4609,20 +4613,6 @@ export function WorkspaceApp({
               ↻
             </button>
           )}
-          <SessionMenu
-            color={session.color}
-            name={sessionName(session)}
-            offerAbilities={
-              session.kind === "agent" &&
-              (session.provider === "claude" || session.provider === "codex")
-            }
-            onColor={(color) => void updateSession(session, { color })}
-            onPin={(pinned) => void updateSession(session, { pinned })}
-            onRename={() => void renameSession(session)}
-            onRoutines={(granted) => void setRoutinesAbility(session, granted)}
-            pinned={Boolean(session.pinnedAt)}
-            routines={holdsRoutines}
-          />
           {session.kind === "agent" &&
             (session.provider === "claude" || session.provider === "codex") && (
               <button
@@ -4658,6 +4648,21 @@ export function WorkspaceApp({
           >
             <ArchiveIcon />
           </button>
+          {/* Last, so hand off and archive open to its left on hover. */}
+          <SessionMenu
+            color={session.color}
+            name={sessionName(session)}
+            offerAbilities={
+              session.kind === "agent" &&
+              (session.provider === "claude" || session.provider === "codex")
+            }
+            onColor={(color) => void updateSession(session, { color })}
+            onPin={(pinned) => void updateSession(session, { pinned })}
+            onRename={() => void renameSession(session)}
+            onRoutines={(granted) => void setRoutinesAbility(session, granted)}
+            pinned={Boolean(session.pinnedAt)}
+            routines={holdsRoutines}
+          />
         </span>
       </div>
     );
@@ -5309,14 +5314,10 @@ export function WorkspaceApp({
       </div>
 
       <div className={`workspace-shell mode-${view}`}>
-        <aside
-          className={`workspace-column ${workspacePanelWidth < PANEL_COMPACT_THRESHOLD ? "panel-compact" : ""}`}
-        >
+        <aside className="workspace-column">
           <div className="section-heading workspace-column-heading">
-            <div>
-              <h1>Workspaces</h1>
-            </div>
-            <div className="panel-heading-actions">
+            {/* Fold-all sits in line with each workspace's own arrow. */}
+            <div className="workspace-column-title">
               {activeWorkspaces.length > 0 && (
                 <button
                   aria-label={
@@ -5344,6 +5345,9 @@ export function WorkspaceApp({
                   </svg>
                 </button>
               )}
+              <h1>Workspaces</h1>
+            </div>
+            <div className="panel-heading-actions">
               <button
                 aria-label="Create workspace"
                 className="quiet workspace-heading-create"
@@ -5353,12 +5357,6 @@ export function WorkspaceApp({
               >
                 +
               </button>
-              <PanelCollapseButton
-                collapsed={workspacePanelWidth < PANEL_COMPACT_THRESHOLD}
-                label="workspace"
-                onClick={toggleWorkspacePanel}
-                side="left"
-              />
             </div>
           </div>
           <nav
@@ -5454,9 +5452,6 @@ export function WorkspaceApp({
                           event.preventDefault();
                       }}
                     >
-                      <span className="workspace-icon">
-                        {item.name.slice(0, 1).toUpperCase()}
-                      </span>
                       <span className="workspace-card-content">
                         <strong className="workspace-card-name">
                           <span>{item.name}</span>
@@ -5534,18 +5529,6 @@ export function WorkspaceApp({
                     </button>
                     <span className="workspace-card-actions" data-no-drag>
                       <button
-                        aria-label={`Create session in ${item.name}`}
-                        className="session-card-action workspace-session-create"
-                        disabled={
-                          !item.available || !snapshot?.settings.tmuxAvailable
-                        }
-                        onClick={() => openSessionModal(undefined, item)}
-                        title="New session"
-                        type="button"
-                      >
-                        +
-                      </button>
-                      <button
                         aria-label={`Open ${item.name} in integrated terminal`}
                         className="session-card-action workspace-terminal-action"
                         disabled={!item.available || busy}
@@ -5563,6 +5546,20 @@ export function WorkspaceApp({
                         type="button"
                       >
                         <ArchiveIcon />
+                      </button>
+                      {/* Last, so the ones that come in on hover open to its
+                          left and it never moves. */}
+                      <button
+                        aria-label={`Create session in ${item.name}`}
+                        className="session-card-action workspace-session-create"
+                        disabled={
+                          !item.available || !snapshot?.settings.tmuxAvailable
+                        }
+                        onClick={() => openSessionModal(undefined, item)}
+                        title="New session"
+                        type="button"
+                      >
+                        +
                       </button>
                     </span>
                   </div>
@@ -5601,15 +5598,14 @@ export function WorkspaceApp({
           aria-label="Resize workspace panel"
           aria-orientation="vertical"
           aria-valuemax={480}
-          aria-valuemin={PANEL_RAIL_WIDTH}
+          aria-valuemin={WORKSPACE_PANEL_MIN_WIDTH}
           aria-valuenow={workspacePanelWidth}
           className="column-resize-handle workspace-panel-resize-handle"
-          onDoubleClick={toggleWorkspacePanel}
           onKeyDown={(event) => {
             if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
             event.preventDefault();
             setWorkspacePanelWidth((width) =>
-              clampPanelSize(
+              clampWorkspacePanelSize(
                 width + (event.key === "ArrowRight" ? PANEL_STEP : -PANEL_STEP),
                 480,
               ),

@@ -601,7 +601,7 @@ button:not(
   visibility: hidden;
 }
 /* The column's heading: one short row right above the list. */
-.workspace-column:not(.panel-compact) {
+.workspace-column {
   padding-top: 14px;
 }
 .workspace-column-heading {
@@ -613,12 +613,16 @@ button:not(
   font-weight: 650;
   letter-spacing: 0;
 }
-.workspace-column-heading .panel-heading-actions {
-  gap: 1px;
+.workspace-column-title {
+  align-items: center;
+  display: flex;
+}
+/* As wide as a card's arrow, so the two line up. */
+.workspace-column-title .workspace-fold-all {
+  width: 18px;
 }
 .workspace-fold-all,
-.workspace-heading-create,
-.workspace-column-heading .panel-collapse-button {
+.workspace-heading-create {
   align-items: center;
   display: flex;
   flex: none;
@@ -631,9 +635,7 @@ button:not(
   font-size: 17px !important;
   line-height: 1;
 }
-.workspace-column-heading .panel-collapse-button {
-  font-size: 16px !important;
-}
+
 .workspace-fold-all svg {
   fill: none;
   height: 14px;
@@ -700,15 +702,30 @@ button:not(
   height: 14px;
   width: 14px;
 }
-.workspace-column:not(.panel-compact) .workspace-group .workspace-icon {
-  display: none;
-}
-.workspace-column:not(.panel-compact) .workspace-group .workspace-item {
+.workspace-group .workspace-item {
   gap: 0;
   padding: 6px 8px 6px 2px;
 }
 .workspace-group .workspace-card-name {
-  padding-right: 70px;
+  /* Room for the +, the one action always showing. */
+  padding-right: 26px;
+}
+/* Terminal and archive come in on hover, to the left of the +. */
+.workspace-group .workspace-terminal-action,
+.workspace-group .workspace-card-archive {
+  display: none !important;
+}
+.workspace-group
+  > .workspace-card:is(:hover, :focus-within)
+  :is(.workspace-terminal-action, .workspace-card-archive) {
+  display: flex !important;
+}
+.workspace-group
+  > .workspace-card:is(:hover, :focus-within)
+  > .workspace-card-actions {
+  background: var(--elevated);
+  border-radius: 6px;
+  box-shadow: 0 0 0 1px var(--line);
 }
 .workspace-group .workspace-session-insights {
   margin-top: 1px;
@@ -3532,34 +3549,6 @@ dd {
   justify-content: center;
   padding: 0 !important;
   width: 28px;
-}
-.workspace-column.panel-compact {
-  padding: 14px 7px 10px;
-}
-.workspace-column.panel-compact .section-heading > div:first-child,
-.workspace-column.panel-compact .create-button,
-.workspace-column.panel-compact .workspace-heading-create,
-.workspace-column.panel-compact .workspace-card-content,
-.workspace-column.panel-compact .workspace-card-actions,
-.workspace-column.panel-compact .workspace-archive-list,
-.workspace-column.panel-compact .workspace-disclosure,
-.workspace-column.panel-compact .workspace-fold-all,
-.workspace-column.panel-compact .workspace-sessions {
-  display: none;
-}
-.workspace-column.panel-compact .section-heading {
-  justify-content: center;
-  margin-bottom: 10px;
-}
-.workspace-column.panel-compact .workspace-card {
-  min-height: 46px;
-}
-.workspace-column.panel-compact .workspace-item {
-  justify-content: center;
-  padding: 7px !important;
-}
-.workspace-column.panel-compact .workspace-icon {
-  flex: 0 0 auto;
 }
 .board-detail-column.panel-compact {
   align-items: center;
