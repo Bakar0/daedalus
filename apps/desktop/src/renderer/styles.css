@@ -6168,3 +6168,170 @@ dd {
 .report-verdict-label {
   color: var(--muted);
 }
+
+/* Explorer and Changes share the explorer column, switched at its top (#50). */
+.workspace-explorer-heading > div.sidebar-switch {
+  display: flex;
+  gap: 6px;
+}
+.sidebar-switch button {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  border-bottom: 1px solid transparent !important;
+  border-radius: 0 !important;
+  color: var(--muted) !important;
+  display: flex;
+  font-size: 10px !important;
+  font-weight: 650;
+  gap: 5px;
+  letter-spacing: 0.09em;
+  padding: 2px 4px !important;
+  text-transform: uppercase;
+}
+.sidebar-switch button.active {
+  border-bottom-color: var(--accent) !important;
+  color: var(--text) !important;
+}
+.sidebar-count {
+  background: var(--accent);
+  border-radius: 8px;
+  color: #fff;
+  font-size: 9px;
+  letter-spacing: 0;
+  line-height: 1;
+  padding: 2px 5px;
+}
+.workspace-explorer-actions[hidden] {
+  display: none;
+}
+
+.changes-view {
+  flex: 1 1 0;
+  min-height: 120px;
+  overflow: auto;
+  padding: 4px 0 24px;
+}
+.changes-empty {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  margin: 10px 14px;
+}
+.changes-empty.nested {
+  margin: 2px 14px 8px 30px;
+}
+.changes-group-heading {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  color: var(--secondary) !important;
+  display: flex;
+  font-size: 11px !important;
+  gap: 5px;
+  padding: 4px 10px 4px 8px !important;
+  text-align: left;
+  width: 100%;
+}
+.changes-group-heading:hover {
+  background: var(--raised-hover) !important;
+}
+.changes-group-name {
+  display: grid;
+  flex: 1;
+  font-weight: 600;
+  min-width: 0;
+}
+.changes-group-name small {
+  color: var(--muted);
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.changes-count {
+  background: var(--raised-hover);
+  border-radius: 8px;
+  color: var(--secondary);
+  font-size: 10px;
+  padding: 1px 6px;
+}
+.changes-file {
+  align-items: center;
+  border: 1px solid transparent;
+  color: var(--secondary);
+  cursor: default;
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
+  height: 22px;
+  outline: none;
+  padding: 0 10px 0 30px;
+  white-space: nowrap;
+}
+.changes-file:hover {
+  background: var(--raised-hover);
+}
+.changes-file.selected {
+  background: var(--accent-wash);
+  color: var(--text);
+}
+.changes-file:focus-visible {
+  border-color: var(--accent);
+}
+.changes-file.deleted .changes-file-name {
+  text-decoration: line-through;
+}
+.changes-file-name {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.changes-file-folder {
+  color: var(--muted);
+  flex: 1 1 0;
+  font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.changes-lines {
+  display: flex;
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  gap: 4px;
+  margin-left: auto;
+}
+.changes-lines .added {
+  color: #73c991;
+}
+.changes-lines .deleted {
+  color: #f14c4c;
+}
+.changes-status {
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  width: 12px;
+}
+.changes-file.added .changes-status,
+.changes-file.untracked .changes-status {
+  color: #73c991;
+}
+.changes-file.modified .changes-status {
+  color: #e2c08d;
+}
+.changes-file.deleted .changes-status {
+  color: #f14c4c;
+}
+.changes-file.renamed .changes-status {
+  color: #4fc1ff;
+}
+.file-tab-name small {
+  color: var(--muted);
+}
+.file-tree[hidden] {
+  display: none;
+}

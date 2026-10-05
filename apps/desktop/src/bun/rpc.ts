@@ -569,6 +569,22 @@ export function createDesktopRequestHandlers(
       mutate(async () => ({
         ...(await context.workspaceContent.removeEntry(params)),
       })),
+    workspaceChanges: ({ workspace }) =>
+      result(async () =>
+        (await context.workspaceContent.worktreeChanges(workspace)).map(
+          (tree) => ({
+            ...tree,
+            files: tree.files.map((file) => ({ ...file })),
+          }),
+        ),
+      ),
+    workspaceChangeOriginal: (params) =>
+      result(() => context.workspaceContent.changeOriginal(params)),
+    fileLinkResolve: (params) =>
+      result(async () => {
+        const target = await context.workspaceContent.resolveFileLink(params);
+        return target ? { ...target } : null;
+      }),
     workspaceEntriesCopy: (params) =>
       mutate(async () =>
         (await context.workspaceContent.copyEntries(params)).map((entry) => ({

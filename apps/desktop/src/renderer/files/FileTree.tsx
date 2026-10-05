@@ -55,6 +55,8 @@ export interface FileTreeProps {
   onRemoved(path: string): void;
   onError(message: string): void;
   handleRef?: React.Ref<FileTreeHandle>;
+  /** Kept mounted but out of sight while the Changes view is showing. */
+  hidden?: boolean;
 }
 
 type Listings = Record<string, WorkspaceFileEntryDto[]>;
@@ -76,6 +78,7 @@ export function FileTree({
   onRemoved,
   onError,
   handleRef,
+  hidden,
 }: FileTreeProps) {
   const [listings, setListings] = useState<Listings>(() =>
     initialRoot ? { "": initialRoot } : ({} as Listings),
@@ -697,6 +700,7 @@ export function FileTree({
       <div
         {...tree.getContainerProps("Workspace files")}
         className="file-tree"
+        hidden={hidden}
         onKeyDown={(event) => {
           if (!event.metaKey || event.target instanceof HTMLInputElement)
             return;

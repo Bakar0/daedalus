@@ -38,11 +38,29 @@ import {
 import { workspaceBaseName } from "./explorer-state";
 import { monaco } from "./monaco";
 
+/** A changed file the Changes view asks to see as a diff. */
+export interface DiffTarget {
+  /** Workspace-relative path of the file as it is now. */
+  path: string;
+  /** The worktree folder, workspace-relative. */
+  root: string;
+  repositoryPath: string;
+  originalRepositoryPath?: string;
+  status: "added" | "modified" | "deleted" | "renamed" | "untracked";
+}
+
+export interface OpenOptions {
+  pinned: boolean;
+  mode?: "edit" | "preview";
+  heading?: string;
+  /** Where to put the cursor, 1-based, as a terminal link names it. */
+  line?: number;
+  column?: number;
+}
+
 export interface EditorAreaHandle {
-  open(
-    path: string,
-    options: { pinned: boolean; mode?: "edit" | "preview"; heading?: string },
-  ): void;
+  open(path: string, options: OpenOptions): void;
+  openDiff(target: DiffTarget, options: { pinned: boolean }): void;
   /** An entry moved from the tree. Open documents under it follow. */
   moved(from: string, to: string): void;
   removed(path: string): void;
@@ -65,9 +83,12 @@ interface FilePanelParams {
   mode?: "edit" | "preview";
   /** A journal heading to scroll to once, then forgotten. */
   heading?: string;
+  /** Set on a diff tab: what to compare the file with. */
+  diff?: DiffTarget;
 }
 
 const panelId = (path: string) => `file:${path}`;
+const diffPanelId = (path: string) => `diff:${path}`;
 const layoutKey = (workspaceId: string) =>
   `daedalus.editor.layout.${workspaceId}`;
 
@@ -99,12 +120,50 @@ const useEditorContext = () => {
  * new file or a click on the tab puts the cursor in the editor. A request
  * waits here when the editor it names has not mounted yet.
  */
-let pendingFocus: string | undefined;
-const focusListeners = new Set<(path: string) => void>();
-const requestFocus = (path: string) => {
-  pendingFocus = path;
-  for (const listener of focusListeners) listener(path);
+interface FocusRequest {
+  panel: string;
+  line?: number;
+  column?: number;
+}
+let pendingFocus: FocusRequest | undefined;
+const focusListeners = new Set<(request: FocusRequest) => void>();
+const requestFocus = (panel: string, line?: number, column?: number) => {
+  pendingFocus = { panel, line, column };
+  for (const listener of focusListeners) listener(pendingFocus);
 };
+
+/**
+ * Hands an editor its focus requests: now when one is waiting for it, and
+ * later as they come. With a line, the cursor goes there and the line is
+ * centred, which is what following a link from a terminal wants.
+ */
+function listenForFocus(
+  panel: string,
+  editor: monaco.editor.ICodeEditor,
+): () => void {
+  const focus = (request: FocusRequest) => {
+    if (request.panel !== panel) return;
+    pendingFocus = undefined;
+    // A frame later: activating the tab re-renders the panel, and a focus
+    // taken during that render is dropped again.
+    requestAnimationFrame(() => {
+      if (request.line) {
+        const position = {
+          lineNumber: request.line,
+          column: request.column ?? 1,
+        };
+        editor.setPosition(position);
+        editor.revealPositionInCenter(position);
+      }
+      editor.focus();
+    });
+  };
+  if (pendingFocus) focus(pendingFocus);
+  focusListeners.add(focus);
+  return () => {
+    focusListeners.delete(focus);
+  };
+}
 
 const useDocumentsRevision = () =>
   useSyncExternalStore(subscribeDocuments, documentsRevision);
@@ -198,72 +257,92 @@ export default function EditorArea({
       panel.api.updateParameters({ ...params, preview: false });
   }, []);
 
-  const open = useCallback(
+  /**
+   * Adds a tab, or shows the one there is. An unpinned tab is the group's
+   * preview: the next one replaces it, as long as nobody has typed into it.
+   */
+  const place = useCallback(
     (
-      path: string,
-      options: {
-        pinned: boolean;
-        mode?: "edit" | "preview";
-        heading?: string;
-      },
+      id: string,
+      component: "file" | "diff",
+      params: FilePanelParams,
+      pinned: boolean,
     ) => {
       const api = apiRef.current;
       if (!api) return;
-      const existing = api.getPanel(panelId(path));
+      const existing = api.getPanel(id);
       if (existing) {
-        const params = existing.params as FilePanelParams;
+        const current = existing.params as FilePanelParams;
         existing.api.updateParameters({
+          ...current,
           ...params,
-          ...(options.pinned ? { preview: false } : {}),
-          ...(options.mode ? { mode: options.mode } : {}),
-          ...(options.heading ? { heading: options.heading } : {}),
+          preview: pinned ? false : current.preview,
         });
         existing.api.setActive();
-        if (options.pinned) requestFocus(path);
         return;
       }
       const group = api.activeGroup;
-      // One preview tab per group, replaced by the next single click, as long
-      // as nobody has typed into it.
       const preview = group?.panels.find((panel) => {
-        const params = panel.params as FilePanelParams | undefined;
-        if (!params?.preview) return false;
-        const doc = getDocument(workspaceId, params.path);
+        const current = panel.params as FilePanelParams | undefined;
+        if (!current?.preview) return false;
+        const doc = getDocument(workspaceId, current.path);
         return !doc || !isDirty(doc);
       });
-      const params: FilePanelParams = {
-        path,
-        preview: !options.pinned,
-        mode: options.mode ?? "edit",
-        heading: options.heading,
-      };
       api.addPanel({
-        id: panelId(path),
-        component: "file",
+        id,
+        component,
         tabComponent: "file",
-        title: workspaceBaseName(path),
-        params,
+        title: workspaceBaseName(params.path),
+        params: { ...params, preview: !pinned },
         ...(preview
           ? { position: { referencePanel: preview.id, direction: "within" } }
           : group
             ? { position: { referenceGroup: group.id, direction: "within" } }
             : {}),
       });
-      if (options.pinned) requestFocus(path);
-      if (preview) {
-        const replaced = (preview.params as FilePanelParams).path;
-        preview.api.close();
-        const doc = getDocument(workspaceId, replaced);
-        if (doc && !isDirty(doc)) closeDocument(doc);
-      }
+      if (preview) preview.api.close();
     },
     [workspaceId],
+  );
+
+  const openDiff = useCallback(
+    (target: DiffTarget, options: { pinned: boolean }) => {
+      place(
+        diffPanelId(target.path),
+        "diff",
+        { path: target.path, diff: target },
+        options.pinned,
+      );
+      if (options.pinned) requestFocus(diffPanelId(target.path));
+    },
+    [place],
+  );
+
+  const open = useCallback(
+    (path: string, options: OpenOptions) => {
+      const existing = apiRef.current?.getPanel(panelId(path));
+      const current = existing?.params as FilePanelParams | undefined;
+      place(
+        panelId(path),
+        "file",
+        {
+          path,
+          mode: options.mode ?? current?.mode ?? "edit",
+          heading: options.heading ?? current?.heading,
+        },
+        options.pinned,
+      );
+      if (options.pinned || options.line !== undefined)
+        requestFocus(panelId(path), options.line, options.column);
+    },
+    [place],
   );
 
   useImperativeHandle(
     handleRef,
     () => ({
       open,
+      openDiff,
       moved(from, to) {
         const api = apiRef.current;
         for (const doc of documentsIn(workspaceId)) {
@@ -295,11 +374,12 @@ export default function EditorArea({
         for (const doc of documentsIn(workspaceId)) {
           if (doc.path !== path && !doc.path.startsWith(`${path}/`)) continue;
           api?.getPanel(panelId(doc.path))?.api.close();
+          api?.getPanel(diffPanelId(doc.path))?.api.close();
           closeDocument(doc);
         }
       },
     }),
-    [client, open, workspaceId],
+    [client, open, openDiff, workspaceId],
   );
 
   // Files changed on disk: a clean document takes the new content, a deleted
@@ -399,7 +479,11 @@ export default function EditorArea({
         // A tab dragged to another group is removed and added; only a real
         // close leaves no panel for the path.
         queueMicrotask(() => {
-          if (api.getPanel(panelId(params.path))) return;
+          if (
+            api.getPanel(panelId(params.path)) ||
+            api.getPanel(diffPanelId(params.path))
+          )
+            return;
           const doc = getDocument(workspaceId, params.path);
           if (doc && !isDirty(doc)) closeDocument(doc);
         });
@@ -430,7 +514,7 @@ export default function EditorArea({
           className={
             theme === "dark" ? "dockview-theme-dark" : "dockview-theme-light"
           }
-          components={{ file: FilePanel }}
+          components={{ file: FilePanel, diff: DiffPanel }}
           dndStrategy="pointer"
           getTabContextMenuItems={({ panel, group, api }) =>
             tabMenu(panel, group.panels, api, close, pin)
@@ -499,14 +583,21 @@ function FileTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
   return (
     <div
       className={`file-tab ${params.preview ? "preview" : ""} ${dirty ? "dirty" : ""}`}
-      onClick={() => requestFocus(params.path)}
+      onClick={() =>
+        requestFocus(
+          params.diff ? diffPanelId(params.path) : panelId(params.path),
+        )
+      }
       onAuxClick={(event) => {
         if (event.button === 1 && panel) void context.close(panel);
       }}
       onDoubleClick={() => panel && context.pin(panel)}
       title={params.path}
     >
-      <span className="file-tab-name">{workspaceBaseName(params.path)}</span>
+      <span className="file-tab-name">
+        {workspaceBaseName(params.path)}
+        {params.diff && <small> (changes)</small>}
+      </span>
       <button
         aria-label={`Close ${workspaceBaseName(params.path)}`}
         className="file-tab-close"
@@ -654,23 +745,121 @@ function MonacoPanel({ doc, onEdit }: { doc: OpenDocument; onEdit(): void }) {
     });
     if (doc.viewState) editor.restoreViewState(doc.viewState);
     const typing = editor.onDidChangeModelContent(() => editEvents.current());
-    const focus = (path: string) => {
-      if (path !== doc.path) return;
-      pendingFocus = undefined;
-      // A frame later: activating the tab re-renders the panel, and a focus
-      // taken during that render is dropped again.
-      requestAnimationFrame(() => editor.focus());
-    };
-    if (pendingFocus === doc.path) focus(doc.path);
-    focusListeners.add(focus);
+    const stopListening = listenForFocus(panelId(doc.path), editor);
     return () => {
-      focusListeners.delete(focus);
+      stopListening();
       doc.viewState = editor.saveViewState();
       typing.dispose();
       editor.dispose();
     };
   }, [context.theme, doc]);
 
+  return <div className="monaco-panel" ref={container} />;
+}
+
+/**
+ * A changed file next to where its worktree branched, as VS Code's Source
+ * Control shows it. The right side is the same document a normal tab edits,
+ * so typing here marks the file dirty and Cmd+S saves it; the left side is
+ * the base and read-only. A deleted file has an empty right side.
+ */
+function DiffPanel({ params }: IDockviewPanelProps<FilePanelParams>) {
+  const context = useEditorContext();
+  const container = useRef<HTMLDivElement>(null);
+  const diff = params.diff;
+  const [loaded, setLoaded] = useState<
+    { original: string; doc?: OpenDocument } | { message: string } | undefined
+  >();
+
+  useEffect(() => {
+    if (!diff) return;
+    let cancelled = false;
+    setLoaded(undefined);
+    void (async () => {
+      const original =
+        diff.status === "added" || diff.status === "untracked"
+          ? { ok: true as const, data: { content: "", binary: false } }
+          : await context.client.request.workspaceChangeOriginal({
+              workspace: context.workspaceId,
+              root: diff.root,
+              repositoryPath:
+                diff.originalRepositoryPath ?? diff.repositoryPath,
+            });
+      const doc =
+        diff.status === "deleted" ? undefined : await context.load(diff.path);
+      if (cancelled) return;
+      if (!original.ok) setLoaded({ message: original.error.message });
+      else if (original.data.binary)
+        setLoaded({ message: "A binary file; there is no text to compare." });
+      else if (diff.status !== "deleted" && !doc)
+        setLoaded({ message: "This file can no longer be read." });
+      else setLoaded({ original: original.data.content, doc });
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // `context` is rebuilt on every render; what to load depends on the diff.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [diff?.path, diff?.root, diff?.repositoryPath, diff?.status]);
+
+  useEffect(() => {
+    const parent = container.current;
+    if (!parent || !diff || !loaded || "message" in loaded) return;
+    const extension = diff.path.slice(diff.path.lastIndexOf("/") + 1);
+    const original = monaco.editor.createModel(
+      loaded.original,
+      undefined,
+      monaco.Uri.from({
+        scheme: "daedalus-original",
+        path: `/${context.workspaceId}/${diff.path}`,
+      }),
+    );
+    const removed = loaded.doc
+      ? undefined
+      : monaco.editor.createModel(
+          "",
+          undefined,
+          monaco.Uri.from({
+            scheme: "daedalus-deleted",
+            path: `/${context.workspaceId}/${extension}`,
+          }),
+        );
+    const modified = loaded.doc?.model ?? removed;
+    if (!modified) return;
+    const editor = monaco.editor.createDiffEditor(parent, {
+      automaticLayout: true,
+      originalEditable: false,
+      readOnly: !loaded.doc || isReadOnlyPath(diff.path),
+      renderSideBySide: true,
+      theme: context.theme === "dark" ? "daedalus-dark" : "daedalus-light",
+      fontFamily: '"SF Mono", Menlo, monospace',
+      fontSize: 13,
+      scrollBeyondLastLine: false,
+      fixedOverflowWidgets: true,
+    });
+    editor.setModel({ original, modified });
+    // Open at the first change, as VS Code does, once the diff is computed.
+    const firstDiff = editor.onDidUpdateDiff(() => {
+      firstDiff.dispose();
+      editor.revealFirstDiff();
+    });
+    const stopListening = listenForFocus(
+      diffPanelId(diff.path),
+      editor.getModifiedEditor(),
+    );
+    return () => {
+      firstDiff.dispose();
+      stopListening();
+      editor.dispose();
+      original.dispose();
+      removed?.dispose();
+    };
+  }, [context.theme, context.workspaceId, diff, loaded]);
+
+  if (!diff) return null;
+  if (!loaded) return <div className="editor-loading">Opening changes…</div>;
+  if ("message" in loaded)
+    return <div className="editor-loading">{loaded.message}</div>;
   return <div className="monaco-panel" ref={container} />;
 }
 

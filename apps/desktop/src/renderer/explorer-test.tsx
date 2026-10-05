@@ -200,6 +200,10 @@ const client = {
     workspaceEntryMove: (params: unknown) => call("/move", params),
     workspaceEntryRemove: (params: unknown) => call("/remove", params),
     workspaceEntriesCopy: (params: unknown) => call("/copy", params),
+    workspaceChanges: () => call("/changes", {}),
+    workspaceChangeOriginal: (params: unknown) =>
+      call("/change-original", params),
+    fileLinkResolve: (params: unknown) => call("/link-resolve", params),
     clipboardFilesRead: () => call("/pb-read", {}),
     clipboardFilesWrite: (params: unknown) => call("/pb-write", params),
     workspaceWatchSet: (params: unknown) => call("/watch", params),

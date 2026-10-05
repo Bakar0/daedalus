@@ -34,6 +34,8 @@ import {
 } from "@daedalus/platform";
 import type {
   AgentSession,
+  ChangedFile,
+  FileLinkTarget,
   GitStatus,
   PullRequestRef,
   ShippedPullRequest,
@@ -44,6 +46,7 @@ import type {
   WorkspaceFile,
   WorkspaceFileEntry,
   WorkspaceRepository,
+  WorktreeChanges,
   RepositoryFetchOutcome,
   RepositoryLibraryEntry,
 } from "../domain";
@@ -809,6 +812,97 @@ const UNAVAILABLE_STATUS: GitStatus = {
   ahead: 0,
   behind: 0,
 };
+
+/**
+ * Reads `git diff --name-status -z -M` and `git diff --numstat -z -M` into one
+ * list. With `-z` a rename is three fields in name-status (`R100`, old, new)
+ * and, in numstat, counts followed by an empty path and then old and new.
+ * A binary file has `-` for both counts and gets none.
+ */
+export function parseChangedFiles(
+  nameStatus: string,
+  numstat: string,
+): Omit<ChangedFile, "path">[] {
+  const counts = new Map<string, { additions?: number; deletions?: number }>();
+  const numberFields = numstat.split("\0");
+  for (let index = 0; index < numberFields.length; index += 1) {
+    const field = numberFields[index];
+    if (!field) continue;
+    const [added, deleted, path] = field.split("\t");
+    let target = path;
+    if (path === "") {
+      // A rename: the next two fields are its old and new path.
+      target = numberFields[index + 2];
+      index += 2;
+    }
+    if (target === undefined) continue;
+    counts.set(
+      target,
+      added === "-" || deleted === "-"
+        ? {}
+        : {
+            additions: Number.parseInt(added ?? "0", 10) || 0,
+            deletions: Number.parseInt(deleted ?? "0", 10) || 0,
+          },
+    );
+  }
+  const files: Omit<ChangedFile, "path">[] = [];
+  const fields = nameStatus.split("\0");
+  for (let index = 0; index < fields.length; index += 1) {
+    const code = fields[index];
+    if (!code) continue;
+    const letter = code[0];
+    if (letter === "R" || letter === "C") {
+      const from = fields[index + 1];
+      const to = fields[index + 2];
+      index += 2;
+      if (!from || !to) continue;
+      files.push({
+        repositoryPath: to,
+        ...(letter === "R" ? { originalRepositoryPath: from } : {}),
+        status: letter === "R" ? "renamed" : "added",
+        ...counts.get(to),
+      });
+      continue;
+    }
+    const path = fields[index + 1];
+    index += 1;
+    if (!path) continue;
+    files.push({
+      repositoryPath: path,
+      status:
+        letter === "A" ? "added" : letter === "D" ? "deleted" : "modified",
+      ...counts.get(path),
+    });
+  }
+  return files;
+}
+
+/**
+ * Where a worktree's changes are measured from: the merge-base with
+ * `origin/<baseBranch>`, so work that landed on the base branch since the
+ * tree branched is not counted as the agent's. Null when there is no base
+ * branch or git cannot find the merge-base; callers then compare with HEAD.
+ */
+async function changesBase(
+  git: string,
+  path: string,
+  baseBranch: string | null,
+): Promise<string | null> {
+  if (!baseBranch) return null;
+  const result = await runCommand(git, [
+    "--no-optional-locks",
+    "-C",
+    path,
+    "merge-base",
+    "HEAD",
+    `refs/remotes/origin/${baseBranch}`,
+  ]);
+  const commit = result.stdout.trim();
+  return result.exitCode === 0 && /^[0-9a-f]{40,64}$/.test(commit)
+    ? commit
+    : null;
+}
 
 // Shared by the read-only checkout under `repos/` and by session worktrees.
 // Both answer the same two questions — what is uncommitted here, and how far
@@ -2574,6 +2668,171 @@ export class WorkspaceContentService {
     );
     await rm(source.target, { recursive: true, force: false });
     return entry;
+  }
+
+  /**
+   * Every session worktree in the workspace, with the files it changed since
+   * it branched from `origin/<baseBranch>`: committed and uncommitted work
+   * together, plus untracked files. Read-only and lock-free, so it never
+   * races an agent's own `git add`.
+   */
+  async worktreeChanges(reference: string): Promise<WorktreeChanges[]> {
+    const workspace = await this.workspaces.getActive(reference);
+    const git = findExecutable("git");
+    const repositories = new Map(
+      this.repositories
+        .listWorkspaceRepositories(workspace.id)
+        .map((item) => [item.id, item]),
+    );
+    const worktrees = this.repositories.listSessionWorktrees({
+      workspaceId: workspace.id,
+    });
+    const results = await Promise.all(
+      worktrees.map(async (worktree): Promise<WorktreeChanges | undefined> => {
+        if (!git || !(await pathExists(worktree.path))) return undefined;
+        const repository = repositories.get(worktree.repositoryId);
+        const root = relative(workspace.path, worktree.path);
+        if (root.startsWith("..") || isAbsolute(root)) return undefined;
+        const base = await changesBase(
+          git,
+          worktree.path,
+          repository?.baseBranch ?? null,
+        );
+        const run = (args: string[]) =>
+          runCommand(git, [
+            "--no-optional-locks",
+            "-C",
+            worktree.path,
+            ...args,
+          ]);
+        const [nameStatus, numstat, untracked] = await Promise.all([
+          run(["diff", "--name-status", "-z", "-M", base ?? "HEAD"]),
+          run(["diff", "--numstat", "-z", "-M", base ?? "HEAD"]),
+          run(["ls-files", "--others", "--exclude-standard", "-z"]),
+        ]);
+        const files: ChangedFile[] = [
+          ...(nameStatus.exitCode === 0
+            ? parseChangedFiles(nameStatus.stdout, numstat.stdout)
+            : []),
+          ...(untracked.exitCode === 0
+            ? untracked.stdout
+                .split("\0")
+                .filter(Boolean)
+                .map((repositoryPath) => ({
+                  repositoryPath,
+                  status: "untracked" as const,
+                }))
+            : []),
+        ].map((file) => ({ ...file, path: join(root, file.repositoryPath) }));
+        files.sort((left, right) => left.path.localeCompare(right.path));
+        return {
+          sessionId: worktree.sessionId,
+          repositoryId: worktree.repositoryId,
+          repositoryName: repository?.name ?? basename(worktree.path),
+          branchName: worktree.branchName,
+          root,
+          base,
+          files,
+        };
+      }),
+    );
+    return results.filter((item) => item !== undefined);
+  }
+
+  /**
+   * A changed file as it was at the worktree's base, for the left side of a
+   * diff. Empty for a file the worktree added.
+   */
+  async changeOriginal(input: {
+    workspace: string;
+    root: string;
+    repositoryPath: string;
+  }): Promise<{ content: string; binary: boolean }> {
+    const workspace = await this.workspaces.getActive(input.workspace);
+    const folder = await this.resolveVisiblePath(workspace, input.root);
+    const worktree = this.repositories
+      .listSessionWorktrees({ workspaceId: workspace.id })
+      .find((item) => resolve(item.path) === resolve(folder.target));
+    if (!worktree)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `'${input.root}' is not a session worktree`,
+      );
+    if (
+      isAbsolute(input.repositoryPath) ||
+      input.repositoryPath.split(/[\\/]/).includes("..")
+    )
+      throw new DaedalusError(
+        "VALIDATION",
+        "Repository paths must be relative",
+      );
+    const git = findExecutable("git");
+    if (!git) throw new DaedalusError("DEPENDENCY", "git was not found");
+    const repository = this.repositories
+      .listWorkspaceRepositories(workspace.id)
+      .find((item) => item.id === worktree.repositoryId);
+    const base = await changesBase(
+      git,
+      worktree.path,
+      repository?.baseBranch ?? null,
+    );
+    const shown = await runCommand(git, [
+      "--no-optional-locks",
+      "-C",
+      worktree.path,
+      "show",
+      `${base ?? "HEAD"}:${input.repositoryPath}`,
+    ]);
+    if (shown.exitCode !== 0) return { content: "", binary: false };
+    const binary = shown.stdout.slice(0, 8192).includes("\0");
+    return { content: binary ? "" : shown.stdout, binary };
+  }
+
+  /**
+   * Where a path printed in a terminal points. A relative path is tried
+   * against each base directory in turn (the session's folder, then its
+   * worktrees); the first existing file wins. Only files inside an active
+   * workspace are links: the editor shows workspace files, and anything else
+   * would be a link that opens nothing.
+   */
+  async resolveFileLink(input: {
+    path: string;
+    baseDirectories: readonly string[];
+  }): Promise<FileLinkTarget | null> {
+    const home = Bun.env.HOME ?? "";
+    const expanded = input.path.startsWith("~/")
+      ? join(home, input.path.slice(2))
+      : input.path;
+    const candidates = isAbsolute(expanded)
+      ? [expanded]
+      : input.baseDirectories
+          .filter((directory) => isAbsolute(directory))
+          .map((directory) => resolve(directory, expanded));
+    const workspaces = await this.workspaces.list();
+    const roots = await Promise.all(
+      workspaces.map(async (workspace) => ({
+        workspace,
+        canonical: await canonicalPath(workspace.path).catch(() => null),
+      })),
+    );
+    for (const candidate of candidates) {
+      if (!(await pathExists(candidate))) continue;
+      if (!(await lstat(candidate)).isFile()) continue;
+      const real = await canonicalPath(candidate);
+      const owner = roots.find(
+        (root) => root.canonical && isPathInside(root.canonical, real),
+      );
+      if (!owner?.canonical) continue;
+      const path = relative(owner.canonical, real);
+      if (
+        path
+          .split(/[\\/]/)
+          .some((part) => part === ".daedalus" || part === ".git")
+      )
+        continue;
+      return { workspaceId: owner.workspace.id, path };
+    }
+    return null;
   }
 
   /**

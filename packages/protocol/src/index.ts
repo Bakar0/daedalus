@@ -211,6 +211,30 @@ export interface SessionWorktreeDto {
   landed?: boolean;
 }
 
+export interface ChangedFileDto {
+  path: string;
+  repositoryPath: string;
+  originalRepositoryPath?: string;
+  status: "added" | "modified" | "deleted" | "renamed" | "untracked";
+  additions?: number;
+  deletions?: number;
+}
+
+export interface WorktreeChangesDto {
+  sessionId: string;
+  repositoryId: string;
+  repositoryName: string;
+  branchName: string;
+  root: string;
+  base: string | null;
+  files: ChangedFileDto[];
+}
+
+export interface FileLinkTargetDto {
+  workspaceId: string;
+  path: string;
+}
+
 export interface WorkspaceContentDto {
   workspaceId: string;
   brief: string;
@@ -797,6 +821,18 @@ export interface DesktopRpcSchema {
        * Copies absolute paths (workspace entries or files from Finder) into a
        * workspace folder; a taken name gets a " copy" suffix.
        */
+      /** Each session worktree's changes since it branched from its base. */
+      workspaceChanges: Request<{ workspace: string }, WorktreeChangesDto[]>;
+      /** A changed file as it was at its worktree's base, for a diff. */
+      workspaceChangeOriginal: Request<
+        { workspace: string; root: string; repositoryPath: string },
+        { content: string; binary: boolean }
+      >;
+      /** Where a path printed in a terminal points, if it is a workspace file. */
+      fileLinkResolve: Request<
+        { path: string; baseDirectories: string[] },
+        FileLinkTargetDto | null
+      >;
       workspaceEntriesCopy: Request<
         { workspace: string; sources: string[]; destinationPath: string },
         WorkspaceFileEntryDto[]

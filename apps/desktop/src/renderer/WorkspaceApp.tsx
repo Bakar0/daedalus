@@ -17,6 +17,7 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from "react";
 import type {
+  FileLinkTargetDto,
   AppUpdateDto,
   TaskTimelineDto,
   AgentActivity,
@@ -48,6 +49,7 @@ import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import { UpdateBanner } from "./UpdateBanner";
 import { runWithConcurrency } from "./concurrency";
 import { wholeLinkRows, type LinkRange } from "./terminal-links";
+import { findPathCandidates } from "./terminal-file-links";
 import { repositoryFuzzyScore } from "./repository-search";
 import { ReorderGroup } from "./ReorderGroup";
 import { useListReorder, type ReorderHandles } from "./use-list-reorder";
@@ -57,7 +59,7 @@ import { taskActions } from "./task-actions";
 import { TaskCostLine, TaskTimeline } from "./TaskTimeline";
 import { TaskActionBar } from "./TaskActionBar";
 import { askConfirm, askText, DialogHost } from "./dialogs";
-import { FilesView } from "./files/FilesView";
+import { type FileOpenRequest, FilesView } from "./files/FilesView";
 import { MarkdownPreview } from "./markdown-preview";
 import { buildWorldModel, worldInputFromSnapshot } from "./world/world-model";
 import { TaskPriorityMenu, TaskStatusMenu } from "./TaskStatusMenu";
@@ -948,6 +950,12 @@ const holdsCaret = (container: HTMLElement | null) =>
     container.contains(document.activeElement),
   );
 
+/** How a terminal turns a printed path into a link and follows it. */
+interface FileLinks {
+  resolve(path: string): Promise<FileLinkTargetDto | null>;
+  open(target: FileLinkTargetDto, line?: number, column?: number): void;
+}
+
 function TerminalSurface({
   activity,
   attention,
@@ -961,6 +969,7 @@ function TerminalSurface({
   onCopy,
   onFocused,
   onOpenLink,
+  fileLinks,
   status,
   session,
   telemetry,
@@ -979,6 +988,8 @@ function TerminalSurface({
   onCopy: (text: string) => void;
   onFocused?: () => void;
   onOpenLink: (url: string) => void;
+  /** Paths the program prints become Cmd+click links into the editor. */
+  fileLinks?: FileLinks;
   status: AgentSessionDto["status"];
   session?: AgentSessionDto;
   telemetry?: SessionTelemetryDto;
@@ -986,6 +997,8 @@ function TerminalSurface({
   worktree?: SessionWorktreeDto;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const fileLinksRef = useRef(fileLinks);
+  fileLinksRef.current = fileLinks;
   const fitRef = useRef<() => void>(() => undefined);
   const focusRef = useRef<() => void>(() => undefined);
   const inputRef = useRef<(data: string) => void>(() => undefined);
@@ -1173,6 +1186,52 @@ function TerminalSurface({
           { hover: hoverLink, leave: leaveLink },
         ),
       );
+      // Paths an agent prints, like `src/a.ts:12:3`. Only the ones that name
+      // a file in a workspace become links, which is what keeps ordinary
+      // words with a dot in them from lighting up.
+      terminal.registerLinkProvider({
+        provideLinks: (y, callback) => {
+          const links = fileLinksRef.current;
+          const text = terminal?.buffer.active
+            .getLine(y - 1)
+            ?.translateToString(true);
+          const candidates = text ? findPathCandidates(text) : [];
+          if (!links || candidates.length === 0) {
+            callback(undefined);
+            return;
+          }
+          void Promise.all(
+            candidates.map((candidate) => links.resolve(candidate.path)),
+          ).then((targets) => {
+            const found = candidates.flatMap((candidate, index) => {
+              const target = targets[index];
+              if (!target) return [];
+              const range = {
+                start: { x: candidate.index + 1, y },
+                end: { x: candidate.index + candidate.text.length, y },
+              };
+              return [
+                {
+                  text: candidate.text,
+                  range,
+                  activate: (event: MouseEvent) => {
+                    if (event.metaKey)
+                      fileLinksRef.current?.open(
+                        target,
+                        candidate.line,
+                        candidate.column,
+                      );
+                  },
+                  hover: (event: MouseEvent, linkText: string) =>
+                    hoverLink(event, linkText, range),
+                  leave: leaveLink,
+                },
+              ];
+            });
+            callback(found.length > 0 ? found : undefined);
+          });
+        },
+      });
       // How a program in the terminal copies: tmux after a drag in a plain
       // shell, and anything else that writes OSC 52. Only a write is honoured;
       // a `?` query would hand the clipboard to whatever runs in the pane.
@@ -1492,6 +1551,7 @@ function IntegratedTerminalSurface({
   mountRevision,
   onCopy,
   onOpenLink,
+  fileLinks,
   terminal,
   terminalEndpoint,
 }: {
@@ -1500,6 +1560,7 @@ function IntegratedTerminalSurface({
   mountRevision: number;
   onCopy: (text: string) => void;
   onOpenLink: (url: string) => void;
+  fileLinks?: FileLinks;
   terminal: IntegratedTerminalDto;
   terminalEndpoint?: string;
 }) {
@@ -1524,6 +1585,7 @@ function IntegratedTerminalSurface({
           label={terminal.name}
           onCopy={onCopy}
           onOpenLink={onOpenLink}
+          fileLinks={fileLinks}
           status={terminal.status}
           target="integrated"
         />
@@ -1653,6 +1715,8 @@ export function WorkspaceApp({
   const [taskTimelineLoading, setTaskTimelineLoading] = useState(false);
   // A journal heading the workspace view should open JOURNAL.md at, once.
   const [journalTarget, setJournalTarget] = useState<string>();
+  // A file a terminal link asked for, opened by the Workspace view.
+  const [fileOpenRequest, setFileOpenRequest] = useState<FileOpenRequest>();
   // The quit dialog is driven entirely by the host: it arrives with the plan
   // already computed, and every button answers back over `quitDecision`.
   const [quitRequest, setQuitRequest] = useState<ShutdownPlanDto>();
@@ -1810,15 +1874,74 @@ export function WorkspaceApp({
     }, 120);
   }, []);
 
+  // xterm asks for a line's links on every mouse move over it, so an answer
+  // is kept for a few seconds rather than asked of the host each time.
+  const fileLinkCache = useRef(
+    new Map<
+      string,
+      { at: number; target: Promise<FileLinkTargetDto | null> }
+    >(),
+  );
+  const resolveFileLink = useCallback(
+    (path: string, baseDirectories: readonly string[]) => {
+      const key = `${baseDirectories.join("\0")}\0\0${path}`;
+      const cached = fileLinkCache.current.get(key);
+      if (cached && Date.now() - cached.at < 5_000) return cached.target;
+      const target = client.request
+        .fileLinkResolve({ path, baseDirectories: [...baseDirectories] })
+        .then((response) => (response.ok ? response.data : null))
+        .catch(() => null);
+      fileLinkCache.current.set(key, { at: Date.now(), target });
+      return target;
+    },
+    [client],
+  );
+  const openFileTarget = useCallback(
+    (target: FileLinkTargetDto, line?: number, column?: number) => {
+      enterWorkspace(target.workspaceId, "workspace");
+      setFileOpenRequest({
+        path: target.path,
+        line,
+        column,
+        nonce: Date.now(),
+      });
+    },
+    // `enterWorkspace` only calls state setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+  const fileLinksFrom = useCallback(
+    (baseDirectories: readonly string[]): FileLinks => ({
+      resolve: (path) => resolveFileLink(path, baseDirectories),
+      open: openFileTarget,
+    }),
+    [openFileTarget, resolveFileLink],
+  );
+
   const openTerminalLink = useCallback(
     (url: string) => {
+      // `file://` links, which Claude Code prints for the files it touches,
+      // open in the editor when they are workspace files.
+      if (url.startsWith("file://")) {
+        let path: string;
+        try {
+          path = decodeURIComponent(new URL(url).pathname);
+        } catch {
+          return;
+        }
+        void resolveFileLink(path, []).then((target) => {
+          if (target) openFileTarget(target);
+          else setError("That file is not in a workspace");
+        });
+        return;
+      }
       void client.request.openExternal({ url }).then((response) => {
         if (!response.ok) setError(response.error.message);
         else if (!response.data.opened)
           setError("The link could not be opened in the default browser");
       });
     },
-    [client],
+    [client, openFileTarget, resolveFileLink],
   );
 
   const copyTerminalText = useCallback(
@@ -4885,6 +5008,15 @@ export function WorkspaceApp({
                 ) : (
                   <FilesView
                     client={client}
+                    openRequest={fileOpenRequest}
+                    sessionNames={
+                      new Map(
+                        workspaceSessions.map((item) => [
+                          item.id,
+                          sessionName(item),
+                        ]),
+                      )
+                    }
                     initialRoot={workspaceContent.files}
                     key={workspace.id}
                     onError={setError}
@@ -5139,6 +5271,12 @@ export function WorkspaceApp({
                   onCopy={copyTerminalText}
                   onFocused={clearSessionFocusRequest}
                   onOpenLink={openTerminalLink}
+                  fileLinks={fileLinksFrom([
+                    activeSession.workingDirectory,
+                    ...(snapshot?.worktrees ?? [])
+                      .filter((item) => item.sessionId === activeSession.id)
+                      .map((item) => item.path),
+                  ])}
                   session={activeSession}
                   status={activeSession.status}
                   target="agent"
@@ -5284,6 +5422,7 @@ export function WorkspaceApp({
                     mountRevision={terminalMountRevision}
                     onCopy={copyTerminalText}
                     onOpenLink={openTerminalLink}
+                    fileLinks={fileLinksFrom([terminal.workingDirectory])}
                     terminal={terminal}
                   />
                 ))

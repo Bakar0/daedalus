@@ -1042,6 +1042,38 @@ Before working in this workspace:
       });
     });
 
+    test("resolves a terminal path to a workspace file, and nothing else", async () => {
+      await withWorkspace(async ({ context, workspaceId, workspacePath }) => {
+        await context.workspaceContent.createEntry({
+          workspace: workspaceId,
+          name: "notes",
+          kind: "directory",
+        });
+        await context.workspaceContent.createEntry({
+          workspace: workspaceId,
+          parentPath: "notes",
+          name: "a.md",
+          kind: "file",
+        });
+        const resolveLink = (path: string, baseDirectories: string[]) =>
+          context.workspaceContent.resolveFileLink({ path, baseDirectories });
+        // Relative: the first base directory where it exists wins.
+        expect(
+          await resolveLink("a.md", [
+            workspacePath,
+            join(workspacePath, "notes"),
+          ]),
+        ).toEqual({ workspaceId, path: "notes/a.md" });
+        expect(
+          await resolveLink(join(workspacePath, "notes", "a.md"), []),
+        ).toEqual({ workspaceId, path: "notes/a.md" });
+        // A folder, a missing file and a file outside every workspace are not links.
+        expect(await resolveLink("notes", [workspacePath])).toBeNull();
+        expect(await resolveLink("missing.md", [workspacePath])).toBeNull();
+        expect(await resolveLink("/etc/hosts", [])).toBeNull();
+      });
+    });
+
     test("removes a file, and a folder with everything under it", async () => {
       await withWorkspace(async ({ context, workspaceId, workspacePath }) => {
         await context.workspaceContent.createEntry({
