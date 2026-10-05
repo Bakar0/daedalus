@@ -1106,6 +1106,29 @@ function Modal({
   title: string;
   wide?: boolean;
 }) {
+  const section = useRef<HTMLElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  // A dialog opened from a session would otherwise leave the caret in the
+  // terminal, where xterm swallows Escape and sends it to the agent.
+  useEffect(() => {
+    const element = section.current;
+    if (element && !element.contains(document.activeElement)) element.focus();
+  }, []);
+  // Escape closes it, on the window like the task drawer, so a menu or a
+  // confirm on top that handles Escape first (`preventDefault`, or a stopped
+  // event) closes only itself.
+  useEffect(() => {
+    if (!dismissible) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (document.querySelector(".app-dialog-backdrop")) return;
+      event.preventDefault();
+      close.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [dismissible]);
   return (
     <div
       className="modal-backdrop"
@@ -1118,7 +1141,9 @@ function Modal({
         aria-label={title}
         aria-modal="true"
         className={`modal ${wide ? "modal-wide" : ""}`}
+        ref={section}
         role="dialog"
+        tabIndex={-1}
       >
         <div className="detail-title">
           <div>

@@ -1874,6 +1874,11 @@ button:not(
   padding: 24px;
   width: calc(100% - 48px);
 }
+/* The dialog takes focus only to pull it out of a terminal; it is not a
+   control, so it draws no ring. */
+.modal:focus {
+  outline: none;
+}
 /* A confirm can be asked from inside another dialog, so it sits above them. */
 .app-dialog-backdrop {
   z-index: 20;
