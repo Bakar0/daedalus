@@ -4234,7 +4234,10 @@ export function WorkspaceApp({
     // not an intent to type into whatever is restored.
     clearSessionFocusRequest();
     // A workspace's card opens its board; its sessions are listed right
-    // under the card (#55).
+    // under the card (#55). The ref moves first, as in `enterWorkspace`, or
+    // the scope effect restores the workspace's remembered view (often its
+    // last session) over the board.
+    viewWorkspaceId.current = id;
     setView("board");
   }
 
