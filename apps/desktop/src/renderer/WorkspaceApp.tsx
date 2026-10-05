@@ -508,28 +508,6 @@ function PanelCollapseButton({
   );
 }
 
-/**
- * A check in a circle: this alert is seen. Not a struck-out bell, which
- * reads as muting alerts altogether.
- */
-function DismissAlertIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="dismiss-alert-icon"
-      fill="none"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="1.8"
-      viewBox="0 0 24 24"
-    >
-      <circle cx="12" cy="12" r="8.5" />
-      <path d="M8.5 12.2l2.4 2.4 4.6-4.9" />
-    </svg>
-  );
-}
-
 /** A baton passing forward: the work continues with someone new. */
 function HandoffIcon() {
   return (
@@ -4622,6 +4600,11 @@ export function WorkspaceApp({
                 the same height (#55). A failed start takes the status line. */}
             <em
               className="session-card-status"
+              data-clearable={
+                statusView.reasons.length > 0 && !startupError
+                  ? "true"
+                  : undefined
+              }
               data-error={startupError ? "true" : undefined}
             >
               <AgentStatusDot
@@ -4647,6 +4630,31 @@ export function WorkspaceApp({
             </em>
           </span>
         </button>
+        {/* The alert's own dot, made into a pill that clears it, over the
+            status row's dot: a button cannot sit inside the card's button.
+            Only while something the agent or its pane raised is open; a
+            lost session needs reviving, not clearing. */}
+        {statusView.reasons.length > 0 && !startupError && (
+          <button
+            aria-label={`Clear ${sessionName(session)}'s needs-you alert`}
+            className="session-attention-clear"
+            data-no-drag
+            disabled={busy}
+            onClick={() => void clearAttention(session.id)}
+            title={
+              statusView.reasons.length > 1
+                ? `Mark as seen: clear these ${statusView.reasons.length} alerts`
+                : "Mark as seen: clear this alert"
+            }
+            type="button"
+          >
+            <AgentStatusDot
+              count={statusView.reasons.length}
+              view={statusView}
+            />
+            Clear
+          </button>
+        )}
         <span className="workspace-card-actions" data-no-drag>
           {session.status === "lost" && (
             <button
@@ -4694,20 +4702,6 @@ export function WorkspaceApp({
           >
             <ArchiveIcon />
           </button>
-          {/* Only while something the agent or its pane raised is open: a
-              lost session needs reviving, not dismissing. */}
-          {statusView.reasons.length > 0 && (
-            <button
-              aria-label={`Mark ${sessionName(session)}'s needs-you alert as seen`}
-              className="session-card-action session-attention-dismiss"
-              disabled={busy}
-              onClick={() => void clearAttention(session.id)}
-              title="Mark as seen: clear this alert"
-              type="button"
-            >
-              <DismissAlertIcon />
-            </button>
-          )}
           {/* Last, so hand off and archive open to its left on hover. */}
           <SessionMenu
             color={session.color}
