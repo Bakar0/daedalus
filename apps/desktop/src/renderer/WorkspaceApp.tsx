@@ -55,7 +55,8 @@ import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import { UpdateBanner } from "./UpdateBanner";
 import { runWithConcurrency } from "./concurrency";
 import { repositoryFuzzyScore } from "./repository-search";
-import { useListReorder } from "./use-list-reorder";
+import { ReorderGroup } from "./ReorderGroup";
+import { useListReorder, type ReorderHandles } from "./use-list-reorder";
 import { BoardView, TaskRelationsBlock, type BoardProvider } from "./BoardView";
 import { laneFor } from "./board-lanes";
 import { taskActions } from "./task-actions";
@@ -71,7 +72,6 @@ import {
   AgentStatusDot,
   compactTokenLabel,
   lifecycleTone,
-  CreateButton,
   providerLabel,
   SessionLaunchIcon,
   sessionConfiguredModel,
@@ -109,6 +109,13 @@ const PANEL_STEP = 24;
 export const clampPanelSize = (size: number, maximum: number) =>
   Math.min(Math.max(PANEL_RAIL_WIDTH, Math.round(size)), maximum);
 
+// The workspace column holds the session lists (#55), so it no longer folds
+// to a rail; this is as narrow as it goes.
+export const WORKSPACE_PANEL_MIN_WIDTH = 200;
+const WORKSPACE_PANEL_DEFAULT_WIDTH = 248;
+export const clampWorkspacePanelSize = (size: number, maximum: number) =>
+  Math.min(Math.max(WORKSPACE_PANEL_MIN_WIDTH, Math.round(size)), maximum);
+
 const storedPanelSize = (key: string, fallback: number) => {
   if (typeof window === "undefined") return fallback;
   const stored = Number(window.localStorage.getItem(key));
@@ -126,6 +133,37 @@ export const clampExplorerWidth = (width: number, available: number) =>
     Math.max(EXPLORER_MIN_WIDTH, Math.round(width)),
     Math.max(EXPLORER_MIN_WIDTH, Math.min(EXPLORER_MAX_WIDTH, available)),
   );
+
+const COLLAPSED_WORKSPACES_STORAGE_KEY = "daedalus.workspaces.collapsed";
+
+/**
+ * The workspaces whose session lists are folded away in the left column
+ * (#55). Lists start open, so only the folded ones are stored.
+ */
+export function parseCollapsedWorkspaces(raw: string | null): Set<string> {
+  if (!raw) return new Set();
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return new Set(
+      Array.isArray(parsed)
+        ? parsed.filter((entry): entry is string => typeof entry === "string")
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+const rememberedCollapsedWorkspaces = () => {
+  if (typeof window === "undefined") return new Set<string>();
+  try {
+    return parseCollapsedWorkspaces(
+      window.localStorage.getItem(COLLAPSED_WORKSPACES_STORAGE_KEY),
+    );
+  } catch {
+    return new Set<string>();
+  }
+};
 
 const lastSessionStorageKey = (workspaceId: string) =>
   `daedalus.session.last.${workspaceId}`;
@@ -185,7 +223,12 @@ const rememberExpandedDirectories = (
 const lastViewStorageKey = (workspaceId: string) =>
   `daedalus.view.last.${workspaceId}`;
 
-export type WorkspaceView = "board" | "sessions" | "workspace" | "world";
+/**
+ * What the main column shows. "session" is one session's terminal, opened
+ * from the session lists nested under each workspace in the left column; it
+ * has no tab of its own (#55).
+ */
+export type WorkspaceView = "board" | "session" | "workspace" | "world";
 
 /**
  * What the main column shows: one workspace, or every active workspace at
@@ -207,7 +250,12 @@ export function preferredScopeView(
   rememberedView?: string | null,
 ): WorkspaceView {
   const preferred = preferredWorkspaceView(rememberedView);
-  return scope === "all" && preferred === "workspace" ? "board" : preferred;
+  // Files and a session's terminal belong to one workspace; every workspace
+  // at once is the board and the World only.
+  return scope === "all" &&
+    (preferred === "workspace" || preferred === "session")
+    ? "board"
+    : preferred;
 }
 
 export function preferredWorkspaceView(
@@ -216,7 +264,10 @@ export function preferredWorkspaceView(
   // Board first, and first by default. The board is where a dispatcher starts
   // the day, and since #27 it also holds the repositories and the add button,
   // so a workspace with nothing attached yet is fixed from here too.
-  return rememberedView === "sessions" ||
+  // "sessions" is the tab that #55 removed; its list now lives in the left
+  // column, so a workspace left on it comes back to its session.
+  if (rememberedView === "sessions") return "session";
+  return rememberedView === "session" ||
     rememberedView === "workspace" ||
     rememberedView === "world"
     ? rememberedView
@@ -473,6 +524,23 @@ function HandoffIcon() {
       <path d="M3 12h9" />
       <path d="M9 8l4 4-4 4" />
       <rect height="14" rx="2.5" width="6" x="15" y="5" />
+    </svg>
+  );
+}
+
+/** A folder: one workspace, beside its name in the left column (#55). */
+function WorkspaceFolderIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z" />
     </svg>
   );
 }
@@ -1655,10 +1723,11 @@ export function WorkspaceApp({
       ),
     [],
   );
-  const [view, setView] = useState<WorkspaceView>(
-    () =>
-      initialWorkspaceView ??
-      preferredScopeView(scope, rememberedWorkspaceView(scopeKey)),
+  const [view, setView] = useState<WorkspaceView>(() =>
+    preferredScopeView(
+      scope,
+      initialWorkspaceView ?? rememberedWorkspaceView(scopeKey),
+    ),
   );
   const viewWorkspaceId = useRef(scopeKey);
   // Where the World button returns to: the World spans every workspace, so
@@ -1817,6 +1886,8 @@ export function WorkspaceApp({
   const [sessionForm, setSessionForm] = useState<{
     name: string;
     taskId?: string;
+    /** The workspace whose card's + opened the dialog. */
+    workspaceId?: string;
     color?: SessionColorDto;
     routines?: boolean;
   }>({ name: "" });
@@ -1882,28 +1953,57 @@ export function WorkspaceApp({
   const [terminalPanelHeight, setTerminalPanelHeight] = useState(() =>
     typeof window === "undefined" ? 300 : Math.round(window.innerHeight * 0.38),
   );
-  const [workspacePanelWidth, setWorkspacePanelWidth] = useState(() =>
-    storedPanelSize("daedalus.panel.workspace-width", 210),
+  // Wide enough by default for the session cards listed under each
+  // workspace, which used to have a column of their own (#55).
+  const [workspacePanelWidth, setWorkspacePanelWidth] = useState(() => {
+    const stored = storedPanelSize(
+      "daedalus.panel.workspace-width",
+      WORKSPACE_PANEL_DEFAULT_WIDTH,
+    );
+    // A width left over from the rail opens at the default instead.
+    return stored < WORKSPACE_PANEL_MIN_WIDTH
+      ? WORKSPACE_PANEL_DEFAULT_WIDTH
+      : stored;
+  });
+  const [collapsedWorkspaceIds, setCollapsedWorkspaceIds] = useState<
+    ReadonlySet<string>
+  >(rememberedCollapsedWorkspaces);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        COLLAPSED_WORKSPACES_STORAGE_KEY,
+        JSON.stringify([...collapsedWorkspaceIds]),
+      );
+    } catch {
+      // Folding a list is not worth an error when the store is unavailable.
+    }
+  }, [collapsedWorkspaceIds]);
+  const setWorkspaceCollapsed = useCallback(
+    (id: string, collapsed: boolean) => {
+      setCollapsedWorkspaceIds((current) => {
+        if (current.has(id) === collapsed) return current;
+        const next = new Set(current);
+        if (collapsed) next.add(id);
+        else next.delete(id);
+        return next;
+      });
+    },
+    [],
+  );
+  const expandWorkspace = useCallback(
+    (id: string) => setWorkspaceCollapsed(id, false),
+    [setWorkspaceCollapsed],
   );
   const [boardDetailPanelWidth, setBoardDetailPanelWidth] = useState(() =>
     storedPanelSize("daedalus.panel.board-detail-width", 340),
   );
-  const [sessionsPanelWidth, setSessionsPanelWidth] = useState(() =>
-    storedPanelSize("daedalus.panel.sessions-width", 320),
-  );
   const [explorerWidth, setExplorerWidth] = useState(() =>
     storedPanelSize("daedalus.panel.explorer-width", EXPLORER_DEFAULT_WIDTH),
-  );
-  const workspaceExpandedWidth = useRef(
-    workspacePanelWidth >= PANEL_COMPACT_THRESHOLD ? workspacePanelWidth : 210,
   );
   const boardDetailExpandedWidth = useRef(
     boardDetailPanelWidth >= PANEL_COMPACT_THRESHOLD
       ? boardDetailPanelWidth
       : 340,
-  );
-  const sessionsExpandedWidth = useRef(
-    sessionsPanelWidth >= PANEL_COMPACT_THRESHOLD ? sessionsPanelWidth : 320,
   );
   const [activeTerminalId, setActiveTerminalId] = useState(
     initialActiveTerminalId,
@@ -1987,19 +2087,17 @@ export function WorkspaceApp({
       const workspaceWidth =
         shell.querySelector<HTMLElement>(".workspace-column")?.offsetWidth ??
         workspacePanelWidth;
-      const secondaryElement =
-        view === "board"
-          ? shell.querySelector<HTMLElement>(".board-detail-column")
-          : shell.querySelector<HTMLElement>(".session-navigator");
+      // Only the board has a column on the right of the main one.
+      const hasSecondary = view === "board";
       const secondaryWidth =
-        secondaryElement?.offsetWidth ??
-        (view === "board" ? boardDetailPanelWidth : sessionsPanelWidth);
+        shell.querySelector<HTMLElement>(".board-detail-column")?.offsetWidth ??
+        boardDetailPanelWidth;
       const mainMinimum = 320;
-      const handlesWidth = view === "workspace" ? 6 : 12;
+      const handlesWidth = hasSecondary ? 12 : 6;
       const workspaceMaximum = Math.max(
         PANEL_RAIL_WIDTH,
         shell.clientWidth -
-          (view === "workspace" ? 0 : secondaryWidth) -
+          (hasSecondary ? secondaryWidth : 0) -
           mainMinimum -
           handlesWidth,
       );
@@ -2015,15 +2113,14 @@ export function WorkspaceApp({
         const movement = moveEvent.clientX - startX;
         if (panel === "workspace")
           setWorkspacePanelWidth(
-            clampPanelSize(workspaceWidth + movement, workspaceMaximum),
-          );
-        else if (view === "board")
-          setBoardDetailPanelWidth(
-            clampPanelSize(secondaryWidth - movement, secondaryMaximum),
+            clampWorkspacePanelSize(
+              workspaceWidth + movement,
+              workspaceMaximum,
+            ),
           );
         else
-          setSessionsPanelWidth(
-            clampPanelSize(secondaryWidth + movement, secondaryMaximum),
+          setBoardDetailPanelWidth(
+            clampPanelSize(secondaryWidth - movement, secondaryMaximum),
           );
       };
       const stop = () => {
@@ -2037,7 +2134,7 @@ export function WorkspaceApp({
       window.addEventListener("pointerup", stop);
       window.addEventListener("pointercancel", stop);
     },
-    [boardDetailPanelWidth, sessionsPanelWidth, view, workspacePanelWidth],
+    [boardDetailPanelWidth, view, workspacePanelWidth],
   );
 
   // The explorer's own two borders. They are deliberately not the column
@@ -2082,26 +2179,11 @@ export function WorkspaceApp({
     [explorerWidth],
   );
 
-  const toggleWorkspacePanel = useCallback(() => {
-    setWorkspacePanelWidth((width) => {
-      if (width < PANEL_COMPACT_THRESHOLD)
-        return workspaceExpandedWidth.current;
-      workspaceExpandedWidth.current = width;
-      return PANEL_RAIL_WIDTH;
-    });
-  }, []);
   const toggleBoardDetailPanel = useCallback(() => {
     setBoardDetailPanelWidth((width) => {
       if (width < PANEL_COMPACT_THRESHOLD)
         return boardDetailExpandedWidth.current;
       boardDetailExpandedWidth.current = width;
-      return PANEL_RAIL_WIDTH;
-    });
-  }, []);
-  const toggleSessionsPanel = useCallback(() => {
-    setSessionsPanelWidth((width) => {
-      if (width < PANEL_COMPACT_THRESHOLD) return sessionsExpandedWidth.current;
-      sessionsExpandedWidth.current = width;
       return PANEL_RAIL_WIDTH;
     });
   }, []);
@@ -2350,7 +2432,8 @@ export function WorkspaceApp({
         setView((current) =>
           current === "world" ? lastWorkspaceView.current : "world",
         );
-      else if (command === "view-sessions" && workspaceId) setView("sessions");
+      else if (command === "view-session" && workspaceId && !showingAll)
+        setView("session");
       else if (command === "view-workspace" && workspaceId && !showingAll)
         setView("workspace");
       else if (command === "toggle-terminal")
@@ -2371,10 +2454,7 @@ export function WorkspaceApp({
         const session = snapshotRef.current?.agents.find(
           (item) => item.id === sessionId,
         );
-        if (!session) return;
-        setWorkspaceId(session.workspaceId);
-        openSession(sessionId);
-        setView("sessions");
+        if (session) showSession(session.id, session.workspaceId);
       }),
     [client, openSession],
   );
@@ -2464,7 +2544,6 @@ export function WorkspaceApp({
     terminalLayoutChanged();
   }, [
     boardDetailPanelWidth,
-    sessionsPanelWidth,
     terminalLayoutChanged,
     terminalPanelHeight,
     terminalPanelOpen,
@@ -2627,8 +2706,6 @@ export function WorkspaceApp({
     if (stored === "dark" || stored === "light") setTheme(stored);
   }, []);
   useEffect(() => {
-    if (workspacePanelWidth >= PANEL_COMPACT_THRESHOLD)
-      workspaceExpandedWidth.current = workspacePanelWidth;
     window.localStorage.setItem(
       "daedalus.panel.workspace-width",
       String(workspacePanelWidth),
@@ -2642,14 +2719,6 @@ export function WorkspaceApp({
       String(boardDetailPanelWidth),
     );
   }, [boardDetailPanelWidth]);
-  useEffect(() => {
-    if (sessionsPanelWidth >= PANEL_COMPACT_THRESHOLD)
-      sessionsExpandedWidth.current = sessionsPanelWidth;
-    window.localStorage.setItem(
-      "daedalus.panel.sessions-width",
-      String(sessionsPanelWidth),
-    );
-  }, [sessionsPanelWidth]);
   useEffect(() => {
     window.localStorage.setItem(
       "daedalus.panel.explorer-width",
@@ -2801,48 +2870,22 @@ export function WorkspaceApp({
   // is the bug, not the feature. The card tone and the workspace roll-up
   // count still surface a blocked session in place.
   const sessions = workspaceSessions.filter((item) => !item.archivedAt);
-  const sessionReorder = useListReorder({
-    ids: sessions.map((item) => item.id),
-    // A position is an order within one workspace, so the all-workspaces
-    // list is read-only: there is no one list on the server for a drag
-    // across it to write.
-    disabled: showingAll,
-    onCommit: (sessionIds) =>
-      perform(
-        client.request.agentReorder({
-          sessionIds,
-          workspace: workspaceId!,
-        }),
-      ),
-  });
   // Sessions holding routines, which their cards and archive dialog mark.
   const routinesBySession = new Map(
     (snapshot?.routines ?? []).map((status) => [status.sessionId, status]),
   );
-  // Pinned sessions sit above the rest, in the order they were pinned; the
-  // manual order holds within each group.
-  const orderedSessions = sessionReorder.order
-    .flatMap((id) => sessions.find((item) => item.id === id) ?? [])
-    .sort((left, right) =>
-      left.pinnedAt && right.pinnedAt
-        ? left.pinnedAt.localeCompare(right.pinnedAt)
-        : Number(Boolean(right.pinnedAt)) - Number(Boolean(left.pinnedAt)),
-    );
   const workspaceSessionLaunches = sessionLaunches.filter((item) =>
     inScope(item.workspaceId),
   );
-  const visibleSessionLaunches = pendingSessionLaunches(
-    workspaceSessionLaunches,
-    workspaceSessions,
-  );
+  // Every workspace's list is in the left column whatever the scope, so the
+  // launch errors are read across all of them.
   const sessionStartupErrors = new Map(
-    workspaceSessionLaunches.flatMap((launch) =>
+    sessionLaunches.flatMap((launch) =>
       launch.sessionId && launch.error
         ? [[launch.sessionId, launch.error] as const]
         : [],
     ),
   );
-  const archivedSessions = workspaceSessions.filter((item) => item.archivedAt);
   const workspaceSessionIds = new Set(workspaceSessions.map((item) => item.id));
   // The snapshot carries every workspace's worktrees so the board can read
   // them without the workspace view open; the board shows only this one's.
@@ -2941,14 +2984,16 @@ export function WorkspaceApp({
   // about a Codex session. Leaving the picker on its first option starts
   // with it, because the core applies the same rule to every spawn.
   // The session dialog's workspace. A dialog opened from a task belongs to
-  // that task's workspace, which with every workspace showing need not be the
-  // selected one; opened from the Sessions toolbar it is the selected one,
-  // and that toolbar's button is off while every workspace is showing.
+  // that task's workspace, and one opened from a workspace card's + to that
+  // workspace; with every workspace showing, neither need be the selected one.
   const sessionFormTask = snapshot?.tasks.find(
     (item) => item.id === sessionForm.taskId,
   );
   const sessionWorkspace =
     (sessionFormTask && workspaceById.get(sessionFormTask.workspaceId)) ??
+    (sessionForm.workspaceId
+      ? workspaceById.get(sessionForm.workspaceId)
+      : undefined) ??
     (showingAll ? undefined : workspace);
   const workspaceDefaultModel =
     sessionWorkspace && sessionWorkspace.defaultProvider === sessionType
@@ -2990,13 +3035,44 @@ export function WorkspaceApp({
   }, [scope, scopeKey, view]);
 
   useEffect(() => {
-    if (view !== "sessions" || !scopeKey) return;
+    if (view !== "session" || !scopeKey) return;
     const remembered = window.localStorage.getItem(
       lastSessionStorageKey(scopeKey),
     );
     const preferred = preferredSessionId(sessions, activeSessionId, remembered);
     if (preferred !== activeSessionId) setActiveSessionId(preferred);
-  }, [activeSessionId, sessions, view, scopeKey]);
+    // A workspace with nothing to show in the session view lands on its
+    // board. A launch still starting counts as something: it becomes the
+    // session in a moment.
+    else if (
+      !preferred &&
+      snapshot &&
+      !sessionLaunches.some(
+        (launch) =>
+          launch.workspaceId === workspaceId && launch.status === "starting",
+      )
+    )
+      setView("board");
+  }, [
+    activeSessionId,
+    sessionLaunches,
+    sessions,
+    snapshot,
+    view,
+    scopeKey,
+    workspaceId,
+  ]);
+
+  // A session opened from elsewhere (the board, a toast) may be below the
+  // fold of a long left column; its card scrolls into sight.
+  useEffect(() => {
+    if (view !== "session" || !activeSessionId) return;
+    document
+      .querySelector(
+        `.session-card-main[data-session-id="${CSS.escape(activeSessionId)}"]`,
+      )
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeSessionId, view]);
 
   useEffect(() => {
     if (!scopeKey || !activeSessionId) return;
@@ -3256,11 +3332,17 @@ export function WorkspaceApp({
     return undefined;
   }
 
-  function openSessionModal(task?: TaskDto) {
-    setSessionForm({ name: task?.title ?? "", taskId: task?.id });
+  function openSessionModal(task?: TaskDto, forWorkspace?: WorkspaceDto) {
+    setSessionForm({
+      name: task?.title ?? "",
+      taskId: task?.id,
+      workspaceId: forWorkspace?.id,
+    });
     // The dialog opens on what Start would launch, so "default" means the
     // same thing here and on the board.
-    const target = task ? workspaceById.get(task.workspaceId) : workspace;
+    const target = task
+      ? workspaceById.get(task.workspaceId)
+      : (forWorkspace ?? workspace);
     if (
       target?.defaultProvider &&
       availableBoardProviders.includes(target.defaultProvider)
@@ -3358,7 +3440,8 @@ export function WorkspaceApp({
     setSessionForm({ name: "" });
     setRememberSessionModel(false);
     setModal(undefined);
-    setView("sessions");
+    // The launch's card appears in the workspace's list in the left column.
+    expandWorkspace(launch.workspaceId);
     try {
       // Remembered before the spawn, so a session that fails to start still
       // leaves the default the user asked for. An empty model is a real
@@ -3388,7 +3471,7 @@ export function WorkspaceApp({
           current.filter((item) => item.key !== launch.key),
         );
         await refresh();
-        openSession(response.data.id);
+        showSession(response.data.id, launch.workspaceId);
         return;
       }
       const sessionId =
@@ -4145,12 +4228,14 @@ export function WorkspaceApp({
     setWorkspaceId(id);
     setSelectedTaskId(undefined);
     setActiveSessionId(undefined);
-    // Restoring the Sessions mode re-arms `preferredSessionId`, so a focus
+    // Restoring the session view re-arms `preferredSessionId`, so a focus
     // request left over from this workspace's previous visit could be
     // satisfied by a session the user never opened. Switching workspaces is
     // not an intent to type into whatever is restored.
     clearSessionFocusRequest();
-    setView(preferredWorkspaceView(rememberedWorkspaceView(id)));
+    // A workspace's card opens its board; its sessions are listed right
+    // under the card (#55).
+    setView("board");
   }
 
   /** The card above the workspaces: every workspace's board and sessions. */
@@ -4178,6 +4263,18 @@ export function WorkspaceApp({
     setWorkspaceId(id);
     viewWorkspaceId.current = id;
     setView(nextView);
+  }
+
+  /**
+   * Every way to a session ends here: a card in the left column, a board
+   * card, the World, a toast or a notification. A session's terminal is one
+   * workspace's view, so this leaves the all-workspaces scope, and it opens
+   * the session's list in case it was collapsed (#55).
+   */
+  function showSession(sessionId: string, sessionWorkspaceId: string) {
+    expandWorkspace(sessionWorkspaceId);
+    enterWorkspace(sessionWorkspaceId, "session");
+    openSession(sessionId);
   }
 
   // One repository with the working trees cut from it: the row the explorer
@@ -4425,6 +4522,321 @@ export function WorkspaceApp({
       })
     : undefined;
 
+  // A session's card in its workspace's list in the left column (#55).
+  const renderSessionCard = (
+    session: AgentSessionDto,
+    reorder: ReorderHandles,
+  ) => {
+    const task = snapshot?.tasks.find((item) => item.id === session.taskId);
+    const tool = sessionTool(session);
+    const timestamp = session.endedAt ?? session.startedAt;
+    const startupError = sessionStartupErrors.get(session.id);
+    const statusView = statusViewFor(session);
+    const holdsRoutines = routinesBySession.has(session.id);
+    const waitingRuns = routinesBySession.get(session.id)?.waiting.length ?? 0;
+    return (
+      <div
+        className={`session-card tone-${statusView.tone} ${view === "session" && session.id === activeSessionId ? "selected" : ""}`}
+        data-color={session.color ?? undefined}
+        data-pinned={session.pinnedAt ? "true" : undefined}
+        data-attention={statusView.attention ? "true" : undefined}
+        data-dragging={reorder.draggingId === session.id ? "true" : undefined}
+        key={session.id}
+        onPointerDown={reorder.onPointerDown(session.id)}
+        ref={reorder.registerCard(session.id)}
+      >
+        <button
+          className="session-card-main"
+          data-provider={session.provider}
+          data-session-id={session.id}
+          onClick={() => showSession(session.id, session.workspaceId)}
+          // What the three rows leave out, or cut short.
+          title={[
+            sessionName(session),
+            `${session.id.slice(0, 8)} · ${session.endedAt ? "ended" : "started"} ${new Date(timestamp).toLocaleString()}`,
+            startupError ?? statusView.detail,
+            statusView.unconfirmed
+              ? "Status read from the terminal pane, not reported by the agent"
+              : undefined,
+          ]
+            .filter(Boolean)
+            .join("\n")}
+          onKeyDown={(event) => {
+            if (!event.altKey) return;
+            const direction =
+              event.key === "ArrowUp"
+                ? "up"
+                : event.key === "ArrowDown"
+                  ? "down"
+                  : undefined;
+            if (direction && reorder.moveByKeyboard(session.id, direction))
+              event.preventDefault();
+          }}
+        >
+          <span className={`session-kind-icon tool-${tool}`}>
+            <ToolIcon tool={tool} />
+          </span>
+          <span>
+            <strong>{sessionName(session)}</strong>
+            <small>
+              {holdsRoutines ? (
+                <span className="session-routines-badge">
+                  Routines
+                  {waitingRuns > 0 && (
+                    <span
+                      className="session-waiting-badge"
+                      title="Routine runs waiting to go in"
+                    >
+                      {waitingRuns} waiting
+                    </span>
+                  )}
+                </span>
+              ) : (
+                (task?.title ?? "Workspace session")
+              )}
+            </small>
+            {/* Always three rows: name, what it is for, and one line of
+                live status with what the agent is doing, so every card is
+                the same height (#55). A failed start takes the status line. */}
+            <em
+              className="session-card-status"
+              data-error={startupError ? "true" : undefined}
+            >
+              <AgentStatusDot
+                count={statusView.reasons.length}
+                label={statusAriaLabel(session, statusView, now)}
+                view={statusView}
+              />
+              <span
+                className="session-status-label"
+                role={startupError ? "alert" : undefined}
+              >
+                {startupError
+                  ? `failed to start · ${startupError}`
+                  : [
+                      statusView.attention && statusView.since
+                        ? `${statusView.label} ${waitingLabel(statusView.since, now)}`
+                        : statusView.label,
+                      statusView.detail,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+              </span>
+            </em>
+          </span>
+        </button>
+        <span className="workspace-card-actions" data-no-drag>
+          {session.status === "lost" && (
+            <button
+              aria-label={`Revive ${sessionName(session)} session`}
+              className="session-card-action"
+              disabled={busy}
+              onClick={() => void reviveSession(session)}
+              title="Resume this conversation in a new terminal"
+            >
+              ↻
+            </button>
+          )}
+          {session.kind === "agent" &&
+            (session.provider === "claude" || session.provider === "codex") && (
+              <button
+                aria-label={`Continue ${sessionName(session)} in a new agent`}
+                className="session-card-action session-card-hover-action session-handoff-action"
+                data-handoff-requested={
+                  session.handoffRequestedAt ? "true" : undefined
+                }
+                disabled={busy}
+                onClick={() => void continueInNewAgent(session)}
+                title={
+                  session.handoffRequestedAt
+                    ? "Handoff requested; the agent is writing its note. Click to ask again."
+                    : session.status === "running"
+                      ? "Continue in a new agent: this one writes a handoff note, then a fresh agent with an empty context takes over in the same working directory"
+                      : "Continue in a new agent: a fresh agent takes over in the same working directory, working from the brief, the journal and git"
+                }
+                type="button"
+              >
+                <HandoffIcon />
+              </button>
+            )}
+          <button
+            aria-label={`Archive ${sessionName(session)} session`}
+            className="session-card-action session-card-hover-action"
+            onClick={() => setSessionAction({ session })}
+            title={
+              holdsRoutines
+                ? "Archive session and pause its routines"
+                : "Archive session"
+            }
+            type="button"
+          >
+            <ArchiveIcon />
+          </button>
+          {/* Last, so hand off and archive open to its left on hover. */}
+          <SessionMenu
+            color={session.color}
+            name={sessionName(session)}
+            offerAbilities={
+              session.kind === "agent" &&
+              (session.provider === "claude" || session.provider === "codex")
+            }
+            onColor={(color) => void updateSession(session, { color })}
+            onPin={(pinned) => void updateSession(session, { pinned })}
+            onRename={() => void renameSession(session)}
+            onRoutines={(granted) => void setRoutinesAbility(session, granted)}
+            pinned={Boolean(session.pinnedAt)}
+            routines={holdsRoutines}
+          />
+        </span>
+      </div>
+    );
+  };
+  // A session asked for but not yet started, or that failed to start.
+  const renderLaunchCard = (launch: SessionLaunchState) => (
+    <div
+      aria-busy={launch.status === "starting"}
+      className={`session-card session-card-${launch.status}`}
+      key={launch.key}
+    >
+      <div className="session-card-main">
+        <span className={`session-kind-icon tool-${launch.tool}`}>
+          {launch.status === "starting" ? (
+            <span aria-hidden="true" className="session-launch-spinner" />
+          ) : (
+            <ToolIcon tool={launch.tool} />
+          )}
+        </span>
+        <span>
+          <strong>{launch.name}</strong>
+          <small>
+            {launch.status === "starting"
+              ? `Starting ${launch.tool}…`
+              : "Failed to start"}
+          </small>
+          {launch.error && (
+            <em className="session-startup-error" role="alert">
+              {launch.error}
+            </em>
+          )}
+          <time dateTime={launch.startedAt}>
+            Requested · {new Date(launch.startedAt).toLocaleString()}
+          </time>
+        </span>
+      </div>
+      {launch.status === "error" && (
+        <button
+          aria-label={`Dismiss failed ${launch.name} session`}
+          className="session-card-action"
+          onClick={() => dismissSessionLaunch(launch.key)}
+          title="Dismiss"
+          type="button"
+        >
+          <DismissIcon />
+        </button>
+      )}
+    </div>
+  );
+  // One workspace's sessions, listed under its card in the left column
+  // (#55). Each list keeps its own drag order, because a session's position
+  // is an order within its workspace.
+  const renderWorkspaceSessions = (item: WorkspaceDto) => {
+    const itemSessions = (snapshot?.agents ?? []).filter(
+      (session) => session.workspaceId === item.id,
+    );
+    const liveSessions = itemSessions.filter((session) => !session.archivedAt);
+    const archived = itemSessions.filter((session) => session.archivedAt);
+    // Offered only for the workspace in focus, but its row's space is kept
+    // under every workspace that has some, so focus moving never shifts the
+    // list (#55).
+    const archiveInFocus = !showingAll && item.id === workspaceId;
+    const launches = pendingSessionLaunches(
+      sessionLaunches.filter((launch) => launch.workspaceId === item.id),
+      itemSessions,
+    );
+    if (
+      liveSessions.length === 0 &&
+      launches.length === 0 &&
+      archived.length === 0
+    )
+      return null;
+    return (
+      <ReorderGroup
+        ids={liveSessions.map((session) => session.id)}
+        onCommit={(sessionIds) =>
+          perform(
+            client.request.agentReorder({ sessionIds, workspace: item.id }),
+          )
+        }
+      >
+        {(reorder) => {
+          // Pinned sessions sit above the rest, in the order they were
+          // pinned; the manual order holds within each group.
+          const ordered = reorder.order
+            .flatMap(
+              (id) => liveSessions.find((session) => session.id === id) ?? [],
+            )
+            .sort((left, right) =>
+              left.pinnedAt && right.pinnedAt
+                ? left.pinnedAt.localeCompare(right.pinnedAt)
+                : Number(Boolean(right.pinnedAt)) -
+                  Number(Boolean(left.pinnedAt)),
+            );
+          return (
+            <div
+              aria-label={`Sessions in ${item.name}`}
+              className="workspace-sessions"
+              role="group"
+            >
+              <div
+                className="session-grid"
+                data-reordering={reorder.draggingId ? "true" : undefined}
+              >
+                {launches.map(renderLaunchCard)}
+                {ordered.map((session) => renderSessionCard(session, reorder))}
+              </div>
+              {archived.length > 0 && (
+                <details
+                  aria-hidden={archiveInFocus ? undefined : true}
+                  className="archive-list session-archive-list"
+                  data-in-focus={archiveInFocus ? "true" : undefined}
+                  // Out of focus it is a closed, invisible placeholder.
+                  {...(archiveInFocus ? {} : { open: false })}
+                >
+                  <summary tabIndex={archiveInFocus ? undefined : -1}>
+                    Archived sessions ({archived.length})
+                  </summary>
+                  <div className="item-list">
+                    {archived.map((session) => (
+                      <div className="archived-item" key={session.id}>
+                        <span>
+                          <strong>{sessionName(session)}</strong>
+                          <small>
+                            {session.provider} · archived{" "}
+                            {new Date(session.archivedAt!).toLocaleDateString()}
+                          </small>
+                        </span>
+                        <button
+                          disabled={busy}
+                          onClick={() => void restoreSession(session)}
+                        >
+                          Restore &amp; resume
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+            </div>
+          );
+        }}
+      </ReorderGroup>
+    );
+  };
+
+  const anyWorkspaceExpanded = activeWorkspaces.some(
+    (item) => !collapsedWorkspaceIds.has(item.id),
+  );
+
   // The card above the workspaces (#35). Its roll-up is the workspace cards'
   // summed: what a dispatcher wants to know before choosing where to look.
   const everySession = (snapshot?.agents ?? []).filter(
@@ -4546,11 +4958,9 @@ export function WorkspaceApp({
             )
           }
           onOpenLink={openTerminalLink}
-          onOpenSession={(session) => {
-            setWorkspaceId(session.workspaceId);
-            openSession(session.id);
-            setView("sessions");
-          }}
+          onOpenSession={(session) =>
+            showSession(session.id, session.workspaceId)
+          }
           onPark={() =>
             void perform(
               client.request.taskSetStatus({
@@ -4803,14 +5213,7 @@ export function WorkspaceApp({
       onStartNext={(task) => void startTaskSession(task)}
       onNeedModels={ensureModelCatalog}
       onOpenLink={openTerminalLink}
-      onOpenSession={(session) => {
-        // The Sessions view lists this scope's sessions, so the
-        // scope stays; the workspace underneath follows the session
-        // so the terminal heading and the content loaders agree.
-        setWorkspaceId(session.workspaceId);
-        openSession(session.id);
-        setView("sessions");
-      }}
+      onOpenSession={(session) => showSession(session.id, session.workspaceId)}
       onSelectTask={(task) => {
         setSelectedTaskId(task.id);
         setEditingTask(false);
@@ -4853,7 +5256,6 @@ export function WorkspaceApp({
           "--terminal-panel-height": `${terminalPanelHeight}px`,
           "--workspace-panel-width": `${workspacePanelWidth}px`,
           "--board-detail-panel-width": `${boardDetailPanelWidth}px`,
-          "--sessions-panel-width": `${sessionsPanelWidth}px`,
         } as CSSProperties
       }
     >
@@ -4861,11 +5263,13 @@ export function WorkspaceApp({
         onDismiss={(ids) => void dismissToasts(ids)}
         onOpen={(toast) => {
           // Without the deep link people learn to ignore these.
-          if (toast.workspaceId) selectWorkspace(toast.workspaceId);
-          if (toast.sessionId) {
-            openSession(toast.sessionId);
-            setView("sessions");
-          }
+          const sessionWorkspaceId =
+            toast.workspaceId ??
+            snapshot?.agents.find((item) => item.id === toast.sessionId)
+              ?.workspaceId;
+          if (toast.sessionId && sessionWorkspaceId)
+            showSession(toast.sessionId, sessionWorkspaceId);
+          else if (toast.workspaceId) selectWorkspace(toast.workspaceId);
         }}
         toasts={snapshot?.toasts ?? []}
       />
@@ -4890,14 +5294,6 @@ export function WorkspaceApp({
             onClick={() => setView("board")}
           >
             Board
-          </button>
-          <button
-            aria-current={view === "sessions" ? "page" : undefined}
-            className={view === "sessions" ? "active" : ""}
-            disabled={!workspace}
-            onClick={() => setView("sessions")}
-          >
-            Sessions
           </button>
           <button
             aria-current={view === "workspace" ? "page" : undefined}
@@ -4954,25 +5350,21 @@ export function WorkspaceApp({
       </div>
 
       <div className={`workspace-shell mode-${view}`}>
-        <aside
-          className={`workspace-column ${workspacePanelWidth < PANEL_COMPACT_THRESHOLD ? "panel-compact" : ""}`}
-        >
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">Projects</span>
+        <aside className="workspace-column">
+          <div className="section-heading workspace-column-heading">
+            <div className="workspace-column-title">
               <h1>Workspaces</h1>
             </div>
             <div className="panel-heading-actions">
-              <CreateButton
-                label="Create workspace"
+              <button
+                aria-label="Create workspace"
+                className="quiet workspace-heading-create"
                 onClick={() => setModal("workspace")}
-              />
-              <PanelCollapseButton
-                collapsed={workspacePanelWidth < PANEL_COMPACT_THRESHOLD}
-                label="workspace"
-                onClick={toggleWorkspacePanel}
-                side="left"
-              />
+                title="New workspace"
+                type="button"
+              >
+                +
+              </button>
             </div>
           </div>
           <nav
@@ -4987,10 +5379,39 @@ export function WorkspaceApp({
               archivedWorkspaces.length === 0 && (
                 <div className="empty large">
                   <strong>No workspaces yet</strong>
-                  <span>Use New to create one.</span>
+                  <span>Use + to create one.</span>
                 </div>
               )}
             {allWorkspacesCard}
+            {/* Under All workspaces, its arrow in line with each
+                workspace's own. */}
+            {activeWorkspaces.length > 0 && (
+              <button
+                aria-label={
+                  anyWorkspaceExpanded
+                    ? "Collapse all session lists"
+                    : "Expand all session lists"
+                }
+                className="quiet workspace-fold-all"
+                onClick={() =>
+                  setCollapsedWorkspaceIds(
+                    anyWorkspaceExpanded
+                      ? new Set(activeWorkspaces.map((item) => item.id))
+                      : new Set(),
+                  )
+                }
+                type="button"
+              >
+                <svg aria-hidden="true" viewBox="0 0 16 16">
+                  {anyWorkspaceExpanded ? (
+                    <path d="M5 2.5l3 3 3-3M5 13.5l3-3 3 3" />
+                  ) : (
+                    <path d="M5 5.5l3-3 3 3M5 10.5l3 3 3-3" />
+                  )}
+                </svg>
+                {anyWorkspaceExpanded ? "Collapse all" : "Expand all"}
+              </button>
+            )}
             {orderedWorkspaces.map((item) => {
               const itemSessions = (snapshot?.agents ?? []).filter(
                 (session) =>
@@ -5010,125 +5431,184 @@ export function WorkspaceApp({
               ).length;
               const sessionLabel = `${itemSessions.length} ${itemSessions.length === 1 ? "session" : "sessions"}`;
               const insightLabel = `${sessionLabel} in ${item.name}: ${liveCount} live, ${attentionCount} need you`;
+              const sessionList = renderWorkspaceSessions(item);
+              const expanded = !collapsedWorkspaceIds.has(item.id);
 
               return (
+                // The group, not the card, is what a workspace drag measures:
+                // its sessions travel with it.
                 <div
-                  className={`workspace-card ${!showingAll && item.id === workspaceId ? "selected" : ""}`}
-                  data-dragging={
-                    workspaceReorder.draggingId === item.id ? "true" : undefined
-                  }
+                  className="workspace-group"
+                  data-expanded={expanded ? "true" : undefined}
                   key={item.id}
-                  onPointerDown={workspaceReorder.onPointerDown(item.id)}
                   ref={workspaceReorder.registerCard(item.id)}
                 >
-                  <button
-                    className="workspace-item"
-                    onClick={() => selectWorkspace(item.id)}
-                    onKeyDown={(event) => {
-                      if (!event.altKey) return;
-                      const direction =
-                        event.key === "ArrowUp"
-                          ? "up"
-                          : event.key === "ArrowDown"
-                            ? "down"
-                            : undefined;
-                      if (
-                        direction &&
-                        workspaceReorder.moveByKeyboard(item.id, direction)
-                      )
-                        event.preventDefault();
-                    }}
+                  <div
+                    className={`workspace-card ${!showingAll && item.id === workspaceId ? "selected" : ""}`}
+                    data-dragging={
+                      workspaceReorder.draggingId === item.id
+                        ? "true"
+                        : undefined
+                    }
+                    onPointerDown={workspaceReorder.onPointerDown(item.id)}
                   >
-                    <span className="workspace-icon">
-                      {item.name.slice(0, 1).toUpperCase()}
-                    </span>
-                    <span className="workspace-card-content">
-                      <strong className="workspace-card-name">
-                        <span>{item.name}</span>
-                        {/* A session blocked in a workspace nobody is looking
+                    <button
+                      aria-controls={`workspace-sessions-${item.id}`}
+                      aria-expanded={expanded}
+                      aria-label={`${expanded ? "Collapse" : "Expand"} ${item.name} sessions`}
+                      className="quiet workspace-disclosure"
+                      data-no-drag
+                      disabled={!sessionList}
+                      onClick={() => setWorkspaceCollapsed(item.id, expanded)}
+                      title={
+                        sessionList
+                          ? `${expanded ? "Hide" : "Show"} sessions`
+                          : "No sessions"
+                      }
+                      type="button"
+                    >
+                      <svg aria-hidden="true" viewBox="0 0 16 16">
+                        <path d="M6 4l4 4-4 4" />
+                      </svg>
+                    </button>
+                    <button
+                      className="workspace-item"
+                      onClick={() => selectWorkspace(item.id)}
+                      onKeyDown={(event) => {
+                        if (!event.altKey) return;
+                        const direction =
+                          event.key === "ArrowUp"
+                            ? "up"
+                            : event.key === "ArrowDown"
+                              ? "down"
+                              : undefined;
+                        if (
+                          direction &&
+                          workspaceReorder.moveByKeyboard(item.id, direction)
+                        )
+                          event.preventDefault();
+                      }}
+                    >
+                      <span className="workspace-folder-icon">
+                        <WorkspaceFolderIcon />
+                      </span>
+                      <span className="workspace-card-content">
+                        <strong className="workspace-card-name">
+                          <span>{item.name}</span>
+                          {/* A session blocked in a workspace nobody is looking
                             at has to be discoverable without clicking in. The
                             badge is a bare count so it survives a 210px
                             column; the line below spells it out. */}
-                        {attentionCount > 0 && (
-                          <span
-                            aria-label={`${attentionCount} ${attentionCount === 1 ? "session needs" : "sessions need"} you in ${item.name}`}
-                            className="workspace-attention-badge"
-                            title={`${attentionCount} ${attentionCount === 1 ? "session needs" : "sessions need"} you`}
-                          >
-                            {attentionCount}
-                          </span>
-                        )}
-                      </strong>
-                      <small>
-                        {item.available
-                          ? item.slug
-                          : `${item.slug} · folder missing`}
-                      </small>
-                      <span
-                        aria-label={insightLabel}
-                        className="workspace-session-insights"
-                      >
-                        <span className="workspace-session-icons">
-                          {itemViews.slice(0, 5).map(({ session, view }) => {
-                            const tool = sessionTool(session);
-                            return (
-                              <span
-                                className={`workspace-session-indicator tool-${tool}`}
-                                data-attention={
-                                  view.attention ? "true" : undefined
-                                }
-                                key={session.id}
-                                title={statusAriaLabel(session, view, now)}
-                              >
-                                <ToolIcon tool={tool} />
-                                <AgentStatusDot
-                                  count={view.reasons.length}
-                                  view={view}
-                                />
-                              </span>
-                            );
-                          })}
-                          {itemSessions.length > 5 && (
-                            <small>+{itemSessions.length - 5}</small>
+                          {attentionCount > 0 && (
+                            <span
+                              aria-label={`${attentionCount} ${attentionCount === 1 ? "session needs" : "sessions need"} you in ${item.name}`}
+                              className="workspace-attention-badge"
+                              title={`${attentionCount} ${attentionCount === 1 ? "session needs" : "sessions need"} you`}
+                            >
+                              {attentionCount}
+                            </span>
                           )}
-                        </span>
-                        <small
-                          className={
-                            attentionCount > 0
-                              ? "workspace-insight-copy needs-attention"
-                              : "workspace-insight-copy"
-                          }
+                        </strong>
+                        {/* The slug is in the main header; the card only
+                            speaks up when the folder is gone. */}
+                        {!item.available && (
+                          <small>{item.slug} · folder missing</small>
+                        )}
+                        <span
+                          aria-label={insightLabel}
+                          className="workspace-session-insights"
                         >
-                          {attentionCount > 0
-                            ? `${attentionCount} need${attentionCount === 1 ? "s" : ""} you`
-                            : itemSessions.length > 0
-                              ? `${liveCount} live · ${sessionLabel}`
-                              : "No sessions"}
-                        </small>
+                          {/* An open list shows each session itself. */}
+                          {!(expanded && sessionList) &&
+                            itemViews.length > 0 && (
+                              <span className="workspace-session-icons">
+                                {itemViews
+                                  .slice(0, 5)
+                                  .map(({ session, view }) => {
+                                    const tool = sessionTool(session);
+                                    return (
+                                      <span
+                                        className={`workspace-session-indicator tool-${tool}`}
+                                        data-attention={
+                                          view.attention ? "true" : undefined
+                                        }
+                                        key={session.id}
+                                        title={statusAriaLabel(
+                                          session,
+                                          view,
+                                          now,
+                                        )}
+                                      >
+                                        <ToolIcon tool={tool} />
+                                        <AgentStatusDot
+                                          count={view.reasons.length}
+                                          view={view}
+                                        />
+                                      </span>
+                                    );
+                                  })}
+                                {itemSessions.length > 5 && (
+                                  <small>+{itemSessions.length - 5}</small>
+                                )}
+                              </span>
+                            )}
+                          <small
+                            className={
+                              attentionCount > 0
+                                ? "workspace-insight-copy needs-attention"
+                                : "workspace-insight-copy"
+                            }
+                          >
+                            {attentionCount > 0
+                              ? `${attentionCount} need${attentionCount === 1 ? "s" : ""} you`
+                              : itemSessions.length > 0
+                                ? `${liveCount} live · ${sessionLabel}`
+                                : "No sessions"}
+                          </small>
+                        </span>
                       </span>
+                    </button>
+                    <span className="workspace-card-actions" data-no-drag>
+                      <button
+                        aria-label={`Open ${item.name} in integrated terminal`}
+                        className="session-card-action workspace-terminal-action"
+                        disabled={!item.available || busy}
+                        onClick={() => void createIntegratedTerminal(item)}
+                        title="Open in integrated terminal"
+                        type="button"
+                      >
+                        <SessionLaunchIcon />
+                      </button>
+                      <button
+                        aria-label={`Archive ${item.name} workspace`}
+                        className="session-card-action workspace-card-archive"
+                        onClick={() => setWorkspaceAction(item)}
+                        title="Archive workspace"
+                        type="button"
+                      >
+                        <ArchiveIcon />
+                      </button>
+                      {/* Last, so the ones that come in on hover open to its
+                          left and it never moves. */}
+                      <button
+                        aria-label={`Create session in ${item.name}`}
+                        className="session-card-action workspace-session-create"
+                        disabled={
+                          !item.available || !snapshot?.settings.tmuxAvailable
+                        }
+                        onClick={() => openSessionModal(undefined, item)}
+                        title="New session"
+                        type="button"
+                      >
+                        +
+                      </button>
                     </span>
-                  </button>
-                  <span className="workspace-card-actions" data-no-drag>
-                    <button
-                      aria-label={`Open ${item.name} in integrated terminal`}
-                      className="session-card-action workspace-terminal-action"
-                      disabled={!item.available || busy}
-                      onClick={() => void createIntegratedTerminal(item)}
-                      title="Open in integrated terminal"
-                      type="button"
-                    >
-                      <SessionLaunchIcon />
-                    </button>
-                    <button
-                      aria-label={`Archive ${item.name} workspace`}
-                      className="session-card-action workspace-card-archive"
-                      onClick={() => setWorkspaceAction(item)}
-                      title="Archive workspace"
-                      type="button"
-                    >
-                      <ArchiveIcon />
-                    </button>
-                  </span>
+                  </div>
+                  {expanded && sessionList && (
+                    <div id={`workspace-sessions-${item.id}`}>
+                      {sessionList}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -5159,15 +5639,14 @@ export function WorkspaceApp({
           aria-label="Resize workspace panel"
           aria-orientation="vertical"
           aria-valuemax={480}
-          aria-valuemin={PANEL_RAIL_WIDTH}
+          aria-valuemin={WORKSPACE_PANEL_MIN_WIDTH}
           aria-valuenow={workspacePanelWidth}
           className="column-resize-handle workspace-panel-resize-handle"
-          onDoubleClick={toggleWorkspacePanel}
           onKeyDown={(event) => {
             if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
             event.preventDefault();
             setWorkspacePanelWidth((width) =>
-              clampPanelSize(
+              clampWorkspacePanelSize(
                 width + (event.key === "ArrowRight" ? PANEL_STEP : -PANEL_STEP),
                 480,
               ),
@@ -5178,761 +5657,452 @@ export function WorkspaceApp({
           tabIndex={0}
         />
 
-        <section
-          className={`workspace-main ${view === "board" ? "board-column" : view === "sessions" ? `session-navigator ${sessionsPanelWidth < PANEL_COMPACT_THRESHOLD ? "panel-compact" : ""}` : view === "world" ? "workspace-content-column world-column" : "workspace-content-column"}`}
-        >
-          <div className="workspace-main-header">
-            <div>
-              <span className="eyebrow">
-                {(showingAll || view === "world") && workspace
-                  ? `${activeWorkspaces.length} ${activeWorkspaces.length === 1 ? "workspace" : "workspaces"}`
-                  : (workspace?.slug ?? "Select a workspace")}
-              </span>
-              <h1>
-                {(showingAll || view === "world") && workspace
-                  ? "All workspaces"
-                  : (workspace?.name ?? "Workspace")}
-              </h1>
-            </div>
-          </div>
-          {!workspace ? (
-            <div className="empty large">
-              <strong>Choose a workspace</strong>
-              <span>Its board, sessions, and files will appear here.</span>
-            </div>
-          ) : view === "workspace" ? (
-            <>
-              <div className="workspace-content-toolbar">
-                <div>
-                  <strong>Workspace files</strong>
-                  <small>{workspace.path}</small>
-                </div>
+        {view !== "session" && (
+          <section
+            className={`workspace-main ${view === "board" ? "board-column" : view === "world" ? "workspace-content-column world-column" : "workspace-content-column"}`}
+          >
+            <div className="workspace-main-header">
+              <div>
+                <span className="eyebrow">
+                  {(showingAll || view === "world") && workspace
+                    ? `${activeWorkspaces.length} ${activeWorkspaces.length === 1 ? "workspace" : "workspaces"}`
+                    : (workspace?.slug ?? "Select a workspace")}
+                </span>
+                <h1>
+                  {(showingAll || view === "world") && workspace
+                    ? "All workspaces"
+                    : (workspace?.name ?? "Workspace")}
+                </h1>
               </div>
-              {!workspaceContent ||
-              workspaceContent.workspaceId !== workspace.id ? (
-                <div className="empty large">Loading workspace content…</div>
-              ) : (
-                <div
-                  className="workspace-browser"
-                  style={
-                    {
-                      "--explorer-width": `${explorerWidth}px`,
-                    } as CSSProperties
-                  }
-                >
-                  <aside className="workspace-explorer">
-                    <div className="workspace-explorer-heading">
-                      <div>
-                        <span>Explorer</span>
-                        <small>{workspace.name}</small>
-                      </div>
-                      <div className="workspace-explorer-actions">
-                        <button
-                          aria-label="New file"
-                          disabled={workspaceSelectionReadOnly}
-                          onClick={() =>
-                            setNewWorkspaceEntry({ kind: "file", name: "" })
-                          }
-                          title="New file"
-                          type="button"
-                        >
-                          <svg
-                            aria-hidden="true"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 16 16"
-                          >
-                            <path d="M3 1.5h6l4 4v9H3zM9 1.5v4h4M8 8v4M6 10h4" />
-                          </svg>
-                        </button>
-                        <button
-                          aria-label="New folder"
-                          disabled={workspaceSelectionReadOnly}
-                          onClick={() =>
-                            setNewWorkspaceEntry({
-                              kind: "directory",
-                              name: "",
-                            })
-                          }
-                          title="New folder"
-                          type="button"
-                        >
-                          <svg
-                            aria-hidden="true"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 16 16"
-                          >
-                            <path d="M1.5 3h5l1.5 2h6.5v8.5h-13zM9 7.5v4M7 9.5h4" />
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-                    {newWorkspaceEntry && (
-                      <form
-                        className="workspace-new-entry"
-                        onSubmit={createWorkspaceEntry}
-                      >
-                        <small title={selectedWorkspaceDirectory || "/"}>
-                          {selectedWorkspaceDirectory || "/"}
-                        </small>
-                        <input
-                          aria-label={`New ${newWorkspaceEntry.kind} name`}
-                          autoFocus
-                          onBlur={() => {
-                            if (!newWorkspaceEntry.name)
-                              setNewWorkspaceEntry(undefined);
-                          }}
-                          onChange={(event) =>
-                            setNewWorkspaceEntry({
-                              ...newWorkspaceEntry,
-                              name: event.target.value,
-                            })
-                          }
-                          onKeyDown={(event) => {
-                            if (event.key === "Escape")
-                              setNewWorkspaceEntry(undefined);
-                          }}
-                          placeholder={
-                            newWorkspaceEntry.kind === "file"
-                              ? "filename.md"
-                              : "folder name"
-                          }
-                          required
-                          value={newWorkspaceEntry.name}
-                        />
-                      </form>
-                    )}
-                    <nav
-                      aria-label="Workspace files"
-                      className="workspace-tree"
-                    >
-                      {renderWorkspaceDirectory()}
-                    </nav>
-                    {entryMenu && (
-                      <>
-                        {/*
-                          A full-window backdrop, so the next click anywhere
-                          closes the menu. Without it the menu survives a click
-                          on the tree behind it and two can be open at once.
-                        */}
-                        <div
-                          className="workspace-tree-menu-backdrop"
-                          onContextMenu={(event) => {
-                            event.preventDefault();
-                            setEntryMenu(undefined);
-                          }}
-                          onPointerDown={() => setEntryMenu(undefined)}
-                        />
-                        <div
-                          aria-label={`Actions for ${entryMenu.entry.name}`}
-                          className="workspace-tree-menu"
-                          // Opened at the pointer, then pulled back inside the
-                          // window if it would hang off the bottom or the
-                          // right. Measured rather than estimated: the menu's
-                          // size depends on its labels and the theme's font.
-                          ref={(node) => {
-                            if (!node) return;
-                            const box = node.getBoundingClientRect();
-                            const overflowX = box.right - window.innerWidth + 8;
-                            const overflowY =
-                              box.bottom - window.innerHeight + 8;
-                            if (overflowX > 0)
-                              node.style.left = `${Math.max(8, entryMenu.x - overflowX)}px`;
-                            if (overflowY > 0)
-                              node.style.top = `${Math.max(8, entryMenu.y - overflowY)}px`;
-                          }}
-                          role="menu"
-                          style={{ left: entryMenu.x, top: entryMenu.y }}
-                        >
-                          {entryMenu.entry.immutableReason && (
-                            // Greyed-out items with no explanation read as
-                            // broken ones. This was reported as "delete does
-                            // nothing", and it was the menu's silence, not the
-                            // action, that was wrong.
-                            <small className="workspace-tree-menu-reason">
-                              {entryMenu.entry.immutableReason}
-                            </small>
-                          )}
-                          <button
-                            disabled={!workspaceEntryMutable(entryMenu.entry)}
-                            onClick={() => {
-                              setRenamingEntry({
-                                path: entryMenu.entry.path,
-                                name: entryMenu.entry.name,
-                              });
-                              setEntryMenu(undefined);
-                            }}
-                            role="menuitem"
-                            type="button"
-                          >
-                            Rename
-                          </button>
-                          <button
-                            disabled={!workspaceEntryMutable(entryMenu.entry)}
-                            onClick={() => {
-                              const target = entryMenu.entry;
-                              setEntryMenu(undefined);
-                              void moveWorkspaceEntry(target);
-                            }}
-                            role="menuitem"
-                            type="button"
-                          >
-                            Move to…
-                          </button>
-                          <button
-                            className="destructive"
-                            disabled={!workspaceEntryMutable(entryMenu.entry)}
-                            onClick={() => {
-                              const target = entryMenu.entry;
-                              setEntryMenu(undefined);
-                              void removeWorkspaceEntry(target);
-                            }}
-                            role="menuitem"
-                            type="button"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </aside>
-
+            </div>
+            {!workspace ? (
+              <div className="empty large">
+                <strong>Choose a workspace</strong>
+                <span>Its board, sessions, and files will appear here.</span>
+              </div>
+            ) : view === "workspace" ? (
+              <>
+                <div className="workspace-content-toolbar">
+                  <div>
+                    <strong>Workspace files</strong>
+                    <small>{workspace.path}</small>
+                  </div>
+                </div>
+                {!workspaceContent ||
+                workspaceContent.workspaceId !== workspace.id ? (
+                  <div className="empty large">Loading workspace content…</div>
+                ) : (
                   <div
-                    aria-label="Resize explorer"
-                    aria-orientation="vertical"
-                    aria-valuemax={EXPLORER_MAX_WIDTH}
-                    aria-valuemin={EXPLORER_MIN_WIDTH}
-                    aria-valuenow={explorerWidth}
-                    className="column-resize-handle explorer-resize-handle"
-                    onKeyDown={(event) => {
-                      if (
-                        event.key !== "ArrowLeft" &&
-                        event.key !== "ArrowRight"
-                      )
-                        return;
-                      event.preventDefault();
-                      setExplorerWidth((width) =>
-                        clampExplorerWidth(
-                          width +
-                            (event.key === "ArrowRight"
-                              ? PANEL_STEP
-                              : -PANEL_STEP),
-                          EXPLORER_MAX_WIDTH,
-                        ),
-                      );
-                    }}
-                    onPointerDown={startExplorerWidthResize}
-                    role="separator"
-                    tabIndex={0}
-                  />
-
-                  <section className="workspace-viewer">
-                    <div className="workspace-viewer-tabbar">
-                      {selectedWorkspaceFile ? (
-                        <span className="workspace-viewer-tab">
-                          <span aria-hidden="true">
-                            {selectedWorkspaceFile.format === "markdown"
-                              ? "M↓"
-                              : "≡"}
-                          </span>
-                          <strong>{selectedWorkspaceFile.name}</strong>
-                        </span>
-                      ) : (
-                        <span className="workspace-viewer-tab muted">
-                          No file selected
-                        </span>
-                      )}
-                      {selectedWorkspaceFile && (
-                        <div className="workspace-viewer-actions">
-                          {selectedWorkspaceFileReadOnly && (
-                            <span>Reference checkout · read-only</span>
-                          )}
-                          {workspaceDraft !== selectedWorkspaceFile.content && (
-                            <span>Unsaved</span>
-                          )}
-                          {selectedWorkspaceFile.format === "markdown" && (
-                            <button
-                              aria-pressed={workspaceFileMode === "preview"}
-                              className={
-                                workspaceFileMode === "preview" ? "active" : ""
-                              }
-                              onClick={() =>
-                                setWorkspaceFileMode((current) =>
-                                  current === "edit" ? "preview" : "edit",
-                                )
-                              }
-                              type="button"
-                            >
-                              {workspaceFileMode === "edit"
-                                ? "Preview"
-                                : "Edit"}
-                            </button>
-                          )}
-                          <button
-                            disabled={
-                              busy ||
-                              selectedWorkspaceFileReadOnly ||
-                              workspaceDraft === selectedWorkspaceFile.content
-                            }
-                            onClick={() => void saveWorkspaceFile()}
-                            title="Save (⌘S)"
-                            type="button"
-                          >
-                            Save
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                    {selectedWorkspaceFile ? (
-                      <>
-                        <div className="workspace-viewer-breadcrumb">
-                          {selectedWorkspaceFile.path.split("/").join("  ›  ")}
-                        </div>
-                        {selectedWorkspaceFile.format === "markdown" &&
-                        workspaceFileMode === "preview" ? (
-                          <div className="workspace-viewer-content markdown">
-                            <MarkdownPreview source={workspaceDraft} />
-                          </div>
-                        ) : (
-                          <WorkspaceFileEditor
-                            file={{
-                              ...selectedWorkspaceFile,
-                              content: workspaceDraft,
-                            }}
-                            onChange={setWorkspaceDraft}
-                            onSave={() => void saveWorkspaceFile()}
-                            readOnly={selectedWorkspaceFileReadOnly}
-                            theme={theme}
-                          />
-                        )}
-                        {selectedWorkspaceFile.path === "JOURNAL.md" &&
-                          workspaceDraft === selectedWorkspaceFile.content && (
-                            <form
-                              className="journal-entry-form"
-                              onSubmit={appendJournal}
-                            >
-                              <select
-                                aria-label="Journal entry type"
-                                value={journalForm.kind}
-                                onChange={(event) =>
-                                  setJournalForm({
-                                    ...journalForm,
-                                    kind: event.target
-                                      .value as typeof journalForm.kind,
-                                  })
-                                }
-                              >
-                                {[
-                                  "decision",
-                                  "progress",
-                                  "blocker",
-                                  "question",
-                                  "handoff",
-                                  "completed",
-                                ].map((kind) => (
-                                  <option key={kind} value={kind}>
-                                    {kind}
-                                  </option>
-                                ))}
-                              </select>
-                              <input
-                                aria-label="Journal entry"
-                                placeholder="Record a meaningful update…"
-                                required
-                                value={journalForm.summary}
-                                onChange={(event) =>
-                                  setJournalForm({
-                                    ...journalForm,
-                                    summary: event.target.value,
-                                  })
-                                }
-                              />
-                              <button disabled={busy} type="submit">
-                                Add
-                              </button>
-                            </form>
-                          )}
-                      </>
-                    ) : (
-                      <div className="workspace-viewer-empty">
-                        <strong>Select a file</strong>
-                        <span>
-                          Choose a text or Markdown file from the explorer.
-                        </span>
-                      </div>
-                    )}
-                  </section>
-                </div>
-              )}
-            </>
-          ) : view === "world" ? (
-            <Suspense
-              fallback={<div className="empty large">Opening the World…</div>}
-            >
-              <WorldView
-                appearance={theme}
-                preview={!!snapshot && snapshot.settings.channel !== "stable"}
-                // The World is every workspace at once, whatever the sidebar
-                // has selected: it is the one view of everything running.
-                model={buildWorldModel(
-                  worldInputFromSnapshot(snapshot, orderedWorkspaces, now),
-                )}
-                onPopOut={() => {
-                  void client.request.worldWindowOpen({});
-                  setView(lastWorkspaceView.current);
-                }}
-                now={now}
-                onOpenSession={(sessionId, sessionWorkspaceId) => {
-                  // The same path a board card takes: the scope stays, the
-                  // workspace underneath follows the session.
-                  setWorkspaceId(sessionWorkspaceId);
-                  openSession(sessionId);
-                  setView("sessions");
-                }}
-              />
-            </Suspense>
-          ) : view === "board" ? (
-            boardView
-          ) : (
-            <>
-              <div className="sessions-toolbar">
-                <div>
-                  <strong>Sessions</strong>
-                  <span className="count-badge">
-                    {sessions.length + visibleSessionLaunches.length}
-                  </span>
-                </div>
-                <div className="panel-heading-actions">
-                  <CreateButton
-                    disabled={!snapshot?.settings.tmuxAvailable || showingAll}
-                    label="Create session"
-                    onClick={() => openSessionModal()}
-                    title={
-                      showingAll
-                        ? "Pick a workspace to start a session in, or Start a task from the board"
-                        : undefined
+                    className="workspace-browser"
+                    style={
+                      {
+                        "--explorer-width": `${explorerWidth}px`,
+                      } as CSSProperties
                     }
-                  />
-                  <PanelCollapseButton
-                    collapsed={sessionsPanelWidth < PANEL_COMPACT_THRESHOLD}
-                    label="sessions"
-                    onClick={toggleSessionsPanel}
-                    side="left"
-                  />
-                </div>
-              </div>
-              <div
-                className="session-grid item-list"
-                data-reordering={sessionReorder.draggingId ? "true" : undefined}
-              >
-                {sessions.length === 0 &&
-                  visibleSessionLaunches.length === 0 && (
-                    <div className="empty large">
-                      <strong>No sessions yet</strong>
-                      <span>Create an agent or free terminal.</span>
-                    </div>
-                  )}
-                {visibleSessionLaunches.map((launch) => (
-                  <div
-                    aria-busy={launch.status === "starting"}
-                    className={`session-card session-card-${launch.status}`}
-                    key={launch.key}
                   >
-                    <div className="session-card-main">
-                      <span className={`session-kind-icon tool-${launch.tool}`}>
-                        {launch.status === "starting" ? (
-                          <span
-                            aria-hidden="true"
-                            className="session-launch-spinner"
-                          />
-                        ) : (
-                          <ToolIcon tool={launch.tool} />
-                        )}
-                      </span>
-                      <span>
-                        <strong>{launch.name}</strong>
-                        <small>
-                          {launch.status === "starting"
-                            ? `Starting ${launch.tool}…`
-                            : "Failed to start"}
-                        </small>
-                        {launch.error && (
-                          <em className="session-startup-error" role="alert">
-                            {launch.error}
-                          </em>
-                        )}
-                        <time dateTime={launch.startedAt}>
-                          Requested ·{" "}
-                          {new Date(launch.startedAt).toLocaleString()}
-                        </time>
-                      </span>
-                    </div>
-                    {launch.status === "error" && (
-                      <button
-                        aria-label={`Dismiss failed ${launch.name} session`}
-                        className="session-card-action"
-                        onClick={() => dismissSessionLaunch(launch.key)}
-                        title="Dismiss"
-                        type="button"
-                      >
-                        <DismissIcon />
-                      </button>
-                    )}
-                  </div>
-                ))}
-                {orderedSessions.map((session) => {
-                  const task = allTasks.find(
-                    (item) => item.id === session.taskId,
-                  );
-                  const tool = sessionTool(session);
-                  const timestamp = session.endedAt ?? session.startedAt;
-                  const startupError = sessionStartupErrors.get(session.id);
-                  const view = statusViewFor(session);
-                  const holdsRoutines = routinesBySession.has(session.id);
-                  const waitingRuns =
-                    routinesBySession.get(session.id)?.waiting.length ?? 0;
-                  return (
-                    <div
-                      className={`session-card tone-${view.tone} ${session.id === activeSessionId ? "selected" : ""}`}
-                      data-color={session.color ?? undefined}
-                      data-pinned={session.pinnedAt ? "true" : undefined}
-                      data-attention={view.attention ? "true" : undefined}
-                      data-dragging={
-                        sessionReorder.draggingId === session.id
-                          ? "true"
-                          : undefined
-                      }
-                      key={session.id}
-                      onPointerDown={sessionReorder.onPointerDown(session.id)}
-                      ref={sessionReorder.registerCard(session.id)}
-                    >
-                      <button
-                        className="session-card-main"
-                        data-provider={session.provider}
-                        data-session-id={session.id}
-                        onClick={() => openSession(session.id)}
-                        onKeyDown={(event) => {
-                          if (!event.altKey) return;
-                          const direction =
-                            event.key === "ArrowUp"
-                              ? "up"
-                              : event.key === "ArrowDown"
-                                ? "down"
-                                : undefined;
-                          if (
-                            direction &&
-                            sessionReorder.moveByKeyboard(session.id, direction)
-                          )
-                            event.preventDefault();
-                        }}
-                      >
-                        <span className={`session-kind-icon tool-${tool}`}>
-                          <ToolIcon tool={tool} />
-                        </span>
-                        <span>
-                          <strong>{sessionName(session)}</strong>
-                          <small>
-                            {showingAll && (
-                              <span className="session-card-workspace">
-                                {workspaceById.get(session.workspaceId)?.slug ??
-                                  session.workspaceId}
-                                {" · "}
-                              </span>
-                            )}
-                            {holdsRoutines ? (
-                              <span className="session-routines-badge">
-                                Routines
-                                {waitingRuns > 0 && (
-                                  <span
-                                    className="session-waiting-badge"
-                                    title="Routine runs waiting to go in"
-                                  >
-                                    {waitingRuns} waiting
-                                  </span>
-                                )}
-                              </span>
-                            ) : (
-                              (task?.title ?? "Workspace session")
-                            )}
-                          </small>
-                          <em>
-                            <AgentStatusDot
-                              count={view.reasons.length}
-                              label={statusAriaLabel(session, view, now)}
-                              view={view}
-                            />
-                            <span className="session-status-label">
-                              {startupError ? "failed to start" : view.label}
-                              {view.attention && view.since
-                                ? ` · waiting ${waitingLabel(view.since, now)}`
-                                : ""}{" "}
-                              · {session.id.slice(0, 6)}
-                            </span>
-                            {view.unconfirmed && (
-                              <span
-                                className="session-status-unconfirmed"
-                                title="Read from the terminal pane, not reported by the agent"
-                              >
-                                unconfirmed
-                              </span>
-                            )}
-                          </em>
-                          {view.detail && (
-                            <em className="session-status-detail">
-                              {view.detail}
-                            </em>
-                          )}
-                          {startupError && (
-                            <em className="session-startup-error" role="alert">
-                              {startupError}
-                            </em>
-                          )}
-                          <time dateTime={timestamp}>
-                            {session.endedAt ? "Ended" : "Started"} ·{" "}
-                            {new Date(timestamp).toLocaleString()}
-                          </time>
-                        </span>
-                      </button>
-                      {session.status === "lost" && (
-                        <button
-                          aria-label={`Revive ${sessionName(session)} session`}
-                          className="session-card-action"
-                          data-no-drag
-                          disabled={busy}
-                          onClick={() => void reviveSession(session)}
-                          title="Resume this conversation in a new terminal"
+                    <aside className="workspace-explorer">
+                      <div className="workspace-explorer-heading">
+                        <div>
+                          <span>Explorer</span>
+                          <small>{workspace.name}</small>
+                        </div>
+                        <div className="workspace-explorer-actions">
+                          <button
+                            aria-label="New file"
+                            disabled={workspaceSelectionReadOnly}
+                            onClick={() =>
+                              setNewWorkspaceEntry({ kind: "file", name: "" })
+                            }
+                            title="New file"
+                            type="button"
+                          >
+                            <svg
+                              aria-hidden="true"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 16 16"
+                            >
+                              <path d="M3 1.5h6l4 4v9H3zM9 1.5v4h4M8 8v4M6 10h4" />
+                            </svg>
+                          </button>
+                          <button
+                            aria-label="New folder"
+                            disabled={workspaceSelectionReadOnly}
+                            onClick={() =>
+                              setNewWorkspaceEntry({
+                                kind: "directory",
+                                name: "",
+                              })
+                            }
+                            title="New folder"
+                            type="button"
+                          >
+                            <svg
+                              aria-hidden="true"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 16 16"
+                            >
+                              <path d="M1.5 3h5l1.5 2h6.5v8.5h-13zM9 7.5v4M7 9.5h4" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                      {newWorkspaceEntry && (
+                        <form
+                          className="workspace-new-entry"
+                          onSubmit={createWorkspaceEntry}
                         >
-                          ↻
-                        </button>
+                          <small title={selectedWorkspaceDirectory || "/"}>
+                            {selectedWorkspaceDirectory || "/"}
+                          </small>
+                          <input
+                            aria-label={`New ${newWorkspaceEntry.kind} name`}
+                            autoFocus
+                            onBlur={() => {
+                              if (!newWorkspaceEntry.name)
+                                setNewWorkspaceEntry(undefined);
+                            }}
+                            onChange={(event) =>
+                              setNewWorkspaceEntry({
+                                ...newWorkspaceEntry,
+                                name: event.target.value,
+                              })
+                            }
+                            onKeyDown={(event) => {
+                              if (event.key === "Escape")
+                                setNewWorkspaceEntry(undefined);
+                            }}
+                            placeholder={
+                              newWorkspaceEntry.kind === "file"
+                                ? "filename.md"
+                                : "folder name"
+                            }
+                            required
+                            value={newWorkspaceEntry.name}
+                          />
+                        </form>
                       )}
-                      <span className="workspace-card-actions" data-no-drag>
-                        <SessionMenu
-                          color={session.color}
-                          name={sessionName(session)}
-                          offerAbilities={
-                            session.kind === "agent" &&
-                            (session.provider === "claude" ||
-                              session.provider === "codex")
-                          }
-                          onColor={(color) =>
-                            void updateSession(session, { color })
-                          }
-                          onPin={(pinned) =>
-                            void updateSession(session, { pinned })
-                          }
-                          onRename={() => void renameSession(session)}
-                          onRoutines={(granted) =>
-                            void setRoutinesAbility(session, granted)
-                          }
-                          pinned={Boolean(session.pinnedAt)}
-                          routines={holdsRoutines}
-                        />
-                        {session.kind === "agent" &&
-                          (session.provider === "claude" ||
-                            session.provider === "codex") && (
+                      <nav
+                        aria-label="Workspace files"
+                        className="workspace-tree"
+                      >
+                        {renderWorkspaceDirectory()}
+                      </nav>
+                      {entryMenu && (
+                        <>
+                          {/*
+                            A full-window backdrop, so the next click anywhere
+                            closes the menu. Without it the menu survives a click
+                            on the tree behind it and two can be open at once.
+                          */}
+                          <div
+                            className="workspace-tree-menu-backdrop"
+                            onContextMenu={(event) => {
+                              event.preventDefault();
+                              setEntryMenu(undefined);
+                            }}
+                            onPointerDown={() => setEntryMenu(undefined)}
+                          />
+                          <div
+                            aria-label={`Actions for ${entryMenu.entry.name}`}
+                            className="workspace-tree-menu"
+                            // Opened at the pointer, then pulled back inside the
+                            // window if it would hang off the bottom or the
+                            // right. Measured rather than estimated: the menu's
+                            // size depends on its labels and the theme's font.
+                            ref={(node) => {
+                              if (!node) return;
+                              const box = node.getBoundingClientRect();
+                              const overflowX =
+                                box.right - window.innerWidth + 8;
+                              const overflowY =
+                                box.bottom - window.innerHeight + 8;
+                              if (overflowX > 0)
+                                node.style.left = `${Math.max(8, entryMenu.x - overflowX)}px`;
+                              if (overflowY > 0)
+                                node.style.top = `${Math.max(8, entryMenu.y - overflowY)}px`;
+                            }}
+                            role="menu"
+                            style={{ left: entryMenu.x, top: entryMenu.y }}
+                          >
+                            {entryMenu.entry.immutableReason && (
+                              // Greyed-out items with no explanation read as
+                              // broken ones. This was reported as "delete does
+                              // nothing", and it was the menu's silence, not the
+                              // action, that was wrong.
+                              <small className="workspace-tree-menu-reason">
+                                {entryMenu.entry.immutableReason}
+                              </small>
+                            )}
                             <button
-                              aria-label={`Continue ${sessionName(session)} in a new agent`}
-                              className="session-card-action session-handoff-action"
-                              data-handoff-requested={
-                                session.handoffRequestedAt ? "true" : undefined
-                              }
-                              disabled={busy}
-                              onClick={() => void continueInNewAgent(session)}
-                              title={
-                                session.handoffRequestedAt
-                                  ? "Handoff requested; the agent is writing its note. Click to ask again."
-                                  : session.status === "running"
-                                    ? "Continue in a new agent: this one writes a handoff note, then a fresh agent with an empty context takes over in the same working directory"
-                                    : "Continue in a new agent: a fresh agent takes over in the same working directory, working from the brief, the journal and git"
-                              }
+                              disabled={!workspaceEntryMutable(entryMenu.entry)}
+                              onClick={() => {
+                                setRenamingEntry({
+                                  path: entryMenu.entry.path,
+                                  name: entryMenu.entry.name,
+                                });
+                                setEntryMenu(undefined);
+                              }}
+                              role="menuitem"
                               type="button"
                             >
-                              <HandoffIcon />
+                              Rename
                             </button>
-                          )}
-                        <button
-                          aria-label={`Archive ${sessionName(session)} session`}
-                          className="session-card-action"
-                          onClick={() => setSessionAction({ session })}
-                          title={
-                            holdsRoutines
-                              ? "Archive session and pause its routines"
-                              : "Archive session"
-                          }
-                          type="button"
-                        >
-                          <ArchiveIcon />
-                        </button>
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-              {archivedSessions.length > 0 && (
-                <details className="archive-list session-archive-list">
-                  <summary>
-                    Archived sessions ({archivedSessions.length})
-                  </summary>
-                  <div className="item-list">
-                    {archivedSessions.map((session) => (
-                      <div className="archived-item" key={session.id}>
-                        <span>
-                          <strong>{sessionName(session)}</strong>
-                          <small>
-                            {session.provider} · archived{" "}
-                            {new Date(session.archivedAt!).toLocaleDateString()}
-                          </small>
-                        </span>
-                        <button
-                          disabled={busy}
-                          onClick={() => void restoreSession(session)}
-                        >
-                          Restore &amp; resume
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </details>
-              )}
-            </>
-          )}
-        </section>
+                            <button
+                              disabled={!workspaceEntryMutable(entryMenu.entry)}
+                              onClick={() => {
+                                const target = entryMenu.entry;
+                                setEntryMenu(undefined);
+                                void moveWorkspaceEntry(target);
+                              }}
+                              role="menuitem"
+                              type="button"
+                            >
+                              Move to…
+                            </button>
+                            <button
+                              className="destructive"
+                              disabled={!workspaceEntryMutable(entryMenu.entry)}
+                              onClick={() => {
+                                const target = entryMenu.entry;
+                                setEntryMenu(undefined);
+                                void removeWorkspaceEntry(target);
+                              }}
+                              role="menuitem"
+                              type="button"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </aside>
 
-        {workspace &&
-          (view === "sessions" || (view === "board" && !showingAll)) && (
-            <div
-              aria-label={`Resize ${view === "board" ? "task inspector" : "sessions"} panel`}
-              aria-orientation="vertical"
-              aria-valuemax={720}
-              aria-valuemin={PANEL_RAIL_WIDTH}
-              aria-valuenow={
-                view === "board" ? boardDetailPanelWidth : sessionsPanelWidth
-              }
-              className="column-resize-handle secondary-panel-resize-handle"
-              onDoubleClick={
-                view === "board" ? toggleBoardDetailPanel : toggleSessionsPanel
-              }
-              onKeyDown={(event) => {
-                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight")
-                  return;
-                event.preventDefault();
-                const movement =
-                  event.key === "ArrowRight" ? PANEL_STEP : -PANEL_STEP;
-                if (view === "board")
-                  setBoardDetailPanelWidth((width) =>
-                    clampPanelSize(width - movement, 720),
-                  );
-                else
-                  setSessionsPanelWidth((width) =>
-                    clampPanelSize(width + movement, 720),
-                  );
-              }}
-              onPointerDown={(event) => startColumnResize(event, "secondary")}
-              role="separator"
-              tabIndex={0}
-            />
-          )}
+                    <div
+                      aria-label="Resize explorer"
+                      aria-orientation="vertical"
+                      aria-valuemax={EXPLORER_MAX_WIDTH}
+                      aria-valuemin={EXPLORER_MIN_WIDTH}
+                      aria-valuenow={explorerWidth}
+                      className="column-resize-handle explorer-resize-handle"
+                      onKeyDown={(event) => {
+                        if (
+                          event.key !== "ArrowLeft" &&
+                          event.key !== "ArrowRight"
+                        )
+                          return;
+                        event.preventDefault();
+                        setExplorerWidth((width) =>
+                          clampExplorerWidth(
+                            width +
+                              (event.key === "ArrowRight"
+                                ? PANEL_STEP
+                                : -PANEL_STEP),
+                            EXPLORER_MAX_WIDTH,
+                          ),
+                        );
+                      }}
+                      onPointerDown={startExplorerWidthResize}
+                      role="separator"
+                      tabIndex={0}
+                    />
+
+                    <section className="workspace-viewer">
+                      <div className="workspace-viewer-tabbar">
+                        {selectedWorkspaceFile ? (
+                          <span className="workspace-viewer-tab">
+                            <span aria-hidden="true">
+                              {selectedWorkspaceFile.format === "markdown"
+                                ? "M↓"
+                                : "≡"}
+                            </span>
+                            <strong>{selectedWorkspaceFile.name}</strong>
+                          </span>
+                        ) : (
+                          <span className="workspace-viewer-tab muted">
+                            No file selected
+                          </span>
+                        )}
+                        {selectedWorkspaceFile && (
+                          <div className="workspace-viewer-actions">
+                            {selectedWorkspaceFileReadOnly && (
+                              <span>Reference checkout · read-only</span>
+                            )}
+                            {workspaceDraft !==
+                              selectedWorkspaceFile.content && (
+                              <span>Unsaved</span>
+                            )}
+                            {selectedWorkspaceFile.format === "markdown" && (
+                              <button
+                                aria-pressed={workspaceFileMode === "preview"}
+                                className={
+                                  workspaceFileMode === "preview"
+                                    ? "active"
+                                    : ""
+                                }
+                                onClick={() =>
+                                  setWorkspaceFileMode((current) =>
+                                    current === "edit" ? "preview" : "edit",
+                                  )
+                                }
+                                type="button"
+                              >
+                                {workspaceFileMode === "edit"
+                                  ? "Preview"
+                                  : "Edit"}
+                              </button>
+                            )}
+                            <button
+                              disabled={
+                                busy ||
+                                selectedWorkspaceFileReadOnly ||
+                                workspaceDraft === selectedWorkspaceFile.content
+                              }
+                              onClick={() => void saveWorkspaceFile()}
+                              title="Save (⌘S)"
+                              type="button"
+                            >
+                              Save
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      {selectedWorkspaceFile ? (
+                        <>
+                          <div className="workspace-viewer-breadcrumb">
+                            {selectedWorkspaceFile.path
+                              .split("/")
+                              .join("  ›  ")}
+                          </div>
+                          {selectedWorkspaceFile.format === "markdown" &&
+                          workspaceFileMode === "preview" ? (
+                            <div className="workspace-viewer-content markdown">
+                              <MarkdownPreview source={workspaceDraft} />
+                            </div>
+                          ) : (
+                            <WorkspaceFileEditor
+                              file={{
+                                ...selectedWorkspaceFile,
+                                content: workspaceDraft,
+                              }}
+                              onChange={setWorkspaceDraft}
+                              onSave={() => void saveWorkspaceFile()}
+                              readOnly={selectedWorkspaceFileReadOnly}
+                              theme={theme}
+                            />
+                          )}
+                          {selectedWorkspaceFile.path === "JOURNAL.md" &&
+                            workspaceDraft ===
+                              selectedWorkspaceFile.content && (
+                              <form
+                                className="journal-entry-form"
+                                onSubmit={appendJournal}
+                              >
+                                <select
+                                  aria-label="Journal entry type"
+                                  value={journalForm.kind}
+                                  onChange={(event) =>
+                                    setJournalForm({
+                                      ...journalForm,
+                                      kind: event.target
+                                        .value as typeof journalForm.kind,
+                                    })
+                                  }
+                                >
+                                  {[
+                                    "decision",
+                                    "progress",
+                                    "blocker",
+                                    "question",
+                                    "handoff",
+                                    "completed",
+                                  ].map((kind) => (
+                                    <option key={kind} value={kind}>
+                                      {kind}
+                                    </option>
+                                  ))}
+                                </select>
+                                <input
+                                  aria-label="Journal entry"
+                                  placeholder="Record a meaningful update…"
+                                  required
+                                  value={journalForm.summary}
+                                  onChange={(event) =>
+                                    setJournalForm({
+                                      ...journalForm,
+                                      summary: event.target.value,
+                                    })
+                                  }
+                                />
+                                <button disabled={busy} type="submit">
+                                  Add
+                                </button>
+                              </form>
+                            )}
+                        </>
+                      ) : (
+                        <div className="workspace-viewer-empty">
+                          <strong>Select a file</strong>
+                          <span>
+                            Choose a text or Markdown file from the explorer.
+                          </span>
+                        </div>
+                      )}
+                    </section>
+                  </div>
+                )}
+              </>
+            ) : view === "world" ? (
+              <Suspense
+                fallback={<div className="empty large">Opening the World…</div>}
+              >
+                <WorldView
+                  appearance={theme}
+                  preview={!!snapshot && snapshot.settings.channel !== "stable"}
+                  // The World is every workspace at once, whatever the sidebar
+                  // has selected: it is the one view of everything running.
+                  model={buildWorldModel(
+                    worldInputFromSnapshot(snapshot, orderedWorkspaces, now),
+                  )}
+                  onPopOut={() => {
+                    void client.request.worldWindowOpen({});
+                    setView(lastWorkspaceView.current);
+                  }}
+                  now={now}
+                  onOpenSession={showSession}
+                />
+              </Suspense>
+            ) : view === "board" ? (
+              boardView
+            ) : null}
+          </section>
+        )}
+
+        {workspace && view === "board" && !showingAll && (
+          <div
+            aria-label="Resize task inspector panel"
+            aria-orientation="vertical"
+            aria-valuemax={720}
+            aria-valuemin={PANEL_RAIL_WIDTH}
+            aria-valuenow={boardDetailPanelWidth}
+            className="column-resize-handle secondary-panel-resize-handle"
+            onDoubleClick={toggleBoardDetailPanel}
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowLeft" && event.key !== "ArrowRight")
+                return;
+              event.preventDefault();
+              const movement =
+                event.key === "ArrowRight" ? PANEL_STEP : -PANEL_STEP;
+              setBoardDetailPanelWidth((width) =>
+                clampPanelSize(width - movement, 720),
+              );
+            }}
+            onPointerDown={(event) => startColumnResize(event, "secondary")}
+            role="separator"
+            tabIndex={0}
+          />
+        )}
 
         {/* The column is one workspace's repositories, so with every
             workspace showing there is none; the board takes the width. */}
@@ -6013,7 +6183,7 @@ export function WorkspaceApp({
           </section>
         )}
 
-        {view === "sessions" && workspace && (
+        {view === "session" && workspace && (
           <section className="terminal-column">
             <div className="terminal-heading">
               <div>
@@ -6134,7 +6304,8 @@ export function WorkspaceApp({
               <div className="terminal-empty">
                 <strong>Select a session</strong>
                 <span>
-                  Choose a card or create a new agent or free terminal.
+                  Choose one under its workspace, or start one with the
+                  workspace&apos;s +.
                 </span>
               </div>
             )}

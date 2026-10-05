@@ -1301,43 +1301,43 @@ try {
     "Atlas's task to reach Running",
   );
 
-  // The Sessions view keeps the scope: every workspace's sessions, each
-  // naming its workspace, with no reorder and no New (a session needs one
-  // workspace to open in).
-  await evaluate(
-    "[...document.querySelectorAll('.app-mode-switcher button')].find((b) => b.textContent === 'Sessions').click()",
-  );
-  await waitFor("document.querySelector('.session-card')", "session cards");
+  // The left column lists every workspace's sessions under it (#55), in
+  // this scope as in any other: no card names its workspace, because the
+  // group it sits in does, and each workspace has its own New.
   const everySession = await evaluate<{
-    cards: number;
-    unlabelled: number;
-    atlasLabels: number;
-    heading: string;
-    create: boolean;
+    groups: number;
+    labelled: number;
+    atlasCards: number;
+    creates: number;
+    tabs: string[];
   }>(`(() => {
-    const cards = [...document.querySelectorAll('.session-card:not(.session-card-starting):not(.session-card-error)')];
+    const groups = [...document.querySelectorAll('.workspace-sessions')];
+    const atlas = groups.find((group) => group.getAttribute('aria-label')?.startsWith('Sessions in Atlas'));
     return {
-      cards: cards.length,
-      unlabelled: cards.filter((card) => !card.querySelector('.session-card-workspace')).length,
-      atlasLabels: cards.filter((card) => card.querySelector('.session-card-workspace')?.textContent.startsWith('atlas')).length,
-      heading: document.querySelector('.workspace-main-header h1')?.textContent ?? '',
-      create: document.querySelector('[aria-label="Create session"]')?.disabled ?? false,
+      groups: groups.length,
+      labelled: document.querySelectorAll('.session-card-workspace').length,
+      atlasCards: atlas?.querySelectorAll('.session-card:not(.session-card-starting):not(.session-card-error)').length ?? 0,
+      creates: [...document.querySelectorAll('[aria-label^="Create session in "]')].filter((button) => !button.disabled).length,
+      tabs: [...document.querySelectorAll('.app-mode-switcher button')].map((button) => button.textContent.trim()),
     };
   })()`);
   check(
-    everySession.heading === "All workspaces",
-    `the Sessions view is headed "${everySession.heading}"`,
+    !everySession.tabs.includes("Sessions"),
+    `the tabs still include Sessions: ${everySession.tabs.join(", ")}`,
+  );
+  check(everySession.groups >= 2, `only ${everySession.groups} session lists`);
+  check(
+    everySession.labelled === 0,
+    `${everySession.labelled} session cards name their workspace`,
   );
   check(
-    everySession.unlabelled === 0,
-    `${everySession.unlabelled} session cards name no workspace`,
+    everySession.atlasCards === 2,
+    `${everySession.atlasCards} session cards under Atlas, expected 2`,
   );
   check(
-    everySession.atlasLabels === 2,
-    `${everySession.atlasLabels} session cards are Atlas's, expected 2`,
+    everySession.creates >= 2,
+    `${everySession.creates} workspaces offer New session`,
   );
-  check(everySession.cards > 2, `only ${everySession.cards} session cards`);
-  check(everySession.create, "New session is not disabled for every workspace");
   const allSessionsShot = await screenshot("all-sessions");
 
   // Back to the Daedalus board, where the steps below expect the column.
@@ -1357,8 +1357,11 @@ try {
     "[...document.querySelectorAll('.app-mode-switcher button')].find((b) => b.textContent === 'Board').click()",
   );
   await waitFor("document.querySelector('.board-lanes')", "the board again");
+  // The workspace column defaults to 248px since it lists sessions (#55),
+  // 38px more than before; the window grows by the same amount so the board
+  // column is as narrow as this step has always tested.
   await send("Emulation.setDeviceMetricsOverride", {
-    width: 920,
+    width: 958,
     height: 860,
     deviceScaleFactor: 1,
     mobile: false,

@@ -164,33 +164,27 @@ try {
   await send("Page.enable");
   await send("Runtime.enable");
 
-  // The tab is found by its name rather than its position: the app opens on
-  // the workspace and the switcher has gained tabs, so an index picks a
-  // different view than it used to and the failure surfaces much later as
-  // "no session cards".
+  // The sessions are listed under their workspace in the left column (#55).
+  // Opening the first one shows its terminal, which the steps below measure
+  // against.
   let inSessionsMode = false;
-  let tabs = "";
   for (let attempt = 0; attempt < 200; attempt += 1) {
     if (
-      (await evaluate<number>(
-        "document.querySelectorAll('.session-grid .session-card').length",
-      )) >= 4
+      await evaluate<boolean>(
+        "Boolean(document.querySelector('.workspace-shell.mode-session')) && document.querySelectorAll('.session-grid .session-card').length >= 4",
+      )
     ) {
       inSessionsMode = true;
       break;
     }
-    tabs = await evaluate<string>(`(() => {
-      const all = [...document.querySelectorAll('.app-mode-switcher button')];
-      const sessions = all.find((tab) => tab.textContent.trim() === 'Sessions');
-      if (!sessions) return JSON.stringify(all.map((tab) => tab.textContent.trim()));
-      sessions.click();
-      return 'ok';
-    })()`);
+    await evaluate(
+      "document.querySelector('.session-grid .session-card-main')?.click() ?? null",
+    );
     await Bun.sleep(50);
   }
   if (!inSessionsMode)
     throw new Error(
-      `Session cards did not render (tabs: ${tabs})${rendererErrors.length ? `: ${rendererErrors.slice(0, 2).join("; ")}` : ""}`,
+      `Session cards did not render${rendererErrors.length ? `: ${rendererErrors.slice(0, 2).join("; ")}` : ""}`,
     );
 
   /**

@@ -146,7 +146,7 @@ try {
     await Bun.sleep(50);
   }
 
-  // The secondary panel only exists beside the board and the sessions. The
+  // The secondary panel only exists beside the board. The
   // view under test is chosen rather than inherited from whichever tab happens
   // to be first, so a change to the default (#27 made it the board) does not
   // silently change what this checks.
@@ -237,61 +237,59 @@ try {
     "document.querySelector('.workspace-column').getBoundingClientRect().width",
   );
 
-  const collapseButton = await evaluate<{ x: number; y: number }>(`(() => {
-    const rect = document.querySelector('[aria-label="Collapse workspace panel"]').getBoundingClientRect();
-    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-  })()`);
-  for (const type of ["mousePressed", "mouseReleased"] as const)
+  // The column no longer folds to a rail (#55): it has no collapse button,
+  // and a drag far to the left stops at its minimum width.
+  const dragWorkspaceHandle = async (distance: number) => {
+    const handle = await evaluate<{ x: number; y: number }>(`(() => {
+      const rect = document.querySelector('.workspace-panel-resize-handle').getBoundingClientRect();
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    })()`);
     await send("Input.dispatchMouseEvent", {
-      type,
+      type: "mousePressed",
       button: "left",
-      buttons: type === "mousePressed" ? 1 : 0,
+      buttons: 1,
       clickCount: 1,
-      x: collapseButton.x,
-      y: collapseButton.y,
+      ...handle,
     });
-  await Bun.sleep(100);
-  const collapsed = await evaluate<{
-    width: number;
-    compact: boolean;
-  }>(`(() => {
-    const panel = document.querySelector('.workspace-column');
-    return { width: panel.getBoundingClientRect().width, compact: panel.classList.contains('panel-compact') };
-  })()`);
-
-  const expandButton = await evaluate<{ x: number; y: number }>(`(() => {
-    const rect = document.querySelector('[aria-label="Expand workspace panel"]').getBoundingClientRect();
-    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-  })()`);
-  for (const type of ["mousePressed", "mouseReleased"] as const)
     await send("Input.dispatchMouseEvent", {
-      type,
+      type: "mouseMoved",
       button: "left",
-      buttons: type === "mousePressed" ? 1 : 0,
-      clickCount: 1,
-      x: expandButton.x,
-      y: expandButton.y,
+      buttons: 1,
+      x: handle.x + distance,
+      y: handle.y,
     });
-  await Bun.sleep(100);
-  const expandedWidth = await evaluate<number>(
-    "document.querySelector('.workspace-column').getBoundingClientRect().width",
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      button: "left",
+      buttons: 0,
+      clickCount: 1,
+      x: handle.x + distance,
+      y: handle.y,
+    });
+    await Bun.sleep(150);
+    return evaluate<number>(
+      "document.querySelector('.workspace-column').getBoundingClientRect().width",
+    );
+  };
+  const narrowest = await dragWorkspaceHandle(-400);
+  const collapseControl = await evaluate<boolean>(
+    `Boolean(document.querySelector('.workspace-column .panel-collapse-button'))`,
   );
 
   if (Math.abs(draggedWidth - (before.width + 96)) > 2)
     throw new Error(`Drag failed: ${before.width}px -> ${draggedWidth}px`);
   if (hover.active === hover.other || hover.other !== before.otherColor)
     throw new Error("Hover styling affected more than the active divider");
-  if (collapsed.width !== 68 || !collapsed.compact)
+  if (narrowest !== 200)
     throw new Error(
-      `Collapse failed: ${collapsed.width}px, compact=${collapsed.compact}`,
+      `The column narrowed to ${narrowest}px, not its 200px minimum`,
     );
-  if (Math.abs(expandedWidth - draggedWidth) > 2)
-    throw new Error(
-      `Expand failed: ${collapsed.width}px -> ${expandedWidth}px`,
-    );
+  if (collapseControl)
+    throw new Error("The workspace column still has a collapse button");
 
+  // The session is opened from its card under the workspace (#55).
   await evaluate(
-    "[...document.querySelectorAll('.app-mode-switcher button')].find((b) => b.textContent === 'Sessions').click()",
+    "document.querySelector('.session-card-main[data-session-id=\"panel-test-agent\"]').click()",
   );
   await Bun.sleep(250);
   const statusTelemetry = await evaluate<{
@@ -318,7 +316,13 @@ try {
       `Claude context is missing or malformed: ${statusTelemetry.context}`,
     );
   for (const expected of ["Codex 5h 28% · 7d 61%", "Claude 5h 34% · 7d 47%"])
-    if (!statusTelemetry.usage.includes(expected))
+    // Compared without spaces: the usage meters are separate elements, so
+    // textContent runs their labels together.
+    if (
+      !statusTelemetry.usage
+        .replace(/\s+/g, "")
+        .includes(expected.replace(/\s+/g, ""))
+    )
       throw new Error(
         `Provider usage is missing ${expected}: ${statusTelemetry.usage}`,
       );
@@ -343,35 +347,89 @@ try {
   if (!terminalFont.family.includes("MesloLGS NF"))
     throw new Error(`Terminal font family mismatch: ${terminalFont.family}`);
 
-  const collapseAndMeasureTerminal = async (label: string) => {
-    const beforeCols = await evaluate<number>(
-      "Number(document.querySelector('.terminal').dataset.terminalCols)",
+  // Folding a workspace's session list, one at a time and all at once, and
+  // the fold surviving a reload (#55). The terminal stays: folding a list is
+  // not leaving the session.
+  const fold = () =>
+    evaluate<{
+      expanded: string | null;
+      cards: number;
+      icons: number;
+      all: string | null;
+      terminal: boolean;
+    }>(`(() => ({
+      expanded: document.querySelector('.workspace-disclosure')?.getAttribute('aria-expanded') ?? null,
+      cards: document.querySelectorAll('.workspace-sessions .session-card').length,
+      icons: document.querySelectorAll('.workspace-session-icons').length,
+      all: document.querySelector('.workspace-fold-all')?.getAttribute('aria-label') ?? null,
+      terminal: Boolean(document.querySelector('.workspace-shell.mode-session .terminal-column')),
+    }))()`);
+  const unfolded = await fold();
+  if (
+    unfolded.expanded !== "true" ||
+    unfolded.cards < 3 ||
+    unfolded.icons !== 0
+  )
+    throw new Error(
+      `The session list did not start open: ${JSON.stringify(unfolded)}`,
     );
-    const button = await evaluate<{ x: number; y: number }>(`(() => {
-      const rect = document.querySelector('[aria-label="Collapse ${label} panel"]').getBoundingClientRect();
-      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-    })()`);
-    for (const type of ["mousePressed", "mouseReleased"] as const)
-      await send("Input.dispatchMouseEvent", {
-        type,
-        button: "left",
-        buttons: type === "mousePressed" ? 1 : 0,
-        clickCount: 1,
-        x: button.x,
-        y: button.y,
-      });
-    await Bun.sleep(300);
-    const afterCols = await evaluate<number>(
-      "Number(document.querySelector('.terminal').dataset.terminalCols)",
+  await evaluate("document.querySelector('.workspace-disclosure').click()");
+  await Bun.sleep(100);
+  const folded = await fold();
+  if (
+    folded.expanded !== "false" ||
+    folded.cards !== 0 ||
+    folded.icons !== 1 ||
+    folded.all !== "Expand all session lists" ||
+    !folded.terminal
+  )
+    throw new Error(`Folding the list failed: ${JSON.stringify(folded)}`);
+  await send("Page.reload");
+  // The old document answers until the new one replaces it.
+  await Bun.sleep(400);
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (
+      await evaluate("Boolean(document.querySelector('.workspace-disclosure'))")
+    )
+      break;
+    await Bun.sleep(50);
+  }
+  const reloaded = await fold();
+  if (reloaded.expanded !== "false" || reloaded.cards !== 0)
+    throw new Error(
+      `The fold did not survive a reload: ${JSON.stringify(reloaded)}`,
     );
-    if (afterCols <= beforeCols)
-      throw new Error(
-        `${label} collapse did not refit terminal: ${beforeCols} -> ${afterCols} cols`,
-      );
-    return { beforeCols, afterCols };
-  };
-  const sessionsCollapse = await collapseAndMeasureTerminal("sessions");
-  const workspaceCollapse = await collapseAndMeasureTerminal("workspace");
+  await evaluate("document.querySelector('.workspace-fold-all').click()");
+  await Bun.sleep(100);
+  const expandedAll = await fold();
+  if (expandedAll.expanded !== "true" || expandedAll.cards < 3)
+    throw new Error(`Expand all failed: ${JSON.stringify(expandedAll)}`);
+  await evaluate(
+    "document.querySelector('.session-card-main[data-session-id=\"panel-test-agent\"]').click()",
+  );
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (
+      await evaluate(
+        "Boolean(document.querySelector('.xterm-rows') && document.querySelector('.terminal')?.dataset.terminalCols)",
+      )
+    )
+      break;
+    await Bun.sleep(50);
+  }
+
+  // Widening the column narrows the terminal, and its grid refits.
+  const colsBeforeWiden = await evaluate<number>(
+    "Number(document.querySelector('.terminal').dataset.terminalCols)",
+  );
+  await dragWorkspaceHandle(120);
+  await Bun.sleep(300);
+  const colsAfterWiden = await evaluate<number>(
+    "Number(document.querySelector('.terminal').dataset.terminalCols)",
+  );
+  if (!colsAfterWiden || colsAfterWiden >= colsBeforeWiden)
+    throw new Error(
+      `Widening the column did not refit the terminal: ${colsBeforeWiden} -> ${colsAfterWiden} cols`,
+    );
 
   const terminalBeforeResize = await evaluate<{ cols: number; width: number }>(
     `(() => {
@@ -415,7 +473,7 @@ try {
   });
   await Bun.write(screenshotPath, Buffer.from(screenshot.data, "base64"));
   console.log(
-    `Panel browser check passed: drag ${before.width}px -> ${draggedWidth}px; collapse -> ${collapsed.width}px; expand -> ${expandedWidth}px`,
+    `Panel browser check passed: drag ${before.width}px -> ${draggedWidth}px; narrowest ${narrowest}px, no collapse button`,
   );
   console.log(
     `Terminal font check passed: ${terminalFont.family} at ${terminalFont.size}`,
@@ -424,7 +482,7 @@ try {
     `Terminal resize check passed: ${terminalBeforeResize.width}px/${terminalBeforeResize.cols} cols -> ${terminalAfterResize.width}px/${terminalAfterResize.cols} cols`,
   );
   console.log(
-    `Terminal panel-collapse checks passed: sessions ${sessionsCollapse.beforeCols} -> ${sessionsCollapse.afterCols} cols; workspace ${workspaceCollapse.beforeCols} -> ${workspaceCollapse.afterCols} cols`,
+    `Terminal refit check passed: widening the column ${colsBeforeWiden} -> ${colsAfterWiden} cols; session lists fold, unfold and stay folded across a reload`,
   );
   console.log(
     `Status telemetry check passed: ${statusTelemetry.status}; ${statusTelemetry.context}; ${statusTelemetry.usage}`,
