@@ -172,6 +172,42 @@ describe("guarded transitions", () => {
     });
   });
 
+  test("a Stop that lands after the pane saw the turn end still says done", async () => {
+    await withSession(async ({ context, sessionId, tmux }) => {
+      await context.activity.observe({
+        sessionId,
+        observation: observeClaudeHook("UserPromptSubmit", {
+          hook_event_name: "UserPromptSubmit",
+        })!,
+      });
+      tmux.paneText = [
+        "⏺ Here is the story.",
+        "✻ Cogitated for 6s · done 9:13 PM",
+        "──────────────────────────────── test ─",
+        "❯ ",
+      ].join("\n");
+      resetRolloutCache();
+      await sweepProviderActivity({
+        config: context.config,
+        repositories: context.repositories,
+        activity: context.activity,
+        tmux,
+      });
+      expect(context.activity.get(sessionId)?.activity).toBe("idle");
+      await context.activity.observe({
+        sessionId,
+        observation: observeClaudeHook("Stop", {
+          hook_event_name: "Stop",
+          last_assistant_message: "Here is the story.",
+        })!,
+      });
+      expect(context.activity.get(sessionId)).toMatchObject({
+        activity: "done",
+        source: "hook",
+      });
+    });
+  });
+
   test("since measures the block, not the polling interval", async () => {
     await withSession(async ({ context, sessionId, advance }) => {
       const first = await context.activity.record({
@@ -365,6 +401,99 @@ describe("staleness decay", () => {
       expect(context.activity.get(sessionId)).toMatchObject({
         activity: "unknown",
         detail: null,
+      });
+    });
+  });
+
+  test("a heartbeat keeps a long turn alive and changes nothing else", async () => {
+    await withSession(async ({ context, sessionId, advance }) => {
+      await context.activity.record({
+        sessionId,
+        activity: "working",
+        detail: "Bash(npm run build)",
+        source: "hook",
+      });
+      const before = context.activity.get(sessionId)!;
+      const heartbeat = {
+        activity: "working" as const,
+        source: "pane" as const,
+        heartbeat: true,
+        ifActivity: ["working" as const],
+      };
+      // A fifteen-minute build fires no hook between PreToolUse and
+      // PostToolUse; only the heartbeats say it is still running.
+      for (let minute = 0; minute < 3; minute += 1) {
+        advance(ACTIVITY_STALE_AFTER_MS - 60_000);
+        await context.activity.observe({ sessionId, observation: heartbeat });
+        expect(await context.activity.decay()).toHaveLength(0);
+      }
+      const after = context.activity.get(sessionId)!;
+      expect(after).toMatchObject({
+        activity: "working",
+        detail: "Bash(npm run build)",
+        source: "hook",
+        since: before.since,
+      });
+      expect(after.observedAt > before.observedAt).toBe(true);
+      // Inside a minute of the last one, a heartbeat is not even written.
+      advance(10_000);
+      expect(
+        await context.activity.observe({ sessionId, observation: heartbeat }),
+      ).toBeUndefined();
+    });
+  });
+
+  test("a heartbeat never revives or creates a reading", async () => {
+    await withSession(async ({ context, sessionId, advance }) => {
+      const heartbeat = observeClaudeHook("PreToolUse", {
+        hook_event_name: "PreToolUse",
+        agent_id: "sub-1",
+        tool_name: "Bash",
+      })!;
+      expect(heartbeat.heartbeat).toBe(true);
+      expect(
+        await context.activity.observe({ sessionId, observation: heartbeat }),
+      ).toBeUndefined();
+      expect(context.activity.get(sessionId)).toBeUndefined();
+      await context.activity.record({
+        sessionId,
+        activity: "done",
+        source: "hook",
+      });
+      advance(5 * 60_000);
+      await context.activity.observe({ sessionId, observation: heartbeat });
+      expect(context.activity.get(sessionId)?.activity).toBe("done");
+    });
+  });
+
+  test("the pane's live timer keeps a hook reading from decaying", async () => {
+    await withSession(async ({ context, sessionId, tmux, advance }) => {
+      await context.activity.record({
+        sessionId,
+        activity: "working",
+        detail: "Bash(sleep 900)",
+        source: "hook",
+      });
+      tmux.paneText = [
+        "⏺ Bash(sleep 900)",
+        "✽ Running… (7m 12s · ↓ 1.2k tokens)",
+        "──────────────────────────────── test ─",
+        "❯ ",
+      ].join("\n");
+      advance(7 * 60_000);
+      resetRolloutCache();
+      await sweepProviderActivity({
+        config: context.config,
+        repositories: context.repositories,
+        activity: context.activity,
+        tmux,
+      });
+      advance(7 * 60_000);
+      expect(await context.activity.decay()).toHaveLength(0);
+      expect(context.activity.get(sessionId)).toMatchObject({
+        activity: "working",
+        detail: "Bash(sleep 900)",
+        source: "hook",
       });
     });
   });

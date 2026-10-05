@@ -45,6 +45,29 @@ because an idle session and one blocked on a permission dialog are both
 `running`, and only the second changes what the user does next. Neither axis
 touches `Task.status`: the board is a third thing again.
 
+**What each state means.**
+
+- `idle`: waiting for a prompt with nothing to show. A new session, an
+  interrupted turn, or one whose badge was dismissed.
+- `working`: a turn is in progress. It starts at `UserPromptSubmit` (Codex:
+  `task_started`) and holds until the turn ends. Tool hooks refresh it, and so
+  do heartbeats, which refresh the timestamp and nothing else: a subagent's
+  hooks, and Claude's live timer in the pane. Without a heartbeat a fifteen-
+  minute build or a long foreground subagent would fire nothing and decay.
+  Decay to `unknown` after ten minutes now means no hook, no transcript write
+  and no live timer, which is a stuck or dead agent.
+- `needs_permission`, `needs_input`, `error`: Needs me. Raised only by
+  structured signals: a permission dialog, `AskUserQuestion` or Codex's
+  `request_user_input`, `daedal attention`, or a failed turn. The agent's prose
+  is never read for questions, because a guess that is wrong teaches people to
+  ignore the badge. Every agent is told this at launch
+  (`DAEDALUS_STATUS_INSTRUCTIONS`, through `--append-system-prompt` or Codex's
+  `developer_instructions`).
+- `done`: the turn ended on its own, with a result to look at. The `Stop` hook
+  and Codex's `task_complete` both say so. Claude's `idle_prompt`, sent a minute
+  after every turn, is ignored because `Stop` already decided. Sessions holding
+  routines end their turns `idle`, since a run is not a result to review.
+
 **Lifecycle dominates on conflict.** A session that becomes `exited` has its
 activity cleared rather than preserved, because "working" is the most damaging
 thing a display can claim about a session that is already gone.

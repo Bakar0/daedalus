@@ -6,12 +6,14 @@ import {
   channelName,
   codexActivityTier,
   codexConfigPath,
+  HEARTBEAT_INTERVAL_MS,
   observeClaudeHook,
   observeCodexHook,
   pendingBackgroundAgents,
   resolveAgentExecutable,
   sessionColor,
   sweepProviderActivity,
+  readActivityRecord,
   writeActivityRecord,
   type ActivityObservation,
   type AgentActivityState,
@@ -128,21 +130,18 @@ async function captureAgentEvent(
       typeof payload.thread_id === "string"
         ? "codex"
         : "claude";
-    // A session with routines sits at its prompt after every run. Claude's
-    // minute-later idle notice would raise a badge each time, for a prompt
-    // nobody needs to answer, so it is dropped for those sessions.
-    if (
-      event === "Notification" &&
-      payload.notification_type === "idle_prompt" &&
-      (await holdsRoutines(sessionId, migrationsDirectory))
-    )
-      return 0;
+    // A session with routines sits at its prompt after every run, so its
+    // turns end `idle` rather than `done`. Only `Stop` depends on it, and
+    // only `Stop` pays for the database read.
+    const routines =
+      event === "Stop" && (await holdsRoutines(sessionId, migrationsDirectory));
     const observation =
       provider === "codex"
-        ? observeCodexHook(event, payload)
+        ? observeCodexHook(event, payload, { routines })
         : (observeClaudeHook(event, payload, {
             backgroundAgents: await claudeBackgroundAgents(event, payload),
-          }) ?? observeCodexHook(event, payload));
+            routines,
+          }) ?? observeCodexHook(event, payload, { routines }));
     if (!observation) return 0;
     const providerSessionId =
       typeof payload.session_id === "string" ? payload.session_id : undefined;
@@ -187,16 +186,14 @@ const CLAUDE_BACKGROUND_TAIL_BYTES = 4 * 1024 * 1024;
 
 /**
  * Background agents the Claude conversation is still waiting on, read only for
- * the two events whose meaning depends on it. Every other hook fires mid-turn,
+ * `Stop`, the one event whose meaning depends on it. Every other hook fires mid-turn,
  * many times a minute, and must not pay for a transcript read.
  */
 async function claudeBackgroundAgents(
   event: string,
   payload: Record<string, unknown>,
 ): Promise<number> {
-  if (event !== "Stop" && event !== "Notification") return 0;
-  if (event === "Notification" && payload.notification_type !== "idle_prompt")
-    return 0;
+  if (event !== "Stop") return 0;
   const path = payload.transcript_path;
   if (typeof path !== "string" || !path) return 0;
   try {
@@ -226,7 +223,21 @@ async function applyObservation(input: {
   migrationsDirectory?: string;
 }): Promise<void> {
   const now = new Date().toISOString();
-  if (!input.observation.clear)
+  if (input.observation.heartbeat) {
+    // Subagents fire many hooks a minute. The record file answers "is there
+    // anything to refresh?" without opening the database, and a heartbeat
+    // must never write the record itself: it carries no reading of its own.
+    const record = await readActivityRecord(input.home, input.sessionId).catch(
+      () => undefined,
+    );
+    if (
+      !record ||
+      (input.observation.ifActivity &&
+        !input.observation.ifActivity.includes(record.activity)) ||
+      Date.now() - Date.parse(record.observedAt) < HEARTBEAT_INTERVAL_MS
+    )
+      return;
+  } else if (!input.observation.clear)
     await writeActivityRecord(input.home, {
       sessionId: input.sessionId,
       activity: input.observation.activity,
@@ -423,9 +434,11 @@ on one badge (newest five, deduplicated) rather than stacking alerts, so it is
 safe to call repeatedly. --clear drops every reason at once; a clear is never
 queued and never silenced, not even while Focus mode is on.
 
-MUST call when blocked on the user, or when something important finished or
-broke. Never call for per-step progress, routine tool calls, or anything
-already on screen.`,
+MUST call when blocked on the user: a decision, an answer, or an approval you
+need before you can continue. This is what puts a session in Needs me; a
+question asked only in your reply does not. A finished turn needs no call,
+because Daedalus marks it done. Never call for per-step progress, routine tool
+calls, or anything already on screen.`,
   notify: `Notification command:
   daedal notify "<message>" [--level info|success|error] [--desktop] [--session <agent-id>]
 

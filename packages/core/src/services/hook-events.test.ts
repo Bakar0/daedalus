@@ -112,7 +112,8 @@ describe("Claude hook payloads", () => {
       activity: "needs_permission",
       detail: "Claude needs your permission to use Bash",
     });
-    expect(type("idle_prompt")).toMatchObject({ activity: "needs_input" });
+    // The idle notice repeats what `Stop` already decided a minute earlier.
+    expect(type("idle_prompt")).toBeUndefined();
     expect(type("agent_needs_input")).toMatchObject({
       activity: "needs_input",
     });
@@ -196,10 +197,40 @@ describe("Claude hook payloads", () => {
       }),
     );
     expect(observed).toMatchObject({
-      activity: "idle",
+      activity: "done",
       detail: "Output: `hello-hooks`",
     });
-    expect(observed?.ifActivity).toEqual(["working", "unknown", "error"]);
+    // `idle` too: the pane can read the new `done` line before this lands.
+    expect(observed?.ifActivity).toEqual([
+      "working",
+      "unknown",
+      "error",
+      "idle",
+    ]);
+  });
+
+  test("Stop never reads the message for a question", () => {
+    // Prose is not a signal. A question that needs the user arrives through
+    // AskUserQuestion, a permission dialog, or `daedal attention`.
+    expect(
+      observeClaudeHook(
+        "Stop",
+        claude("Stop", {
+          last_assistant_message: "Built the parser.\n\nShould I build A?",
+        }),
+      ),
+    ).toMatchObject({
+      activity: "done",
+      detail: "Built the parser. Should I build A?",
+    });
+  });
+
+  test("a session holding routines ends its turns idle", () => {
+    const stop = (last_assistant_message: string) =>
+      observeClaudeHook("Stop", claude("Stop", { last_assistant_message }), {
+        routines: true,
+      });
+    expect(stop("Nothing new today.")).toMatchObject({ activity: "idle" });
   });
 
   test("StopFailure carries the error and SessionEnd clears", () => {
@@ -230,15 +261,20 @@ describe("Claude hook payloads", () => {
     );
   });
 
-  test("subagent events are invisible so the parent does not flap", () => {
-    expect(
-      observeClaudeHook(
-        "SubagentStop",
-        claude("SubagentStop", {
-          agent_id: "sub-1",
-        }),
-      ),
-    ).toBeUndefined();
+  test("subagent events only keep a working parent alive", () => {
+    // Never a new reading, so the parent does not flap; only proof that its
+    // turn is still running, so a long foreground subagent cannot decay it.
+    const heartbeat = {
+      activity: "working",
+      heartbeat: true,
+      ifActivity: ["working"],
+    };
+    const subagentStop = observeClaudeHook(
+      "SubagentStop",
+      claude("SubagentStop", { agent_id: "sub-1" }),
+    );
+    expect(subagentStop).toMatchObject(heartbeat);
+    expect(subagentStop?.detail).toBeUndefined();
     // A tool call made by a subagent carries the same tell.
     expect(
       observeClaudeHook(
@@ -248,7 +284,7 @@ describe("Claude hook payloads", () => {
           tool_name: "Bash",
         }),
       ),
-    ).toBeUndefined();
+    ).toMatchObject(heartbeat);
   });
 
   test("an unknown event is ignored rather than guessed at", () => {
@@ -388,11 +424,11 @@ describe("Claude background agents", () => {
         ?.detail,
     ).toBe("Waiting for 2 background agents");
     expect(observeClaudeHook("Stop", claude("Stop", stop))).toMatchObject({
-      activity: "idle",
+      activity: "done",
     });
   });
 
-  test("the idle notice raises no badge while an agent is out", () => {
+  test("the idle notice raises no badge, agent out or not", () => {
     const idle = claude("Notification", {
       notification_type: "idle_prompt",
       message: "Claude is waiting for your input",
@@ -400,9 +436,7 @@ describe("Claude background agents", () => {
     expect(
       observeClaudeHook("Notification", idle, { backgroundAgents: 1 }),
     ).toBeUndefined();
-    expect(observeClaudeHook("Notification", idle)).toMatchObject({
-      activity: "needs_input",
-    });
+    expect(observeClaudeHook("Notification", idle)).toBeUndefined();
     // A real permission dialog still needs the user, agent or no agent.
     expect(
       observeClaudeHook(
@@ -480,6 +514,22 @@ describe("Codex hook payloads", () => {
     }
   });
 
+  test("Stop is done, or idle in a session holding routines", () => {
+    expect(
+      observeCodexHook(
+        "Stop",
+        codex("Stop", { last_assistant_message: "Tests pass." }),
+      ),
+    ).toMatchObject({ activity: "done", detail: "Tests pass." });
+    expect(
+      observeCodexHook(
+        "Stop",
+        codex("Stop", { last_assistant_message: "Which branch?" }),
+        { routines: true },
+      ),
+    ).toMatchObject({ activity: "idle" });
+  });
+
   test("Interrupt has no Claude equivalent and lands on idle", () => {
     expect(observeCodexHook("Interrupt", codex("Interrupt"))).toMatchObject({
       activity: "idle",
@@ -498,15 +548,13 @@ describe("Codex rollout fallback", () => {
   const line = (payload: Record<string, unknown>) =>
     JSON.stringify({ type: "event_msg", payload });
 
-  test("task_started is working and task_complete is idle, never done", () => {
+  test("task_started is working and task_complete is done, as from the hook", () => {
     expect(observeCodexRollout(line({ type: "task_started" }))).toMatchObject({
       activity: "working",
       source: "transcript",
     });
-    // "The turn ended" is not "the work is finished"; reporting `done` here
-    // would claim something the rollout never says.
     expect(observeCodexRollout(line({ type: "task_complete" }))).toMatchObject({
-      activity: "idle",
+      activity: "done",
       source: "transcript",
     });
   });
@@ -651,7 +699,7 @@ describe("Claude pane fallback", () => {
   const pane = (status: string, trailing: string[] = []) =>
     ["⏺ Some earlier output", status, ...trailing, ...box].join("\n");
 
-  test("a finished turn retracts working, whatever the verb happens to be", () => {
+  test("a done line retracts working, whatever the verb happens to be", () => {
     for (const status of [
       "✻ Brewed for 3s · done 6:35 PM",
       "✻ Worked for 4m 56s · done 12:35 PM",
@@ -694,16 +742,21 @@ describe("Claude pane fallback", () => {
       "✽ Generating… (14s · ↓ 900 tokens)",
       "──────────────────────────────── test ─",
     ].join("\n");
-    expect(observeClaudePane(text)).toBeUndefined();
+    expect(observeClaudePane(text)).toMatchObject({ heartbeat: true });
   });
 
-  test("a live timer means the turn is still running, so nothing is retracted", () => {
+  test("a live timer keeps working alive and retracts nothing", () => {
     for (const status of [
       "✽ Generating… (6m 17s · ↓ 24.8k tokens)",
       "· Generating… (6m 26s · ↓ 25.2k tokens)",
       "✢ Thinking… (3s)",
     ])
-      expect(observeClaudePane(pane(status))).toBeUndefined();
+      expect(observeClaudePane(pane(status))).toEqual({
+        activity: "working",
+        source: "pane",
+        heartbeat: true,
+        ifActivity: ["working"],
+      });
   });
 
   test("the newest status line wins, so a stale done never reads past a timer", () => {
@@ -713,7 +766,7 @@ describe("Claude pane fallback", () => {
       "✽ Generating… (12s · ↓ 1.1k tokens)",
       ...box,
     ].join("\n");
-    expect(observeClaudePane(text)).toBeUndefined();
+    expect(observeClaudePane(text)).toMatchObject({ heartbeat: true });
   });
 
   test("output that merely talks about a status line is not one", () => {
@@ -725,7 +778,7 @@ describe("Claude pane fallback", () => {
           "  ⎿  │ idle │ ✻ Brewed for 3s · done 6:35 PM │",
         ]),
       ),
-    ).toBeUndefined();
+    ).toMatchObject({ heartbeat: true });
     expect(
       observeClaudePane(
         ["  ⎿  ✻ Brewed for 3s · done 6:35 PM", ...box].join("\n"),
@@ -741,7 +794,43 @@ describe("Claude pane fallback", () => {
       "✻ Waiting for 1 background agent to finish",
       ...box,
     ].join("\n");
-    expect(observeClaudePane(text)).toBeUndefined();
+    expect(observeClaudePane(text)).toMatchObject({ heartbeat: true });
+  });
+
+  test("a turn that has only just started is not read as finished", () => {
+    // Captured in the first half second of a turn, before the timer is drawn.
+    const starting = [
+      "✻ Cogitated for 3s · done 9:12 PM",
+      "❯ write a 300 word story about tortoises",
+      "✻ Schlepping…",
+      ...box,
+    ].join("\n");
+    expect(observeClaudePane(starting)).toMatchObject({ heartbeat: true });
+    // And while the answer streams, when no status line shows at all.
+    const streaming = [
+      "✻ Cogitated for 3s · done 9:12 PM",
+      "❯ write a 300 word story about tortoises",
+      "  Thought for 1s",
+      "⏺ The Slow Journey",
+      ...box,
+    ].join("\n");
+    expect(observeClaudePane(streaming)).toBeUndefined();
+  });
+
+  test("an instant escape puts the prompt back in the box, so done still counts", () => {
+    // Captured after escaping 0.3s into a turn: no echo above the box, and
+    // the prompt sits in the input box between the two rules.
+    const escaped = [
+      "✻ Cogitated for 7s · done 9:12 PM",
+      "──────────────────────────────────────── test ─",
+      "❯ write a 100 word poem",
+      "─────────────────────────────────────────────────",
+      "  ⏸ manual mode on",
+    ].join("\n");
+    expect(observeClaudePane(escaped)).toMatchObject({
+      activity: "idle",
+      ifActivity: ["working"],
+    });
   });
 
   test("a pane with no status line at all is no observation", () => {

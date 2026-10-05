@@ -65,9 +65,24 @@ export interface TmuxTerminalTarget {
   session: string;
 }
 
+/**
+ * The slot Daedalus's own terminal feature occupies. A fixed index rather than
+ * an append, so attaching a hundred times sets it once; high enough that the
+ * built-in entries and a user's `~/.tmux.conf` never reach it.
+ */
+const HYPERLINKS_FEATURE_INDEX = 99;
+
 export const tmuxPtyArguments = (target: TmuxTerminalTarget): string[] =>
   terminalArgs(
     target.socketName,
+    // xterm.js opens OSC 8 links, but tmux strips them unless the attaching
+    // terminal declares `hyperlinks`, and none of its defaults do. Set before
+    // the attach in the same command, the attaching client already has it.
+    "set-option",
+    "-s",
+    `terminal-features[${HYPERLINKS_FEATURE_INDEX}]`,
+    "xterm*:hyperlinks",
+    ";",
     "set-option",
     "-t",
     target.session,
@@ -248,6 +263,11 @@ export class CommandTmuxClient implements TmuxClient {
   async createSession(launch: TmuxLaunch): Promise<void> {
     await this.scrubServerEnvironment();
     const environment = Object.entries({
+      // Programs decide for themselves whether the terminal supports OSC 8
+      // links, and under tmux they guess no. Daedalus's terminal does (see
+      // `tmuxPtyArguments`), and Claude Code then sends a URL wrapped across
+      // rows as one link instead of rows of text no link detector can join.
+      FORCE_HYPERLINK: "1",
       ...launch.env,
       PWD: launch.cwd,
     }).flatMap(([key, value]) => ["-e", `${key}=${value}`]);

@@ -1061,6 +1061,12 @@ export interface DesktopRpcSchema {
       terminalClose: Request<{ id: string }, IntegratedTerminalDto>;
       openExternal: Request<{ url: string }, { opened: boolean }>;
       /**
+       * Puts text on the system clipboard. A terminal program copies by
+       * sending OSC 52, and the webview's own clipboard API refuses a write
+       * that does not come straight from a click, which this never does.
+       */
+      clipboardWrite: Request<{ text: string }, { written: boolean }>;
+      /**
        * Which window is asking: the main app, or the World on its own. Both
        * load the same page, and a `views://` URL carries no parameters, so a
        * page learns what to draw by asking.

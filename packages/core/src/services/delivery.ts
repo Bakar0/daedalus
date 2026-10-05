@@ -1,4 +1,5 @@
 import type { AgentActivityState, AgentSession } from "../domain";
+import { isBackgroundWait } from "./hook-events";
 
 /**
  * When Daedalus may type a line into a session the user may also be typing
@@ -127,7 +128,7 @@ export function activityAtPrompt(
     case "done":
       return true;
     case "working":
-      return /^Waiting for \d+ background agents?$/.test(activity.detail ?? "");
+      return isBackgroundWait(activity.detail);
     case "needs_input":
       // A badge the agent raised on itself, or Claude's idle notice: neither
       // is a question that a typed line would answer.

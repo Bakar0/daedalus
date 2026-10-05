@@ -118,8 +118,8 @@ hold:
    unknown, the pane decides (an input box and no "esc to interrupt"). For
    Claude, a `needs_input` badge with the input box showing does not count as
    a question: Claude draws a real question or permission dialog in place of
-   the box. Such a badge comes from Claude's idle notice or from one of the
-   session's background agents. The badge stays on the card.
+   the box. Such a badge comes from the agent's own `daedal attention` or
+   from one of the session's background agents. The badge stays on the card.
 3. Its input box is empty. Daedalus reads the pane with its escape codes just
    before typing and ignores dim text, which is a placeholder: Claude's
    suggested next prompt, or Codex's "Ask Codex to do anything".
@@ -181,5 +181,4 @@ and an urgent flag. Only the session calls `daedal routine report`.
   once, with `{{missed}}` set.
 - A run with no `routine done` before its timeout fails. After 3 failures in
   a row the session's card gets an attention badge.
-- Claude's idle notice, a minute after each turn, does not raise a badge on a
-  session holding routines.
+- A session holding routines ends each turn `idle`, not `done`.

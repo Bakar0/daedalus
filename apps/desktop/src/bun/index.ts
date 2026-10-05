@@ -418,6 +418,10 @@ const createRpc = (role: DesktopWindowRole = "main") =>
           openWorld: openWorldWindow,
           focusSession: focusMainSession,
         },
+        (text) => {
+          Utils.clipboardWriteText(text);
+          return true;
+        },
       ),
     },
   });

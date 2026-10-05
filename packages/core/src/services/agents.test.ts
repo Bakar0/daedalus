@@ -11,7 +11,18 @@ import {
   isMissingCodexConversationError,
   recoverCodexSessionId,
   reviveFailureReason,
+  DAEDALUS_STATUS_INSTRUCTIONS,
 } from "../index";
+
+/** What every launch adds so the agent knows how to report its state. */
+const CLAUDE_INSTRUCTIONS = [
+  "--append-system-prompt",
+  DAEDALUS_STATUS_INSTRUCTIONS,
+];
+const CODEX_INSTRUCTIONS = [
+  "-c",
+  `developer_instructions=${JSON.stringify(DAEDALUS_STATUS_INSTRUCTIONS)}`,
+];
 
 class FakeTmux implements TmuxClient {
   readonly sessions = new Set<string>();
@@ -214,6 +225,7 @@ describe("AgentService", () => {
           // So `daedal` can write its database from inside the sandbox.
           "--add-dir",
           home,
+          ...CODEX_INSTRUCTIONS,
           launchPrompt,
         ],
         cwd: agent.workingDirectory,
@@ -324,6 +336,7 @@ describe("AgentService", () => {
         // Spawned sessions start in Claude's auto permission mode.
         "--permission-mode",
         "auto",
+        ...CLAUDE_INSTRUCTIONS,
         "--settings",
         expect.stringContaining('"agent","event","Notification"'),
         "--session-id",
@@ -348,6 +361,7 @@ describe("AgentService", () => {
         "run",
         "--settings",
         expect.stringContaining('"agent","event","Notification"'),
+        ...CLAUDE_INSTRUCTIONS,
         "--model",
         "claude-fable-5-1[1m]",
         "--resume",
@@ -407,6 +421,7 @@ describe("AgentService", () => {
         "run",
         "--settings",
         expect.stringContaining('"agent","event","Notification"'),
+        ...CLAUDE_INSTRUCTIONS,
         "--model",
         "default",
         "--resume",
@@ -454,6 +469,7 @@ describe("AgentService", () => {
         "--no-alt-screen",
         "-c",
         "tui.disable_mouse_capture=true",
+        ...CODEX_INSTRUCTIONS,
       ]);
       context.close();
     });
@@ -500,6 +516,7 @@ describe("AgentService", () => {
         "--no-alt-screen",
         "-c",
         "tui.disable_mouse_capture=true",
+        ...CODEX_INSTRUCTIONS,
       ]);
       context.close();
     });
