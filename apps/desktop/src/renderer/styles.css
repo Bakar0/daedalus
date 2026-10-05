@@ -759,15 +759,12 @@ button:not(
   /* Room for the +, the one action always showing. */
   padding-right: 26px;
 }
-/* A long name is cut short, never the attention badge after it. */
+/* A long name is cut short with an ellipsis. */
 .workspace-group .workspace-card-name > span:first-child {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.workspace-group .workspace-attention-badge {
-  flex: none;
 }
 /* Terminal and archive come in on hover, to the left of the +. */
 .workspace-group .workspace-terminal-action,
