@@ -232,7 +232,7 @@ export interface SessionWorktree {
   landed?: boolean;
 }
 
-/** One file a session's worktree changed, against where it branched. */
+/** One file with uncommitted changes in a session's worktree. */
 export interface ChangedFile {
   /** Workspace-relative, so the editor can open it as any other file. */
   path: string;
@@ -246,11 +246,7 @@ export interface ChangedFile {
   deletions?: number;
 }
 
-/**
- * What one session worktree changed since it branched from its base:
- * commits and uncommitted work together, which is what a person following
- * an agent wants to read. Committing moves nothing here; only new work does.
- */
+/** One session worktree's `git status`: what is not committed yet. */
 export interface WorktreeChanges {
   sessionId: string;
   repositoryId: string;
@@ -258,7 +254,7 @@ export interface WorktreeChanges {
   branchName: string;
   /** The worktree's folder, workspace-relative. */
   root: string;
-  /** The commit the changes are measured from, or null when git could not say. */
+  /** HEAD, which the changes are measured from; null when git could not say. */
   base: string | null;
   files: ChangedFile[];
 }

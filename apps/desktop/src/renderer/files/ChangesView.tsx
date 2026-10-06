@@ -100,7 +100,7 @@ export function useWorktreeChanges(
 }
 
 /**
- * One worktree's changed files, as VS Code's Source Control lists them: name,
+ * One worktree's uncommitted files, as VS Code's Source Control lists them: name,
  * folder, line counts and a status letter. A click opens the diff as a
  * preview, a double-click keeps it, and the context menu opens the file.
  */
