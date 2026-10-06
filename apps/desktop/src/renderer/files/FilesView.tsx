@@ -9,7 +9,7 @@ import {
 } from "react";
 import type { WorkspaceFileEntryDto } from "@daedalus/protocol";
 import type { DesktopClient } from "../client-types";
-import type { EditorAreaHandle } from "./EditorArea";
+import type { DiffTarget, EditorAreaHandle } from "./EditorArea";
 import {
   clampExplorerWidth,
   EXPLORER_DEFAULT_WIDTH,
@@ -17,7 +17,6 @@ import {
   EXPLORER_MIN_WIDTH,
   EXPLORER_VIEWER_MIN_WIDTH,
 } from "./explorer-state";
-import { ChangesView } from "./ChangesView";
 import { FileTree, type FileTreeHandle } from "./FileTree";
 
 // Monaco and dockview are several megabytes the app needs only once someone
@@ -26,12 +25,14 @@ import { FileTree, type FileTreeHandle } from "./FileTree";
 const EditorArea = lazy(() => import("./EditorArea"));
 
 const PANEL_STEP = 24;
-const SIDEBAR_KEY = "daedalus.files.sidebar";
 
 export interface FileOpenRequest {
   path: string;
   line?: number;
   column?: number;
+  /** Open the file's changes as a diff instead of the file itself. */
+  diff?: DiffTarget;
+  pinned?: boolean;
   /** A fresh value per request, so the same file can be asked for twice. */
   nonce: number;
 }
@@ -55,8 +56,6 @@ export interface FilesViewProps {
   initialRoot?: WorkspaceFileEntryDto[];
   /** A file to open, from a terminal link; acted on when the nonce changes. */
   openRequest?: FileOpenRequest;
-  /** Session names by id, for the Changes view's headings. */
-  sessionNames: ReadonlyMap<string, string>;
   /** A journal heading the task timeline linked to; opened once, then cleared. */
   journalTarget?: string;
   onJournalTargetShown(): void;
@@ -70,7 +69,6 @@ export function FilesView({
   theme,
   initialRoot,
   openRequest,
-  sessionNames,
   journalTarget,
   onJournalTargetShown,
   onError,
@@ -78,16 +76,6 @@ export function FilesView({
 }: FilesViewProps) {
   const [width, setWidth] = useState(storedWidth);
   const [activePath, setActivePath] = useState<string>();
-  const [sidebar, setSidebar] = useState<"explorer" | "changes">(() => {
-    try {
-      return window.localStorage.getItem(SIDEBAR_KEY) === "changes"
-        ? "changes"
-        : "explorer";
-    } catch {
-      return "explorer";
-    }
-  });
-  const [changeCount, setChangeCount] = useState<number>();
   const browser = useRef<HTMLDivElement>(null);
   const tree = useRef<FileTreeHandle | null>(null);
   const editor = useRef<EditorAreaHandle | null>(null);
@@ -122,20 +110,18 @@ export function FilesView({
   }, []);
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(SIDEBAR_KEY, sidebar);
-    } catch {
-      // Which sidebar was open is a convenience.
-    }
-  }, [sidebar]);
-
-  useEffect(() => {
     if (!openRequest) return;
-    open(openRequest.path, {
-      pinned: true,
-      line: openRequest.line,
-      column: openRequest.column,
-    });
+    const { diff } = openRequest;
+    if (diff)
+      withEditor((handle) =>
+        handle.openDiff(diff, { pinned: openRequest.pinned ?? false }),
+      );
+    else
+      open(openRequest.path, {
+        pinned: openRequest.pinned ?? true,
+        line: openRequest.line,
+        column: openRequest.column,
+      });
     // Only a new request opens anything; the same one seen again does not.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openRequest?.nonce]);
@@ -189,34 +175,11 @@ export function FilesView({
     >
       <aside className="workspace-explorer">
         <div className="workspace-explorer-heading">
-          <div className="sidebar-switch" role="tablist">
-            <button
-              aria-selected={sidebar === "explorer"}
-              className={sidebar === "explorer" ? "active" : ""}
-              onClick={() => setSidebar("explorer")}
-              role="tab"
-              type="button"
-            >
-              Explorer
-            </button>
-            <button
-              aria-selected={sidebar === "changes"}
-              className={sidebar === "changes" ? "active" : ""}
-              onClick={() => setSidebar("changes")}
-              role="tab"
-              title="What each session's worktree changed since it branched"
-              type="button"
-            >
-              Changes
-              {changeCount ? (
-                <span className="sidebar-count">{changeCount}</span>
-              ) : null}
-            </button>
+          <div>
+            <span>Explorer</span>
+            <small>{workspace.name}</small>
           </div>
-          <div
-            className="workspace-explorer-actions"
-            hidden={sidebar !== "explorer"}
-          >
+          <div className="workspace-explorer-actions">
             <button
               aria-label="New file"
               onClick={() => tree.current?.newEntry("file")}
@@ -264,20 +227,7 @@ export function FilesView({
             </button>
           </div>
         </div>
-        {sidebar === "changes" && (
-          <ChangesView
-            client={client}
-            onCount={setChangeCount}
-            onOpenDiff={(target, options) =>
-              withEditor((handle) => handle.openDiff(target, options))
-            }
-            onOpenFile={(path) => open(path, { pinned: true })}
-            sessionNames={sessionNames}
-            workspaceId={workspace.id}
-          />
-        )}
         <FileTree
-          hidden={sidebar !== "explorer"}
           activePath={activePath}
           client={client}
           handleRef={tree}

@@ -4,6 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import {
   lazy,
+  Fragment,
   Suspense,
   useCallback,
   useEffect,
@@ -60,6 +61,12 @@ import { TaskCostLine, TaskTimeline } from "./TaskTimeline";
 import { TaskActionBar } from "./TaskActionBar";
 import { askConfirm, askText, DialogHost } from "./dialogs";
 import { type FileOpenRequest, FilesView } from "./files/FilesView";
+import {
+  ChangedFileList,
+  useWorktreeChanges,
+  worktreeKey,
+} from "./files/ChangesView";
+import type { DiffTarget } from "./files/EditorArea";
 import { MarkdownPreview } from "./markdown-preview";
 import { buildWorldModel, worldInputFromSnapshot } from "./world/world-model";
 import { TaskPriorityMenu, TaskStatusMenu } from "./TaskStatusMenu";
@@ -367,38 +374,6 @@ const elapsedLabel = (
   const remainder = minutes % 60;
   return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
 };
-
-function PanelCollapseButton({
-  collapsed,
-  label,
-  onClick,
-  side,
-}: {
-  collapsed: boolean;
-  label: string;
-  onClick: () => void;
-  side: "left" | "right";
-}) {
-  const direction = collapsed
-    ? side === "left"
-      ? "›"
-      : "‹"
-    : side === "left"
-      ? "‹"
-      : "›";
-  const action = collapsed ? "Expand" : "Collapse";
-  return (
-    <button
-      aria-label={`${action} ${label} panel`}
-      className="quiet panel-collapse-button"
-      onClick={onClick}
-      title={`${action} ${label}`}
-      type="button"
-    >
-      {direction}
-    </button>
-  );
-}
 
 /** A baton passing forward: the work continues with someone new. */
 function HandoffIcon() {
@@ -1844,6 +1819,14 @@ export function WorkspaceApp({
   const [boardDetailPanelWidth, setBoardDetailPanelWidth] = useState(() =>
     storedPanelSize("daedalus.panel.board-detail-width", 340),
   );
+  // The Workspace panel (repositories, worktrees and what each changed) sits
+  // on the right of every view about one workspace: board, files, session.
+  const workspacePanelVisible =
+    Boolean(workspaceId) &&
+    !showingAll &&
+    (view === "board" || view === "workspace" || view === "session");
+  const workspacePanelCollapsed =
+    boardDetailPanelWidth < PANEL_COMPACT_THRESHOLD;
   const boardDetailExpandedWidth = useRef(
     boardDetailPanelWidth >= PANEL_COMPACT_THRESHOLD
       ? boardDetailPanelWidth
@@ -1999,8 +1982,7 @@ export function WorkspaceApp({
       const workspaceWidth =
         shell.querySelector<HTMLElement>(".workspace-column")?.offsetWidth ??
         workspacePanelWidth;
-      // Only the board has a column on the right of the main one.
-      const hasSecondary = view === "board";
+      const hasSecondary = workspacePanelVisible;
       const secondaryWidth =
         shell.querySelector<HTMLElement>(".board-detail-column")?.offsetWidth ??
         boardDetailPanelWidth;
@@ -2046,7 +2028,7 @@ export function WorkspaceApp({
       window.addEventListener("pointerup", stop);
       window.addEventListener("pointercancel", stop);
     },
-    [boardDetailPanelWidth, view, workspacePanelWidth],
+    [boardDetailPanelWidth, workspacePanelVisible, workspacePanelWidth],
   );
 
   const toggleBoardDetailPanel = useCallback(() => {
@@ -2057,6 +2039,18 @@ export function WorkspaceApp({
       return PANEL_RAIL_WIDTH;
     });
   }, []);
+
+  // ⌥⌘B folds the workspace panel, the key VS Code gives its secondary side bar.
+  useEffect(() => {
+    if (!workspacePanelVisible) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (!event.metaKey || !event.altKey || event.code !== "KeyB") return;
+      event.preventDefault();
+      toggleBoardDetailPanel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [toggleBoardDetailPanel, workspacePanelVisible]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2409,7 +2403,7 @@ export function WorkspaceApp({
   // nothing when it is showing something else. A watcher is a kernel resource
   // and a tree nobody is looking at does not need to be fresh.
   useEffect(() => {
-    if (view !== "workspace" || !workspaceId) {
+    if (view === "world" || scope === "all" || !workspaceId) {
       void client.request.workspaceWatchSet({ workspaces: [] });
       return;
     }
@@ -2417,7 +2411,7 @@ export function WorkspaceApp({
     return () => {
       void client.request.workspaceWatchSet({ workspaces: [] });
     };
-  }, [client, view, workspaceId]);
+  }, [client, scope, view, workspaceId]);
 
   useEffect(() => {
     const stored = window.localStorage.getItem("daedalus.theme");
@@ -2539,6 +2533,14 @@ export function WorkspaceApp({
     (item) => item.archivedAt,
   );
   const workspace = activeWorkspaces.find((item) => item.id === workspaceId);
+  const worktreeChanges = useWorktreeChanges(
+    client,
+    workspacePanelVisible ? workspace?.id : undefined,
+  );
+  // Worktrees whose file list the user folded away in the panel.
+  const [foldedWorktrees, setFoldedWorktrees] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const workspaceReorder = useListReorder({
     ids: activeWorkspaces.map((item) => item.id),
     // The promise is returned, not discarded: it is what holds the dropped
@@ -3755,75 +3757,125 @@ export function WorkspaceApp({
                 (item) => item.id === worktree.sessionId,
               );
               const key = `push:${worktree.sessionId}:${worktree.repositoryId}`;
+              const changesKey = worktreeKey(
+                worktree.sessionId,
+                worktree.repositoryId,
+              );
+              const changes = worktreeChanges.get(changesKey);
+              const folded = foldedWorktrees.has(changesKey);
               return (
-                <div className="workspace-worktree-row" key={key}>
-                  <span>
-                    <strong>
-                      {session
-                        ? sessionName(session)
-                        : worktree.sessionId.slice(0, 8)}
-                    </strong>
-                    <small title={worktree.path}>{worktree.branchName}</small>
-                  </span>
-                  <span className="workspace-worktree-status">
-                    {gitStatusParts(worktree.gitStatus, worktree.landed).map(
-                      (part) => (
-                        <em
-                          className={`git-part tone-${part.tone}`}
-                          key={part.key}
-                          title={part.title}
-                        >
-                          {part.text}
-                        </em>
-                      ),
-                    )}
-                  </span>
-                  <button
-                    aria-label={`Open ${worktree.branchName} in integrated terminal`}
-                    className="quiet repository-action"
-                    disabled={!snapshot?.settings.tmuxAvailable}
-                    onClick={() =>
-                      void createIntegratedTerminal(workspace, {
-                        name: session ? sessionName(session) : repository.name,
-                        workingDirectory: worktree.path,
-                      })
-                    }
-                    title="Open a terminal in this working tree"
-                    type="button"
-                  >
-                    <TerminalIcon />
-                  </button>
-                  <button
-                    aria-label={`Push ${worktree.branchName}`}
-                    className={`quiet repository-action ${pendingRepositoryActions.has(key) ? "syncing" : ""}`}
-                    disabled={pendingRepositoryActions.has(key)}
-                    onClick={() => void pushSessionWorktree(worktree)}
-                    title={`Push ${worktree.branchName} to origin`}
-                    type="button"
-                  >
-                    <RepositoryPushIcon />
-                  </button>
-                  <button
-                    aria-label={`Remove ${worktree.branchName}`}
-                    className={`quiet repository-action ${pendingRepositoryActions.has(`remove:${worktree.sessionId}:${worktree.repositoryId}`) ? "syncing" : ""}`}
-                    disabled={pendingRepositoryActions.has(
-                      `remove:${worktree.sessionId}:${worktree.repositoryId}`,
-                    )}
-                    onClick={() =>
-                      setWorktreeAction({
-                        worktree,
-                        repositoryName: repository.name,
-                        sessionLabel: session
+                <Fragment key={key}>
+                  <div className="workspace-worktree-row">
+                    <button
+                      aria-expanded={changes ? !folded : undefined}
+                      aria-label={`${folded ? "Show" : "Hide"} changed files`}
+                      className="worktree-disclosure"
+                      disabled={!changes || changes.files.length === 0}
+                      onClick={() =>
+                        setFoldedWorktrees((current) => {
+                          const next = new Set(current);
+                          if (folded) next.delete(changesKey);
+                          else next.add(changesKey);
+                          return next;
+                        })
+                      }
+                      type="button"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`file-tree-twisty ${changes && changes.files.length > 0 && !folded ? "open" : ""}`}
+                      >
+                        {changes && changes.files.length > 0 ? "›" : ""}
+                      </span>
+                    </button>
+                    <span>
+                      <strong>
+                        {session
                           ? sessionName(session)
-                          : worktree.sessionId.slice(0, 8),
-                      })
-                    }
-                    title="Remove this working tree"
-                    type="button"
-                  >
-                    <DismissIcon />
-                  </button>
-                </div>
+                          : worktree.sessionId.slice(0, 8)}
+                      </strong>
+                      <small title={worktree.path}>{worktree.branchName}</small>
+                    </span>
+                    <span className="workspace-worktree-status">
+                      {changes && changes.files.length > 0 && (
+                        <em
+                          className="git-part tone-changes"
+                          title={`${changes.files.length} files changed since this branch left ${changes.base ? changes.base.slice(0, 8) : "its base"}`}
+                        >
+                          {changes.files.length}{" "}
+                          {changes.files.length === 1 ? "file" : "files"}
+                        </em>
+                      )}
+                      {gitStatusParts(worktree.gitStatus, worktree.landed).map(
+                        (part) => (
+                          <em
+                            className={`git-part tone-${part.tone}`}
+                            key={part.key}
+                            title={part.title}
+                          >
+                            {part.text}
+                          </em>
+                        ),
+                      )}
+                    </span>
+                    <button
+                      aria-label={`Open ${worktree.branchName} in integrated terminal`}
+                      className="quiet repository-action"
+                      disabled={!snapshot?.settings.tmuxAvailable}
+                      onClick={() =>
+                        void createIntegratedTerminal(workspace, {
+                          name: session
+                            ? sessionName(session)
+                            : repository.name,
+                          workingDirectory: worktree.path,
+                        })
+                      }
+                      title="Open a terminal in this working tree"
+                      type="button"
+                    >
+                      <TerminalIcon />
+                    </button>
+                    <button
+                      aria-label={`Push ${worktree.branchName}`}
+                      className={`quiet repository-action ${pendingRepositoryActions.has(key) ? "syncing" : ""}`}
+                      disabled={pendingRepositoryActions.has(key)}
+                      onClick={() => void pushSessionWorktree(worktree)}
+                      title={`Push ${worktree.branchName} to origin`}
+                      type="button"
+                    >
+                      <RepositoryPushIcon />
+                    </button>
+                    <button
+                      aria-label={`Remove ${worktree.branchName}`}
+                      className={`quiet repository-action ${pendingRepositoryActions.has(`remove:${worktree.sessionId}:${worktree.repositoryId}`) ? "syncing" : ""}`}
+                      disabled={pendingRepositoryActions.has(
+                        `remove:${worktree.sessionId}:${worktree.repositoryId}`,
+                      )}
+                      onClick={() =>
+                        setWorktreeAction({
+                          worktree,
+                          repositoryName: repository.name,
+                          sessionLabel: session
+                            ? sessionName(session)
+                            : worktree.sessionId.slice(0, 8),
+                        })
+                      }
+                      title="Remove this working tree"
+                      type="button"
+                    >
+                      <DismissIcon />
+                    </button>
+                  </div>
+                  {changes && changes.files.length > 0 && !folded && (
+                    <ChangedFileList
+                      onOpenDiff={(target, options) =>
+                        openFromPanel({ ...options, diff: target })
+                      }
+                      onOpenFile={(path) => openFromPanel({ path })}
+                      tree={changes}
+                    />
+                  )}
+                </Fragment>
               );
             })}
       </div>
@@ -3856,6 +3908,71 @@ export function WorkspaceApp({
       )}
     </div>
   );
+
+  // The panel folded to a rail still says something: each repository by its
+  // initials and state, and under it one chip per worktree with how many
+  // files it changed. Any of it opens the panel.
+  const workspaceRail = repositoriesReady ? (
+    <button
+      aria-label="Expand workspace panel"
+      className="workspace-rail"
+      onClick={toggleBoardDetailPanel}
+      type="button"
+    >
+      {workspaceContent.repositories.map((repository) => (
+        <span className="rail-repository" key={repository.id}>
+          <span
+            className={`rail-avatar repository-status-${repository.gitStatus?.state ?? "unavailable"}`}
+            title={`${repository.name} · ${repositoryStatusText(repository.gitStatus)}`}
+          >
+            {repository.name.slice(0, 2)}
+            <i aria-hidden="true" />
+          </span>
+          {workspaceContent.worktrees
+            .filter((item) => item.repositoryId === repository.id)
+            .map((worktree) => {
+              const count =
+                worktreeChanges.get(
+                  worktreeKey(worktree.sessionId, worktree.repositoryId),
+                )?.files.length ?? 0;
+              const session = workspaceSessions.find(
+                (item) => item.id === worktree.sessionId,
+              );
+              const label = session
+                ? sessionName(session)
+                : worktree.branchName;
+              return (
+                <span
+                  className={`rail-worktree ${count > 0 ? "changed" : ""}`}
+                  key={`${worktree.sessionId}:${worktree.repositoryId}`}
+                  title={`${label} · ${count} ${count === 1 ? "file" : "files"} changed`}
+                >
+                  {count > 0 ? count : "·"}
+                </span>
+              );
+            })}
+        </span>
+      ))}
+      <span className="rail-label">Workspace</span>
+    </button>
+  ) : null;
+
+  /** A file or a diff from the panel opens in the Workspace view's editor. */
+  function openFromPanel(request: {
+    path?: string;
+    diff?: DiffTarget;
+    pinned?: boolean;
+  }) {
+    const path = request.diff?.path ?? request.path;
+    if (!path) return;
+    if (view !== "workspace") setView("workspace");
+    setFileOpenRequest({
+      path,
+      diff: request.diff,
+      pinned: request.pinned,
+      nonce: Date.now(),
+    });
+  }
 
   function closeTaskDrawer() {
     setSelectedTaskId(undefined);
@@ -4676,7 +4793,9 @@ export function WorkspaceApp({
         )}
       </div>
 
-      <div className={`workspace-shell mode-${view}`}>
+      <div
+        className={`workspace-shell mode-${view} ${workspacePanelVisible ? "has-workspace-panel" : ""}`}
+      >
         <aside className="workspace-column" ref={workspaceColumnRef}>
           <div className="section-heading workspace-column-heading">
             <div className="workspace-column-title">
@@ -5009,14 +5128,6 @@ export function WorkspaceApp({
                   <FilesView
                     client={client}
                     openRequest={fileOpenRequest}
-                    sessionNames={
-                      new Map(
-                        workspaceSessions.map((item) => [
-                          item.id,
-                          sessionName(item),
-                        ]),
-                      )
-                    }
                     initialRoot={workspaceContent.files}
                     key={workspace.id}
                     onError={setError}
@@ -5056,9 +5167,9 @@ export function WorkspaceApp({
           </section>
         )}
 
-        {workspace && view === "board" && !showingAll && (
+        {workspace && workspacePanelVisible && (
           <div
-            aria-label="Resize task inspector panel"
+            aria-label="Resize repositories panel"
             aria-orientation="vertical"
             aria-valuemax={720}
             aria-valuemin={PANEL_RAIL_WIDTH}
@@ -5078,14 +5189,38 @@ export function WorkspaceApp({
             onPointerDown={(event) => startColumnResize(event, "secondary")}
             role="separator"
             tabIndex={0}
-          />
+          >
+            {/* The panel's edge is its handle: drag to resize, click the tab
+                to fold it to a rail and back. */}
+            <button
+              aria-expanded={!workspacePanelCollapsed}
+              aria-label={
+                workspacePanelCollapsed
+                  ? "Expand workspace panel"
+                  : "Collapse workspace panel"
+              }
+              className="panel-edge-toggle"
+              onClick={toggleBoardDetailPanel}
+              onDoubleClick={(event) => event.stopPropagation()}
+              onPointerDown={(event) => event.stopPropagation()}
+              title={`${workspacePanelCollapsed ? "Expand" : "Collapse"} workspace panel (⌥⌘B)`}
+              type="button"
+            >
+              <svg aria-hidden="true" viewBox="0 0 8 14">
+                <path
+                  d={workspacePanelCollapsed ? "M6 1 1 7l5 6" : "M2 1l5 6-5 6"}
+                />
+              </svg>
+            </button>
+          </div>
         )}
 
         {/* The column is one workspace's repositories, so with every
             workspace showing there is none; the board takes the width. */}
-        {view === "board" && workspace && !showingAll && (
+        {workspacePanelVisible && workspace && (
           <aside
-            className={`board-detail-column ${boardDetailPanelWidth < PANEL_COMPACT_THRESHOLD ? "panel-compact" : ""}`}
+            aria-label="Workspace panel"
+            className={`board-detail-column ${workspacePanelCollapsed ? "panel-compact" : ""}`}
           >
             <div className="section-heading">
               <div>
@@ -5121,15 +5256,9 @@ export function WorkspaceApp({
                 >
                   + Add
                 </button>
-                <PanelCollapseButton
-                  collapsed={boardDetailPanelWidth < PANEL_COMPACT_THRESHOLD}
-                  label="workspace"
-                  onClick={toggleBoardDetailPanel}
-                  side="right"
-                />
               </div>
             </div>
-            {workspaceRepositories}
+            {workspacePanelCollapsed ? workspaceRail : workspaceRepositories}
           </aside>
         )}
 

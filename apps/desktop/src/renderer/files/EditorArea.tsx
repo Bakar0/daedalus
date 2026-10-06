@@ -338,11 +338,24 @@ export default function EditorArea({
     [place],
   );
 
+  // A request that arrives before dockview is ready (the editor chunk has
+  // just loaded because a link or the workspace panel asked for a file) waits
+  // here and runs once the layout is restored.
+  const pending = useRef<Array<() => void>>([]);
+  // What the last `onReady` ran. React's development StrictMode mounts
+  // dockview twice and hands over a second instance; replaying these on it
+  // keeps the request from landing on the instance that was thrown away.
+  const delivered = useRef<Array<() => void>>([]);
+  const whenReady = useCallback((request: () => void) => {
+    if (apiRef.current) request();
+    else pending.current.push(request);
+  }, []);
+
   useImperativeHandle(
     handleRef,
     () => ({
-      open,
-      openDiff,
+      open: (path, options) => whenReady(() => open(path, options)),
+      openDiff: (target, options) => whenReady(() => openDiff(target, options)),
       moved(from, to) {
         const api = apiRef.current;
         for (const doc of documentsIn(workspaceId)) {
@@ -379,7 +392,7 @@ export default function EditorArea({
         }
       },
     }),
-    [client, open, openDiff, workspaceId],
+    [client, open, openDiff, whenReady, workspaceId],
   );
 
   // Files changed on disk: a clean document takes the new content, a deleted
@@ -457,7 +470,11 @@ export default function EditorArea({
       } catch {
         api.clear();
       }
-      if (!restored) open("BRIEF.md", { pinned: true });
+      const queued = pending.current.splice(0);
+      const waiting = queued.length > 0 ? queued : delivered.current;
+      delivered.current = waiting;
+      if (!restored && waiting.length === 0) open("BRIEF.md", { pinned: true });
+      for (const request of waiting) request();
       const persist = () => {
         try {
           window.localStorage.setItem(

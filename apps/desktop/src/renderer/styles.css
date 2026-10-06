@@ -2840,7 +2840,7 @@ dd {
   font-size: 9px;
   font-style: italic;
 }
-.workspace-worktree-row > span:first-child {
+.workspace-worktree-row > span:first-of-type {
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -3799,32 +3799,189 @@ dd {
   padding: 0 !important;
   width: 28px;
 }
+/* Folded, the panel is a rail that still reports: repositories by their
+   initials and state, and a chip per worktree with its changed-file count. */
 .board-detail-column.panel-compact {
-  align-items: center;
-  padding: 18px 7px;
+  padding: 12px 0;
 }
-.board-detail-column.panel-compact > :not(.section-heading) {
+.board-detail-column.panel-compact > .section-heading {
   display: none;
 }
-.board-detail-column.panel-compact .section-heading {
-  justify-content: center;
+.workspace-rail {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  cursor: pointer;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 4px 0 !important;
   width: 100%;
 }
-.board-detail-column.panel-compact .section-heading > div:first-child,
-.board-detail-column.panel-compact
-  .panel-heading-actions
-  > :not(.panel-collapse-button) {
-  display: none;
+.workspace-rail:hover .rail-label {
+  color: var(--text);
 }
-.board-detail-column.panel-compact::before {
+.rail-repository {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.rail-avatar {
+  align-items: center;
+  background: var(--raised);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  color: var(--text);
+  display: flex;
+  font-size: 11px;
+  font-weight: 650;
+  height: 30px;
+  justify-content: center;
+  position: relative;
+  text-transform: lowercase;
+  width: 30px;
+}
+.rail-avatar i {
+  background: var(--muted);
+  border: 2px solid var(--overlay);
+  border-radius: 50%;
+  bottom: -3px;
+  height: 9px;
+  position: absolute;
+  right: -3px;
+  width: 9px;
+}
+.rail-avatar.repository-status-clean i {
+  background: var(--success);
+}
+.rail-avatar.repository-status-modified i,
+.rail-avatar.repository-status-behind i,
+.rail-avatar.repository-status-diverged i {
+  background: #eab66f;
+}
+.rail-avatar.repository-status-ahead i {
+  background: var(--accent);
+}
+.rail-worktree {
+  border: 1px solid var(--line);
+  border-radius: 9px;
   color: var(--muted);
-  content: "Workspace";
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  min-width: 24px;
+  padding: 1px 6px;
+  text-align: center;
+}
+.rail-worktree.changed {
+  background: rgb(226 192 141 / 0.12);
+  border-color: rgb(226 192 141 / 0.35);
+  color: #e2c08d;
+}
+.rail-label {
+  color: var(--muted);
   font-size: 10px;
   font-weight: 650;
   letter-spacing: 0.12em;
+  margin-top: auto;
   text-transform: uppercase;
   writing-mode: vertical-rl;
 }
+
+/* The panel's left edge is its control. The tab sits on the divider, faint
+   at rest and solid when the edge is hovered; clicking folds or unfolds,
+   and dragging anywhere else on the edge resizes. */
+.panel-edge-toggle {
+  align-items: center;
+  background: var(--overlay, #141a2a) !important;
+  border: 1px solid var(--line-strong) !important;
+  border-radius: 7px !important;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
+  color: var(--muted) !important;
+  cursor: pointer;
+  display: flex;
+  height: 44px;
+  justify-content: center;
+  left: 50%;
+  opacity: 0.55;
+  padding: 0 !important;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  transition:
+    opacity 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+  width: 14px;
+  z-index: 6;
+}
+.panel-edge-toggle svg {
+  fill: none;
+  height: 12px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+  width: 7px;
+}
+.secondary-panel-resize-handle:hover .panel-edge-toggle,
+.panel-edge-toggle:focus-visible {
+  border-color: var(--accent) !important;
+  color: var(--text) !important;
+  opacity: 1;
+}
+
+.worktree-disclosure {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  display: flex;
+  flex: 0 0 12px;
+  height: 16px;
+  justify-content: center;
+  padding: 0 !important;
+}
+.worktree-disclosure:disabled {
+  cursor: default;
+}
+.git-part.tone-changes {
+  color: #e2c08d;
+}
+.board-detail-column .changes-list {
+  margin: 0 0 6px 18px;
+}
+.board-detail-column .changes-file {
+  border-radius: 4px;
+  font-size: 11px;
+  height: 21px;
+  padding: 0 6px 0 10px;
+}
+.board-detail-column .changes-empty {
+  font-size: 10px;
+  margin: 2px 0 6px 28px;
+}
+
+/* Session and file views get the workspace panel too (#50). */
+.workspace-shell.has-workspace-panel.mode-session,
+.workspace-shell.has-workspace-panel.mode-workspace {
+  grid-template-columns:
+    var(--workspace-panel-width) 6px minmax(320px, 1fr) 6px
+    var(--board-detail-panel-width);
+}
+/* The panel comes before the session's terminal in the markup; dense
+   placement puts the terminal back in the first row, beside it. */
+.workspace-shell.has-workspace-panel {
+  grid-auto-flow: dense;
+}
+.workspace-shell.has-workspace-panel .workspace-content-column,
+.workspace-shell.has-workspace-panel.mode-session .terminal-column {
+  grid-column: 3;
+}
+
 .modal-wide {
   max-height: calc(100% - 64px);
   max-width: 700px;
@@ -6169,43 +6326,6 @@ dd {
   color: var(--muted);
 }
 
-/* Explorer and Changes share the explorer column, switched at its top (#50). */
-.workspace-explorer-heading > div.sidebar-switch {
-  display: flex;
-  gap: 6px;
-}
-.sidebar-switch button {
-  align-items: center;
-  background: transparent !important;
-  border: 0 !important;
-  border-bottom: 1px solid transparent !important;
-  border-radius: 0 !important;
-  color: var(--muted) !important;
-  display: flex;
-  font-size: 10px !important;
-  font-weight: 650;
-  gap: 5px;
-  letter-spacing: 0.09em;
-  padding: 2px 4px !important;
-  text-transform: uppercase;
-}
-.sidebar-switch button.active {
-  border-bottom-color: var(--accent) !important;
-  color: var(--text) !important;
-}
-.sidebar-count {
-  background: var(--accent);
-  border-radius: 8px;
-  color: #fff;
-  font-size: 9px;
-  letter-spacing: 0;
-  line-height: 1;
-  padding: 2px 5px;
-}
-.workspace-explorer-actions[hidden] {
-  display: none;
-}
-
 .changes-view {
   flex: 1 1 0;
   min-height: 120px;
@@ -6331,7 +6451,4 @@ dd {
 }
 .file-tab-name small {
   color: var(--muted);
-}
-.file-tree[hidden] {
-  display: none;
 }

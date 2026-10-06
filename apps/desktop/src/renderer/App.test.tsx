@@ -1639,10 +1639,11 @@ describe("desktop application shell", () => {
     expect(html).toContain("22222222 · started");
     expect(html).toContain("Terminal for Terminal task 11111111");
     expect(html).toContain("mode-session");
-    // The terminal takes the main column: no Sessions column beside it.
+    // The terminal takes the main column, with the workspace panel (its
+    // repositories and what each worktree changed) beside it (#50).
     expect(html).not.toContain("workspace-main");
-    expect(html).not.toContain("secondary-panel-resize-handle");
-    expect(html).not.toContain("board-detail-column");
+    expect(html).toContain("has-workspace-panel");
+    expect(html).toContain('aria-label="Workspace panel"');
   });
 
   test("renders free terminals with lifecycle timestamps in their tooltip", () => {
@@ -1948,7 +1949,8 @@ describe("desktop application shell", () => {
     expect(html).toContain("<small>/tmp/demo</small>");
     expect(html).toContain('aria-label="Resize integrated terminal"');
     expect(html).toContain('aria-label="Resize workspace panel"');
-    expect(html).toContain('aria-label="Resize task inspector panel"');
+    expect(html).toContain('aria-label="Resize repositories panel"');
+    expect(html).toContain('aria-label="Collapse workspace panel"');
     expect(html).toContain("Terminal for Demo 55555555");
     expect(html).toContain('aria-label="New terminal in Daedalus home"');
     expect(html).toContain('title="New terminal in /tmp/daedalus-test"');
