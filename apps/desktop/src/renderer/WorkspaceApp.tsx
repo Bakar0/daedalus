@@ -868,9 +868,15 @@ function Modal({
   onClose,
   wide = false,
   dismissible = true,
+  closeButton = false,
   children,
 }: {
   children: React.ReactNode;
+  /**
+   * A Close button in the header, for a dialog with no Cancel of its own.
+   * A dialog that has Cancel shows only that, as macOS sheets do.
+   */
+  closeButton?: boolean;
   dismissible?: boolean;
   onClose: () => void;
   title: string;
@@ -920,9 +926,11 @@ function Modal({
             <span className="eyebrow">Daedalus</span>
             <h2>{title}</h2>
           </div>
-          <button className="quiet" disabled={!dismissible} onClick={onClose}>
-            Close
-          </button>
+          {closeButton && (
+            <button className="quiet" disabled={!dismissible} onClick={onClose}>
+              Close
+            </button>
+          )}
         </div>
         {children}
       </section>
@@ -1729,11 +1737,7 @@ export function WorkspaceApp({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [theme, setTheme] = useState<"dark" | "light">("dark");
-  const [workspaceForm, setWorkspaceForm] = useState({
-    name: "",
-    slug: "",
-    path: "",
-  });
+  const [workspaceForm, setWorkspaceForm] = useState({ name: "" });
   const [taskForm, setTaskForm] = useState({ title: "", description: "" });
   const [sessionType, setSessionType] = useState("codex");
   const [sessionModel, setSessionModel] = useState("");
@@ -3220,14 +3224,12 @@ export function WorkspaceApp({
     const created = await perform(
       client.request.workspaceCreate({
         name: workspaceForm.name,
-        slug: workspaceForm.slug || undefined,
-        path: workspaceForm.path || undefined,
       }),
     );
     if (created) {
       setScope("workspace");
       setWorkspaceId(created.id);
-      setWorkspaceForm({ name: "", slug: "", path: "" });
+      setWorkspaceForm({ name: "" });
       setModal(undefined);
     }
   }
@@ -4606,7 +4608,7 @@ export function WorkspaceApp({
   const renderArchivedRow = (row: {
     id: string;
     name: string;
-    detail: string;
+    detail?: string;
     archivedAt: string;
     restoreLabel: string;
     disabled?: boolean;
@@ -4617,7 +4619,7 @@ export function WorkspaceApp({
       <span className="archived-item-text" title={row.name}>
         <strong>{row.name}</strong>
         <small>
-          {row.detail} ·{" "}
+          {row.detail && `${row.detail} · `}
           <time dateTime={row.archivedAt}>
             {new Date(row.archivedAt).toLocaleDateString()}
           </time>
@@ -5347,11 +5349,8 @@ export function WorkspaceApp({
                         <strong className="workspace-card-name">
                           <span>{item.name}</span>
                         </strong>
-                        {/* The slug is in the main header; the card only
-                            speaks up when the folder is gone. */}
-                        {!item.available && (
-                          <small>{item.slug} · folder missing</small>
-                        )}
+                        {/* The card only speaks up when the folder is gone. */}
+                        {!item.available && <small>folder missing</small>}
                         <span
                           aria-label={insightLabel}
                           className="workspace-session-insights"
@@ -5461,7 +5460,6 @@ export function WorkspaceApp({
                   renderArchivedRow({
                     id: item.id,
                     name: item.name,
-                    detail: item.slug,
                     archivedAt: item.archivedAt!,
                     restoreLabel: "Restore",
                     onRestore: () => void restoreWorkspace(item),
@@ -5504,7 +5502,9 @@ export function WorkspaceApp({
                 <span className="eyebrow">
                   {(showingAll || view === "world") && workspace
                     ? `${activeWorkspaces.length} ${activeWorkspaces.length === 1 ? "workspace" : "workspaces"}`
-                    : (workspace?.slug ?? "Select a workspace")}
+                    : workspace
+                      ? "Workspace"
+                      : "Select a workspace"}
                 </span>
                 <h1>
                   {(showingAll || view === "world") && workspace
@@ -6098,32 +6098,6 @@ export function WorkspaceApp({
                 placeholder="My project"
               />
             </label>
-            <label>
-              Slug <small>optional</small>
-              <input
-                value={workspaceForm.slug}
-                onChange={(event) =>
-                  setWorkspaceForm({
-                    ...workspaceForm,
-                    slug: event.target.value,
-                  })
-                }
-                placeholder="my-project"
-              />
-            </label>
-            <label>
-              Custom path <small>optional</small>
-              <input
-                value={workspaceForm.path}
-                onChange={(event) =>
-                  setWorkspaceForm({
-                    ...workspaceForm,
-                    path: event.target.value,
-                  })
-                }
-                placeholder={snapshot?.settings.workspaceRoot}
-              />
-            </label>
             <div className="modal-actions">
               <button
                 className="quiet"
@@ -6591,6 +6565,7 @@ export function WorkspaceApp({
             if (appUpdate?.state === "current" || appUpdate?.state === "error")
               dismissUpdate();
           }}
+          closeButton
           title="Settings"
           wide
         >
