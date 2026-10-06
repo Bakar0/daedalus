@@ -962,6 +962,45 @@ describe("reboot recovery", () => {
     });
   });
 
+  test("archives a Codex session whose rollout Codex left empty", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const codexHome = join(home, "codex");
+      const codex = await codexRecorder(home);
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { codex: { executable: codex.path, args: [] } },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home, CODEX_HOME: codexHome },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Empty" });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      const nativeId = "8ceaa092-b66b-4dc9-8b5d-a2e7cd40ae7b";
+      const [year, month, day] = session.startedAt.slice(0, 10).split("-");
+      const directory = join(codexHome, "sessions", year!, month!, day!);
+      await mkdir(directory, { recursive: true });
+      await Bun.write(join(directory, `rollout-${nativeId}.jsonl`), "");
+      context.repositories.updateAgent({
+        ...session,
+        providerSessionId: nativeId,
+      });
+
+      const archived = await context.agents.archive(session.id);
+
+      expect(archived.archivedAt).not.toBeNull();
+      // Codex answers "failed to archive session" for a thread it never kept.
+      expect(await codex.invocations()).not.toContain(`archive ${nativeId}`);
+      context.close();
+    });
+  });
+
   test("keeps a Codex session running when no Codex can archive it", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const codexHome = join(home, "codex");

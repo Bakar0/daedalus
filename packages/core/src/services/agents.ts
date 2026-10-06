@@ -382,23 +382,39 @@ export async function hasPersistedCodexSession(input: {
         .toISOString()
         .slice(0, 10)
         .split("-");
-      try {
-        const entries = await readdir(
+      if (
+        await hasCodexRollout(
           join(input.sessionsDirectory, year!, month!, day!),
-        );
-        if (entries.some((entry) => entry.endsWith(`${input.id}.jsonl`)))
-          return true;
-      } catch {
-        // Missing date directories are expected.
-      }
+          input.id,
+        )
+      )
+        return true;
     }
   }
+  return hasCodexRollout(join(codexHome, "archived_sessions"), input.id);
+}
+
+/**
+ * An empty rollout is a conversation Codex opened and never wrote to. Codex
+ * keeps no thread for it, so `codex archive` fails with "failed to archive
+ * session", and there is nothing in it to resume.
+ */
+async function hasCodexRollout(directory: string, id: string) {
+  let entries: string[];
   try {
-    const entries = await readdir(join(codexHome, "archived_sessions"));
-    return entries.some((entry) => entry.endsWith(`${input.id}.jsonl`));
+    entries = await readdir(directory);
   } catch {
+    // Missing date directories are expected.
     return false;
   }
+  for (const entry of entries) {
+    if (!entry.endsWith(`${id}.jsonl`)) continue;
+    const size = await stat(join(directory, entry))
+      .then((file) => file.size)
+      .catch(() => 0);
+    if (size > 0) return true;
+  }
+  return false;
 }
 
 /**
