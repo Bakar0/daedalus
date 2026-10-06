@@ -1044,16 +1044,19 @@ describe("desktop application shell", () => {
     expect(html).not.toContain("Select a task");
     expect(html).toContain("main ·");
     expect(html).toContain("↓2 behind");
+    // Fetch only downloads; Pull also moves the checkout to the latest base.
     expect(html).toContain('aria-label="Fetch daedalus"');
-    // Fetching moves the checkout too, so there is no separate pull.
-    expect(html).not.toContain('aria-label="Pull daedalus"');
+    expect(html).toContain('aria-label="Pull daedalus"');
+    expect(html).toContain('aria-label="Fetch all repositories"');
+    expect(html).toContain('aria-label="Pull all repositories"');
     expect(html).toContain('aria-label="Add repository"');
     // The working tree is nested under the repository it was cut from, and
     // carries the branch it is on rather than only the session's name.
     expect(html).toContain("workspace-repository-group");
     expect(html).toContain("workspace-worktree-row");
     expect(html).toContain("daedalus/demo/task/session");
-    expect(html).toContain('aria-label="Push daedalus/demo/task/session"');
+    // The agent pushes its own branch; the panel offers no Push.
+    expect(html).not.toContain('aria-label="Push daedalus/demo/task/session"');
     expect(column).toContain("workspace-repository-group");
   });
 

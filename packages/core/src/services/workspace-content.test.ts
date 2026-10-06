@@ -1933,6 +1933,39 @@ Before working in this workspace:
       });
     });
 
+    test("fetch only downloads; pull also moves the checkout", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const source = join(home, "source", "product");
+        await createRepository(source);
+        const context = await createApplicationContext({
+          env: { DAEDALUS_HOME: home },
+          reconcile: false,
+        });
+        const workspace = await context.workspaces.create({ name: "Pull" });
+        const attached = await context.workspaceContent.addAndAttachRepository({
+          workspace: workspace.id,
+          remoteUrl: source,
+        });
+        const checkout = attached.referencePath!;
+        const before = await git(["-C", checkout, "rev-parse", "HEAD"]);
+        await commitIn(source, "LATER.md");
+        const latest = await git(["-C", source, "rev-parse", "HEAD"]);
+
+        const fetched = await context.workspaceContent.fetchRepository(
+          attached.id,
+          { pull: false },
+        );
+        expect(await git(["-C", checkout, "rev-parse", "HEAD"])).toBe(before);
+        expect(fetched.gitStatus?.behind).toBe(1);
+
+        await context.workspaceContent.fetchRepository(attached.id, {
+          pull: true,
+        });
+        expect(await git(["-C", checkout, "rev-parse", "HEAD"])).toBe(latest);
+        context.close();
+      });
+    });
+
     test("names a task's branch after the task, and follows a branch the agent switched to", async () => {
       await withTemporaryDaedalusHome(async (home) => {
         const source = join(home, "source", "product");

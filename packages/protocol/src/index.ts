@@ -994,7 +994,12 @@ export interface DesktopRpcSchema {
        * what each checkout took.
        */
       workspaceRepositoriesFetch: Request<
-        { workspace: string; ids?: string[] },
+        {
+          workspace: string;
+          ids?: string[];
+          /** Also move each checkout to the latest base branch (default). */
+          pull?: boolean;
+        },
         RepositoryFetchOutcomeDto[]
       >;
       /**

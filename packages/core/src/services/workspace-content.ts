@@ -1664,6 +1664,7 @@ export class WorkspaceContentService {
   private async refreshRepository(
     repository: RepositoryLibraryEntry,
     persist = true,
+    follow = true,
   ): Promise<RepositoryLibraryEntry> {
     const git = findExecutable("git");
     if (!git)
@@ -1735,7 +1736,7 @@ export class WorkspaceContentService {
     );
     if (persist) {
       this.repositories.updateRepositoryLibraryEntry(refreshed);
-      await this.followRemote(refreshed);
+      if (follow) await this.followRemote(refreshed);
     }
     return refreshed;
   }
@@ -1828,7 +1829,15 @@ export class WorkspaceContentService {
   // Fetch updates the shared clone every workspace and worktree resolves
   // against, so it is what makes "behind 3" true again without touching a
   // single working tree.
-  async fetchRepository(id: string): Promise<WorkspaceRepository> {
+  /**
+   * `pull: false` only fetches: the remote-tracking refs move and the row can
+   * say "behind 3", but no checkout under `repos/` changes. The default also
+   * moves every checkout of the clone to the latest base branch.
+   */
+  async fetchRepository(
+    id: string,
+    options: { pull?: boolean } = {},
+  ): Promise<WorkspaceRepository> {
     const repository = this.repositories.findWorkspaceRepository(id);
     if (!repository)
       throw new DaedalusError(
@@ -1849,7 +1858,11 @@ export class WorkspaceContentService {
         "NOT_FOUND",
         "The shared repository clone is no longer available",
       );
-    const refreshed = await this.refreshRepository(libraryRepository);
+    const refreshed = await this.refreshRepository(
+      libraryRepository,
+      true,
+      options.pull ?? true,
+    );
     // Read again: the fetch may have moved this checkout and recorded it.
     const updated: WorkspaceRepository = {
       ...(this.repositories.findWorkspaceRepository(repository.id) ??
@@ -1869,6 +1882,8 @@ export class WorkspaceContentService {
   async fetchRepositories(input: {
     workspace: string;
     ids?: string[];
+    /** Also move each checkout to the latest base branch; true unless false. */
+    pull?: boolean;
   }): Promise<RepositoryFetchOutcome[]> {
     const workspace = await this.workspaces.get(input.workspace);
     const wanted = input.ids ? new Set(input.ids) : undefined;
@@ -1900,7 +1915,9 @@ export class WorkspaceContentService {
         };
         let fetched: WorkspaceRepository;
         try {
-          fetched = await this.fetchRepository(repository.id);
+          fetched = await this.fetchRepository(repository.id, {
+            pull: input.pull ?? true,
+          });
         } catch (error) {
           return { ...outcome, error: normalizeError(error).message };
         }

@@ -424,6 +424,8 @@ daedal repo library add <url-or-absolute-path> [--name <name>]
 daedal repo list --workspace <workspace>
 daedal repo attach --workspace <workspace> --repository <library-id>
 daedal repo sync <attachment-id>
+daedal repo fetch <attachment-id>
+daedal repo pull <attachment-id>
 daedal repo detach <attachment-id>
 daedal repo worktree create --session <agent-id> --repository <name-or-id>
 daedal repo worktree open --session <agent-id> --repository <name-or-id>
@@ -435,9 +437,9 @@ Library entries are bare clones shared across workspaces. `library add` accepts
 a remote URL or full local path and refreshes an existing entry with the same
 remote. `attach` fetches the library entry and creates a read-only planning
 checkout under the workspace's `repos/` directory. Every fetch of a library
-entry, including `repo fetch` and the one `worktree create` makes, moves each
-workspace checkout of it to the fetched tip by fast-forward, unless the
-checkout has local changes. `sync` does the same for one checkout and reports
+entry by `repo pull`, or the one `worktree create` makes, moves each workspace
+checkout of it to the fetched tip by fast-forward, unless the checkout has
+local changes; `repo fetch` only downloads and moves nothing. `sync` does the same for one checkout and reports
 why when it cannot. `detach` refuses while session worktrees depend on the
 attachment.
 

@@ -76,10 +76,11 @@ Failure to fetch or resolve the remote default branch fails the attachment
 rather than silently using stale code. The attachment records the branch,
 commit, and fetch timestamp.
 
-The checkout follows the remote. Every fetch of the library clone, whether from
-the fetch button, `daedal repo fetch`, or a new session worktree, moves every
+The checkout follows the remote when asked. A pull of the library clone, from
+the panel's Pull, `daedal repo pull`, or a new session worktree, moves every
 workspace checkout of that clone to the fetched tip by fast-forward and
-records the new commit. It is checked out by name, so `git status` and
+records the new commit. A plain fetch (the panel's Fetch, `daedal repo fetch`)
+only downloads: the row learns how far behind it is and no checkout moves. It is checked out by name, so `git status` and
 `git branch` there read `HEAD detached at origin/main`. A checkout with local
 changes, or one that has somehow diverged, stays where it is and reports how
 far behind it is; `daedal repo sync` then says why. The checkout stays
@@ -87,7 +88,7 @@ detached because git allows a branch in only one working tree at a time, and
 one library clone can be attached to many workspaces.
 
 This is the place to run the latest merged code: open a terminal in
-`<workspace>/repos/<repository-name>` after a fetch.
+`<workspace>/repos/<repository-name>` after a pull.
 
 The Repositories column's fetch button fetches every repository in the
 workspace at once; each row's own button fetches one. Afterwards each row says

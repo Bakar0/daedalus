@@ -486,25 +486,39 @@ function SettingsIcon() {
   );
 }
 
-// VS Code Codicons sync glyph (MIT).
+/** Fetch: download from the remote. Nothing in a checkout moves. */
 function RepositoryFetchIcon() {
   return (
-    <svg aria-hidden="true" fill="currentColor" viewBox="0 0 16 16">
-      <path d="M2.006 8.267 0 9.098l3.622 3.856.348-.153 4.006-1.657-2.8-.687a5.028 5.028 0 0 1 3.97-5.797 5 5 0 0 1 4.516 1.61l.847-.847a6.19 6.19 0 0 0-5.582-1.985A6.22 6.22 0 0 0 4.11 9.142l-2.104-.875Zm11.988-.534L16 6.902 12.378 3.05l-.348.153-4.006 1.657 2.8.687a5.03 5.03 0 0 1-3.97 5.797 5 5 0 0 1-4.516-1.61l-.847.847a6.19 6.19 0 0 0 5.582 1.985 6.22 6.22 0 0 0 4.817-6.704l2.104.871Z" />
+    <svg
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.3"
+      viewBox="0 0 16 16"
+    >
+      <path d="M4.5 11.5H4a3 3 0 0 1-.3-6 4.2 4.2 0 0 1 8.1 1A2.5 2.5 0 0 1 12 11.5h-.5" />
+      <path d="M8 7.5v6M5.8 11.3 8 13.5l2.2-2.2" />
     </svg>
   );
 }
 
-// VS Code Codicons repo-push glyph (MIT).
-function RepositoryPushIcon() {
+/** Pull: bring the checkout up to the latest base branch. */
+function RepositoryPullIcon() {
   return (
-    <svg aria-hidden="true" fill="currentColor" viewBox="0 0 16 16">
-      <path d="M7.65 1.15A.49.49 0 0 1 8 1c.128 0 .255.05.35.15l3 3a.49.49 0 0 1 .15.35.49.49 0 0 1-.15.35.49.49 0 0 1-.35.15.49.49 0 0 1-.35-.15L8.5 2.71V9.5a.5.5 0 0 1-1 0V2.71L5.35 4.85a.49.49 0 0 1-.35.15.49.49 0 0 1-.35-.15.49.49 0 0 1-.15-.35c0-.127.05-.255.15-.35l3-3Z" />
-      <path
-        clipRule="evenodd"
-        d="M9.95 13h2.55a.5.5 0 0 1 0 1H9.95A2.5 2.5 0 0 1 5.05 14H2.5a.5.5 0 0 1 0-1h2.55a2.5 2.5 0 0 1 4.9 0ZM6.09 14A1.5 1.5 0 0 0 9 13.5 1.5 1.5 0 0 0 6 13.5c0 .18.03.34.09.5Z"
-        fillRule="evenodd"
-      />
+    <svg
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.3"
+      viewBox="0 0 16 16"
+    >
+      <path d="M8 1.5v7M5.5 6 8 8.5 10.5 6" />
+      <circle cx="8" cy="12" r="2" />
+      <path d="M2 12h4M10 12h4" />
     </svg>
   );
 }
@@ -3320,13 +3334,21 @@ export function WorkspaceApp({
 
   // One repository, or every one in the workspace when `repositoryId` is
   // absent. Each row then says what its checkout took.
-  async function fetchWorkspaceRepositories(repositoryId?: string) {
+  /**
+   * Fetch downloads from the remote and moves nothing; pull also moves each
+   * checkout under `repos/` to the latest base branch.
+   */
+  async function fetchWorkspaceRepositories(
+    mode: "fetch" | "pull",
+    repositoryId?: string,
+  ) {
     if (!workspace) return;
     const outcomes = await runRepositoryAction(
-      repositoryId ? `fetch:${repositoryId}` : "fetch:all",
+      `${mode}:${repositoryId ?? "all"}`,
       () =>
         client.request.workspaceRepositoriesFetch({
           workspace: workspace.id,
+          pull: mode === "pull",
           ...(repositoryId ? { ids: [repositoryId] } : {}),
         }),
     );
@@ -3346,17 +3368,6 @@ export function WorkspaceApp({
           return next;
         }),
       FETCH_OUTCOME_VISIBLE_MS,
-    );
-  }
-
-  async function pushSessionWorktree(worktree: SessionWorktreeDto) {
-    await runRepositoryAction(
-      `push:${worktree.sessionId}:${worktree.repositoryId}`,
-      () =>
-        client.request.sessionWorktreePush({
-          session: worktree.sessionId,
-          repository: worktree.repositoryId,
-        }),
     );
   }
 
@@ -3750,20 +3761,39 @@ export function WorkspaceApp({
             >
               <TerminalIcon />
             </button>
-            <button
-              aria-label={`Fetch ${repository.name}`}
-              className={`quiet repository-action ${pendingRepositoryActions.has(`fetch:${repository.id}`) || pendingRepositoryActions.has("fetch:all") ? "syncing" : ""}`}
-              disabled={
-                repository.status !== "ready" ||
-                pendingRepositoryActions.has(`fetch:${repository.id}`) ||
-                pendingRepositoryActions.has("fetch:all")
-              }
-              onClick={() => void fetchWorkspaceRepositories(repository.id)}
-              title={`Fetch, and move this checkout to the latest ${repository.baseBranch ?? "default branch"}`}
-              type="button"
-            >
-              <RepositoryFetchIcon />
-            </button>
+            {(["fetch", "pull"] as const).map((mode) => {
+              const busy = ["all", repository.id].some((target) =>
+                ["fetch", "pull"].some((kind) =>
+                  pendingRepositoryActions.has(`${kind}:${target}`),
+                ),
+              );
+              const running =
+                pendingRepositoryActions.has(`${mode}:${repository.id}`) ||
+                pendingRepositoryActions.has(`${mode}:all`);
+              return (
+                <button
+                  aria-label={`${mode === "fetch" ? "Fetch" : "Pull"} ${repository.name}`}
+                  className={`quiet repository-action ${running ? "syncing" : ""}`}
+                  disabled={repository.status !== "ready" || busy}
+                  key={mode}
+                  onClick={() =>
+                    void fetchWorkspaceRepositories(mode, repository.id)
+                  }
+                  title={
+                    mode === "fetch"
+                      ? "Fetch: download from the remote. The checkout stays where it is."
+                      : `Pull: fetch, and move this checkout to the latest ${repository.baseBranch ?? "default branch"}`
+                  }
+                  type="button"
+                >
+                  {mode === "fetch" ? (
+                    <RepositoryFetchIcon />
+                  ) : (
+                    <RepositoryPullIcon />
+                  )}
+                </button>
+              );
+            })}
           </span>
         </div>
         {worktrees.length === 0
@@ -3879,16 +3909,6 @@ export function WorkspaceApp({
                       type="button"
                     >
                       <TerminalIcon />
-                    </button>
-                    <button
-                      aria-label={`Push ${worktree.branchName}`}
-                      className={`quiet repository-action ${pendingRepositoryActions.has(key) ? "syncing" : ""}`}
-                      disabled={pendingRepositoryActions.has(key)}
-                      onClick={() => void pushSessionWorktree(worktree)}
-                      title={`Push ${worktree.branchName} to origin`}
-                      type="button"
-                    >
-                      <RepositoryPushIcon />
                     </button>
                     <button
                       aria-label={`Remove ${worktree.branchName}`}
@@ -5292,20 +5312,39 @@ export function WorkspaceApp({
                     {workspaceContent.repositories.length}
                   </small>
                 )}
-                <button
-                  aria-label="Fetch all repositories"
-                  className={`quiet repository-action ${pendingRepositoryActions.has("fetch:all") ? "syncing" : ""}`}
-                  disabled={
-                    !workspaceContent?.repositories.some(
-                      (item) => item.status === "ready",
-                    ) || pendingRepositoryActions.has("fetch:all")
-                  }
-                  onClick={() => void fetchWorkspaceRepositories()}
-                  title="Fetch every repository, and move each checkout to the latest default branch"
-                  type="button"
-                >
-                  <RepositoryFetchIcon />
-                </button>
+                {(["fetch", "pull"] as const).map((mode) => {
+                  const anyRunning = ["fetch", "pull"].some((kind) =>
+                    [...pendingRepositoryActions].some((action) =>
+                      action.startsWith(`${kind}:`),
+                    ),
+                  );
+                  return (
+                    <button
+                      aria-label={`${mode === "fetch" ? "Fetch" : "Pull"} all repositories`}
+                      className={`quiet repository-header-action ${pendingRepositoryActions.has(`${mode}:all`) ? "syncing" : ""}`}
+                      disabled={
+                        !workspaceContent?.repositories.some(
+                          (item) => item.status === "ready",
+                        ) || anyRunning
+                      }
+                      key={mode}
+                      onClick={() => void fetchWorkspaceRepositories(mode)}
+                      title={
+                        mode === "fetch"
+                          ? "Fetch every repository. No checkout moves."
+                          : "Pull every repository: fetch, and move each checkout to the latest default branch"
+                      }
+                      type="button"
+                    >
+                      {mode === "fetch" ? (
+                        <RepositoryFetchIcon />
+                      ) : (
+                        <RepositoryPullIcon />
+                      )}
+                      {mode === "fetch" ? "Fetch" : "Pull"}
+                    </button>
+                  );
+                })}
                 <button
                   aria-label="Add repository"
                   className="quiet"

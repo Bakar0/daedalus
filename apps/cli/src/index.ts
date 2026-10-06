@@ -361,6 +361,7 @@ it was cleared, journal entries whose heading names the task, and done.`,
   daedal repo attach --workspace <workspace> --repository <library-id>
   daedal repo sync <attachment-id>
   daedal repo fetch <attachment-id>
+  daedal repo pull <attachment-id>
   daedal repo detach <attachment-id>
   daedal repo worktree create --session <agent-id> --repository <name-or-id>
   daedal repo worktree list [--workspace <workspace>] [--session <agent-id>]
@@ -1964,19 +1965,23 @@ async function repositoryCommand(
     );
     return 0;
   }
-  if (action === "fetch") {
+  // `fetch` only downloads: the row learns how far behind it is and nothing
+  // under `repos/` moves. `pull` also moves every checkout of the clone to
+  // the latest base branch, as the panel's Pull does.
+  if (action === "fetch" || action === "pull") {
     const parsed = parseArguments(args, []);
     expectPositionals(
       parsed.positionals,
       1,
-      "daedal repo fetch <attachment-id>",
+      `daedal repo ${action} <attachment-id>`,
     );
     const result = await context.workspaceContent.fetchRepository(
       parsed.positionals[0]!,
+      { pull: action === "pull" },
     );
     printResult(result, json, () =>
       console.log(
-        `Fetched ${result.name} · ${result.gitStatus?.state ?? "unavailable"}`,
+        `${action === "pull" ? "Pulled" : "Fetched"} ${result.name} · ${result.gitStatus?.state ?? "unavailable"}`,
       ),
     );
     return 0;

@@ -3342,8 +3342,27 @@ dd {
   height: 14px;
   width: 14px;
 }
-.repository-action.syncing svg {
-  animation: repository-progress-spin 800ms linear infinite;
+/* In progress: the icon breathes rather than spins, since neither the
+   fetch nor the pull glyph is round. */
+.repository-action.syncing svg,
+.repository-header-action.syncing svg {
+  animation: repository-progress-pulse 900ms ease-in-out infinite;
+}
+@keyframes repository-progress-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.repository-header-action {
+  align-items: center;
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px 7px !important;
+  white-space: nowrap;
+}
+.repository-header-action svg {
+  height: 14px;
+  width: 14px;
 }
 .workspace-resource-row small {
   color: var(--muted);
