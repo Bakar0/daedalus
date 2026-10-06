@@ -1506,7 +1506,11 @@ Before working in this workspace:
         const relativeRoot = worktree.path.slice(workspace.path.length + 1);
 
         await content.get(workspace.id);
-        await content.settleGitStatus(workspace.id);
+        // The counter itself works: a forced pass measures everything, so
+        // every zero below is a pass that ran no git, not a trace nobody wrote.
+        expect(
+          await gitLaunches(() => content.settleGitStatus(workspace.id)),
+        ).toBeGreaterThan(0);
         expect(await status()).toMatchObject({ state: "clean", ahead: 0 });
 
         // Nothing moved: an ordinary pass and a changes listing start no git.
@@ -1531,8 +1535,9 @@ Before working in this workspace:
           "-qm",
           "agent work",
         ]);
-        expect(await gitLaunches(ordinaryPass)).toBeGreaterThan(0);
+        const commitLaunches = await gitLaunches(ordinaryPass);
         expect(await status()).toMatchObject({ state: "ahead", ahead: 1 });
+        expect(commitLaunches).toBeGreaterThan(0);
 
         // An edit moves no git metadata; the watcher's report is what says
         // the tree changed, and its pass follows without being asked.
