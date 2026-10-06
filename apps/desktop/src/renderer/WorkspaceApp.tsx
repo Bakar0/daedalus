@@ -1739,7 +1739,7 @@ export function WorkspaceApp({
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [workspaceForm, setWorkspaceForm] = useState({ name: "" });
   const [taskForm, setTaskForm] = useState({ title: "", description: "" });
-  const [sessionType, setSessionType] = useState("codex");
+  const [sessionType, setSessionType] = useState("claude");
   const [sessionModel, setSessionModel] = useState("");
   const [rememberSessionModel, setRememberSessionModel] = useState(false);
   const [modelCatalogs, setModelCatalogs] = useState<
@@ -6381,8 +6381,8 @@ export function WorkspaceApp({
               >
                 {(
                   [
-                    { id: "codex", label: "Codex" },
                     { id: "claude", label: "Claude" },
+                    { id: "codex", label: "Codex" },
                     { id: "terminal", label: "Terminal" },
                   ] as const
                 ).map((tool) => {
@@ -6422,13 +6422,6 @@ export function WorkspaceApp({
               <div className="session-model-picker">
                 <span>
                   <strong>Model</strong>
-                  <small>
-                    {sessionModelCatalogPending || modelCatalogLoading
-                      ? `Loading ${sessionType === "claude" ? "Claude" : "Codex"} models…`
-                      : sessionType === "codex"
-                        ? "Available to your Codex account"
-                        : "Available to your Claude account"}
-                  </small>
                 </span>
                 <select
                   aria-label="Model"
@@ -6456,28 +6449,12 @@ export function WorkspaceApp({
                     </option>
                   ))}
                 </select>
-                <small
-                  className={
-                    workspaceDefaultModelStale && !sessionModel
-                      ? "session-model-error"
-                      : "session-model-description"
-                  }
-                >
-                  {sessionModelCatalogPending || modelCatalogLoading
-                    ? "Reading the models available to your account"
-                    : (selectedSessionModel?.description ??
-                      (sessionModel
-                        ? `Use ${sessionModel} for this session`
-                        : workspaceDefaultModelStale
-                          ? `${providerLabel(sessionType)} no longer offers ${workspaceDefaultModel}. Pick a model here, or change the default in board settings; until then a session started without one refuses.`
-                          : workspaceDefaultModel
-                            ? "Set in board settings. Every new session of this provider in this workspace starts with it unless one is picked here."
-                            : sessionType === "claude"
-                              ? "Claude's recommended model, asked for by name, so a /model change made inside a session does not carry into new ones."
-                              : sessionModelCatalog?.defaultModel
-                                ? "The model Codex is configured with"
-                                : "The provider chooses its current default"))}
-                </small>
+                {workspaceDefaultModelStale && !sessionModel && (
+                  <small className="session-model-error">
+                    {providerLabel(sessionType)} no longer offers{" "}
+                    {workspaceDefaultModel}. Pick another model.
+                  </small>
+                )}
                 {modelCatalogError && (
                   <small className="session-model-error">
                     Model list unavailable: {modelCatalogError}
@@ -6492,15 +6469,7 @@ export function WorkspaceApp({
                       }
                       type="checkbox"
                     />
-                    <span>
-                      Remember{" "}
-                      <strong>
-                        {providerLabel(sessionType)} ·{" "}
-                        {selectedSessionModel?.label ??
-                          (sessionModel || "provider default")}
-                      </strong>{" "}
-                      as this workspace&apos;s default
-                    </span>
+                    <span>Remember for this workspace</span>
                   </label>
                 )}
               </div>
@@ -6508,7 +6477,6 @@ export function WorkspaceApp({
             <div className="session-color-picker">
               <span>
                 <strong>Color</strong>
-                <small>On the card&apos;s edge and the World figure</small>
               </span>
               <ColorSwatches
                 onChange={(color) =>
@@ -6521,10 +6489,7 @@ export function WorkspaceApp({
               <label className="session-ability-option">
                 <span>
                   <strong>Routines</strong>
-                  <small>
-                    Checks this session runs on a schedule while the app is
-                    open. Ask it for routines once it starts.
-                  </small>
+                  <small>Scheduled checks while the app is open</small>
                 </span>
                 <input
                   aria-label="Routines enabled"
