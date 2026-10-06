@@ -27,6 +27,8 @@ const EditorArea = lazy(() => import("./EditorArea"));
 const PANEL_STEP = 24;
 
 export interface FileOpenRequest {
+  /** The workspace the path is relative to. */
+  workspaceId: string;
   path: string;
   line?: number;
   column?: number;
@@ -58,8 +60,9 @@ export interface FilesViewProps {
   worktreeBases?: ReadonlyMap<string, string | null>;
   /** What session worktrees changed, by workspace path, for the tree's colours. */
   gitStatus?: ReadonlyMap<string, ChangedFileDto["status"]>;
-  /** A file to open, from a terminal link; acted on when the nonce changes. */
+  /** A file to open, from a terminal link; opened once, then cleared. */
   openRequest?: FileOpenRequest;
+  onOpenRequestShown(): void;
   /** A journal heading the task timeline linked to; opened once, then cleared. */
   journalTarget?: string;
   onJournalTargetShown(): void;
@@ -75,6 +78,7 @@ export function FilesView({
   gitStatus,
   worktreeBases,
   openRequest,
+  onOpenRequestShown,
   journalTarget,
   onJournalTargetShown,
   onError,
@@ -128,6 +132,7 @@ export function FilesView({
         line: openRequest.line,
         column: openRequest.column,
       });
+    onOpenRequestShown();
     // Only a new request opens anything; the same one seen again does not.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openRequest?.nonce]);

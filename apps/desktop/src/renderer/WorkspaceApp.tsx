@@ -1658,7 +1658,15 @@ export function WorkspaceApp({
   const [focusedSessionId, setFocusedSessionId] = useState<string>();
   const activeSessionIdRef = useRef(activeSessionId);
   activeSessionIdRef.current = activeSessionId;
+  // A session created from the dialog, shown in the terminal column while its
+  // provider starts. Spawning returns only once the agent is ready, which
+  // takes seconds; the column switches at once and the terminal takes the
+  // caret when it exists. Opening any session in the meantime cancels this.
+  const [openingLaunchKey, setOpeningLaunchKey] = useState<string>();
+  const openingLaunchKeyRef = useRef(openingLaunchKey);
+  openingLaunchKeyRef.current = openingLaunchKey;
   const openSession = useCallback((id: string) => {
+    setOpeningLaunchKey(undefined);
     setActiveSessionId(id);
     setFocusedSessionId(id);
   }, []);
@@ -1785,6 +1793,24 @@ export function WorkspaceApp({
   const [archivingWorkspaceIds, setArchivingWorkspaceIds] = useState<
     ReadonlySet<string>
   >(() => new Set());
+  // Sessions confirmed for archiving whose request has not returned yet. They
+  // show as archived at once; stopping the agent and releasing its worktrees
+  // can take seconds, and the dialog should not wait for that.
+  const [archivingSessionIds, setArchivingSessionIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const archivingStartedAt = useRef(new Date().toISOString());
+  // Repositories confirmed in the picker whose rows have not arrived yet.
+  // Attaching and reloading the workspace's git status takes seconds; these
+  // rows say something is happening until the real ones replace them.
+  const [addingRepositories, setAddingRepositories] = useState<
+    Array<{
+      key: string;
+      workspaceId: string;
+      name: string;
+      libraryRepositoryId?: string;
+    }>
+  >([]);
   const [terminalPanelOpen, setTerminalPanelOpen] = useState(
     initialTerminalPanelOpen,
   );
@@ -1899,6 +1925,7 @@ export function WorkspaceApp({
     (target: FileLinkTargetDto, line?: number, column?: number) => {
       enterWorkspace(target.workspaceId, "workspace");
       setFileOpenRequest({
+        workspaceId: target.workspaceId,
         path: target.path,
         line,
         column,
@@ -2590,6 +2617,11 @@ export function WorkspaceApp({
   const workspaceById = new Map(
     (snapshot?.workspaces ?? []).map((item) => [item.id, item]),
   );
+  const agents = (snapshot?.agents ?? []).map((session) =>
+    archivingSessionIds.has(session.id) && !session.archivedAt
+      ? { ...session, archivedAt: archivingStartedAt.current }
+      : session,
+  );
   // The scope's workspaces: the selected one, or every active one. An
   // archived workspace's tasks and sessions stay out of the all-workspaces
   // view the same way its card stays out of the column.
@@ -2608,13 +2640,9 @@ export function WorkspaceApp({
   // snapshot's positions are only meaningful within one workspace.
   const workspaceSessions = showingAll
     ? orderedWorkspaces.flatMap((item) =>
-        (snapshot?.agents ?? []).filter(
-          (session) => session.workspaceId === item.id,
-        ),
+        agents.filter((session) => session.workspaceId === item.id),
       )
-    : (snapshot?.agents ?? []).filter(
-        (item) => item.workspaceId === workspaceId,
-      );
+    : agents.filter((item) => item.workspaceId === workspaceId);
   // Blocked sessions used to float to the top here. They no longer do: once
   // the order is something the user placed, moving a card out from under them
   // is the bug, not the feature. The card tone and the workspace roll-up
@@ -2655,7 +2683,19 @@ export function WorkspaceApp({
   );
   // Deliberately not the filtered list: hiding a session from the list must
   // not tear down the terminal the user is sitting in.
-  const activeSession = sessions.find((item) => item.id === activeSessionId);
+  // The launch being opened, while it is still one: once it fails or becomes
+  // a session, the column goes back to showing sessions.
+  const openingLaunch = openingLaunchKey
+    ? sessionLaunches.find(
+        (launch) =>
+          launch.key === openingLaunchKey &&
+          launch.status === "starting" &&
+          launch.workspaceId === workspaceId,
+      )
+    : undefined;
+  const activeSession = openingLaunch
+    ? undefined
+    : sessions.find((item) => item.id === activeSessionId);
   // A session that was asked to hand off, by a click or by the automatic
   // sweep, is followed to its successor: the fresh session in the same
   // working directory that started after the request. Looked up across the
@@ -2786,6 +2826,7 @@ export function WorkspaceApp({
 
   useEffect(() => {
     if (view !== "session" || !scopeKey) return;
+    if (openingLaunch) return;
     const remembered = window.localStorage.getItem(
       lastSessionStorageKey(scopeKey),
     );
@@ -2805,6 +2846,7 @@ export function WorkspaceApp({
       setView("board");
   }, [
     activeSessionId,
+    openingLaunch,
     sessionLaunches,
     sessions,
     snapshot,
@@ -3185,8 +3227,11 @@ export function WorkspaceApp({
     setSessionForm({ name: "" });
     setRememberSessionModel(false);
     setModal(undefined);
-    // The launch's card appears in the workspace's list in the left column.
+    // The launch's card appears in the workspace's list in the left column,
+    // and the terminal column switches to it now rather than when it is ready.
     expandWorkspace(launch.workspaceId);
+    setOpeningLaunchKey(launch.key);
+    enterWorkspace(launch.workspaceId, "session");
     try {
       // Remembered before the spawn, so a session that fails to start still
       // leaves the default the user asked for. An empty model is a real
@@ -3212,11 +3257,16 @@ export function WorkspaceApp({
           : {}),
       });
       if (response.ok) {
+        // The launch stays until the refreshed list holds its session, so the
+        // column never falls back to another session in between.
+        await refresh();
         setSessionLaunches((current) =>
           current.filter((item) => item.key !== launch.key),
         );
-        await refresh();
-        showSession(response.data.id, launch.workspaceId);
+        // Only if the user is still waiting on it: a session they opened in
+        // the meantime keeps the column and the caret.
+        if (openingLaunchKeyRef.current === launch.key)
+          showSession(response.data.id, launch.workspaceId);
         return;
       }
       const sessionId =
@@ -3236,7 +3286,10 @@ export function WorkspaceApp({
         ),
       );
       await refresh();
-      if (sessionId) setActiveSessionId(sessionId);
+      if (sessionId && openingLaunchKeyRef.current === launch.key) {
+        setOpeningLaunchKey(undefined);
+        setActiveSessionId(sessionId);
+      }
     } catch (cause) {
       setSessionLaunches((current) =>
         current.map((item) =>
@@ -3267,31 +3320,63 @@ export function WorkspaceApp({
     );
     if (pending.length === 0 && pendingGitHub.length === 0) return;
     closeRepositoryModal();
+    // One placeholder per repository, each dropped on its own: hidden as soon
+    // as its real row is listed, and removed at once if its request fails.
+    const placeholder = (name: string, libraryRepositoryId?: string) => ({
+      key: crypto.randomUUID(),
+      workspaceId: workspace.id,
+      name,
+      libraryRepositoryId,
+    });
+    const githubPlaceholders = pendingGitHub.map((repository) =>
+      placeholder(repository.name),
+    );
+    const libraryPlaceholders = pending.map((id) =>
+      placeholder(
+        snapshot?.repositories.find((item) => item.id === id)?.name ?? id,
+        id,
+      ),
+    );
+    const placeholders = [...githubPlaceholders, ...libraryPlaceholders];
+    setAddingRepositories((current) => [...current, ...placeholders]);
     const failures: string[] = [];
     await runWithConcurrency(
       [
-        ...pendingGitHub.map((repository) => async () => {
+        ...pendingGitHub.map((repository, index) => async () => {
           const started = await client.request.repositoryAddAndAttachStart({
             workspace: workspace.id,
             githubNameWithOwner: repository.nameWithOwner,
             remoteUrl: repository.remoteUrl,
           });
-          if (!started.ok)
+          if (!started.ok) {
             failures.push(`${repository.name}: ${started.error.message}`);
+            dropAddingRepositories([githubPlaceholders[index]!]);
+          }
         }),
-        ...pending.map((libraryRepositoryId) => async () => {
+        ...pending.map((libraryRepositoryId, index) => async () => {
           const attached = await client.request.workspaceRepositoryAttach({
             workspace: workspace.id,
             libraryRepositoryId,
           });
-          if (!attached.ok) failures.push(attached.error.message);
+          if (!attached.ok) {
+            failures.push(attached.error.message);
+            dropAddingRepositories([libraryPlaceholders[index]!]);
+          }
         }),
       ],
       REPOSITORY_ADD_CONCURRENCY,
     );
     if (failures.length > 0) setError(failures.join("; "));
     await refreshWorkspaceContent();
+    dropAddingRepositories(placeholders);
     await refresh();
+  }
+
+  function dropAddingRepositories(placeholders: Array<{ key: string }>) {
+    const keys = new Set(placeholders.map((item) => item.key));
+    setAddingRepositories((current) =>
+      current.filter((item) => !keys.has(item.key)),
+    );
   }
 
   // Fetch, pull and push are the same shape: run one request, then re-read the
@@ -3330,6 +3415,19 @@ export function WorkspaceApp({
     await runRepositoryAction(`detach:${repositoryId}`, () =>
       client.request.workspaceRepositoryDetach({ id: repositoryId }),
     );
+  }
+
+  async function removeWorkspaceRepository(
+    repository: WorkspaceContentDto["repositories"][number],
+  ) {
+    const confirmed = await askConfirm({
+      title: `Remove ${repository.name}?`,
+      message:
+        "Its read-only checkout under repos/ is deleted. The shared clone stays in the library, so it can be added again.",
+      confirmLabel: "Remove",
+      danger: true,
+    });
+    if (confirmed) await detachWorkspaceRepository(repository.id);
   }
 
   // One repository, or every one in the workspace when `repositoryId` is
@@ -3382,17 +3480,29 @@ export function WorkspaceApp({
       if (selectedRepositoryCount > 0) await attachSelectedRepositories();
       return;
     }
+    const remoteUrl = repositoryForm.search;
+    const placeholder = {
+      key: crypto.randomUUID(),
+      workspaceId: workspace.id,
+      name:
+        remoteUrl
+          .trim()
+          .replace(/\/+$/, "")
+          .split(/[/:]/)
+          .pop()
+          ?.replace(/\.git$/, "") || remoteUrl,
+    };
+    setRepositoryForm({ remoteUrl: "", search: "" });
+    closeRepositoryModal();
+    setAddingRepositories((current) => [...current, placeholder]);
     const started = await perform(
       client.request.repositoryAddAndAttachStart({
         workspace: workspace.id,
-        remoteUrl: repositoryForm.search,
+        remoteUrl,
       }),
     );
-    if (started) {
-      setRepositoryForm({ remoteUrl: "", search: "" });
-      closeRepositoryModal();
-      await refreshWorkspaceContent();
-    }
+    if (started) await refreshWorkspaceContent();
+    dropAddingRepositories([placeholder]);
   }
 
   async function refreshWorkspaceContent() {
@@ -3419,13 +3529,20 @@ export function WorkspaceApp({
   }
 
   async function archiveSession(session: AgentSessionDto) {
+    const wasActive = activeSessionId === session.id;
+    setSessionAction(undefined);
+    archivingStartedAt.current = new Date().toISOString();
+    setArchivingSessionIds((current) => new Set(current).add(session.id));
+    if (wasActive) setActiveSessionId(undefined);
     const archived = await perform(
       client.request.agentArchive({ id: session.id, force: false }),
     );
-    if (archived) {
-      if (activeSessionId === session.id) setActiveSessionId(undefined);
-      setSessionAction(undefined);
-    }
+    setArchivingSessionIds((current) => {
+      const next = new Set(current);
+      next.delete(session.id);
+      return next;
+    });
+    if (!archived && wasActive) setActiveSessionId(session.id);
   }
 
   // The button runs the same thing as `/daedalus-handoff`: a running agent
@@ -3794,6 +3911,26 @@ export function WorkspaceApp({
                 </button>
               );
             })}
+            {!failed && (
+              <button
+                aria-label={`Remove ${repository.name}`}
+                className={`quiet repository-action ${pendingRepositoryActions.has(`detach:${repository.id}`) ? "syncing" : ""}`}
+                disabled={
+                  preparing ||
+                  worktrees.length > 0 ||
+                  pendingRepositoryActions.has(`detach:${repository.id}`)
+                }
+                onClick={() => void removeWorkspaceRepository(repository)}
+                title={
+                  worktrees.length > 0
+                    ? "Remove its working trees first; sessions are using this repository"
+                    : "Remove this repository from the workspace"
+                }
+                type="button"
+              >
+                <DismissIcon />
+              </button>
+            )}
           </span>
         </div>
         {worktrees.length === 0
@@ -3962,12 +4099,25 @@ export function WorkspaceApp({
   const repositoriesReady =
     workspaceContent !== undefined &&
     workspaceContent.workspaceId === workspace?.id;
+  // A placeholder steps aside the moment its repository is listed, which can
+  // be before its own request returns: the workspace's content also arrives
+  // from the host's own updates.
+  const workspaceAddingRepositories = addingRepositories.filter(
+    (item) =>
+      item.workspaceId === workspace?.id &&
+      !(workspaceContent?.repositories ?? []).some((repository) =>
+        item.libraryRepositoryId
+          ? repository.libraryRepositoryId === item.libraryRepositoryId
+          : repository.name.toLowerCase() === item.name.toLowerCase(),
+      ),
+  );
   // The board's right column is the workspace's, not the selected task's
   // (#27): the repositories with the working trees cut from each, as the
   // explorer used to draw them. The task's detail floats over it in a drawer.
   const workspaceRepositories = !repositoriesReady ? (
     <div className="empty">Loading repositories…</div>
-  ) : workspaceContent.repositories.length === 0 ? (
+  ) : workspaceContent.repositories.length === 0 &&
+    workspaceAddingRepositories.length === 0 ? (
     <div className="workspace-repository-invite">
       <strong>No repositories yet</strong>
       <span>
@@ -3983,6 +4133,22 @@ export function WorkspaceApp({
       {workspaceContent.repositories.map((repository) =>
         renderRepositoryGroup(repository),
       )}
+      {workspaceAddingRepositories.map((item) => (
+        <div className="workspace-repository-group" key={item.key}>
+          <div className="workspace-resource-row repository-status-unavailable repository-preparing">
+            <span>
+              <strong>{item.name}</strong>
+              <small>
+                <span
+                  aria-hidden="true"
+                  className="repository-preparing-spinner"
+                />
+                Adding…
+              </small>
+            </span>
+          </div>
+        </div>
+      ))}
     </div>
   );
 
@@ -4041,9 +4207,10 @@ export function WorkspaceApp({
     pinned?: boolean;
   }) {
     const path = request.diff?.path ?? request.path;
-    if (!path) return;
+    if (!path || !workspaceId) return;
     if (view !== "workspace") setView("workspace");
     setFileOpenRequest({
+      workspaceId,
       path,
       diff: request.diff,
       pinned: request.pinned,
@@ -4321,7 +4488,7 @@ export function WorkspaceApp({
   // (#55). Each list keeps its own drag order, because a session's position
   // is an order within its workspace.
   const renderWorkspaceSessions = (item: WorkspaceDto) => {
-    const itemSessions = (snapshot?.agents ?? []).filter(
+    const itemSessions = agents.filter(
       (session) => session.workspaceId === item.id,
     );
     const liveSessions = itemSessions.filter((session) => !session.archivedAt);
@@ -4467,7 +4634,7 @@ export function WorkspaceApp({
 
   // The card above the workspaces (#35). Its roll-up is the workspace cards'
   // summed: what a dispatcher wants to know before choosing where to look.
-  const everySession = (snapshot?.agents ?? []).filter(
+  const everySession = agents.filter(
     (session) =>
       !session.archivedAt &&
       activeWorkspaces.some((item) => item.id === session.workspaceId),
@@ -4668,9 +4835,7 @@ export function WorkspaceApp({
       report.taskId ? [[report.taskId, report] as const] : [],
     ),
   );
-  const sessionsById = new Map(
-    (snapshot?.agents ?? []).map((session) => [session.id, session]),
-  );
+  const sessionsById = new Map(agents.map((session) => [session.id, session]));
   const routineOwners = new Map(
     (snapshot?.abilities ?? []).flatMap((ability) => {
       const session = sessionsById.get(ability.sessionId);
@@ -4936,7 +5101,7 @@ export function WorkspaceApp({
               </button>
             )}
             {orderedWorkspaces.map((item) => {
-              const itemSessions = (snapshot?.agents ?? []).filter(
+              const itemSessions = agents.filter(
                 (session) =>
                   session.workspaceId === item.id && !session.archivedAt,
               );
@@ -5206,7 +5371,15 @@ export function WorkspaceApp({
                     client={client}
                     gitStatus={changedPaths}
                     worktreeBases={worktreeBases}
-                    openRequest={fileOpenRequest}
+                    // A request belongs to the workspace it was made for, and
+                    // is cleared once shown, so a remount of this view (another
+                    // workspace, or a return to it) does not replay it.
+                    openRequest={
+                      fileOpenRequest?.workspaceId === workspace.id
+                        ? fileOpenRequest
+                        : undefined
+                    }
+                    onOpenRequestShown={() => setFileOpenRequest(undefined)}
                     initialRoot={workspaceContent.files}
                     key={workspace.id}
                     onError={setError}
@@ -5409,12 +5582,18 @@ export function WorkspaceApp({
                         </small>
                       )}
                     </>
+                  ) : openingLaunch ? (
+                    openingLaunch.name || "New session"
                   ) : (
                     "No session selected"
                   )}
                 </h1>
               </div>
-              {activeSession && <small>{activeSession.status}</small>}
+              {activeSession ? (
+                <small>{activeSession.status}</small>
+              ) : (
+                openingLaunch && <small>starting</small>
+              )}
             </div>
             {activeSessionRoutines && activeSession && (
               <RoutineBar
@@ -5517,6 +5696,11 @@ export function WorkspaceApp({
                   telemetry={activeSessionTelemetry}
                   worktree={activeSessionWorktree}
                 />
+              </div>
+            ) : openingLaunch ? (
+              <div className="terminal-empty">
+                <strong>Starting {openingLaunch.tool}…</strong>
+                <span>The terminal opens here as soon as it is ready.</span>
               </div>
             ) : (
               <div className="terminal-empty">
