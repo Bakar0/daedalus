@@ -2342,6 +2342,42 @@ export class WorkspaceContentService {
       await this.discardReferenceCheckout(repository);
   }
 
+  // Called only when an archived session is deleted for good. Its worktrees
+  // go with their branches, whatever they hold. Its folder goes too, but only
+  // a folder Daedalus made under `worktrees/` that no other session runs in:
+  // a session continued by handoff shares its predecessor's folder.
+  async discardSessionFiles(session: AgentSession): Promise<void> {
+    for (const worktree of this.repositories.listSessionWorktrees({
+      sessionId: session.id,
+    })) {
+      const repository = this.repositories.findWorkspaceRepository(
+        worktree.repositoryId,
+      );
+      if (repository) await this.discardWorktree(repository, worktree);
+    }
+    const workspace = await this.workspaces.get(session.workspaceId);
+    const worktreesRoot = join(workspace.path, "worktrees");
+    const folder = resolve(session.workingDirectory);
+    if (
+      !isPathInside(worktreesRoot, folder) ||
+      this.repositories
+        .listAgents({ workspaceId: workspace.id })
+        .some(
+          (other) =>
+            other.id !== session.id &&
+            resolve(other.workingDirectory) === folder,
+        ) ||
+      !(await pathExists(folder)) ||
+      (await lstat(folder)).isSymbolicLink()
+    )
+      return;
+    await removeDirectory(folder);
+    // A task's group folder goes with its last session.
+    const group = dirname(folder);
+    if (group !== resolve(worktreesRoot) && (await readdir(group)).length === 0)
+      await removeDirectory(group);
+  }
+
   async syncRepository(id: string): Promise<WorkspaceRepository> {
     const repository = this.repositories.findWorkspaceRepository(id);
     if (!repository)

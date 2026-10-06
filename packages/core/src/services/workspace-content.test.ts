@@ -1,4 +1,5 @@
 import { isAbsolute, join } from "node:path";
+import { Database } from "bun:sqlite";
 import {
   lstat,
   mkdir,
@@ -1836,6 +1837,63 @@ Before working in this workspace:
         expect(
           (await git(["rev-parse", "--verify", worktree.branchName])).exitCode,
         ).not.toBe(0);
+        context.close();
+      });
+    });
+
+    test("deleting an archived session takes its trees and its own folder", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const { context, workspace, repository, session, worktree } =
+          await scenario(home);
+        await commitIn(worktree.path, "UNPUSHED.md");
+        const folder = context.repositories.findAgent(
+          session.id,
+        )!.workingDirectory;
+
+        await expect(
+          context.agents.deletePermanently(session.id),
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+        await context.agents.archive(session.id);
+        expect(await pathExists(worktree.path)).toBe(true);
+
+        await context.agents.deletePermanently(session.id);
+        expect(context.repositories.findAgent(session.id)).toBeUndefined();
+        expect(await pathExists(folder)).toBe(false);
+        expect(await pathExists(workspace.path)).toBe(true);
+        expect(
+          (
+            await runCommand("git", [
+              "--git-dir",
+              repository.canonicalPath,
+              "rev-parse",
+              "--verify",
+              worktree.branchName,
+            ])
+          ).exitCode,
+        ).not.toBe(0);
+        context.close();
+      });
+    });
+
+    test("deleting a session keeps a folder another session runs in", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const { context, workspace, session } = await scenario(home);
+        const folder = context.repositories.findAgent(
+          session.id,
+        )!.workingDirectory;
+        const other = await context.agents.spawn({
+          workspace: workspace.id,
+          provider: "claude",
+        });
+        // As `agent continue` leaves it: the successor runs in this folder.
+        const database = new Database(context.config.databasePath);
+        database
+          .query("UPDATE agent_sessions SET working_directory = ? WHERE id = ?")
+          .run(folder, other.id);
+        database.close();
+        await context.agents.archive(session.id);
+        await context.agents.deletePermanently(session.id);
+        expect(await pathExists(folder)).toBe(true);
         context.close();
       });
     });

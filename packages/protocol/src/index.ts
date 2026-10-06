@@ -1107,6 +1107,8 @@ export interface DesktopRpcSchema {
       agentSend: Request<{ id: string; text: string }, AgentSessionDto>;
       agentStop: Request<{ id: string; force: boolean }, AgentSessionDto>;
       agentRemove: Request<{ id: string }, AgentSessionDto>;
+      /** Archived sessions only; deletes their worktrees and folder. */
+      agentDelete: Request<{ id: string }, AgentSessionDto>;
       /** As `workspaceReorder`, scoped to one workspace's sessions. */
       agentReorder: Request<
         { workspace: string; sessionIds: string[] },

@@ -1799,6 +1799,9 @@ export function WorkspaceApp({
   const [deletingWorkspaceIds, setDeletingWorkspaceIds] = useState<
     ReadonlySet<string>
   >(() => new Set());
+  const [deletingSessionIds, setDeletingSessionIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
   // Sessions confirmed for archiving whose request has not returned yet. They
   // show as archived at once; stopping the agent and releasing its worktrees
   // can take seconds, and the dialog should not wait for that.
@@ -3704,6 +3707,33 @@ export function WorkspaceApp({
     if (restored) openSession(restored.id);
   }
 
+  async function deleteSession(session: AgentSessionDto) {
+    const worktrees = (snapshot?.worktrees ?? []).filter(
+      (worktree) => worktree.sessionId === session.id,
+    ).length;
+    const confirmed = await askConfirm({
+      title: `Delete ${sessionName(session)} permanently?`,
+      message: `${
+        worktrees > 0
+          ? `Its ${worktrees === 1 ? "worktree" : `${worktrees} worktrees`} and ${worktrees === 1 ? "branch are" : "branches are"} deleted, unpushed commits too, and so is its folder`
+          : "Its folder is deleted"
+      }, unless another session works in the same folder. This cannot be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!confirmed) return;
+    setDeletingSessionIds((current) => new Set(current).add(session.id));
+    await performForSession(
+      session.id,
+      client.request.agentDelete({ id: session.id }),
+    );
+    setDeletingSessionIds((current) => {
+      const next = new Set(current);
+      next.delete(session.id);
+      return next;
+    });
+  }
+
   async function reviveSession(session: AgentSessionDto) {
     const revived = await performForSession(
       session.id,
@@ -4571,6 +4601,52 @@ export function WorkspaceApp({
       )}
     </div>
   );
+  // One compact row in an archived list: name and date on one line, then
+  // unarchive and delete side by side.
+  const renderArchivedRow = (row: {
+    id: string;
+    name: string;
+    detail: string;
+    archivedAt: string;
+    restoreLabel: string;
+    disabled?: boolean;
+    onRestore: () => void;
+    onDelete: () => void;
+  }) => (
+    <div className="archived-item" key={row.id}>
+      <span className="archived-item-text" title={row.name}>
+        <strong>{row.name}</strong>
+        <small>
+          {row.detail} ·{" "}
+          <time dateTime={row.archivedAt}>
+            {new Date(row.archivedAt).toLocaleDateString()}
+          </time>
+        </small>
+      </span>
+      <span className="archived-item-actions">
+        <button
+          aria-label={`${row.restoreLabel} ${row.name}`}
+          className="archived-item-action"
+          disabled={row.disabled}
+          onClick={row.onRestore}
+          title={row.restoreLabel}
+          type="button"
+        >
+          <TaskActionIcon name="unarchive" />
+        </button>
+        <button
+          aria-label={`Delete ${row.name} permanently`}
+          className="archived-item-action danger"
+          disabled={row.disabled}
+          onClick={row.onDelete}
+          title="Delete permanently"
+          type="button"
+        >
+          <TaskActionIcon name="delete" />
+        </button>
+      </span>
+    </div>
+  );
   // One workspace's sessions, listed under its card in the left column
   // (#55). Each list keeps its own drag order, because a session's position
   // is an order within its workspace.
@@ -4579,7 +4655,12 @@ export function WorkspaceApp({
       (session) => session.workspaceId === item.id,
     );
     const liveSessions = itemSessions.filter((session) => !session.archivedAt);
-    const archived = itemSessions.filter((session) => session.archivedAt);
+    // Most recently archived first, like the archived workspaces.
+    const archived = itemSessions
+      .filter(
+        (session) => session.archivedAt && !deletingSessionIds.has(session.id),
+      )
+      .sort((a, b) => b.archivedAt!.localeCompare(a.archivedAt!));
     // Offered only for the workspace in focus, but its row's space is kept
     // under every workspace that has some, so focus moving never shifts the
     // list (#55).
@@ -4641,23 +4722,18 @@ export function WorkspaceApp({
                     Archived sessions ({archived.length})
                   </summary>
                   <div className="item-list">
-                    {archived.map((session) => (
-                      <div className="archived-item" key={session.id}>
-                        <span>
-                          <strong>{sessionName(session)}</strong>
-                          <small>
-                            {session.provider} · archived{" "}
-                            {new Date(session.archivedAt!).toLocaleDateString()}
-                          </small>
-                        </span>
-                        <button
-                          disabled={pendingSessionIds.has(session.id)}
-                          onClick={() => void restoreSession(session)}
-                        >
-                          Restore &amp; resume
-                        </button>
-                      </div>
-                    ))}
+                    {archived.map((session) =>
+                      renderArchivedRow({
+                        id: session.id,
+                        name: sessionName(session),
+                        detail: session.provider,
+                        archivedAt: session.archivedAt!,
+                        restoreLabel: "Restore and resume",
+                        disabled: pendingSessionIds.has(session.id),
+                        onRestore: () => void restoreSession(session),
+                        onDelete: () => void deleteSession(session),
+                      }),
+                    )}
                   </div>
                 </details>
               )}
@@ -5381,37 +5457,17 @@ export function WorkspaceApp({
                 Archived workspaces ({archivedWorkspaces.length})
               </summary>
               <div className="item-list">
-                {archivedWorkspaces.map((item) => (
-                  <div className="archived-item" key={item.id}>
-                    <span>
-                      <strong>{item.name}</strong>
-                      <small>
-                        {item.slug} · archived{" "}
-                        <time dateTime={item.archivedAt!}>
-                          {new Date(item.archivedAt!).toLocaleDateString()}
-                        </time>
-                      </small>
-                    </span>
-                    <span className="archived-item-actions">
-                      <button
-                        aria-label={`Restore ${item.name}`}
-                        className="archived-item-action"
-                        onClick={() => void restoreWorkspace(item)}
-                        title="Restore"
-                      >
-                        <TaskActionIcon name="restore" />
-                      </button>
-                      <button
-                        aria-label={`Delete ${item.name} permanently`}
-                        className="archived-item-action danger"
-                        onClick={() => void deleteWorkspace(item)}
-                        title="Delete permanently"
-                      >
-                        <TaskActionIcon name="delete" />
-                      </button>
-                    </span>
-                  </div>
-                ))}
+                {archivedWorkspaces.map((item) =>
+                  renderArchivedRow({
+                    id: item.id,
+                    name: item.name,
+                    detail: item.slug,
+                    archivedAt: item.archivedAt!,
+                    restoreLabel: "Restore",
+                    onRestore: () => void restoreWorkspace(item),
+                    onDelete: () => void deleteWorkspace(item),
+                  }),
+                )}
               </div>
             </details>
           )}

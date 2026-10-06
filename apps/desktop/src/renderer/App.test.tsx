@@ -1823,7 +1823,7 @@ describe("desktop application shell", () => {
     expect(html.indexOf("Alpha")).toBeLessThan(html.indexOf("Mike"));
   });
 
-  test("renders collapsed workspace and session archives with restore actions", () => {
+  test("renders collapsed workspace and session archives with restore and delete actions", () => {
     const archivedAt = "2026-02-02T00:00:00.000Z";
     const snapshot: DesktopSnapshotDto = {
       ...base,
@@ -1897,7 +1897,14 @@ describe("desktop application shell", () => {
     expect(html).toContain("Archived project");
     expect(html).toContain("Archived sessions (1)");
     expect(html).toContain("Archived conversation");
-    expect(html).toContain("Restore &amp; resume");
+    expect(html).toContain(
+      'aria-label="Restore and resume Archived conversation"',
+    );
+    expect(html).toContain('aria-label="Restore Archived project"');
+    expect(html).toContain(
+      'aria-label="Delete Archived conversation permanently"',
+    );
+    expect(html).toContain('aria-label="Delete Archived project permanently"');
     expect(html).toContain('aria-label="Archive Active workspace"');
   });
 

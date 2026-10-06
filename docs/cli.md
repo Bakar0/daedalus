@@ -100,8 +100,11 @@ daedal agent continue [<agent-id> | --self] [--handoff-file <path|->] [--provide
 daedal agent restore <agent-id>
 daedal agent revive <agent-id> | --all | --workspace <workspace>
 daedal agent stop <agent-id> [--force]
+daedal agent delete <agent-id> --force
 daedal agent remove <agent-id>
 ```
+
+`delete` is for an archived session you no longer want, and is the trash button in the app's archived sessions list. It removes the session's worktrees together with their branches, unpushed commits included, deletes its folder under `worktrees/` unless another session runs in the same folder (a session continued by handoff shares its predecessor's), and then deletes the session. It refuses a session that is not archived. `remove` deletes only the record and leaves every file in place.
 
 Built-in provider definitions come from `config.json`. Named custom definitions use `--command`. Executables and arguments are always passed as arrays. A task-backed launch receives only `Execute task #<number>` plus optional `--message` guidance; the installed skill supplies the workflow, so task content and CLI instructions are not duplicated in the prompt. Claude and Codex receive the prompt through their native initial-prompt argument, while custom launches receive it in `DAEDALUS_TASK_PROMPT`. Daedalus never types the initial prompt into the terminal. Agent processes receive their current session, workspace, internal task ID, and task number through `DAEDALUS_SESSION_ID`, `DAEDALUS_WORKSPACE_ID`, `DAEDALUS_TASK_ID`, and `DAEDALUS_TASK_NUMBER`. These variables are restored when a session resumes.
 
