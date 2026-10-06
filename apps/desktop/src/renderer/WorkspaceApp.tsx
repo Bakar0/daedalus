@@ -1804,7 +1804,12 @@ export function WorkspaceApp({
   // Attaching and reloading the workspace's git status takes seconds; these
   // rows say something is happening until the real ones replace them.
   const [addingRepositories, setAddingRepositories] = useState<
-    Array<{ key: string; workspaceId: string; name: string }>
+    Array<{
+      key: string;
+      workspaceId: string;
+      name: string;
+      libraryRepositoryId?: string;
+    }>
   >([]);
   const [terminalPanelOpen, setTerminalPanelOpen] = useState(
     initialTerminalPanelOpen,
@@ -3315,36 +3320,48 @@ export function WorkspaceApp({
     );
     if (pending.length === 0 && pendingGitHub.length === 0) return;
     closeRepositoryModal();
-    const placeholders = [
-      ...pendingGitHub.map((repository) => repository.name),
-      ...pending.map(
-        (id) =>
-          snapshot?.repositories.find((item) => item.id === id)?.name ?? id,
-      ),
-    ].map((name) => ({
+    // One placeholder per repository, each dropped on its own: hidden as soon
+    // as its real row is listed, and removed at once if its request fails.
+    const placeholder = (name: string, libraryRepositoryId?: string) => ({
       key: crypto.randomUUID(),
       workspaceId: workspace.id,
       name,
-    }));
+      libraryRepositoryId,
+    });
+    const githubPlaceholders = pendingGitHub.map((repository) =>
+      placeholder(repository.name),
+    );
+    const libraryPlaceholders = pending.map((id) =>
+      placeholder(
+        snapshot?.repositories.find((item) => item.id === id)?.name ?? id,
+        id,
+      ),
+    );
+    const placeholders = [...githubPlaceholders, ...libraryPlaceholders];
     setAddingRepositories((current) => [...current, ...placeholders]);
     const failures: string[] = [];
     await runWithConcurrency(
       [
-        ...pendingGitHub.map((repository) => async () => {
+        ...pendingGitHub.map((repository, index) => async () => {
           const started = await client.request.repositoryAddAndAttachStart({
             workspace: workspace.id,
             githubNameWithOwner: repository.nameWithOwner,
             remoteUrl: repository.remoteUrl,
           });
-          if (!started.ok)
+          if (!started.ok) {
             failures.push(`${repository.name}: ${started.error.message}`);
+            dropAddingRepositories([githubPlaceholders[index]!]);
+          }
         }),
-        ...pending.map((libraryRepositoryId) => async () => {
+        ...pending.map((libraryRepositoryId, index) => async () => {
           const attached = await client.request.workspaceRepositoryAttach({
             workspace: workspace.id,
             libraryRepositoryId,
           });
-          if (!attached.ok) failures.push(attached.error.message);
+          if (!attached.ok) {
+            failures.push(attached.error.message);
+            dropAddingRepositories([libraryPlaceholders[index]!]);
+          }
         }),
       ],
       REPOSITORY_ADD_CONCURRENCY,
@@ -4049,8 +4066,17 @@ export function WorkspaceApp({
   const repositoriesReady =
     workspaceContent !== undefined &&
     workspaceContent.workspaceId === workspace?.id;
+  // A placeholder steps aside the moment its repository is listed, which can
+  // be before its own request returns: the workspace's content also arrives
+  // from the host's own updates.
   const workspaceAddingRepositories = addingRepositories.filter(
-    (item) => item.workspaceId === workspace?.id,
+    (item) =>
+      item.workspaceId === workspace?.id &&
+      !(workspaceContent?.repositories ?? []).some((repository) =>
+        item.libraryRepositoryId
+          ? repository.libraryRepositoryId === item.libraryRepositoryId
+          : repository.name.toLowerCase() === item.name.toLowerCase(),
+      ),
   );
   // The board's right column is the workspace's, not the selected task's
   // (#27): the repositories with the working trees cut from each, as the
