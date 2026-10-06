@@ -60,6 +60,7 @@ import { laneFor } from "./board-lanes";
 import { taskActions } from "./task-actions";
 import { TaskCostLine, TaskTimeline } from "./TaskTimeline";
 import { TaskActionBar } from "./TaskActionBar";
+import { ConfirmButton } from "./ConfirmButton";
 import { askConfirm, askText, DialogHost } from "./dialogs";
 import { TaskActionIcon } from "./task-action-icons";
 import { type FileOpenRequest, FilesView } from "./files/FilesView";
@@ -861,6 +862,27 @@ export function quitDisclosure(plan: ShutdownPlanDto): string {
   return parts.length
     ? `${parts.join(" and ")} will keep running.`
     : "Nothing is running.";
+}
+
+/**
+ * What removing a working tree would throw away, as its confirm button says
+ * it, or `undefined` when nothing would be lost. The same two facts the
+ * removal guard checks: a merged pull request holding HEAD means the commits
+ * are on the base branch.
+ */
+export function worktreeDiscardLabel(
+  worktree: Pick<SessionWorktreeDto, "gitStatus" | "landed">,
+): string | undefined {
+  const status = worktree.gitStatus;
+  const unsaved = status?.changedFiles ?? 0;
+  const unpushed = worktree.landed
+    ? 0
+    : (status?.unpushed ?? status?.ahead ?? 0);
+  const parts = [
+    ...(unsaved > 0 ? [plural(unsaved, "change")] : []),
+    ...(unpushed > 0 ? [plural(unpushed, "commit")] : []),
+  ];
+  return parts.length ? `Discard ${parts.join(", ")}` : undefined;
 }
 
 function Modal({
@@ -1786,15 +1808,6 @@ export function WorkspaceApp({
   const [fetchOutcomes, setFetchOutcomes] = useState<
     Readonly<Record<string, RepositoryFetchOutcomeDto>>
   >({});
-  const [worktreeAction, setWorktreeAction] = useState<{
-    worktree: SessionWorktreeDto;
-    repositoryName: string;
-    sessionLabel: string;
-  }>();
-  const [sessionAction, setSessionAction] = useState<{
-    session: AgentSessionDto;
-  }>();
-  const [workspaceAction, setWorkspaceAction] = useState<WorkspaceDto>();
   const [archivingWorkspaceIds, setArchivingWorkspaceIds] = useState<
     ReadonlySet<string>
   >(() => new Set());
@@ -3473,19 +3486,6 @@ export function WorkspaceApp({
     );
   }
 
-  async function removeWorkspaceRepository(
-    repository: WorkspaceContentDto["repositories"][number],
-  ) {
-    const confirmed = await askConfirm({
-      title: `Remove ${repository.name}?`,
-      message:
-        "Its read-only checkout under repos/ is deleted. The shared clone stays in the library, so it can be added again.",
-      confirmLabel: "Remove",
-      danger: true,
-    });
-    if (confirmed) await detachWorkspaceRepository(repository.id);
-  }
-
   // One repository, or every one in the workspace when `repositoryId` is
   // absent. Each row then says what its checkout took.
   /**
@@ -3586,7 +3586,6 @@ export function WorkspaceApp({
 
   async function archiveSession(session: AgentSessionDto) {
     const wasActive = activeSessionId === session.id;
-    setSessionAction(undefined);
     archivingStartedAt.current = new Date().toISOString();
     setArchivingSessionIds((current) => new Set(current).add(session.id));
     if (wasActive) setActiveSessionId(undefined);
@@ -3709,21 +3708,20 @@ export function WorkspaceApp({
     if (restored) openSession(restored.id);
   }
 
-  async function deleteSession(session: AgentSessionDto) {
+  // What deleting an archived session takes with it, as the armed delete
+  // button's tooltip says it.
+  function sessionDeleteDisclosure(session: AgentSessionDto) {
     const worktrees = (snapshot?.worktrees ?? []).filter(
       (worktree) => worktree.sessionId === session.id,
     ).length;
-    const confirmed = await askConfirm({
-      title: `Delete ${sessionName(session)} permanently?`,
-      message: `${
-        worktrees > 0
-          ? `Its ${worktrees === 1 ? "worktree" : `${worktrees} worktrees`} and ${worktrees === 1 ? "branch are" : "branches are"} deleted, unpushed commits too, and so is its folder`
-          : "Its folder is deleted"
-      }, unless another session works in the same folder. This cannot be undone.`,
-      confirmLabel: "Delete",
-      danger: true,
-    });
-    if (!confirmed) return;
+    return `${
+      worktrees > 0
+        ? `Its ${worktrees === 1 ? "worktree" : `${worktrees} worktrees`} and ${worktrees === 1 ? "branch are" : "branches are"} deleted, unpushed commits too, and so is its folder`
+        : "Its folder is deleted"
+    }, unless another session works in the same folder. This cannot be undone.`;
+  }
+
+  async function deleteSession(session: AgentSessionDto) {
     setDeletingSessionIds((current) => new Set(current).add(session.id));
     await performForSession(
       session.id,
@@ -3746,7 +3744,6 @@ export function WorkspaceApp({
 
   async function archiveWorkspace(item: WorkspaceDto) {
     const wasSelected = workspaceId === item.id;
-    setWorkspaceAction(undefined);
     setArchivingWorkspaceIds((current) => new Set(current).add(item.id));
     if (wasSelected) {
       setWorkspaceId(
@@ -3776,7 +3773,9 @@ export function WorkspaceApp({
     }
   }
 
-  async function deleteWorkspace(item: WorkspaceDto) {
+  // What deleting an archived workspace takes with it, as the armed delete
+  // button's tooltip says it.
+  function workspaceDeleteDisclosure(item: WorkspaceDto) {
     const sessionIds = new Set(
       (snapshot?.agents ?? [])
         .filter((session) => session.workspaceId === item.id)
@@ -3785,17 +3784,14 @@ export function WorkspaceApp({
     const worktrees = (snapshot?.worktrees ?? []).filter((worktree) =>
       sessionIds.has(worktree.sessionId),
     ).length;
-    const confirmed = await askConfirm({
-      title: `Delete ${item.name} permanently?`,
-      message: `The folder ${item.path} and everything in it are deleted${
-        worktrees > 0
-          ? `, including ${worktrees} session ${worktrees === 1 ? "worktree" : "worktrees"} and ${worktrees === 1 ? "its branch" : "their branches"}, unpushed commits too`
-          : ""
-      }. Its tasks and sessions go with it. This cannot be undone.`,
-      confirmLabel: "Delete",
-      danger: true,
-    });
-    if (!confirmed) return;
+    return `The folder ${item.path} and everything in it are deleted${
+      worktrees > 0
+        ? `, including ${worktrees} session ${worktrees === 1 ? "worktree" : "worktrees"} and ${worktrees === 1 ? "its branch" : "their branches"}, unpushed commits too`
+        : ""
+    }. Its tasks and sessions go with it. This cannot be undone.`;
+  }
+
+  async function deleteWorkspace(item: WorkspaceDto) {
     setDeletingWorkspaceIds((current) => new Set(current).add(item.id));
     await perform(client.request.workspaceDelete({ reference: item.id }));
     setDeletingWorkspaceIds((current) => {
@@ -4031,24 +4027,24 @@ export function WorkspaceApp({
               );
             })}
             {!failed && (
-              <button
+              <ConfirmButton
                 aria-label={`Remove ${repository.name}`}
+                armedTitle="Its read-only checkout under repos/ is deleted. The shared clone stays in the library, so it can be added again."
                 className={`quiet repository-action ${pendingRepositoryActions.has(`detach:${repository.id}`) ? "syncing" : ""}`}
                 disabled={
                   preparing ||
                   worktrees.length > 0 ||
                   pendingRepositoryActions.has(`detach:${repository.id}`)
                 }
-                onClick={() => void removeWorkspaceRepository(repository)}
+                onConfirm={() => void detachWorkspaceRepository(repository.id)}
                 title={
                   worktrees.length > 0
                     ? "Remove its working trees first; sessions are using this repository"
                     : "Remove this repository from the workspace"
                 }
-                type="button"
               >
                 <DismissIcon />
-              </button>
+              </ConfirmButton>
             )}
           </span>
         </div>
@@ -4166,26 +4162,33 @@ export function WorkspaceApp({
                     >
                       <TerminalIcon />
                     </button>
-                    <button
-                      aria-label={`Remove ${worktree.branchName}`}
-                      className={`quiet repository-action ${pendingRepositoryActions.has(`remove:${worktree.sessionId}:${worktree.repositoryId}`) ? "syncing" : ""}`}
-                      disabled={pendingRepositoryActions.has(
-                        `remove:${worktree.sessionId}:${worktree.repositoryId}`,
-                      )}
-                      onClick={() =>
-                        setWorktreeAction({
-                          worktree,
-                          repositoryName: repository.name,
-                          sessionLabel: session
-                            ? sessionName(session)
-                            : worktree.sessionId.slice(0, 8),
-                        })
-                      }
-                      title="Remove this working tree"
-                      type="button"
-                    >
-                      <DismissIcon />
-                    </button>
+                    {(() => {
+                      const discard = worktreeDiscardLabel(worktree);
+                      return (
+                        <ConfirmButton
+                          aria-label={`Remove ${worktree.branchName}`}
+                          armedLabel={discard ?? "Confirm"}
+                          armedTitle={
+                            discard
+                              ? "Removing it discards that work permanently. Push first to keep it."
+                              : "Nothing is uncommitted or unpushed, so the directory and its branch go without losing anything."
+                          }
+                          className={`quiet repository-action ${pendingRepositoryActions.has(`remove:${worktree.sessionId}:${worktree.repositoryId}`) ? "syncing" : ""}`}
+                          disabled={pendingRepositoryActions.has(
+                            `remove:${worktree.sessionId}:${worktree.repositoryId}`,
+                          )}
+                          onConfirm={() =>
+                            void removeSessionWorktree(
+                              worktree,
+                              discard !== undefined,
+                            )
+                          }
+                          title="Remove this working tree"
+                        >
+                          <DismissIcon />
+                        </ConfirmButton>
+                      );
+                    })()}
                   </div>
                   {changes && changes.files.length > 0 && !folded && (
                     <ChangedFileList
@@ -4526,19 +4529,23 @@ export function WorkspaceApp({
                 <HandoffIcon />
               </button>
             )}
-          <button
+          <ConfirmButton
             aria-label={`Archive ${sessionName(session)} session`}
+            armedTitle={
+              holdsRoutines
+                ? "Running work stops and its routines pause. Restoring the session resumes both."
+                : "Running work stops. Its conversation can be restored and resumed later."
+            }
             className="session-card-action session-card-hover-action"
-            onClick={() => setSessionAction({ session })}
+            onConfirm={() => void archiveSession(session)}
             title={
               holdsRoutines
                 ? "Archive session and pause its routines"
                 : "Archive session"
             }
-            type="button"
           >
             <ArchiveIcon />
-          </button>
+          </ConfirmButton>
           {/* Last, so hand off and archive open to its left on hover. */}
           <SessionMenu
             color={session.color}
@@ -4614,6 +4621,7 @@ export function WorkspaceApp({
     disabled?: boolean;
     onRestore: () => void;
     onDelete: () => void;
+    deleteDisclosure: string;
   }) => (
     <div className="archived-item" key={row.id}>
       <span className="archived-item-text" title={row.name}>
@@ -4636,16 +4644,16 @@ export function WorkspaceApp({
         >
           <TaskActionIcon name="unarchive" />
         </button>
-        <button
+        <ConfirmButton
           aria-label={`Delete ${row.name} permanently`}
+          armedTitle={row.deleteDisclosure}
           className="archived-item-action danger"
           disabled={row.disabled}
-          onClick={row.onDelete}
+          onConfirm={row.onDelete}
           title="Delete permanently"
-          type="button"
         >
           <TaskActionIcon name="delete" />
-        </button>
+        </ConfirmButton>
       </span>
     </div>
   );
@@ -4734,6 +4742,7 @@ export function WorkspaceApp({
                         disabled: pendingSessionIds.has(session.id),
                         onRestore: () => void restoreSession(session),
                         onDelete: () => void deleteSession(session),
+                        deleteDisclosure: sessionDeleteDisclosure(session),
                       }),
                     )}
                   </div>
@@ -4984,13 +4993,6 @@ export function WorkspaceApp({
   );
 
   async function deleteTask(task: TaskDto) {
-    const confirmed = await askConfirm({
-      title: "Delete task",
-      message: `Permanently delete task #${task.number} "${task.title}"? This cannot be undone.`,
-      confirmLabel: "Delete task",
-      danger: true,
-    });
-    if (!confirmed) return;
     await perform(client.request.taskRemove({ id: task.id, force: true }));
     setSelectedTaskId(undefined);
   }
@@ -5416,15 +5418,16 @@ export function WorkspaceApp({
                       >
                         <SessionLaunchIcon />
                       </button>
-                      <button
+                      <ConfirmButton
                         aria-label={`Archive ${item.name} workspace`}
+                        armedTitle="All its sessions stop and move to their archived list. The workspace and its sessions can be restored later."
                         className="session-card-action workspace-card-archive"
-                        onClick={() => setWorkspaceAction(item)}
+                        disabled={busy}
+                        onConfirm={() => void archiveWorkspace(item)}
                         title="Archive workspace"
-                        type="button"
                       >
                         <ArchiveIcon />
-                      </button>
+                      </ConfirmButton>
                       {/* Last, so the ones that come in on hover open to its
                           left and it never moves. */}
                       <button
@@ -5464,6 +5467,7 @@ export function WorkspaceApp({
                     restoreLabel: "Restore",
                     onRestore: () => void restoreWorkspace(item),
                     onDelete: () => void deleteWorkspace(item),
+                    deleteDisclosure: workspaceDeleteDisclosure(item),
                   }),
                 )}
               </div>
@@ -6568,148 +6572,6 @@ export function WorkspaceApp({
               onInstall: installUpdate,
             }}
           />
-        </Modal>
-      )}
-
-      {worktreeAction &&
-        (() => {
-          const status = worktreeAction.worktree.gitStatus;
-          const unsaved = status?.changedFiles ?? 0;
-          // The same two facts the removal guard checks: a merged pull
-          // request holding HEAD means the commits are on the base branch.
-          const unpushed = worktreeAction.worktree.landed
-            ? 0
-            : (status?.unpushed ?? status?.ahead ?? 0);
-          const holdsWork = unsaved > 0 || unpushed > 0;
-          return (
-            <Modal
-              onClose={() => setWorktreeAction(undefined)}
-              title="Remove working tree"
-            >
-              <div className="confirmation-content">
-                <p>
-                  Remove the <strong>{worktreeAction.repositoryName}</strong>{" "}
-                  working tree for{" "}
-                  <strong>{worktreeAction.sessionLabel}</strong>?
-                </p>
-                <p>
-                  {holdsWork ? (
-                    <>
-                      It has{" "}
-                      {unsaved > 0 &&
-                        `${unsaved} uncommitted ${unsaved === 1 ? "change" : "changes"}`}
-                      {unsaved > 0 && unpushed > 0 && " and "}
-                      {unpushed > 0 &&
-                        `${unpushed} unpushed ${unpushed === 1 ? "commit" : "commits"}`}
-                      . Removing it discards that permanently. Push first if you
-                      want to keep it.
-                    </>
-                  ) : (
-                    <>
-                      Nothing is uncommitted and nothing is unpushed, so the
-                      directory and its branch can go without losing anything.
-                    </>
-                  )}
-                </p>
-                <div className="modal-actions">
-                  <button
-                    className="quiet"
-                    onClick={() => setWorktreeAction(undefined)}
-                    type="button"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    autoFocus={!holdsWork}
-                    className={holdsWork ? "danger-action" : ""}
-                    onClick={() => {
-                      const pending = worktreeAction;
-                      setWorktreeAction(undefined);
-                      void removeSessionWorktree(pending.worktree, holdsWork);
-                    }}
-                    type="button"
-                  >
-                    {holdsWork ? "Discard and remove" : "Remove"}
-                  </button>
-                </div>
-              </div>
-            </Modal>
-          );
-        })()}
-      {sessionAction && (
-        <Modal
-          onClose={() => setSessionAction(undefined)}
-          title="Archive session"
-        >
-          <div className="confirmation-content">
-            <p>
-              Archive <strong>{sessionName(sessionAction.session)}</strong>?
-              Running work will stop, but its conversation can be restored and
-              resumed later.
-            </p>
-            {routinesBySession.has(sessionAction.session.id) && (
-              <p>
-                This session runs routines. Archiving pauses them and keeps them
-                and their tasks. Restoring the session resumes them.
-              </p>
-            )}
-            <div className="modal-actions">
-              <button
-                className="quiet"
-                onClick={() => setSessionAction(undefined)}
-                type="button"
-              >
-                Cancel
-              </button>
-              <button
-                autoFocus
-                className="danger-action"
-                disabled={busy}
-                onClick={() => void archiveSession(sessionAction.session)}
-                type="button"
-              >
-                Archive session
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
-
-      {workspaceAction && (
-        <Modal
-          onClose={() => setWorkspaceAction(undefined)}
-          title="Archive workspace"
-        >
-          <form
-            className="confirmation-content"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void archiveWorkspace(workspaceAction);
-            }}
-          >
-            <p>
-              Archive <strong>{workspaceAction.name}</strong>? All sessions in
-              this workspace will stop and move to their archived list. You can
-              restore the workspace and resume its sessions later.
-            </p>
-            <div className="modal-actions">
-              <button
-                className="quiet"
-                onClick={() => setWorkspaceAction(undefined)}
-                type="button"
-              >
-                Cancel
-              </button>
-              <button
-                autoFocus
-                className="danger-action"
-                disabled={busy}
-                type="submit"
-              >
-                Archive workspace
-              </button>
-            </div>
-          </form>
         </Modal>
       )}
 

@@ -824,9 +824,17 @@ export interface DesktopRpcSchema {
         { workspace: string; path: string; destinationPath: string },
         WorkspaceFileEntryDto
       >;
-      /** Recursive for a folder. Returns the entry as it was, to report on. */
+      /**
+       * Recursive for a folder. Moves it to Daedalus's trash and returns the
+       * entry as it was, with the `trashId` that restores it.
+       */
       workspaceEntryRemove: Request<
         { workspace: string; path: string },
+        WorkspaceFileEntryDto & { trashId: string }
+      >;
+      /** Puts a removed entry back where it was. */
+      workspaceEntryRestore: Request<
+        { workspace: string; trashId: string },
         WorkspaceFileEntryDto
       >;
       /**

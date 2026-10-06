@@ -1213,6 +1213,32 @@ const samePullRequest = (
     left.state === right.state &&
     left.isDraft === right.isDraft);
 
+/** How long a removed entry can still be restored. */
+const TRASH_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+const TRASH_ORIGIN = "origin.json";
+const TRASH_ENTRY = "entry";
+
+interface TrashOrigin {
+  workspaceId: string;
+  /** Relative to the workspace root. */
+  path: string;
+  removedAt: string;
+}
+
+/**
+ * `rename`, or a copy and delete when the two paths are on different volumes
+ * (a workspace outside the Daedalus home can be).
+ */
+async function moveAcrossVolumes(from: string, to: string): Promise<void> {
+  try {
+    await rename(from, to);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
+    await cp(from, to, { recursive: true, verbatimSymlinks: true });
+    await rm(from, { recursive: true, force: true });
+  }
+}
+
 export class WorkspaceContentService {
   /** In-flight preparations, so a shutdown or a test can wait for them. */
   private readonly preparations = new Map<string, Promise<void>>();
@@ -3112,11 +3138,16 @@ export class WorkspaceContentService {
     );
   }
 
-  /** Removes an entry, and everything under it when it is a folder. */
+  /**
+   * Removes an entry, and everything under it when it is a folder, by moving
+   * it into Daedalus's trash so `restoreEntry` can put it back. The returned
+   * `trashId` names it there. Anything in the trash longer than
+   * `TRASH_KEEP_MS` is deleted for good on the next remove.
+   */
   async removeEntry(input: {
     workspace: string;
     path: string;
-  }): Promise<WorkspaceFileEntry> {
+  }): Promise<WorkspaceFileEntry & { trashId: string }> {
     const workspace = await this.workspaces.getActive(input.workspace);
     const source = await this.resolveMutablePath(workspace, input.path);
     const entry = await this.describeEntry(
@@ -3124,8 +3155,81 @@ export class WorkspaceContentService {
       source.target,
       source.relativePath,
     );
-    await rm(source.target, { recursive: true, force: false });
-    return entry;
+    const trashId = crypto.randomUUID();
+    const holder = join(this.trashRoot, trashId);
+    await ensureDirectory(holder);
+    const origin: TrashOrigin = {
+      workspaceId: workspace.id,
+      path: source.relativePath,
+      removedAt: new Date().toISOString(),
+    };
+    try {
+      await writeFile(join(holder, TRASH_ORIGIN), JSON.stringify(origin));
+      await moveAcrossVolumes(source.target, join(holder, TRASH_ENTRY));
+    } catch (error) {
+      await rm(holder, { recursive: true, force: true });
+      throw error;
+    }
+    void this.emptyTrash().catch(() => {});
+    return { ...entry, trashId };
+  }
+
+  /** Puts a removed entry back where it was, if nothing has taken its place. */
+  async restoreEntry(input: {
+    workspace: string;
+    trashId: string;
+  }): Promise<WorkspaceFileEntry> {
+    const workspace = await this.workspaces.getActive(input.workspace);
+    if (!/^[0-9a-f-]{36}$/.test(input.trashId))
+      throw new DaedalusError("VALIDATION", "Not a trash id");
+    const holder = join(this.trashRoot, input.trashId);
+    let origin: TrashOrigin;
+    try {
+      origin = JSON.parse(
+        await readTextFile(join(holder, TRASH_ORIGIN)),
+      ) as TrashOrigin;
+    } catch {
+      throw new DaedalusError(
+        "NOT_FOUND",
+        "That entry is no longer in the trash",
+      );
+    }
+    if (origin.workspaceId !== workspace.id)
+      throw new DaedalusError(
+        "VALIDATION",
+        "That entry was removed from another workspace",
+      );
+    const destination = await this.resolveDestination(workspace, origin.path);
+    if (await pathExists(destination.target))
+      throw new DaedalusError(
+        "CONFLICT",
+        `Workspace path '${origin.path}' already exists`,
+      );
+    await moveAcrossVolumes(join(holder, TRASH_ENTRY), destination.target);
+    await rm(holder, { recursive: true, force: true });
+    return this.describeEntry(
+      workspace.id,
+      destination.target,
+      destination.relativePath,
+    );
+  }
+
+  private get trashRoot(): string {
+    return join(this.config.home, "trash");
+  }
+
+  /** Deletes for good whatever has been in the trash past `TRASH_KEEP_MS`. */
+  private async emptyTrash(): Promise<void> {
+    const cutoff = Date.now() - TRASH_KEEP_MS;
+    const holders = await readdir(this.trashRoot).catch(() => []);
+    await Promise.all(
+      holders.map(async (name) => {
+        const holder = join(this.trashRoot, name);
+        const info = await lstat(holder).catch(() => undefined);
+        if (info && info.mtimeMs < cutoff)
+          await rm(holder, { recursive: true, force: true });
+      }),
+    );
   }
 
   /**

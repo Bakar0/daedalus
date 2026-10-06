@@ -28,6 +28,7 @@ import type {
   TaskDto,
 } from "@daedalus/protocol";
 import { confirmStartDespite } from "./BoardView";
+import { ConfirmButton } from "./ConfirmButton";
 import { providerLabel, sessionName } from "./session-view";
 import { TaskActionIcon } from "./task-action-icons";
 import type { BoardProvider, TaskActions } from "./task-actions";
@@ -252,15 +253,15 @@ export function TaskActionBar(props: TaskActionBarProps) {
             <TaskActionIcon name="edit" />
             Edit
           </button>
-          <button
+          <ConfirmButton
+            armedTitle="Permanently delete this task. This cannot be undone."
             className="danger-link"
-            onClick={props.onDelete}
+            onConfirm={props.onDelete}
             title="Delete this task. It asks first."
-            type="button"
           >
             <TaskActionIcon name="delete" />
             Delete
-          </button>
+          </ConfirmButton>
         </div>
       </div>
       {actions.launches.map((launch) => (

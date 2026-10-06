@@ -573,6 +573,10 @@ export function createDesktopRequestHandlers(
       mutate(async () => ({
         ...(await context.workspaceContent.removeEntry(params)),
       })),
+    workspaceEntryRestore: (params) =>
+      mutate(async () => ({
+        ...(await context.workspaceContent.restoreEntry(params)),
+      })),
     workspaceChanges: ({ workspace }) =>
       result(async () =>
         (await context.workspaceContent.worktreeChanges(workspace)).map(

@@ -1929,6 +1929,22 @@ button:not(
 .app-dialog-message {
   white-space: pre-line;
 }
+/* A question and two buttons: kept narrow and tight so the answer is near. */
+.app-dialog {
+  max-width: 340px;
+  padding: 16px 18px;
+}
+.app-dialog .eyebrow {
+  display: none;
+}
+.app-dialog h2 {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.app-dialog .confirmation-content {
+  gap: 14px;
+  margin-top: 8px;
+}
 .modal-form {
   margin-top: 22px;
 }
@@ -6731,4 +6747,57 @@ dd {
   display: flex;
   gap: 4px;
   margin: -4px 0 8px;
+}
+
+/* An armed ConfirmButton: the icon becomes a red-tinted pill in the same
+   spot, so the second click needs no travel. A bar along its bottom drains
+   over the window it stays armed for. The class repeats to outrank the fixed
+   icon-button sizes above, several of which are `!important`. */
+.confirm-armed.confirm-armed.confirm-armed.confirm-armed {
+  animation: confirm-arm 160ms cubic-bezier(0.3, 1.5, 0.6, 1);
+  background: color-mix(in srgb, var(--danger) 14%, transparent) !important;
+  border: 0 !important;
+  border-radius: 6px !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 55%, transparent);
+  color: var(--danger) !important;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  padding: 0 9px !important;
+  position: relative;
+  white-space: nowrap;
+  width: auto !important;
+}
+.confirm-armed.confirm-armed.confirm-armed.confirm-armed:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 24%, transparent) !important;
+  color: var(--danger) !important;
+}
+.confirm-armed.confirm-armed.confirm-armed.confirm-armed::after {
+  animation: confirm-window var(--confirm-window, 3s) linear forwards;
+  background: var(--danger);
+  bottom: 0;
+  content: "";
+  height: 2px;
+  left: 0;
+  position: absolute;
+  right: 0;
+  transform-origin: left;
+}
+@keyframes confirm-arm {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+}
+@keyframes confirm-window {
+  to {
+    transform: scaleX(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .confirm-armed.confirm-armed.confirm-armed.confirm-armed,
+  .confirm-armed.confirm-armed.confirm-armed.confirm-armed::after {
+    animation: none;
+  }
 }
