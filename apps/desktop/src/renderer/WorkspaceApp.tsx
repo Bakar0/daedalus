@@ -3417,6 +3417,19 @@ export function WorkspaceApp({
     );
   }
 
+  async function removeWorkspaceRepository(
+    repository: WorkspaceContentDto["repositories"][number],
+  ) {
+    const confirmed = await askConfirm({
+      title: `Remove ${repository.name}?`,
+      message:
+        "Its read-only checkout under repos/ is deleted. The shared clone stays in the library, so it can be added again.",
+      confirmLabel: "Remove",
+      danger: true,
+    });
+    if (confirmed) await detachWorkspaceRepository(repository.id);
+  }
+
   // One repository, or every one in the workspace when `repositoryId` is
   // absent. Each row then says what its checkout took.
   /**
@@ -3898,6 +3911,26 @@ export function WorkspaceApp({
                 </button>
               );
             })}
+            {!failed && (
+              <button
+                aria-label={`Remove ${repository.name}`}
+                className={`quiet repository-action ${pendingRepositoryActions.has(`detach:${repository.id}`) ? "syncing" : ""}`}
+                disabled={
+                  preparing ||
+                  worktrees.length > 0 ||
+                  pendingRepositoryActions.has(`detach:${repository.id}`)
+                }
+                onClick={() => void removeWorkspaceRepository(repository)}
+                title={
+                  worktrees.length > 0
+                    ? "Remove its working trees first; sessions are using this repository"
+                    : "Remove this repository from the workspace"
+                }
+                type="button"
+              >
+                <DismissIcon />
+              </button>
+            )}
           </span>
         </div>
         {worktrees.length === 0
