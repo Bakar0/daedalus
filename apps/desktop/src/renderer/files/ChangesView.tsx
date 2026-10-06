@@ -259,7 +259,9 @@ export function WorktreeCommits({
         >
           ›
         </span>
-        {count} {count === 1 ? "commit" : "commits"}
+        <span className="worktree-commits-label">
+          {count} {count === 1 ? "commit" : "commits"}
+        </span>
       </button>
       {open &&
         (commits === undefined ? (

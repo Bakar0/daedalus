@@ -6613,6 +6613,11 @@ dd {
   font-size: 10px !important;
   gap: 4px;
   padding: 2px 6px !important;
+  white-space: nowrap;
+}
+/* One label, so the count and the word never wrap apart. */
+.worktree-commits-label {
+  white-space: nowrap;
 }
 .worktree-commits-toggle:hover {
   color: var(--text) !important;
