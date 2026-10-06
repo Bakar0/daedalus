@@ -586,6 +586,17 @@ export function createDesktopRequestHandlers(
           (commit) => ({ ...commit }),
         ),
       ),
+    workspacePullRequests: (params) =>
+      result(async () => {
+        const pulls =
+          await context.workspaceContent.worktreePullRequests(params);
+        return pulls
+          ? pulls.map((pull) => ({
+              ...pull,
+              commits: pull.commits.map((commit) => ({ ...commit })),
+            }))
+          : null;
+      }),
     workspaceCommitFiles: (params) =>
       result(async () =>
         (await context.workspaceContent.commitFiles(params)).map((file) => ({

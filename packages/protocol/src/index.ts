@@ -236,6 +236,13 @@ export interface WorktreeCommitDto {
   author: string;
   date: string;
   subject: string;
+  /** On a branch on `origin`; false for a commit that exists only here. */
+  pushed?: boolean;
+}
+
+/** A pull request opened from a worktree's branch, with its commits. */
+export interface WorktreePullRequestDto extends PullRequestRefDto {
+  commits: WorktreeCommitDto[];
 }
 
 export interface FileLinkTargetDto {
@@ -846,6 +853,14 @@ export interface DesktopRpcSchema {
       workspaceCommits: Request<
         { workspace: string; root: string },
         WorktreeCommitDto[]
+      >;
+      /**
+       * Every pull request from a worktree's branch with its commits, or null
+       * when `gh` cannot answer.
+       */
+      workspacePullRequests: Request<
+        { workspace: string; root: string },
+        WorktreePullRequestDto[] | null
       >;
       /** The files one commit of a session worktree changed. */
       workspaceCommitFiles: Request<

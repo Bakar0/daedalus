@@ -6680,3 +6680,93 @@ dd {
 .worktree-commits .changes-list {
   margin-left: 12px;
 }
+.pr-chip-more {
+  opacity: 0.7;
+}
+
+/* A worktree's commits grouped by the pull request each went into. */
+.worktree-pr-heading {
+  align-items: center;
+  display: flex;
+  padding-left: 10px;
+}
+.worktree-pr-toggle {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 4px !important;
+  color: var(--secondary) !important;
+  display: flex;
+  flex: 1;
+  font-size: 11px !important;
+  gap: 5px;
+  min-width: 0;
+  padding: 3px 4px !important;
+  text-align: left;
+}
+.worktree-pr-toggle:hover {
+  background: var(--raised-hover) !important;
+}
+.worktree-pr-label {
+  align-items: center;
+  display: flex;
+  flex: 1;
+  font-weight: 600;
+  gap: 5px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.worktree-pr-label em {
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 500;
+  padding: 0 5px;
+}
+.worktree-pr-label.state-open {
+  color: #3fb950;
+}
+.worktree-pr-label.state-draft {
+  color: #8b949e;
+}
+.worktree-pr-label.state-merged {
+  color: #a371f7;
+}
+.worktree-pr-label.state-closed {
+  color: #f85149;
+}
+.worktree-pr-title {
+  color: var(--secondary);
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.worktree-pr-count {
+  color: var(--muted);
+  flex: 0 0 auto;
+  font-size: 10px;
+}
+.worktree-pr-open {
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 4px !important;
+  color: var(--muted) !important;
+  font-size: 12px !important;
+  padding: 2px 6px !important;
+}
+.worktree-pr-open:hover {
+  background: var(--raised-hover) !important;
+  color: var(--text) !important;
+}
+.worktree-pr .worktree-commit {
+  padding-left: 26px !important;
+}
+.worktree-commit-local {
+  border: 1px solid rgb(226 192 141 / 0.4);
+  border-radius: 8px;
+  color: #e2c08d;
+  flex: 0 0 auto;
+  font-size: 9px;
+  padding: 0 5px;
+}

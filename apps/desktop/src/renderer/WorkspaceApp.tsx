@@ -3816,6 +3816,14 @@ export function WorkspaceApp({
               const changes = worktreeChanges.get(changesKey);
               const folded = foldedWorktrees.has(changesKey);
               const commitsAhead = worktree.gitStatus?.ahead ?? 0;
+              // Earlier pull requests from this branch, merged and remembered;
+              // the chip shows the current one and counts these.
+              const earlierPulls = (snapshot?.shipped ?? []).filter(
+                (pull) =>
+                  pull.sessionId === worktree.sessionId &&
+                  pull.repositoryId === worktree.repositoryId &&
+                  pull.url !== worktree.pullRequest?.url,
+              );
               // Something to unfold: changed files, or commits to read.
               const unfoldable = Boolean(
                 changes && (changes.files.length > 0 || commitsAhead > 0),
@@ -3860,7 +3868,13 @@ export function WorkspaceApp({
                           onClick={() =>
                             openTerminalLink(worktree.pullRequest!.url)
                           }
-                          title={`Pull request #${worktree.pullRequest.number}${worktree.pullRequest.title ? `: ${worktree.pullRequest.title}` : ""}\n${worktree.pullRequest.isDraft && worktree.pullRequest.state === "OPEN" ? "Draft" : worktree.pullRequest.state.toLowerCase()} · open on GitHub`}
+                          title={[
+                            `Pull request #${worktree.pullRequest.number}${worktree.pullRequest.title ? `: ${worktree.pullRequest.title}` : ""}`,
+                            `${worktree.pullRequest.isDraft && worktree.pullRequest.state === "OPEN" ? "Draft" : worktree.pullRequest.state.toLowerCase()} · click to open on GitHub`,
+                            ...earlierPulls.map(
+                              (pull) => `Also #${pull.number} merged`,
+                            ),
+                          ].join("\n")}
                           type="button"
                         >
                           <svg aria-hidden="true" viewBox="0 0 16 16">
@@ -3870,6 +3884,11 @@ export function WorkspaceApp({
                             <path d="M4 5.1v5.8M12 10.9V6.5a2 2 0 0 0-2-2H7.5M9 3l-1.5 1.5L9 6" />
                           </svg>
                           #{worktree.pullRequest.number}
+                          {earlierPulls.length > 0 && (
+                            <span className="pr-chip-more">
+                              +{earlierPulls.length}
+                            </span>
+                          )}
                         </button>
                       )}
                       {changes && changes.files.length > 0 && (
@@ -3948,6 +3967,7 @@ export function WorkspaceApp({
                         openFromPanel({ ...options, diff: target })
                       }
                       onOpenFile={(path) => openFromPanel({ path })}
+                      onOpenLink={openTerminalLink}
                       root={changes.root}
                       workspaceId={workspace.id}
                     />

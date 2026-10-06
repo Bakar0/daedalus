@@ -271,6 +271,13 @@ export interface WorktreeCommit {
   /** ISO 8601, the author date. */
   date: string;
   subject: string;
+  /** On a branch on `origin`; false for a commit that exists only here. */
+  pushed?: boolean;
+}
+
+/** A pull request opened from a worktree's branch, with what it carries. */
+export interface WorktreePullRequest extends PullRequestRef {
+  commits: WorktreeCommit[];
 }
 
 /** Where a path printed in a terminal points, when it is a workspace file. */
