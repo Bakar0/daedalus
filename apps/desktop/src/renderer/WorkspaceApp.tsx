@@ -2693,6 +2693,15 @@ export function WorkspaceApp({
           launch.workspaceId === workspaceId,
       )
     : undefined;
+  // The launch's own row, once a snapshot carries it: the list then shows
+  // that card instead of the launch's, and it must stay the highlighted one
+  // until the spawn returns and the session is opened for real.
+  const openingSessionId = openingLaunch
+    ? sessions.find((item) => launchMatchesSession(openingLaunch, item))?.id
+    : undefined;
+  const highlightedSessionId = openingLaunch
+    ? openingSessionId
+    : activeSessionId;
   const activeSession = openingLaunch
     ? undefined
     : sessions.find((item) => item.id === activeSessionId);
@@ -4254,7 +4263,7 @@ export function WorkspaceApp({
     const waitingRuns = routinesBySession.get(session.id)?.waiting.length ?? 0;
     return (
       <div
-        className={`session-card tone-${statusView.tone} ${view === "session" && session.id === activeSessionId ? "selected" : ""}`}
+        className={`session-card tone-${statusView.tone} ${view === "session" && session.id === highlightedSessionId ? "selected" : ""}`}
         data-color={session.color ?? undefined}
         data-pinned={session.pinnedAt ? "true" : undefined}
         data-attention={statusView.attention ? "true" : undefined}
@@ -4443,7 +4452,7 @@ export function WorkspaceApp({
   const renderLaunchCard = (launch: SessionLaunchState) => (
     <div
       aria-busy={launch.status === "starting"}
-      className={`session-card session-card-${launch.status}`}
+      className={`session-card session-card-${launch.status} ${view === "session" && launch.key === openingLaunch?.key ? "selected" : ""}`}
       key={launch.key}
     >
       <div className="session-card-main">
@@ -5698,7 +5707,8 @@ export function WorkspaceApp({
                 />
               </div>
             ) : openingLaunch ? (
-              <div className="terminal-empty">
+              <div aria-busy="true" className="terminal-empty">
+                <span aria-hidden="true" className="session-launch-spinner" />
                 <strong>Starting {openingLaunch.tool}…</strong>
                 <span>The terminal opens here as soon as it is ready.</span>
               </div>
