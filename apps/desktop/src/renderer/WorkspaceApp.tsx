@@ -5312,6 +5312,22 @@ export function WorkspaceApp({
                     {workspaceContent.repositories.length}
                   </small>
                 )}
+                <button
+                  aria-label="Add repository"
+                  className="quiet"
+                  onClick={() => openRepositoryModal()}
+                  title="Add repository"
+                  type="button"
+                >
+                  + Add
+                </button>
+              </div>
+            </div>
+            {/* Fetch and pull for every repository at once, a row of their
+                own so the heading stays the panel's name and Add. */}
+            {!workspacePanelCollapsed &&
+            workspaceContent?.repositories.length ? (
+              <div className="repository-toolbar">
                 {(["fetch", "pull"] as const).map((mode) => {
                   const anyRunning = ["fetch", "pull"].some((kind) =>
                     [...pendingRepositoryActions].some((action) =>
@@ -5341,21 +5357,12 @@ export function WorkspaceApp({
                       ) : (
                         <RepositoryPullIcon />
                       )}
-                      {mode === "fetch" ? "Fetch" : "Pull"}
+                      {mode === "fetch" ? "Fetch all" : "Pull all"}
                     </button>
                   );
                 })}
-                <button
-                  aria-label="Add repository"
-                  className="quiet"
-                  onClick={() => openRepositoryModal()}
-                  title="Add repository"
-                  type="button"
-                >
-                  + Add
-                </button>
               </div>
-            </div>
+            ) : null}
             {workspacePanelCollapsed ? workspaceRail : workspaceRepositories}
           </aside>
         )}

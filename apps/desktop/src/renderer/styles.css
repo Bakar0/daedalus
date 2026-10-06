@@ -6689,3 +6689,10 @@ dd {
   font-size: 9px;
   padding: 0 5px;
 }
+
+/* Fetch all and Pull all, under the panel's heading. */
+.repository-toolbar {
+  display: flex;
+  gap: 4px;
+  margin: -4px 0 8px;
+}
