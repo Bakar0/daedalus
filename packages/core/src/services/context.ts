@@ -30,7 +30,11 @@ import { TaskService } from "./tasks";
 import { TelemetryService } from "./telemetry";
 import { WorkspaceService } from "./workspaces";
 import { WorkspaceContentService } from "./workspace-content";
-import { WorkspaceWatchService } from "./workspace-watch";
+import {
+  WORKSPACE_FILES_CHANGED,
+  WorkspaceWatchService,
+  type WorkspaceFilesChanged,
+} from "./workspace-watch";
 
 export interface ApplicationContext {
   config: DaedalusConfig;
@@ -164,6 +168,14 @@ export async function createApplicationContext(
         message: error.message,
       }),
   );
+  // File changes the watcher sees tell the git status pass which trees to
+  // measure, so it can leave every other tree alone.
+  events.subscribe((event) => {
+    if (event.type !== WORKSPACE_FILES_CHANGED) return;
+    const { workspaceId, changes, overflow } =
+      event.payload as WorkspaceFilesChanged;
+    workspaceContent.noteFilesChanged(workspaceId, changes, overflow);
+  });
   const telemetry = new TelemetryService(repositories, config);
   const presence = new PresenceService(config);
   const notifications = new NotificationService(repositories, presence, {

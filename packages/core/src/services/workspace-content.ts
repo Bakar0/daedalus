@@ -2,10 +2,12 @@ import {
   appendFile,
   cp,
   lstat,
+  readFile,
   readlink,
   readdir,
   rename,
   rm,
+  stat,
   symlink,
   unlink,
   writeFile,
@@ -18,6 +20,7 @@ import {
   join,
   relative,
   resolve,
+  sep,
 } from "node:path";
 import {
   canonicalPath,
@@ -806,14 +809,83 @@ const STATUS_REFRESH_INTERVAL_MS = 1_000;
 const BOARD_STATUS_REFRESH_INTERVAL_MS = 10_000;
 
 /**
- * The read-only checkouts under `repos/` move only when Daedalus fetches,
- * pulls or syncs them, and each of those forces a pass. An ordinary pass
- * measures them only when nothing is cached yet or this long has passed.
- * Measuring them on every pass cost a 75-repository workspace hundreds of git
- * processes a second while agents worked, and every launch blocks the thread
- * that relays terminal input.
+ * A pass measures a tree only when something says it changed: its git
+ * metadata (HEAD, index, its branch and its base on `origin`) has a new
+ * modification time, or the workspace watcher saw a file change inside it.
+ * Neither check starts a process. These ages are the safety net for what
+ * neither can see — above all an edit in a workspace that is not open, which
+ * has no watcher. A live session's tree is re-measured at least this often.
  */
-const REFERENCE_STATUS_REFRESH_MS = 60_000;
+const LIVE_TREE_MAX_AGE_MS = 30_000;
+/** Everything else: read-only checkouts and trees of ended sessions. */
+const IDLE_TREE_MAX_AGE_MS = 10 * 60_000;
+
+/**
+ * File changes arrive in bursts while an agent writes. A burst is answered
+ * with one pass this long after it goes quiet, so a badge follows an edit
+ * within about a second without a pass per file.
+ */
+const FILE_CHANGE_SETTLE_MS = 750;
+
+/**
+ * Where a checkout's git metadata lives. A worktree's `.git` is a file that
+ * points at its own directory inside the shared clone, and that directory's
+ * `commondir` points at the clone's refs.
+ */
+async function gitDirectories(
+  path: string,
+): Promise<{ gitDir: string; commonDir: string } | undefined> {
+  const dotGit = join(path, ".git");
+  const info = await stat(dotGit).catch(() => undefined);
+  if (!info) return undefined;
+  if (info.isDirectory()) return { gitDir: dotGit, commonDir: dotGit };
+  const pointer = (await readFile(dotGit, "utf8").catch(() => ""))
+    .trim()
+    .replace(/^gitdir:\s*/, "");
+  if (!pointer) return undefined;
+  const gitDir = resolve(path, pointer);
+  const common = (
+    await readFile(join(gitDir, "commondir"), "utf8").catch(() => "")
+  ).trim();
+  return { gitDir, commonDir: common ? resolve(gitDir, common) : gitDir };
+}
+
+/**
+ * A cheap fingerprint of everything git metadata that a status depends on:
+ * what HEAD names, and when HEAD, the index, the branch, its base on
+ * `origin` and the packed refs last changed. Commits, checkouts, staging and
+ * fetches all move one of them; an edit to a file does not, which is what the
+ * watcher and the maximum age are for. Only `stat` and one small read, never
+ * a process, so it costs nothing next to the git it saves.
+ */
+async function gitMetadataFingerprint(
+  path: string,
+  baseBranch: string | null,
+): Promise<string | undefined> {
+  const directories = await gitDirectories(path);
+  if (!directories) return undefined;
+  const { gitDir, commonDir } = directories;
+  const head = (
+    await readFile(join(gitDir, "HEAD"), "utf8").catch(() => "")
+  ).trim();
+  const branchRef = head.startsWith("ref: ") ? head.slice(5) : undefined;
+  const files = [
+    join(gitDir, "HEAD"),
+    join(gitDir, "index"),
+    join(commonDir, "packed-refs"),
+    ...(branchRef ? [join(commonDir, branchRef)] : []),
+    ...(baseBranch
+      ? [join(commonDir, "refs", "remotes", "origin", baseBranch)]
+      : []),
+  ];
+  const stamps = await Promise.all(
+    files.map(async (file) => {
+      const info = await stat(file).catch(() => undefined);
+      return info ? `${info.mtimeMs}:${info.size}` : "-";
+    }),
+  );
+  return [head, ...stamps].join("|");
+}
 
 /**
  * At most this many targets are measured at once. Launching a process blocks
@@ -1159,10 +1231,42 @@ export class WorkspaceContentService {
    * one of them.
    */
   private statusRefreshAgain: string | null | undefined;
+  /** Whether the queued pass must measure every tree, not only changed ones. */
+  private statusRefreshAgainForce = false;
   private lastStatusRefreshAt = 0;
   private lastBoardRefreshAt = 0;
-  /** When each workspace's `repos/` checkouts were last measured. */
-  private readonly lastReferenceRefreshAt = new Map<string, number>();
+  /**
+   * What each tree looked like when it was last measured, keyed like
+   * `gitStatusCache`: its git metadata fingerprint, the watcher's change count
+   * for it, and when. A pass skips a tree whose fingerprint and change count
+   * still match until the record is older than its maximum age.
+   */
+  private readonly measuredTrees = new Map<
+    string,
+    {
+      fingerprint: string | undefined;
+      generation: number;
+      at: number;
+      branch: string | null;
+    }
+  >();
+  /** File changes the watcher has seen inside each tree, keyed by path. */
+  private readonly treeGenerations = new Map<string, number>();
+  /** The last `worktreeChanges` answer per tree, reused while nothing moved. */
+  private readonly changesCache = new Map<
+    string,
+    {
+      fingerprint: string | undefined;
+      generation: number;
+      at: number;
+      value: WorktreeChanges | undefined;
+    }
+  >();
+  /** Workspaces whose file changes are waiting out `FILE_CHANGE_SETTLE_MS`. */
+  private readonly settlingWorkspaces = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
 
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -1276,22 +1380,30 @@ export class WorkspaceContentService {
   private scheduleGitStatusRefresh(
     workspaceId: string | null,
     force = false,
+    /**
+     * Run now, past the rate limit, but measure only what changed. For a
+     * change that is known to have happened, such as a file the watcher saw.
+     */
+    urgent = force,
   ): void {
     if (this.statusRefresh) {
-      // Only a forced request is worth a second pass; an ordinary one is
-      // already being answered by the pass in flight or the next listing.
-      if (force)
+      // Only a forced or urgent request is worth a second pass; an ordinary
+      // one is already being answered by the pass in flight or the next
+      // listing.
+      if (urgent) {
         this.statusRefreshAgain =
           this.statusRefreshAgain === undefined ||
           this.statusRefreshAgain === workspaceId
             ? workspaceId
             : null;
+        this.statusRefreshAgainForce ||= force;
+      }
       return;
     }
     const since = Date.now() - this.lastStatusRefreshAt;
-    if (!force && since < STATUS_REFRESH_INTERVAL_MS) return;
+    if (!urgent && since < STATUS_REFRESH_INTERVAL_MS) return;
     if (
-      !force &&
+      !urgent &&
       workspaceId === null &&
       Date.now() - this.lastBoardRefreshAt < BOARD_STATUS_REFRESH_INTERVAL_MS
     )
@@ -1303,11 +1415,111 @@ export class WorkspaceContentService {
         this.statusRefresh = undefined;
         this.lastStatusRefreshAt = Date.now();
         const again = this.statusRefreshAgain;
+        const againForce = this.statusRefreshAgainForce;
         if (again !== undefined) {
           this.statusRefreshAgain = undefined;
-          this.scheduleGitStatusRefresh(again, true);
+          this.statusRefreshAgainForce = false;
+          this.scheduleGitStatusRefresh(again, againForce, true);
         }
       });
+  }
+
+  /**
+   * Records the workspace watcher's file changes against the trees they fall
+   * in, so the next pass and the next `worktreeChanges` measure those trees
+   * and only those, then asks for that pass once the burst settles. A batch
+   * too large to describe marks every tree in the workspace.
+   */
+  noteFilesChanged(
+    workspaceId: string,
+    changes: readonly { path: string }[],
+    overflow: boolean,
+  ): void {
+    const workspace = this.repositories.findWorkspace(workspaceId);
+    if (!workspace) return;
+    const roots = this.treePaths(workspaceId).map((path) => ({
+      key: statusKey(path),
+      root: relative(workspace.path, path).split(sep).join("/"),
+    }));
+    let touched = false;
+    for (const { key, root } of roots) {
+      if (
+        !overflow &&
+        !changes.some(
+          (change) =>
+            change.path === root || change.path.startsWith(`${root}/`),
+        )
+      )
+        continue;
+      this.treeGenerations.set(key, (this.treeGenerations.get(key) ?? 0) + 1);
+      touched = true;
+    }
+    if (!touched) return;
+    clearTimeout(this.settlingWorkspaces.get(workspaceId));
+    this.settlingWorkspaces.set(
+      workspaceId,
+      setTimeout(() => {
+        this.settlingWorkspaces.delete(workspaceId);
+        this.scheduleGitStatusRefresh(workspaceId, false, true);
+      }, FILE_CHANGE_SETTLE_MS),
+    );
+  }
+
+  /**
+   * Forgets what every tree in the workspace looked like and measures them
+   * all now. For the moments the user says something changed, such as Fetch,
+   * and for anything Daedalus did that the cheap checks might not see.
+   */
+  remeasureWorkspace(workspaceId: string): void {
+    for (const path of this.treePaths(workspaceId)) {
+      this.measuredTrees.delete(statusKey(path));
+      this.changesCache.delete(statusKey(path));
+    }
+    this.scheduleGitStatusRefresh(workspaceId, true);
+  }
+
+  /** Every tree a workspace pass can measure: checkouts and worktrees. */
+  private treePaths(workspaceId: string): string[] {
+    return [
+      ...this.repositories
+        .listWorkspaceRepositories(workspaceId)
+        .flatMap((item) => (item.referencePath ? [item.referencePath] : [])),
+      ...this.repositories
+        .listSessionWorktrees({ workspaceId })
+        .map((item) => item.path),
+    ];
+  }
+
+  /** Whether a tree has changed, or gone unmeasured too long, since its record. */
+  private async treeIsDue(
+    record:
+      | { fingerprint: string | undefined; generation: number; at: number }
+      | undefined,
+    key: string,
+    fingerprint: string | undefined,
+    maxAge: number,
+  ): Promise<boolean> {
+    return (
+      !record ||
+      fingerprint === undefined ||
+      record.fingerprint !== fingerprint ||
+      record.generation !== (this.treeGenerations.get(key) ?? 0) ||
+      Date.now() - record.at >= maxAge
+    );
+  }
+
+  private sessionIsLive(sessionId: string): boolean {
+    const session = this.repositories.findAgent(sessionId);
+    return Boolean(
+      session &&
+      !session.archivedAt &&
+      (session.status === "running" || session.status === "starting"),
+    );
+  }
+
+  private pullRequestDue(key: string): boolean {
+    const cached = this.pullRequestCache.get(key);
+    return !cached || Date.now() - cached.checkedAt >= PULL_REQUEST_REFRESH_MS;
   }
 
   private async refreshGitStatuses(
@@ -1317,12 +1529,6 @@ export class WorkspaceContentService {
     const repositories = this.repositories.listWorkspaceRepositories(
       workspaceId ?? undefined,
     );
-    const referencesDue =
-      workspaceId !== null &&
-      (force ||
-        Date.now() - (this.lastReferenceRefreshAt.get(workspaceId) ?? 0) >=
-          REFERENCE_STATUS_REFRESH_MS);
-    if (referencesDue) this.lastReferenceRefreshAt.set(workspaceId, Date.now());
     const baseBranches = new Map(
       repositories.map((item) => [item.id, item.baseBranch]),
     );
@@ -1338,17 +1544,10 @@ export class WorkspaceContentService {
     }> = [
       ...(workspaceId === null
         ? []
-        : repositories
-            .filter(
-              (item) =>
-                referencesDue ||
-                (item.referencePath &&
-                  !this.gitStatusCache.has(statusKey(item.referencePath))),
-            )
-            .map((item) => ({
-              path: item.status === "ready" ? item.referencePath : null,
-              baseBranch: item.baseBranch,
-            }))),
+        : repositories.map((item) => ({
+            path: item.status === "ready" ? item.referencePath : null,
+            baseBranch: item.baseBranch,
+          }))),
       ...this.repositories
         .listSessionWorktrees(workspaceId ? { workspaceId } : {})
         .map((item) => ({
@@ -1364,21 +1563,51 @@ export class WorkspaceContentService {
       STATUS_REFRESH_CONCURRENCY,
       async (target) => {
         if (!target.path) return;
-        const status = await gitStatusAt(target.path, target.baseBranch);
         const key = statusKey(target.path);
         const previous = this.gitStatusCache.get(key);
+        const record = this.measuredTrees.get(key);
+        // Read before measuring, so a change that lands while git runs is
+        // seen as a change on the next pass rather than absorbed into this one.
+        const generation = this.treeGenerations.get(key) ?? 0;
+        const fingerprint = await gitMetadataFingerprint(
+          target.path,
+          target.baseBranch,
+        );
+        const due =
+          force ||
+          !previous ||
+          (await this.treeIsDue(
+            record,
+            key,
+            fingerprint,
+            target.worktree && this.sessionIsLive(target.worktree.sessionId)
+              ? LIVE_TREE_MAX_AGE_MS
+              : IDLE_TREE_MAX_AGE_MS,
+          ));
         const git = findExecutable("git");
-        const current =
-          target.worktree && git
-            ? await checkedOutBranch(git, target.path)
-            : null;
-        if (
-          git &&
-          target.worktree &&
-          (await this.recordBranch(git, target.worktree, current)) !==
-            target.worktree
-        )
-          changed = true;
+        let status = previous;
+        let current = record?.branch ?? null;
+        if (due) {
+          status = await gitStatusAt(target.path, target.baseBranch);
+          current =
+            target.worktree && git
+              ? await checkedOutBranch(git, target.path)
+              : null;
+          this.measuredTrees.set(key, {
+            fingerprint,
+            generation,
+            at: Date.now(),
+            branch: current,
+          });
+          if (
+            git &&
+            target.worktree &&
+            (await this.recordBranch(git, target.worktree, current)) !==
+              target.worktree
+          )
+            changed = true;
+        }
+        if (!status) return;
         // A branch with no commits of its own has nothing to open a pull
         // request for, so it costs no `gh` call. One that had a link keeps
         // being checked, so a closed or merged state still arrives. It is
@@ -1389,9 +1618,12 @@ export class WorkspaceContentService {
         // two apart.
         // An open pull request is followed to its end whatever the task's
         // state, so a merge after the card was marked done is still seen.
+        // This runs on its own clock, not the tree's: a pull request is merged
+        // on GitHub, where nothing in the tree moves.
         if (
           git &&
           current &&
+          this.pullRequestDue(key) &&
           ((target.wantsPullRequest &&
             (status.ahead > 0 || this.pullRequestCache.get(key)?.value)) ||
             this.pullRequestCache.get(key)?.value?.state === "OPEN" ||
@@ -1410,13 +1642,14 @@ export class WorkspaceContentService {
         )
           changed = true;
         if (
-          previous &&
-          previous.state === status.state &&
-          previous.changedFiles === status.changedFiles &&
-          previous.ahead === status.ahead &&
-          previous.behind === status.behind &&
-          previous.filesAhead === status.filesAhead &&
-          previous.unpushed === status.unpushed
+          !due ||
+          (previous &&
+            previous.state === status.state &&
+            previous.changedFiles === status.changedFiles &&
+            previous.ahead === status.ahead &&
+            previous.behind === status.behind &&
+            previous.filesAhead === status.filesAhead &&
+            previous.unpushed === status.unpushed)
         )
           return;
         this.gitStatusCache.set(key, status);
@@ -1461,7 +1694,12 @@ export class WorkspaceContentService {
     const head = git
       ? (await runCommand(git, ["-C", path, "rev-parse", "HEAD"])).stdout.trim()
       : "";
-    if (cached?.landedHead && cached.landedHead === head) return false;
+    if (cached?.landedHead && cached.landedHead === head) {
+      // Still the merged HEAD: nothing to ask, and nothing to ask again for
+      // another minute.
+      cached.checkedAt = Date.now();
+      return false;
+    }
     if (cached && Date.now() - cached.checkedAt < PULL_REQUEST_REFRESH_MS)
       return false;
     const gh = findExecutable("gh", GH_EXECUTABLE_FALLBACKS);
@@ -1889,7 +2127,15 @@ export class WorkspaceContentService {
    */
   async fetchRepository(
     id: string,
-    options: { pull?: boolean } = {},
+    options: {
+      pull?: boolean;
+      /**
+       * Re-measure every tree in the workspace afterwards; true unless false.
+       * Fetch is also how a user says "something changed that you have not
+       * shown yet", so it does not trust any cached answer.
+       */
+      remeasure?: boolean;
+    } = {},
   ): Promise<WorkspaceRepository> {
     const repository = this.repositories.findWorkspaceRepository(id);
     if (!repository)
@@ -1923,7 +2169,10 @@ export class WorkspaceContentService {
       fetchedAt: refreshed.lastFetchedAt,
     };
     this.repositories.updateWorkspaceRepository(updated);
-    return this.measureAndCache(updated);
+    const measured = await this.measureAndCache(updated);
+    if (options.remeasure ?? true)
+      this.remeasureWorkspace(repository.workspaceId);
+    return measured;
   }
 
   /**
@@ -1954,7 +2203,7 @@ export class WorkspaceContentService {
       const result = await runCommand(git, ["-C", path, "rev-parse", "HEAD"]);
       return result.exitCode === 0 ? result.stdout.trim() || null : null;
     };
-    return Promise.all(
+    const outcomes = await Promise.all(
       repositories.map(async (repository) => {
         const from = await headOf(repository.referencePath);
         const outcome: RepositoryFetchOutcome = {
@@ -1970,6 +2219,7 @@ export class WorkspaceContentService {
         try {
           fetched = await this.fetchRepository(repository.id, {
             pull: input.pull ?? true,
+            remeasure: false,
           });
         } catch (error) {
           return { ...outcome, error: normalizeError(error).message };
@@ -2013,6 +2263,9 @@ export class WorkspaceContentService {
         return outcome;
       }),
     );
+    // Once for the whole fetch rather than once per repository.
+    this.remeasureWorkspace(workspace.id);
+    return outcomes;
   }
 
   // Pushing publishes an agent's branch, so it is never implicit: nothing in
@@ -2767,6 +3020,30 @@ export class WorkspaceContentService {
         const repository = repositories.get(worktree.repositoryId);
         const root = relative(workspace.path, worktree.path);
         if (root.startsWith("..") || isAbsolute(root)) return undefined;
+        // The same answer as last time unless the tree moved: its git
+        // metadata changed, the watcher saw a file change in it, or the
+        // answer is old enough that something unseen could have happened.
+        // The window asks on every update, and most updates are an agent's
+        // activity or token count, which cannot change a single file.
+        const key = statusKey(worktree.path);
+        const generation = this.treeGenerations.get(key) ?? 0;
+        const fingerprint = await gitMetadataFingerprint(worktree.path, null);
+        const cached = this.changesCache.get(key);
+        if (
+          cached &&
+          !(await this.treeIsDue(
+            cached,
+            key,
+            fingerprint,
+            LIVE_TREE_MAX_AGE_MS,
+          ))
+        )
+          return (
+            cached.value && {
+              ...cached.value,
+              branchName: worktree.branchName,
+            }
+          );
         const run = (args: string[]) =>
           runCommand(git, [
             "--no-optional-locks",
@@ -2799,7 +3076,7 @@ export class WorkspaceContentService {
             : []),
         ].map((file) => ({ ...file, path: join(root, file.repositoryPath) }));
         files.sort((left, right) => left.path.localeCompare(right.path));
-        return {
+        const value: WorktreeChanges = {
           sessionId: worktree.sessionId,
           repositoryId: worktree.repositoryId,
           repositoryName: repository?.name ?? basename(worktree.path),
@@ -2808,6 +3085,13 @@ export class WorkspaceContentService {
           base,
           files,
         };
+        this.changesCache.set(key, {
+          fingerprint,
+          generation,
+          at: Date.now(),
+          value,
+        });
+        return value;
       }),
     );
     return results.filter((item) => item !== undefined);
