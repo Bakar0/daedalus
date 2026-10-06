@@ -48,7 +48,6 @@ import type {
   WorkspaceRepository,
   WorktreeChanges,
   WorktreeCommit,
-  WorktreePullRequest,
   RepositoryFetchOutcome,
   RepositoryLibraryEntry,
 } from "../domain";
@@ -1049,55 +1048,6 @@ const PULL_REQUEST_REFRESH_MS = 60_000;
  * wrong is worse than no link. The title and merge time are extras and may be
  * missing.
  */
-/**
- * Reads `gh pr list --json number,url,state,isDraft,title,mergedAt,commits`.
- * Open requests come first, then the rest newest first; anything malformed
- * is left out rather than failing the list.
- */
-export function parsePullRequestList(stdout: string): WorktreePullRequest[] {
-  let rows: unknown;
-  try {
-    rows = JSON.parse(stdout);
-  } catch {
-    return [];
-  }
-  if (!Array.isArray(rows)) return [];
-  const pulls = rows.flatMap((row): WorktreePullRequest[] => {
-    const pull = parsePullRequestView(JSON.stringify(row));
-    if (!pull) return [];
-    const listed = (row as { commits?: unknown }).commits;
-    const commits: WorktreeCommit[] = Array.isArray(listed)
-      ? listed.flatMap((item) => {
-          const commit = item as Partial<{
-            oid: string;
-            messageHeadline: string;
-            authoredDate: string;
-            authors: Array<{ name?: string; login?: string }>;
-          }>;
-          if (typeof commit.oid !== "string" || !commit.oid) return [];
-          return [
-            {
-              sha: commit.oid,
-              shortSha: commit.oid.slice(0, 7),
-              author:
-                commit.authors?.[0]?.name ?? commit.authors?.[0]?.login ?? "",
-              date: commit.authoredDate ?? "",
-              subject: commit.messageHeadline ?? "",
-              pushed: true,
-            },
-          ];
-        })
-      : [];
-    // GitHub lists a pull request's commits oldest first.
-    return [{ ...pull, commits: commits.reverse() }];
-  });
-  return pulls.sort(
-    (left, right) =>
-      Number(right.state === "OPEN") - Number(left.state === "OPEN") ||
-      right.number - left.number,
-  );
-}
-
 export function parsePullRequestView(
   stdout: string,
 ): PullRequestRef | undefined {
@@ -2897,16 +2847,6 @@ export class WorkspaceContentService {
       base ? `${base}..HEAD` : "HEAD",
     ]);
     if (log.exitCode !== 0) return [];
-    // What no branch on `origin` holds yet: committed here, not pushed.
-    const local = await run([
-      "rev-list",
-      base ? `${base}..HEAD` : "HEAD",
-      "--not",
-      "--remotes=origin",
-    ]);
-    const unpushed = new Set(
-      local.exitCode === 0 ? local.stdout.split("\n").filter(Boolean) : [],
-    );
     return log.stdout
       .split("\0")
       .filter((record) => record.trim())
@@ -2922,7 +2862,6 @@ export class WorkspaceContentService {
                 author: author ?? "",
                 date,
                 subject: subject ?? "",
-                pushed: !unpushed.has(sha),
               },
             ]
           : [];
@@ -2952,50 +2891,6 @@ export class WorkspaceContentService {
       ...file,
       path: join(root, file.repositoryPath),
     }));
-  }
-
-  /**
-   * Every pull request opened from the worktree's branch (open, draft, merged
-   * or closed), open first then newest, each with its commits, from one
-   * `gh pr list`. A branch can carry several over time: a merged one, then a
-   * new one for the work after it. Null when `gh` is missing, signed out or
-   * offline, so the caller can fall back to a plain commit list.
-   */
-  async worktreePullRequests(input: {
-    workspace: string;
-    root: string;
-  }): Promise<WorktreePullRequest[] | null> {
-    const { worktree } = await this.resolveWorktree(
-      input.workspace,
-      input.root,
-    );
-    const git = findExecutable("git");
-    const gh = findExecutable("gh", GH_EXECUTABLE_FALLBACKS);
-    if (!git || !gh) return null;
-    const branch =
-      (await checkedOutBranch(git, worktree.path)) ?? worktree.branchName;
-    const response = await runCommand(
-      gh,
-      [
-        "pr",
-        "list",
-        "--head",
-        branch,
-        "--state",
-        "all",
-        "--limit",
-        "20",
-        "--json",
-        "number,url,state,isDraft,title,mergedAt,commits",
-      ],
-      {
-        cwd: worktree.path,
-        env: { GH_PROMPT_DISABLED: "1" },
-        timeoutMs: 20_000,
-      },
-    ).catch(() => undefined);
-    if (!response || response.exitCode !== 0) return null;
-    return parsePullRequestList(response.stdout);
   }
 
   /**

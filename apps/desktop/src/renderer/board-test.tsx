@@ -323,20 +323,7 @@ const snapshot: DesktopSnapshotDto = {
       },
     },
   ],
-  // An earlier pull request from #24's branch, merged before the open one.
-  shipped: [
-    {
-      url: "https://github.com/example/daedalus/pull/19",
-      workspaceId: "w1",
-      sessionId: "s-24",
-      taskId: null,
-      repositoryId: "repo",
-      number: 19,
-      title: "First pass at the explorer",
-      branchName: "daedalus/deadalus/e11f6aae",
-      mergedAt: "2026-10-04T10:00:00Z",
-    },
-  ],
+  shipped: [],
   toasts: [],
   abilities: [],
   routines: [],
@@ -496,45 +483,6 @@ const client = {
           author: "Claude",
           date: new Date(Date.now() - 3 * 3_600_000).toISOString(),
           subject: "Add rename, move and delete to the explorer",
-          pushed: false,
-        },
-      ]),
-    workspacePullRequests: async () =>
-      ok([
-        {
-          number: 23,
-          url: "https://github.com/example/daedalus/pull/23",
-          state: "OPEN",
-          isDraft: false,
-          title: "Explorer that does not go stale",
-          commits: [
-            {
-              sha: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
-              shortSha: "a1b2c3d",
-              author: "Claude",
-              date: new Date(Date.now() - 40 * 60_000).toISOString(),
-              subject: "Watch the workspace and reconcile the tree",
-              pushed: true,
-            },
-          ],
-        },
-        {
-          number: 19,
-          url: "https://github.com/example/daedalus/pull/19",
-          state: "MERGED",
-          isDraft: false,
-          title: "First pass at the explorer",
-          mergedAt: "2026-10-04T10:00:00Z",
-          commits: [
-            {
-              sha: "c3d4e5f60718293a4b5c6d7e8f90123456789012",
-              shortSha: "c3d4e5f",
-              author: "Claude",
-              date: "2026-10-04T09:00:00Z",
-              subject: "Tree with rename and delete",
-              pushed: true,
-            },
-          ],
         },
       ]),
     workspaceCommitFiles: async () =>

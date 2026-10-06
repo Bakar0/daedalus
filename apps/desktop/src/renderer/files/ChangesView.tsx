@@ -2,7 +2,6 @@ import type {
   ChangedFileDto,
   WorktreeChangesDto,
   WorktreeCommitDto,
-  WorktreePullRequestDto,
 } from "@daedalus/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DesktopClient } from "../client-types";
@@ -192,22 +191,10 @@ const ago = (iso: string, now = Date.now()) => {
   return `${Math.round(hours / 24)}d`;
 };
 
-type PullRequestSection = WorktreePullRequestDto;
-
-const pullStateLabel = (pull: PullRequestSection) =>
-  pull.state === "OPEN"
-    ? pull.isDraft
-      ? "draft"
-      : "open"
-    : pull.state.toLowerCase();
-
 /**
- * The commits a worktree made since it branched, folded behind a count, and
- * grouped by the pull request each went into: a branch can carry several
- * over time (one merged, a new one open), and what is not in any is listed
- * last, with the ones not yet pushed marked. Without `gh` the list is flat.
- * Read when opened, and again when the count moves. A commit unfolds into
- * its files, and a file opens that commit's diff.
+ * The commits a worktree made since it branched, newest first, folded behind
+ * a count. Opening a commit lists the files it changed; a file opens that
+ * commit's diff. Read when opened, and again when the count moves.
  */
 export function WorktreeCommits({
   client,
@@ -216,7 +203,6 @@ export function WorktreeCommits({
   count,
   onOpenDiff,
   onOpenFile,
-  onOpenLink,
 }: {
   client: DesktopClient;
   workspaceId: string;
@@ -225,38 +211,20 @@ export function WorktreeCommits({
   count: number;
   onOpenDiff(target: DiffTarget, options: { pinned: boolean }): void;
   onOpenFile(path: string): void;
-  onOpenLink(url: string): void;
 }) {
   const [open, setOpen] = useState(false);
   const [commits, setCommits] = useState<WorktreeCommitDto[]>();
-  const [pulls, setPulls] = useState<PullRequestSection[] | null>();
-  const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
   const [expanded, setExpanded] = useState<string>();
   const [files, setFiles] = useState<Record<string, ChangedFileDto[]>>({});
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    void Promise.all([
-      client.request.workspaceCommits({ workspace: workspaceId, root }),
-      client.request
-        .workspacePullRequests({ workspace: workspaceId, root })
-        .catch(() => undefined),
-    ]).then(([listed, pullRequests]) => {
-      if (cancelled) return;
-      if (listed.ok) setCommits(listed.data);
-      const found = pullRequests?.ok ? pullRequests.data : null;
-      setPulls(found);
-      // Merged and closed requests start folded: what is still in review
-      // is what a person is here to read.
-      setFolded(
-        new Set(
-          (found ?? [])
-            .filter((pull) => pull.state !== "OPEN")
-            .map((pull) => `pr:${pull.number}`),
-        ),
-      );
-    });
+    void client.request
+      .workspaceCommits({ workspace: workspaceId, root })
+      .then((response) => {
+        if (!cancelled && response.ok) setCommits(response.data);
+      });
     return () => {
       cancelled = true;
     };
@@ -277,140 +245,6 @@ export function WorktreeCommits({
       });
   };
 
-  const toggleSection = (key: string) =>
-    setFolded((current) => {
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-
-  const commitRow = (commit: WorktreeCommitDto) => (
-    <div key={commit.sha}>
-      <button
-        aria-expanded={expanded === commit.sha}
-        className="worktree-commit"
-        onClick={() => toggleCommit(commit)}
-        title={`${commit.sha}\n${commit.author} · ${new Date(commit.date).toLocaleString()}\n\n${commit.subject}`}
-        type="button"
-      >
-        <span className="worktree-commit-sha">{commit.shortSha}</span>
-        <span className="worktree-commit-subject">{commit.subject}</span>
-        {commit.pushed === false && (
-          <span
-            className="worktree-commit-local"
-            title="Committed here, not pushed yet"
-          >
-            not pushed
-          </span>
-        )}
-        <span className="worktree-commit-age">{ago(commit.date)}</span>
-      </button>
-      {expanded === commit.sha &&
-        (files[commit.sha] ? (
-          <ChangedFileList
-            commit={{ sha: commit.sha, shortSha: commit.shortSha }}
-            onOpenDiff={onOpenDiff}
-            onOpenFile={onOpenFile}
-            tree={{
-              root,
-              branchName: commit.shortSha,
-              files: files[commit.sha]!,
-            }}
-          />
-        ) : (
-          <p className="changes-empty">Reading files…</p>
-        ))}
-    </div>
-  );
-
-  const sectionHeading = (
-    key: string,
-    label: React.ReactNode,
-    total: number,
-    extra?: React.ReactNode,
-  ) => (
-    <div className="worktree-pr-heading">
-      <button
-        aria-expanded={!folded.has(key)}
-        className="worktree-pr-toggle"
-        onClick={() => toggleSection(key)}
-        type="button"
-      >
-        <span
-          aria-hidden="true"
-          className={`file-tree-twisty ${folded.has(key) ? "" : "open"}`}
-        >
-          ›
-        </span>
-        {label}
-        <span className="worktree-pr-count">
-          {total} {total === 1 ? "commit" : "commits"}
-        </span>
-      </button>
-      {extra}
-    </div>
-  );
-
-  const grouped = () => {
-    if (!commits) return <p className="changes-empty">Reading commits…</p>;
-    if (!pulls || pulls.length === 0)
-      return commits.length === 0 ? (
-        <p className="changes-empty">No commits since the branch point.</p>
-      ) : (
-        commits.map(commitRow)
-      );
-    const inPulls = new Set(
-      pulls.flatMap((pull) => pull.commits.map((commit) => commit.sha)),
-    );
-    const loose = commits.filter((commit) => !inPulls.has(commit.sha));
-    return (
-      <>
-        {pulls.map((pull) => {
-          const key = `pr:${pull.number}`;
-          return (
-            <div className="worktree-pr" key={key}>
-              {sectionHeading(
-                key,
-                <span
-                  className={`worktree-pr-label state-${pullStateLabel(pull)}`}
-                  title={pull.title}
-                >
-                  #{pull.number}
-                  <em>{pullStateLabel(pull)}</em>
-                  {pull.title && (
-                    <span className="worktree-pr-title">{pull.title}</span>
-                  )}
-                </span>,
-                pull.commits.length,
-                <button
-                  aria-label={`Open pull request #${pull.number} on GitHub`}
-                  className="worktree-pr-open"
-                  onClick={() => onOpenLink(pull.url)}
-                  title={`Open #${pull.number} on GitHub`}
-                  type="button"
-                >
-                  ↗
-                </button>,
-              )}
-              {!folded.has(key) && pull.commits.map(commitRow)}
-            </div>
-          );
-        })}
-        {loose.length > 0 && (
-          <div className="worktree-pr">
-            {sectionHeading(
-              "loose",
-              <span className="worktree-pr-label">Not in a pull request</span>,
-              loose.length,
-            )}
-            {!folded.has("loose") && loose.map(commitRow)}
-          </div>
-        )}
-      </>
-    );
-  };
-
   return (
     <div className="worktree-commits">
       <button
@@ -429,7 +263,45 @@ export function WorktreeCommits({
           {count} {count === 1 ? "commit" : "commits"}
         </span>
       </button>
-      {open && grouped()}
+      {open &&
+        (commits === undefined ? (
+          <p className="changes-empty">Reading commits…</p>
+        ) : commits.length === 0 ? (
+          <p className="changes-empty">No commits since the branch point.</p>
+        ) : (
+          commits.map((commit) => (
+            <div key={commit.sha}>
+              <button
+                aria-expanded={expanded === commit.sha}
+                className="worktree-commit"
+                onClick={() => toggleCommit(commit)}
+                title={`${commit.sha}\n${commit.author} · ${new Date(commit.date).toLocaleString()}\n\n${commit.subject}`}
+                type="button"
+              >
+                <span className="worktree-commit-sha">{commit.shortSha}</span>
+                <span className="worktree-commit-subject">
+                  {commit.subject}
+                </span>
+                <span className="worktree-commit-age">{ago(commit.date)}</span>
+              </button>
+              {expanded === commit.sha &&
+                (files[commit.sha] ? (
+                  <ChangedFileList
+                    commit={{ sha: commit.sha, shortSha: commit.shortSha }}
+                    onOpenDiff={onOpenDiff}
+                    onOpenFile={onOpenFile}
+                    tree={{
+                      root,
+                      branchName: commit.shortSha,
+                      files: files[commit.sha]!,
+                    }}
+                  />
+                ) : (
+                  <p className="changes-empty">Reading files…</p>
+                ))}
+            </div>
+          ))
+        ))}
     </div>
   );
 }

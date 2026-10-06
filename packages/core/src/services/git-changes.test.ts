@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseChangedFiles, parsePullRequestList } from "./workspace-content";
+import { parseChangedFiles } from "./workspace-content";
 
 const git = async (cwd: string, ...args: string[]) => {
   const child = Bun.spawn(["git", "-C", cwd, ...args], {
@@ -77,66 +77,5 @@ describe("parseChangedFiles", () => {
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
-  });
-});
-
-describe("parsePullRequestList", () => {
-  test("puts open requests first, newest first, with commits newest first", () => {
-    const pulls = parsePullRequestList(
-      JSON.stringify([
-        {
-          number: 19,
-          url: "https://github.com/o/r/pull/19",
-          state: "MERGED",
-          isDraft: false,
-          title: "First part",
-          mergedAt: "2026-10-01T10:00:00Z",
-          commits: [
-            {
-              oid: "a".repeat(40),
-              messageHeadline: "one",
-              authoredDate: "2026-10-01T09:00:00Z",
-              authors: [{ name: "Agent" }],
-            },
-            {
-              oid: "b".repeat(40),
-              messageHeadline: "two",
-              authoredDate: "2026-10-01T09:30:00Z",
-              authors: [{ login: "agent" }],
-            },
-          ],
-        },
-        {
-          number: 23,
-          url: "https://github.com/o/r/pull/23",
-          state: "OPEN",
-          isDraft: true,
-          title: "Second part",
-          commits: [],
-        },
-        { number: "bad" },
-      ]),
-    );
-    expect(
-      pulls.map((pull) => [pull.number, pull.state, pull.isDraft]),
-    ).toEqual([
-      [23, "OPEN", true],
-      [19, "MERGED", false],
-    ]);
-    expect(
-      pulls[1]!.commits.map((commit) => [
-        commit.shortSha,
-        commit.subject,
-        commit.author,
-      ]),
-    ).toEqual([
-      ["bbbbbbb", "two", "agent"],
-      ["aaaaaaa", "one", "Agent"],
-    ]);
-  });
-
-  test("returns nothing for output that is not a list", () => {
-    expect(parsePullRequestList("not json")).toEqual([]);
-    expect(parsePullRequestList("{}")).toEqual([]);
   });
 });
