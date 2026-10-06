@@ -2747,8 +2747,8 @@ dd {
   user-select: none;
   white-space: nowrap;
 }
+/* Hover only brightens the name; a background is for selection and focus. */
 .file-tree-row:hover {
-  background: var(--raised-hover);
   color: var(--text);
 }
 .file-tree-row.selected {
