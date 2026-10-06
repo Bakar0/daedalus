@@ -36,6 +36,7 @@ import {
   subscribeDocuments,
 } from "./documents";
 import { workspaceBaseName } from "./explorer-state";
+import { FileTypeIcon } from "./file-icons";
 import { monaco } from "./monaco";
 
 /** A changed file the Changes view asks to see as a diff. */
@@ -611,6 +612,7 @@ function FileTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
       onDoubleClick={() => panel && context.pin(panel)}
       title={params.path}
     >
+      <FileTypeIcon name={workspaceBaseName(params.path)} />
       <span className="file-tab-name">
         {workspaceBaseName(params.path)}
         {params.diff && <small> (changes)</small>}

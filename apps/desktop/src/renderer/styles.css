@@ -2840,6 +2840,21 @@ dd {
   stroke-width: 1.15;
   width: 14px;
 }
+/* Seti file icons, as in VS Code's default theme: the glyph is the SVG,
+   the colour comes from the icon and fills it. */
+.file-type-icon {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 16px;
+  height: 16px;
+  justify-content: center;
+  width: 16px;
+}
+.file-type-icon svg {
+  fill: currentColor;
+  height: 16px;
+  width: 16px;
+}
 .file-tree-icon.folder {
   color: #c9a45a;
 }

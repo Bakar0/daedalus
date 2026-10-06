@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { DesktopClient } from "../client-types";
 import type { DiffTarget } from "./EditorArea";
 import { workspaceBaseName, workspaceParentPath } from "./explorer-state";
+import { FileTypeIcon } from "./file-icons";
 
 // Long enough that an agent writing a burst of files causes one git pass, not
 // one per file.
@@ -149,6 +150,7 @@ export function ChangedFileList({
             tabIndex={0}
             title={`${file.path}${file.originalRepositoryPath ? `\nRenamed from ${file.originalRepositoryPath}` : ""}\nRight-click to open the file`}
           >
+            <FileTypeIcon name={workspaceBaseName(file.repositoryPath)} />
             <span className="changes-file-name">
               {workspaceBaseName(file.repositoryPath)}
             </span>

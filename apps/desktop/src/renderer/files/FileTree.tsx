@@ -20,6 +20,7 @@ import {
 } from "react";
 import type { DesktopClient } from "../client-types";
 import { askConfirm, askText } from "../dialogs";
+import { FileTypeIcon } from "./file-icons";
 import {
   planExplorerRefresh,
   rememberedExpandedDirectories,
@@ -1071,15 +1072,5 @@ function FileIcon({
         ↗
       </span>
     );
-  return (
-    <svg
-      aria-hidden="true"
-      className="file-tree-icon file"
-      fill="none"
-      stroke="currentColor"
-      viewBox="0 0 16 16"
-    >
-      <path d="M3.5 1.5h6l3 3v10h-9zM9.5 1.5v3h3" />
-    </svg>
-  );
+  return <FileTypeIcon name={entry.name} />;
 }
