@@ -4017,7 +4017,7 @@ export function WorkspaceApp({
                   }
                   title={
                     mode === "fetch"
-                      ? "Fetch: download from the remote. The checkout stays where it is."
+                      ? "Fetch: download from the remote, and re-check every working tree in this workspace. The checkout stays where it is."
                       : `Pull: fetch, and move this checkout to the latest ${repository.baseBranch ?? "default branch"}`
                   }
                   type="button"
@@ -5683,7 +5683,7 @@ export function WorkspaceApp({
                       onClick={() => void fetchWorkspaceRepositories(mode)}
                       title={
                         mode === "fetch"
-                          ? "Fetch every repository. No checkout moves."
+                          ? "Fetch every repository, and re-check every working tree in this workspace. No checkout moves."
                           : "Pull every repository: fetch, and move each checkout to the latest default branch"
                       }
                       type="button"
