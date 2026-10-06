@@ -33,7 +33,9 @@ import {
   removeDirectory,
   runCommand,
   standardExecutableFallbacks,
+  watchFileTree,
   writeTextFile,
+  type FileTreeWatcher,
 } from "@daedalus/platform";
 import type {
   AgentSession,
@@ -811,19 +813,21 @@ const BOARD_STATUS_REFRESH_INTERVAL_MS = 10_000;
 /**
  * A pass measures a tree only when something says it changed: its git
  * metadata (HEAD, index, its branch and its base on `origin`) has a new
- * modification time, or the workspace watcher saw a file change inside it.
- * Neither check starts a process. These ages are the safety net for what
- * neither can see — above all an edit in a workspace that is not open, which
- * has no watcher. A live session's tree is re-measured at least this often.
+ * modification time, or a watcher saw a file change inside it. Neither check
+ * starts a process. Every live session's worktree has a watcher of its own,
+ * in whichever workspace, so an edit shows within about a second anywhere.
+ * These ages are only the safety net for an event a watcher missed. A live
+ * session's tree is re-measured at least this often.
  */
 const LIVE_TREE_MAX_AGE_MS = 30_000;
 /** Everything else: read-only checkouts and trees of ended sessions. */
 const IDLE_TREE_MAX_AGE_MS = 10 * 60_000;
 
 /**
- * File changes arrive in bursts while an agent writes. A burst is answered
- * with one pass this long after it goes quiet, so a badge follows an edit
- * within about a second without a pass per file.
+ * File changes arrive in bursts while an agent writes. The first change in a
+ * workspace starts a pass this long afterwards, and changes until then ride
+ * along with it. Not reset by later changes: an agent that never stops
+ * writing would otherwise never get its badge updated.
  */
 const FILE_CHANGE_SETTLE_MS = 750;
 
@@ -1262,6 +1266,13 @@ export class WorkspaceContentService {
       value: WorktreeChanges | undefined;
     }
   >();
+  /**
+   * One watcher per live session's worktree, keyed by path. The workspace
+   * watcher covers only the workspace on screen; these are what make an
+   * agent's edit in any other workspace show without waiting for a maximum
+   * age. Kept in step with the sessions by every pass.
+   */
+  private readonly treeWatchers = new Map<string, FileTreeWatcher>();
   /** Workspaces whose file changes are waiting out `FILE_CHANGE_SETTLE_MS`. */
   private readonly settlingWorkspaces = new Map<
     string,
@@ -1441,21 +1452,21 @@ export class WorkspaceContentService {
       key: statusKey(path),
       root: relative(workspace.path, path).split(sep).join("/"),
     }));
-    let touched = false;
-    for (const { key, root } of roots) {
+    for (const { key, root } of roots)
       if (
-        !overflow &&
-        !changes.some(
+        overflow ||
+        changes.some(
           (change) =>
             change.path === root || change.path.startsWith(`${root}/`),
         )
       )
-        continue;
-      this.treeGenerations.set(key, (this.treeGenerations.get(key) ?? 0) + 1);
-      touched = true;
-    }
-    if (!touched) return;
-    clearTimeout(this.settlingWorkspaces.get(workspaceId));
+        this.markTreeChanged(key, workspaceId);
+  }
+
+  /** Marks one tree changed and asks for its workspace's pass once settled. */
+  private markTreeChanged(key: string, workspaceId: string): void {
+    this.treeGenerations.set(key, (this.treeGenerations.get(key) ?? 0) + 1);
+    if (this.settlingWorkspaces.has(workspaceId)) return;
     this.settlingWorkspaces.set(
       workspaceId,
       setTimeout(() => {
@@ -1476,6 +1487,54 @@ export class WorkspaceContentService {
       this.changesCache.delete(statusKey(path));
     }
     this.scheduleGitStatusRefresh(workspaceId, true);
+  }
+
+  /**
+   * Watches exactly the worktrees of live sessions, opening a watcher for a
+   * new one and closing the watcher of one whose session ended. Cheap enough
+   * to run at the start of every pass: it reads the database and compares.
+   */
+  private syncTreeWatchers(): void {
+    const wanted = new Map<string, { path: string; workspaceId: string }>();
+    for (const worktree of this.repositories.listSessionWorktrees({})) {
+      const session = this.repositories.findAgent(worktree.sessionId);
+      if (session && this.sessionIsLive(session.id))
+        wanted.set(statusKey(worktree.path), {
+          path: worktree.path,
+          workspaceId: session.workspaceId,
+        });
+    }
+    for (const [key, watcher] of this.treeWatchers)
+      if (!wanted.has(key)) {
+        watcher.close();
+        this.treeWatchers.delete(key);
+      }
+    for (const [key, worktree] of wanted) {
+      if (this.treeWatchers.has(key)) continue;
+      try {
+        this.treeWatchers.set(
+          key,
+          watchFileTree({
+            root: worktree.path,
+            // Any change at all, or a burst too big to describe, means the
+            // tree is worth measuring; which file does not matter here.
+            onChanges: () => this.markTreeChanged(key, worktree.workspaceId),
+            // A tree that cannot be watched still has its maximum age.
+            onError: () => undefined,
+          }),
+        );
+      } catch {
+        // Same: the maximum age covers a tree with no watcher.
+      }
+    }
+  }
+
+  /** Stops every watcher and timer, so a closing app holds nothing open. */
+  close(): void {
+    for (const watcher of this.treeWatchers.values()) watcher.close();
+    this.treeWatchers.clear();
+    for (const timer of this.settlingWorkspaces.values()) clearTimeout(timer);
+    this.settlingWorkspaces.clear();
   }
 
   /** Every tree a workspace pass can measure: checkouts and worktrees. */
@@ -1526,6 +1585,7 @@ export class WorkspaceContentService {
     workspaceId: string | null,
     force = false,
   ): Promise<void> {
+    this.syncTreeWatchers();
     const repositories = this.repositories.listWorkspaceRepositories(
       workspaceId ?? undefined,
     );

@@ -1479,6 +1479,18 @@ Before working in this workspace:
           await content.get(workspace.id);
           await content.settleGitStatus();
         };
+        // A watcher's report reaches the status on its own, a moment later.
+        const statusBecomes = async (changedFiles: number) => {
+          const deadline = Date.now() + 5_000;
+          while (
+            (await status())?.changedFiles !== changedFiles &&
+            Date.now() < deadline
+          ) {
+            await Bun.sleep(100);
+            await content.settleGitStatus();
+          }
+          return status();
+        };
         // Counts the git processes started inside `run`, by git's own trace.
         const gitLaunches = async (run: () => Promise<unknown>) => {
           const trace = join(home, `git-trace-${crypto.randomUUID()}`);
@@ -1529,9 +1541,7 @@ Before working in this workspace:
           [{ path: `${relativeRoot}/SCRATCH.md` }],
           false,
         );
-        await Bun.sleep(900);
-        await content.settleGitStatus();
-        expect(await status()).toMatchObject({
+        expect(await statusBecomes(1)).toMatchObject({
           state: "modified",
           changedFiles: 1,
         });
@@ -1540,6 +1550,11 @@ Before working in this workspace:
             (file) => file.repositoryPath,
           ),
         ).toEqual(["SCRATCH.md"]);
+
+        // An edit nothing reports — as in a workspace that is not open — is
+        // seen by the live session's own worktree watcher within seconds.
+        await Bun.write(join(worktree.path, "WATCHED.md"), "# Watched\n");
+        expect(await statusBecomes(2)).toMatchObject({ changedFiles: 2 });
 
         // A change outside every tree marks none of them.
         content.noteFilesChanged(workspace.id, [{ path: "BRIEF.md" }], false);
@@ -1550,6 +1565,7 @@ Before working in this workspace:
         // Fetch is the user saying something changed: everything is measured
         // again, whatever the cheap checks say.
         await unlink(join(worktree.path, "SCRATCH.md"));
+        await unlink(join(worktree.path, "WATCHED.md"));
         content.remeasureWorkspace(workspace.id);
         await content.settleGitStatus();
         expect(await status()).toMatchObject({

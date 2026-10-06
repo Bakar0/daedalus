@@ -257,6 +257,7 @@ export async function createApplicationContext(
     // released here rather than left to the process exiting.
     close: () => {
       workspaceWatch.close();
+      workspaceContent.close();
       repositories.close();
     },
   };
