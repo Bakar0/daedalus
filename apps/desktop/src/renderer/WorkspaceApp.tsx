@@ -3875,7 +3875,7 @@ export function WorkspaceApp({
                       {changes && changes.files.length > 0 && (
                         <em
                           className="git-part tone-changes"
-                          title={`${changes.files.length} files changed since this branch left ${changes.base ? changes.base.slice(0, 8) : "its base"}`}
+                          title={`${changes.files.length} uncommitted ${changes.files.length === 1 ? "change" : "changes"}, as git status shows them`}
                         >
                           {changes.files.length}{" "}
                           {changes.files.length === 1 ? "file" : "files"}

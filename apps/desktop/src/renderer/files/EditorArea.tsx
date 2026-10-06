@@ -655,7 +655,8 @@ function FileTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
         {params.diff && (
           <small>
             {" "}
-            ({params.diff.commit ? params.diff.commit.shortSha : "changes"})
+            ({params.diff.commit ? params.diff.commit.shortSha : "working tree"}
+            )
           </small>
         )}
       </span>
@@ -875,8 +876,8 @@ function MonacoPanel({ doc, onEdit }: { doc: OpenDocument; onEdit(): void }) {
 
 /**
  * A changed file next to an earlier version of it, as VS Code's Source
- * Control shows it. For the work so far, the left side is the worktree's
- * base and the right side is the same document a normal tab edits, so typing
+ * Control shows it. For uncommitted work, the left side is HEAD and the
+ * right side is the same document a normal tab edits, so typing
  * here marks it dirty and Cmd+S saves. For one commit, both sides come from
  * git and neither is editable. A deleted file has an empty right side.
  */

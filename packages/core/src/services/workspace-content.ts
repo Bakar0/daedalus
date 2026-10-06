@@ -883,10 +883,10 @@ export function parseChangedFiles(
 const COMMIT_REF = /^[0-9a-f]{7,64}\^?$/;
 
 /**
- * Where a worktree's changes are measured from: the merge-base with
- * `origin/<baseBranch>`, so work that landed on the base branch since the
- * tree branched is not counted as the agent's. Null when there is no base
- * branch or git cannot find the merge-base; callers then compare with HEAD.
+ * Where a worktree's commits start: the merge-base with
+ * `origin/<baseBranch>`, so commits that landed on the base branch since the
+ * tree branched are not listed as its own. Null when there is no base branch
+ * or git cannot find the merge-base; the caller then lists from HEAD.
  */
 async function changesBase(
   git: string,
@@ -2692,10 +2692,10 @@ export class WorkspaceContentService {
   }
 
   /**
-   * Every session worktree in the workspace, with the files it changed since
-   * it branched from `origin/<baseBranch>`: committed and uncommitted work
-   * together, plus untracked files. Read-only and lock-free, so it never
-   * races an agent's own `git add`.
+   * Every session worktree in the workspace with its `git status`: changes
+   * in the working tree and the index against HEAD, plus untracked files,
+   * as VS Code's Source Control shows them. Read-only and lock-free, so it
+   * never races an agent's own `git add`.
    */
   async worktreeChanges(reference: string): Promise<WorktreeChanges[]> {
     const workspace = await this.workspaces.getActive(reference);
@@ -2714,11 +2714,6 @@ export class WorkspaceContentService {
         const repository = repositories.get(worktree.repositoryId);
         const root = relative(workspace.path, worktree.path);
         if (root.startsWith("..") || isAbsolute(root)) return undefined;
-        const base = await changesBase(
-          git,
-          worktree.path,
-          repository?.baseBranch ?? null,
-        );
         const run = (args: string[]) =>
           runCommand(git, [
             "--no-optional-locks",
@@ -2726,11 +2721,16 @@ export class WorkspaceContentService {
             worktree.path,
             ...args,
           ]);
-        const [nameStatus, numstat, untracked] = await Promise.all([
-          run(["diff", "--name-status", "-z", "-M", base ?? "HEAD"]),
-          run(["diff", "--numstat", "-z", "-M", base ?? "HEAD"]),
+        // What `git status` reports, as VS Code's Source Control lists it:
+        // the working tree and the index against HEAD, plus untracked files.
+        // Committed work is not here; it is in the worktree's commits.
+        const [head, nameStatus, numstat, untracked] = await Promise.all([
+          run(["rev-parse", "HEAD"]),
+          run(["diff", "--name-status", "-z", "-M", "HEAD"]),
+          run(["diff", "--numstat", "-z", "-M", "HEAD"]),
           run(["ls-files", "--others", "--exclude-standard", "-z"]),
         ]);
+        const base = head.exitCode === 0 ? head.stdout.trim() || null : null;
         const files: ChangedFile[] = [
           ...(nameStatus.exitCode === 0
             ? parseChangedFiles(nameStatus.stdout, numstat.stdout)
@@ -2794,7 +2794,7 @@ export class WorkspaceContentService {
   }
 
   /**
-   * A file as it was at the worktree's base, for the left side of a diff, or
+   * A file as it is at HEAD, for the left side of a diff, or
    * at a commit (`<sha>`, or `<sha>^` for its parent) when `ref` is given.
    * Empty for a file that did not exist there.
    */
@@ -2814,13 +2814,10 @@ export class WorkspaceContentService {
       );
     if (input.ref !== undefined && !COMMIT_REF.test(input.ref))
       throw new DaedalusError("VALIDATION", "Not a commit");
-    const { base, run } = await this.resolveWorktree(
-      input.workspace,
-      input.root,
-    );
+    const { run } = await this.resolveWorktree(input.workspace, input.root);
     const shown = await run([
       "show",
-      `${input.ref ?? base ?? "HEAD"}:${input.repositoryPath}`,
+      `${input.ref ?? "HEAD"}:${input.repositoryPath}`,
     ]);
     if (shown.exitCode !== 0) return { content: "", binary: false };
     const binary = shown.stdout.slice(0, 8192).includes("\0");

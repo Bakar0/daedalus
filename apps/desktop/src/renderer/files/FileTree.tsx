@@ -175,7 +175,15 @@ export function FileTree({
 
   const setExpanded = useCallback(
     (paths: string[]) => {
-      const unique = [...new Set(paths)];
+      // Closing a folder closes what is inside it. Keeping the descendants
+      // would spring the whole subtree back open the next time the parent is
+      // opened, which is not what closing a folder means (#21).
+      const closed = expandedRef.current.filter(
+        (path) => !paths.includes(path),
+      );
+      const unique = [...new Set(paths)].filter(
+        (path) => !closed.some((folder) => path.startsWith(`${folder}/`)),
+      );
       setExpandedState(unique);
       rememberExpandedDirectories(workspaceId, unique);
       const unlisted = unique.filter((path) => !listingsRef.current[path]);
@@ -999,6 +1007,7 @@ function TreeRow({
     <div
       {...item.getProps()}
       className={classes}
+      data-path={entry.path}
       onContextMenu={(event) => {
         event.preventDefault();
         if (!item.isSelected()) item.getTree().setSelectedItems([item.getId()]);
