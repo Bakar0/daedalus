@@ -263,6 +263,16 @@ export interface WorktreeChanges {
   files: ChangedFile[];
 }
 
+/** One commit a session worktree made since it branched. */
+export interface WorktreeCommit {
+  sha: string;
+  shortSha: string;
+  author: string;
+  /** ISO 8601, the author date. */
+  date: string;
+  subject: string;
+}
+
 /** Where a path printed in a terminal points, when it is a workspace file. */
 export interface FileLinkTarget {
   workspaceId: string;

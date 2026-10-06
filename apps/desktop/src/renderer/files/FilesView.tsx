@@ -54,6 +54,8 @@ export interface FilesViewProps {
   theme: "dark" | "light";
   /** The workspace root's entries, already loaded with the workspace content. */
   initialRoot?: WorkspaceFileEntryDto[];
+  /** Session worktree folders and the commit each branched from. */
+  worktreeBases?: ReadonlyMap<string, string | null>;
   /** What session worktrees changed, by workspace path, for the tree's colours. */
   gitStatus?: ReadonlyMap<string, ChangedFileDto["status"]>;
   /** A file to open, from a terminal link; acted on when the nonce changes. */
@@ -71,6 +73,7 @@ export function FilesView({
   theme,
   initialRoot,
   gitStatus,
+  worktreeBases,
   openRequest,
   journalTarget,
   onJournalTargetShown,
@@ -280,6 +283,7 @@ export function FilesView({
             onWorkspaceDocumentSaved={onWorkspaceDocumentSaved}
             theme={theme}
             workspaceId={workspace.id}
+            worktreeBases={worktreeBases}
           />
         </Suspense>
       </section>

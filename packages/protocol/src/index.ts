@@ -230,6 +230,14 @@ export interface WorktreeChangesDto {
   files: ChangedFileDto[];
 }
 
+export interface WorktreeCommitDto {
+  sha: string;
+  shortSha: string;
+  author: string;
+  date: string;
+  subject: string;
+}
+
 export interface FileLinkTargetDto {
   workspaceId: string;
   path: string;
@@ -825,8 +833,24 @@ export interface DesktopRpcSchema {
       workspaceChanges: Request<{ workspace: string }, WorktreeChangesDto[]>;
       /** A changed file as it was at its worktree's base, for a diff. */
       workspaceChangeOriginal: Request<
-        { workspace: string; root: string; repositoryPath: string },
+        {
+          workspace: string;
+          root: string;
+          repositoryPath: string;
+          /** A commit, or `<sha>^` for its parent; the base when absent. */
+          ref?: string;
+        },
         { content: string; binary: boolean }
+      >;
+      /** The commits a session worktree made since it branched, newest first. */
+      workspaceCommits: Request<
+        { workspace: string; root: string },
+        WorktreeCommitDto[]
+      >;
+      /** The files one commit of a session worktree changed. */
+      workspaceCommitFiles: Request<
+        { workspace: string; root: string; sha: string },
+        ChangedFileDto[]
       >;
       /** Where a path printed in a terminal points, if it is a workspace file. */
       fileLinkResolve: Request<

@@ -6540,3 +6540,119 @@ dd {
 .file-tab-name small {
   color: var(--muted);
 }
+
+/* Quick diff in the editor margin, in VS Code's Dark Modern gutter colours:
+   a bar for added and changed lines, a wedge where lines were removed. */
+.monaco-editor .quick-diff {
+  margin-left: 3px;
+}
+.monaco-editor .quick-diff-added {
+  border-left: 3px solid #2ea043;
+}
+.monaco-editor .quick-diff-modified {
+  border-left: 3px solid #0078d4;
+}
+.monaco-editor .quick-diff-deleted::before {
+  border-bottom: 4px solid transparent;
+  border-left: 4px solid #f85149;
+  border-top: 4px solid transparent;
+  content: "";
+  left: 0;
+  position: absolute;
+  top: -4px;
+}
+
+/* A worktree's pull request, coloured by state as GitHub colours it. */
+.pr-chip {
+  align-items: center;
+  background: transparent !important;
+  border: 1px solid currentColor !important;
+  border-radius: 9px !important;
+  display: inline-flex;
+  font-size: 9px !important;
+  font-variant-numeric: tabular-nums;
+  gap: 3px;
+  line-height: 1;
+  padding: 2px 5px !important;
+}
+.pr-chip svg {
+  fill: none;
+  height: 10px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.4;
+  width: 10px;
+}
+.pr-chip.state-open {
+  color: #3fb950 !important;
+}
+.pr-chip.state-draft {
+  color: #8b949e !important;
+}
+.pr-chip.state-merged {
+  color: #a371f7 !important;
+}
+.pr-chip.state-closed {
+  color: #f85149 !important;
+}
+.pr-chip:hover {
+  background: var(--raised-hover) !important;
+}
+
+/* The commits a worktree made, folded behind a count under its files. */
+.worktree-commits {
+  margin: 0 0 6px 18px;
+}
+.worktree-commits-toggle {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  color: var(--muted) !important;
+  display: flex;
+  font-size: 10px !important;
+  gap: 4px;
+  padding: 2px 6px !important;
+}
+.worktree-commits-toggle:hover {
+  color: var(--text) !important;
+}
+.worktree-commit {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 4px !important;
+  color: var(--secondary) !important;
+  display: flex;
+  font-size: 11px !important;
+  gap: 6px;
+  height: 21px;
+  padding: 0 6px 0 16px !important;
+  text-align: left;
+  width: 100%;
+}
+.worktree-commit:hover {
+  background: var(--raised-hover) !important;
+  color: var(--text) !important;
+}
+.worktree-commit-sha {
+  color: #4fc1ff;
+  flex: 0 0 auto;
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 10px;
+}
+.worktree-commit-subject {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.worktree-commit-age {
+  color: var(--muted);
+  flex: 0 0 auto;
+  font-size: 10px;
+}
+.worktree-commits .changes-list {
+  margin-left: 12px;
+}

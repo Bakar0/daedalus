@@ -468,6 +468,33 @@ const client = {
         content: path === "JOURNAL.md" ? JOURNAL : `// ${path}\n`,
         format: path.endsWith(".md") ? "markdown" : "text",
       }),
+    workspaceCommits: async () =>
+      ok([
+        {
+          sha: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+          shortSha: "a1b2c3d",
+          author: "Claude",
+          date: new Date(Date.now() - 40 * 60_000).toISOString(),
+          subject: "Watch the workspace and reconcile the tree",
+        },
+        {
+          sha: "b2c3d4e5f60718293a4b5c6d7e8f901234567890",
+          shortSha: "b2c3d4e",
+          author: "Claude",
+          date: new Date(Date.now() - 3 * 3_600_000).toISOString(),
+          subject: "Add rename, move and delete to the explorer",
+        },
+      ]),
+    workspaceCommitFiles: async () =>
+      ok([
+        {
+          path: "worktrees/24/daedalus/packages/core/src/services/workspace-watch.ts",
+          repositoryPath: "packages/core/src/services/workspace-watch.ts",
+          status: "added",
+          additions: 120,
+          deletions: 0,
+        },
+      ]),
     workspaceChangeOriginal: async () =>
       ok({ content: "// before\n", binary: false }),
     workspaceChanges: async () =>

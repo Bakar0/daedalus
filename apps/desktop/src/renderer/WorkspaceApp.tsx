@@ -65,6 +65,7 @@ import { type FileOpenRequest, FilesView } from "./files/FilesView";
 import {
   ChangedFileList,
   useWorktreeChanges,
+  WorktreeCommits,
   worktreeKey,
 } from "./files/ChangesView";
 import type { DiffTarget } from "./files/EditorArea";
@@ -2548,6 +2549,16 @@ export function WorkspaceApp({
       ),
     [worktreeChanges],
   );
+  // Where each worktree branched, so the editor can mark what changed.
+  const worktreeBases = useMemo(
+    () =>
+      new Map(
+        [...worktreeChanges.values()].map(
+          (tree) => [tree.root, tree.base] as const,
+        ),
+      ),
+    [worktreeChanges],
+  );
   // Worktrees whose file list the user folded away in the panel.
   const [foldedWorktrees, setFoldedWorktrees] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -3774,6 +3785,11 @@ export function WorkspaceApp({
               );
               const changes = worktreeChanges.get(changesKey);
               const folded = foldedWorktrees.has(changesKey);
+              const commitsAhead = worktree.gitStatus?.ahead ?? 0;
+              // Something to unfold: changed files, or commits to read.
+              const unfoldable = Boolean(
+                changes && (changes.files.length > 0 || commitsAhead > 0),
+              );
               return (
                 <Fragment key={key}>
                   <div className="workspace-worktree-row">
@@ -3781,7 +3797,7 @@ export function WorkspaceApp({
                       aria-expanded={changes ? !folded : undefined}
                       aria-label={`${folded ? "Show" : "Hide"} changed files`}
                       className="worktree-disclosure"
-                      disabled={!changes || changes.files.length === 0}
+                      disabled={!unfoldable}
                       onClick={() =>
                         setFoldedWorktrees((current) => {
                           const next = new Set(current);
@@ -3794,9 +3810,9 @@ export function WorkspaceApp({
                     >
                       <span
                         aria-hidden="true"
-                        className={`file-tree-twisty ${changes && changes.files.length > 0 && !folded ? "open" : ""}`}
+                        className={`file-tree-twisty ${unfoldable && !folded ? "open" : ""}`}
                       >
-                        {changes && changes.files.length > 0 ? "›" : ""}
+                        {unfoldable ? "›" : ""}
                       </span>
                     </button>
                     <span>
@@ -3808,6 +3824,24 @@ export function WorkspaceApp({
                       <small title={worktree.path}>{worktree.branchName}</small>
                     </span>
                     <span className="workspace-worktree-status">
+                      {worktree.pullRequest && (
+                        <button
+                          className={`pr-chip state-${worktree.pullRequest.isDraft && worktree.pullRequest.state === "OPEN" ? "draft" : worktree.pullRequest.state.toLowerCase()}`}
+                          onClick={() =>
+                            openTerminalLink(worktree.pullRequest!.url)
+                          }
+                          title={`Pull request #${worktree.pullRequest.number}${worktree.pullRequest.title ? `: ${worktree.pullRequest.title}` : ""}\n${worktree.pullRequest.isDraft && worktree.pullRequest.state === "OPEN" ? "Draft" : worktree.pullRequest.state.toLowerCase()} · open on GitHub`}
+                          type="button"
+                        >
+                          <svg aria-hidden="true" viewBox="0 0 16 16">
+                            <circle cx="4" cy="3.5" r="1.6" />
+                            <circle cx="4" cy="12.5" r="1.6" />
+                            <circle cx="12" cy="12.5" r="1.6" />
+                            <path d="M4 5.1v5.8M12 10.9V6.5a2 2 0 0 0-2-2H7.5M9 3l-1.5 1.5L9 6" />
+                          </svg>
+                          #{worktree.pullRequest.number}
+                        </button>
+                      )}
                       {changes && changes.files.length > 0 && (
                         <em
                           className="git-part tone-changes"
@@ -3884,6 +3918,18 @@ export function WorkspaceApp({
                       }
                       onOpenFile={(path) => openFromPanel({ path })}
                       tree={changes}
+                    />
+                  )}
+                  {changes && commitsAhead > 0 && !folded && (
+                    <WorktreeCommits
+                      client={client}
+                      count={commitsAhead}
+                      onOpenDiff={(target, options) =>
+                        openFromPanel({ ...options, diff: target })
+                      }
+                      onOpenFile={(path) => openFromPanel({ path })}
+                      root={changes.root}
+                      workspaceId={workspace.id}
                     />
                   )}
                 </Fragment>
@@ -5139,6 +5185,7 @@ export function WorkspaceApp({
                   <FilesView
                     client={client}
                     gitStatus={changedPaths}
+                    worktreeBases={worktreeBases}
                     openRequest={fileOpenRequest}
                     initialRoot={workspaceContent.files}
                     key={workspace.id}

@@ -38,6 +38,7 @@ import {
 import { workspaceBaseName } from "./explorer-state";
 import { FileTypeIcon } from "./file-icons";
 import { monaco } from "./monaco";
+import { quickDiff } from "./quick-diff";
 
 /** A changed file the Changes view asks to see as a diff. */
 export interface DiffTarget {
@@ -48,6 +49,8 @@ export interface DiffTarget {
   repositoryPath: string;
   originalRepositoryPath?: string;
   status: "added" | "modified" | "deleted" | "renamed" | "untracked";
+  /** A diff of one commit against its parent, instead of the work so far. */
+  commit?: { sha: string; shortSha: string };
 }
 
 export interface OpenOptions {
@@ -76,6 +79,8 @@ export interface EditorAreaProps {
   /** BRIEF.md or JOURNAL.md was written; other views show their content. */
   onWorkspaceDocumentSaved(): void;
   handleRef: React.Ref<EditorAreaHandle>;
+  /** Session worktree folders and the commit each branched from. */
+  worktreeBases?: ReadonlyMap<string, string | null>;
 }
 
 interface FilePanelParams {
@@ -89,7 +94,8 @@ interface FilePanelParams {
 }
 
 const panelId = (path: string) => `file:${path}`;
-const diffPanelId = (path: string) => `diff:${path}`;
+const diffPanelId = (path: string, commit?: string) =>
+  commit ? `commit:${commit}:${path}` : `diff:${path}`;
 const layoutKey = (workspaceId: string) =>
   `daedalus.editor.layout.${workspaceId}`;
 
@@ -106,6 +112,8 @@ interface EditorContextValue {
   pin(panel: IDockviewPanel): void;
   onError(message: string): void;
   onWorkspaceDocumentSaved(): void;
+  /** A file's text where its worktree branched, or undefined outside one. */
+  baseText(path: string): Promise<string | undefined> | undefined;
 }
 
 const EditorContext = createContext<EditorContextValue | null>(null);
@@ -177,7 +185,37 @@ export default function EditorArea({
   onError,
   onWorkspaceDocumentSaved,
   handleRef,
+  worktreeBases,
 }: EditorAreaProps) {
+  // Base text by root, base commit and path. A new base (the worktree was
+  // rebased, or main was fetched) is a new key, so the cache never goes stale.
+  const baseCache = useRef(new Map<string, Promise<string | undefined>>());
+  const baseText = (path: string) => {
+    if (!worktreeBases) return undefined;
+    for (const [root, base] of worktreeBases) {
+      if (!path.startsWith(`${root}/`)) continue;
+      const repositoryPath = path.slice(root.length + 1);
+      const key = `${root}\u0000${base ?? "HEAD"}\u0000${repositoryPath}`;
+      let text = baseCache.current.get(key);
+      if (!text) {
+        text = client.request
+          .workspaceChangeOriginal({
+            workspace: workspaceId,
+            root,
+            repositoryPath,
+          })
+          .then((response) =>
+            response.ok && !response.data.binary
+              ? response.data.content
+              : undefined,
+          )
+          .catch(() => undefined);
+        baseCache.current.set(key, text);
+      }
+      return text;
+    }
+    return undefined;
+  };
   const apiRef = useRef<DockviewApi | undefined>(undefined);
   const loading = useRef(new Map<string, Promise<OpenDocument | undefined>>());
   const callbacks = useRef({
@@ -308,13 +346,9 @@ export default function EditorArea({
 
   const openDiff = useCallback(
     (target: DiffTarget, options: { pinned: boolean }) => {
-      place(
-        diffPanelId(target.path),
-        "diff",
-        { path: target.path, diff: target },
-        options.pinned,
-      );
-      if (options.pinned) requestFocus(diffPanelId(target.path));
+      const id = diffPanelId(target.path, target.commit?.sha);
+      place(id, "diff", { path: target.path, diff: target }, options.pinned);
+      if (options.pinned) requestFocus(id);
     },
     [place],
   );
@@ -523,6 +557,7 @@ export default function EditorArea({
     onError: (message) => callbacks.current.onError(message),
     onWorkspaceDocumentSaved: () =>
       callbacks.current.onWorkspaceDocumentSaved(),
+    baseText,
   };
 
   return (
@@ -603,7 +638,9 @@ function FileTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
       className={`file-tab ${params.preview ? "preview" : ""} ${dirty ? "dirty" : ""}`}
       onClick={() =>
         requestFocus(
-          params.diff ? diffPanelId(params.path) : panelId(params.path),
+          params.diff
+            ? diffPanelId(params.path, params.diff.commit?.sha)
+            : panelId(params.path),
         )
       }
       onAuxClick={(event) => {
@@ -615,7 +652,12 @@ function FileTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
       <FileTypeIcon name={workspaceBaseName(params.path)} />
       <span className="file-tab-name">
         {workspaceBaseName(params.path)}
-        {params.diff && <small> (changes)</small>}
+        {params.diff && (
+          <small>
+            {" "}
+            ({params.diff.commit ? params.diff.commit.shortSha : "changes"})
+          </small>
+        )}
       </span>
       <button
         aria-label={`Close ${workspaceBaseName(params.path)}`}
@@ -744,6 +786,9 @@ function FilePanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
 function MonacoPanel({ doc, onEdit }: { doc: OpenDocument; onEdit(): void }) {
   const context = useEditorContext();
   const container = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | undefined>(
+    undefined,
+  );
   const editEvents = useRef(onEdit);
   editEvents.current = onEdit;
 
@@ -762,93 +807,183 @@ function MonacoPanel({ doc, onEdit }: { doc: OpenDocument; onEdit(): void }) {
       wordWrap: isMarkdown(doc.path) ? "on" : "off",
       fixedOverflowWidgets: true,
     });
+    editorRef.current = editor;
     if (doc.viewState) editor.restoreViewState(doc.viewState);
     const typing = editor.onDidChangeModelContent(() => editEvents.current());
     const stopListening = listenForFocus(panelId(doc.path), editor);
     return () => {
       stopListening();
+      editorRef.current = undefined;
       doc.viewState = editor.saveViewState();
       typing.dispose();
       editor.dispose();
     };
   }, [context.theme, doc]);
 
+  // Margin marks for what changed since the worktree branched, as VS Code
+  // draws them: green for added lines, blue for changed ones, a red wedge
+  // where lines were removed. Recomputed as the text changes.
+  const baseRequest = context.baseText(doc.path);
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || !baseRequest) return;
+    let cancelled = false;
+    let base: string | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const decorations = editor.createDecorationsCollection();
+    const paint = () => {
+      if (base === undefined || doc.model.isDisposed()) return;
+      decorations.set(
+        quickDiff(base, doc.model.getValue()).map((range) => ({
+          range: new monaco.Range(range.startLine, 1, range.endLine, 1),
+          options: {
+            isWholeLine: true,
+            linesDecorationsClassName: `quick-diff quick-diff-${range.kind}`,
+            overviewRuler: {
+              color:
+                range.kind === "added"
+                  ? "#487e02"
+                  : range.kind === "modified"
+                    ? "#1b81a8"
+                    : "#f14c4c",
+              position: monaco.editor.OverviewRulerLane.Left,
+            },
+          },
+        })),
+      );
+    };
+    void baseRequest.then((text) => {
+      if (cancelled) return;
+      base = text;
+      paint();
+    });
+    const changes = doc.model.onDidChangeContent(() => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(paint, 250);
+    });
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      changes.dispose();
+      decorations.clear();
+    };
+    // The editor is rebuilt when the theme changes, and the marks with it.
+  }, [baseRequest, context.theme, doc]);
+
   return <div className="monaco-panel" ref={container} />;
 }
 
 /**
- * A changed file next to where its worktree branched, as VS Code's Source
- * Control shows it. The right side is the same document a normal tab edits,
- * so typing here marks the file dirty and Cmd+S saves it; the left side is
- * the base and read-only. A deleted file has an empty right side.
+ * A changed file next to an earlier version of it, as VS Code's Source
+ * Control shows it. For the work so far, the left side is the worktree's
+ * base and the right side is the same document a normal tab edits, so typing
+ * here marks it dirty and Cmd+S saves. For one commit, both sides come from
+ * git and neither is editable. A deleted file has an empty right side.
  */
 function DiffPanel({ params }: IDockviewPanelProps<FilePanelParams>) {
   const context = useEditorContext();
   const container = useRef<HTMLDivElement>(null);
   const diff = params.diff;
   const [loaded, setLoaded] = useState<
-    { original: string; doc?: OpenDocument } | { message: string } | undefined
+    | { original: string; modified: OpenDocument | string }
+    | { message: string }
+    | undefined
   >();
 
   useEffect(() => {
     if (!diff) return;
     let cancelled = false;
     setLoaded(undefined);
+    const empty = { ok: true as const, data: { content: "", binary: false } };
+    const read = (repositoryPath: string, ref?: string) =>
+      context.client.request.workspaceChangeOriginal({
+        workspace: context.workspaceId,
+        root: diff.root,
+        repositoryPath,
+        ...(ref ? { ref } : {}),
+      });
+    const sha = diff.commit?.sha;
     void (async () => {
       const original =
         diff.status === "added" || diff.status === "untracked"
-          ? { ok: true as const, data: { content: "", binary: false } }
-          : await context.client.request.workspaceChangeOriginal({
-              workspace: context.workspaceId,
-              root: diff.root,
-              repositoryPath:
-                diff.originalRepositoryPath ?? diff.repositoryPath,
-            });
-      const doc =
-        diff.status === "deleted" ? undefined : await context.load(diff.path);
+          ? empty
+          : await read(
+              diff.originalRepositoryPath ?? diff.repositoryPath,
+              sha ? `${sha}^` : undefined,
+            );
+      const modified =
+        diff.status === "deleted"
+          ? ""
+          : sha
+            ? await read(diff.repositoryPath, sha)
+            : await context.load(diff.path);
       if (cancelled) return;
-      if (!original.ok) setLoaded({ message: original.error.message });
-      else if (original.data.binary)
-        setLoaded({ message: "A binary file; there is no text to compare." });
-      else if (diff.status !== "deleted" && !doc)
+      if (!original.ok) {
+        setLoaded({ message: original.error.message });
+        return;
+      }
+      if (modified === undefined) {
         setLoaded({ message: "This file can no longer be read." });
-      else setLoaded({ original: original.data.content, doc });
+        return;
+      }
+      if (typeof modified === "object" && "ok" in modified) {
+        if (!modified.ok) setLoaded({ message: modified.error.message });
+        else if (modified.data.binary || original.data.binary)
+          setLoaded({ message: "A binary file; there is no text to compare." });
+        else
+          setLoaded({
+            original: original.data.content,
+            modified: modified.data.content,
+          });
+        return;
+      }
+      if (original.data.binary)
+        setLoaded({ message: "A binary file; there is no text to compare." });
+      else setLoaded({ original: original.data.content, modified });
     })();
     return () => {
       cancelled = true;
     };
     // `context` is rebuilt on every render; what to load depends on the diff.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [diff?.path, diff?.root, diff?.repositoryPath, diff?.status]);
+  }, [
+    diff?.path,
+    diff?.root,
+    diff?.repositoryPath,
+    diff?.status,
+    diff?.commit?.sha,
+  ]);
 
   useEffect(() => {
     const parent = container.current;
     if (!parent || !diff || !loaded || "message" in loaded) return;
-    const extension = diff.path.slice(diff.path.lastIndexOf("/") + 1);
+    const sha = diff.commit?.sha;
+    const uri = (scheme: string) =>
+      monaco.Uri.from({
+        scheme,
+        path: `/${context.workspaceId}/${sha ?? "work"}/${diff.path}`,
+      });
     const original = monaco.editor.createModel(
       loaded.original,
       undefined,
-      monaco.Uri.from({
-        scheme: "daedalus-original",
-        path: `/${context.workspaceId}/${diff.path}`,
-      }),
+      uri("daedalus-original"),
     );
-    const removed = loaded.doc
-      ? undefined
-      : monaco.editor.createModel(
-          "",
-          undefined,
-          monaco.Uri.from({
-            scheme: "daedalus-deleted",
-            path: `/${context.workspaceId}/${extension}`,
-          }),
-        );
-    const modified = loaded.doc?.model ?? removed;
-    if (!modified) return;
+    // A commit's version, or a deleted file's empty side, is text of its own;
+    // the work so far is the live document.
+    const fixed =
+      typeof loaded.modified === "string"
+        ? monaco.editor.createModel(
+            loaded.modified,
+            undefined,
+            uri("daedalus-commit"),
+          )
+        : undefined;
+    const modified =
+      typeof loaded.modified === "string" ? fixed! : loaded.modified.model;
     const editor = monaco.editor.createDiffEditor(parent, {
       automaticLayout: true,
       originalEditable: false,
-      readOnly: !loaded.doc || isReadOnlyPath(diff.path),
+      readOnly: Boolean(fixed) || isReadOnlyPath(diff.path),
       renderSideBySide: true,
       theme: context.theme === "dark" ? "daedalus-dark" : "daedalus-light",
       fontFamily: '"SF Mono", Menlo, monospace',
@@ -863,7 +998,7 @@ function DiffPanel({ params }: IDockviewPanelProps<FilePanelParams>) {
       editor.revealFirstDiff();
     });
     const stopListening = listenForFocus(
-      diffPanelId(diff.path),
+      diffPanelId(diff.path, sha),
       editor.getModifiedEditor(),
     );
     return () => {
@@ -871,7 +1006,7 @@ function DiffPanel({ params }: IDockviewPanelProps<FilePanelParams>) {
       stopListening();
       editor.dispose();
       original.dispose();
-      removed?.dispose();
+      fixed?.dispose();
     };
   }, [context.theme, context.workspaceId, diff, loaded]);
 

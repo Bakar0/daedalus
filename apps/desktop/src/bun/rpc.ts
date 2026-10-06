@@ -580,6 +580,18 @@ export function createDesktopRequestHandlers(
       ),
     workspaceChangeOriginal: (params) =>
       result(() => context.workspaceContent.changeOriginal(params)),
+    workspaceCommits: (params) =>
+      result(async () =>
+        (await context.workspaceContent.worktreeCommits(params)).map(
+          (commit) => ({ ...commit }),
+        ),
+      ),
+    workspaceCommitFiles: (params) =>
+      result(async () =>
+        (await context.workspaceContent.commitFiles(params)).map((file) => ({
+          ...file,
+        })),
+      ),
     fileLinkResolve: (params) =>
       result(async () => {
         const target = await context.workspaceContent.resolveFileLink(params);

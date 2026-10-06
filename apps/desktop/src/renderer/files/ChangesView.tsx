@@ -1,4 +1,8 @@
-import type { ChangedFileDto, WorktreeChangesDto } from "@daedalus/protocol";
+import type {
+  ChangedFileDto,
+  WorktreeChangesDto,
+  WorktreeCommitDto,
+} from "@daedalus/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DesktopClient } from "../client-types";
 import type { DiffTarget } from "./EditorArea";
@@ -102,10 +106,13 @@ export function useWorktreeChanges(
  */
 export function ChangedFileList({
   tree,
+  commit,
   onOpenDiff,
   onOpenFile,
 }: {
-  tree: WorktreeChangesDto;
+  tree: Pick<WorktreeChangesDto, "root" | "branchName" | "files">;
+  /** Files of one commit: their diffs compare that commit with its parent. */
+  commit?: { sha: string; shortSha: string };
   onOpenDiff(target: DiffTarget, options: { pinned: boolean }): void;
   onOpenFile(path: string): void;
 }) {
@@ -125,6 +132,7 @@ export function ChangedFileList({
           repositoryPath: file.repositoryPath,
           originalRepositoryPath: file.originalRepositoryPath,
           status: file.status,
+          ...(commit ? { commit } : {}),
         };
         const folder = workspaceParentPath(file.repositoryPath);
         return (
@@ -171,6 +179,127 @@ export function ChangedFileList({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+const ago = (iso: string, now = Date.now()) => {
+  const minutes = Math.max(0, Math.round((now - Date.parse(iso)) / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
+};
+
+/**
+ * The commits a worktree made since it branched, newest first, folded behind
+ * a count. Opening a commit lists the files it changed; a file opens that
+ * commit's diff. Read when opened, and again when the count moves.
+ */
+export function WorktreeCommits({
+  client,
+  workspaceId,
+  root,
+  count,
+  onOpenDiff,
+  onOpenFile,
+}: {
+  client: DesktopClient;
+  workspaceId: string;
+  root: string;
+  /** Commits ahead of the base, from the worktree's git status. */
+  count: number;
+  onOpenDiff(target: DiffTarget, options: { pinned: boolean }): void;
+  onOpenFile(path: string): void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [commits, setCommits] = useState<WorktreeCommitDto[]>();
+  const [expanded, setExpanded] = useState<string>();
+  const [files, setFiles] = useState<Record<string, ChangedFileDto[]>>({});
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void client.request
+      .workspaceCommits({ workspace: workspaceId, root })
+      .then((response) => {
+        if (!cancelled && response.ok) setCommits(response.data);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, count, open, root, workspaceId]);
+
+  const toggleCommit = (commit: WorktreeCommitDto) => {
+    if (expanded === commit.sha) {
+      setExpanded(undefined);
+      return;
+    }
+    setExpanded(commit.sha);
+    if (files[commit.sha]) return;
+    void client.request
+      .workspaceCommitFiles({ workspace: workspaceId, root, sha: commit.sha })
+      .then((response) => {
+        if (response.ok)
+          setFiles((current) => ({ ...current, [commit.sha]: response.data }));
+      });
+  };
+
+  return (
+    <div className="worktree-commits">
+      <button
+        aria-expanded={open}
+        className="worktree-commits-toggle"
+        onClick={() => setOpen((current) => !current)}
+        type="button"
+      >
+        <span
+          aria-hidden="true"
+          className={`file-tree-twisty ${open ? "open" : ""}`}
+        >
+          ›
+        </span>
+        {count} {count === 1 ? "commit" : "commits"}
+      </button>
+      {open &&
+        (commits === undefined ? (
+          <p className="changes-empty">Reading commits…</p>
+        ) : commits.length === 0 ? (
+          <p className="changes-empty">No commits since the branch point.</p>
+        ) : (
+          commits.map((commit) => (
+            <div key={commit.sha}>
+              <button
+                aria-expanded={expanded === commit.sha}
+                className="worktree-commit"
+                onClick={() => toggleCommit(commit)}
+                title={`${commit.sha}\n${commit.author} · ${new Date(commit.date).toLocaleString()}\n\n${commit.subject}`}
+                type="button"
+              >
+                <span className="worktree-commit-sha">{commit.shortSha}</span>
+                <span className="worktree-commit-subject">
+                  {commit.subject}
+                </span>
+                <span className="worktree-commit-age">{ago(commit.date)}</span>
+              </button>
+              {expanded === commit.sha &&
+                (files[commit.sha] ? (
+                  <ChangedFileList
+                    commit={{ sha: commit.sha, shortSha: commit.shortSha }}
+                    onOpenDiff={onOpenDiff}
+                    onOpenFile={onOpenFile}
+                    tree={{
+                      root,
+                      branchName: commit.shortSha,
+                      files: files[commit.sha]!,
+                    }}
+                  />
+                ) : (
+                  <p className="changes-empty">Reading files…</p>
+                ))}
+            </div>
+          ))
+        ))}
     </div>
   );
 }

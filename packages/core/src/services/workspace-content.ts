@@ -47,6 +47,7 @@ import type {
   WorkspaceFileEntry,
   WorkspaceRepository,
   WorktreeChanges,
+  WorktreeCommit,
   RepositoryFetchOutcome,
   RepositoryLibraryEntry,
 } from "../domain";
@@ -877,6 +878,9 @@ export function parseChangedFiles(
   }
   return files;
 }
+
+/** A commit, or its parent, as a diff may ask for one. */
+const COMMIT_REF = /^[0-9a-f]{7,64}\^?$/;
 
 /**
  * Where a worktree's changes are measured from: the merge-base with
@@ -2739,32 +2743,17 @@ export class WorkspaceContentService {
     return results.filter((item) => item !== undefined);
   }
 
-  /**
-   * A changed file as it was at the worktree's base, for the left side of a
-   * diff. Empty for a file the worktree added.
-   */
-  async changeOriginal(input: {
-    workspace: string;
-    root: string;
-    repositoryPath: string;
-  }): Promise<{ content: string; binary: boolean }> {
-    const workspace = await this.workspaces.getActive(input.workspace);
-    const folder = await this.resolveVisiblePath(workspace, input.root);
+  /** The session worktree at `root`, with git and where its changes start. */
+  private async resolveWorktree(reference: string, root: string) {
+    const workspace = await this.workspaces.getActive(reference);
+    const folder = await this.resolveVisiblePath(workspace, root);
     const worktree = this.repositories
       .listSessionWorktrees({ workspaceId: workspace.id })
       .find((item) => resolve(item.path) === resolve(folder.target));
     if (!worktree)
       throw new DaedalusError(
         "NOT_FOUND",
-        `'${input.root}' is not a session worktree`,
-      );
-    if (
-      isAbsolute(input.repositoryPath) ||
-      input.repositoryPath.split(/[\\/]/).includes("..")
-    )
-      throw new DaedalusError(
-        "VALIDATION",
-        "Repository paths must be relative",
+        `'${root}' is not a session worktree`,
       );
     const git = findExecutable("git");
     if (!git) throw new DaedalusError("DEPENDENCY", "git was not found");
@@ -2776,16 +2765,115 @@ export class WorkspaceContentService {
       worktree.path,
       repository?.baseBranch ?? null,
     );
-    const shown = await runCommand(git, [
-      "--no-optional-locks",
-      "-C",
-      worktree.path,
+    const run = (args: string[]) =>
+      runCommand(git, ["--no-optional-locks", "-C", worktree.path, ...args]);
+    return {
+      workspace,
+      worktree,
+      root: relative(workspace.path, worktree.path),
+      base,
+      run,
+    };
+  }
+
+  /**
+   * A file as it was at the worktree's base, for the left side of a diff, or
+   * at a commit (`<sha>`, or `<sha>^` for its parent) when `ref` is given.
+   * Empty for a file that did not exist there.
+   */
+  async changeOriginal(input: {
+    workspace: string;
+    root: string;
+    repositoryPath: string;
+    ref?: string;
+  }): Promise<{ content: string; binary: boolean }> {
+    if (
+      isAbsolute(input.repositoryPath) ||
+      input.repositoryPath.split(/[\\/]/).includes("..")
+    )
+      throw new DaedalusError(
+        "VALIDATION",
+        "Repository paths must be relative",
+      );
+    if (input.ref !== undefined && !COMMIT_REF.test(input.ref))
+      throw new DaedalusError("VALIDATION", "Not a commit");
+    const { base, run } = await this.resolveWorktree(
+      input.workspace,
+      input.root,
+    );
+    const shown = await run([
       "show",
-      `${base ?? "HEAD"}:${input.repositoryPath}`,
+      `${input.ref ?? base ?? "HEAD"}:${input.repositoryPath}`,
     ]);
     if (shown.exitCode !== 0) return { content: "", binary: false };
     const binary = shown.stdout.slice(0, 8192).includes("\0");
     return { content: binary ? "" : shown.stdout, binary };
+  }
+
+  /**
+   * The commits a session worktree made since it branched, newest first, as
+   * VS Code's Source Control Graph lists a branch's outgoing commits.
+   */
+  async worktreeCommits(input: {
+    workspace: string;
+    root: string;
+  }): Promise<WorktreeCommit[]> {
+    const { base, run } = await this.resolveWorktree(
+      input.workspace,
+      input.root,
+    );
+    const log = await run([
+      "log",
+      "--max-count=200",
+      "-z",
+      `--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s`,
+      base ? `${base}..HEAD` : "HEAD",
+    ]);
+    if (log.exitCode !== 0) return [];
+    return log.stdout
+      .split("\0")
+      .filter((record) => record.trim())
+      .flatMap((record) => {
+        const [sha, shortSha, author, date, subject] = record
+          .replace(/^\n/, "")
+          .split("\x1f");
+        return sha && shortSha && date
+          ? [
+              {
+                sha,
+                shortSha,
+                author: author ?? "",
+                date,
+                subject: subject ?? "",
+              },
+            ]
+          : [];
+      });
+  }
+
+  /** The files one commit of a session worktree changed, against its parent. */
+  async commitFiles(input: {
+    workspace: string;
+    root: string;
+    sha: string;
+  }): Promise<ChangedFile[]> {
+    if (!/^[0-9a-f]{7,64}$/.test(input.sha))
+      throw new DaedalusError("VALIDATION", "Not a commit");
+    const { root, run } = await this.resolveWorktree(
+      input.workspace,
+      input.root,
+    );
+    // `--root` so the first commit of a history still lists what it added.
+    const args = ["diff-tree", "--root", "-r", "-z", "-M", "--no-commit-id"];
+    const [nameStatus, numstat] = await Promise.all([
+      run([...args, "--name-status", input.sha]),
+      run([...args, "--numstat", input.sha]),
+    ]);
+    if (nameStatus.exitCode !== 0) return [];
+    return parseChangedFiles(nameStatus.stdout, numstat.stdout).map((file) => ({
+      ...file,
+      path: join(root, file.repositoryPath),
+    }));
   }
 
   /**
