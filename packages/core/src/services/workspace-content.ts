@@ -861,6 +861,12 @@ async function gitDirectories(
  * fetches all move one of them; an edit to a file does not, which is what the
  * watcher and the maximum age are for. Only `stat` and one small read, never
  * a process, so it costs nothing next to the git it saves.
+ *
+ * The shared clones are created with `--ref-format=reftable`. There HEAD reads
+ * `ref: refs/heads/.invalid` and no ref is a file of its own: every update,
+ * a commit included, rewrites `reftable/tables.list` instead — the clone's for
+ * branches and remote refs, the worktree's own for its HEAD. Both are read,
+ * as are the loose-ref files, so either format is seen.
  */
 async function gitMetadataFingerprint(
   path: string,
@@ -876,6 +882,8 @@ async function gitMetadataFingerprint(
   const files = [
     join(gitDir, "HEAD"),
     join(gitDir, "index"),
+    join(gitDir, "reftable", "tables.list"),
+    join(commonDir, "reftable", "tables.list"),
     join(commonDir, "packed-refs"),
     ...(branchRef ? [join(commonDir, branchRef)] : []),
     ...(baseBranch
