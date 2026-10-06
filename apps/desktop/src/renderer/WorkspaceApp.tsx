@@ -6486,24 +6486,33 @@ export function WorkspaceApp({
               />
             </div>
             {sessionType !== "terminal" && (
-              <label className="session-ability-option">
-                <span>
-                  <strong>Routines</strong>
-                  <small>Scheduled checks while the app is open</small>
-                </span>
-                <input
-                  aria-label="Routines enabled"
-                  checked={Boolean(sessionForm.routines)}
-                  className="switch"
-                  onChange={(event) =>
-                    setSessionForm({
-                      ...sessionForm,
-                      routines: event.target.checked,
-                    })
-                  }
-                  type="checkbox"
-                />
-              </label>
+              // One row per ability the agent can be given at launch.
+              <fieldset className="session-tool-picker session-abilities">
+                <legend>Agent abilities</legend>
+                {(
+                  [
+                    {
+                      key: "routines",
+                      label: "Give the agent the ability to run routines",
+                    },
+                  ] as const
+                ).map((ability) => (
+                  <label className="session-ability-option" key={ability.key}>
+                    <strong>{ability.label}</strong>
+                    <input
+                      checked={Boolean(sessionForm[ability.key])}
+                      className="switch"
+                      onChange={(event) =>
+                        setSessionForm({
+                          ...sessionForm,
+                          [ability.key]: event.target.checked,
+                        })
+                      }
+                      type="checkbox"
+                    />
+                  </label>
+                ))}
+              </fieldset>
             )}
             <div className="modal-actions">
               <button

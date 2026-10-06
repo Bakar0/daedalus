@@ -6183,6 +6183,10 @@ dd {
   display: grid;
   gap: 2px;
 }
+.session-abilities {
+  display: grid;
+  gap: 6px;
+}
 /* A switch like the skills panel's, drawn inside a menu item that is itself
    the control. */
 .menu-switch {
