@@ -3675,16 +3675,18 @@ dd {
 .archived-item {
   align-items: center;
   background: var(--raised);
-  border-radius: 8px;
+  border-radius: 6px;
   display: flex;
-  gap: 8px;
+  gap: 6px;
   justify-content: space-between;
-  margin: 4px 0;
-  padding: 8px;
+  margin: 2px 0;
+  padding: 3px 3px 3px 8px;
 }
-.archived-item > span {
-  display: grid;
-  gap: 2px;
+.archived-item > .archived-item-text {
+  align-items: baseline;
+  display: flex;
+  flex: 1;
+  gap: 6px;
   min-width: 0;
 }
 .archived-item strong,
@@ -3695,11 +3697,41 @@ dd {
 }
 .archived-item strong {
   font-size: 11px;
+  min-width: 0;
 }
-.archived-item button {
+.archived-item small {
+  color: var(--muted);
+  flex: 0 1 auto;
+  font-size: 10px;
+}
+.archived-item > .archived-item-actions {
+  display: flex;
   flex: 0 0 auto;
-  font-size: 10px !important;
-  padding: 5px 7px !important;
+  gap: 1px;
+}
+.archived-item .archived-item-action {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 5px !important;
+  color: var(--muted) !important;
+  display: inline-flex;
+  height: 22px;
+  justify-content: center;
+  padding: 0 !important;
+  width: 22px;
+}
+.archived-item .archived-item-action svg {
+  height: 14px;
+  margin: 0;
+  width: 14px;
+}
+.archived-item .archived-item-action:hover:not(:disabled) {
+  background: var(--raised-hover) !important;
+  color: var(--text) !important;
+}
+.archived-item .archived-item-action.danger:hover:not(:disabled) {
+  color: #f0707e !important;
 }
 .workspace-archive-list {
   margin-top: auto;
@@ -6150,6 +6182,10 @@ dd {
 .session-ability-option > span {
   display: grid;
   gap: 2px;
+}
+.session-abilities {
+  display: grid;
+  gap: 6px;
 }
 /* A switch like the skills panel's, drawn inside a menu item that is itself
    the control. */

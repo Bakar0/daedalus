@@ -18,6 +18,7 @@ export type TaskActionIconName =
   | "draft"
   | "second-opinion"
   | "edit"
+  | "unarchive"
   | "delete";
 
 const PATHS: Record<TaskActionIconName, ReactNode> = {
@@ -63,6 +64,13 @@ const PATHS: Record<TaskActionIconName, ReactNode> = {
     <>
       <path d="M4.5 19.5h4L19 9a2.1 2.1 0 0 0-3-3L5.5 16.5z" />
       <path d="M13.5 8.5 16 11" />
+    </>
+  ),
+  unarchive: (
+    <>
+      <rect height="4" rx="1" width="17" x="3.5" y="4" />
+      <path d="M5 8v10.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V8" />
+      <path d="M12 17.5v-6M9.5 14 12 11.5l2.5 2.5" />
     </>
   ),
   delete: (

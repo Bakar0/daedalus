@@ -747,9 +747,7 @@ describe("desktop application shell", () => {
       />,
     );
     expect(html).toContain('class="session-model-picker"');
-    expect(html).toContain("Loading Codex models");
     expect(html).toContain("Loading models");
-    expect(html).toContain("Reading the models available to your account");
     expect(html).not.toContain("Provider default · Automatic");
   });
 
@@ -781,23 +779,22 @@ describe("desktop application shell", () => {
             settings: {
               ...base.settings,
               providers: [
-                { name: "codex", executable: "codex", available: true },
+                { name: "claude", executable: "claude", available: true },
               ],
             },
           }}
         />,
       );
-    // The dialog opens on Codex with the picker on its first option. Against
-    // a Claude default that is a different choice, so the checkbox offers to
-    // make it the default; against a Codex default the first option already
+    // The dialog opens on Claude with the picker on its first option. Against
+    // a Codex default that is a different choice, so the checkbox offers to
+    // make it the default; against a Claude default the first option already
     // means that default, and there is nothing to remember.
-    const differs = render("claude");
+    const differs = render("codex");
     expect(differs).toContain('class="session-model-remember"');
-    expect(differs).toContain("Codex · provider default");
-    expect(differs).toContain("as this workspace");
-    const same = render("codex");
+    expect(differs).toContain("Remember for this workspace");
+    const same = render("claude");
     expect(same).not.toContain('class="session-model-remember"');
-    expect(same).toContain("Loading Codex models");
+    expect(same).toContain('class="session-model-picker"');
   });
 
   test("renders the unified repository finder and clone action", () => {
@@ -1823,7 +1820,7 @@ describe("desktop application shell", () => {
     expect(html.indexOf("Alpha")).toBeLessThan(html.indexOf("Mike"));
   });
 
-  test("renders collapsed workspace and session archives with restore actions", () => {
+  test("renders collapsed workspace and session archives with restore and delete actions", () => {
     const archivedAt = "2026-02-02T00:00:00.000Z";
     const snapshot: DesktopSnapshotDto = {
       ...base,
@@ -1897,7 +1894,14 @@ describe("desktop application shell", () => {
     expect(html).toContain("Archived project");
     expect(html).toContain("Archived sessions (1)");
     expect(html).toContain("Archived conversation");
-    expect(html).toContain("Restore &amp; resume");
+    expect(html).toContain(
+      'aria-label="Restore and resume Archived conversation"',
+    );
+    expect(html).toContain('aria-label="Restore Archived project"');
+    expect(html).toContain(
+      'aria-label="Delete Archived conversation permanently"',
+    );
+    expect(html).toContain('aria-label="Delete Archived project permanently"');
     expect(html).toContain('aria-label="Archive Active workspace"');
   });
 

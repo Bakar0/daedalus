@@ -535,6 +535,10 @@ export function createDesktopRequestHandlers(
       mutate(async () =>
         workspaceDto(await context.workspaces.restore(reference)),
       ),
+    workspaceDelete: ({ reference }) =>
+      mutate(async () =>
+        workspaceDto(await context.workspaces.deletePermanently(reference)),
+      ),
     workspaceContentGet: ({ workspace }) =>
       result(async () =>
         workspaceContentDto(await context.workspaceContent.get(workspace)),
@@ -775,6 +779,8 @@ export function createDesktopRequestHandlers(
       mutate(async () => agentDto(await context.agents.stop(id, force))),
     agentRemove: ({ id }) =>
       mutate(async () => agentDto(await context.agents.remove(id))),
+    agentDelete: ({ id }) =>
+      mutate(async () => agentDto(await context.agents.deletePermanently(id))),
     agentReorder: ({ workspace, sessionIds }) =>
       mutate(async () =>
         (await context.agents.reorder(workspace, sessionIds)).map(agentDto),

@@ -297,10 +297,10 @@ const help = `daedal ${VERSION} — local-first control plane for coding agents
 Usage:
   daedal doctor [--json]
   daedal shutdown [--dry-run] [--keep-terminals] [--force] [--json]
-  daedal workspace <create|list|get|update|archive|restore|remove> ... [--json]
+  daedal workspace <create|list|get|update|archive|restore|delete|remove> ... [--json]
   daedal task <create|list|get|current|update|status|timeline|remove> ... [--json]
   daedal repo <library|list|add|attach|sync|fetch|detach|worktree> ... [--json]
-  daedal agent <spawn|list|get|wait|attach|send|archive|restore|revive|stop|remove> ... [--json]
+  daedal agent <spawn|list|get|wait|attach|send|archive|restore|revive|stop|delete|remove> ... [--json]
   daedal skill <list|get|enable|disable|visibility|install|remove|sync|doctor> ... [--json]
   daedal session <rename|pin|unpin|color|abilities|grant|revoke> ... [--json]
   daedal routine <add|list|get|enable|disable|run|remove|purpose|pause|resume|runs|start|done|fail|report|resolve|reports|feedback> ... [--json]
@@ -323,6 +323,7 @@ const commandHelp: Record<string, string> = {
       [--default-model <model>|none] [--auto-handoff <percent>|off]
   daedal workspace archive <workspace>
   daedal workspace restore <workspace>
+  daedal workspace delete <workspace> --force
   daedal workspace remove <workspace> [--delete-files] --force
 
 The board settings are per workspace. --start-sets-in-progress (on by default)
@@ -384,6 +385,7 @@ it was cleared, journal entries whose heading names the task, and done.`,
   daedal agent restore <agent-id>
   daedal agent revive <agent-id> | --all | --workspace <workspace>
   daedal agent stop <agent-id> [--force]
+  daedal agent delete <agent-id> --force
   daedal agent remove <agent-id>
 
 Every session carries an 'activity' block in --json output: what the agent is
@@ -795,6 +797,26 @@ async function workspaceCommand(
     );
     return 0;
   }
+  if (action === "delete") {
+    const parsed = parseArguments(args, [], ["force"]);
+    expectPositionals(
+      parsed.positionals,
+      1,
+      "daedal workspace delete <workspace> --force",
+    );
+    if (!parsed.flags.has("force"))
+      throw new DaedalusError(
+        "VALIDATION",
+        "Deleting a workspace removes its folder for good and requires --force",
+      );
+    const result = await context.workspaces.deletePermanently(
+      parsed.positionals[0]!,
+    );
+    printResult(result, json, () =>
+      console.log(`Deleted workspace ${result.slug} and ${result.path}`),
+    );
+    return 0;
+  }
   if (action === "remove") {
     const parsed = parseArguments(args, [], ["delete-files", "force"]);
     expectPositionals(
@@ -1202,7 +1224,9 @@ async function agentCommand(
   const parsed = parseArguments(
     args,
     action === "archive" ? ["after-pid"] : [],
-    action === "stop" || action === "archive" ? ["force"] : [],
+    action === "stop" || action === "archive" || action === "delete"
+      ? ["force"]
+      : [],
   );
   if (action === "get") {
     expectPositionals(parsed.positionals, 1, "daedal agent get <agent-id>");
@@ -1293,6 +1317,23 @@ async function agentCommand(
     printResult(result, json, () =>
       console.log(`Restored and resumed agent ${result.id}`),
     );
+    return 0;
+  }
+  if (action === "delete") {
+    expectPositionals(
+      parsed.positionals,
+      1,
+      "daedal agent delete <agent-id> --force",
+    );
+    if (!parsed.flags.has("force"))
+      throw new DaedalusError(
+        "VALIDATION",
+        "Deleting a session removes its worktrees and folder for good and requires --force",
+      );
+    const result = await context.agents.deletePermanently(
+      parsed.positionals[0]!,
+    );
+    printResult(result, json, () => console.log(`Deleted agent ${result.id}`));
     return 0;
   }
   if (action === "remove") {

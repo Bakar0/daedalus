@@ -61,6 +61,7 @@ import { taskActions } from "./task-actions";
 import { TaskCostLine, TaskTimeline } from "./TaskTimeline";
 import { TaskActionBar } from "./TaskActionBar";
 import { askConfirm, askText, DialogHost } from "./dialogs";
+import { TaskActionIcon } from "./task-action-icons";
 import { type FileOpenRequest, FilesView } from "./files/FilesView";
 import {
   ChangedFileList,
@@ -867,9 +868,15 @@ function Modal({
   onClose,
   wide = false,
   dismissible = true,
+  closeButton = false,
   children,
 }: {
   children: React.ReactNode;
+  /**
+   * A Close button in the header, for a dialog with no Cancel of its own.
+   * A dialog that has Cancel shows only that, as macOS sheets do.
+   */
+  closeButton?: boolean;
   dismissible?: boolean;
   onClose: () => void;
   title: string;
@@ -919,9 +926,11 @@ function Modal({
             <span className="eyebrow">Daedalus</span>
             <h2>{title}</h2>
           </div>
-          <button className="quiet" disabled={!dismissible} onClick={onClose}>
-            Close
-          </button>
+          {closeButton && (
+            <button className="quiet" disabled={!dismissible} onClick={onClose}>
+              Close
+            </button>
+          )}
         </div>
         {children}
       </section>
@@ -1728,13 +1737,9 @@ export function WorkspaceApp({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [theme, setTheme] = useState<"dark" | "light">("dark");
-  const [workspaceForm, setWorkspaceForm] = useState({
-    name: "",
-    slug: "",
-    path: "",
-  });
+  const [workspaceForm, setWorkspaceForm] = useState({ name: "" });
   const [taskForm, setTaskForm] = useState({ title: "", description: "" });
-  const [sessionType, setSessionType] = useState("codex");
+  const [sessionType, setSessionType] = useState("claude");
   const [sessionModel, setSessionModel] = useState("");
   const [rememberSessionModel, setRememberSessionModel] = useState(false);
   const [modelCatalogs, setModelCatalogs] = useState<
@@ -1791,6 +1796,14 @@ export function WorkspaceApp({
   }>();
   const [workspaceAction, setWorkspaceAction] = useState<WorkspaceDto>();
   const [archivingWorkspaceIds, setArchivingWorkspaceIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  // Archived workspaces whose deletion has not returned yet; removing their
+  // worktrees and folder can take seconds, so they leave the list at once.
+  const [deletingWorkspaceIds, setDeletingWorkspaceIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const [deletingSessionIds, setDeletingSessionIds] = useState<
     ReadonlySet<string>
   >(() => new Set());
   // Sessions confirmed for archiving whose request has not returned yet. They
@@ -2607,9 +2620,10 @@ export function WorkspaceApp({
   const activeWorkspaces = (snapshot?.workspaces ?? []).filter(
     (item) => !item.archivedAt && !archivingWorkspaceIds.has(item.id),
   );
-  const archivedWorkspaces = (snapshot?.workspaces ?? []).filter(
-    (item) => item.archivedAt,
-  );
+  // Most recently archived first, so the one just put away is on top.
+  const archivedWorkspaces = (snapshot?.workspaces ?? [])
+    .filter((item) => item.archivedAt && !deletingWorkspaceIds.has(item.id))
+    .sort((a, b) => b.archivedAt!.localeCompare(a.archivedAt!));
   const workspace = activeWorkspaces.find((item) => item.id === workspaceId);
   const worktreeChanges = useWorktreeChanges(
     client,
@@ -3210,14 +3224,12 @@ export function WorkspaceApp({
     const created = await perform(
       client.request.workspaceCreate({
         name: workspaceForm.name,
-        slug: workspaceForm.slug || undefined,
-        path: workspaceForm.path || undefined,
       }),
     );
     if (created) {
       setScope("workspace");
       setWorkspaceId(created.id);
-      setWorkspaceForm({ name: "", slug: "", path: "" });
+      setWorkspaceForm({ name: "" });
       setModal(undefined);
     }
   }
@@ -3697,6 +3709,33 @@ export function WorkspaceApp({
     if (restored) openSession(restored.id);
   }
 
+  async function deleteSession(session: AgentSessionDto) {
+    const worktrees = (snapshot?.worktrees ?? []).filter(
+      (worktree) => worktree.sessionId === session.id,
+    ).length;
+    const confirmed = await askConfirm({
+      title: `Delete ${sessionName(session)} permanently?`,
+      message: `${
+        worktrees > 0
+          ? `Its ${worktrees === 1 ? "worktree" : `${worktrees} worktrees`} and ${worktrees === 1 ? "branch are" : "branches are"} deleted, unpushed commits too, and so is its folder`
+          : "Its folder is deleted"
+      }, unless another session works in the same folder. This cannot be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!confirmed) return;
+    setDeletingSessionIds((current) => new Set(current).add(session.id));
+    await performForSession(
+      session.id,
+      client.request.agentDelete({ id: session.id }),
+    );
+    setDeletingSessionIds((current) => {
+      const next = new Set(current);
+      next.delete(session.id);
+      return next;
+    });
+  }
+
   async function reviveSession(session: AgentSessionDto) {
     const revived = await performForSession(
       session.id,
@@ -3735,6 +3774,35 @@ export function WorkspaceApp({
       setScope("workspace");
       setWorkspaceId(restored.id);
     }
+  }
+
+  async function deleteWorkspace(item: WorkspaceDto) {
+    const sessionIds = new Set(
+      (snapshot?.agents ?? [])
+        .filter((session) => session.workspaceId === item.id)
+        .map((session) => session.id),
+    );
+    const worktrees = (snapshot?.worktrees ?? []).filter((worktree) =>
+      sessionIds.has(worktree.sessionId),
+    ).length;
+    const confirmed = await askConfirm({
+      title: `Delete ${item.name} permanently?`,
+      message: `The folder ${item.path} and everything in it are deleted${
+        worktrees > 0
+          ? `, including ${worktrees} session ${worktrees === 1 ? "worktree" : "worktrees"} and ${worktrees === 1 ? "its branch" : "their branches"}, unpushed commits too`
+          : ""
+      }. Its tasks and sessions go with it. This cannot be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!confirmed) return;
+    setDeletingWorkspaceIds((current) => new Set(current).add(item.id));
+    await perform(client.request.workspaceDelete({ reference: item.id }));
+    setDeletingWorkspaceIds((current) => {
+      const next = new Set(current);
+      next.delete(item.id);
+      return next;
+    });
   }
 
   async function createIntegratedTerminal(
@@ -4535,6 +4603,52 @@ export function WorkspaceApp({
       )}
     </div>
   );
+  // One compact row in an archived list: name and date on one line, then
+  // unarchive and delete side by side.
+  const renderArchivedRow = (row: {
+    id: string;
+    name: string;
+    detail?: string;
+    archivedAt: string;
+    restoreLabel: string;
+    disabled?: boolean;
+    onRestore: () => void;
+    onDelete: () => void;
+  }) => (
+    <div className="archived-item" key={row.id}>
+      <span className="archived-item-text" title={row.name}>
+        <strong>{row.name}</strong>
+        <small>
+          {row.detail && `${row.detail} · `}
+          <time dateTime={row.archivedAt}>
+            {new Date(row.archivedAt).toLocaleDateString()}
+          </time>
+        </small>
+      </span>
+      <span className="archived-item-actions">
+        <button
+          aria-label={`${row.restoreLabel} ${row.name}`}
+          className="archived-item-action"
+          disabled={row.disabled}
+          onClick={row.onRestore}
+          title={row.restoreLabel}
+          type="button"
+        >
+          <TaskActionIcon name="unarchive" />
+        </button>
+        <button
+          aria-label={`Delete ${row.name} permanently`}
+          className="archived-item-action danger"
+          disabled={row.disabled}
+          onClick={row.onDelete}
+          title="Delete permanently"
+          type="button"
+        >
+          <TaskActionIcon name="delete" />
+        </button>
+      </span>
+    </div>
+  );
   // One workspace's sessions, listed under its card in the left column
   // (#55). Each list keeps its own drag order, because a session's position
   // is an order within its workspace.
@@ -4543,7 +4657,12 @@ export function WorkspaceApp({
       (session) => session.workspaceId === item.id,
     );
     const liveSessions = itemSessions.filter((session) => !session.archivedAt);
-    const archived = itemSessions.filter((session) => session.archivedAt);
+    // Most recently archived first, like the archived workspaces.
+    const archived = itemSessions
+      .filter(
+        (session) => session.archivedAt && !deletingSessionIds.has(session.id),
+      )
+      .sort((a, b) => b.archivedAt!.localeCompare(a.archivedAt!));
     // Offered only for the workspace in focus, but its row's space is kept
     // under every workspace that has some, so focus moving never shifts the
     // list (#55).
@@ -4605,23 +4724,18 @@ export function WorkspaceApp({
                     Archived sessions ({archived.length})
                   </summary>
                   <div className="item-list">
-                    {archived.map((session) => (
-                      <div className="archived-item" key={session.id}>
-                        <span>
-                          <strong>{sessionName(session)}</strong>
-                          <small>
-                            {session.provider} · archived{" "}
-                            {new Date(session.archivedAt!).toLocaleDateString()}
-                          </small>
-                        </span>
-                        <button
-                          disabled={pendingSessionIds.has(session.id)}
-                          onClick={() => void restoreSession(session)}
-                        >
-                          Restore &amp; resume
-                        </button>
-                      </div>
-                    ))}
+                    {archived.map((session) =>
+                      renderArchivedRow({
+                        id: session.id,
+                        name: sessionName(session),
+                        detail: session.provider,
+                        archivedAt: session.archivedAt!,
+                        restoreLabel: "Restore and resume",
+                        disabled: pendingSessionIds.has(session.id),
+                        onRestore: () => void restoreSession(session),
+                        onDelete: () => void deleteSession(session),
+                      }),
+                    )}
                   </div>
                 </details>
               )}
@@ -5235,11 +5349,8 @@ export function WorkspaceApp({
                         <strong className="workspace-card-name">
                           <span>{item.name}</span>
                         </strong>
-                        {/* The slug is in the main header; the card only
-                            speaks up when the folder is gone. */}
-                        {!item.available && (
-                          <small>{item.slug} · folder missing</small>
-                        )}
+                        {/* The card only speaks up when the folder is gone. */}
+                        {!item.available && <small>folder missing</small>}
                         <span
                           aria-label={insightLabel}
                           className="workspace-session-insights"
@@ -5345,17 +5456,16 @@ export function WorkspaceApp({
                 Archived workspaces ({archivedWorkspaces.length})
               </summary>
               <div className="item-list">
-                {archivedWorkspaces.map((item) => (
-                  <div className="archived-item" key={item.id}>
-                    <span>
-                      <strong>{item.name}</strong>
-                      <small>{item.slug}</small>
-                    </span>
-                    <button onClick={() => void restoreWorkspace(item)}>
-                      Restore
-                    </button>
-                  </div>
-                ))}
+                {archivedWorkspaces.map((item) =>
+                  renderArchivedRow({
+                    id: item.id,
+                    name: item.name,
+                    archivedAt: item.archivedAt!,
+                    restoreLabel: "Restore",
+                    onRestore: () => void restoreWorkspace(item),
+                    onDelete: () => void deleteWorkspace(item),
+                  }),
+                )}
               </div>
             </details>
           )}
@@ -5392,7 +5502,9 @@ export function WorkspaceApp({
                 <span className="eyebrow">
                   {(showingAll || view === "world") && workspace
                     ? `${activeWorkspaces.length} ${activeWorkspaces.length === 1 ? "workspace" : "workspaces"}`
-                    : (workspace?.slug ?? "Select a workspace")}
+                    : workspace
+                      ? "Workspace"
+                      : "Select a workspace"}
                 </span>
                 <h1>
                   {(showingAll || view === "world") && workspace
@@ -5986,32 +6098,6 @@ export function WorkspaceApp({
                 placeholder="My project"
               />
             </label>
-            <label>
-              Slug <small>optional</small>
-              <input
-                value={workspaceForm.slug}
-                onChange={(event) =>
-                  setWorkspaceForm({
-                    ...workspaceForm,
-                    slug: event.target.value,
-                  })
-                }
-                placeholder="my-project"
-              />
-            </label>
-            <label>
-              Custom path <small>optional</small>
-              <input
-                value={workspaceForm.path}
-                onChange={(event) =>
-                  setWorkspaceForm({
-                    ...workspaceForm,
-                    path: event.target.value,
-                  })
-                }
-                placeholder={snapshot?.settings.workspaceRoot}
-              />
-            </label>
             <div className="modal-actions">
               <button
                 className="quiet"
@@ -6295,8 +6381,8 @@ export function WorkspaceApp({
               >
                 {(
                   [
-                    { id: "codex", label: "Codex" },
                     { id: "claude", label: "Claude" },
+                    { id: "codex", label: "Codex" },
                     { id: "terminal", label: "Terminal" },
                   ] as const
                 ).map((tool) => {
@@ -6336,13 +6422,6 @@ export function WorkspaceApp({
               <div className="session-model-picker">
                 <span>
                   <strong>Model</strong>
-                  <small>
-                    {sessionModelCatalogPending || modelCatalogLoading
-                      ? `Loading ${sessionType === "claude" ? "Claude" : "Codex"} models…`
-                      : sessionType === "codex"
-                        ? "Available to your Codex account"
-                        : "Available to your Claude account"}
-                  </small>
                 </span>
                 <select
                   aria-label="Model"
@@ -6370,28 +6449,12 @@ export function WorkspaceApp({
                     </option>
                   ))}
                 </select>
-                <small
-                  className={
-                    workspaceDefaultModelStale && !sessionModel
-                      ? "session-model-error"
-                      : "session-model-description"
-                  }
-                >
-                  {sessionModelCatalogPending || modelCatalogLoading
-                    ? "Reading the models available to your account"
-                    : (selectedSessionModel?.description ??
-                      (sessionModel
-                        ? `Use ${sessionModel} for this session`
-                        : workspaceDefaultModelStale
-                          ? `${providerLabel(sessionType)} no longer offers ${workspaceDefaultModel}. Pick a model here, or change the default in board settings; until then a session started without one refuses.`
-                          : workspaceDefaultModel
-                            ? "Set in board settings. Every new session of this provider in this workspace starts with it unless one is picked here."
-                            : sessionType === "claude"
-                              ? "Claude's recommended model, asked for by name, so a /model change made inside a session does not carry into new ones."
-                              : sessionModelCatalog?.defaultModel
-                                ? "The model Codex is configured with"
-                                : "The provider chooses its current default"))}
-                </small>
+                {workspaceDefaultModelStale && !sessionModel && (
+                  <small className="session-model-error">
+                    {providerLabel(sessionType)} no longer offers{" "}
+                    {workspaceDefaultModel}. Pick another model.
+                  </small>
+                )}
                 {modelCatalogError && (
                   <small className="session-model-error">
                     Model list unavailable: {modelCatalogError}
@@ -6406,15 +6469,7 @@ export function WorkspaceApp({
                       }
                       type="checkbox"
                     />
-                    <span>
-                      Remember{" "}
-                      <strong>
-                        {providerLabel(sessionType)} ·{" "}
-                        {selectedSessionModel?.label ??
-                          (sessionModel || "provider default")}
-                      </strong>{" "}
-                      as this workspace&apos;s default
-                    </span>
+                    <span>Remember for this workspace</span>
                   </label>
                 )}
               </div>
@@ -6422,7 +6477,6 @@ export function WorkspaceApp({
             <div className="session-color-picker">
               <span>
                 <strong>Color</strong>
-                <small>On the card&apos;s edge and the World figure</small>
               </span>
               <ColorSwatches
                 onChange={(color) =>
@@ -6432,27 +6486,37 @@ export function WorkspaceApp({
               />
             </div>
             {sessionType !== "terminal" && (
-              <label className="session-ability-option">
-                <span>
-                  <strong>Routines</strong>
-                  <small>
-                    Checks this session runs on a schedule while the app is
-                    open. Ask it for routines once it starts.
-                  </small>
-                </span>
-                <input
-                  aria-label="Routines enabled"
-                  checked={Boolean(sessionForm.routines)}
-                  className="switch"
-                  onChange={(event) =>
-                    setSessionForm({
-                      ...sessionForm,
-                      routines: event.target.checked,
-                    })
-                  }
-                  type="checkbox"
-                />
-              </label>
+              // One row per ability the agent can be given at launch.
+              <fieldset className="session-tool-picker session-abilities">
+                <legend>Agent abilities</legend>
+                {(
+                  [
+                    {
+                      key: "routines",
+                      label: "Routines",
+                      description: "Give the agent the ability to run routines",
+                    },
+                  ] as const
+                ).map((ability) => (
+                  <label className="session-ability-option" key={ability.key}>
+                    <span>
+                      <strong>{ability.label}</strong>
+                      <small>{ability.description}</small>
+                    </span>
+                    <input
+                      checked={Boolean(sessionForm[ability.key])}
+                      className="switch"
+                      onChange={(event) =>
+                        setSessionForm({
+                          ...sessionForm,
+                          [ability.key]: event.target.checked,
+                        })
+                      }
+                      type="checkbox"
+                    />
+                  </label>
+                ))}
+              </fieldset>
             )}
             <div className="modal-actions">
               <button
@@ -6479,6 +6543,7 @@ export function WorkspaceApp({
             if (appUpdate?.state === "current" || appUpdate?.state === "error")
               dismissUpdate();
           }}
+          closeButton
           title="Settings"
           wide
         >

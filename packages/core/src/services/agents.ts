@@ -1366,6 +1366,20 @@ export class AgentService {
     return agent;
   }
 
+  // The permanent counterpart of `archive`: only an archived session
+  // qualifies, and its worktrees, branches and folder go with the row.
+  async deletePermanently(id: string): Promise<AgentSession> {
+    const agent = await this.get(id);
+    if (!agent.archivedAt)
+      throw new DaedalusError(
+        "CONFLICT",
+        "Only an archived session can be deleted; archive it first",
+      );
+    await this.workspaceContent.discardSessionFiles(agent);
+    this.repositories.deleteAgent(id);
+    return agent;
+  }
+
   async archive(id: string, force = false): Promise<AgentSession> {
     let agent = await this.get(id);
     if (agent.archivedAt) return agent;
