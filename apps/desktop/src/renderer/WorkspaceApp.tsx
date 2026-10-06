@@ -1800,6 +1800,10 @@ export function WorkspaceApp({
     ReadonlySet<string>
   >(() => new Set());
   const archivingStartedAt = useRef(new Date().toISOString());
+  // Sessions with an archive, restore, revive or continue in flight.
+  const [pendingSessionIds, setPendingSessionIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
   // Repositories confirmed in the picker whose rows have not arrived yet.
   // Attaching and reloading the workspace's git status takes seconds; these
   // rows say something is happening until the real ones replace them.
@@ -2531,6 +2535,37 @@ export function WorkspaceApp({
     void client.request.quitDecision?.({ choice }).catch(() => {
       // The app is on its way out; there is nobody left to tell.
     });
+  }
+
+  /**
+   * `perform` for one session's own lifecycle: archive, restore, revive and
+   * continue. These start or stop an agent and can take seconds, so they mark
+   * only that session as pending instead of setting `busy`, which disables
+   * buttons across every workspace until the request returns.
+   */
+  async function performForSession<T>(
+    sessionId: string,
+    operation: Promise<RpcResult<T>>,
+  ) {
+    setPendingSessionIds((current) => new Set(current).add(sessionId));
+    setError(undefined);
+    try {
+      const response = await operation;
+      if (!response.ok) {
+        setError(response.error.message);
+        return;
+      }
+      await refresh();
+      return response.data;
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setPendingSessionIds((current) => {
+        const next = new Set(current);
+        next.delete(sessionId);
+        return next;
+      });
+    }
   }
 
   async function perform<T>(operation: Promise<RpcResult<T>>) {
@@ -3543,7 +3578,8 @@ export function WorkspaceApp({
     archivingStartedAt.current = new Date().toISOString();
     setArchivingSessionIds((current) => new Set(current).add(session.id));
     if (wasActive) setActiveSessionId(undefined);
-    const archived = await perform(
+    const archived = await performForSession(
+      session.id,
       client.request.agentArchive({ id: session.id, force: false }),
     );
     setArchivingSessionIds((current) => {
@@ -3559,10 +3595,14 @@ export function WorkspaceApp({
   // answer gets its successor straight away, working from brief and git.
   async function continueInNewAgent(session: AgentSessionDto) {
     if (session.status === "running") {
-      await perform(client.request.agentRequestHandoff({ id: session.id }));
+      await performForSession(
+        session.id,
+        client.request.agentRequestHandoff({ id: session.id }),
+      );
       return;
     }
-    const successor = await perform(
+    const successor = await performForSession(
+      session.id,
       client.request.agentContinue({ id: session.id }),
     );
     if (successor) openSession(successor.id);
@@ -3650,14 +3690,16 @@ export function WorkspaceApp({
   }
 
   async function restoreSession(session: AgentSessionDto) {
-    const restored = await perform(
+    const restored = await performForSession(
+      session.id,
       client.request.agentRestore({ id: session.id }),
     );
     if (restored) openSession(restored.id);
   }
 
   async function reviveSession(session: AgentSessionDto) {
-    const revived = await perform(
+    const revived = await performForSession(
+      session.id,
       client.request.agentRevive({ id: session.id }),
     );
     if (revived) openSession(revived.id);
@@ -4387,7 +4429,7 @@ export function WorkspaceApp({
             <button
               aria-label={`Revive ${sessionName(session)} session`}
               className="session-card-action"
-              disabled={busy}
+              disabled={pendingSessionIds.has(session.id)}
               onClick={() => void reviveSession(session)}
               title="Resume this conversation in a new terminal"
             >
@@ -4402,7 +4444,7 @@ export function WorkspaceApp({
                 data-handoff-requested={
                   session.handoffRequestedAt ? "true" : undefined
                 }
-                disabled={busy}
+                disabled={pendingSessionIds.has(session.id)}
                 onClick={() => void continueInNewAgent(session)}
                 title={
                   session.handoffRequestedAt
@@ -4573,7 +4615,7 @@ export function WorkspaceApp({
                           </small>
                         </span>
                         <button
-                          disabled={busy}
+                          disabled={pendingSessionIds.has(session.id)}
                           onClick={() => void restoreSession(session)}
                         >
                           Restore &amp; resume

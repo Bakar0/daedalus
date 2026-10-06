@@ -476,6 +476,31 @@ Before working in this workspace:
         (await context.workspaceContent.get(workspace.id)).repositories[0]
           ?.gitStatus,
       ).toMatchObject({ state: "clean", changedFiles: 0, ahead: 0, behind: 0 });
+
+      // A routine pass leaves a measured reference checkout alone; only a
+      // forced one, or the slow interval, measures it again.
+      await Bun.write(
+        join(repository.referencePath!, "README.md"),
+        "Unmeasured reference edit\n",
+      );
+      await Bun.sleep(1_100);
+      await context.workspaceContent.get(workspace.id);
+      await context.workspaceContent.settleGitStatus();
+      expect(
+        (await context.workspaceContent.get(workspace.id)).repositories[0]
+          ?.gitStatus,
+      ).toMatchObject({ state: "clean", changedFiles: 0 });
+      await context.workspaceContent.settleGitStatus(workspace.id);
+      expect(
+        (await context.workspaceContent.get(workspace.id)).repositories[0]
+          ?.gitStatus,
+      ).toMatchObject({ state: "modified", changedFiles: 1 });
+      await Bun.write(
+        join(repository.referencePath!, "README.md"),
+        "# Latest remote state\n",
+      );
+      await context.workspaceContent.settleGitStatus(workspace.id);
+
       await Bun.write(join(source, "README.md"), "# Synced remote state\n");
       expect(
         (await runCommand("git", ["-C", source, "add", "README.md"])).exitCode,

@@ -805,6 +805,39 @@ const STATUS_REFRESH_INTERVAL_MS = 1_000;
  */
 const BOARD_STATUS_REFRESH_INTERVAL_MS = 10_000;
 
+/**
+ * The read-only checkouts under `repos/` move only when Daedalus fetches,
+ * pulls or syncs them, and each of those forces a pass. An ordinary pass
+ * measures them only when nothing is cached yet or this long has passed.
+ * Measuring them on every pass cost a 75-repository workspace hundreds of git
+ * processes a second while agents worked, and every launch blocks the thread
+ * that relays terminal input.
+ */
+const REFERENCE_STATUS_REFRESH_MS = 60_000;
+
+/**
+ * At most this many targets are measured at once. Launching a process blocks
+ * the JavaScript thread until the child starts, and with endpoint security
+ * inspecting every launch that took tens of milliseconds each; launched all
+ * at once, a pass held the thread for seconds and typing in a terminal
+ * stalled with it. A few at a time lets terminal I/O through in between.
+ */
+const STATUS_REFRESH_CONCURRENCY = 4;
+
+async function forEachWithConcurrency<T>(
+  items: readonly T[],
+  limit: number,
+  run: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) await run(items[next++]!);
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, worker),
+  );
+}
+
 const statusKey = (path: string) => resolve(path);
 
 const UNAVAILABLE_STATUS: GitStatus = {
@@ -1128,6 +1161,8 @@ export class WorkspaceContentService {
   private statusRefreshAgain: string | null | undefined;
   private lastStatusRefreshAt = 0;
   private lastBoardRefreshAt = 0;
+  /** When each workspace's `repos/` checkouts were last measured. */
+  private readonly lastReferenceRefreshAt = new Map<string, number>();
 
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -1262,7 +1297,7 @@ export class WorkspaceContentService {
     )
       return;
     if (workspaceId === null) this.lastBoardRefreshAt = Date.now();
-    this.statusRefresh = this.refreshGitStatuses(workspaceId)
+    this.statusRefresh = this.refreshGitStatuses(workspaceId, force)
       .catch(() => undefined)
       .finally(() => {
         this.statusRefresh = undefined;
@@ -1275,10 +1310,19 @@ export class WorkspaceContentService {
       });
   }
 
-  private async refreshGitStatuses(workspaceId: string | null): Promise<void> {
+  private async refreshGitStatuses(
+    workspaceId: string | null,
+    force = false,
+  ): Promise<void> {
     const repositories = this.repositories.listWorkspaceRepositories(
       workspaceId ?? undefined,
     );
+    const referencesDue =
+      workspaceId !== null &&
+      (force ||
+        Date.now() - (this.lastReferenceRefreshAt.get(workspaceId) ?? 0) >=
+          REFERENCE_STATUS_REFRESH_MS);
+    if (referencesDue) this.lastReferenceRefreshAt.set(workspaceId, Date.now());
     const baseBranches = new Map(
       repositories.map((item) => [item.id, item.baseBranch]),
     );
@@ -1294,10 +1338,17 @@ export class WorkspaceContentService {
     }> = [
       ...(workspaceId === null
         ? []
-        : repositories.map((item) => ({
-            path: item.status === "ready" ? item.referencePath : null,
-            baseBranch: item.baseBranch,
-          }))),
+        : repositories
+            .filter(
+              (item) =>
+                referencesDue ||
+                (item.referencePath &&
+                  !this.gitStatusCache.has(statusKey(item.referencePath))),
+            )
+            .map((item) => ({
+              path: item.status === "ready" ? item.referencePath : null,
+              baseBranch: item.baseBranch,
+            }))),
       ...this.repositories
         .listSessionWorktrees(workspaceId ? { workspaceId } : {})
         .map((item) => ({
@@ -1308,8 +1359,10 @@ export class WorkspaceContentService {
         })),
     ];
     let changed = false;
-    await Promise.all(
-      targets.map(async (target) => {
+    await forEachWithConcurrency(
+      targets,
+      STATUS_REFRESH_CONCURRENCY,
+      async (target) => {
         if (!target.path) return;
         const status = await gitStatusAt(target.path, target.baseBranch);
         const key = statusKey(target.path);
@@ -1368,7 +1421,7 @@ export class WorkspaceContentService {
           return;
         this.gitStatusCache.set(key, status);
         changed = true;
-      }),
+      },
     );
     if (changed) this.onRepositoriesChanged();
   }
