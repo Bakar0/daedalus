@@ -2630,41 +2630,6 @@ dd {
   stroke-width: 1.25;
   width: 16px;
 }
-.workspace-new-entry {
-  border-bottom: 1px solid var(--line);
-  display: grid;
-  gap: 4px;
-  padding: 6px 8px;
-}
-.workspace-new-entry small {
-  color: var(--muted);
-  font-size: 9px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.workspace-new-entry input {
-  border-radius: 3px;
-  font-family: "SFMono-Regular", Menlo, monospace;
-  font-size: 10px;
-  padding: 5px 6px;
-}
-/* Renaming happens in the row the entry already occupies, so the tree does not
-   reflow under the user while they type. The padding is the row's, computed
-   from the same depth, which is what keeps the input aligned with the name it
-   replaced rather than with the left edge. */
-.workspace-tree-rename {
-  display: flex;
-  padding-right: 8px;
-}
-.workspace-tree-rename input {
-  border-radius: 3px;
-  flex: 1 1 auto;
-  font-family: "SFMono-Regular", Menlo, monospace;
-  font-size: 10px;
-  min-width: 0;
-  padding: 3px 5px;
-}
 /* Covers the window rather than the tree: a menu that stayed open behind a
    click somewhere else in the app would be a menu the user cannot dismiss. */
 .workspace-tree-menu-backdrop {
@@ -2714,12 +2679,6 @@ dd {
 .workspace-tree-menu button.destructive:not(:disabled) {
   color: var(--danger);
 }
-.workspace-tree {
-  flex: 1 1 0;
-  min-height: 120px;
-  overflow: auto;
-  padding: 5px 0;
-}
 /* The explorer's right border is draggable. The column handle above divides
    the whole shell; this divides what is inside the explorer, so it answers to
    the explorer's own minimums rather than the shell's.
@@ -2729,52 +2688,195 @@ dd {
 .explorer-resize-handle {
   background: rgb(7 10 17 / 0.28);
 }
-.workspace-tree-entry > button {
+.workspace-tree-menu button {
   align-items: center;
-  background: transparent !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-  color: var(--secondary) !important;
   display: flex;
-  font-size: 11px !important;
-  gap: 5px;
-  height: 25px;
-  overflow: hidden;
-  padding-bottom: 0 !important;
-  padding-right: 7px !important;
-  padding-top: 0 !important;
-  text-align: left;
-  width: 100%;
+  gap: 18px;
+  justify-content: space-between;
 }
-.workspace-tree-entry > button:hover {
-  background: var(--raised-hover) !important;
+.workspace-tree-menu kbd {
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 10px;
 }
-.workspace-tree-entry > button.selected {
-  background: var(--accent-wash) !important;
-  color: var(--text) !important;
+.workspace-tree-menu hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 4px 2px;
 }
-.workspace-tree-entry > button:disabled {
-  opacity: 0.55;
+
+/* The file tree (#50): headless-tree rows, styled after VS Code's explorer.
+   One flat list; depth is padding, so a folder's rows never nest in the DOM. */
+.file-tree {
+  flex: 1 1 0;
+  min-height: 120px;
+  outline: none;
+  overflow: auto;
+  padding: 4px 0 24px;
+  position: relative;
 }
-.workspace-tree-entry > button > span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* Rows as VS Code draws them: names quiet until hovered, focused or
+   selected; no borders; the highlight is a rounded block inset from the
+   column's edges. */
+.file-tree {
+  --tree-text: #a3adbf;
+  --git-modified: #e2c08d;
+  --git-added: #73c991;
+  --git-deleted: #e06c66;
+  --git-renamed: #73c991;
+}
+.app[data-theme="light"] .file-tree {
+  --tree-text: #586479;
+  --git-modified: #895503;
+  --git-added: #3f7d18;
+  --git-deleted: #b3261e;
+  --git-renamed: #3f7d18;
+}
+.file-tree-row {
+  align-items: center;
+  border-radius: 4px;
+  color: var(--tree-text);
+  cursor: default;
+  display: flex;
+  font-size: 12px;
+  gap: 4px;
+  height: 22px;
+  margin: 0 6px;
+  outline: none;
+  padding-right: 6px;
+  user-select: none;
   white-space: nowrap;
 }
-.workspace-tree-icon {
+/* Hover only brightens the name; a background is for selection and focus. */
+.file-tree-row:hover {
+  color: var(--text);
+}
+.file-tree-row.selected {
+  background: var(--raised-hover);
+  color: var(--text);
+}
+.file-tree:focus-within .file-tree-row.selected {
+  background: var(--accent-wash);
+}
+.file-tree:focus-within .file-tree-row.focused {
+  color: var(--text);
+}
+.file-tree:focus-within .file-tree-row.focused:not(.selected) {
+  background: var(--raised);
+}
+.file-tree-row.drop-target {
+  background: var(--accent-wash);
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+}
+/* Git decorations: the name takes the colour of the change, a file shows
+   its status letter at the right and a folder holding changes a dot. */
+.file-tree-row.git-modified .file-tree-name {
+  color: var(--git-modified);
+}
+.file-tree-row.git-added .file-tree-name,
+.file-tree-row.git-untracked .file-tree-name {
+  color: var(--git-added);
+}
+.file-tree-row.git-renamed .file-tree-name {
+  color: var(--git-renamed);
+}
+.file-tree-row.git-deleted .file-tree-name {
+  color: var(--git-deleted);
+}
+.file-tree-git {
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  margin-left: auto;
+  padding-left: 6px;
+}
+.file-tree-git.folder {
+  border-radius: 50%;
+  height: 6px;
+  padding: 0;
+  width: 6px;
+}
+.git-modified .file-tree-git {
+  color: var(--git-modified);
+}
+.git-modified .file-tree-git.folder {
+  background: var(--git-modified);
+}
+.git-added .file-tree-git,
+.git-untracked .file-tree-git,
+.git-renamed .file-tree-git {
+  color: var(--git-added);
+}
+.git-added .file-tree-git.folder,
+.git-untracked .file-tree-git.folder,
+.git-renamed .file-tree-git.folder {
+  background: var(--git-added);
+}
+.git-deleted .file-tree-git.folder {
+  background: var(--git-deleted);
+}
+.file-tree-row.symlink {
+  opacity: 0.6;
+}
+.file-tree-twisty {
   color: var(--muted);
+  display: inline-block;
   flex: 0 0 12px;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1;
   text-align: center;
+  transition: transform 80ms ease;
 }
-.workspace-tree-icon.file::before {
-  border: 1px solid currentColor;
-  border-radius: 1px;
-  content: "";
-  display: inline-block;
-  height: 10px;
-  width: 8px;
+.file-tree-twisty.open {
+  transform: rotate(90deg);
+}
+.file-tree-icon {
+  color: var(--muted);
+  flex: 0 0 14px;
+  height: 14px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.15;
+  width: 14px;
+}
+/* Seti file icons, as in VS Code's default theme: the glyph is the SVG,
+   the colour comes from the icon and fills it. */
+.file-type-icon {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 16px;
+  height: 16px;
+  justify-content: center;
+  width: 16px;
+}
+.file-type-icon svg {
+  fill: currentColor;
+  height: 16px;
+  width: 16px;
+}
+.file-tree-icon.folder {
+  color: #c9a45a;
+}
+.file-tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-tree-row input,
+.file-tree-rename {
+  border-radius: 2px;
+  flex: 1 1 auto;
+  font-family: inherit;
+  font-size: 12px;
+  height: 20px;
+  min-width: 0;
+  padding: 0 4px;
+}
+.file-tree-dragline {
+  background: var(--accent);
+  height: 2px;
+  pointer-events: none;
+  position: absolute;
 }
 
 /* A repository and the working trees cut from it are one unit: the question is
@@ -2826,7 +2928,7 @@ dd {
   font-size: 9px;
   font-style: italic;
 }
-.workspace-worktree-row > span:first-child {
+.workspace-worktree-row > span:first-of-type {
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -2946,64 +3048,6 @@ dd {
   min-height: 0;
   min-width: 0;
 }
-.workspace-viewer-tabbar {
-  align-items: flex-end;
-  background: rgb(5 8 14 / 0.25);
-  border-bottom: 1px solid var(--line);
-  display: flex;
-  height: 37px;
-}
-.workspace-viewer-actions {
-  align-items: center;
-  display: flex;
-  gap: 5px;
-  margin-left: auto;
-  padding: 0 7px;
-}
-.workspace-viewer-actions > span {
-  color: #eab66f;
-  font-size: 9px;
-}
-.workspace-viewer-actions button {
-  background: transparent !important;
-  border: 0 !important;
-  border-radius: 4px !important;
-  color: var(--muted) !important;
-  font-size: 10px !important;
-  padding: 5px 7px !important;
-}
-.workspace-viewer-actions button:hover:not(:disabled),
-.workspace-viewer-actions button.active {
-  background: var(--raised-hover) !important;
-  color: var(--text) !important;
-}
-.workspace-viewer-tab {
-  align-items: center;
-  align-self: stretch;
-  border-right: 1px solid var(--line);
-  border-top: 1px solid var(--accent);
-  display: flex;
-  font-size: 11px;
-  gap: 7px;
-  max-width: 260px;
-  min-width: 130px;
-  padding: 0 12px;
-}
-.workspace-viewer-tab > span {
-  color: #8fb7ff;
-  font-size: 9px;
-}
-.workspace-viewer-tab.muted {
-  border-top-color: transparent;
-  color: var(--muted);
-}
-.workspace-viewer-breadcrumb {
-  border-bottom: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 10px;
-  min-height: 30px;
-  padding: 8px 14px;
-}
 .workspace-viewer-content {
   flex: 1;
   min-height: 0;
@@ -3023,25 +3067,155 @@ dd {
   tab-size: 2;
   white-space: pre;
 }
-.workspace-code-editor {
+
+/* The editor area (#50): dockview groups and tabs with a Monaco editor in
+   each panel. Colours follow the app's panel rather than VS Code's grey. */
+.editor-area {
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  min-width: 0;
+  position: relative;
 }
-.workspace-code-editor .cm-editor {
+.editor-area > div,
+.editor-area .dv-dockview {
   height: 100%;
 }
-.workspace-viewer-empty {
+.editor-area .dockview-theme-dark {
+  --dv-group-view-background-color: #0d121c;
+  --dv-tabs-and-actions-container-background-color: #080c14;
+  --dv-activegroup-visiblepanel-tab-background-color: #0d121c;
+  --dv-activegroup-hiddenpanel-tab-background-color: #0a0e17;
+  --dv-inactivegroup-visiblepanel-tab-background-color: #0d121c;
+  --dv-inactivegroup-hiddenpanel-tab-background-color: #0a0e17;
+  --dv-tab-divider-color: #0d121c;
+  --dv-separator-border: rgb(255 255 255 / 0.08);
+  --dv-tabs-and-actions-container-font-size: 12px;
+}
+.editor-area .dockview-theme-light {
+  --dv-group-view-background-color: #f9fbfe;
+  --dv-tabs-and-actions-container-background-color: #eef2f8;
+  --dv-activegroup-visiblepanel-tab-background-color: #f9fbfe;
+  --dv-activegroup-hiddenpanel-tab-background-color: #e7ecf4;
+  --dv-inactivegroup-visiblepanel-tab-background-color: #f9fbfe;
+  --dv-inactivegroup-hiddenpanel-tab-background-color: #e7ecf4;
+  --dv-tab-divider-color: #f9fbfe;
+  --dv-separator-border: rgb(0 0 0 / 0.08);
+  --dv-tabs-and-actions-container-font-size: 12px;
+}
+.editor-area .dv-tab {
+  border-right: 1px solid var(--line);
+  padding: 0;
+}
+.editor-area .dv-tab.dv-active-tab {
+  box-shadow: inset 0 1px 0 var(--accent);
+}
+.file-tab {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  height: 100%;
+  max-width: 220px;
+  padding: 0 6px 0 12px;
+}
+.file-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-tab.preview .file-tab-name {
+  font-style: italic;
+}
+.file-tab-close {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 4px !important;
+  color: inherit !important;
+  display: flex;
+  height: 20px;
+  justify-content: center;
+  padding: 0 !important;
+  width: 20px;
+}
+.file-tab-close:hover {
+  background: var(--raised-hover) !important;
+}
+.file-tab-dot,
+.file-tab-x {
+  font-size: 14px;
+  line-height: 1;
+}
+/* VS Code's rule: a clean tab shows its close button only when active or
+   hovered; a dirty tab shows a dot that turns into the button on hover. */
+.file-tab-dot {
+  display: none;
+  font-size: 10px;
+}
+.file-tab-x {
+  visibility: hidden;
+}
+.dv-active-tab .file-tab-x,
+.file-tab:hover .file-tab-x {
+  visibility: visible;
+}
+.file-tab.dirty .file-tab-dot {
+  display: inline;
+}
+.file-tab.dirty .file-tab-x {
+  display: none;
+}
+.file-tab.dirty .file-tab-close:hover .file-tab-dot {
+  display: none;
+}
+.file-tab.dirty .file-tab-close:hover .file-tab-x {
+  display: inline;
+  visibility: visible;
+}
+.editor-header-actions {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+  height: 100%;
+  padding: 0 8px;
+}
+.editor-header-note {
+  color: #eab66f;
+  font-size: 10px;
+}
+.editor-header-actions button {
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 4px !important;
+  color: var(--muted) !important;
+  font-size: 11px !important;
+  padding: 4px 7px !important;
+}
+.editor-header-actions button:hover,
+.editor-header-actions button.active {
+  background: var(--raised-hover) !important;
+  color: var(--text) !important;
+}
+.monaco-panel {
+  height: 100%;
+  width: 100%;
+}
+.markdown-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.editor-watermark,
+.editor-loading {
   align-items: center;
   color: var(--muted);
   display: flex;
-  flex: 1;
   flex-direction: column;
-  font-size: 11px;
+  font-size: 12px;
   gap: 5px;
+  height: 100%;
   justify-content: center;
 }
-.workspace-viewer-empty strong {
+.editor-watermark strong {
   color: var(--secondary);
 }
 .workspace-content-grid {
@@ -3168,8 +3342,27 @@ dd {
   height: 14px;
   width: 14px;
 }
-.repository-action.syncing svg {
-  animation: repository-progress-spin 800ms linear infinite;
+/* In progress: the icon breathes rather than spins, since neither the
+   fetch nor the pull glyph is round. */
+.repository-action.syncing svg,
+.repository-header-action.syncing svg {
+  animation: repository-progress-pulse 900ms ease-in-out infinite;
+}
+@keyframes repository-progress-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.repository-header-action {
+  align-items: center;
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px 7px !important;
+  white-space: nowrap;
+}
+.repository-header-action svg {
+  height: 14px;
+  width: 14px;
 }
 .workspace-resource-row small {
   color: var(--muted);
@@ -3713,32 +3906,189 @@ dd {
   padding: 0 !important;
   width: 28px;
 }
+/* Folded, the panel is a rail that still reports: repositories by their
+   initials and state, and a chip per worktree with its changed-file count. */
 .board-detail-column.panel-compact {
-  align-items: center;
-  padding: 18px 7px;
+  padding: 12px 0;
 }
-.board-detail-column.panel-compact > :not(.section-heading) {
+.board-detail-column.panel-compact > .section-heading {
   display: none;
 }
-.board-detail-column.panel-compact .section-heading {
-  justify-content: center;
+.workspace-rail {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  cursor: pointer;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 4px 0 !important;
   width: 100%;
 }
-.board-detail-column.panel-compact .section-heading > div:first-child,
-.board-detail-column.panel-compact
-  .panel-heading-actions
-  > :not(.panel-collapse-button) {
-  display: none;
+.workspace-rail:hover .rail-label {
+  color: var(--text);
 }
-.board-detail-column.panel-compact::before {
+.rail-repository {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.rail-avatar {
+  align-items: center;
+  background: var(--raised);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  color: var(--text);
+  display: flex;
+  font-size: 11px;
+  font-weight: 650;
+  height: 30px;
+  justify-content: center;
+  position: relative;
+  text-transform: lowercase;
+  width: 30px;
+}
+.rail-avatar i {
+  background: var(--muted);
+  border: 2px solid var(--overlay);
+  border-radius: 50%;
+  bottom: -3px;
+  height: 9px;
+  position: absolute;
+  right: -3px;
+  width: 9px;
+}
+.rail-avatar.repository-status-clean i {
+  background: var(--success);
+}
+.rail-avatar.repository-status-modified i,
+.rail-avatar.repository-status-behind i,
+.rail-avatar.repository-status-diverged i {
+  background: #eab66f;
+}
+.rail-avatar.repository-status-ahead i {
+  background: var(--accent);
+}
+.rail-worktree {
+  border: 1px solid var(--line);
+  border-radius: 9px;
   color: var(--muted);
-  content: "Workspace";
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  min-width: 24px;
+  padding: 1px 6px;
+  text-align: center;
+}
+.rail-worktree.changed {
+  background: rgb(226 192 141 / 0.12);
+  border-color: rgb(226 192 141 / 0.35);
+  color: #e2c08d;
+}
+.rail-label {
+  color: var(--muted);
   font-size: 10px;
   font-weight: 650;
   letter-spacing: 0.12em;
+  margin-top: auto;
   text-transform: uppercase;
   writing-mode: vertical-rl;
 }
+
+/* The panel's left edge is its control. The tab sits on the divider, faint
+   at rest and solid when the edge is hovered; clicking folds or unfolds,
+   and dragging anywhere else on the edge resizes. */
+.panel-edge-toggle {
+  align-items: center;
+  background: var(--overlay, #141a2a) !important;
+  border: 1px solid var(--line-strong) !important;
+  border-radius: 7px !important;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
+  color: var(--muted) !important;
+  cursor: pointer;
+  display: flex;
+  height: 44px;
+  justify-content: center;
+  left: 50%;
+  opacity: 0.55;
+  padding: 0 !important;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  transition:
+    opacity 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+  width: 14px;
+  z-index: 6;
+}
+.panel-edge-toggle svg {
+  fill: none;
+  height: 12px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+  width: 7px;
+}
+.secondary-panel-resize-handle:hover .panel-edge-toggle,
+.panel-edge-toggle:focus-visible {
+  border-color: var(--accent) !important;
+  color: var(--text) !important;
+  opacity: 1;
+}
+
+.worktree-disclosure {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  display: flex;
+  flex: 0 0 12px;
+  height: 16px;
+  justify-content: center;
+  padding: 0 !important;
+}
+.worktree-disclosure:disabled {
+  cursor: default;
+}
+.git-part.tone-changes {
+  color: #e2c08d;
+}
+.board-detail-column .changes-list {
+  margin: 0 0 6px 18px;
+}
+.board-detail-column .changes-file {
+  border-radius: 4px;
+  font-size: 11px;
+  height: 21px;
+  padding: 0 6px 0 10px;
+}
+.board-detail-column .changes-empty {
+  font-size: 10px;
+  margin: 2px 0 6px 28px;
+}
+
+/* Session and file views get the workspace panel too (#50). */
+.workspace-shell.has-workspace-panel.mode-session,
+.workspace-shell.has-workspace-panel.mode-workspace {
+  grid-template-columns:
+    var(--workspace-panel-width) 6px minmax(320px, 1fr) 6px
+    var(--board-detail-panel-width);
+}
+/* The panel comes before the session's terminal in the markup; dense
+   placement puts the terminal back in the first row, beside it. */
+.workspace-shell.has-workspace-panel {
+  grid-auto-flow: dense;
+}
+.workspace-shell.has-workspace-panel .workspace-content-column,
+.workspace-shell.has-workspace-panel.mode-session .terminal-column {
+  grid-column: 3;
+}
+
 .modal-wide {
   max-height: calc(100% - 64px);
   max-width: 700px;
@@ -6081,4 +6431,268 @@ dd {
 }
 .report-verdict-label {
   color: var(--muted);
+}
+
+.changes-view {
+  flex: 1 1 0;
+  min-height: 120px;
+  overflow: auto;
+  padding: 4px 0 24px;
+}
+.changes-empty {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  margin: 10px 14px;
+}
+.changes-empty.nested {
+  margin: 2px 14px 8px 30px;
+}
+.changes-group-heading {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  color: var(--secondary) !important;
+  display: flex;
+  font-size: 11px !important;
+  gap: 5px;
+  padding: 4px 10px 4px 8px !important;
+  text-align: left;
+  width: 100%;
+}
+.changes-group-heading:hover {
+  background: var(--raised-hover) !important;
+}
+.changes-group-name {
+  display: grid;
+  flex: 1;
+  font-weight: 600;
+  min-width: 0;
+}
+.changes-group-name small {
+  color: var(--muted);
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.changes-count {
+  background: var(--raised-hover);
+  border-radius: 8px;
+  color: var(--secondary);
+  font-size: 10px;
+  padding: 1px 6px;
+}
+.changes-file {
+  align-items: center;
+  border: 1px solid transparent;
+  color: var(--secondary);
+  cursor: default;
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
+  height: 22px;
+  outline: none;
+  padding: 0 10px 0 30px;
+  white-space: nowrap;
+}
+.changes-file:hover {
+  background: var(--raised-hover);
+}
+.changes-file.selected {
+  background: var(--accent-wash);
+  color: var(--text);
+}
+.changes-file:focus-visible {
+  border-color: var(--accent);
+}
+.changes-file.deleted .changes-file-name {
+  text-decoration: line-through;
+}
+.changes-file-name {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.changes-file-folder {
+  color: var(--muted);
+  flex: 1 1 0;
+  font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.changes-lines {
+  display: flex;
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  gap: 4px;
+  margin-left: auto;
+}
+.changes-lines .added {
+  color: #73c991;
+}
+.changes-lines .deleted {
+  color: #f14c4c;
+}
+.changes-status {
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  width: 12px;
+}
+.changes-file.added .changes-status,
+.changes-file.untracked .changes-status {
+  color: #73c991;
+}
+.changes-file.modified .changes-status {
+  color: #e2c08d;
+}
+.changes-file.deleted .changes-status {
+  color: #f14c4c;
+}
+.changes-file.renamed .changes-status {
+  color: #4fc1ff;
+}
+.file-tab-name small {
+  color: var(--muted);
+}
+
+/* Quick diff in the editor margin, in VS Code's Dark Modern gutter colours:
+   a bar for added and changed lines, a wedge where lines were removed. */
+.monaco-editor .quick-diff {
+  margin-left: 3px;
+}
+.monaco-editor .quick-diff-added {
+  border-left: 3px solid #2ea043;
+}
+.monaco-editor .quick-diff-modified {
+  border-left: 3px solid #0078d4;
+}
+.monaco-editor .quick-diff-deleted::before {
+  border-bottom: 4px solid transparent;
+  border-left: 4px solid #f85149;
+  border-top: 4px solid transparent;
+  content: "";
+  left: 0;
+  position: absolute;
+  top: -4px;
+}
+
+/* A worktree's pull request, coloured by state as GitHub colours it. */
+.pr-chip {
+  align-items: center;
+  background: transparent !important;
+  border: 1px solid currentColor !important;
+  border-radius: 9px !important;
+  display: inline-flex;
+  font-size: 9px !important;
+  font-variant-numeric: tabular-nums;
+  gap: 3px;
+  line-height: 1;
+  padding: 2px 5px !important;
+}
+.pr-chip svg {
+  fill: none;
+  height: 10px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.4;
+  width: 10px;
+}
+.pr-chip.state-open {
+  color: #3fb950 !important;
+}
+.pr-chip.state-draft {
+  color: #8b949e !important;
+}
+.pr-chip.state-merged {
+  color: #a371f7 !important;
+}
+.pr-chip.state-closed {
+  color: #f85149 !important;
+}
+.pr-chip:hover {
+  background: var(--raised-hover) !important;
+}
+
+/* The commits a worktree made, folded behind a count under its files. */
+.worktree-commits {
+  margin: 0 0 6px 18px;
+}
+.worktree-commits-toggle {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  color: var(--muted) !important;
+  display: flex;
+  font-size: 10px !important;
+  gap: 4px;
+  padding: 2px 6px !important;
+  white-space: nowrap;
+}
+/* One label, so the count and the word never wrap apart. */
+.worktree-commits-label {
+  white-space: nowrap;
+}
+.worktree-commits-toggle:hover {
+  color: var(--text) !important;
+}
+.worktree-commit {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 4px !important;
+  color: var(--secondary) !important;
+  display: flex;
+  font-size: 11px !important;
+  gap: 6px;
+  height: 21px;
+  padding: 0 6px 0 16px !important;
+  text-align: left;
+  width: 100%;
+}
+.worktree-commit:hover {
+  background: var(--raised-hover) !important;
+  color: var(--text) !important;
+}
+.worktree-commit-sha {
+  color: #4fc1ff;
+  flex: 0 0 auto;
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 10px;
+}
+.worktree-commit-subject {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.worktree-commit-age {
+  color: var(--muted);
+  flex: 0 0 auto;
+  font-size: 10px;
+}
+.worktree-commits .changes-list {
+  margin-left: 12px;
+}
+/* A commit that exists only in the worktree, not on any branch on origin. */
+.worktree-commit-local {
+  border: 1px solid rgb(226 192 141 / 0.4);
+  border-radius: 8px;
+  color: #e2c08d;
+  flex: 0 0 auto;
+  font-size: 9px;
+  padding: 0 5px;
+}
+
+/* Fetch all and Pull all, under the panel's heading. */
+.repository-toolbar {
+  display: flex;
+  gap: 4px;
+  margin: -4px 0 8px;
 }

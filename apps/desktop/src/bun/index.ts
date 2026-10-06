@@ -37,6 +37,7 @@ import {
   SHUTDOWN_MENU_ACTION,
 } from "@daedalus/protocol";
 import { APPLICATION_MENU } from "./menu";
+import { acceptFirstMouse } from "./first-mouse";
 import { installCliShim } from "./cli-shim";
 import { QuitController } from "./quit";
 import { UpdateController } from "./updates";
@@ -520,6 +521,7 @@ Electrobun.events.on("before-quit", () => {
  * other half of this.
  */
 function openMainWindow(): void {
+  acceptFirstMouse();
   rpc = createRpc();
   mainWindow = new BrowserWindow({
     title: "Daedalus",

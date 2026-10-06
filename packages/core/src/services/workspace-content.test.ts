@@ -962,6 +962,118 @@ Before working in this workspace:
       });
     });
 
+    test("copies entries in with a VS Code copy suffix when the name is taken", async () => {
+      await withWorkspace(async ({ context, workspaceId, workspacePath }) => {
+        await context.workspaceContent.createEntry({
+          workspace: workspaceId,
+          name: "inbox",
+          kind: "directory",
+        });
+        await context.workspaceContent.createEntry({
+          workspace: workspaceId,
+          parentPath: "inbox",
+          name: "note.md",
+          kind: "file",
+        });
+        const copy = () =>
+          context.workspaceContent.copyEntries({
+            workspace: workspaceId,
+            sources: [join(workspacePath, "inbox/note.md")],
+            destinationPath: "inbox",
+          });
+        expect((await copy()).map((entry) => entry.path)).toEqual([
+          "inbox/note copy.md",
+        ]);
+        expect((await copy()).map((entry) => entry.path)).toEqual([
+          "inbox/note copy 2.md",
+        ]);
+        // A folder, recursively, into the root.
+        expect(
+          await context.workspaceContent.copyEntries({
+            workspace: workspaceId,
+            sources: [join(workspacePath, "inbox")],
+            destinationPath: "",
+          }),
+        ).toEqual([
+          {
+            name: "inbox copy",
+            path: "inbox copy",
+            kind: "directory",
+            mutable: true,
+          },
+        ]);
+        expect(
+          await readFile(
+            join(workspacePath, "inbox copy", "note copy 2.md"),
+            "utf8",
+          ),
+        ).toBe("");
+      });
+    });
+
+    test("refuses to copy into repos/, inside itself, or from a relative path", async () => {
+      await withWorkspace(async ({ context, workspaceId, workspacePath }) => {
+        await context.workspaceContent.createEntry({
+          workspace: workspaceId,
+          name: "outer",
+          kind: "directory",
+        });
+        await expect(
+          context.workspaceContent.copyEntries({
+            workspace: workspaceId,
+            sources: [join(workspacePath, "outer")],
+            destinationPath: "outer",
+          }),
+        ).rejects.toMatchObject({ code: "VALIDATION" });
+        await expect(
+          context.workspaceContent.copyEntries({
+            workspace: workspaceId,
+            sources: ["outer"],
+            destinationPath: "",
+          }),
+        ).rejects.toMatchObject({ code: "VALIDATION" });
+        await expect(
+          context.workspaceContent.copyEntries({
+            workspace: workspaceId,
+            sources: [join(workspacePath, "outer")],
+            destinationPath: "repos",
+          }),
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+      });
+    });
+
+    test("resolves a terminal path to a workspace file, and nothing else", async () => {
+      await withWorkspace(async ({ context, workspaceId, workspacePath }) => {
+        await context.workspaceContent.createEntry({
+          workspace: workspaceId,
+          name: "notes",
+          kind: "directory",
+        });
+        await context.workspaceContent.createEntry({
+          workspace: workspaceId,
+          parentPath: "notes",
+          name: "a.md",
+          kind: "file",
+        });
+        const resolveLink = (path: string, baseDirectories: string[]) =>
+          context.workspaceContent.resolveFileLink({ path, baseDirectories });
+        // Relative: the first base directory where it exists wins.
+        expect(
+          await resolveLink("a.md", [
+            workspacePath,
+            join(workspacePath, "notes"),
+          ]),
+        ).toEqual({ workspaceId, path: "notes/a.md" });
+        expect(
+          await resolveLink(join(workspacePath, "notes", "a.md"), []),
+        ).toEqual({ workspaceId, path: "notes/a.md" });
+        // A folder, a missing file and a file outside every workspace are not links.
+        expect(await resolveLink("notes", [workspacePath])).toBeNull();
+        expect(await resolveLink("missing.md", [workspacePath])).toBeNull();
+        expect(await resolveLink("/etc/hosts", [])).toBeNull();
+      });
+    });
+
     test("removes a file, and a folder with everything under it", async () => {
       await withWorkspace(async ({ context, workspaceId, workspacePath }) => {
         await context.workspaceContent.createEntry({
@@ -1817,6 +1929,39 @@ Before working in this workspace:
         expect(
           await git(["--git-dir", bare, "rev-parse", "refs/heads/main"]),
         ).toBe(await git(["-C", source, "rev-parse", "HEAD"]));
+        context.close();
+      });
+    });
+
+    test("fetch only downloads; pull also moves the checkout", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const source = join(home, "source", "product");
+        await createRepository(source);
+        const context = await createApplicationContext({
+          env: { DAEDALUS_HOME: home },
+          reconcile: false,
+        });
+        const workspace = await context.workspaces.create({ name: "Pull" });
+        const attached = await context.workspaceContent.addAndAttachRepository({
+          workspace: workspace.id,
+          remoteUrl: source,
+        });
+        const checkout = attached.referencePath!;
+        const before = await git(["-C", checkout, "rev-parse", "HEAD"]);
+        await commitIn(source, "LATER.md");
+        const latest = await git(["-C", source, "rev-parse", "HEAD"]);
+
+        const fetched = await context.workspaceContent.fetchRepository(
+          attached.id,
+          { pull: false },
+        );
+        expect(await git(["-C", checkout, "rev-parse", "HEAD"])).toBe(before);
+        expect(fetched.gitStatus?.behind).toBe(1);
+
+        await context.workspaceContent.fetchRepository(attached.id, {
+          pull: true,
+        });
+        expect(await git(["-C", checkout, "rev-parse", "HEAD"])).toBe(latest);
         context.close();
       });
     });

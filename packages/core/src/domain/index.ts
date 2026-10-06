@@ -232,6 +232,55 @@ export interface SessionWorktree {
   landed?: boolean;
 }
 
+/** One file a session's worktree changed, against where it branched. */
+export interface ChangedFile {
+  /** Workspace-relative, so the editor can open it as any other file. */
+  path: string;
+  /** Inside the repository, which is what git and the diff's original need. */
+  repositoryPath: string;
+  /** Where a renamed file came from, repository-relative. */
+  originalRepositoryPath?: string;
+  status: "added" | "modified" | "deleted" | "renamed" | "untracked";
+  /** Absent for a binary file or an untracked one. */
+  additions?: number;
+  deletions?: number;
+}
+
+/**
+ * What one session worktree changed since it branched from its base:
+ * commits and uncommitted work together, which is what a person following
+ * an agent wants to read. Committing moves nothing here; only new work does.
+ */
+export interface WorktreeChanges {
+  sessionId: string;
+  repositoryId: string;
+  repositoryName: string;
+  branchName: string;
+  /** The worktree's folder, workspace-relative. */
+  root: string;
+  /** The commit the changes are measured from, or null when git could not say. */
+  base: string | null;
+  files: ChangedFile[];
+}
+
+/** One commit a session worktree made since it branched. */
+export interface WorktreeCommit {
+  sha: string;
+  shortSha: string;
+  author: string;
+  /** ISO 8601, the author date. */
+  date: string;
+  subject: string;
+  /** On a branch on `origin`; false for a commit that exists only here. */
+  pushed?: boolean;
+}
+
+/** Where a path printed in a terminal points, when it is a workspace file. */
+export interface FileLinkTarget {
+  workspaceId: string;
+  path: string;
+}
+
 export interface WorkspaceFileEntry {
   name: string;
   path: string;

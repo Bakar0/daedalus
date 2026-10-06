@@ -1001,10 +1001,14 @@ describe("desktop application shell", () => {
     expect(html).toContain("mode-workspace");
     expect(html).toContain("Explorer");
     expect(html).toContain("workspace-viewer");
-    expect(html).toContain("BRIEF.md");
-    expect(html).toContain("JOURNAL.md");
-    expect(html).toContain("workspace-code-editor");
-    expect(html).toContain("Preview");
+    // The tree builds its rows once mounted, and the editor is a lazy chunk
+    // (Monaco and dockview need a browser), so a static render shows the
+    // explorer's frame and the editor's placeholder. The rows and tabs are
+    // `test:explorer-ui`'s to check.
+    expect(html).toContain('aria-label="Workspace files"');
+    // The editor itself is a lazy chunk (Monaco and dockview need a
+    // browser), so a static render shows its placeholder.
+    expect(html).toContain("Loading the editor");
     expect(html).toContain('aria-label="New file"');
     expect(html).toContain('aria-label="New folder"');
     // Since #27 the explorer is the file tree alone; the repositories are in
@@ -1040,16 +1044,19 @@ describe("desktop application shell", () => {
     expect(html).not.toContain("Select a task");
     expect(html).toContain("main ·");
     expect(html).toContain("↓2 behind");
+    // Fetch only downloads; Pull also moves the checkout to the latest base.
     expect(html).toContain('aria-label="Fetch daedalus"');
-    // Fetching moves the checkout too, so there is no separate pull.
-    expect(html).not.toContain('aria-label="Pull daedalus"');
+    expect(html).toContain('aria-label="Pull daedalus"');
+    expect(html).toContain('aria-label="Fetch all repositories"');
+    expect(html).toContain('aria-label="Pull all repositories"');
     expect(html).toContain('aria-label="Add repository"');
     // The working tree is nested under the repository it was cut from, and
     // carries the branch it is on rather than only the session's name.
     expect(html).toContain("workspace-repository-group");
     expect(html).toContain("workspace-worktree-row");
     expect(html).toContain("daedalus/demo/task/session");
-    expect(html).toContain('aria-label="Push daedalus/demo/task/session"');
+    // The agent pushes its own branch; the panel offers no Push.
+    expect(html).not.toContain('aria-label="Push daedalus/demo/task/session"');
     expect(column).toContain("workspace-repository-group");
   });
 
@@ -1635,10 +1642,11 @@ describe("desktop application shell", () => {
     expect(html).toContain("22222222 · started");
     expect(html).toContain("Terminal for Terminal task 11111111");
     expect(html).toContain("mode-session");
-    // The terminal takes the main column: no Sessions column beside it.
+    // The terminal takes the main column, with the workspace panel (its
+    // repositories and what each worktree changed) beside it (#50).
     expect(html).not.toContain("workspace-main");
-    expect(html).not.toContain("secondary-panel-resize-handle");
-    expect(html).not.toContain("board-detail-column");
+    expect(html).toContain("has-workspace-panel");
+    expect(html).toContain('aria-label="Workspace panel"');
   });
 
   test("renders free terminals with lifecycle timestamps in their tooltip", () => {
@@ -1944,7 +1952,8 @@ describe("desktop application shell", () => {
     expect(html).toContain("<small>/tmp/demo</small>");
     expect(html).toContain('aria-label="Resize integrated terminal"');
     expect(html).toContain('aria-label="Resize workspace panel"');
-    expect(html).toContain('aria-label="Resize task inspector panel"');
+    expect(html).toContain('aria-label="Resize repositories panel"');
+    expect(html).toContain('aria-label="Collapse workspace panel"');
     expect(html).toContain("Terminal for Demo 55555555");
     expect(html).toContain('aria-label="New terminal in Daedalus home"');
     expect(html).toContain('title="New terminal in /tmp/daedalus-test"');

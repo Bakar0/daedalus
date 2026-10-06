@@ -460,6 +460,95 @@ const client = {
             : [{ id: "gpt-5", label: "GPT-5" }],
         source: "aliases",
       }),
+    workspaceFileRead: async ({ path }: { path: string }) =>
+      ok({
+        name: path.slice(path.lastIndexOf("/") + 1),
+        path,
+        // The journal is the real one the timeline links into.
+        content: path === "JOURNAL.md" ? JOURNAL : `// ${path}\n`,
+        format: path.endsWith(".md") ? "markdown" : "text",
+      }),
+    workspaceCommits: async () =>
+      ok([
+        {
+          sha: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+          shortSha: "a1b2c3d",
+          author: "Claude",
+          date: new Date(Date.now() - 40 * 60_000).toISOString(),
+          subject: "Watch the workspace and reconcile the tree",
+        },
+        {
+          sha: "b2c3d4e5f60718293a4b5c6d7e8f901234567890",
+          shortSha: "b2c3d4e",
+          author: "Claude",
+          date: new Date(Date.now() - 3 * 3_600_000).toISOString(),
+          subject: "Add rename, move and delete to the explorer",
+          pushed: false,
+        },
+      ]),
+    workspaceCommitFiles: async () =>
+      ok([
+        {
+          path: "worktrees/24/daedalus/packages/core/src/services/workspace-watch.ts",
+          repositoryPath: "packages/core/src/services/workspace-watch.ts",
+          status: "added",
+          additions: 120,
+          deletions: 0,
+        },
+      ]),
+    workspaceChangeOriginal: async () =>
+      ok({ content: "// before\n", binary: false }),
+    workspaceChanges: async () =>
+      ok([
+        {
+          sessionId: "s-24",
+          repositoryId: "repo",
+          repositoryName: "daedalus",
+          branchName: "daedalus/deadalus/e11f6aae",
+          root: "worktrees/24/daedalus",
+          base: "0123456789abcdef0123456789abcdef01234567",
+          files: [
+            {
+              path: "worktrees/24/daedalus/apps/desktop/src/renderer/files/FileTree.tsx",
+              repositoryPath: "apps/desktop/src/renderer/files/FileTree.tsx",
+              status: "added",
+              additions: 412,
+              deletions: 0,
+            },
+            {
+              path: "worktrees/24/daedalus/packages/core/src/services/workspace-watch.ts",
+              repositoryPath: "packages/core/src/services/workspace-watch.ts",
+              status: "modified",
+              additions: 38,
+              deletions: 9,
+            },
+            {
+              path: "worktrees/24/daedalus/README.md",
+              repositoryPath: "README.md",
+              status: "modified",
+              additions: 2,
+              deletions: 1,
+            },
+          ],
+        },
+        {
+          sessionId: "s-25",
+          repositoryId: "repo",
+          repositoryName: "daedalus",
+          branchName: "daedalus/deadalus/9c1a0b2d",
+          root: "worktrees/25/daedalus",
+          base: null,
+          files: [
+            {
+              path: "worktrees/25/daedalus/apps/desktop/src/renderer/BoardView.tsx",
+              repositoryPath: "apps/desktop/src/renderer/BoardView.tsx",
+              status: "modified",
+              additions: 120,
+              deletions: 44,
+            },
+          ],
+        },
+      ]),
     workspaceContentGet: async () =>
       ok({
         workspaceId: WORKSPACE,

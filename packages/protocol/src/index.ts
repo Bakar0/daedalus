@@ -211,6 +211,40 @@ export interface SessionWorktreeDto {
   landed?: boolean;
 }
 
+export interface ChangedFileDto {
+  path: string;
+  repositoryPath: string;
+  originalRepositoryPath?: string;
+  status: "added" | "modified" | "deleted" | "renamed" | "untracked";
+  additions?: number;
+  deletions?: number;
+}
+
+export interface WorktreeChangesDto {
+  sessionId: string;
+  repositoryId: string;
+  repositoryName: string;
+  branchName: string;
+  root: string;
+  base: string | null;
+  files: ChangedFileDto[];
+}
+
+export interface WorktreeCommitDto {
+  sha: string;
+  shortSha: string;
+  author: string;
+  date: string;
+  subject: string;
+  /** On a branch on `origin`; false for a commit that exists only here. */
+  pushed?: boolean;
+}
+
+export interface FileLinkTargetDto {
+  workspaceId: string;
+  path: string;
+}
+
 export interface WorkspaceContentDto {
   workspaceId: string;
   brief: string;
@@ -794,6 +828,42 @@ export interface DesktopRpcSchema {
         WorkspaceFileEntryDto
       >;
       /**
+       * Copies absolute paths (workspace entries or files from Finder) into a
+       * workspace folder; a taken name gets a " copy" suffix.
+       */
+      /** Each session worktree's changes since it branched from its base. */
+      workspaceChanges: Request<{ workspace: string }, WorktreeChangesDto[]>;
+      /** A changed file as it was at its worktree's base, for a diff. */
+      workspaceChangeOriginal: Request<
+        {
+          workspace: string;
+          root: string;
+          repositoryPath: string;
+          /** A commit, or `<sha>^` for its parent; the base when absent. */
+          ref?: string;
+        },
+        { content: string; binary: boolean }
+      >;
+      /** The commits a session worktree made since it branched, newest first. */
+      workspaceCommits: Request<
+        { workspace: string; root: string },
+        WorktreeCommitDto[]
+      >;
+      /** The files one commit of a session worktree changed. */
+      workspaceCommitFiles: Request<
+        { workspace: string; root: string; sha: string },
+        ChangedFileDto[]
+      >;
+      /** Where a path printed in a terminal points, if it is a workspace file. */
+      fileLinkResolve: Request<
+        { path: string; baseDirectories: string[] },
+        FileLinkTargetDto | null
+      >;
+      workspaceEntriesCopy: Request<
+        { workspace: string; sources: string[]; destinationPath: string },
+        WorkspaceFileEntryDto[]
+      >;
+      /**
        * Names the workspaces whose files the window is showing, which is the
        * only thing the host needs in order to watch the right trees. An empty
        * list stops watching — a view that is not the explorer has no tree to
@@ -926,7 +996,12 @@ export interface DesktopRpcSchema {
        * what each checkout took.
        */
       workspaceRepositoriesFetch: Request<
-        { workspace: string; ids?: string[] },
+        {
+          workspace: string;
+          ids?: string[];
+          /** Also move each checkout to the latest base branch (default). */
+          pull?: boolean;
+        },
         RepositoryFetchOutcomeDto[]
       >;
       /**
@@ -1066,6 +1141,10 @@ export interface DesktopRpcSchema {
        * that does not come straight from a click, which this never does.
        */
       clipboardWrite: Request<{ text: string }, { written: boolean }>;
+      /** The files on the macOS pasteboard, as Finder's Copy leaves them. */
+      clipboardFilesRead: Request<Record<string, never>, { paths: string[] }>;
+      /** Puts files on the macOS pasteboard, so Finder can paste them. */
+      clipboardFilesWrite: Request<{ paths: string[] }, { written: number }>;
       /**
        * Which window is asking: the main app, or the World on its own. Both
        * load the same page, and a `views://` URL carries no parameters, so a

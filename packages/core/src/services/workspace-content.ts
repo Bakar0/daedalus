@@ -1,5 +1,6 @@
 import {
   appendFile,
+  cp,
   lstat,
   readlink,
   readdir,
@@ -33,6 +34,8 @@ import {
 } from "@daedalus/platform";
 import type {
   AgentSession,
+  ChangedFile,
+  FileLinkTarget,
   GitStatus,
   PullRequestRef,
   ShippedPullRequest,
@@ -43,6 +46,8 @@ import type {
   WorkspaceFile,
   WorkspaceFileEntry,
   WorkspaceRepository,
+  WorktreeChanges,
+  WorktreeCommit,
   RepositoryFetchOutcome,
   RepositoryLibraryEntry,
 } from "../domain";
@@ -809,6 +814,100 @@ const UNAVAILABLE_STATUS: GitStatus = {
   behind: 0,
 };
 
+/**
+ * Reads `git diff --name-status -z -M` and `git diff --numstat -z -M` into one
+ * list. With `-z` a rename is three fields in name-status (`R100`, old, new)
+ * and, in numstat, counts followed by an empty path and then old and new.
+ * A binary file has `-` for both counts and gets none.
+ */
+export function parseChangedFiles(
+  nameStatus: string,
+  numstat: string,
+): Omit<ChangedFile, "path">[] {
+  const counts = new Map<string, { additions?: number; deletions?: number }>();
+  const numberFields = numstat.split("\0");
+  for (let index = 0; index < numberFields.length; index += 1) {
+    const field = numberFields[index];
+    if (!field) continue;
+    const [added, deleted, path] = field.split("\t");
+    let target = path;
+    if (path === "") {
+      // A rename: the next two fields are its old and new path.
+      target = numberFields[index + 2];
+      index += 2;
+    }
+    if (target === undefined) continue;
+    counts.set(
+      target,
+      added === "-" || deleted === "-"
+        ? {}
+        : {
+            additions: Number.parseInt(added ?? "0", 10) || 0,
+            deletions: Number.parseInt(deleted ?? "0", 10) || 0,
+          },
+    );
+  }
+  const files: Omit<ChangedFile, "path">[] = [];
+  const fields = nameStatus.split("\0");
+  for (let index = 0; index < fields.length; index += 1) {
+    const code = fields[index];
+    if (!code) continue;
+    const letter = code[0];
+    if (letter === "R" || letter === "C") {
+      const from = fields[index + 1];
+      const to = fields[index + 2];
+      index += 2;
+      if (!from || !to) continue;
+      files.push({
+        repositoryPath: to,
+        ...(letter === "R" ? { originalRepositoryPath: from } : {}),
+        status: letter === "R" ? "renamed" : "added",
+        ...counts.get(to),
+      });
+      continue;
+    }
+    const path = fields[index + 1];
+    index += 1;
+    if (!path) continue;
+    files.push({
+      repositoryPath: path,
+      status:
+        letter === "A" ? "added" : letter === "D" ? "deleted" : "modified",
+      ...counts.get(path),
+    });
+  }
+  return files;
+}
+
+/** A commit, or its parent, as a diff may ask for one. */
+const COMMIT_REF = /^[0-9a-f]{7,64}\^?$/;
+
+/**
+ * Where a worktree's changes are measured from: the merge-base with
+ * `origin/<baseBranch>`, so work that landed on the base branch since the
+ * tree branched is not counted as the agent's. Null when there is no base
+ * branch or git cannot find the merge-base; callers then compare with HEAD.
+ */
+async function changesBase(
+  git: string,
+  path: string,
+  baseBranch: string | null,
+): Promise<string | null> {
+  if (!baseBranch) return null;
+  const result = await runCommand(git, [
+    "--no-optional-locks",
+    "-C",
+    path,
+    "merge-base",
+    "HEAD",
+    `refs/remotes/origin/${baseBranch}`,
+  ]);
+  const commit = result.stdout.trim();
+  return result.exitCode === 0 && /^[0-9a-f]{40,64}$/.test(commit)
+    ? commit
+    : null;
+}
+
 // Shared by the read-only checkout under `repos/` and by session worktrees.
 // Both answer the same two questions — what is uncommitted here, and how far
 // has this tree moved from the branch it started on — so both are compared
@@ -1565,6 +1664,7 @@ export class WorkspaceContentService {
   private async refreshRepository(
     repository: RepositoryLibraryEntry,
     persist = true,
+    follow = true,
   ): Promise<RepositoryLibraryEntry> {
     const git = findExecutable("git");
     if (!git)
@@ -1636,7 +1736,7 @@ export class WorkspaceContentService {
     );
     if (persist) {
       this.repositories.updateRepositoryLibraryEntry(refreshed);
-      await this.followRemote(refreshed);
+      if (follow) await this.followRemote(refreshed);
     }
     return refreshed;
   }
@@ -1729,7 +1829,15 @@ export class WorkspaceContentService {
   // Fetch updates the shared clone every workspace and worktree resolves
   // against, so it is what makes "behind 3" true again without touching a
   // single working tree.
-  async fetchRepository(id: string): Promise<WorkspaceRepository> {
+  /**
+   * `pull: false` only fetches: the remote-tracking refs move and the row can
+   * say "behind 3", but no checkout under `repos/` changes. The default also
+   * moves every checkout of the clone to the latest base branch.
+   */
+  async fetchRepository(
+    id: string,
+    options: { pull?: boolean } = {},
+  ): Promise<WorkspaceRepository> {
     const repository = this.repositories.findWorkspaceRepository(id);
     if (!repository)
       throw new DaedalusError(
@@ -1750,7 +1858,11 @@ export class WorkspaceContentService {
         "NOT_FOUND",
         "The shared repository clone is no longer available",
       );
-    const refreshed = await this.refreshRepository(libraryRepository);
+    const refreshed = await this.refreshRepository(
+      libraryRepository,
+      true,
+      options.pull ?? true,
+    );
     // Read again: the fetch may have moved this checkout and recorded it.
     const updated: WorkspaceRepository = {
       ...(this.repositories.findWorkspaceRepository(repository.id) ??
@@ -1770,6 +1882,8 @@ export class WorkspaceContentService {
   async fetchRepositories(input: {
     workspace: string;
     ids?: string[];
+    /** Also move each checkout to the latest base branch; true unless false. */
+    pull?: boolean;
   }): Promise<RepositoryFetchOutcome[]> {
     const workspace = await this.workspaces.get(input.workspace);
     const wanted = input.ids ? new Set(input.ids) : undefined;
@@ -1801,7 +1915,9 @@ export class WorkspaceContentService {
         };
         let fetched: WorkspaceRepository;
         try {
-          fetched = await this.fetchRepository(repository.id);
+          fetched = await this.fetchRepository(repository.id, {
+            pull: input.pull ?? true,
+          });
         } catch (error) {
           return { ...outcome, error: normalizeError(error).message };
         }
@@ -2573,6 +2689,332 @@ export class WorkspaceContentService {
     );
     await rm(source.target, { recursive: true, force: false });
     return entry;
+  }
+
+  /**
+   * Every session worktree in the workspace, with the files it changed since
+   * it branched from `origin/<baseBranch>`: committed and uncommitted work
+   * together, plus untracked files. Read-only and lock-free, so it never
+   * races an agent's own `git add`.
+   */
+  async worktreeChanges(reference: string): Promise<WorktreeChanges[]> {
+    const workspace = await this.workspaces.getActive(reference);
+    const git = findExecutable("git");
+    const repositories = new Map(
+      this.repositories
+        .listWorkspaceRepositories(workspace.id)
+        .map((item) => [item.id, item]),
+    );
+    const worktrees = this.repositories.listSessionWorktrees({
+      workspaceId: workspace.id,
+    });
+    const results = await Promise.all(
+      worktrees.map(async (worktree): Promise<WorktreeChanges | undefined> => {
+        if (!git || !(await pathExists(worktree.path))) return undefined;
+        const repository = repositories.get(worktree.repositoryId);
+        const root = relative(workspace.path, worktree.path);
+        if (root.startsWith("..") || isAbsolute(root)) return undefined;
+        const base = await changesBase(
+          git,
+          worktree.path,
+          repository?.baseBranch ?? null,
+        );
+        const run = (args: string[]) =>
+          runCommand(git, [
+            "--no-optional-locks",
+            "-C",
+            worktree.path,
+            ...args,
+          ]);
+        const [nameStatus, numstat, untracked] = await Promise.all([
+          run(["diff", "--name-status", "-z", "-M", base ?? "HEAD"]),
+          run(["diff", "--numstat", "-z", "-M", base ?? "HEAD"]),
+          run(["ls-files", "--others", "--exclude-standard", "-z"]),
+        ]);
+        const files: ChangedFile[] = [
+          ...(nameStatus.exitCode === 0
+            ? parseChangedFiles(nameStatus.stdout, numstat.stdout)
+            : []),
+          ...(untracked.exitCode === 0
+            ? untracked.stdout
+                .split("\0")
+                .filter(Boolean)
+                .map((repositoryPath) => ({
+                  repositoryPath,
+                  status: "untracked" as const,
+                }))
+            : []),
+        ].map((file) => ({ ...file, path: join(root, file.repositoryPath) }));
+        files.sort((left, right) => left.path.localeCompare(right.path));
+        return {
+          sessionId: worktree.sessionId,
+          repositoryId: worktree.repositoryId,
+          repositoryName: repository?.name ?? basename(worktree.path),
+          branchName: worktree.branchName,
+          root,
+          base,
+          files,
+        };
+      }),
+    );
+    return results.filter((item) => item !== undefined);
+  }
+
+  /** The session worktree at `root`, with git and where its changes start. */
+  private async resolveWorktree(reference: string, root: string) {
+    const workspace = await this.workspaces.getActive(reference);
+    const folder = await this.resolveVisiblePath(workspace, root);
+    const worktree = this.repositories
+      .listSessionWorktrees({ workspaceId: workspace.id })
+      .find((item) => resolve(item.path) === resolve(folder.target));
+    if (!worktree)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `'${root}' is not a session worktree`,
+      );
+    const git = findExecutable("git");
+    if (!git) throw new DaedalusError("DEPENDENCY", "git was not found");
+    const repository = this.repositories
+      .listWorkspaceRepositories(workspace.id)
+      .find((item) => item.id === worktree.repositoryId);
+    const base = await changesBase(
+      git,
+      worktree.path,
+      repository?.baseBranch ?? null,
+    );
+    const run = (args: string[]) =>
+      runCommand(git, ["--no-optional-locks", "-C", worktree.path, ...args]);
+    return {
+      workspace,
+      worktree,
+      root: relative(workspace.path, worktree.path),
+      base,
+      run,
+    };
+  }
+
+  /**
+   * A file as it was at the worktree's base, for the left side of a diff, or
+   * at a commit (`<sha>`, or `<sha>^` for its parent) when `ref` is given.
+   * Empty for a file that did not exist there.
+   */
+  async changeOriginal(input: {
+    workspace: string;
+    root: string;
+    repositoryPath: string;
+    ref?: string;
+  }): Promise<{ content: string; binary: boolean }> {
+    if (
+      isAbsolute(input.repositoryPath) ||
+      input.repositoryPath.split(/[\\/]/).includes("..")
+    )
+      throw new DaedalusError(
+        "VALIDATION",
+        "Repository paths must be relative",
+      );
+    if (input.ref !== undefined && !COMMIT_REF.test(input.ref))
+      throw new DaedalusError("VALIDATION", "Not a commit");
+    const { base, run } = await this.resolveWorktree(
+      input.workspace,
+      input.root,
+    );
+    const shown = await run([
+      "show",
+      `${input.ref ?? base ?? "HEAD"}:${input.repositoryPath}`,
+    ]);
+    if (shown.exitCode !== 0) return { content: "", binary: false };
+    const binary = shown.stdout.slice(0, 8192).includes("\0");
+    return { content: binary ? "" : shown.stdout, binary };
+  }
+
+  /**
+   * The commits a session worktree made since it branched, newest first, as
+   * VS Code's Source Control Graph lists a branch's outgoing commits.
+   */
+  async worktreeCommits(input: {
+    workspace: string;
+    root: string;
+  }): Promise<WorktreeCommit[]> {
+    const { base, run } = await this.resolveWorktree(
+      input.workspace,
+      input.root,
+    );
+    const log = await run([
+      "log",
+      "--max-count=200",
+      "-z",
+      `--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s`,
+      base ? `${base}..HEAD` : "HEAD",
+    ]);
+    if (log.exitCode !== 0) return [];
+    // What no branch on `origin` holds yet: committed here, not pushed.
+    const local = await run([
+      "rev-list",
+      base ? `${base}..HEAD` : "HEAD",
+      "--not",
+      "--remotes=origin",
+    ]);
+    const unpushed = new Set(
+      local.exitCode === 0 ? local.stdout.split("\n").filter(Boolean) : [],
+    );
+    return log.stdout
+      .split("\0")
+      .filter((record) => record.trim())
+      .flatMap((record) => {
+        const [sha, shortSha, author, date, subject] = record
+          .replace(/^\n/, "")
+          .split("\x1f");
+        return sha && shortSha && date
+          ? [
+              {
+                sha,
+                shortSha,
+                author: author ?? "",
+                date,
+                subject: subject ?? "",
+                pushed: !unpushed.has(sha),
+              },
+            ]
+          : [];
+      });
+  }
+
+  /** The files one commit of a session worktree changed, against its parent. */
+  async commitFiles(input: {
+    workspace: string;
+    root: string;
+    sha: string;
+  }): Promise<ChangedFile[]> {
+    if (!/^[0-9a-f]{7,64}$/.test(input.sha))
+      throw new DaedalusError("VALIDATION", "Not a commit");
+    const { root, run } = await this.resolveWorktree(
+      input.workspace,
+      input.root,
+    );
+    // `--root` so the first commit of a history still lists what it added.
+    const args = ["diff-tree", "--root", "-r", "-z", "-M", "--no-commit-id"];
+    const [nameStatus, numstat] = await Promise.all([
+      run([...args, "--name-status", input.sha]),
+      run([...args, "--numstat", input.sha]),
+    ]);
+    if (nameStatus.exitCode !== 0) return [];
+    return parseChangedFiles(nameStatus.stdout, numstat.stdout).map((file) => ({
+      ...file,
+      path: join(root, file.repositoryPath),
+    }));
+  }
+
+  /**
+   * Where a path printed in a terminal points. A relative path is tried
+   * against each base directory in turn (the session's folder, then its
+   * worktrees); the first existing file wins. Only files inside an active
+   * workspace are links: the editor shows workspace files, and anything else
+   * would be a link that opens nothing.
+   */
+  async resolveFileLink(input: {
+    path: string;
+    baseDirectories: readonly string[];
+  }): Promise<FileLinkTarget | null> {
+    const home = Bun.env.HOME ?? "";
+    const expanded = input.path.startsWith("~/")
+      ? join(home, input.path.slice(2))
+      : input.path;
+    const candidates = isAbsolute(expanded)
+      ? [expanded]
+      : input.baseDirectories
+          .filter((directory) => isAbsolute(directory))
+          .map((directory) => resolve(directory, expanded));
+    const workspaces = await this.workspaces.list();
+    const roots = await Promise.all(
+      workspaces.map(async (workspace) => ({
+        workspace,
+        canonical: await canonicalPath(workspace.path).catch(() => null),
+      })),
+    );
+    for (const candidate of candidates) {
+      if (!(await pathExists(candidate))) continue;
+      if (!(await lstat(candidate)).isFile()) continue;
+      const real = await canonicalPath(candidate);
+      const owner = roots.find(
+        (root) => root.canonical && isPathInside(root.canonical, real),
+      );
+      if (!owner?.canonical) continue;
+      const path = relative(owner.canonical, real);
+      if (
+        path
+          .split(/[\\/]/)
+          .some((part) => part === ".daedalus" || part === ".git")
+      )
+        continue;
+      return { workspaceId: owner.workspace.id, path };
+    }
+    return null;
+  }
+
+  /**
+   * Copies files or folders into a workspace folder: entries of this
+   * workspace, or anything on disk the user copied in Finder. Sources are
+   * absolute paths, because a paste from Finder has no workspace to be
+   * relative to. A name that is taken gets VS Code's suffix, `name copy.ext`
+   * then `name copy 2.ext`, so a paste never overwrites.
+   */
+  async copyEntries(input: {
+    workspace: string;
+    sources: readonly string[];
+    destinationPath: string;
+  }): Promise<WorkspaceFileEntry[]> {
+    const workspace = await this.workspaces.getActive(input.workspace);
+    const folder = await this.resolveVisiblePath(
+      workspace,
+      input.destinationPath,
+    );
+    this.assertWritable(folder.relativePath);
+    if (!(await lstat(folder.target)).isDirectory())
+      throw new DaedalusError(
+        "VALIDATION",
+        `'${input.destinationPath}' is not a folder`,
+      );
+    const copied: WorkspaceFileEntry[] = [];
+    for (const source of input.sources) {
+      if (!isAbsolute(source))
+        throw new DaedalusError("VALIDATION", "Copy sources must be absolute");
+      if (!(await pathExists(source)))
+        throw new DaedalusError("NOT_FOUND", `'${source}' was not found`);
+      const sourceReal = await canonicalPath(source);
+      const folderReal = await canonicalPath(folder.target);
+      if (folderReal === sourceReal || isPathInside(sourceReal, folderReal))
+        throw new DaedalusError(
+          "VALIDATION",
+          "A folder cannot be copied inside itself",
+        );
+      const name = await this.vacantCopyName(folder.target, basename(source));
+      const relativePath = join(folder.relativePath, name);
+      if (folder.relativePath === "" && name === ".daedalus")
+        throw new DaedalusError(
+          "VALIDATION",
+          "The .daedalus directory is reserved",
+        );
+      const target = join(folder.target, name);
+      await cp(source, target, {
+        recursive: true,
+        errorOnExist: true,
+        force: false,
+        verbatimSymlinks: true,
+      });
+      copied.push(await this.describeEntry(workspace.id, target, relativePath));
+    }
+    return copied;
+  }
+
+  private async vacantCopyName(folder: string, name: string): Promise<string> {
+    if (!(await pathExists(join(folder, name)))) return name;
+    const extension = extname(name);
+    const stem = extension ? name.slice(0, -extension.length) : name;
+    for (let attempt = 1; attempt < 1000; attempt += 1) {
+      const candidate = `${stem} copy${attempt === 1 ? "" : ` ${attempt}`}${extension}`;
+      if (!(await pathExists(join(folder, candidate)))) return candidate;
+    }
+    throw new DaedalusError("CONFLICT", `No free name for a copy of '${name}'`);
   }
 
   /**
