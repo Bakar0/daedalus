@@ -6493,12 +6493,16 @@ export function WorkspaceApp({
                   [
                     {
                       key: "routines",
-                      label: "Give the agent the ability to run routines",
+                      label: "Routines",
+                      description: "Give the agent the ability to run routines",
                     },
                   ] as const
                 ).map((ability) => (
                   <label className="session-ability-option" key={ability.key}>
-                    <strong>{ability.label}</strong>
+                    <span>
+                      <strong>{ability.label}</strong>
+                      <small>{ability.description}</small>
+                    </span>
                     <input
                       checked={Boolean(sessionForm[ability.key])}
                       className="switch"
