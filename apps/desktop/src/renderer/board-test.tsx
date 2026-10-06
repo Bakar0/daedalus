@@ -483,6 +483,7 @@ const client = {
           author: "Claude",
           date: new Date(Date.now() - 3 * 3_600_000).toISOString(),
           subject: "Add rename, move and delete to the explorer",
+          pushed: false,
         },
       ]),
     workspaceCommitFiles: async () =>

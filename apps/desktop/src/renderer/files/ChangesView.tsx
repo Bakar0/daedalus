@@ -282,6 +282,15 @@ export function WorktreeCommits({
                 <span className="worktree-commit-subject">
                   {commit.subject}
                 </span>
+                {commit.pushed === false && (
+                  <span
+                    className="worktree-commit-local"
+
+                    title="Committed here, not pushed yet"
+                  >
+                    not pushed
+                  </span>
+                )}
                 <span className="worktree-commit-age">{ago(commit.date)}</span>
               </button>
               {expanded === commit.sha &&

@@ -271,6 +271,8 @@ export interface WorktreeCommit {
   /** ISO 8601, the author date. */
   date: string;
   subject: string;
+  /** On a branch on `origin`; false for a commit that exists only here. */
+  pushed?: boolean;
 }
 
 /** Where a path printed in a terminal points, when it is a workspace file. */

@@ -2847,6 +2847,16 @@ export class WorkspaceContentService {
       base ? `${base}..HEAD` : "HEAD",
     ]);
     if (log.exitCode !== 0) return [];
+    // What no branch on `origin` holds yet: committed here, not pushed.
+    const local = await run([
+      "rev-list",
+      base ? `${base}..HEAD` : "HEAD",
+      "--not",
+      "--remotes=origin",
+    ]);
+    const unpushed = new Set(
+      local.exitCode === 0 ? local.stdout.split("\n").filter(Boolean) : [],
+    );
     return log.stdout
       .split("\0")
       .filter((record) => record.trim())
@@ -2862,6 +2872,7 @@ export class WorkspaceContentService {
                 author: author ?? "",
                 date,
                 subject: subject ?? "",
+                pushed: !unpushed.has(sha),
               },
             ]
           : [];

@@ -6680,3 +6680,12 @@ dd {
 .worktree-commits .changes-list {
   margin-left: 12px;
 }
+/* A commit that exists only in the worktree, not on any branch on origin. */
+.worktree-commit-local {
+  border: 1px solid rgb(226 192 141 / 0.4);
+  border-radius: 8px;
+  color: #e2c08d;
+  flex: 0 0 auto;
+  font-size: 9px;
+  padding: 0 5px;
+}

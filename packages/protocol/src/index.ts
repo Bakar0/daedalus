@@ -236,6 +236,8 @@ export interface WorktreeCommitDto {
   author: string;
   date: string;
   subject: string;
+  /** On a branch on `origin`; false for a commit that exists only here. */
+  pushed?: boolean;
 }
 
 export interface FileLinkTargetDto {
