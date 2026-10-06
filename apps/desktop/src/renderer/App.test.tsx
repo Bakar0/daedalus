@@ -7,6 +7,7 @@ import type {
 } from "@daedalus/protocol";
 import { App, MarkdownPreview } from "./App";
 import type { DesktopClient } from "./client-types";
+import { ConfirmButton } from "./ConfirmButton";
 import {
   agentMultilineSequence,
   clampExplorerWidth,
@@ -29,6 +30,7 @@ import {
   preferredSessionId,
   preferredWorkspaceView,
   quitDisclosure,
+  worktreeDiscardLabel,
   type SessionLaunchState,
   shouldFocusSession,
   TERMINAL_FONT_SIZE,
@@ -100,6 +102,52 @@ describe("quit disclosure", () => {
     expect(quitDisclosure({ sessions: [], terminals: [] })).toBe(
       "Nothing is running.",
     );
+  });
+});
+
+describe("confirm in place", () => {
+  const status = (changedFiles: number, ahead: number, unpushed?: number) => ({
+    state: "modified" as const,
+    changedFiles,
+    ahead,
+    behind: 0,
+    unpushed,
+  });
+
+  test("a working tree's button names the work removing it discards", () => {
+    expect(worktreeDiscardLabel({ gitStatus: status(0, 0) })).toBeUndefined();
+    expect(worktreeDiscardLabel({})).toBeUndefined();
+    expect(worktreeDiscardLabel({ gitStatus: status(3, 0) })).toBe(
+      "Discard 3 changes",
+    );
+    expect(worktreeDiscardLabel({ gitStatus: status(1, 2, 1) })).toBe(
+      "Discard 1 change, 1 commit",
+    );
+    // Without the remote's answer, every commit ahead counts as unpushed.
+    expect(worktreeDiscardLabel({ gitStatus: status(0, 2) })).toBe(
+      "Discard 2 commits",
+    );
+    // A merged pull request holds the commits on the base branch.
+    expect(
+      worktreeDiscardLabel({ gitStatus: status(0, 2, 2), landed: true }),
+    ).toBeUndefined();
+  });
+
+  test("an unarmed button shows its icon and its own tooltip", () => {
+    const html = renderToStaticMarkup(
+      <ConfirmButton
+        aria-label="Archive x session"
+        armedTitle="Running work stops."
+        onConfirm={() => {}}
+        title="Archive session"
+      >
+        <svg />
+      </ConfirmButton>,
+    );
+    expect(html).toContain('title="Archive session"');
+    expect(html).toContain('aria-label="Archive x session"');
+    expect(html).not.toContain("Confirm");
+    expect(html).not.toContain("confirm-armed");
   });
 });
 

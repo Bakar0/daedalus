@@ -22,6 +22,7 @@ type Request = { id: number } & (
       message: string;
       confirmLabel: string;
       danger: boolean;
+      enterConfirms: boolean;
       resolve: (answer: boolean) => void;
     }
   | {
@@ -45,6 +46,11 @@ export function askConfirm(options: {
   confirmLabel?: string;
   /** Styles the button as destructive and leaves focus on Cancel. */
   danger?: boolean;
+  /**
+   * Focuses the confirm button even when `danger` is set, so Enter answers
+   * yes. For a request the user just made on purpose, like a delete key.
+   */
+  enterConfirms?: boolean;
 }): Promise<boolean> {
   return new Promise((resolve) => {
     queue.push({
@@ -54,6 +60,7 @@ export function askConfirm(options: {
       message: options.message,
       confirmLabel: options.confirmLabel ?? "OK",
       danger: options.danger ?? false,
+      enterConfirms: options.enterConfirms ?? false,
       resolve,
     });
     announce();
@@ -149,7 +156,11 @@ export function DialogHost() {
           )}
           <div className="modal-actions">
             <button
-              autoFocus={request.kind === "confirm" && request.danger}
+              autoFocus={
+                request.kind === "confirm" &&
+                request.danger &&
+                !request.enterConfirms
+              }
               className="quiet"
               data-dialog-answer="cancel"
               onClick={() => answer(false)}
@@ -158,7 +169,10 @@ export function DialogHost() {
               Cancel
             </button>
             <button
-              autoFocus={request.kind === "confirm" && !request.danger}
+              autoFocus={
+                request.kind === "confirm" &&
+                (!request.danger || request.enterConfirms)
+              }
               className={
                 request.kind === "confirm" && request.danger
                   ? "danger-action"

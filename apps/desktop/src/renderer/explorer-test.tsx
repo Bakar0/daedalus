@@ -199,6 +199,7 @@ const client = {
     workspaceEntryRename: (params: unknown) => call("/rename", params),
     workspaceEntryMove: (params: unknown) => call("/move", params),
     workspaceEntryRemove: (params: unknown) => call("/remove", params),
+    workspaceEntryRestore: (params: unknown) => call("/restore", params),
     workspaceEntriesCopy: (params: unknown) => call("/copy", params),
     workspaceChanges: () => call("/changes", {}),
     workspaceChangeOriginal: (params: unknown) =>

@@ -132,6 +132,12 @@ export function FileTree({
   const [expanded, setExpandedState] = useState<string[]>([]);
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
+  // The trash ids of each delete, newest last, for Command-Z. A trash id
+  // restores only into the workspace it came from, so switching starts over.
+  const removals = useRef<string[][]>([]);
+  useEffect(() => {
+    removals.current = [];
+  }, [workspaceId]);
   const [pending, setPending] = useState<PendingEntry>();
   const [menu, setMenu] = useState<{
     entry?: WorkspaceFileEntryDto;
@@ -345,20 +351,20 @@ export function FileTree({
     const only = removable.length === 1 ? removable[0] : undefined;
     const confirmed = await askConfirm({
       title: only
-        ? only.kind === "directory"
-          ? "Delete folder"
-          : "Delete file"
-        : `Delete ${removable.length} items`,
+        ? `Delete ${only.name}?`
+        : `Delete ${removable.length} items?`,
       message: only
         ? only.kind === "directory"
-          ? `Delete the folder ${only.name} and everything inside it? This cannot be undone.`
-          : `Delete ${only.name}? This cannot be undone.`
-        : `Delete ${removable.map((entry) => entry.name).join(", ")}? This cannot be undone.`,
+          ? "The folder and everything inside it. \u2318Z puts it back."
+          : "\u2318Z puts it back."
+        : `${removable.map((entry) => entry.name).join(", ")}. \u2318Z puts them back.`,
       confirmLabel: "Delete",
       danger: true,
+      enterConfirms: true,
     });
     if (!confirmed) return;
     const parents = new Set<string>();
+    const trashIds: string[] = [];
     for (const entry of removable) {
       const response = await client.request.workspaceEntryRemove({
         workspace: workspaceId,
@@ -369,8 +375,10 @@ export function FileTree({
         continue;
       }
       parents.add(workspaceParentPath(entry.path));
+      trashIds.push(response.data.trashId);
       onRemoved(entry.path);
     }
+    if (trashIds.length > 0) removals.current.push(trashIds);
     setExpanded(
       expandedRef.current.filter(
         (path) =>
@@ -379,6 +387,25 @@ export function FileTree({
           ),
       ),
     );
+    await relist([...parents]);
+  };
+
+  /** Puts back what the last delete removed, newest delete first. */
+  const undoRemove = async () => {
+    const trashIds = removals.current.pop();
+    if (!trashIds) return;
+    const parents = new Set<string>();
+    for (const trashId of [...trashIds].reverse()) {
+      const response = await client.request.workspaceEntryRestore({
+        workspace: workspaceId,
+        trashId,
+      });
+      if (!response.ok) {
+        onError(response.error.message);
+        continue;
+      }
+      parents.add(workspaceParentPath(response.data.path));
+    }
     await relist([...parents]);
   };
 
@@ -754,13 +781,21 @@ export function FileTree({
         {...tree.getContainerProps("Workspace files")}
         className="file-tree"
         onKeyDown={(event) => {
-          if (!event.metaKey || event.target instanceof HTMLInputElement)
+          if (event.target instanceof HTMLInputElement) return;
+          // The Mac delete key (Backspace), with or without Command, and the
+          // forward Delete key (fn-delete). The tree has no type-to-search
+          // that Backspace would edit.
+          if (event.key === "Backspace" || event.key === "Delete") {
+            event.preventDefault();
+            void remove(selectedOrFocused());
             return;
+          }
+          if (!event.metaKey) return;
           const targets = selectedOrFocused();
           const focusedFolder = folderOf(targets[0]);
-          if (event.key === "Backspace") {
+          if (event.key === "z" && !event.shiftKey) {
             event.preventDefault();
-            void remove(targets);
+            void undoRemove();
           } else if (event.key === "c" && !event.shiftKey) {
             event.preventDefault();
             void copyToPasteboard(targets, false);

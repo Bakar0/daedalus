@@ -1118,13 +1118,100 @@ Before working in this workspace:
             workspace: workspaceId,
             path: "scratch",
           }),
-        ).toEqual({
+        ).toMatchObject({
           name: "scratch",
           path: "scratch",
           kind: "directory",
           mutable: true,
         });
         expect(await pathExists(join(workspacePath, "scratch"))).toBe(false);
+      });
+    });
+
+    test("restores a removed folder, with what was in it, where it was", async () => {
+      await withWorkspace(async ({ context, workspaceId, workspacePath }) => {
+        await context.workspaceContent.createEntry({
+          workspace: workspaceId,
+          name: "scratch",
+          kind: "directory",
+        });
+        await context.workspaceContent.createEntry({
+          workspace: workspaceId,
+          parentPath: "scratch",
+          name: "a.md",
+          kind: "file",
+        });
+        await Bun.write(join(workspacePath, "scratch", "a.md"), "kept");
+        const { trashId } = await context.workspaceContent.removeEntry({
+          workspace: workspaceId,
+          path: "scratch",
+        });
+        expect(
+          await context.workspaceContent.restoreEntry({
+            workspace: workspaceId,
+            trashId,
+          }),
+        ).toMatchObject({ path: "scratch", kind: "directory" });
+        expect(
+          await readFile(join(workspacePath, "scratch", "a.md"), "utf8"),
+        ).toBe("kept");
+        // Restored once, it is gone from the trash.
+        await expect(
+          context.workspaceContent.restoreEntry({
+            workspace: workspaceId,
+            trashId,
+          }),
+        ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      });
+    });
+
+    test("does not restore over an entry that took the removed one's place", async () => {
+      await withWorkspace(async ({ context, workspaceId, workspacePath }) => {
+        await context.workspaceContent.createEntry({
+          workspace: workspaceId,
+          name: "a.md",
+          kind: "file",
+        });
+        const { trashId } = await context.workspaceContent.removeEntry({
+          workspace: workspaceId,
+          path: "a.md",
+        });
+        await Bun.write(join(workspacePath, "a.md"), "new");
+        await expect(
+          context.workspaceContent.restoreEntry({
+            workspace: workspaceId,
+            trashId,
+          }),
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+        expect(await readFile(join(workspacePath, "a.md"), "utf8")).toBe("new");
+      });
+    });
+
+    test("empties what has been in the trash for over a week", async () => {
+      await withWorkspace(async ({ context, workspaceId }) => {
+        for (const name of ["old.md", "new.md"])
+          await context.workspaceContent.createEntry({
+            workspace: workspaceId,
+            name,
+            kind: "file",
+          });
+        const old = await context.workspaceContent.removeEntry({
+          workspace: workspaceId,
+          path: "old.md",
+        });
+        const trash = join(context.config.home, "trash");
+        const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+        await utimes(join(trash, old.trashId), eightDaysAgo, eightDaysAgo);
+        const recent = await context.workspaceContent.removeEntry({
+          workspace: workspaceId,
+          path: "new.md",
+        });
+        // Emptying runs behind the remove; give it its turn.
+        for (let tries = 0; tries < 50; tries++) {
+          if (!(await pathExists(join(trash, old.trashId)))) break;
+          await Bun.sleep(10);
+        }
+        expect(await readdir(trash)).toEqual([recent.trashId]);
       });
     });
 

@@ -170,6 +170,15 @@ const bridge = Bun.serve({
           () => files.removeEntry({ ...body, workspace: workspaceRef }),
           announce,
         );
+      case "/restore":
+        return answer(
+          () =>
+            files.restoreEntry({
+              ...(body as unknown as { trashId: string }),
+              workspace: workspaceRef,
+            }),
+          announce,
+        );
       case "/watch":
         return answer(async () => ({
           watching: await context.workspaceWatch.watchOnly(
