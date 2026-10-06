@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { WorkspaceFileEntryDto } from "@daedalus/protocol";
+import type { ChangedFileDto, WorkspaceFileEntryDto } from "@daedalus/protocol";
 import type { DesktopClient } from "../client-types";
 import type { DiffTarget, EditorAreaHandle } from "./EditorArea";
 import {
@@ -54,6 +54,8 @@ export interface FilesViewProps {
   theme: "dark" | "light";
   /** The workspace root's entries, already loaded with the workspace content. */
   initialRoot?: WorkspaceFileEntryDto[];
+  /** What session worktrees changed, by workspace path, for the tree's colours. */
+  gitStatus?: ReadonlyMap<string, ChangedFileDto["status"]>;
   /** A file to open, from a terminal link; acted on when the nonce changes. */
   openRequest?: FileOpenRequest;
   /** A journal heading the task timeline linked to; opened once, then cleared. */
@@ -68,6 +70,7 @@ export function FilesView({
   workspace,
   theme,
   initialRoot,
+  gitStatus,
   openRequest,
   journalTarget,
   onJournalTargetShown,
@@ -229,6 +232,7 @@ export function FilesView({
         </div>
         <FileTree
           activePath={activePath}
+          gitStatus={gitStatus}
           client={client}
           handleRef={tree}
           initialRoot={initialRoot}

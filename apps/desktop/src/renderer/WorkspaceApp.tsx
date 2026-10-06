@@ -9,6 +9,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -2536,6 +2537,16 @@ export function WorkspaceApp({
   const worktreeChanges = useWorktreeChanges(
     client,
     workspacePanelVisible ? workspace?.id : undefined,
+  );
+  // The same changes, by workspace path, so the file tree can colour them.
+  const changedPaths = useMemo(
+    () =>
+      new Map(
+        [...worktreeChanges.values()].flatMap((tree) =>
+          tree.files.map((file) => [file.path, file.status] as const),
+        ),
+      ),
+    [worktreeChanges],
   );
   // Worktrees whose file list the user folded away in the panel.
   const [foldedWorktrees, setFoldedWorktrees] = useState<ReadonlySet<string>>(
@@ -5127,6 +5138,7 @@ export function WorkspaceApp({
                 ) : (
                   <FilesView
                     client={client}
+                    gitStatus={changedPaths}
                     openRequest={fileOpenRequest}
                     initialRoot={workspaceContent.files}
                     key={workspace.id}

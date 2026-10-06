@@ -9,11 +9,12 @@ import {
   syncDataLoaderFeature,
 } from "@headless-tree/core";
 import { useTree } from "@headless-tree/react";
-import type { WorkspaceFileEntryDto } from "@daedalus/protocol";
+import type { ChangedFileDto, WorkspaceFileEntryDto } from "@daedalus/protocol";
 import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -32,6 +33,47 @@ const ROOT = "\u0000root";
 const INDENT = 12;
 const MAX_DROPPED_FILE_BYTES = 1024 * 1024;
 
+type GitStatus = ChangedFileDto["status"];
+const GIT_LETTER: Record<GitStatus, string> = {
+  added: "A",
+  modified: "M",
+  deleted: "D",
+  renamed: "R",
+  untracked: "U",
+};
+// Which change a folder shows when it holds several, as VS Code ranks them.
+const GIT_WEIGHT: Record<GitStatus, number> = {
+  deleted: 4,
+  modified: 3,
+  renamed: 2,
+  added: 1,
+  untracked: 1,
+};
+
+/**
+ * The colour each row takes: a changed file its own status, and every folder
+ * above it the weightiest status of what it holds.
+ */
+function gitDecorations(
+  changes: ReadonlyMap<string, GitStatus> | undefined,
+): ReadonlyMap<string, { status: GitStatus; folder: boolean }> {
+  const decorations = new Map<string, { status: GitStatus; folder: boolean }>();
+  if (!changes) return decorations;
+  for (const [path, status] of changes) {
+    decorations.set(path, { status, folder: false });
+    for (
+      let parent = workspaceParentPath(path);
+      parent;
+      parent = workspaceParentPath(parent)
+    ) {
+      const current = decorations.get(parent);
+      if (current && GIT_WEIGHT[current.status] >= GIT_WEIGHT[status]) break;
+      decorations.set(parent, { status, folder: true });
+    }
+  }
+  return decorations;
+}
+
 const isReadOnlyFolder = (path: string) =>
   path === "repos" || path.startsWith("repos/");
 
@@ -47,6 +89,8 @@ export interface FileTreeProps {
   workspacePath: string;
   /** The file the editor is showing; the tree selects it and opens its folders. */
   activePath?: string;
+  /** What session worktrees changed, by workspace path, to colour the rows. */
+  gitStatus?: ReadonlyMap<string, GitStatus>;
   /** The root listing, when the caller already has it, so the first render is not empty. */
   initialRoot?: WorkspaceFileEntryDto[];
   onOpen(path: string, options: { pinned: boolean }): void;
@@ -70,6 +114,7 @@ export function FileTree({
   workspaceId,
   workspacePath,
   activePath,
+  gitStatus,
   initialRoot,
   onOpen,
   onMoved,
@@ -77,6 +122,7 @@ export function FileTree({
   onError,
   handleRef,
 }: FileTreeProps) {
+  const decorations = useMemo(() => gitDecorations(gitStatus), [gitStatus]);
   const [listings, setListings] = useState<Listings>(() =>
     initialRoot ? { "": initialRoot } : ({} as Listings),
   );
@@ -635,7 +681,7 @@ export function FileTree({
       className="file-tree-row pending"
       key="\u0000pending"
       style={{
-        paddingLeft: `${8 + (pending.parent ? pending.parent.split("/").length : 0) * INDENT}px`,
+        paddingLeft: `${4 + (pending.parent ? pending.parent.split("/").length : 0) * INDENT}px`,
       }}
     >
       <span className="file-tree-twisty" aria-hidden="true">
@@ -667,6 +713,7 @@ export function FileTree({
   for (const item of items) {
     rows.push(
       <TreeRow
+        git={decorations.get(item.getId())}
         item={item}
         key={item.getKey()}
         onMenu={setMenu}
@@ -925,10 +972,12 @@ export function FileTree({
 }
 
 function TreeRow({
+  git,
   item,
   onMenu,
   onOpen,
 }: {
+  git?: { status: GitStatus; folder: boolean };
   item: ItemInstance<WorkspaceFileEntryDto>;
   onMenu(menu: { entry: WorkspaceFileEntryDto; x: number; y: number }): void;
   onOpen(path: string, options: { pinned: boolean }): void;
@@ -941,6 +990,7 @@ function TreeRow({
     item.isFocused() ? "focused" : "",
     item.isDragTarget() ? "drop-target" : "",
     entry.kind === "symlink" ? "symlink" : "",
+    git ? `git-${git.status}` : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -956,8 +1006,12 @@ function TreeRow({
       onDoubleClick={() => {
         if (entry.kind === "file") onOpen(entry.path, { pinned: true });
       }}
-      style={{ paddingLeft: `${8 + level * INDENT}px` }}
-      title={entry.path}
+      style={{ paddingLeft: `${4 + level * INDENT}px` }}
+      title={
+        git
+          ? `${entry.path} · ${git.folder ? "contains changes" : git.status}`
+          : entry.path
+      }
     >
       <span
         aria-hidden="true"
@@ -976,6 +1030,14 @@ function TreeRow({
       ) : (
         <span className="file-tree-name">{entry.name}</span>
       )}
+      {git &&
+        (git.folder ? (
+          <span aria-hidden="true" className="file-tree-git folder" />
+        ) : (
+          <span aria-label={git.status} className="file-tree-git">
+            {GIT_LETTER[git.status]}
+          </span>
+        ))}
     </div>
   );
 }

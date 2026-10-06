@@ -2715,33 +2715,106 @@ dd {
   padding: 4px 0 24px;
   position: relative;
 }
+/* Rows as VS Code draws them: names quiet until hovered, focused or
+   selected; no borders; the highlight is a rounded block inset from the
+   column's edges. */
+.file-tree {
+  --tree-text: #a3adbf;
+  --git-modified: #e2c08d;
+  --git-added: #73c991;
+  --git-deleted: #e06c66;
+  --git-renamed: #73c991;
+}
+.app[data-theme="light"] .file-tree {
+  --tree-text: #586479;
+  --git-modified: #895503;
+  --git-added: #3f7d18;
+  --git-deleted: #b3261e;
+  --git-renamed: #3f7d18;
+}
 .file-tree-row {
   align-items: center;
-  border: 1px solid transparent;
-  color: var(--secondary);
+  border-radius: 4px;
+  color: var(--tree-text);
   cursor: default;
   display: flex;
   font-size: 12px;
   gap: 4px;
   height: 22px;
-  padding-right: 8px;
+  margin: 0 6px;
+  outline: none;
+  padding-right: 6px;
   user-select: none;
   white-space: nowrap;
 }
 .file-tree-row:hover {
   background: var(--raised-hover);
-}
-.file-tree-row.selected {
-  background: var(--accent-wash);
   color: var(--text);
 }
+.file-tree-row.selected {
+  background: var(--raised-hover);
+  color: var(--text);
+}
+.file-tree:focus-within .file-tree-row.selected {
+  background: var(--accent-wash);
+}
 .file-tree:focus-within .file-tree-row.focused {
-  border-color: var(--accent);
+  color: var(--text);
+}
+.file-tree:focus-within .file-tree-row.focused:not(.selected) {
+  background: var(--raised);
 }
 .file-tree-row.drop-target {
   background: var(--accent-wash);
   outline: 1px dashed var(--accent);
   outline-offset: -1px;
+}
+/* Git decorations: the name takes the colour of the change, a file shows
+   its status letter at the right and a folder holding changes a dot. */
+.file-tree-row.git-modified .file-tree-name {
+  color: var(--git-modified);
+}
+.file-tree-row.git-added .file-tree-name,
+.file-tree-row.git-untracked .file-tree-name {
+  color: var(--git-added);
+}
+.file-tree-row.git-renamed .file-tree-name {
+  color: var(--git-renamed);
+}
+.file-tree-row.git-deleted .file-tree-name {
+  color: var(--git-deleted);
+}
+.file-tree-git {
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  margin-left: auto;
+  padding-left: 6px;
+}
+.file-tree-git.folder {
+  border-radius: 50%;
+  height: 6px;
+  padding: 0;
+  width: 6px;
+}
+.git-modified .file-tree-git {
+  color: var(--git-modified);
+}
+.git-modified .file-tree-git.folder {
+  background: var(--git-modified);
+}
+.git-added .file-tree-git,
+.git-untracked .file-tree-git,
+.git-renamed .file-tree-git {
+  color: var(--git-added);
+}
+.git-added .file-tree-git.folder,
+.git-untracked .file-tree-git.folder,
+.git-renamed .file-tree-git.folder {
+  background: var(--git-added);
+}
+.git-deleted .file-tree-git.folder {
+  background: var(--git-deleted);
 }
 .file-tree-row.symlink {
   opacity: 0.6;
