@@ -98,9 +98,10 @@ const isLive = (status: AgentSessionStatus) =>
   status === "running" || status === "starting";
 
 /**
- * A `custom` agent has no native resume, so `archive` would refuse it (see
- * `AgentService.prepareArchivable`). A `terminal` session is a shell rather
- * than a conversation and archives fine — there is simply nothing to resume.
+ * A `custom` agent has no native resume. Archiving it would make the next
+ * launch start its command again unasked, so it is only stopped. A `terminal`
+ * session is a shell rather than a conversation and archives fine — there is
+ * simply nothing to resume.
  */
 const dispositionFor = (session: AgentSession): ShutdownDisposition =>
   session.kind !== "terminal" && session.provider === "custom"

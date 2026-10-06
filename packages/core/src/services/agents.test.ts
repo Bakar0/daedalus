@@ -920,6 +920,164 @@ describe("reboot recovery", () => {
     });
   });
 
+  test("archives a Codex conversation whose launching executable is gone", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const codexHome = join(home, "codex");
+      const codex = await codexRecorder(home);
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { codex: { executable: codex.path, args: [] } },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home, CODEX_HOME: codexHome },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Moved" });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      const nativeId = "8ceaa092-b66b-4dc9-8b5d-a2e7cd40ae7b";
+      await writeCodexRollout({
+        codexHome,
+        id: nativeId,
+        cwd: session.workingDirectory,
+        startedAt: session.startedAt,
+      });
+      // What a ChatGPT app update that drops its bundled Codex leaves behind.
+      context.repositories.updateAgent({
+        ...session,
+        command: join(home, "removed", "codex"),
+        providerSessionId: nativeId,
+      });
+
+      const archived = await context.agents.archive(session.id);
+
+      expect(archived.archivedAt).not.toBeNull();
+      expect(await codex.invocations()).toContain(`archive ${nativeId}`);
+      context.close();
+    });
+  });
+
+  test("archives a Codex session whose rollout Codex left empty", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const codexHome = join(home, "codex");
+      const codex = await codexRecorder(home);
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { codex: { executable: codex.path, args: [] } },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home, CODEX_HOME: codexHome },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Empty" });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      const nativeId = "8ceaa092-b66b-4dc9-8b5d-a2e7cd40ae7b";
+      const [year, month, day] = session.startedAt.slice(0, 10).split("-");
+      const directory = join(codexHome, "sessions", year!, month!, day!);
+      await mkdir(directory, { recursive: true });
+      await Bun.write(join(directory, `rollout-${nativeId}.jsonl`), "");
+      context.repositories.updateAgent({
+        ...session,
+        providerSessionId: nativeId,
+      });
+
+      const archived = await context.agents.archive(session.id);
+
+      expect(archived.archivedAt).not.toBeNull();
+      // Codex answers "failed to archive session" for a thread it never kept.
+      expect(await codex.invocations()).not.toContain(`archive ${nativeId}`);
+      context.close();
+    });
+  });
+
+  test("keeps a Codex session running when no Codex can archive it", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const codexHome = join(home, "codex");
+      const codex = await codexRecorder(home);
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { codex: { executable: codex.path, args: [] } },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home, CODEX_HOME: codexHome },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Gone" });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      const nativeId = "8ceaa092-b66b-4dc9-8b5d-a2e7cd40ae7b";
+      await writeCodexRollout({
+        codexHome,
+        id: nativeId,
+        cwd: session.workingDirectory,
+        startedAt: session.startedAt,
+      });
+      context.repositories.updateAgent({
+        ...session,
+        providerSessionId: nativeId,
+      });
+      await rm(codex.path);
+
+      await expect(context.agents.archive(session.id)).rejects.toThrow(
+        "Codex is not installed, so its conversation cannot be archived",
+      );
+      expect(tmux.sessions.has(session.tmuxSession)).toBe(true);
+      expect((await context.agents.get(session.id)).archivedAt).toBeNull();
+      context.close();
+    });
+  });
+
+  test("archives a custom session and restores it by starting its command again", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { shell: { executable: process.execPath, args: ["repl"] } },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Custom" });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        command: "shell",
+        name: "Demo agent",
+      });
+      expect(session.provider).toBe("custom");
+
+      const archived = await context.agents.archive(session.id);
+      expect(archived.archivedAt).not.toBeNull();
+      expect(tmux.sessions.has(session.tmuxSession)).toBe(false);
+
+      const restored = await context.agents.restore(session.id);
+      expect(restored).toMatchObject({ status: "running", archivedAt: null });
+      expect(tmux.launches.at(-1)).toMatchObject({
+        executable: session.command,
+        args: session.args,
+      });
+      context.close();
+    });
+  });
+
   test("refuses to revive an archived session, which is what restore is for", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       await Bun.write(
