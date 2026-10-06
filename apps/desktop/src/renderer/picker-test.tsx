@@ -36,6 +36,8 @@ const snapshot = {
       autoHandoffPercent: null,
       defaultProvider: null,
       defaultModel: null,
+      defaultClaudeAccount: null,
+      defaultCodexAccount: null,
     },
   ],
   tasks: [],
@@ -66,6 +68,7 @@ const snapshot = {
     tmuxAvailable: true,
     workspaceInstructionFilesEnabled: true,
     focusMode: false,
+    accounts: [],
     providers: [],
   },
 } as unknown as DesktopSnapshotDto;

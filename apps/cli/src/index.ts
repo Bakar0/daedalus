@@ -29,6 +29,7 @@ import {
   required,
 } from "./arguments";
 import { callerSession } from "./caller";
+import { accountChecks, accountCommand, accountHelp } from "./accounts";
 import { routineCommand, routineHelp, sessionCommand } from "./routines";
 import { findTmuxExecutable, probeVersion } from "@daedalus/platform";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
@@ -302,6 +303,7 @@ Usage:
   daedal repo <library|list|add|attach|sync|fetch|detach|worktree> ... [--json]
   daedal agent <spawn|list|get|wait|attach|send|archive|restore|revive|stop|delete|remove> ... [--json]
   daedal skill <list|get|enable|disable|visibility|install|remove|sync|doctor> ... [--json]
+  daedal account <list|status|add|rename|remove|login|logout> ... [--json]
   daedal session <rename|pin|unpin|color|abilities|grant|revoke> ... [--json]
   daedal routine <add|list|get|enable|disable|run|remove|purpose|pause|resume|runs|start|done|fail|report|resolve|reports|feedback> ... [--json]
   daedal attention "<reason>" [--session <agent-id>] [--clear] [--json]
@@ -313,6 +315,7 @@ Run 'daedal <command> --help' for command details.`;
 
 const commandHelp: Record<string, string> = {
   ...routineHelp,
+  account: accountHelp,
   workspace: `Workspace commands:
   daedal workspace create <name> [--slug <slug>] [--path <path>]
   daedal workspace list [--archived]
@@ -321,6 +324,8 @@ const commandHelp: Record<string, string> = {
   daedal workspace update <workspace> [--name <name>] [--slug <slug>]
       [--start-sets-in-progress on|off] [--default-provider claude|codex|none]
       [--default-model <model>|none] [--auto-handoff <percent>|off]
+      [--default-claude-account <account>|default]
+      [--default-codex-account <account>|default]
   daedal workspace archive <workspace>
   daedal workspace restore <workspace>
   daedal workspace delete <workspace> --force
@@ -335,6 +340,8 @@ dialog, and 'agent spawn' without --model. It belongs to the provider, so it
 needs --default-provider and is cleared with it. A default the provider no
 longer offers makes those spawns fail, naming the fix, rather than start a
 session that cannot answer.
+--default-claude-account and --default-codex-account name the account each
+provider's sessions start on when nothing chooses one; see 'daedal account'.
 --auto-handoff (off by default) asks a session to hand its work to a fresh
 agent once its context passes that percent of the window; see 'agent
 continue'. The desktop app runs the check about once a second.`,
@@ -370,8 +377,8 @@ it was cleared, journal entries whose heading names the task, and done.`,
   daedal repo worktree push --session <agent-id> --repository <name-or-id>
   daedal repo worktree remove --session <agent-id> --repository <name-or-id> [--force]`,
   agent: `Agent commands:
-  daedal agent models <codex|claude>
-  daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>] [--draft-brief]
+  daedal agent models <codex|claude> [--account <account>]
+  daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--draft-brief]
   daedal agent spawn ... [--ability <ability>[,<ability>]] [--color <color>] [--pin]
   daedal agent list [--workspace <workspace>] [--running|--archived]
   daedal agent reorder --workspace <workspace> <agent-id> [<agent-id>...]
@@ -381,7 +388,7 @@ it was cleared, journal entries whose heading names the task, and done.`,
   daedal agent send <agent-id> <text>
   daedal agent archive <agent-id> [--force]
   daedal agent handoff <agent-id>
-  daedal agent continue [<agent-id>] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--message <text>]
+  daedal agent continue [<agent-id>] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--account <account>] [--message <text>]
   daedal agent restore <agent-id>
   daedal agent revive <agent-id> | --all | --workspace <workspace>
   daedal agent stop <agent-id> [--force]
@@ -628,6 +635,7 @@ async function doctor(
       { name: "home", ok: true, detail: context.config.home },
       { name: "database", ok: true, detail: context.config.databasePath },
       await codexActivityCheck(context),
+      ...(await accountChecks(context)),
     ];
     const ok = checks.every((check) => check.ok);
     if (json) console.log(JSON.stringify({ ok, data: { checks } }));
@@ -715,6 +723,8 @@ async function workspaceCommand(
       "default-provider",
       "default-model",
       "auto-handoff",
+      "default-claude-account",
+      "default-codex-account",
     ]);
     expectPositionals(
       parsed.positionals,
@@ -760,6 +770,8 @@ async function workspaceCommand(
           : defaultModel === "none"
             ? null
             : defaultModel,
+      defaultClaudeAccount: parsed.values["default-claude-account"],
+      defaultCodexAccount: parsed.values["default-codex-account"],
     });
     printResult(result, json, () =>
       console.log(`Updated workspace ${result.slug} (${result.id})`),
@@ -1079,7 +1091,7 @@ async function agentCommand(
     return 0;
   }
   if (action === "models") {
-    const parsed = parseArguments(args, []);
+    const parsed = parseArguments(args, ["account"]);
     expectPositionals(
       parsed.positionals,
       1,
@@ -1091,7 +1103,7 @@ async function agentCommand(
         "VALIDATION",
         "Provider must be 'codex' or 'claude'",
       );
-    const result = await context.agents.models(provider);
+    const result = await context.agents.models(provider, parsed.values.account);
     printResult(result, json, () => {
       console.log(
         `Provider default${result.defaultModel ? `: ${result.defaultModel}` : ""}`,
@@ -1113,6 +1125,7 @@ async function agentCommand(
         "task",
         "name",
         "model",
+        "account",
         "message",
         "ability",
         "color",
@@ -1135,6 +1148,9 @@ async function agentCommand(
       taskId: task?.id,
       name: parsed.values.name,
       model: parsed.values.model,
+      ...(parsed.values.account !== undefined
+        ? { account: parsed.values.account }
+        : {}),
       message: parsed.values.message,
       draftBrief: parsed.flags.has("draft-brief") || undefined,
       ...(parsed.values.ability
@@ -1357,11 +1373,11 @@ async function agentContinueCommand(
 ): Promise<number> {
   const parsed = parseArguments(
     args,
-    ["handoff-file", "provider", "model", "message"],
+    ["handoff-file", "provider", "model", "account", "message"],
     ["self"],
   );
   const usage =
-    "daedal agent continue [<agent-id> | --self] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--message <text>]";
+    "daedal agent continue [<agent-id> | --self] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--account <account>] [--message <text>]";
   if (
     parsed.positionals.length > 1 ||
     (parsed.flags.has("self") && parsed.positionals.length)
@@ -1404,6 +1420,9 @@ async function agentContinueCommand(
     handoff,
     provider,
     model: parsed.values.model,
+    ...(parsed.values.account !== undefined
+      ? { account: parsed.values.account }
+      : {}),
     message: parsed.values.message,
     archive: self ? "later" : "now",
   });
@@ -2480,6 +2499,7 @@ export async function runCli(
       "repo",
       "agent",
       "skill",
+      "account",
       "attention",
       "notify",
       "ui",
@@ -2502,6 +2522,8 @@ export async function runCli(
       return await repositoryCommand(context, args.slice(1), json);
     if (args[0] === "skill")
       return await skillCommand(context, args.slice(1), json);
+    if (args[0] === "account")
+      return await accountCommand(context, args.slice(1), json);
     if (args[0] === "attention")
       return await attentionCommand(context, args.slice(1), json);
     if (args[0] === "notify")

@@ -15,6 +15,8 @@ import { runMigrations } from "../repositories/migrations";
 import { SqliteRepositories } from "../repositories/sqlite";
 import { ActivityService } from "./activity";
 import { AbilityService } from "./abilities";
+import { findAccount } from "./account-homes";
+import { AccountService } from "./accounts";
 import { DeliveryGate } from "./delivery";
 import { RoutineDelivery } from "./routine-delivery";
 import { RoutineReportService } from "./routine-reports";
@@ -59,6 +61,7 @@ export interface ApplicationContext {
   notifications: NotificationService;
   activity: ActivityService;
   skills: SkillService;
+  accounts: AccountService;
   abilities: AbilityService;
   routines: RoutineService;
   routineReports: RoutineReportService;
@@ -132,6 +135,8 @@ export async function createApplicationContext(
     config.home,
     () => config.workspaceInstructionFilesEnabled,
     (workspaceId) => workspaceContent.discardWorkspaceCheckouts(workspaceId),
+    (provider, reference) =>
+      findAccount(config, provider, reference)?.id ?? null,
   );
   const tasks = new TaskService(repositories, workspaces, (taskId) =>
     agents.hasLiveTaskAgents(taskId),
@@ -247,6 +252,7 @@ export async function createApplicationContext(
     notifications,
     activity,
     skills: new SkillService(config),
+    accounts: new AccountService(config, repositories),
     abilities,
     routines,
     routineReports,

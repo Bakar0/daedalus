@@ -2,10 +2,13 @@ import { isAbsolute } from "node:path";
 import packageJson from "../../../../package.json";
 import { readPasteboardFiles, writePasteboardFiles } from "@daedalus/platform";
 import {
+  accountDirectory,
   channelName,
   DaedalusError,
+  INSTALL_COMMANDS,
   normalizeError,
   saveAutoRestoreSessionsEnabled,
+  type AccountProfile,
   type AgentActivityState,
   type AgentSession,
   type ApplicationContext,
@@ -24,6 +27,7 @@ import {
   type WorkspaceRepository,
 } from "@daedalus/core";
 import type {
+  AccountDto,
   AgentActivityDto,
   AppUpdateDto,
   QuitChoice,
@@ -108,6 +112,16 @@ const taskDto = (task: Task): TaskDto => ({ ...task });
 const agentDto = (agent: AgentSession): AgentSessionDto => ({
   ...agent,
   args: [...agent.args],
+});
+const accountDto = (
+  context: ApplicationContext,
+  profile: AccountProfile,
+): AccountDto => ({
+  provider: profile.provider,
+  account: profile.id,
+  name: profile.name,
+  directory: accountDirectory(context.config, profile),
+  createdAt: profile.createdAt,
 });
 const integratedTerminalDto = (
   terminal: IntegratedTerminal,
@@ -223,6 +237,7 @@ export async function desktopSnapshot(
       autoRestoreSessionsEnabled: context.config.autoRestoreSessionsEnabled,
       focusMode: context.config.focusMode,
       ...capabilities,
+      accounts: context.accounts.list().map((item) => ({ ...item })),
     },
   };
 }
@@ -773,8 +788,48 @@ export function createDesktopRequestHandlers(
       mutate(async () => taskDto(await context.tasks.remove(id, force))),
     agentGet: ({ id }) =>
       result(async () => agentDto(await context.agents.get(id))),
-    agentModels: ({ provider }) =>
-      result(() => context.agents.models(provider)),
+    agentModels: ({ provider, account }) =>
+      result(() => context.agents.models(provider, account)),
+    accountStatus: (filter) =>
+      result(async () =>
+        (await context.accounts.status(filter)).map((status) => ({
+          ...status,
+          ...(status.state === "missing"
+            ? {
+                install: INSTALL_COMMANDS[status.provider].map((item) => ({
+                  ...item,
+                })),
+              }
+            : {}),
+        })),
+      ),
+    accountAdd: ({ provider, name }) =>
+      mutate(async () =>
+        accountDto(context, await context.accounts.add(provider, name)),
+      ),
+    accountRename: ({ provider, account, name }) =>
+      mutate(async () =>
+        accountDto(
+          context,
+          await context.accounts.rename(provider, account, name),
+        ),
+      ),
+    accountRemove: ({ provider, account }) =>
+      mutate(async () =>
+        accountDto(context, await context.accounts.remove(provider, account)),
+      ),
+    accountSignIn: ({ provider, account }) =>
+      mutate(async () =>
+        integratedTerminalDto(
+          await context.accounts.openSignIn(
+            context.terminals,
+            provider,
+            account,
+          ),
+        ),
+      ),
+    accountSignOut: ({ provider, account }) =>
+      mutate(() => context.accounts.signOut(provider, account)),
     agentSpawn: (params) =>
       mutate(async () => agentDto(await context.agents.spawn(params))),
     agentSend: ({ id, text }) =>

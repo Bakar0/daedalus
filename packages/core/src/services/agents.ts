@@ -42,6 +42,16 @@ import {
   type SkillProvider,
 } from "./skills";
 import type { AbilityService } from "./abilities";
+import {
+  accountConfig,
+  accountEnvironment,
+  accountName,
+  accountProfile,
+  DEFAULT_ACCOUNT,
+  findAccount,
+  providerLabel,
+} from "./account-homes";
+import { checkSignIn } from "./accounts";
 import { applyManualOrder } from "./ordering";
 import type { TaskService } from "./tasks";
 import type { WorkspaceService } from "./workspaces";
@@ -450,6 +460,11 @@ export class AgentService {
     private readonly onSessionEnded: (sessionId: string) => void = () => {},
   ) {}
 
+  /** The configuration with this session's account folders in place. */
+  private sessionConfig(agent: AgentSession): DaedalusConfig {
+    return accountConfig(this.config, agent.provider, agent.account);
+  }
+
   private async agentEnvironment(
     session: AgentSession,
     environment: Record<string, string> = {},
@@ -474,6 +489,7 @@ export class AgentService {
     ].join(":");
     return {
       ...environment,
+      ...accountEnvironment(this.config, session.provider, session.account),
       PATH: path,
       DAEDALUS_HOME: this.config.home,
       DAEDALUS_SESSION_ID: session.id,
@@ -652,14 +668,29 @@ export class AgentService {
     };
   }
 
+  // Keyed by provider and account: a plan decides which models an account
+  // is offered, so one account's catalog says nothing about another's.
   private readonly modelCatalogs = new Map<
-    "codex" | "claude",
+    string,
     { fetchedAt: number; catalog: ProviderModelCatalog }
   >();
 
-  async models(provider: "codex" | "claude"): Promise<ProviderModelCatalog> {
-    const catalog = await discoverProviderModels(this.config, provider);
-    this.modelCatalogs.set(provider, { fetchedAt: Date.now(), catalog });
+  async models(
+    provider: "codex" | "claude",
+    account?: string | null,
+  ): Promise<ProviderModelCatalog> {
+    const id = account
+      ? findAccount(this.config, provider, account)?.id
+      : undefined;
+    const catalog = await discoverProviderModels(
+      accountConfig(this.config, provider, id),
+      provider,
+      accountEnvironment(this.config, provider, id),
+    );
+    this.modelCatalogs.set(`${provider}:${id ?? DEFAULT_ACCOUNT}`, {
+      fetchedAt: Date.now(),
+      catalog,
+    });
     return catalog;
   }
 
@@ -671,12 +702,15 @@ export class AgentService {
    */
   private async knownModels(
     provider: "codex" | "claude",
+    account: string | null,
   ): Promise<ProviderModelCatalog | undefined> {
-    const cached = this.modelCatalogs.get(provider);
+    const cached = this.modelCatalogs.get(
+      `${provider}:${account ?? DEFAULT_ACCOUNT}`,
+    );
     if (cached && Date.now() - cached.fetchedAt < MODEL_CATALOG_TTL_MS)
       return cached.catalog;
     try {
-      return await this.models(provider);
+      return await this.models(provider, account);
     } catch {
       return undefined;
     }
@@ -702,6 +736,7 @@ export class AgentService {
     workspace: Workspace,
     provider: "claude" | "codex" | "custom",
     requested: string | undefined,
+    account: string | null,
   ): Promise<string | undefined> {
     const explicit = requested?.trim();
     if (explicit) return explicit;
@@ -711,7 +746,7 @@ export class AgentService {
       provider !== "custom" &&
       workspace.defaultProvider === provider
     ) {
-      const catalog = await this.knownModels(provider);
+      const catalog = await this.knownModels(provider, account);
       if (catalog && !catalogOffersModel(catalog, defaultModel))
         throw new DaedalusError(
           "VALIDATION",
@@ -732,6 +767,73 @@ export class AgentService {
     return undefined;
   }
 
+  /**
+   * The account a new session runs on: the one asked for, else its
+   * predecessor's when it continues one on the same provider, else the
+   * workspace's default for that provider, else the provider's own.
+   *
+   * A workspace default whose profile was removed falls back to the default
+   * account, because removing a profile already clears those. A predecessor's
+   * account that is gone is refused instead: the conversation the successor
+   * is meant to carry on lived in that folder.
+   */
+  private launchAccount(
+    workspace: Workspace,
+    provider: "claude" | "codex" | "custom",
+    input: { account?: string | null; continueFrom?: AgentSession },
+  ): string | null {
+    if (provider === "custom") {
+      if (input.account && input.account !== DEFAULT_ACCOUNT)
+        throw new DaedalusError(
+          "VALIDATION",
+          "A custom command has no accounts; choose --provider to pick one",
+        );
+      return null;
+    }
+    if (input.account !== undefined)
+      return findAccount(this.config, provider, input.account)?.id ?? null;
+    const previous = input.continueFrom;
+    if (previous && previous.provider === provider) {
+      if (
+        previous.account &&
+        !accountProfile(this.config, provider, previous.account)
+      )
+        throw new DaedalusError(
+          "CONFLICT",
+          `This session ran on the ${providerLabel(provider)} account '${previous.account}', which was removed`,
+        );
+      return previous.account;
+    }
+    const preferred =
+      provider === "claude"
+        ? workspace.defaultClaudeAccount
+        : workspace.defaultCodexAccount;
+    return accountProfile(this.config, provider, preferred) ? preferred : null;
+  }
+
+  /**
+   * Refuses a launch on an account its provider says is signed out, which
+   * would otherwise open a terminal that fails on its first turn. Only a
+   * definite "signed out" stops it: a provider too old to say, or one that
+   * did not answer, gets the benefit of the doubt.
+   */
+  private async requireSignedIn(
+    provider: "claude" | "codex",
+    account: string | null,
+  ): Promise<void> {
+    const signIn = await checkSignIn(this.config, provider, account);
+    if (signIn.state !== "signed-out") return;
+    const name = accountName(this.config, provider, account);
+    const reference = account
+      ? ` ${JSON.stringify(accountProfile(this.config, provider, account)?.name ?? account)}`
+      : "";
+    throw new DaedalusError(
+      "DEPENDENCY",
+      `${providerLabel(provider)} is not signed in on the ${name} account. Sign in from Settings → Agents, or run 'daedal account login ${provider}${reference}'.`,
+      { provider, account: account ?? DEFAULT_ACCOUNT, reason: "signed-out" },
+    );
+  }
+
   async spawn(input: {
     workspace: string;
     taskId?: string;
@@ -741,6 +843,11 @@ export class AgentService {
     message?: string;
     command?: string;
     terminal?: boolean;
+    /**
+     * The account profile to run on, by id or name; `default` for the
+     * provider's own. Omitted means the workspace's default for the provider.
+     */
+    account?: string | null;
     /**
      * Launch the session to write the task's brief rather than to do the task.
      * It is still linked to the task, so the board shows it, but it does not
@@ -786,9 +893,26 @@ export class AgentService {
       : undefined;
     if (input.terminal && !shell)
       throw new DaedalusError("DEPENDENCY", "No interactive shell was found");
-    const provider = input.terminal
+    const chosen = input.terminal
       ? undefined
       : resolveProvider(this.config, input);
+    if (input.terminal && input.account && input.account !== DEFAULT_ACCOUNT)
+      throw new DaedalusError(
+        "VALIDATION",
+        "A terminal session has no account",
+      );
+    const account = chosen
+      ? this.launchAccount(workspace, chosen.name, input)
+      : null;
+    // The launch reads the account's own folders: its Codex config for hooks
+    // and instructions, its Claude folder for skills.
+    const provider =
+      chosen && account
+        ? resolveProvider(
+            accountConfig(this.config, chosen.name, account),
+            input,
+          )
+        : chosen;
     if (input.color !== undefined) sessionColor(input.color);
     // Checked before anything is prepared, so a session that cannot hold an
     // ability is refused without leaving a worktree behind. A successor
@@ -812,11 +936,13 @@ export class AgentService {
           "DEPENDENCY",
           `Agent executable '${availability.executable}' is not available on PATH`,
         );
+      if (provider.name !== "custom")
+        await this.requireSignedIn(provider.name, account);
     }
     // Resolved before anything is prepared on disk, so a default the
     // provider no longer offers refuses here and leaves no worktree behind.
     const model = provider
-      ? await this.launchModel(workspace, provider.name, input.model)
+      ? await this.launchModel(workspace, provider.name, input.model, account)
       : undefined;
     const id = crypto.randomUUID();
     const defaultName = input.terminal
@@ -889,6 +1015,7 @@ export class AgentService {
         input.continueFrom?.pinnedAt ??
         (input.pinned ? new Date().toISOString() : null),
       color: input.continueFrom?.color ?? input.color ?? null,
+      account,
     };
     this.repositories.transaction(() => {
       this.repositories.createAgent(session);
@@ -921,7 +1048,7 @@ export class AgentService {
       let runningSession = session;
       if (provider?.name === "codex") {
         const recoveredId = await recoverCodexSessionId({
-          sessionsDirectory: this.config.codexSessionsDirectory,
+          sessionsDirectory: this.sessionConfig(session).codexSessionsDirectory,
           workingDirectory: session.workingDirectory,
           startedAt: session.startedAt,
           claimedIds: this.repositories
@@ -1084,6 +1211,8 @@ export class AgentService {
     handoff?: string;
     provider?: "codex" | "claude";
     model?: string;
+    /** Another account for the successor; its predecessor's by default. */
+    account?: string | null;
     message?: string;
     archive?: "now" | "later";
   }): Promise<{
@@ -1134,6 +1263,7 @@ export class AgentService {
         (provider === predecessor.provider
           ? sessionLaunchModel(predecessor.args)
           : undefined),
+      ...(input.account !== undefined ? { account: input.account } : {}),
       message: input.message,
       continueFrom: predecessor,
       handoff: Boolean(handoff),
@@ -1391,7 +1521,7 @@ export class AgentService {
       agent.provider === "codex" &&
       agent.providerSessionId
         ? await hasPersistedCodexSession({
-            sessionsDirectory: this.config.codexSessionsDirectory,
+            sessionsDirectory: this.sessionConfig(agent).codexSessionsDirectory,
             id: agent.providerSessionId,
             startedAt: agent.startedAt,
           })
@@ -1415,7 +1545,10 @@ export class AgentService {
       const result = await runCommand(
         codex,
         ["archive", agent.providerSessionId],
-        { cwd: agent.workingDirectory },
+        {
+          cwd: agent.workingDirectory,
+          env: accountEnvironment(this.config, "codex", agent.account),
+        },
       );
       const errorMessage = result.stderr.trim() || result.stdout.trim();
       if (
@@ -1572,6 +1705,12 @@ export class AgentService {
     let executable = agent.command;
     let args = agent.args;
     let providerSessionId = agent.providerSessionId;
+    const scoped = this.sessionConfig(agent);
+    const accountEnv = accountEnvironment(
+      this.config,
+      agent.provider,
+      agent.account,
+    );
     if (agent.kind === "agent" && agent.provider === "custom") {
       // Restoring one starts its command afresh, which the user asks for by
       // restoring it. Revival never gets here: an unattended relaunch of an
@@ -1597,6 +1736,16 @@ export class AgentService {
       executable =
         resolveAgentExecutable(agent.provider, definition.executable) ??
         definition.executable;
+      if (
+        agent.account &&
+        !accountProfile(this.config, agent.provider, agent.account)
+      )
+        throw new DaedalusError(
+          "CONFLICT",
+          `This session ran on the ${providerLabel(agent.provider)} account '${agent.account}', which was removed`,
+        );
+      if (agent.provider === "claude" || agent.provider === "codex")
+        await this.requireSignedIn(agent.provider, agent.account);
       const additionalDirectories = this.repositories
         .listWorkspaceRepositories(workspace.id)
         .flatMap((repository) => [
@@ -1608,7 +1757,7 @@ export class AgentService {
       if (agent.provider === "codex") {
         const hasNativeConversation = nativeSessionId
           ? await hasPersistedCodexSession({
-              sessionsDirectory: this.config.codexSessionsDirectory,
+              sessionsDirectory: scoped.codexSessionsDirectory,
               id: nativeSessionId,
               startedAt: agent.startedAt,
             })
@@ -1623,7 +1772,7 @@ export class AgentService {
             const unarchive = await runCommand(
               executable,
               ["unarchive", nativeSessionId],
-              { cwd: agent.workingDirectory },
+              { cwd: agent.workingDirectory, env: accountEnv },
             );
             const unarchiveError =
               unarchive.stderr.trim() || unarchive.stdout.trim();
@@ -1634,10 +1783,10 @@ export class AgentService {
               );
           }
           args = [
-            ...(await daedalusInstructionArgs(this.config, "codex", [
+            ...(await daedalusInstructionArgs(scoped, "codex", [
               ...definition.args,
               ...CODEX_DAEDALUS_TUI_ARGS,
-              ...(await ensureCodexHooks(this.config, executable)),
+              ...(await ensureCodexHooks(scoped, executable)),
             ])),
             ...modelArgs,
             ...additionalDirectories,
@@ -1649,10 +1798,10 @@ export class AgentService {
           // not persist an empty conversation. Restoring such an archived
           // session correctly starts a new empty native session.
           args = [
-            ...(await daedalusInstructionArgs(this.config, "codex", [
+            ...(await daedalusInstructionArgs(scoped, "codex", [
               ...definition.args,
               ...CODEX_DAEDALUS_TUI_ARGS,
-              ...(await ensureCodexHooks(this.config, executable)),
+              ...(await ensureCodexHooks(scoped, executable)),
             ])),
             ...modelArgs,
             ...additionalDirectories,
@@ -1667,13 +1816,9 @@ export class AgentService {
           );
         args = [
           ...(await daedalusInstructionArgs(
-            this.config,
+            scoped,
             "claude",
-            await claudeDaedalusSettingsArgs(
-              this.config,
-              definition.args,
-              agent.id,
-            ),
+            await claudeDaedalusSettingsArgs(scoped, definition.args, agent.id),
           )),
           ...modelArgs,
           ...additionalDirectories,
@@ -1735,7 +1880,7 @@ export class AgentService {
         this.repositories.abilities.setPausedForSession(agent.id, false);
       if (agent.provider === "codex" && !restored.providerSessionId) {
         const recoveredId = await recoverCodexSessionId({
-          sessionsDirectory: this.config.codexSessionsDirectory,
+          sessionsDirectory: scoped.codexSessionsDirectory,
           workingDirectory: restored.workingDirectory,
           startedAt: restored.startedAt,
           claimedIds: this.repositories
@@ -1767,6 +1912,7 @@ export class AgentService {
       )
         await runCommand(executable, ["archive", agent.providerSessionId], {
           cwd: workspace.path,
+          env: accountEnv,
         }).catch(() => undefined);
       throw error;
     }
@@ -1865,7 +2011,7 @@ export class AgentService {
     if (agent.providerSessionId) return agent;
     if (agent.provider === "codex") {
       const recoveredId = await recoverCodexSessionId({
-        sessionsDirectory: this.config.codexSessionsDirectory,
+        sessionsDirectory: this.sessionConfig(agent).codexSessionsDirectory,
         workingDirectory: agent.workingDirectory,
         startedAt: agent.startedAt,
         claimedIds: this.repositories
@@ -1887,7 +2033,7 @@ export class AgentService {
     }
     if (agent.provider === "claude") {
       const recoveredId = await recoverClaudeSessionId({
-        projectsDirectory: this.config.claudeProjectsDirectory,
+        projectsDirectory: this.sessionConfig(agent).claudeProjectsDirectory,
         workingDirectory: agent.workingDirectory,
         startedAt: agent.startedAt,
         claimedIds: this.repositories

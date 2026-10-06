@@ -6801,3 +6801,125 @@ dd {
     animation: none;
   }
 }
+
+/* Settings → Agents: each provider and the accounts it can run sessions on. */
+.accounts-panel {
+  display: grid;
+  gap: 18px;
+}
+.accounts-toolbar {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+.accounts-toolbar .skills-note {
+  margin: 0;
+}
+.accounts-toolbar button {
+  flex-shrink: 0;
+}
+.accounts-error {
+  color: var(--danger);
+  font-size: 12px;
+  margin: 0;
+}
+.accounts-provider {
+  display: grid;
+  gap: 8px;
+}
+.accounts-provider h3 {
+  align-items: baseline;
+  display: flex;
+  gap: 10px;
+  margin: 0;
+}
+.accounts-provider h3 code {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.accounts-install {
+  background: var(--raised);
+  border-radius: 9px;
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+}
+.accounts-install p {
+  color: var(--secondary);
+  font-size: 12px;
+  margin: 0;
+}
+.accounts-install-row {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 90px minmax(0, 1fr) auto;
+}
+.accounts-install-row span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.accounts-install-row code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.accounts-list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.accounts-list li {
+  align-items: center;
+  background: var(--raised);
+  border-radius: 9px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 9px 11px;
+}
+.accounts-who {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.accounts-who small {
+  color: var(--secondary);
+  font-size: 11px;
+}
+.accounts-who code {
+  color: var(--muted);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.accounts-actions {
+  display: flex;
+  gap: 6px;
+}
+.accounts-name-form {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+.accounts-name-form input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.accounts-add {
+  justify-self: start;
+}
+/* The heading is in capitals; the executable path beside it is not. */
+.accounts-provider h3 code {
+  letter-spacing: 0;
+  text-transform: none;
+}

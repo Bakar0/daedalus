@@ -6,6 +6,7 @@ import {
   SettingsModal,
   type SettingsSection,
 } from "./SettingsModal";
+import { accountStateLine } from "./AccountsPanel";
 import type { DesktopClient } from "./client-types";
 
 const settings: DesktopSettingsDto = {
@@ -20,6 +21,22 @@ const settings: DesktopSettingsDto = {
   workspaceInstructionFilesEnabled: true,
   autoRestoreSessionsEnabled: true,
   focusMode: false,
+  accounts: [
+    {
+      provider: "claude",
+      account: "default",
+      name: "Default",
+      directory: "/Users/someone/.claude",
+      createdAt: null,
+    },
+    {
+      provider: "claude",
+      account: "personal-1a2b",
+      name: "Personal",
+      directory: "/Users/someone/.daedalus-dev/accounts/claude/personal-1a2b",
+      createdAt: "2026-10-06T00:00:00.000Z",
+    },
+  ],
   providers: [
     { name: "claude", executable: "/usr/local/bin/claude", available: true },
   ],
@@ -36,6 +53,7 @@ const render = (section: SettingsSection) =>
       client={client}
       onError={() => undefined}
       onFocusMode={() => undefined}
+      onOpenTerminal={() => undefined}
       onSection={() => undefined}
       onTheme={() => undefined}
       perform={async () => undefined}
@@ -73,10 +91,44 @@ describe("SettingsModal", () => {
     expect(about).not.toContain("Focus mode");
   });
 
-  test("Sessions carries recovery and the agent executables", () => {
+  test("Sessions carries recovery; Agents carries executables and accounts", () => {
     const sessions = render("sessions");
     expect(sessions).toContain("Bring sessions back on startup");
-    expect(sessions).toContain("/usr/local/bin/claude");
+    expect(sessions).not.toContain("/usr/local/bin/claude");
+    const agents = render("agents");
+    expect(agents).toContain("/usr/local/bin/claude");
+    expect(agents).toContain("Personal");
+    expect(agents).toContain("Add Claude account");
+    // The default account can be neither renamed nor removed.
+    expect(agents.match(/>Rename</g)).toHaveLength(1);
+  });
+
+  test("an account's line says who it is signed in as, or what is wrong", () => {
+    const base = {
+      provider: "claude" as const,
+      account: "default",
+      name: "Default",
+      directory: "/Users/someone/.claude",
+      createdAt: null,
+      executable: "/usr/local/bin/claude",
+      checkedAt: "2026-10-06T00:00:00.000Z",
+    };
+    expect(accountStateLine(undefined)).toBe("Checking…");
+    expect(
+      accountStateLine({
+        ...base,
+        state: "signed-in",
+        email: "me@example.com",
+        method: "Claude subscription",
+        plan: "max",
+      }),
+    ).toBe("Signed in · me@example.com · Claude subscription · max");
+    expect(accountStateLine({ ...base, state: "signed-out" })).toBe(
+      "Signed out",
+    );
+    expect(accountStateLine({ ...base, state: "missing" })).toBe(
+      "Not installed",
+    );
   });
 });
 
@@ -90,6 +142,7 @@ const renderAbout = (
       client={client}
       onError={() => undefined}
       onFocusMode={() => undefined}
+      onOpenTerminal={() => undefined}
       onSection={() => undefined}
       onTheme={() => undefined}
       perform={async () => undefined}

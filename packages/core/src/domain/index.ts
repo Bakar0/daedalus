@@ -39,6 +39,12 @@ export interface Workspace {
    * provider: a model belongs to one, and clearing the provider clears it.
    */
   defaultModel: string | null;
+  /**
+   * The account each provider's sessions start on when nothing names one: a
+   * profile id, or null for the provider's default account.
+   */
+  defaultClaudeAccount: string | null;
+  defaultCodexAccount: string | null;
 }
 
 export interface Task {
@@ -101,6 +107,12 @@ export interface AgentSession {
   pinnedAt: string | null;
   /** The mark on its card, its World figure and its routines' tasks. */
   color: SessionColor | null;
+  /**
+   * The account profile it runs on, or null for the provider's default.
+   * Fixed at spawn: every relaunch points the provider at the same folder,
+   * because that folder is where its conversation is.
+   */
+  account: string | null;
 }
 
 export interface IntegratedTerminal {

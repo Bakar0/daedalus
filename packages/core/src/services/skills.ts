@@ -54,6 +54,7 @@ import {
   type SkillVisibility,
 } from "../config";
 import { DaedalusError } from "../errors";
+import { accountConfig } from "./account-homes";
 
 import daedalusControlSkillTemplate from "../../../../skills/daedalus-control/SKILL.md" with { type: "text" };
 import daedalusControlCliReference from "../../../../skills/daedalus-control/references/cli.md" with { type: "text" };
@@ -819,13 +820,26 @@ export class SkillService {
    * discovery path survives both directions.
    */
   async sync(): Promise<void> {
+    await this.syncArtifacts();
+    await this.syncClaudeSettings();
+    // Each account profile has its own Claude and Codex folders, so the links
+    // and the instructions block go into those too. Its settings file is
+    // left alone: a profile's sessions all start from Daedalus, and the
+    // launch argument already carries the same style and switches.
+    for (const profile of this.config.accounts)
+      await new SkillService(
+        accountConfig(this.config, profile.provider, profile.id),
+      ).syncArtifacts();
+  }
+
+  /** Links, styles and instruction blocks, without the settings file. */
+  async syncArtifacts(): Promise<void> {
     for (const definition of this.definitions()) {
       const setting = this.settingFor(definition.id);
       if (setting.enabled) await this.installArtifacts(definition);
       else await this.removeArtifacts(definition);
     }
     await this.cleanRemovedInstalls();
-    await this.syncClaudeSettings();
   }
 
   private async installArtifacts(

@@ -76,6 +76,7 @@ const session = (
   startedAt: ago(90),
   endedAt: null,
   providerSessionId: null,
+  account: null,
   archivedAt: null,
   resumeCount: 0,
   lostReason: null,
@@ -112,6 +113,8 @@ const snapshot: DesktopSnapshotDto = {
       autoHandoffPercent: null,
       defaultProvider: "claude",
       defaultModel: null,
+      defaultClaudeAccount: null,
+      defaultCodexAccount: null,
     },
     {
       id: OTHER_WORKSPACE,
@@ -129,6 +132,8 @@ const snapshot: DesktopSnapshotDto = {
       // the task's own workspace chose the provider, not the selected one.
       defaultProvider: "codex",
       defaultModel: null,
+      defaultClaudeAccount: null,
+      defaultCodexAccount: null,
     },
   ],
   tasks: [
@@ -340,6 +345,7 @@ const snapshot: DesktopSnapshotDto = {
     workspaceInstructionFilesEnabled: true,
     autoRestoreSessionsEnabled: true,
     focusMode: false,
+    accounts: [],
     providers: [
       { name: "claude", executable: "claude", available: true },
       { name: "codex", executable: "codex", available: true },

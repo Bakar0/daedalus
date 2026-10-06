@@ -33,6 +33,10 @@ const cornerScreenshotPath = join(
   projectRoot,
   "artifacts/settings-ui-update-dot.png",
 );
+const agentsScreenshotPath = join(
+  projectRoot,
+  "artifacts/settings-ui-agents.png",
+);
 const generalScreenshotPath = join(
   projectRoot,
   "artifacts/settings-ui-general.png",
@@ -262,6 +266,7 @@ try {
   const heights: Record<string, number> = {};
   for (const label of [
     "General",
+    "Agents",
     "Skills",
     "Sessions",
     "Notifications",
@@ -507,7 +512,7 @@ try {
     "The pane scrolls and the dialog does not, so the categories and the title stay put",
   );
   console.log(
-    `All five categories open at a steady ${[...distinct][0]}px: ${Object.keys(heights).join(", ")}`,
+    `All six categories open at a steady ${[...distinct][0]}px: ${Object.keys(heights).join(", ")}`,
   );
   console.log(
     `Found skills: ${grouped.length} groups (${labels.join(", ")}), ${totalRows} rows each with a ${shape.width}x${shape.height} switch that moves, collapse works, fuzzy filter narrows to ${filteredRows}, viewer opens`,
@@ -523,6 +528,72 @@ try {
     format: "png",
   });
   await Bun.write(groupsScreenshotPath, Buffer.from(groupsShot.data, "base64"));
+  // Agents: each provider with its accounts, the state the provider reported,
+  // the action that fits it, and install commands for one that is missing.
+  await evaluate(`(() => {
+    [...document.querySelectorAll('.settings-nav button')]
+      .find((one) => one.textContent.trim() === 'Agents').click();
+  })()`);
+  // The panel asks the providers once it opens; wait for its answer.
+  for (let attempt = 0; ; attempt += 1) {
+    const ready = await evaluate<boolean>(
+      "document.querySelectorAll('.accounts-install-row').length > 0",
+    );
+    if (ready) break;
+    if (attempt > 60) throw new Error("Agents: account status never arrived");
+    await Bun.sleep(50);
+  }
+  const agents = await evaluate<{
+    rows: Array<{ account: string; line: string; actions: string[] }>;
+    install: string[];
+    overflow: boolean;
+  }>(`(() => {
+    const pane = document.querySelector('.settings-pane').getBoundingClientRect();
+    const rows = [...document.querySelectorAll('.accounts-list li')];
+    return {
+      rows: rows.map((row) => ({
+        account: row.dataset.account,
+        line: row.querySelector('.accounts-who small')?.textContent ?? '',
+        actions: [...row.querySelectorAll('.accounts-actions button')].map((b) => b.textContent.trim()),
+      })),
+      install: [...document.querySelectorAll('.accounts-install-row code')].map((c) => c.textContent),
+      overflow: rows.some((row) => row.getBoundingClientRect().right > pane.right + 1),
+    };
+  })()`);
+  const [signedIn, signedOut, missing] = agents.rows;
+  if (
+    !signedIn?.line.includes("someone@example.com") ||
+    !signedIn.actions.includes("Sign out") ||
+    signedIn.actions.includes("Remove")
+  )
+    throw new Error(
+      `Agents: the signed-in default row is wrong: ${JSON.stringify(signedIn)}`,
+    );
+  if (
+    signedOut?.line !== "Signed out" ||
+    !signedOut.actions.includes("Sign in") ||
+    !signedOut.actions.includes("Remove")
+  )
+    throw new Error(
+      `Agents: the signed-out profile row is wrong: ${JSON.stringify(signedOut)}`,
+    );
+  if (missing?.line !== "Not installed" || missing.actions.length !== 0)
+    throw new Error(
+      `Agents: the missing provider's row is wrong: ${JSON.stringify(missing)}`,
+    );
+  if (!agents.install.includes("brew install --cask codex"))
+    throw new Error(
+      `Agents: no install command for Codex: ${JSON.stringify(agents.install)}`,
+    );
+  if (agents.overflow)
+    throw new Error("Agents: an account row runs past the pane");
+  const agentsShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(agentsScreenshotPath, Buffer.from(agentsShot.data, "base64"));
+  console.log(
+    `Agents: ${agents.rows.length} accounts (signed in with email, signed out with Sign in, Codex not installed with ${agents.install.length} install commands), none past the pane`,
+  );
   // And General, where a switch sits beside a two-line description and the
   // alignment either reads or does not.
   await evaluate(`(() => {
@@ -613,7 +684,7 @@ try {
     "Closed, the offer returns to the banner and the dot stays on Settings",
   );
   console.log(
-    `Screenshots: ${screenshotPath}, ${groupsScreenshotPath}, ${generalScreenshotPath}, ${aboutScreenshotPath}, ${cornerScreenshotPath}`,
+    `Screenshots: ${screenshotPath}, ${groupsScreenshotPath}, ${agentsScreenshotPath}, ${generalScreenshotPath}, ${aboutScreenshotPath}, ${cornerScreenshotPath}`,
   );
   socket.close();
 } finally {

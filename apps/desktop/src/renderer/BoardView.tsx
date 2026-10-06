@@ -14,6 +14,7 @@ import {
   type ReportVerdictChoice,
 } from "./routines/ReportDetails";
 import type {
+  AccountDto,
   RoutineReportDto,
   AgentActivityDto,
   AgentSessionDto,
@@ -79,6 +80,8 @@ export interface BoardViewProps {
   tmuxAvailable: boolean;
   /** Providers installed on this machine, in the order to prefer them. */
   availableProviders: BoardProvider[];
+  /** Every account; the settings offer a choice once a provider has two. */
+  accounts?: AccountDto[];
   modelCatalogs: Partial<Record<BoardProvider, ProviderModelCatalogDto>>;
   onNeedModels: (provider: BoardProvider) => void;
   onSelectTask: (task: TaskDto) => void;
@@ -117,6 +120,8 @@ export interface BoardViewProps {
     autoHandoffPercent?: number | null;
     defaultProvider?: BoardProvider | null;
     defaultModel?: string | null;
+    defaultClaudeAccount?: string | null;
+    defaultCodexAccount?: string | null;
   }) => void;
 }
 
@@ -430,12 +435,14 @@ function AnswerBox({
 const DEFAULT_AUTO_HANDOFF_PERCENT = 85;
 
 function BoardSettings({
+  accounts,
   availableProviders,
   modelCatalogs,
   onNeedModels,
   onUpdate,
   workspace,
 }: {
+  accounts: AccountDto[];
   availableProviders: BoardProvider[];
   modelCatalogs: BoardViewProps["modelCatalogs"];
   onNeedModels: BoardViewProps["onNeedModels"];
@@ -449,6 +456,18 @@ function BoardSettings({
     if (open && effective && !modelCatalogs[effective]) onNeedModels(effective);
   }, [effective, modelCatalogs, onNeedModels, open]);
   const catalog = effective ? modelCatalogs[effective] : undefined;
+  const providerAccounts = accounts.filter(
+    (item) => item.provider === effective,
+  );
+  const accountKey =
+    effective === "codex" ? "defaultCodexAccount" : "defaultClaudeAccount";
+  const defaultAccount =
+    (effective === "codex"
+      ? workspace.defaultCodexAccount
+      : workspace.defaultClaudeAccount) ?? "default";
+  const defaultAccountName = providerAccounts.find(
+    (item) => item.account === defaultAccount,
+  )?.name;
   // Matched by id or by the model an alias resolves to, the same test the
   // core applies before a spawn. Undefined until the catalog has loaded.
   const defaultOffered =
@@ -469,6 +488,9 @@ function BoardSettings({
         <strong>
           {effective ? providerLabel(effective) : "no provider"}
           {workspace.defaultModel ? ` · ${workspace.defaultModel}` : ""}
+          {defaultAccount !== "default" && defaultAccountName
+            ? ` · ${defaultAccountName}`
+            : ""}
         </strong>
       </summary>
       <div className="board-settings-popover">
@@ -503,6 +525,29 @@ function BoardSettings({
             ))}
           </select>
         </label>
+        {effective && providerAccounts.length > 1 && (
+          <label>
+            Account
+            <select
+              aria-label="Default account for Start"
+              onChange={(event) =>
+                onUpdate({
+                  [accountKey]:
+                    event.target.value === "default"
+                      ? null
+                      : event.target.value,
+                })
+              }
+              value={defaultAccount}
+            >
+              {providerAccounts.map((item) => (
+                <option key={item.account} value={item.account}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label>
           Model
           <select
@@ -1013,6 +1058,7 @@ export function BoardView(props: BoardViewProps) {
         {workspace ? (
           <div className="heading-actions">
             <BoardSettings
+              accounts={props.accounts ?? []}
               availableProviders={props.availableProviders}
               modelCatalogs={props.modelCatalogs}
               onNeedModels={props.onNeedModels}

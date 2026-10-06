@@ -39,6 +39,7 @@ daedal workspace get <workspace> [--json]
 daedal workspace update <workspace> [--name <name>] [--slug <slug>]
     [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--auto-handoff <percent>|off]
     [--default-model <model>|none]
+    [--default-claude-account <account>|default] [--default-codex-account <account>|default]
 daedal workspace reorder <workspace> [<workspace>...]
 daedal workspace archive <workspace>
 daedal workspace restore <workspace>
@@ -51,6 +52,8 @@ daedal workspace remove <workspace> [--delete-files] --force
 Create makes a real directory and identity marker before committing metadata. Slugs contain lowercase ASCII letters, digits, and hyphens. Updating a slug changes the lookup alias, not the directory path.
 
 The three board settings are per workspace. `--start-sets-in-progress` (on by default) decides whether starting a task-backed session moves a `todo` or `blocked` task to `in_progress`. `--default-provider` is what the board's Start and Start next launch; `none` clears it, and the board then uses the first installed provider. `--default-model` is what every session of that provider starts with when nothing names a model: Start, the app's session dialog, and `agent spawn` without `--model`. When no workspace default applies, a Claude session is launched with `--model default`, Claude's own name for its recommended model, rather than with no model at all: with none, Claude reads the last `/model` choice made in any session from the user's settings file, so a new session would get whatever the previous one ended on. A `--model` in the Daedalus agent arguments still wins. Codex is launched with no model and uses its `config.toml`. A model belongs to a provider, so `--default-model` needs a default provider, and changing or clearing the provider without naming a model clears the model, so Codex is never launched with a Claude model id. Before a spawn uses the default, it is checked against the provider's current catalog (`agent models`); a default the provider no longer offers fails the spawn with exit code 2 and a message naming this command, rather than starting a session whose every turn would fail. When the catalog cannot be read, the default is used unchecked.
+
+`--default-claude-account` and `--default-codex-account` name the account each provider's sessions start on when nothing chooses one (see Account below); `default` is the provider's own account. Removing an account resets every workspace default that named it.
 
 `--auto-handoff <percent>` (off by default) asks a running Claude or Codex session to hand its work to a fresh agent once its context reaches that share of the window; `off` turns it back off, and the value must be a whole number from 10 to 100. The check runs on the desktop app's one-second tick against the same context telemetry the usage footer shows, so it does nothing while the app is closed. Each session is asked once; the request is recorded as `handoffRequestedAt` on the session and stands until the successor archives it. What the agent is asked to do is exactly what `agent handoff` sends.
 
@@ -82,9 +85,9 @@ A brief can name other tasks. `depends on #N`, `after #N` and `blocked by #N` (c
 ## Agent
 
 ```text
-daedal agent models <codex|claude>
-daedal agent spawn --workspace <workspace> --provider codex [--task <task-ref>] [--model <model>] [--message <text>]
-daedal agent spawn --workspace <workspace> --provider claude [--task <task-ref>] [--model <model>] [--message <text>]
+daedal agent models <codex|claude> [--account <account>]
+daedal agent spawn --workspace <workspace> --provider codex [--task <task-ref>] [--model <model>] [--account <account>] [--message <text>]
+daedal agent spawn --workspace <workspace> --provider claude [--task <task-ref>] [--model <model>] [--account <account>] [--message <text>]
 daedal agent spawn --workspace <workspace> --command <configured-name> [--task <task-ref>] [--message <text>]
 daedal agent spawn --workspace <workspace> --provider <codex|claude> --task <task-ref> --draft-brief
 daedal agent spawn ... [--ability routines] [--color <color>] [--pin]
@@ -96,7 +99,7 @@ daedal agent attach <agent-id>
 daedal agent send <agent-id> <text>
 daedal agent archive <agent-id> [--force]
 daedal agent handoff <agent-id>
-daedal agent continue [<agent-id> | --self] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--message <text>]
+daedal agent continue [<agent-id> | --self] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--account <account>] [--message <text>]
 daedal agent restore <agent-id>
 daedal agent revive <agent-id> | --all | --workspace <workspace>
 daedal agent stop <agent-id> [--force]
@@ -127,6 +130,28 @@ Each launch gets a durable `daedalus_<uuid>` tmux session on a Daedalus server i
 Sessions outlive the process that started them, and the app. The tmux server is keyed to `DAEDALUS_HOME` rather than owned by either adapter, so closing the terminal that ran `agent spawn` leaves the agent running, and so does quitting the desktop app — the app is an optional view onto sessions it does not own. Ending them is always explicit: `agent stop`, `agent archive`, or `daedal shutdown` for all of them at once.
 
 Startup reconciliation compares SQLite with tmux. Missing live sessions become `lost`; existing starting sessions become `running`. Reconciliation observes and never starts anything: it runs on nearly every command, so revival is always an explicit call and `agent list` never spawns. The desktop app runs one sweep when it starts, before anything else, unless **Bring sessions back on startup** is turned off in Settings; a lock file under `DAEDALUS_HOME` keeps that sweep and a concurrent CLI one from creating two runtimes for the same conversation. Integrated terminals are reopened by the same sweep as fresh login shells in the same directory — there is no conversation to resume, so their scrollback is genuinely lost and their tab says so. A `lost` session keeps its activity reading and its attention badge, because it is coming back to the same point it stopped at. If tmux itself is unavailable, reconciliation leaves persisted state unchanged and agent lifecycle commands report exit code 5 where applicable.
+
+## Account
+
+```text
+daedal account list
+daedal account status [<claude|codex> [<account>]]
+daedal account add <claude|codex> <name>
+daedal account rename <claude|codex> <account> <name>
+daedal account remove <claude|codex> <account> --force
+daedal account login <claude|codex> [<account>]
+daedal account logout <claude|codex> [<account>]
+```
+
+An account is a provider configuration folder, so one machine can run sessions on more than one Claude or Codex account. Each provider has a `default` account: whatever it uses with nothing set, `~/.claude` (or `CLAUDE_CONFIG_DIR`) and `~/.codex` (or `CODEX_HOME`). `add` creates another under `$DAEDALUS_HOME/accounts/<provider>/<id>`. The folder starts empty and shares no settings, plugins, MCP servers or memory with the default account. Daedalus links its own skills and writing style into it and, for Claude, writes `{"hasCompletedOnboarding": true}` to its `.claude.json` so a session does not stop on the first-run theme picker. `<account>` is the name or the id; `rename` changes only the name, because the id is the folder.
+
+Daedalus stores no credentials. A session on a profile runs with `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` (Claude), or `CODEX_HOME` and `CODEX_SQLITE_HOME` (Codex), set to its folder; a session on the default account sets none of them. Claude keeps a profile's login in the Keychain under a name made from the folder path, which is why the folder never moves, and Codex keeps it in the folder. `login` and `logout` run the provider's own `claude auth login` / `codex login` (and `logout`) in the calling terminal with those variables, then print the account's status. The desktop app runs the same sign-in in an integrated terminal from Settings → Agents.
+
+`status` asks each provider now: `claude auth status --json`, and `codex login status` plus the Codex app server's `account/read` for the email and plan. The state is `signed-in`, `signed-out`, `missing` (the provider is not installed; the human output prints the install commands) or `unknown` (the provider gave no usable answer, such as a build too old to have the command).
+
+A session runs on the account it was spawned on for its whole life: restore, revive, handoff and archive all point the provider at the same folder, because that is where its conversation is. `agent spawn --account` chooses; without it the workspace's default for that provider applies, else the default account. `agent continue` keeps the predecessor's account unless `--account` says otherwise. Every launch first asks the provider whether the account is signed in and refuses with exit code 5 when it says it is not, instead of starting a terminal whose first turn fails; an `unknown` answer does not block. Model catalogs, Codex hooks and instructions, session lookup, context telemetry and rate-limit windows are all read from the session's account, and the usage footer shows a profile's windows under its own name.
+
+`remove` requires `--force`, signs the account out (which also removes Claude's Keychain entry), clears workspace defaults that named it and deletes its folder. It is refused while a session that is not archived runs on it. An archived session on a removed account cannot be restored, and says so.
 
 ## Session
 
@@ -506,7 +531,7 @@ desktop Cottontail runtime, so non-interactive commands terminate after
 emitting their result. Daedalus-launched sessions put this directory first on
 `PATH`.
 
-`daedal doctor [--json]` checks the verified Bun version, tmux availability/minimum, resolved home, and migrated database.
+`daedal doctor [--json]` checks the verified Bun version, tmux availability/minimum, resolved home, migrated database, and each account's sign-in. An installed provider whose account is signed out fails the check; a provider that is not installed passes, with its install command.
 
 `daedal --version --json` reports the version from the same package metadata
 used by the desktop bundle, preventing the CLI and app version strings from

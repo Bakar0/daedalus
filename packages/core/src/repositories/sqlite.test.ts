@@ -27,6 +27,8 @@ describe("SqliteRepositories", () => {
         autoHandoffPercent: null,
         defaultProvider: null,
         defaultModel: null,
+        defaultClaudeAccount: null,
+        defaultCodexAccount: null,
       });
       repositories.createTask({
         id: "task-id",
@@ -65,6 +67,7 @@ describe("SqliteRepositories", () => {
         position: 1,
         pinnedAt: null,
         color: null,
+        account: null,
       });
       repositories.createIntegratedTerminal({
         id: "terminal-id",

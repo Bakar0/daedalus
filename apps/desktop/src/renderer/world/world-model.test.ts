@@ -46,6 +46,8 @@ const workspace = (id: string): WorkspaceDto => ({
   autoHandoffPercent: null,
   defaultProvider: null,
   defaultModel: null,
+  defaultClaudeAccount: null,
+  defaultCodexAccount: null,
 });
 
 const session = (
@@ -67,6 +69,7 @@ const session = (
   startedAt: "2026-09-23T10:00:00.000Z",
   endedAt: null,
   providerSessionId: null,
+  account: null,
   archivedAt: null,
   resumeCount: 0,
   lostReason: null,

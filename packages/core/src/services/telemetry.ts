@@ -3,6 +3,12 @@ import { join } from "node:path";
 import type { DaedalusConfig } from "../config";
 import type { AgentSession } from "../domain";
 import type { SqliteRepositories } from "../repositories";
+import {
+  accountConfig,
+  accountEnvironment,
+  accountProfile,
+  DEFAULT_ACCOUNT,
+} from "./account-homes";
 import { resolveAgentExecutable, sessionLaunchModel } from "./providers";
 
 const SESSION_CACHE_MS = 5_000;
@@ -19,6 +25,12 @@ export interface ProviderUsage {
   provider: "codex" | "claude";
   windows: UsageWindow[];
   observedAt: string;
+  /**
+   * The account profile these limits belong to, absent for the provider's
+   * default account. Limits are per account, so two accounts' windows are
+   * two readings, never one.
+   */
+  account?: string;
 }
 
 export interface SessionTelemetry {
@@ -273,9 +285,10 @@ export async function codexRolloutPath(
 }
 
 async function readCodexSession(
-  config: DaedalusConfig,
+  shared: DaedalusConfig,
   agent: AgentSession,
 ): Promise<SessionTelemetry | undefined> {
+  const config = accountConfig(shared, agent.provider, agent.account);
   const path = await codexRolloutPath(config.codexSessionsDirectory, agent);
   if (!path) return undefined;
   try {
@@ -409,9 +422,10 @@ export function parseClaudeTranscript(
 }
 
 async function readClaudeTranscript(
-  config: DaedalusConfig,
+  shared: DaedalusConfig,
   agent: AgentSession,
 ): Promise<SessionTelemetry | undefined> {
+  const config = accountConfig(shared, agent.provider, agent.account);
   const path = claudeTranscriptPath(config.claudeProjectsDirectory, agent);
   try {
     const file = Bun.file(path);
@@ -492,6 +506,7 @@ export function parseCodexRateLimits(
 
 async function readCodexUsage(
   config: DaedalusConfig,
+  account: string | null,
 ): Promise<ProviderUsage | undefined> {
   const definition = config.agents.codex;
   if (!definition) return undefined;
@@ -503,6 +518,7 @@ async function readCodexUsage(
       stdin: "pipe",
       stdout: "pipe",
       stderr: "ignore",
+      env: { ...Bun.env, ...accountEnvironment(config, "codex", account) },
     });
     try {
       const writer = process.stdin;
@@ -529,8 +545,10 @@ async function readCodexUsage(
                   id?: unknown;
                   result?: unknown;
                 };
-                if (message.id === 2)
-                  return parseCodexRateLimits(message.result);
+                if (message.id === 2) {
+                  const usage = parseCodexRateLimits(message.result);
+                  return usage && account ? { ...usage, account } : usage;
+                }
               } catch {
                 // Ignore non-protocol output.
               }
@@ -672,7 +690,10 @@ async function readHistoryText(path: string): Promise<string | undefined> {
 
 export class TelemetryService {
   private sessionCache?: { expiresAt: number; value: TelemetrySnapshot };
-  private providerCache?: { expiresAt: number; value?: ProviderUsage };
+  private readonly providerCache = new Map<
+    string,
+    { expiresAt: number; value?: ProviderUsage }
+  >();
 
   /** Keyed by file path; reused while the file's size and mtime hold. */
   private readonly historyCache = new Map<
@@ -728,11 +749,9 @@ export class TelemetryService {
       return { ...history, models };
     };
     if (agent.kind !== "agent") return { models: [] };
+    const scoped = accountConfig(this.config, agent.provider, agent.account);
     if (agent.provider === "codex") {
-      const path = await codexRolloutPath(
-        this.config.codexSessionsDirectory,
-        agent,
-      );
+      const path = await codexRolloutPath(scoped.codexSessionsDirectory, agent);
       return merge(
         path ? await this.cachedHistory(path, codexUsageHistory) : undefined,
       );
@@ -743,7 +762,7 @@ export class TelemetryService {
         finiteNumber(status?.context_window?.context_window_size) ??
         contextWindowFromModel(launched);
       const history = await this.cachedHistory(
-        claudeTranscriptPath(this.config.claudeProjectsDirectory, agent),
+        claudeTranscriptPath(scoped.claudeProjectsDirectory, agent),
         (text) => claudeUsageHistory(text, window),
       );
       // The status line's own percentage is a reading the transcript may not
@@ -769,23 +788,52 @@ export class TelemetryService {
     if (this.sessionCache && this.sessionCache.expiresAt > now)
       return this.sessionCache.value;
     const results = await this.readLiveSessions();
-    if (!this.providerCache || this.providerCache.expiresAt <= now) {
-      this.providerCache = {
-        expiresAt: now + PROVIDER_CACHE_MS,
-        value: await readCodexUsage(this.config),
-      };
-    }
-    const newestClaudeUsage = results
+    // The default account always, and each profile a live Codex session runs
+    // on. Asking for a profile nothing uses would start a Codex server to
+    // report on an account the user is not watching.
+    const codexAccounts = [
+      null,
+      ...new Set(
+        this.repositories
+          .listAgents()
+          .filter(
+            (agent) =>
+              agent.provider === "codex" &&
+              agent.account &&
+              (agent.status === "running" || agent.status === "starting") &&
+              accountProfile(this.config, "codex", agent.account),
+          )
+          .map((agent) => agent.account!),
+      ),
+    ];
+    const codexUsage = await Promise.all(
+      codexAccounts.map(async (account) => {
+        const key = account ?? DEFAULT_ACCOUNT;
+        const cached = this.providerCache.get(key);
+        if (cached && cached.expiresAt > now) return cached.value;
+        const value = await readCodexUsage(this.config, account);
+        this.providerCache.set(key, {
+          expiresAt: now + PROVIDER_CACHE_MS,
+          value,
+        });
+        return value;
+      }),
+    );
+    // Newest reading per Claude account: every session on one account sees
+    // the same limits, and the most recent of them is the truest.
+    const newestClaudeUsage = new Map<string, ProviderUsage>();
+    for (const usage of results
       .map((result) => result.usage)
       .filter((item): item is ProviderUsage => Boolean(item))
       .filter(
         (item) => now - Date.parse(item.observedAt) <= CLAUDE_USAGE_MAX_AGE_MS,
       )
-      .sort((left, right) =>
-        right.observedAt.localeCompare(left.observedAt),
-      )[0];
+      .sort((left, right) => right.observedAt.localeCompare(left.observedAt))) {
+      const key = usage.account ?? DEFAULT_ACCOUNT;
+      if (!newestClaudeUsage.has(key)) newestClaudeUsage.set(key, usage);
+    }
     const value = {
-      providerUsage: [this.providerCache.value, newestClaudeUsage].filter(
+      providerUsage: [...codexUsage, ...newestClaudeUsage.values()].filter(
         (item): item is ProviderUsage => Boolean(item),
       ),
       sessionTelemetry: results
@@ -826,7 +874,10 @@ export class TelemetryService {
           const transcript = await readClaudeTranscript(this.config, agent);
           const statusSession = status?.session;
           return {
-            usage: status?.usage,
+            usage:
+              status?.usage && agent.account
+                ? { ...status.usage, account: agent.account }
+                : status?.usage,
             session:
               statusSession || transcript
                 ? {

@@ -480,6 +480,8 @@ const configuredModel = async (
 export async function discoverProviderModels(
   config: DaedalusConfig,
   provider: "codex" | "claude",
+  /** Points the provider at an account profile; empty for the default. */
+  env: Record<string, string> = {},
 ): Promise<ProviderModelCatalog> {
   const definition = config.agents[provider];
   const executable = definition
@@ -509,7 +511,7 @@ export async function discoverProviderModels(
         "stream-json",
         "--verbose",
       ],
-      { stdin: input },
+      { stdin: input, env },
     );
     if (result.exitCode !== 0)
       throw new DaedalusError(
@@ -519,7 +521,7 @@ export async function discoverProviderModels(
     return parseClaudeModelCatalog(result.stdout, requestId, defaultModel);
   }
 
-  const result = await runCommand(executable, ["debug", "models"]);
+  const result = await runCommand(executable, ["debug", "models"], { env });
   if (result.exitCode !== 0)
     throw new DaedalusError(
       "DEPENDENCY",

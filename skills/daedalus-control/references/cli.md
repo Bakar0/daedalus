@@ -8,7 +8,7 @@ Add `--json` anywhere on a non-interactive command for a compact result envelope
 daedal workspace create <name> [--slug <slug>] [--path <path>]
 daedal workspace list [--archived]
 daedal workspace get <workspace>
-daedal workspace update <workspace> [--name <name>] [--slug <slug>] [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--default-model <model>|none] [--auto-handoff <percent>|off]
+daedal workspace update <workspace> [--name <name>] [--slug <slug>] [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--default-model <model>|none] [--default-claude-account <account>|default] [--default-codex-account <account>|default] [--auto-handoff <percent>|off]
 daedal workspace archive <workspace>
 daedal workspace restore <workspace>
 daedal workspace remove <workspace> [--delete-files] --force
@@ -56,15 +56,15 @@ library ID.
 ## Agents and sessions
 
 ```text
-daedal agent models <codex|claude>
-daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <configured-name>) [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>] [--draft-brief] [--ability routines] [--color <color>] [--pin]
+daedal agent models <codex|claude> [--account <account>]
+daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <configured-name>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--draft-brief] [--ability routines] [--color <color>] [--pin]
 daedal agent list [--workspace <workspace>] [--running|--archived]
 daedal agent get <agent-id>
 daedal agent attach <agent-id>
 daedal agent send <agent-id> <text>
 daedal agent archive <agent-id> [--force]
 daedal agent handoff <agent-id>
-daedal agent continue [<agent-id>] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--message <text>]
+daedal agent continue [<agent-id>] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--account <account>] [--message <text>]
 daedal agent restore <agent-id>
 daedal agent stop <agent-id> [--force]
 daedal agent remove <agent-id>
@@ -102,6 +102,24 @@ workspace's `defaultModel` when `--provider` is its `defaultProvider`, and
 `data.defaultModel` otherwise. A workspace default the provider no longer
 lists fails the spawn with exit code 2; fix it with `workspace update
 --default-model`. Display labels are descriptive and are not model IDs.
+
+## Accounts
+
+```text
+daedal account list
+daedal account status [<claude|codex> [<account>]]
+daedal account add <claude|codex> <name>
+daedal account login|logout <claude|codex> [<account>]
+daedal account rename <claude|codex> <account> <name>
+daedal account remove <claude|codex> <account> --force
+```
+
+Each provider can have several accounts; `default` is the provider's own. A
+session runs on one account for its whole life: `agent spawn --account`, else
+the workspace's `--default-claude-account` / `--default-codex-account`, else
+`default`. A spawn on an account its provider reports as signed out fails with
+exit code 5; `account login` is interactive and is for the user to run, so ask
+them rather than running it yourself.
 
 ## Attention and notifications
 

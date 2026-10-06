@@ -36,6 +36,13 @@ export interface TmuxLaunch {
   executable: string;
   args: string[];
   env?: Record<string, string>;
+  /**
+   * Keep the pane on screen after the command exits, so a one-shot command
+   * such as a sign-in leaves its last words readable instead of vanishing
+   * with its session. Set in the same tmux invocation as the session, before
+   * the command can finish.
+   */
+  keepOnExit?: boolean;
 }
 
 export interface TmuxClient {
@@ -282,6 +289,9 @@ export class CommandTmuxClient implements TmuxClient {
       "--",
       launch.executable,
       ...launch.args,
+      ...(launch.keepOnExit
+        ? [";", "set-option", "-t", launch.session, "remain-on-exit", "on"]
+        : []),
     ];
     // tmux gives a new session's command the PATH of the client that asked
     // for it, not the `-e PATH=` above: measured on tmux 3.7c, a client with

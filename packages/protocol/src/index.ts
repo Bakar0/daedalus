@@ -27,6 +27,9 @@ export interface WorkspaceDto {
   defaultProvider: "claude" | "codex" | null;
   /** A provider model id, or null for that provider's default. */
   defaultModel: string | null;
+  /** The account each provider's sessions start on; null is the default. */
+  defaultClaudeAccount: string | null;
+  defaultCodexAccount: string | null;
 }
 
 export interface TaskDto {
@@ -87,6 +90,8 @@ export interface AgentSessionDto {
   /** When it was pinned to the top of its workspace's list, or null. */
   pinnedAt: string | null;
   color: SessionColorDto | null;
+  /** The account profile it runs on, or null for the provider's default. */
+  account: string | null;
 }
 
 export type SessionColorDto =
@@ -293,6 +298,38 @@ export interface ProviderAvailabilityDto {
   available: boolean;
 }
 
+/** One account a provider can run sessions on. */
+export interface AccountDto {
+  provider: "claude" | "codex";
+  /** `default`, or a profile id. */
+  account: string;
+  name: string;
+  /** The configuration folder the provider reads for it. */
+  directory: string;
+  createdAt: string | null;
+}
+
+export type SignInStateDto = "missing" | "signed-out" | "signed-in" | "unknown";
+
+export interface InstallCommandDto {
+  label: string;
+  command: string;
+}
+
+/** What the provider says about one account's login, asked just now. */
+export interface AccountStatusDto extends AccountDto {
+  state: SignInStateDto;
+  method?: string;
+  email?: string;
+  organization?: string;
+  plan?: string;
+  detail?: string;
+  executable: string;
+  checkedAt: string;
+  /** Present when the provider is not installed: how to install it. */
+  install?: InstallCommandDto[];
+}
+
 export interface ProviderModelDto {
   id: string;
   label: string;
@@ -415,6 +452,8 @@ export interface DesktopSettingsDto {
   autoRestoreSessionsEnabled: boolean;
   focusMode: boolean;
   providers: ProviderAvailabilityDto[];
+  /** Every account, default ones first. Sign-in state is `accountStatus`. */
+  accounts: AccountDto[];
 }
 
 export interface UsageWindowDto {
@@ -427,6 +466,8 @@ export interface ProviderUsageDto {
   provider: "codex" | "claude";
   windows: UsageWindowDto[];
   observedAt: string;
+  /** The account profile, absent for the provider's default account. */
+  account?: string;
 }
 
 /**
@@ -770,6 +811,9 @@ export interface DesktopRpcSchema {
           autoHandoffPercent?: number | null;
           defaultProvider?: "claude" | "codex" | null;
           defaultModel?: string | null;
+          /** A profile id, or null for the default account. */
+          defaultClaudeAccount?: string | null;
+          defaultCodexAccount?: string | null;
         },
         WorkspaceDto
       >;
@@ -1099,6 +1143,8 @@ export interface DesktopRpcSchema {
           name?: string;
           provider?: "codex" | "claude";
           model?: string;
+          /** A profile id, or `default`. Omitted: the workspace's default. */
+          account?: string;
           message?: string;
           command?: string;
           terminal?: boolean;
@@ -1109,8 +1155,42 @@ export interface DesktopRpcSchema {
         AgentSessionDto
       >;
       agentModels: Request<
-        { provider: "codex" | "claude" },
+        { provider: "codex" | "claude"; account?: string },
         ProviderModelCatalogDto
+      >;
+      /**
+       * Asks each provider about its accounts' logins now. A few tenths of a
+       * second per account, so it is its own request rather than part of
+       * every snapshot.
+       */
+      accountStatus: Request<
+        { provider?: "claude" | "codex"; account?: string },
+        AccountStatusDto[]
+      >;
+      accountAdd: Request<
+        { provider: "claude" | "codex"; name: string },
+        AccountDto
+      >;
+      accountRename: Request<
+        { provider: "claude" | "codex"; account: string; name: string },
+        AccountDto
+      >;
+      /** Signs the account out and deletes its folder. */
+      accountRemove: Request<
+        { provider: "claude" | "codex"; account: string },
+        AccountDto
+      >;
+      /**
+       * Opens the provider's own sign-in for one account in an integrated
+       * terminal, and returns that terminal so the app can show it.
+       */
+      accountSignIn: Request<
+        { provider: "claude" | "codex"; account: string },
+        IntegratedTerminalDto
+      >;
+      accountSignOut: Request<
+        { provider: "claude" | "codex"; account: string },
+        { provider: "claude" | "codex"; account: string }
       >;
       agentSend: Request<{ id: string; text: string }, AgentSessionDto>;
       agentStop: Request<{ id: string; force: boolean }, AgentSessionDto>;

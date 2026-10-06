@@ -1,4 +1,5 @@
 import type { DaedalusConfig } from "../config";
+import { accountConfig } from "./account-homes";
 import type { AgentSession } from "../domain";
 import type { TmuxClient } from "@daedalus/platform";
 import type { SqliteRepositories } from "../repositories";
@@ -83,9 +84,10 @@ const CLAUDE_TAIL_BYTES = 1024 * 1024;
  * launch — so unlike Codex there is nothing to recover and nothing to search.
  */
 export async function detectClaudeTranscriptActivity(
-  config: DaedalusConfig,
+  shared: DaedalusConfig,
   agent: AgentSession,
 ): Promise<ActivityObservation | undefined> {
+  const config = accountConfig(shared, agent.provider, agent.account);
   const text = await readChangedTail(
     agent.id,
     claudeTranscriptPath(config.claudeProjectsDirectory, agent),
@@ -128,10 +130,11 @@ export async function detectClaudePaneActivity(
  * nothing at all when the file has not changed since the last look.
  */
 export async function detectCodexRolloutActivity(
-  config: DaedalusConfig,
+  shared: DaedalusConfig,
   agent: AgentSession,
   repositories?: SqliteRepositories,
 ): Promise<ActivityObservation | undefined> {
+  const config = accountConfig(shared, agent.provider, agent.account);
   const now = Date.now();
   const cached = cache.get(agent.id);
   if (cached && now - cached.checkedAt < CACHE_MS) return undefined;

@@ -50,6 +50,30 @@ export interface ManagedSkillSetting {
  */
 export type SkillVisibility = "on" | "off";
 
+/** The providers an account profile can belong to. */
+export type AccountProvider = "claude" | "codex";
+
+/**
+ * A second (or third) account for one provider: a configuration folder of
+ * its own under `DAEDALUS_HOME`, which the provider's CLI is pointed at with
+ * its own environment variable. The default account is not one of these. It
+ * is whatever the provider uses with nothing set, so it needs no entry.
+ *
+ * Holds no credentials. The provider keeps its own login: Claude in the
+ * Keychain under a name derived from the folder path, Codex in the folder.
+ */
+export interface AccountProfile {
+  /**
+   * The folder name, fixed at creation. Claude keys its Keychain login on the
+   * folder path, so renaming the folder would sign the account out; the
+   * display name is free to change because it is stored only here.
+   */
+  id: string;
+  provider: AccountProvider;
+  name: string;
+  createdAt: string;
+}
+
 export interface DaedalusConfig {
   home: string;
   workspaceRoot: string;
@@ -115,6 +139,8 @@ export interface DaedalusConfig {
    * not choose.
    */
   claudeOutputStyleWritten?: string;
+  /** Account profiles beyond each provider's default. */
+  accounts: AccountProfile[];
 }
 
 type StoredConfig = Partial<
@@ -131,6 +157,7 @@ type StoredConfig = Partial<
   skillOverrides?: Record<string, SkillVisibility>;
   claudeOverridesWritten?: string[];
   claudeOutputStyleWritten?: string;
+  accounts?: AccountProfile[];
 };
 
 function expandHome(path: string): string {
@@ -243,8 +270,32 @@ export async function loadConfig(
     ...(stored.claudeOutputStyleWritten
       ? { claudeOutputStyleWritten: stored.claudeOutputStyleWritten }
       : {}),
+    accounts: storedAccounts(stored.accounts),
   };
 }
+
+const ACCOUNT_ID = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+/**
+ * The stored profiles that are well formed. An entry with a bad id would name
+ * a folder outside `accounts/`, and one with an unknown provider has no
+ * variable to point at it, so both are dropped rather than trusted.
+ */
+function storedAccounts(value: unknown): AccountProfile[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (entry): entry is AccountProfile =>
+      typeof entry === "object" &&
+      entry !== null &&
+      typeof entry.id === "string" &&
+      ACCOUNT_ID.test(entry.id) &&
+      (entry.provider === "claude" || entry.provider === "codex") &&
+      typeof entry.name === "string" &&
+      typeof entry.createdAt === "string",
+  );
+}
+
+export const isAccountId = (value: string): boolean => ACCOUNT_ID.test(value);
 
 /**
  * Merges a patch into the stored settings and republishes it atomically, so a
@@ -334,6 +385,15 @@ export async function saveClaudeOverridesWritten(
 ): Promise<void> {
   await saveSetting(config, { claudeOverridesWritten: names });
   config.claudeOverridesWritten = names;
+}
+
+/** Stores the whole list of account profiles. */
+export async function saveAccounts(
+  config: DaedalusConfig,
+  accounts: AccountProfile[],
+): Promise<void> {
+  await saveSetting(config, { accounts });
+  config.accounts = accounts;
 }
 
 /** Records which output style, if any, is Daedalus's in Claude's settings. */

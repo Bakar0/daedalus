@@ -70,6 +70,7 @@ const base: DesktopSnapshotDto = {
     workspaceInstructionFilesEnabled: true,
     autoRestoreSessionsEnabled: true,
     focusMode: false,
+    accounts: [],
     providers: [
       { name: "codex", executable: "codex", available: false },
       { name: "claude", executable: "claude", available: true },
@@ -349,6 +350,7 @@ describe("desktop application shell", () => {
           startedAt: "2026-09-14T08:00:01.000Z",
           endedAt: null,
           providerSessionId: null,
+          account: null,
           archivedAt: null,
           resumeCount: 0,
           lostReason: null,
@@ -490,6 +492,8 @@ describe("desktop application shell", () => {
       autoHandoffPercent: null,
       defaultProvider: "claude" as const,
       defaultModel: null,
+      defaultClaudeAccount: null,
+      defaultCodexAccount: null,
     });
     const task = (id: string, workspaceId: string, number: number) => ({
       id,
@@ -525,6 +529,7 @@ describe("desktop application shell", () => {
       startedAt: "2026-09-02T01:00:00.000Z",
       endedAt: null,
       providerSessionId: null,
+      account: null,
       archivedAt: null,
       resumeCount: 0,
       lostReason: null,
@@ -782,6 +787,8 @@ describe("desktop application shell", () => {
               autoHandoffPercent: null,
               defaultProvider: null,
               defaultModel: null,
+              defaultClaudeAccount: null,
+              defaultCodexAccount: null,
             },
           ],
           settings: {
@@ -822,6 +829,8 @@ describe("desktop application shell", () => {
                 autoHandoffPercent: null,
                 defaultProvider,
                 defaultModel: "sonnet",
+                defaultClaudeAccount: null,
+                defaultCodexAccount: null,
               },
             ],
             settings: {
@@ -867,6 +876,8 @@ describe("desktop application shell", () => {
               autoHandoffPercent: null,
               defaultProvider: null,
               defaultModel: null,
+              defaultClaudeAccount: null,
+              defaultCodexAccount: null,
             },
           ],
           repositories: [
@@ -920,6 +931,8 @@ describe("desktop application shell", () => {
           autoHandoffPercent: null,
           defaultProvider: null,
           defaultModel: null,
+          defaultClaudeAccount: null,
+          defaultCodexAccount: null,
         },
       ],
     };
@@ -973,6 +986,8 @@ describe("desktop application shell", () => {
         autoHandoffPercent: null,
         defaultProvider: null,
         defaultModel: null,
+        defaultClaudeAccount: null,
+        defaultCodexAccount: null,
       },
     ],
   };
@@ -1163,6 +1178,8 @@ describe("desktop application shell", () => {
           autoHandoffPercent: null,
           defaultProvider: null,
           defaultModel: null,
+          defaultClaudeAccount: null,
+          defaultCodexAccount: null,
         },
       ],
       tasks: [
@@ -1198,6 +1215,7 @@ describe("desktop application shell", () => {
           startedAt: "now",
           endedAt: null,
           providerSessionId: "daedalus-agent-12345678",
+          account: null,
           archivedAt: null,
           resumeCount: 0,
           lostReason: null,
@@ -1222,6 +1240,7 @@ describe("desktop application shell", () => {
           startedAt: "now",
           endedAt: null,
           providerSessionId: "agent-needs-attention",
+          account: null,
           archivedAt: null,
           resumeCount: 0,
           lostReason: null,
@@ -1338,6 +1357,8 @@ describe("desktop application shell", () => {
       autoHandoffPercent: null,
       defaultProvider: null,
       defaultModel: null,
+      defaultClaudeAccount: null,
+      defaultCodexAccount: null,
     };
     const task = (
       id: string,
@@ -1422,6 +1443,8 @@ describe("desktop application shell", () => {
       autoHandoffPercent: null,
       defaultProvider: "codex" as const,
       defaultModel: null,
+      defaultClaudeAccount: null,
+      defaultCodexAccount: null,
     };
     const task = (
       id: string,
@@ -1458,6 +1481,7 @@ describe("desktop application shell", () => {
       startedAt: "2026-09-23T10:00:00.000Z",
       endedAt: null,
       providerSessionId: null,
+      account: null,
       archivedAt: null,
       resumeCount: 0,
       lostReason: null,
@@ -1588,6 +1612,8 @@ describe("desktop application shell", () => {
           autoHandoffPercent: null,
           defaultProvider: null,
           defaultModel: null,
+          defaultClaudeAccount: null,
+          defaultCodexAccount: null,
         },
       ],
     };
@@ -1615,6 +1641,7 @@ describe("desktop application shell", () => {
       startedAt: "now",
       endedAt: null,
       providerSessionId: "11111111-1111-4111-8111-111111111111",
+      account: null,
       archivedAt: null,
       resumeCount: 0,
       lostReason: null,
@@ -1640,6 +1667,8 @@ describe("desktop application shell", () => {
           autoHandoffPercent: null,
           defaultProvider: null,
           defaultModel: null,
+          defaultClaudeAccount: null,
+          defaultCodexAccount: null,
         },
       ],
       tasks: [
@@ -1712,6 +1741,8 @@ describe("desktop application shell", () => {
           autoHandoffPercent: null,
           defaultProvider: null,
           defaultModel: null,
+          defaultClaudeAccount: null,
+          defaultCodexAccount: null,
         },
       ],
       agents: [
@@ -1731,6 +1762,7 @@ describe("desktop application shell", () => {
           startedAt: "2026-01-01T00:00:00.000Z",
           endedAt: null,
           providerSessionId: null,
+          account: null,
           archivedAt: null,
           resumeCount: 0,
           lostReason: null,
@@ -1785,6 +1817,8 @@ describe("desktop application shell", () => {
           autoHandoffPercent: null,
           defaultProvider: null,
           defaultModel: null,
+          defaultClaudeAccount: null,
+          defaultCodexAccount: null,
         },
       ],
       agents: [
@@ -1804,6 +1838,7 @@ describe("desktop application shell", () => {
           startedAt: "2026-01-02T00:00:00.000Z",
           endedAt: null,
           providerSessionId: null,
+          account: null,
           archivedAt: null,
           resumeCount: 0,
           lostReason: null,
@@ -1847,6 +1882,8 @@ describe("desktop application shell", () => {
       autoHandoffPercent: null,
       defaultProvider: null,
       defaultModel: null,
+      defaultClaudeAccount: null,
+      defaultCodexAccount: null,
     });
     // Deliberately not alphabetical, not by creation, and not by position
     // value either: the array order is what the service already applied, and
@@ -1887,6 +1924,8 @@ describe("desktop application shell", () => {
           autoHandoffPercent: null,
           defaultProvider: null,
           defaultModel: null,
+          defaultClaudeAccount: null,
+          defaultCodexAccount: null,
         },
         {
           id: "w2",
@@ -1902,6 +1941,8 @@ describe("desktop application shell", () => {
           autoHandoffPercent: null,
           defaultProvider: null,
           defaultModel: null,
+          defaultClaudeAccount: null,
+          defaultCodexAccount: null,
         },
       ],
       agents: [
@@ -1921,6 +1962,7 @@ describe("desktop application shell", () => {
           startedAt: "now",
           endedAt: archivedAt,
           providerSessionId: "44444444-4444-4444-8444-444444444444",
+          account: null,
           archivedAt,
           resumeCount: 0,
           lostReason: null,
@@ -1972,6 +2014,8 @@ describe("desktop application shell", () => {
           autoHandoffPercent: null,
           defaultProvider: null,
           defaultModel: null,
+          defaultClaudeAccount: null,
+          defaultCodexAccount: null,
         },
       ],
       terminals: [
@@ -2028,6 +2072,8 @@ describe("desktop application shell", () => {
       autoHandoffPercent: null,
       defaultProvider: null,
       defaultModel: null,
+      defaultClaudeAccount: null,
+      defaultCodexAccount: null,
     };
     const html = renderToStaticMarkup(
       <App
@@ -2085,6 +2131,7 @@ const liveSession: AgentSessionDto = {
   startedAt: "2026-09-16T09:00:00.000Z",
   endedAt: null,
   providerSessionId: null,
+  account: null,
   archivedAt: null,
   resumeCount: 0,
   lostReason: null,
@@ -2250,6 +2297,8 @@ describe("session status indicators", () => {
       autoHandoffPercent: null,
       defaultProvider: null,
       defaultModel: null,
+      defaultClaudeAccount: null,
+      defaultCodexAccount: null,
     };
     const blocked: AgentSessionDto = {
       ...liveSession,

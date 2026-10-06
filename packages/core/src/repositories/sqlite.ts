@@ -38,6 +38,8 @@ interface WorkspaceRow {
   auto_handoff_percent: number | null;
   default_provider: "claude" | "codex" | null;
   default_model: string | null;
+  default_claude_account: string | null;
+  default_codex_account: string | null;
 }
 
 interface TaskIdRow {
@@ -82,6 +84,7 @@ interface AgentRow {
   position: number;
   pinned_at: string | null;
   color: SessionColor | null;
+  account: string | null;
 }
 
 interface IntegratedTerminalRow {
@@ -145,6 +148,8 @@ const workspaceFromRow = (row: WorkspaceRow): Workspace => ({
   autoHandoffPercent: row.auto_handoff_percent,
   defaultProvider: row.default_provider,
   defaultModel: row.default_model,
+  defaultClaudeAccount: row.default_claude_account,
+  defaultCodexAccount: row.default_codex_account,
 });
 
 const taskFromRow = (row: TaskRow): Task => ({
@@ -185,6 +190,7 @@ const agentFromRow = (row: AgentRow): AgentSession => ({
   position: row.position,
   pinnedAt: row.pinned_at,
   color: row.color,
+  account: row.account,
 });
 
 const integratedTerminalFromRow = (
@@ -375,8 +381,9 @@ export class SqliteRepositories {
         `INSERT INTO workspaces
          (id, slug, name, path, created_at, updated_at, archived_at,
           task_id_prefix, position, start_sets_in_progress, default_provider,
-          default_model, auto_handoff_percent)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          default_model, auto_handoff_percent, default_claude_account,
+          default_codex_account)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         workspace.id,
@@ -392,6 +399,8 @@ export class SqliteRepositories {
         workspace.defaultProvider,
         workspace.defaultModel,
         workspace.autoHandoffPercent,
+        workspace.defaultClaudeAccount,
+        workspace.defaultCodexAccount,
       );
   }
 
@@ -445,7 +454,8 @@ export class SqliteRepositories {
       .query(
         `UPDATE workspaces SET slug = ?, name = ?, path = ?, updated_at = ?,
          archived_at = ?, start_sets_in_progress = ?, default_provider = ?,
-         default_model = ?, auto_handoff_percent = ? WHERE id = ?`,
+         default_model = ?, auto_handoff_percent = ?,
+         default_claude_account = ?, default_codex_account = ? WHERE id = ?`,
       )
       .run(
         workspace.slug,
@@ -457,8 +467,24 @@ export class SqliteRepositories {
         workspace.defaultProvider,
         workspace.defaultModel,
         workspace.autoHandoffPercent,
+        workspace.defaultClaudeAccount,
+        workspace.defaultCodexAccount,
         workspace.id,
       );
+  }
+
+  /** Points every workspace that defaulted to a removed profile back home. */
+  clearWorkspaceDefaultAccount(
+    provider: "claude" | "codex",
+    account: string,
+  ): void {
+    const column =
+      provider === "claude"
+        ? "default_claude_account"
+        : "default_codex_account";
+    this.database
+      .query(`UPDATE workspaces SET ${column} = NULL WHERE ${column} = ?`)
+      .run(account);
   }
 
   deleteWorkspace(id: string): void {
@@ -779,8 +805,9 @@ export class SqliteRepositories {
          (id, workspace_id, task_id, name, provider, kind, tmux_session, command, args,
           working_directory, status, exit_code, started_at, ended_at,
           provider_session_id, archived_at, resume_count, lost_reason,
-          resume_on_start, handoff_requested_at, position, pinned_at, color)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          resume_on_start, handoff_requested_at, position, pinned_at, color,
+          account)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         agent.id,
@@ -806,6 +833,7 @@ export class SqliteRepositories {
         agent.position,
         agent.pinnedAt,
         agent.color,
+        agent.account,
       );
   }
 
