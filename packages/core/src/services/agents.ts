@@ -1356,23 +1356,34 @@ export class AgentService {
     // Archivability is settled before anything is stopped, so a session that
     // cannot be archived safely keeps running instead of being destroyed.
     agent = await this.prepareArchivable(agent);
-    if (agent.status === "running" || agent.status === "starting")
-      agent = await this.stop(id, force);
     const hasNativeCodexConversation =
-      agent.provider === "codex" && agent.providerSessionId
+      agent.kind === "agent" &&
+      agent.provider === "codex" &&
+      agent.providerSessionId
         ? await hasPersistedCodexSession({
             sessionsDirectory: this.config.codexSessionsDirectory,
             id: agent.providerSessionId,
             startedAt: agent.startedAt,
           })
         : false;
-    if (
-      agent.provider === "codex" &&
-      agent.providerSessionId &&
-      hasNativeCodexConversation
-    ) {
+    // The Codex that launched a session is not necessarily still installed:
+    // the ChatGPT app has dropped its bundled copy before, which left every
+    // older session pointing at a path that no longer exists. Archiving uses
+    // the Codex that `restore` would use, and finds it before anything is
+    // stopped.
+    const codex = hasNativeCodexConversation
+      ? this.codexExecutable(agent)
+      : undefined;
+    if (hasNativeCodexConversation && !codex)
+      throw new DaedalusError(
+        "DEPENDENCY",
+        "Codex is not installed, so its conversation cannot be archived",
+      );
+    if (agent.status === "running" || agent.status === "starting")
+      agent = await this.stop(id, force);
+    if (codex && agent.providerSessionId) {
       const result = await runCommand(
-        agent.command,
+        codex,
         ["archive", agent.providerSessionId],
         { cwd: agent.workingDirectory },
       );
@@ -1400,6 +1411,15 @@ export class AgentService {
     await this.workspaceContent.releaseSessionWorktrees(id);
     this.onSessionEnded(id);
     return archived;
+  }
+
+  /** The Codex a restore would launch, else the one the session started with. */
+  private codexExecutable(agent: AgentSession): string | undefined {
+    const configured = this.config.agents.codex?.executable;
+    return (
+      (configured ? resolveAgentExecutable("codex", configured) : undefined) ??
+      resolveAgentExecutable("codex", agent.command)
+    );
   }
 
   async restore(id: string): Promise<AgentSession> {
@@ -1522,7 +1542,16 @@ export class AgentService {
     let executable = agent.command;
     let args = agent.args;
     let providerSessionId = agent.providerSessionId;
-    if (agent.kind === "agent") {
+    if (agent.kind === "agent" && agent.provider === "custom") {
+      // Restoring one starts its command afresh, which the user asks for by
+      // restoring it. Revival never gets here: an unattended relaunch of an
+      // arbitrary command is not the same promise as resuming a conversation.
+      if (!agent.archivedAt)
+        throw new DaedalusError(
+          "CONFLICT",
+          "Custom sessions do not define a native resume capability",
+        );
+    } else if (agent.kind === "agent") {
       const nativeSessionId = agent.providerSessionId;
       if (!nativeSessionId && agent.provider !== "codex")
         throw new DaedalusError(
@@ -1624,7 +1653,7 @@ export class AgentService {
       } else {
         throw new DaedalusError(
           "CONFLICT",
-          "Custom sessions do not define a native resume capability",
+          `Agent configuration '${agent.provider}' cannot be resumed`,
         );
       }
     }
@@ -1800,12 +1829,9 @@ export class AgentService {
    * same reason, one machine reboot later.
    */
   private async prepareArchivable(agent: AgentSession): Promise<AgentSession> {
-    if (agent.kind === "terminal") return agent;
-    if (agent.provider === "custom")
-      throw new DaedalusError(
-        "CONFLICT",
-        "Custom agent sessions cannot be archived because no native resume capability is configured",
-      );
+    // A custom command has no conversation to find, so like a terminal it
+    // archives as it is and `restore` starts the command again.
+    if (agent.kind === "terminal" || agent.provider === "custom") return agent;
     if (agent.providerSessionId) return agent;
     if (agent.provider === "codex") {
       const recoveredId = await recoverCodexSessionId({
