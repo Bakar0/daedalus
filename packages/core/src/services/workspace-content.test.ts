@@ -1516,9 +1516,9 @@ Before working in this workspace:
           await gitLaunches(() => content.worktreeChanges(workspace.id)),
         ).toBe(0);
 
-        // A commit moves HEAD, which the cheap check sees with no watcher.
-        await Bun.write(join(worktree.path, "LANDED.md"), "# Landed\n");
-        await runCommand("git", ["-C", worktree.path, "add", "LANDED.md"]);
+        // A commit moves HEAD, which the cheap check sees with no watcher. It
+        // is empty on purpose: it writes nothing inside the worktree, so no
+        // watcher fires and git's own files are the only signal.
         await runCommand("git", [
           "-C",
           worktree.path,
@@ -1527,6 +1527,7 @@ Before working in this workspace:
           "-c",
           "user.email=test@daedalus.local",
           "commit",
+          "--allow-empty",
           "-qm",
           "agent work",
         ]);
