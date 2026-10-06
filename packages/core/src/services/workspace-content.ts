@@ -1281,6 +1281,13 @@ export class WorkspaceContentService {
    * age. Kept in step with the sessions by every pass.
    */
   private readonly treeWatchers = new Map<string, FileTreeWatcher>();
+  /**
+   * How many times a tree was measured with git, by status passes and by
+   * `worktreeChanges`. Read by tests to see that a tree with nothing new is
+   * left alone; a child process cannot be counted from inside this one,
+   * because Bun gives children the environment it started with.
+   */
+  readonly gitMeasurements = { status: 0, changes: 0 };
   /** Workspaces whose file changes are waiting out `FILE_CHANGE_SETTLE_MS`. */
   private readonly settlingWorkspaces = new Map<
     string,
@@ -1656,6 +1663,7 @@ export class WorkspaceContentService {
         let status = previous;
         let current = record?.branch ?? null;
         if (due) {
+          this.gitMeasurements.status += 1;
           status = await gitStatusAt(target.path, target.baseBranch);
           current =
             target.worktree && git
@@ -3112,6 +3120,7 @@ export class WorkspaceContentService {
               branchName: worktree.branchName,
             }
           );
+        this.gitMeasurements.changes += 1;
         const run = (args: string[]) =>
           runCommand(git, [
             "--no-optional-locks",

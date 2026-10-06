@@ -1451,36 +1451,38 @@ Before working in this workspace:
   });
 
   describe("working tree state", () => {
-    test("runs git only for a tree that changed, and never misses the change", async () => {
-      await withTemporaryDaedalusHome(async (home) => {
-        const source = join(home, "source", "product");
-        await createRepository(source);
-        const context = await contextWithStubbedAgent(home);
-        const workspace = await context.workspaces.create({ name: "Lazy" });
-        await context.workspaceContent.addAndAttachRepository({
-          workspace: workspace.id,
-          remoteUrl: source,
-        });
-        const session = await context.agents.spawn({
-          workspace: workspace.id,
-          provider: "claude",
-        });
-        const worktree = await context.workspaceContent.createSessionWorktree({
-          session: session.id,
-          repository: "product",
-        });
-        const content = context.workspaceContent;
-        const status = async () =>
-          (await content.get(workspace.id)).worktrees[0]?.gitStatus;
-        // What the window does on every update: list, which schedules an
-        // ordinary pass once the rate limit allows, then wait for it.
-        const ordinaryPass = async () => {
-          await Bun.sleep(1_100);
-          await content.get(workspace.id);
-          await content.settleGitStatus();
-        };
-        // A watcher's report reaches the status on its own, a moment later.
-        const statusBecomes = async (changedFiles: number) => {
+    // One workspace with one session worktree, and the helpers both tests
+    // below read it through.
+    const lazyFixture = async (home: string) => {
+      const source = join(home, "source", "product");
+      await createRepository(source);
+      const context = await contextWithStubbedAgent(home);
+      const workspace = await context.workspaces.create({ name: "Lazy" });
+      await context.workspaceContent.addAndAttachRepository({
+        workspace: workspace.id,
+        remoteUrl: source,
+      });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "claude",
+      });
+      const worktree = await context.workspaceContent.createSessionWorktree({
+        session: session.id,
+        repository: "product",
+      });
+      const content = context.workspaceContent;
+      const status = async () =>
+        (await content.get(workspace.id)).worktrees[0]?.gitStatus;
+      return {
+        context,
+        content,
+        session,
+        workspace,
+        worktree,
+        status,
+        relativeRoot: worktree.path.slice(workspace.path.length + 1),
+        // A report reaches the status on its own, a moment later.
+        statusBecomes: async (changedFiles: number) => {
           const deadline = Date.now() + 5_000;
           while (
             (await status())?.changedFiles !== changedFiles &&
@@ -1490,39 +1492,62 @@ Before working in this workspace:
             await content.settleGitStatus();
           }
           return status();
-        };
-        // Counts the git processes started inside `run`, by git's own trace.
-        const gitLaunches = async (run: () => Promise<unknown>) => {
-          const trace = join(home, `git-trace-${crypto.randomUUID()}`);
-          await mkdir(trace);
-          process.env.GIT_TRACE2_EVENT = trace;
-          try {
-            await run();
-          } finally {
-            delete process.env.GIT_TRACE2_EVENT;
-          }
-          return (await readdir(trace)).length;
-        };
-        const relativeRoot = worktree.path.slice(workspace.path.length + 1);
+        },
+      };
+    };
 
-        await content.get(workspace.id);
-        // The counter itself works: a forced pass measures everything, so
-        // every zero below is a pass that ran no git, not a trace nobody wrote.
+    test("runs git only for a tree that changed, and never misses the change", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const {
+          context,
+          content,
+          session,
+          workspace,
+          worktree,
+          status,
+          statusBecomes,
+          relativeRoot,
+        } = await lazyFixture(home);
+        // An ended session's worktree has no watcher of its own, so nothing
+        // starts a pass behind this test's back and every count is exact.
+        await context.agents.stop(session.id, true);
+        // What the window does on every update: list, which schedules an
+        // ordinary pass once the rate limit allows, then wait for it.
+        const ordinaryPass = async () => {
+          await Bun.sleep(1_100);
+          await content.get(workspace.id);
+          await content.settleGitStatus();
+        };
+        // How many trees `run` measured with git, for status and for changes.
+        const measured = async (run: () => Promise<unknown>) => {
+          const before = { ...content.gitMeasurements };
+          await run();
+          return {
+            status: content.gitMeasurements.status - before.status,
+            changes: content.gitMeasurements.changes - before.changes,
+          };
+        };
+
+        // Whatever creating the worktree started has finished; then a full
+        // pass measures both trees, the checkout under repos/ and the
+        // worktree, so every zero below is a tree left alone.
+        await content.settleGitStatus();
         expect(
-          await gitLaunches(() => content.settleGitStatus(workspace.id)),
-        ).toBeGreaterThan(0);
+          await measured(async () => {
+            content.remeasureWorkspace(workspace.id);
+            await content.settleGitStatus();
+          }),
+        ).toMatchObject({ status: 2 });
         expect(await status()).toMatchObject({ state: "clean", ahead: 0 });
 
-        // Nothing moved: an ordinary pass and a changes listing start no git.
+        // Nothing moved: an ordinary pass and a changes listing run no git.
         await content.worktreeChanges(workspace.id);
-        expect(await gitLaunches(ordinaryPass)).toBe(0);
+        expect(await measured(ordinaryPass)).toEqual({ status: 0, changes: 0 });
         expect(
-          await gitLaunches(() => content.worktreeChanges(workspace.id)),
-        ).toBe(0);
+          await measured(() => content.worktreeChanges(workspace.id)),
+        ).toEqual({ status: 0, changes: 0 });
 
-        // A commit moves HEAD, which the cheap check sees with no watcher. It
-        // is empty on purpose: it writes nothing inside the worktree, so no
-        // watcher fires and git's own files are the only signal.
+        // A commit moves HEAD, which the cheap check sees on its own.
         await runCommand("git", [
           "-C",
           worktree.path,
@@ -1535,9 +1560,12 @@ Before working in this workspace:
           "-qm",
           "agent work",
         ]);
-        const commitLaunches = await gitLaunches(ordinaryPass);
+        // Measured: the worktree, and the checkout under repos/ beside it.
+        // Both are trees of one shared clone, whose refs live in a single
+        // reftable; a commit rewrites it, and which branch moved is not
+        // knowable without git. Commits come minutes apart, so this is cheap.
+        expect(await measured(ordinaryPass)).toEqual({ status: 2, changes: 0 });
         expect(await status()).toMatchObject({ state: "ahead", ahead: 1 });
-        expect(commitLaunches).toBeGreaterThan(0);
 
         // An edit moves no git metadata; the watcher's report is what says
         // the tree changed, and its pass follows without being asked.
@@ -1557,21 +1585,15 @@ Before working in this workspace:
           ),
         ).toEqual(["SCRATCH.md"]);
 
-        // An edit nothing reports — as in a workspace that is not open — is
-        // seen by the live session's own worktree watcher within seconds.
-        await Bun.write(join(worktree.path, "WATCHED.md"), "# Watched\n");
-        expect(await statusBecomes(2)).toMatchObject({ changedFiles: 2 });
-
         // A change outside every tree marks none of them.
         content.noteFilesChanged(workspace.id, [{ path: "BRIEF.md" }], false);
         expect(
-          await gitLaunches(() => content.worktreeChanges(workspace.id)),
-        ).toBe(0);
+          await measured(() => content.worktreeChanges(workspace.id)),
+        ).toEqual({ status: 0, changes: 0 });
 
         // Fetch is the user saying something changed: everything is measured
         // again, whatever the cheap checks say.
         await unlink(join(worktree.path, "SCRATCH.md"));
-        await unlink(join(worktree.path, "WATCHED.md"));
         content.remeasureWorkspace(workspace.id);
         await content.settleGitStatus();
         expect(await status()).toMatchObject({
@@ -1581,6 +1603,23 @@ Before working in this workspace:
         context.close();
       });
       // It waits out the rate limit and the file-change settle on purpose.
+    }, 20_000);
+
+    test("sees an edit nothing reports in a live session's worktree", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const { context, content, worktree, statusBecomes } =
+          await lazyFixture(home);
+        await content.settleGitStatus();
+        // As in a workspace that is not open: no workspace watcher, nobody
+        // calls noteFilesChanged. The live session's own worktree watcher is
+        // what sees it.
+        await Bun.write(join(worktree.path, "WATCHED.md"), "# Watched\n");
+        expect(await statusBecomes(1)).toMatchObject({
+          state: "modified",
+          changedFiles: 1,
+        });
+        context.close();
+      });
     }, 20_000);
 
     test("reports each worktree's own changes and distance from the base branch", async () => {
