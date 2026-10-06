@@ -92,6 +92,9 @@ export class WorkspaceService {
     private readonly archiveAgents: (workspaceId: string) => Promise<void>,
     private readonly daedalusHome: string,
     private readonly instructionFilesEnabled: () => boolean = () => true,
+    private readonly discardCheckouts: (
+      workspaceId: string,
+    ) => Promise<void> = async () => {},
   ) {}
 
   async create(input: {
@@ -358,6 +361,33 @@ export class WorkspaceService {
     };
     this.repositories.updateWorkspace(restored);
     return restored;
+  }
+
+  // The one way to destroy everything an archived workspace still holds:
+  // session worktrees with their branches (unpushed commits included),
+  // repository checkouts, the folder and every file in it, and its tasks and
+  // sessions. Only an archived workspace qualifies, so it is always a second,
+  // deliberate step after archiving.
+  async deletePermanently(reference: string): Promise<Workspace> {
+    const workspace = await this.get(reference);
+    if (!workspace.archivedAt)
+      throw new DaedalusError(
+        "CONFLICT",
+        `Workspace '${workspace.slug}' is not archived; archive it before deleting it`,
+      );
+    if (await this.hasLiveAgents(workspace.id))
+      throw new DaedalusError(
+        "CONFLICT",
+        "Workspace has live agent sessions; stop them before deleting it",
+      );
+    const folderExists = await pathExists(workspace.path);
+    if (folderExists) await this.verifyDeletionTarget(workspace);
+    await this.discardCheckouts(workspace.id);
+    if (folderExists) await removeDirectory(workspace.path);
+    this.repositories.transaction(() =>
+      this.repositories.deleteWorkspace(workspace.id),
+    );
+    return workspace;
   }
 
   private async verifyDeletionTarget(workspace: Workspace): Promise<void> {

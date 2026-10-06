@@ -1806,6 +1806,40 @@ Before working in this workspace:
       });
     });
 
+    test("deleting an archived workspace takes its trees, checkouts and folder", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const { context, workspace, repository, session, worktree } =
+          await scenario(home);
+        await commitIn(worktree.path, "UNPUSHED.md");
+
+        // Only an archived workspace can be deleted.
+        await expect(
+          context.workspaces.deletePermanently(workspace.id),
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+        await context.workspaces.archive(workspace.id);
+        // Archiving kept the tree, because it holds an unpushed commit.
+        expect(await pathExists(worktree.path)).toBe(true);
+
+        await context.workspaces.deletePermanently(workspace.id);
+        expect(await pathExists(workspace.path)).toBe(false);
+        await expect(
+          context.workspaces.get(workspace.id),
+        ).rejects.toMatchObject({ code: "NOT_FOUND" });
+        expect(context.repositories.findAgent(session.id)).toBeUndefined();
+        // The shared clone stays, with no worktree registered into the
+        // deleted folder and no branch left from the session.
+        const git = (args: string[]) =>
+          runCommand("git", ["--git-dir", repository.canonicalPath, ...args]);
+        expect((await git(["worktree", "list"])).stdout).not.toContain(
+          workspace.path,
+        );
+        expect(
+          (await git(["rev-parse", "--verify", worktree.branchName])).exitCode,
+        ).not.toBe(0);
+        context.close();
+      });
+    });
+
     test("refuses to remove a tree holding uncommitted or unpushed work", async () => {
       await withTemporaryDaedalusHome(async (home) => {
         const { context, session, worktree } = await scenario(home);

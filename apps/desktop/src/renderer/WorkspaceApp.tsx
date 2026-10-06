@@ -61,6 +61,7 @@ import { taskActions } from "./task-actions";
 import { TaskCostLine, TaskTimeline } from "./TaskTimeline";
 import { TaskActionBar } from "./TaskActionBar";
 import { askConfirm, askText, DialogHost } from "./dialogs";
+import { TaskActionIcon } from "./task-action-icons";
 import { type FileOpenRequest, FilesView } from "./files/FilesView";
 import {
   ChangedFileList,
@@ -1793,6 +1794,11 @@ export function WorkspaceApp({
   const [archivingWorkspaceIds, setArchivingWorkspaceIds] = useState<
     ReadonlySet<string>
   >(() => new Set());
+  // Archived workspaces whose deletion has not returned yet; removing their
+  // worktrees and folder can take seconds, so they leave the list at once.
+  const [deletingWorkspaceIds, setDeletingWorkspaceIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
   // Sessions confirmed for archiving whose request has not returned yet. They
   // show as archived at once; stopping the agent and releasing its worktrees
   // can take seconds, and the dialog should not wait for that.
@@ -2607,9 +2613,10 @@ export function WorkspaceApp({
   const activeWorkspaces = (snapshot?.workspaces ?? []).filter(
     (item) => !item.archivedAt && !archivingWorkspaceIds.has(item.id),
   );
-  const archivedWorkspaces = (snapshot?.workspaces ?? []).filter(
-    (item) => item.archivedAt,
-  );
+  // Most recently archived first, so the one just put away is on top.
+  const archivedWorkspaces = (snapshot?.workspaces ?? [])
+    .filter((item) => item.archivedAt && !deletingWorkspaceIds.has(item.id))
+    .sort((a, b) => b.archivedAt!.localeCompare(a.archivedAt!));
   const workspace = activeWorkspaces.find((item) => item.id === workspaceId);
   const worktreeChanges = useWorktreeChanges(
     client,
@@ -3735,6 +3742,35 @@ export function WorkspaceApp({
       setScope("workspace");
       setWorkspaceId(restored.id);
     }
+  }
+
+  async function deleteWorkspace(item: WorkspaceDto) {
+    const sessionIds = new Set(
+      (snapshot?.agents ?? [])
+        .filter((session) => session.workspaceId === item.id)
+        .map((session) => session.id),
+    );
+    const worktrees = (snapshot?.worktrees ?? []).filter((worktree) =>
+      sessionIds.has(worktree.sessionId),
+    ).length;
+    const confirmed = await askConfirm({
+      title: `Delete ${item.name} permanently?`,
+      message: `The folder ${item.path} and everything in it are deleted${
+        worktrees > 0
+          ? `, including ${worktrees} session ${worktrees === 1 ? "worktree" : "worktrees"} and ${worktrees === 1 ? "its branch" : "their branches"}, unpushed commits too`
+          : ""
+      }. Its tasks and sessions go with it. This cannot be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!confirmed) return;
+    setDeletingWorkspaceIds((current) => new Set(current).add(item.id));
+    await perform(client.request.workspaceDelete({ reference: item.id }));
+    setDeletingWorkspaceIds((current) => {
+      const next = new Set(current);
+      next.delete(item.id);
+      return next;
+    });
   }
 
   async function createIntegratedTerminal(
@@ -5349,11 +5385,31 @@ export function WorkspaceApp({
                   <div className="archived-item" key={item.id}>
                     <span>
                       <strong>{item.name}</strong>
-                      <small>{item.slug}</small>
+                      <small>
+                        {item.slug} · archived{" "}
+                        <time dateTime={item.archivedAt!}>
+                          {new Date(item.archivedAt!).toLocaleDateString()}
+                        </time>
+                      </small>
                     </span>
-                    <button onClick={() => void restoreWorkspace(item)}>
-                      Restore
-                    </button>
+                    <span className="archived-item-actions">
+                      <button
+                        aria-label={`Restore ${item.name}`}
+                        className="archived-item-action"
+                        onClick={() => void restoreWorkspace(item)}
+                        title="Restore"
+                      >
+                        <TaskActionIcon name="restore" />
+                      </button>
+                      <button
+                        aria-label={`Delete ${item.name} permanently`}
+                        className="archived-item-action danger"
+                        onClick={() => void deleteWorkspace(item)}
+                        title="Delete permanently"
+                      >
+                        <TaskActionIcon name="delete" />
+                      </button>
+                    </span>
                   </div>
                 ))}
               </div>

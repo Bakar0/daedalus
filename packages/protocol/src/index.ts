@@ -785,6 +785,8 @@ export interface DesktopRpcSchema {
       workspaceReorder: Request<{ references: string[] }, WorkspaceDto[]>;
       workspaceArchive: Request<{ reference: string }, WorkspaceDto>;
       workspaceRestore: Request<{ reference: string }, WorkspaceDto>;
+      /** Archived workspaces only; deletes the folder and everything in it. */
+      workspaceDelete: Request<{ reference: string }, WorkspaceDto>;
       workspaceContentGet: Request<{ workspace: string }, WorkspaceContentDto>;
       workspaceDirectoryList: Request<
         { workspace: string; path?: string },

@@ -42,8 +42,11 @@ daedal workspace update <workspace> [--name <name>] [--slug <slug>]
 daedal workspace reorder <workspace> [<workspace>...]
 daedal workspace archive <workspace>
 daedal workspace restore <workspace>
+daedal workspace delete <workspace> --force
 daedal workspace remove <workspace> [--delete-files] --force
 ```
+
+`delete` is for an archived workspace you no longer want. It removes every session worktree in it together with its branches, unpushed commits included, unregisters its checkouts under `repos/` from the shared clones, deletes the workspace folder and everything in it, and then deletes its tasks and sessions. It refuses a workspace that is not archived, one with a live session, and a folder whose identity marker does not match. The shared clones in the repository library stay. This is the desktop app's trash button in the archived workspaces list.
 
 Create makes a real directory and identity marker before committing metadata. Slugs contain lowercase ASCII letters, digits, and hyphens. Updating a slug changes the lookup alias, not the directory path.
 

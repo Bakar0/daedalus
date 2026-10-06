@@ -3701,6 +3701,35 @@ dd {
   font-size: 10px !important;
   padding: 5px 7px !important;
 }
+.archived-item-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+.archived-item .archived-item-action {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 6px !important;
+  color: var(--muted) !important;
+  display: inline-flex;
+  height: 24px;
+  justify-content: center;
+  padding: 0 !important;
+  width: 24px;
+}
+.archived-item .archived-item-action svg {
+  height: 15px;
+  margin: 0;
+  width: 15px;
+}
+.archived-item .archived-item-action:hover:not(:disabled) {
+  background: var(--raised-hover) !important;
+  color: var(--text) !important;
+}
+.archived-item .archived-item-action.danger:hover:not(:disabled) {
+  color: #f0707e !important;
+}
 .workspace-archive-list {
   margin-top: auto;
 }

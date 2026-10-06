@@ -535,6 +535,10 @@ export function createDesktopRequestHandlers(
       mutate(async () =>
         workspaceDto(await context.workspaces.restore(reference)),
       ),
+    workspaceDelete: ({ reference }) =>
+      mutate(async () =>
+        workspaceDto(await context.workspaces.deletePermanently(reference)),
+      ),
     workspaceContentGet: ({ workspace }) =>
       result(async () =>
         workspaceContentDto(await context.workspaceContent.get(workspace)),

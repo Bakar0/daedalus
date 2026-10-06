@@ -297,7 +297,7 @@ const help = `daedal ${VERSION} — local-first control plane for coding agents
 Usage:
   daedal doctor [--json]
   daedal shutdown [--dry-run] [--keep-terminals] [--force] [--json]
-  daedal workspace <create|list|get|update|archive|restore|remove> ... [--json]
+  daedal workspace <create|list|get|update|archive|restore|delete|remove> ... [--json]
   daedal task <create|list|get|current|update|status|timeline|remove> ... [--json]
   daedal repo <library|list|add|attach|sync|fetch|detach|worktree> ... [--json]
   daedal agent <spawn|list|get|wait|attach|send|archive|restore|revive|stop|remove> ... [--json]
@@ -323,6 +323,7 @@ const commandHelp: Record<string, string> = {
       [--default-model <model>|none] [--auto-handoff <percent>|off]
   daedal workspace archive <workspace>
   daedal workspace restore <workspace>
+  daedal workspace delete <workspace> --force
   daedal workspace remove <workspace> [--delete-files] --force
 
 The board settings are per workspace. --start-sets-in-progress (on by default)
@@ -792,6 +793,26 @@ async function workspaceCommand(
       console.log(
         `${action === "archive" ? "Archived" : "Restored"} workspace ${result.slug}`,
       ),
+    );
+    return 0;
+  }
+  if (action === "delete") {
+    const parsed = parseArguments(args, [], ["force"]);
+    expectPositionals(
+      parsed.positionals,
+      1,
+      "daedal workspace delete <workspace> --force",
+    );
+    if (!parsed.flags.has("force"))
+      throw new DaedalusError(
+        "VALIDATION",
+        "Deleting a workspace removes its folder for good and requires --force",
+      );
+    const result = await context.workspaces.deletePermanently(
+      parsed.positionals[0]!,
+    );
+    printResult(result, json, () =>
+      console.log(`Deleted workspace ${result.slug} and ${result.path}`),
     );
     return 0;
   }

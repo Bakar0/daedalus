@@ -2323,6 +2323,25 @@ export class WorkspaceContentService {
     return released;
   }
 
+  // Called only when a workspace is deleted for good. Every session worktree
+  // goes with its branches, whatever it holds, and every checkout under
+  // `repos/` is unregistered, so the shared clones keep no worktree entry
+  // pointing into a folder that is about to disappear.
+  async discardWorkspaceCheckouts(workspaceId: string): Promise<void> {
+    const repositories =
+      this.repositories.listWorkspaceRepositories(workspaceId);
+    for (const worktree of this.repositories.listSessionWorktrees({
+      workspaceId,
+    })) {
+      const repository = repositories.find(
+        (item) => item.id === worktree.repositoryId,
+      );
+      if (repository) await this.discardWorktree(repository, worktree);
+    }
+    for (const repository of repositories)
+      await this.discardReferenceCheckout(repository);
+  }
+
   async syncRepository(id: string): Promise<WorkspaceRepository> {
     const repository = this.repositories.findWorkspaceRepository(id);
     if (!repository)

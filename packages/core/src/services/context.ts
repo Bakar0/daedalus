@@ -127,6 +127,7 @@ export async function createApplicationContext(
     (workspaceId) => agents.archiveWorkspaceSessions(workspaceId),
     config.home,
     () => config.workspaceInstructionFilesEnabled,
+    (workspaceId) => workspaceContent.discardWorkspaceCheckouts(workspaceId),
   );
   const tasks = new TaskService(repositories, workspaces, (taskId) =>
     agents.hasLiveTaskAgents(taskId),
