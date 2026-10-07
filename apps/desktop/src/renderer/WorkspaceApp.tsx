@@ -6712,14 +6712,21 @@ export function WorkspaceApp({
             client={client}
             onError={setError}
             onFocusMode={(enabled) => void setFocusMode(enabled)}
-            onOpenTerminal={(terminal) => {
-              // A sign-in opens a browser and may ask something in its
-              // terminal, which is behind this dialog; the dialog goes so the
-              // terminal can be seen. Settings checks again when reopened.
-              setModal(undefined);
-              setTerminalPanelOpen(true);
-              setActiveTerminalId(terminal.id);
-            }}
+            renderTerminal={(terminal) => (
+              // A sign-in runs where it was started, inside Settings, so its
+              // result is read in place.
+              <TerminalSurface
+                fitRevision={terminalFitRevision}
+                focused
+                id={terminal.id}
+                label={terminal.name}
+                onCopy={copyTerminalText}
+                onOpenLink={openTerminalLink}
+                status={terminal.status}
+                target="integrated"
+                terminalEndpoint={terminalEndpoint}
+              />
+            )}
             onSection={setSettingsSection}
             onTheme={(value) => {
               setTheme(value);

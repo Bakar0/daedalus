@@ -55,7 +55,7 @@ const render = (section: SettingsSection) =>
       client={client}
       onError={() => undefined}
       onFocusMode={() => undefined}
-      onOpenTerminal={() => undefined}
+      renderTerminal={() => null}
       onSection={() => undefined}
       onTheme={() => undefined}
       perform={async () => undefined}
@@ -101,8 +101,10 @@ describe("SettingsModal", () => {
     expect(agents).toContain("/usr/local/bin/claude");
     expect(agents).toContain("Personal");
     expect(agents).toContain("Add Claude account");
-    // The default account can be neither renamed nor removed.
-    expect(agents.match(/>Rename</g)).toHaveLength(1);
+    // Both can be edited (Default only its sign-in method), and only the
+    // added one can be removed.
+    expect(agents.match(/>Edit</g)).toHaveLength(2);
+    expect(agents.match(/>Remove</g)).toHaveLength(1);
   });
 
   test("an account's line says who it is signed in as, or what is wrong", () => {
@@ -145,7 +147,7 @@ const renderAbout = (
       client={client}
       onError={() => undefined}
       onFocusMode={() => undefined}
-      onOpenTerminal={() => undefined}
+      renderTerminal={() => null}
       onSection={() => undefined}
       onTheme={() => undefined}
       perform={async () => undefined}

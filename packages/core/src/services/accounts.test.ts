@@ -343,14 +343,16 @@ describe("account profiles", () => {
       });
       await expect(
         context.accounts.remove("claude", "Personal"),
-      ).rejects.toThrow("Archive it before removing the account");
-      await context.agents.archive(agent.id);
+      ).rejects.toThrow("Stop or archive it before removing the account");
+      // A stopped session no longer holds the account.
+      await context.agents.stop(agent.id, true);
       await context.accounts.remove("claude", "Personal");
       expect(await pathExists(folder)).toBe(false);
       expect(
         (await context.workspaces.get(workspace.id)).defaultClaudeAccount,
       ).toBeNull();
-      // The archived session cannot come back on an account that is gone.
+      // Archived afterwards, it cannot come back on an account that is gone.
+      await context.agents.archive(agent.id);
       await expect(context.agents.restore(agent.id)).rejects.toThrow(
         "which was removed",
       );
@@ -524,6 +526,66 @@ describe("account profiles", () => {
       expect(
         context.accounts.signInCommand("claude", null, "console").args,
       ).toEqual(["auth", "login", "--console"]);
+      context.close();
+    });
+  });
+
+  test("an account remembers how it signs in, so Sign in needs no choice", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context } = await setup(home);
+      await context.accounts.add("claude", "Work", "login", "sso");
+      expect(context.accounts.signInCommand("claude", "Work").args).toEqual([
+        "auth",
+        "login",
+        "--sso",
+      ]);
+      // A one-off choice still wins over the stored one.
+      expect(
+        context.accounts.signInCommand("claude", "Work", "console").args,
+      ).toEqual(["auth", "login", "--console"]);
+      // The default account has one too, and it survives a restart.
+      await context.accounts.setLogin("claude", "default", "console");
+      expect(context.accounts.signInCommand("claude").args).toEqual([
+        "auth",
+        "login",
+        "--console",
+      ]);
+      const reloaded = await loadConfig({ DAEDALUS_HOME: home });
+      expect(reloaded.defaultLogins).toEqual({ claude: "console" });
+      expect(reloaded.accounts[0]?.login).toBe("sso");
+      expect(
+        context.accounts.list().find((item) => item.name === "Work")?.login,
+      ).toBe("sso");
+      await expect(
+        context.accounts.setLogin("codex", "default", "sso"),
+      ).rejects.toThrow("Only Claude has more than one login");
+      context.close();
+    });
+  });
+
+  test("Remove can archive the sessions running on an account instead of refusing", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context } = await setup(home);
+      const profile = await context.accounts.add("claude", "Personal");
+      await Bun.write(
+        join(home, "accounts", "claude", profile.id, "signed-in"),
+        "",
+      );
+      const workspace = await context.workspaces.create({ name: "Side" });
+      const agent = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "claude",
+        account: profile.id,
+        name: "Accept terms",
+      });
+      await expect(
+        context.accounts.remove("claude", "Personal"),
+      ).rejects.toThrow("'Accept terms' is running on 'Personal'");
+      await context.accounts.remove("claude", "Personal", {
+        archiveSessions: true,
+      });
+      expect((await context.agents.get(agent.id)).archivedAt).not.toBeNull();
+      expect(context.config.accounts).toEqual([]);
       context.close();
     });
   });

@@ -254,7 +254,9 @@ export async function createApplicationContext(
     notifications,
     activity,
     skills: new SkillService(config),
-    accounts: new AccountService(config, repositories),
+    accounts: new AccountService(config, repositories, undefined, (id) =>
+      agents.archive(id, true),
+    ),
     abilities,
     routines,
     routineReports,

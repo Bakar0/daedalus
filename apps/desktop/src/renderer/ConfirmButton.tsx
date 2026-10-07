@@ -40,6 +40,11 @@ export function ConfirmButton({
 }: Props) {
   const [armed, setArmed] = useState(false);
   const armedAt = useRef(0);
+  const button = useRef<HTMLButtonElement>(null);
+  // Its size before arming. The pill is styled for icon buttons, and on a
+  // text button it came out smaller than the button it replaced; it is
+  // never allowed to be.
+  const [size, setSize] = useState<{ width: number; height: number }>();
   useEffect(() => {
     if (!armed) return;
     const timer = window.setTimeout(() => setArmed(false), DISARM_AFTER_MS);
@@ -48,6 +53,7 @@ export function ConfirmButton({
   return (
     <button
       {...props}
+      ref={button}
       aria-label={armed ? (armedTitle ?? armedLabel) : props["aria-label"]}
       className={armed ? `${className ?? ""} confirm-armed` : className}
       data-armed={armed ? "true" : undefined}
@@ -56,6 +62,7 @@ export function ConfirmButton({
         armed
           ? ({
               ...props.style,
+              ...(size ? { minWidth: size.width, minHeight: size.height } : {}),
               "--confirm-window": `${DISARM_AFTER_MS}ms`,
             } as CSSProperties)
           : props.style
@@ -66,6 +73,8 @@ export function ConfirmButton({
       }}
       onClick={() => {
         if (!armed) {
+          const rect = button.current?.getBoundingClientRect();
+          if (rect) setSize({ width: rect.width, height: rect.height });
           armedAt.current = Date.now();
           setArmed(true);
           return;

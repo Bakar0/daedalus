@@ -9,6 +9,8 @@ import {
 } from "@daedalus/platform";
 import {
   saveAccounts,
+  saveDefaultLogin,
+  type ClaudeLogin,
   type AccountProfile,
   type AccountProvider,
   type DaedalusConfig,
@@ -51,6 +53,7 @@ export interface AccountStatus extends SignIn {
   directory: string;
   createdAt: string | null;
   kind: "login" | "api-key";
+  login?: ClaudeLogin;
   executable: string;
   checkedAt: string;
 }
@@ -89,7 +92,7 @@ const CLAUDE_METHODS: Record<string, string> = {
 };
 
 /** How a login-based account signs in: Claude's three login flows. */
-export type SignInVariant = "subscription" | "sso" | "console";
+export type SignInVariant = ClaudeLogin;
 
 /** The Keychain item an API-key account's key lives in. */
 export const API_KEY_SERVICE = "Daedalus Claude API key";
@@ -379,6 +382,8 @@ export class AccountService {
       ) => Promise<void>;
       remove: (service: string, account: string) => Promise<void>;
     } = { write: writeKeychainPassword, remove: deleteKeychainPassword },
+    /** Archives a session; how Remove clears the sessions running on it. */
+    private readonly archiveSession?: (sessionId: string) => Promise<unknown>,
   ) {}
 
   /** Every account, the default ones first. */
@@ -389,8 +394,13 @@ export class AccountService {
     directory: string;
     createdAt: string | null;
     kind: "login" | "api-key";
+    /** Claude only: which login Sign in runs. */
+    login?: ClaudeLogin;
   }> {
     const defaults = (["claude", "codex"] as const).map((provider) => ({
+      ...(provider === "claude"
+        ? { login: this.config.defaultLogins.claude ?? "subscription" }
+        : {}),
       provider,
       account: DEFAULT_ACCOUNT,
       name: "Default",
@@ -401,6 +411,9 @@ export class AccountService {
     }));
     const profiles = this.config.accounts.map((profile) => ({
       kind: profile.kind ?? ("login" as const),
+      ...(profile.provider === "claude" && profile.kind !== "api-key"
+        ? { login: profile.login ?? ("subscription" as const) }
+        : {}),
       provider: profile.provider,
       account: profile.id,
       name: profile.name,
@@ -448,9 +461,15 @@ export class AccountService {
     provider: string,
     name: string,
     kind: "login" | "api-key" = "login",
+    login?: ClaudeLogin,
   ): Promise<AccountProfile> {
     const owner = accountProvider(provider);
     const trimmed = this.validName(owner, name);
+    if (login && (owner !== "claude" || kind === "api-key"))
+      throw new DaedalusError(
+        "VALIDATION",
+        "A choice of login is for Claude accounts that sign in",
+      );
     if (kind === "api-key" && owner !== "claude")
       throw new DaedalusError(
         "VALIDATION",
@@ -462,6 +481,7 @@ export class AccountService {
       name: trimmed,
       createdAt: new Date().toISOString(),
       ...(kind === "api-key" ? { kind } : {}),
+      ...(login ? { login } : {}),
     };
     const directory = accountDirectory(this.config, profile);
     await ensureDirectory(directory);
@@ -480,6 +500,44 @@ export class AccountService {
       accountConfig(this.config, owner, profile.id),
     ).syncArtifacts();
     return profile;
+  }
+
+  /**
+   * Changes which of Claude's logins an account's Sign in runs. The default
+   * account has one too, kept apart from the profiles.
+   */
+  async setLogin(
+    provider: string,
+    reference: string | null | undefined,
+    login: ClaudeLogin,
+  ): Promise<{
+    provider: AccountProvider;
+    account: string;
+    login: ClaudeLogin;
+  }> {
+    const owner = accountProvider(provider);
+    if (owner !== "claude")
+      throw new DaedalusError(
+        "VALIDATION",
+        "Only Claude has more than one login",
+      );
+    const profile = findAccount(this.config, owner, reference);
+    if (!profile) {
+      await saveDefaultLogin(this.config, login);
+      return { provider: owner, account: DEFAULT_ACCOUNT, login };
+    }
+    if (profile.kind === "api-key")
+      throw new DaedalusError(
+        "VALIDATION",
+        `'${profile.name}' uses an API key, not a login`,
+      );
+    await saveAccounts(
+      this.config,
+      this.config.accounts.map((entry) =>
+        entry.id === profile.id ? { ...entry, login } : entry,
+      ),
+    );
+    return { provider: owner, account: profile.id, login };
   }
 
   async rename(
@@ -510,21 +568,36 @@ export class AccountService {
    * archived, and say why when someone tries to restore them. Workspaces that
    * started sessions on it by default go back to the default account.
    */
-  async remove(provider: string, reference: string): Promise<AccountProfile> {
+  async remove(
+    provider: string,
+    reference: string,
+    options: {
+      /** Archive the sessions running on it first, instead of refusing. */
+      archiveSessions?: boolean;
+    } = {},
+  ): Promise<AccountProfile> {
     const owner = accountProvider(provider);
     const profile = this.requireProfile(owner, reference);
+    // Only a session that is running holds the account: it would lose its
+    // login mid-turn. One that stopped or failed has nothing to lose, and
+    // afterwards it says the account was removed if anyone restores it.
     const live = this.repositories
       .listAgents()
       .filter(
         (session) =>
           session.provider === owner &&
           session.account === profile.id &&
-          !session.archivedAt,
+          !session.archivedAt &&
+          (session.status === "running" || session.status === "starting"),
       );
-    if (live.length)
+    // Asked for: the running sessions are archived, so their conversations
+    // stop cleanly before the login they run on goes.
+    if (live.length && options.archiveSessions && this.archiveSession)
+      for (const session of live) await this.archiveSession(session.id);
+    else if (live.length)
       throw new DaedalusError(
         "CONFLICT",
-        `${live.length === 1 ? "A session runs" : `${live.length} sessions run`} on '${profile.name}'. Archive ${live.length === 1 ? "it" : "them"} before removing the account.`,
+        `${live.map((session) => `'${session.name}'`).join(", ")} ${live.length === 1 ? "is" : "are"} running on '${profile.name}'. Stop or archive ${live.length === 1 ? "it" : "them"} before removing the account.`,
         { sessions: live.map((session) => session.id) },
       );
     // Claude keeps the login in the Keychain under a name made from the
@@ -596,6 +669,7 @@ export class AccountService {
           directory: entry.directory,
           createdAt: entry.createdAt,
           kind: entry.kind,
+          ...(entry.login ? { login: entry.login } : {}),
           executable:
             executable ??
             this.config.agents[entry.provider]?.executable ??
@@ -615,9 +689,27 @@ export class AccountService {
   signInCommand(
     provider: string,
     reference?: string | null,
-    variant: SignInVariant = "subscription",
+    variant?: SignInVariant,
   ): AccountCommand {
-    return this.command(provider, reference, "in", variant);
+    return this.command(
+      provider,
+      reference,
+      "in",
+      variant ?? this.storedLogin(provider, reference),
+    );
+  }
+
+  /** The login an account was set to sign in with; subscription if none. */
+  private storedLogin(
+    provider: string,
+    reference: string | null | undefined,
+  ): SignInVariant {
+    if (provider !== "claude") return "subscription";
+    const profile = findAccount(this.config, "claude", reference);
+    return (
+      (profile ? profile.login : this.config.defaultLogins.claude) ??
+      "subscription"
+    );
   }
 
   signOutCommand(provider: string, reference?: string | null): AccountCommand {
@@ -677,7 +769,7 @@ export class AccountService {
     terminals: IntegratedTerminalService,
     provider: string,
     reference?: string | null,
-    variant: SignInVariant = "subscription",
+    variant?: SignInVariant,
   ): Promise<IntegratedTerminal> {
     const command = this.signInCommand(provider, reference, variant);
     return terminals.createCommand({

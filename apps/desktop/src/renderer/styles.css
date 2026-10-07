@@ -1902,7 +1902,8 @@ button:not(
   justify-content: center;
   position: fixed;
   backdrop-filter: blur(8px);
-  z-index: 10;
+  /* Above everything in the panels, the terminal's resize handle included, which otherwise caught the pointer through the dialog. */
+  z-index: 45;
 }
 .modal {
   background: var(--overlay);
@@ -1924,7 +1925,8 @@ button:not(
 }
 /* A confirm can be asked from inside another dialog, so it sits above them. */
 .app-dialog-backdrop {
-  z-index: 20;
+  /* Above a modal, since a confirm can open from inside one; below toasts. */
+  z-index: 55;
 }
 .app-dialog-message {
   white-space: pre-line;
@@ -6941,42 +6943,8 @@ dd {
 .accounts-actions {
   align-items: center;
 }
-/* Sign in on a Claude account: a button that asks which login. */
-.accounts-signin {
-  align-items: center;
-  background: var(--accent);
-  border-radius: 8px;
-  color: #fff;
-  cursor: pointer;
-  display: inline-flex;
-  font-size: 12px;
-  font-weight: 600;
-  gap: 6px;
-  list-style: none;
-  padding: 6px 10px 6px 12px;
-}
-.accounts-signin::-webkit-details-marker {
-  display: none;
-}
-.accounts-signin:hover {
-  background: var(--accent-hover);
-}
-.accounts-signin span {
-  font-size: 9px;
-  opacity: 0.85;
-}
-.accounts-signin-item {
-  align-items: flex-start !important;
-  display: grid !important;
-  gap: 1px;
-  min-width: 200px;
-}
-.accounts-signin-item small {
-  color: var(--muted);
-  font-size: 10px;
-}
-/* The add form's choice of login or API key, as one two-part control. */
-.accounts-kind {
+/* How a Claude account signs in, as one segmented control. */
+.accounts-methods {
   background: var(--raised);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -6984,7 +6952,7 @@ dd {
   flex-shrink: 0;
   padding: 2px;
 }
-.accounts-kind button {
+.accounts-methods button {
   background: transparent !important;
   border: 0 !important;
   border-radius: 6px !important;
@@ -6992,7 +6960,7 @@ dd {
   font-size: 11px;
   padding: 4px 10px !important;
 }
-.accounts-kind button.selected {
+.accounts-methods button.selected {
   background: var(--accent-wash) !important;
   color: var(--text) !important;
 }
@@ -7005,6 +6973,84 @@ dd {
 .accounts-name-form button {
   height: 30px;
 }
-.accounts-name-form .accounts-kind button {
+.accounts-name-form .accounts-methods button {
   height: 24px;
+}
+
+/* The add form: a card under the list, name, method and, for a key, the key. */
+.accounts-add-form {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+.accounts-add-form label,
+.accounts-add-method {
+  display: grid;
+  gap: 5px;
+}
+.accounts-add-form label > span,
+.accounts-add-method > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.accounts-add-form input {
+  font-size: 12px;
+  height: 30px;
+  padding: 0 10px;
+}
+.accounts-add-method .accounts-methods {
+  justify-self: start;
+}
+.accounts-add-method small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.accounts-form-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.accounts-form-actions button {
+  height: 30px;
+}
+
+/* Rows under an account's row: its edit card and its running sign-in. */
+.accounts-list li.accounts-form-row,
+.accounts-list li.accounts-signin-panel {
+  background: none;
+  display: block;
+  padding: 0;
+}
+.accounts-form-title {
+  font-size: 12px;
+}
+.accounts-signin-panel {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overflow: hidden;
+}
+.accounts-signin-head {
+  align-items: center;
+  background: var(--raised);
+  color: var(--secondary);
+  display: flex;
+  font-size: 11px;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 8px 10px;
+}
+.accounts-signin-done {
+  color: var(--success);
+  font-size: 12px;
+}
+.accounts-signin-terminal {
+  background: #11151d;
+  height: 240px;
+  position: relative;
+}
+.accounts-signin-terminal > * {
+  height: 100%;
 }

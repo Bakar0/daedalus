@@ -123,6 +123,9 @@ const accountDto = (
   directory: accountDirectory(context.config, profile),
   createdAt: profile.createdAt,
   kind: profile.kind ?? "login",
+  ...(profile.provider === "claude" && profile.kind !== "api-key"
+    ? { login: profile.login ?? "subscription" }
+    : {}),
 });
 const integratedTerminalDto = (
   terminal: IntegratedTerminal,
@@ -804,10 +807,15 @@ export function createDesktopRequestHandlers(
             : {}),
         })),
       ),
-    accountAdd: ({ provider, name, kind }) =>
+    accountAdd: ({ provider, name, kind, login }) =>
       mutate(async () =>
-        accountDto(context, await context.accounts.add(provider, name, kind)),
+        accountDto(
+          context,
+          await context.accounts.add(provider, name, kind, login),
+        ),
       ),
+    accountSetLogin: ({ provider, account, login }) =>
+      mutate(() => context.accounts.setLogin(provider, account, login)),
     accountSetApiKey: ({ provider, account, key }) =>
       mutate(async () =>
         accountDto(
@@ -822,9 +830,12 @@ export function createDesktopRequestHandlers(
           await context.accounts.rename(provider, account, name),
         ),
       ),
-    accountRemove: ({ provider, account }) =>
+    accountRemove: ({ provider, account, archiveSessions }) =>
       mutate(async () =>
-        accountDto(context, await context.accounts.remove(provider, account)),
+        accountDto(
+          context,
+          await context.accounts.remove(provider, account, { archiveSessions }),
+        ),
       ),
     accountSignIn: ({ provider, account, variant }) =>
       mutate(async () =>

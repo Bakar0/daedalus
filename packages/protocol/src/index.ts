@@ -309,7 +309,11 @@ export interface AccountDto {
   createdAt: string | null;
   /** `api-key`: a Claude key kept in the Keychain; `login` otherwise. */
   kind: "login" | "api-key";
+  /** Claude login accounts: which login Sign in runs. */
+  login?: ClaudeLoginDto;
 }
+
+export type ClaudeLoginDto = "subscription" | "sso" | "console";
 
 export type SignInStateDto = "missing" | "signed-out" | "signed-in" | "unknown";
 
@@ -1182,8 +1186,15 @@ export interface DesktopRpcSchema {
           provider: "claude" | "codex";
           name: string;
           kind?: "login" | "api-key";
+          /** Claude login accounts: which login Sign in will run. */
+          login?: ClaudeLoginDto;
         },
         AccountDto
+      >;
+      /** Sets which login an account's Sign in runs (Claude). */
+      accountSetLogin: Request<
+        { provider: "claude"; account: string; login: ClaudeLoginDto },
+        { provider: "claude" | "codex"; account: string; login: ClaudeLoginDto }
       >;
       /** Stores an API-key account's key in the Keychain. */
       accountSetApiKey: Request<
@@ -1196,7 +1207,12 @@ export interface DesktopRpcSchema {
       >;
       /** Signs the account out and deletes its folder. */
       accountRemove: Request<
-        { provider: "claude" | "codex"; account: string },
+        {
+          provider: "claude" | "codex";
+          account: string;
+          /** Archive the sessions running on it first, instead of refusing. */
+          archiveSessions?: boolean;
+        },
         AccountDto
       >;
       /**

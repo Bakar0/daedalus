@@ -137,10 +137,11 @@ Startup reconciliation compares SQLite with tmux. Missing live sessions become `
 ```text
 daedal account list
 daedal account status [<claude|codex> [<account>]]
-daedal account add <claude|codex> <name> [--api-key]
+daedal account add <claude|codex> <name> [--api-key | --sso | --console]
+daedal account method claude <account> <subscription|sso|console>
 daedal account key claude <account>        # the key on standard input
 daedal account rename <claude|codex> <account> <name>
-daedal account remove <claude|codex> <account> --force
+daedal account remove <claude|codex> <account> --force [--archive-sessions]
 daedal account login <claude|codex> [<account>] [--sso | --console]
 daedal account logout <claude|codex> [<account>]
 ```
@@ -149,7 +150,7 @@ An account is a provider configuration folder, so one machine can run sessions o
 
 Daedalus stores no credentials. A session on a profile runs with `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` (Claude), or `CODEX_HOME` and `CODEX_SQLITE_HOME` (Codex), set to its folder; a session on the default account sets none of them. Claude keeps a profile's login in the Keychain under a name made from the folder path, which is why the folder never moves, and Codex keeps it in the folder. `login` and `logout` run the provider's own `claude auth login` / `codex login` (and `logout`) in the calling terminal with those variables, then print the account's status. The desktop app runs the same sign-in in an integrated terminal from Settings → Agents.
 
-Claude accounts can sign in three ways: `login` runs `claude auth login` for a Claude subscription, `--sso` for an organization's single sign-on, and `--console` for an Anthropic Console (API billing) login. Settings → Agents offers the same choice beside Sign in.
+Claude accounts can sign in three ways: a Claude subscription (`claude auth login`), an organization's single sign-on (`--sso`), or an Anthropic Console (API billing) login (`--console`). Each account remembers which: it is chosen when the account is added (`account add --sso|--console`, or the Signs in with choice in Settings → Agents), changed with `account method` or the row's Edit, and kept for the default account too. `account login` runs the remembered one; `--sso` or `--console` on it overrides it once. In the app, Add and sign in creates the account and opens its sign-in in one step.
 
 An account added with `--api-key` uses an Anthropic API key instead of a login. `account key` reads the key from standard input, never from an argument (arguments are visible to every process), checks that it looks like `sk-ant-…`, and stores it in the macOS login Keychain under the service `Daedalus Claude API key`, with the account's folder path as the Keychain account. The account's `settings.json` gets an `apiKeyHelper` that reads it back with `/usr/bin/security find-generic-password … -w`, so no file Daedalus writes ever holds the key. `account logout` on such an account deletes the Keychain item and the helper, and `account remove` does the same before deleting the folder. Claude reports such an account as signed in with "API key" and bills it to the API.
 
@@ -157,7 +158,7 @@ An account added with `--api-key` uses an Anthropic API key instead of a login. 
 
 A session runs on the account it was spawned on for its whole life: restore, revive, handoff and archive all point the provider at the same folder, because that is where its conversation is. `agent spawn --account` chooses; without it the workspace's default for that provider applies, else the default account. `agent continue` keeps the predecessor's account unless `--account` says otherwise. Every launch first asks the provider whether the account is signed in and refuses with exit code 5 when it says it is not, instead of starting a terminal whose first turn fails; an `unknown` answer does not block. Model catalogs, Codex hooks and instructions, session lookup, context telemetry and rate-limit windows are all read from the session's account, and the usage footer shows a profile's windows under its own name.
 
-`remove` requires `--force`, signs the account out (which also removes Claude's Keychain entry), clears workspace defaults that named it and deletes its folder. It is refused while a session that is not archived runs on it. An archived session on a removed account cannot be restored, and says so.
+`remove` requires `--force`, signs the account out (which also removes Claude's Keychain entry), clears workspace defaults that named it and deletes its folder. It is refused while a session is running on it, unless `--archive-sessions` archives those sessions first, which is what Remove in Settings → Agents does. An archived session on a removed account cannot be restored, and says so.
 
 ## Session
 
