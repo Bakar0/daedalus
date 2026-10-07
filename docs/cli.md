@@ -34,6 +34,7 @@ The `details` property is omitted when no structured details exist.
 
 ```text
 daedal workspace create <name> [--slug <slug>] [--path <path>]
+    [--default-claude-account <account>] [--default-codex-account <account>]
 daedal workspace list [--json]
 daedal workspace get <workspace> [--json]
 daedal workspace update <workspace> [--name <name>] [--slug <slug>]

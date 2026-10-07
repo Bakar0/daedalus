@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  currentUsage,
   parseClaudeStatus,
   parseClaudeTranscript,
   parseCodexRateLimits,
@@ -43,6 +44,42 @@ describe("parseClaudeStatus", () => {
         observedAt: "2026-09-15T08:00:00.000Z",
       },
     });
+  });
+
+  test("reads Claude's reset times, which arrive as epoch seconds", () => {
+    expect(
+      parseClaudeStatus("session-1", {
+        observedAt: "2026-09-15T08:00:00.000Z",
+        rate_limits: {
+          five_hour: { used_percentage: 17, resets_at: 1_791_304_200 },
+        },
+      }).usage?.windows,
+    ).toEqual([
+      {
+        label: "5h",
+        usedPercent: 17,
+        resetsAt: new Date(1_791_304_200_000).toISOString(),
+      },
+    ]);
+  });
+
+  test("a kept reading loses each window once that window has reset", () => {
+    const usage = {
+      provider: "claude" as const,
+      observedAt: "2026-10-07T08:00:00.000Z",
+      windows: [
+        { label: "5h", usedPercent: 40, resetsAt: "2026-10-07T10:00:00.000Z" },
+        { label: "7d", usedPercent: 60, resetsAt: "2026-10-10T00:00:00.000Z" },
+        { label: "allowance", usedPercent: 5 },
+      ],
+    };
+    // Two hours on: the five-hour window reset, the weekly one did not, and
+    // a window with no reset time is past the age a live reading is trusted.
+    expect(
+      currentUsage(usage, Date.parse("2026-10-07T11:00:00.000Z")).windows,
+    ).toEqual([
+      { label: "7d", usedPercent: 60, resetsAt: "2026-10-10T00:00:00.000Z" },
+    ]);
   });
 
   test("omits rate limits when an account does not report them", () => {

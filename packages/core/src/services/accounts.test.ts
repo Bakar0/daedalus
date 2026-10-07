@@ -352,4 +352,84 @@ describe("account profiles", () => {
       context.close();
     });
   });
+
+  test("the usage footer has an entry per account and keeps a reading after its session ends", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context } = await setup(home);
+      const profile = await context.accounts.add("claude", "Personal");
+      await Bun.write(
+        join(home, "accounts", "claude", profile.id, "signed-in"),
+        "",
+      );
+      const workspace = await context.workspaces.create({ name: "Side" });
+      const agent = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "claude",
+        account: profile.id,
+      });
+      const resets = Math.floor(Date.now() / 1_000) + 3_600;
+      await Bun.write(
+        join(home, "telemetry", `${agent.id}.json`),
+        JSON.stringify({
+          observedAt: new Date().toISOString(),
+          rate_limits: {
+            five_hour: { used_percentage: 21, resets_at: resets },
+          },
+        }),
+      );
+      const usage = (await context.telemetry.read()).providerUsage;
+      expect(
+        usage.map((item) => [item.account ?? "default", item.windows.length]),
+      ).toEqual([
+        ["default", 0],
+        [profile.id, 1],
+      ]);
+      context.close();
+
+      // Another process, the session gone: the reading is still there until
+      // its window resets.
+      const later = await createApplicationContext({
+        env: {
+          DAEDALUS_HOME: home,
+          CLAUDE_CONFIG_DIR: join(home, "claude-default"),
+          DAEDALUS_AGENTS_HOME: join(home, "agents"),
+        },
+        tmux: new FakeTmux(),
+      });
+      later.repositories.deleteAgent(agent.id);
+      const kept = (await later.telemetry.read()).providerUsage.find(
+        (item) => item.account === profile.id,
+      );
+      expect(kept?.windows).toEqual([
+        {
+          label: "5h",
+          usedPercent: 21,
+          resetsAt: new Date(resets * 1_000).toISOString(),
+        },
+      ]);
+      later.close();
+    });
+  });
+
+  test("a workspace can be created with a default account", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context } = await setup(home);
+      const profile = await context.accounts.add("claude", "Personal");
+      const workspace = await context.workspaces.create({
+        name: "Side",
+        defaultClaudeAccount: "personal",
+      });
+      expect(workspace.defaultClaudeAccount).toBe(profile.id);
+      expect(workspace.defaultCodexAccount).toBeNull();
+      // A name with no account behind it refuses before a folder is made.
+      await expect(
+        context.workspaces.create({
+          name: "Other",
+          defaultClaudeAccount: "nobody",
+        }),
+      ).rejects.toThrow("No Claude account named 'nobody'");
+      expect(await pathExists(join(home, "workspaces", "other"))).toBe(false);
+      context.close();
+    });
+  });
 });

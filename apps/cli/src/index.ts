@@ -318,6 +318,7 @@ const commandHelp: Record<string, string> = {
   account: accountHelp,
   workspace: `Workspace commands:
   daedal workspace create <name> [--slug <slug>] [--path <path>]
+      [--default-claude-account <account>] [--default-codex-account <account>]
   daedal workspace list [--archived]
   daedal workspace reorder <workspace> [<workspace>...]
   daedal workspace get <workspace>
@@ -663,16 +664,23 @@ async function workspaceCommand(
     return 0;
   }
   if (action === "create") {
-    const parsed = parseArguments(args, ["slug", "path"]);
+    const parsed = parseArguments(args, [
+      "slug",
+      "path",
+      "default-claude-account",
+      "default-codex-account",
+    ]);
     expectPositionals(
       parsed.positionals,
       1,
-      "daedal workspace create <name> [--slug <slug>] [--path <path>]",
+      "daedal workspace create <name> [--slug <slug>] [--path <path>] [--default-claude-account <account>] [--default-codex-account <account>]",
     );
     const result = await context.workspaces.create({
       name: parsed.positionals[0]!,
       slug: parsed.values.slug,
       path: parsed.values.path,
+      defaultClaudeAccount: parsed.values["default-claude-account"],
+      defaultCodexAccount: parsed.values["default-codex-account"],
     });
     printResult(result, json, () =>
       console.log(

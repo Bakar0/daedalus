@@ -797,7 +797,14 @@ export interface DesktopRpcSchema {
        */
       terminalEndpoint: Request<Record<string, never>, { endpoint: string }>;
       workspaceCreate: Request<
-        { name: string; slug?: string; path?: string },
+        {
+          name: string;
+          slug?: string;
+          path?: string;
+          /** A profile id, or null for the default account. */
+          defaultClaudeAccount?: string | null;
+          defaultCodexAccount?: string | null;
+        },
         WorkspaceDto
       >;
       workspaceGet: Request<{ reference: string }, WorkspaceDto>;

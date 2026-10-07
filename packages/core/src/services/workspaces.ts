@@ -113,8 +113,21 @@ export class WorkspaceService {
     name: string;
     slug?: string;
     path?: string;
+    /** A profile id or name per provider; omitted or `default` is the default. */
+    defaultClaudeAccount?: string | null;
+    defaultCodexAccount?: string | null;
   }): Promise<Workspace> {
     const name = requiredName(input.name);
+    // Resolved before anything is made, so a name with no profile behind it
+    // refuses without leaving a folder.
+    const defaultClaudeAccount = this.resolveAccount(
+      "claude",
+      input.defaultClaudeAccount ?? null,
+    );
+    const defaultCodexAccount = this.resolveAccount(
+      "codex",
+      input.defaultCodexAccount ?? null,
+    );
     const slug = workspaceSlug(input.slug ?? name);
     const path = resolve(input.path ?? join(this.workspaceRoot, slug));
     if (this.repositories.findWorkspace(slug))
@@ -146,8 +159,8 @@ export class WorkspaceService {
       autoHandoffPercent: null,
       defaultProvider: null,
       defaultModel: null,
-      defaultClaudeAccount: null,
-      defaultCodexAccount: null,
+      defaultClaudeAccount,
+      defaultCodexAccount,
     };
     let created = false;
     try {

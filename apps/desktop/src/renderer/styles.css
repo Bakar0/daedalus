@@ -6923,3 +6923,78 @@ dd {
   letter-spacing: 0;
   text-transform: none;
 }
+/* An account with no reading yet: present, but saying nothing. */
+.provider-usage-none {
+  color: var(--faint);
+}
+/* A session on a non-default account names it on its card. */
+.session-account-chip {
+  background: var(--raised-hover);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--secondary);
+  font-size: 10px;
+  font-style: normal;
+  margin-right: 6px;
+  padding: 0 6px;
+}
+/* The selected tool's accounts, joined to its card by a notch. */
+.session-account-strip {
+  align-items: center;
+  background: var(--accent-wash);
+  border: 1px solid rgb(69 150 254 / 0.4);
+  border-radius: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  position: relative;
+}
+.session-account-strip::before {
+  background: var(--elevated);
+  border-left: 1px solid rgb(69 150 254 / 0.4);
+  border-top: 1px solid rgb(69 150 254 / 0.4);
+  content: "";
+  height: 10px;
+  left: calc(var(--tool-index, 0) * (96px + 9px) + 43px);
+  position: absolute;
+  top: -6px;
+  transform: rotate(45deg);
+  width: 10px;
+}
+.session-account-strip::after {
+  background: var(--accent-wash);
+  content: "";
+  height: 10px;
+  left: calc(var(--tool-index, 0) * (96px + 9px) + 43px);
+  position: absolute;
+  top: -6px;
+  transform: rotate(45deg);
+  width: 10px;
+}
+.session-account-strip > span {
+  color: var(--muted);
+  font-size: 11px;
+  margin-right: 4px;
+}
+.session-account-strip button {
+  align-items: baseline;
+  background: var(--raised) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 999px !important;
+  color: var(--text) !important;
+  display: inline-flex;
+  font-size: 12px;
+  gap: 6px;
+  padding: 3px 10px !important;
+}
+.session-account-strip button.selected {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: #fff !important;
+}
+.session-account-strip button small {
+  font-size: 9px;
+  opacity: 0.75;
+}
