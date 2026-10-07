@@ -283,6 +283,8 @@ export class TeamService {
     const note = await this.say({
       team: team.id,
       author: DAEDALUS_HANDLE,
+      // The new member has its instructions already; only the lead is told.
+      tags: [LEAD_HANDLE],
       body: `@${LEAD_HANDLE} the user added @${handle} ('${session.name}') to the team with these instructions:\n\n${instructions}`,
     });
     return { session, handle, note };
@@ -311,6 +313,8 @@ export class TeamService {
     team: string;
     author: string;
     body: string;
+    /** Who Daedalus's own posts reach, instead of the tags in the body. */
+    tags?: string[];
   }): Promise<TeamSayResult> {
     const team = this.get(input.team);
     const body = input.body.trim();
@@ -324,7 +328,7 @@ export class TeamService {
     const handles = new Set(readers.map((reader) => reader.handle));
     const tags = new Set<string>();
     const unknown: string[] = [];
-    for (const tag of parseTags(body)) {
+    for (const tag of input.tags ?? parseTags(body)) {
       if (tag === ALL_TAG) for (const handle of handles) tags.add(handle);
       else if (handles.has(tag) || tag === USER_HANDLE) tags.add(tag);
       else unknown.push(tag);
