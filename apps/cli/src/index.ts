@@ -31,6 +31,7 @@ import {
 import { callerSession } from "./caller";
 import { accountChecks, accountCommand, accountHelp } from "./accounts";
 import { routineCommand, routineHelp, sessionCommand } from "./routines";
+import { spawnTeamMember, takeTeamOption, teamCommand, teamHelp } from "./team";
 import { findTmuxExecutable, probeVersion } from "@daedalus/platform";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -153,10 +154,34 @@ async function captureAgentEvent(
       ...(providerSessionId ? { providerSessionId } : {}),
       ...(migrationsDirectory ? { migrationsDirectory } : {}),
     });
+    if (event === "SessionStart" || event === "Stop")
+      await deliverTeamMessages(sessionId, migrationsDirectory);
   } catch {
     // An activity hook must never interfere with the provider session.
   }
   return 0;
+}
+
+/**
+ * Sends a team member, or a lead, team messages that could not reach it
+ * before: it was not running yet, or a send failed. Never throws.
+ */
+async function deliverTeamMessages(
+  sessionId: string,
+  migrationsDirectory?: string,
+): Promise<void> {
+  let context: ApplicationContext | undefined;
+  try {
+    context = await createApplicationContext({
+      reconcile: false,
+      ...(migrationsDirectory ? { migrationsDirectory } : {}),
+    });
+    await context.teams.flushSession(sessionId);
+  } catch {
+    // Team delivery is retried on the next post, chat or turn.
+  } finally {
+    context?.close();
+  }
 }
 
 /** Whether a session holds the routines ability now. Never throws. */
@@ -306,6 +331,7 @@ Usage:
   daedal account <list|status|add|rename|remove|login|logout> ... [--json]
   daedal session <rename|pin|unpin|color|abilities|grant|revoke> ... [--json]
   daedal routine <add|list|get|enable|disable|run|remove|purpose|pause|resume|runs|start|done|fail|report|resolve|reports|feedback> ... [--json]
+  daedal team <say|chat|list|goal> ... [--json]
   daedal attention "<reason>" [--session <agent-id>] [--clear] [--json]
   daedal notify "<message>" [--level info|success|error] [--desktop] [--json]
   daedal ui state [--json]
@@ -315,6 +341,7 @@ Run 'daedal <command> --help' for command details.`;
 
 const commandHelp: Record<string, string> = {
   ...routineHelp,
+  team: teamHelp,
   account: accountHelp,
   workspace: `Workspace commands:
   daedal workspace create <name> [--slug <slug>] [--path <path>]
@@ -381,6 +408,7 @@ it was cleared, journal entries whose heading names the task, and done.`,
   daedal agent models <codex|claude> [--account <account>]
   daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--draft-brief]
   daedal agent spawn ... [--ability <ability>[,<ability>]] [--color <color>] [--pin]
+  daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>] [--user]
   daedal agent list [--workspace <workspace>] [--running|--archived]
   daedal agent reorder --workspace <workspace> <agent-id> [<agent-id>...]
   daedal agent get <agent-id>
@@ -417,6 +445,10 @@ leaves the status alone.
 ability: the user asks it for routines and Daedalus types their runs into
 it. --color and --pin mark the session's card. See 'daedal session --help'
 and 'daedal routine --help'.
+
+'agent spawn --team' adds a member to a team: with no value, the team of the
+lead running it; with a lead, that lead's team, and the lead is told in the
+team chat. See 'daedal team --help'.
 
 'agent spawn' without --model starts with the workspace's default model when
 --provider is the workspace's default provider. Otherwise Claude is asked for
@@ -1124,8 +1156,9 @@ async function agentCommand(
     return 0;
   }
   if (action === "spawn") {
+    const { rest, team } = takeTeamOption(args);
     const parsed = parseArguments(
-      args,
+      rest,
       [
         "workspace",
         "provider",
@@ -1138,13 +1171,28 @@ async function agentCommand(
         "ability",
         "color",
       ],
-      ["draft-brief", "pin"],
+      ["draft-brief", "pin", "user"],
     );
     expectPositionals(
       parsed.positionals,
       0,
       "daedal agent spawn --workspace <workspace> (--provider <provider> | --command <name>)",
     );
+    if (team)
+      return spawnTeamMember(
+        context,
+        {
+          ...(team.lead !== undefined ? { lead: team.lead } : {}),
+          asUser: parsed.flags.has("user"),
+          values: parsed.values,
+          flags: parsed.flags,
+          resolveTask: async (reference, workspace) =>
+            (await resolveTaskReference(context, reference, workspace)).id,
+        },
+        json,
+      );
+    if (parsed.flags.has("user"))
+      throw new DaedalusError("VALIDATION", "--user goes with --team");
     const workspace = required(parsed.values.workspace, "--workspace");
     const task = parsed.values.task
       ? await resolveTaskReference(context, parsed.values.task, workspace)
@@ -2515,6 +2563,7 @@ export async function runCli(
       "shutdown",
       "session",
       "routine",
+      "team",
     ].includes(args[0]!)
   )
     throw new DaedalusError("VALIDATION", `Unknown command '${args[0]}'`);
@@ -2543,6 +2592,8 @@ export async function runCli(
       return await shutdownCommand(context, args.slice(1), json);
     if (args[0] === "session")
       return await sessionCommand(context, args.slice(1), json);
+    if (args[0] === "team")
+      return await teamCommand(context, args.slice(1), json);
     if (args[0] === "routine")
       return await routineCommand(context, args.slice(1), json, (reference) =>
         resolveTaskReference(context, reference),

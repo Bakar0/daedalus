@@ -181,6 +181,11 @@ export class AbilityService {
       );
     const [ability] = this.validate(session, [abilityId]) as [AbilityId];
     const definition = ABILITIES[ability];
+    if (ability === "orchestration" && session.teamId)
+      throw new DaedalusError(
+        "CONFLICT",
+        `'${session.name}' is a member of a team, and a member cannot lead one`,
+      );
     const note = options.live
       ? definition.grantNote((skill) => this.skillName(skill))
       : null;

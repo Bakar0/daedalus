@@ -65,6 +65,8 @@ import handoffOpenAiMetadata from "../../../../skills/daedalus-handoff/agents/op
 import unslopStyleTemplate from "../../../../styles/Unslop.md" with { type: "text" };
 import routinesSkillTemplate from "../../../../skills/daedalus-routines/SKILL.md" with { type: "text" };
 import routineRunSkillTemplate from "../../../../skills/daedalus-routine/SKILL.md" with { type: "text" };
+import orchestrationSkillTemplate from "../../../../skills/daedalus-orchestration/SKILL.md" with { type: "text" };
+import teamSkillTemplate from "../../../../skills/daedalus-team/SKILL.md" with { type: "text" };
 
 export type SkillProvider = "claude" | "codex" | "cursor";
 export type SkillOrigin = "daedalus" | "user" | "plugin";
@@ -163,6 +165,26 @@ export const MANAGED_SKILLS: readonly ManagedSkillDefinition[] = [
     defaultEnabled: true,
     defaultMode: "on-demand",
     skillFiles: [{ path: "SKILL.md", contents: routineRunSkillTemplate }],
+  },
+  {
+    id: "daedalus-orchestration",
+    title: "Orchestration",
+    summary:
+      "Lets a session that holds the orchestration ability lead a team: plan the work, add members, send them decisions and keep TEAM.md. Sessions without the ability cannot use it.",
+    supportsAlways: false,
+    defaultEnabled: true,
+    defaultMode: "on-demand",
+    skillFiles: [{ path: "SKILL.md", contents: orchestrationSkillTemplate }],
+  },
+  {
+    id: "daedalus-team",
+    title: "Team chat",
+    summary:
+      "How a team's lead and members post to the team chat, read it, and tell teammates' messages from the user's.",
+    supportsAlways: false,
+    defaultEnabled: true,
+    defaultMode: "on-demand",
+    skillFiles: [{ path: "SKILL.md", contents: teamSkillTemplate }],
   },
   {
     id: "unslop",
