@@ -240,8 +240,11 @@ the other new messages in the chat. The cursor moves under a write lock
 before the send, so two processes never send the same message, and moves
 back if the send fails. A failure is kept in `last_error`, shown by
 `team list`, and the send is tried again on the next post, on `team chat` and
-`team list`, and on the session's own `SessionStart` and `Stop` hooks, which
-covers a member that was not running yet.
+`team list`, on the session's own `SessionStart` and `Stop` hooks, and when a
+spawn, restore or revive has the session running. A resumed session sits
+idle, so its hooks alone would not deliver. An archived member can be
+tagged; the message waits until it is restored. `@all` reaches live sessions
+only.
 
 - **Claude** sessions get the message on their inbox socket. Daedalus finds
   the live `<claudeHome>/sessions/<pid>.json` whose `sessionId` is the

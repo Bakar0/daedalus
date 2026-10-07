@@ -476,6 +476,19 @@ export class AgentService {
     this.teamLaunchLines = lines;
   }
 
+  private sessionRunning: (session: AgentSession) => Promise<unknown> =
+    async () => undefined;
+
+  /**
+   * Called once a spawn, restore or revive has the session running, such as
+   * to send it team messages that waited while it was not. A resumed session
+   * sits idle, so its own hooks may not fire again for a long time. Must not
+   * throw.
+   */
+  onSessionRunning(run: (session: AgentSession) => Promise<unknown>): void {
+    this.sessionRunning = run;
+  }
+
   /** Raises the badge for a session that stopped on a question at startup. */
   private askedAtStartup(session: AgentSession): void {
     void this.onStartupQuestion(
@@ -1136,6 +1149,7 @@ export class AgentService {
       if (task && !input.terminal && !input.draftBrief && !input.continueFrom)
         this.markTaskStarted(workspace, task.id);
       if (startup === "question") this.askedAtStartup(running);
+      await this.sessionRunning(running);
       return running;
     } catch (error) {
       if (input.continueFrom)
@@ -1984,6 +1998,7 @@ export class AgentService {
       }
       this.repositories.updateAgent(restored);
       if (startup === "question") this.askedAtStartup(restored);
+      await this.sessionRunning(restored);
       return restored;
     } catch (error) {
       // A launch that got as far as tmux but not as far as a ready provider

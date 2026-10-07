@@ -370,6 +370,34 @@ describe("teams", () => {
         error: "the session is exited; it gets the messages when it runs again",
       });
       expect(transport.delivered).toEqual([]);
+
+      // An archived member can still be tagged, and is not part of @all.
+      await context.agents.archive(server.session.id, true);
+      const archived = await context.teams.say({
+        team: team.id,
+        author: "lead",
+        body: "@server once you are back, rebase",
+      });
+      expect(archived.message.tags).toEqual(["server"]);
+      expect(archived.warnings).toEqual([
+        "@server is archived; it gets the message when it is restored",
+      ]);
+      const everyone = await context.teams.say({
+        team: team.id,
+        author: "user",
+        body: "@all hello",
+      });
+      expect(everyone.message.tags).toEqual(["lead"]);
+      // Restoring it sends both waiting messages at once, without waiting
+      // for a hook: a resumed session sits idle.
+      await context.agents.restore(server.session.id);
+      expect(transport.to(server.session)).toHaveLength(1);
+      expect(await context.teams.flushSession(server.session.id)).toMatchObject(
+        { delivered: false, messages: 0 },
+      );
+      expect(transport.to(server.session)[0]!.text).toContain(
+        "lead: @server once you are back, rebase",
+      );
     });
   });
 

@@ -111,6 +111,7 @@ export class TeamService {
     private readonly now: () => Date = () => new Date(),
   ) {
     agents.onTeamLaunch((member) => this.memberLaunchLines(member));
+    agents.onSessionRunning((session) => this.flushSession(session.id));
     abilities.onRevoke("orchestration", (ability) =>
       this.repositories.clearTeam(ability.id),
     );
@@ -324,23 +325,35 @@ export class TeamService {
         "VALIDATION",
         "A team message holds at most 20000 characters; put longer text in a file and point to it",
       );
-    const readers = this.readers(team);
-    const handles = new Set(readers.map((reader) => reader.handle));
+    const handles = new Set(this.readers(team).map((reader) => reader.handle));
+    // An archived member can be tagged: the message waits until it is
+    // restored. `@all` means the sessions that are live now.
+    const archived = new Set(
+      this.members(team.id).flatMap((member) =>
+        member.archivedAt && member.teamHandle ? [member.teamHandle] : [],
+      ),
+    );
     const tags = new Set<string>();
     const unknown: string[] = [];
     for (const tag of input.tags ?? parseTags(body)) {
       if (tag === ALL_TAG) for (const handle of handles) tags.add(handle);
-      else if (handles.has(tag) || tag === USER_HANDLE) tags.add(tag);
+      else if (handles.has(tag) || archived.has(tag) || tag === USER_HANDLE)
+        tags.add(tag);
       else unknown.push(tag);
     }
     if (unknown.length)
       throw new DaedalusError(
         "VALIDATION",
-        `No one in '${team.name}' is called ${unknown.map((tag) => `@${tag}`).join(", ")}; tag ${[...handles, ALL_TAG, USER_HANDLE].map((handle) => `@${handle}`).join(", ")}`,
+        `No one in '${team.name}' is called ${unknown.map((tag) => `@${tag}`).join(", ")}; tag ${[...handles, ...archived, ALL_TAG, USER_HANDLE].map((handle) => `@${handle}`).join(", ")}`,
       );
     tags.delete(input.author);
     const warnings: string[] = [];
-    if (![...tags].some((tag) => handles.has(tag)))
+    for (const tag of tags)
+      if (archived.has(tag))
+        warnings.push(
+          `@${tag} is archived; it gets the message when it is restored`,
+        );
+    if (![...tags].some((tag) => handles.has(tag) || archived.has(tag)))
       warnings.push(
         "The message tags no session, so nobody was notified; it waits in the team chat",
       );
