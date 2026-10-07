@@ -665,24 +665,77 @@ try {
     )
   )
     throw new Error(`Agents: Add and sign in sent ${requests}`);
-  // Signing in closes Settings so the terminal can be seen; the rest of the
-  // check carries on in a reopened one.
-  if (
-    await evaluate<boolean>("Boolean(document.querySelector('.settings-nav'))")
-  )
-    throw new Error("Agents: Settings stayed open over the sign-in terminal");
-  await evaluate("document.querySelector('.settings-corner-button').click()");
+  // Signing in happens inside Settings, under the account's row: the
+  // terminal, then the account signed in, then the terminal gone.
+  const settingsOpen = () =>
+    evaluate<boolean>("Boolean(document.querySelector('.settings-nav'))");
+  if (!(await settingsOpen()))
+    throw new Error("Agents: signing in closed Settings");
+  await clickAt(
+    "[...document.querySelectorAll('li[data-account=\"personal-1a2b\"] .accounts-actions button')].find((button) => button.textContent.trim() === 'Sign in')",
+  );
+  const panel = await evaluate<{
+    after: string;
+    terminal: boolean;
+  } | null>(`(() => {
+    const panel = document.querySelector('.accounts-signin-panel');
+    if (!panel) return null;
+    return {
+      after: panel.previousElementSibling?.dataset.account ?? '',
+      terminal: Boolean(panel.querySelector('.accounts-signin-terminal > *')),
+    };
+  })()`);
+  if (panel?.after !== "personal-1a2b" || !panel.terminal)
+    throw new Error(
+      `Agents: no sign-in under Personal: ${JSON.stringify(panel)}`,
+    );
+  const signingShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(
+    agentsScreenshotPath.replace(".png", "-signing.png"),
+    Buffer.from(signingShot.data, "base64"),
+  );
+  let done = "";
+  for (let attempt = 0; attempt < 60 && !done; attempt += 1) {
+    await Bun.sleep(100);
+    done = await evaluate<string>(
+      "document.querySelector('.accounts-signin-done')?.textContent ?? ''",
+    );
+  }
+  if (!done.startsWith("Signed in · me@example.com"))
+    throw new Error(`Agents: the sign-in never showed as done: ${done}`);
+  const row = await evaluate<string>(
+    "document.querySelector('li[data-account=\"personal-1a2b\"] .accounts-who small')?.textContent ?? ''",
+  );
+  if (!row.startsWith("Signed in · me@example.com"))
+    throw new Error(`Agents: Personal's row still says ${row}`);
+  const doneShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(
+    agentsScreenshotPath.replace(".png", "-signed-in.png"),
+    Buffer.from(doneShot.data, "base64"),
+  );
   for (
     let attempt = 0;
-    attempt < 40 &&
-    !(await evaluate<boolean>(
-      "Boolean(document.querySelector('.settings-nav'))",
+    attempt < 60 &&
+    (await evaluate<boolean>(
+      "Boolean(document.querySelector('.accounts-signin-panel'))",
     ));
     attempt += 1
   )
-    await Bun.sleep(50);
+    await Bun.sleep(100);
+  if (
+    await evaluate<boolean>(
+      "Boolean(document.querySelector('.accounts-signin-panel'))",
+    )
+  )
+    throw new Error("Agents: the finished sign-in's terminal never closed");
+  if (!(await settingsOpen()))
+    throw new Error("Agents: Settings closed during the sign-in");
   console.log(
-    `Agents: ${agents.rows.length} accounts (signed in with email, signed out with a one-click Sign in, Add and sign in with SSO sending both requests, an API-key account with Set key, Codex not installed with ${agents.install.length} install commands), none past the pane`,
+    `Agents: ${agents.rows.length} accounts (signed in with email, signed out with a one-click Sign in, Add and sign in with SSO sending both requests, a sign-in running under its row and turning it signed in, an API-key account with Set key, Codex not installed with ${agents.install.length} install commands), none past the pane`,
   );
   // And General, where a switch sits beside a two-line description and the
   // alignment either reads or does not.

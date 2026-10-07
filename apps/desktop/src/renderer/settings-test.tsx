@@ -281,9 +281,19 @@ const client = {
         },
       };
     },
-    accountStatus: async () => ({
-      ok: true,
-      data: [
+    // Answers for one account when asked for one. Once a sign-in was
+    // requested for Personal, it reports Personal signed in, the way the
+    // provider does when the browser login finishes.
+    accountStatus: async (filter: { account?: string } = {}) => {
+      const host = window as unknown as {
+        requests?: Array<Record<string, unknown>>;
+      };
+      const signedIn = (host.requests ?? []).some(
+        (request) =>
+          (request.accountSignIn as { account?: string } | undefined)
+            ?.account === "personal-1a2b",
+      );
+      const all = [
         {
           ...snapshot.settings.accounts[0]!,
           state: "signed-in",
@@ -315,8 +325,23 @@ const client = {
             { label: "npm", command: "npm install -g @openai/codex" },
           ],
         },
-      ],
-    }),
+      ].map((status) =>
+        signedIn && status.account === "personal-1a2b"
+          ? {
+              ...status,
+              state: "signed-in",
+              email: "me@example.com",
+              method: "Claude subscription",
+            }
+          : status,
+      );
+      return {
+        ok: true,
+        data: filter.account
+          ? all.filter((status) => status.account === filter.account)
+          : all,
+      };
+    },
     agentModels: async ({ provider }: { provider: "codex" | "claude" }) => ({
       ok: true,
       data: { provider, models: [], source: "aliases" },

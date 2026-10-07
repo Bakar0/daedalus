@@ -149,7 +149,7 @@ export function SettingsModal({
   onTheme,
   onError,
   onFocusMode,
-  onOpenTerminal,
+  renderTerminal,
   perform,
   updates,
 }: {
@@ -157,8 +157,8 @@ export function SettingsModal({
   client: DesktopClient;
   onError: (message: string | undefined) => void;
   onFocusMode: (enabled: boolean) => void;
-  /** Shows a terminal Settings opened, such as a sign-in, and closes it. */
-  onOpenTerminal: (terminal: IntegratedTerminalDto) => void;
+  /** Draws a terminal Settings opened, such as a sign-in, in place. */
+  renderTerminal: (terminal: IntegratedTerminalDto) => React.ReactNode;
   onSection: (section: SettingsSection) => void;
   onTheme: (theme: "dark" | "light") => void;
   perform: <T>(operation: Promise<RpcResult<T>>) => Promise<T | undefined>;
@@ -231,7 +231,7 @@ export function SettingsModal({
             <AccountsPanel
               busy={busy}
               client={client}
-              onOpenTerminal={onOpenTerminal}
+              renderTerminal={renderTerminal}
               perform={perform}
               settings={settings}
             />

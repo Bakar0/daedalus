@@ -55,7 +55,7 @@ const render = (section: SettingsSection) =>
       client={client}
       onError={() => undefined}
       onFocusMode={() => undefined}
-      onOpenTerminal={() => undefined}
+      renderTerminal={() => null}
       onSection={() => undefined}
       onTheme={() => undefined}
       perform={async () => undefined}
@@ -147,7 +147,7 @@ const renderAbout = (
       client={client}
       onError={() => undefined}
       onFocusMode={() => undefined}
-      onOpenTerminal={() => undefined}
+      renderTerminal={() => null}
       onSection={() => undefined}
       onTheme={() => undefined}
       perform={async () => undefined}

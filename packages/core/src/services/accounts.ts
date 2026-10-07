@@ -569,18 +569,22 @@ export class AccountService {
   async remove(provider: string, reference: string): Promise<AccountProfile> {
     const owner = accountProvider(provider);
     const profile = this.requireProfile(owner, reference);
+    // Only a session that is running holds the account: it would lose its
+    // login mid-turn. One that stopped or failed has nothing to lose, and
+    // afterwards it says the account was removed if anyone restores it.
     const live = this.repositories
       .listAgents()
       .filter(
         (session) =>
           session.provider === owner &&
           session.account === profile.id &&
-          !session.archivedAt,
+          !session.archivedAt &&
+          (session.status === "running" || session.status === "starting"),
       );
     if (live.length)
       throw new DaedalusError(
         "CONFLICT",
-        `${live.length === 1 ? "A session runs" : `${live.length} sessions run`} on '${profile.name}'. Archive ${live.length === 1 ? "it" : "them"} before removing the account.`,
+        `${live.map((session) => `'${session.name}'`).join(", ")} ${live.length === 1 ? "is" : "are"} running on '${profile.name}'. Stop or archive ${live.length === 1 ? "it" : "them"} before removing the account.`,
         { sessions: live.map((session) => session.id) },
       );
     // Claude keeps the login in the Keychain under a name made from the

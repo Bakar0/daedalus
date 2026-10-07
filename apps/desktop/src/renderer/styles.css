@@ -1902,7 +1902,8 @@ button:not(
   justify-content: center;
   position: fixed;
   backdrop-filter: blur(8px);
-  z-index: 10;
+  /* Above everything in the panels, the terminal's resize handle included, which otherwise caught the pointer through the dialog. */
+  z-index: 45;
 }
 .modal {
   background: var(--overlay);
@@ -1924,7 +1925,8 @@ button:not(
 }
 /* A confirm can be asked from inside another dialog, so it sits above them. */
 .app-dialog-backdrop {
-  z-index: 20;
+  /* Above a modal, since a confirm can open from inside one; below toasts. */
+  z-index: 55;
 }
 .app-dialog-message {
   white-space: pre-line;
@@ -7014,22 +7016,41 @@ dd {
 .accounts-form-actions button {
   height: 30px;
 }
-/* Editing a row: the name, then how it signs in, then the buttons. */
-.accounts-edit-form {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  grid-column: 2 / -1;
-  min-width: 0;
+
+/* Rows under an account's row: its edit card and its running sign-in. */
+.accounts-list li.accounts-form-row,
+.accounts-list li.accounts-signin-panel {
+  background: none;
+  display: block;
+  padding: 0;
 }
-.accounts-edit-form input {
-  flex: 1 1 140px;
+.accounts-form-title {
   font-size: 12px;
-  height: 30px;
-  min-width: 0;
-  padding: 0 10px;
 }
-.accounts-edit-form .accounts-form-actions {
-  margin-left: auto;
+.accounts-signin-panel {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overflow: hidden;
+}
+.accounts-signin-head {
+  align-items: center;
+  background: var(--raised);
+  color: var(--secondary);
+  display: flex;
+  font-size: 11px;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 8px 10px;
+}
+.accounts-signin-done {
+  color: var(--success);
+  font-size: 12px;
+}
+.accounts-signin-terminal {
+  background: #11151d;
+  height: 240px;
+  position: relative;
+}
+.accounts-signin-terminal > * {
+  height: 100%;
 }

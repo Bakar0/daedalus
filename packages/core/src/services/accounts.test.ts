@@ -343,14 +343,16 @@ describe("account profiles", () => {
       });
       await expect(
         context.accounts.remove("claude", "Personal"),
-      ).rejects.toThrow("Archive it before removing the account");
-      await context.agents.archive(agent.id);
+      ).rejects.toThrow("Stop or archive it before removing the account");
+      // A stopped session no longer holds the account.
+      await context.agents.stop(agent.id, true);
       await context.accounts.remove("claude", "Personal");
       expect(await pathExists(folder)).toBe(false);
       expect(
         (await context.workspaces.get(workspace.id)).defaultClaudeAccount,
       ).toBeNull();
-      // The archived session cannot come back on an account that is gone.
+      // Archived afterwards, it cannot come back on an account that is gone.
+      await context.agents.archive(agent.id);
       await expect(context.agents.restore(agent.id)).rejects.toThrow(
         "which was removed",
       );
