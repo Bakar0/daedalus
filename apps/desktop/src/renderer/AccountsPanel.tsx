@@ -18,6 +18,22 @@ import type {
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { ConfirmButton } from "./ConfirmButton";
+import { Menu } from "./Menu";
+
+/** Claude's three logins, as Sign in offers them. */
+const SIGN_IN_VARIANTS = [
+  {
+    id: "subscription",
+    label: "Claude subscription",
+    hint: "Pro, Max, Team or Enterprise plan",
+  },
+  { id: "sso", label: "Single sign-on", hint: "Your organization's SSO" },
+  {
+    id: "console",
+    label: "Anthropic Console",
+    hint: "Billed per API use",
+  },
+] as const;
 
 const PROVIDERS = [
   { id: "claude", label: "Claude" },
@@ -78,10 +94,6 @@ export function AccountsPanel({
   /** The account whose key form is open, as `provider:account`. */
   const [keying, setKeying] = useState<string>();
   const [apiKey, setApiKey] = useState("");
-  /** Which Claude login each account's Sign in runs. */
-  const [variants, setVariants] = useState<
-    Record<string, "subscription" | "sso" | "console">
-  >({});
 
   const check = useCallback(async () => {
     setChecking(true);
@@ -112,18 +124,15 @@ export function AccountsPanel({
         item.provider === account.provider && item.account === account.account,
     );
 
-  async function signIn(account: AccountDto) {
+  async function signIn(
+    account: AccountDto,
+    variant?: (typeof SIGN_IN_VARIANTS)[number]["id"],
+  ) {
     const terminal = await perform(
       client.request.accountSignIn({
         provider: account.provider,
         account: account.account,
-        ...(account.provider === "claude"
-          ? {
-              variant:
-                variants[`${account.provider}:${account.account}`] ??
-                "subscription",
-            }
-          : {}),
+        ...(variant ? { variant } : {}),
       }),
     );
     if (terminal) onOpenTerminal(terminal);
@@ -391,35 +400,45 @@ export function AccountsPanel({
                           >
                             Sign out
                           </ConfirmButton>
-                        ) : (
-                          <>
-                            {account.provider === "claude" ? (
-                              <select
-                                aria-label={`How ${account.name} signs in`}
-                                onChange={(event) =>
-                                  setVariants((current) => ({
-                                    ...current,
-                                    [key]: event.target.value as
-                                      "subscription" | "sso" | "console",
-                                  }))
-                                }
-                                value={variants[key] ?? "subscription"}
+                        ) : account.provider === "claude" ? (
+                          // Claude has three logins; the button asks which.
+                          <Menu
+                            align="end"
+                            className="accounts-signin-menu"
+                            label={`Sign ${account.name} in`}
+                            menuLabel={`How ${account.name} signs in`}
+                            summary={
+                              <>
+                                Sign in
+                                <span aria-hidden="true">▾</span>
+                              </>
+                            }
+                            summaryClassName="accounts-signin"
+                          >
+                            {SIGN_IN_VARIANTS.map((variant) => (
+                              <button
+                                className="quiet menu-item accounts-signin-item"
+                                disabled={busy}
+                                key={variant.id}
+                                onClick={() => void signIn(account, variant.id)}
+                                role="menuitem"
+                                type="button"
                               >
-                                <option value="subscription">
-                                  Subscription
-                                </option>
-                                <option value="sso">SSO</option>
-                                <option value="console">Console</option>
-                              </select>
-                            ) : undefined}
-                            <button
-                              disabled={busy}
-                              onClick={() => void signIn(account)}
-                              type="button"
-                            >
-                              Sign in
-                            </button>
-                          </>
+                                <span className="menu-item-label">
+                                  {variant.label}
+                                </span>
+                                <small>{variant.hint}</small>
+                              </button>
+                            ))}
+                          </Menu>
+                        ) : (
+                          <button
+                            disabled={busy}
+                            onClick={() => void signIn(account)}
+                            type="button"
+                          >
+                            Sign in
+                          </button>
                         )
                       ) : undefined}
                       {!isDefault && renaming !== key ? (
@@ -479,21 +498,38 @@ export function AccountsPanel({
                   value={name}
                 />
                 {provider.id === "claude" ? (
-                  <select
+                  <span
                     aria-label="How the new account authenticates"
-                    onChange={(event) =>
-                      setAddKind(event.target.value as "login" | "api-key")
-                    }
-                    value={addKind}
+                    className="accounts-kind"
+                    role="radiogroup"
                   >
-                    <option value="login">Sign in</option>
-                    <option value="api-key">API key</option>
-                  </select>
+                    {(
+                      [
+                        { id: "login", label: "Sign in" },
+                        { id: "api-key", label: "API key" },
+                      ] as const
+                    ).map((option) => (
+                      <button
+                        aria-checked={addKind === option.id}
+                        className={addKind === option.id ? "selected" : ""}
+                        key={option.id}
+                        onClick={() => setAddKind(option.id)}
+                        role="radio"
+                        type="button"
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </span>
                 ) : undefined}
                 <button disabled={busy || !name.trim()} type="submit">
                   Add
                 </button>
-                <button onClick={() => setAdding(undefined)} type="button">
+                <button
+                  className="quiet"
+                  onClick={() => setAdding(undefined)}
+                  type="button"
+                >
                   Cancel
                 </button>
               </form>

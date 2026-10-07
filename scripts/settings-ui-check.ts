@@ -548,7 +548,7 @@ try {
       account: string;
       line: string;
       actions: string[];
-      selects: string[];
+      signIn: string;
     }>;
     install: string[];
     overflow: boolean;
@@ -560,7 +560,7 @@ try {
         account: row.dataset.account,
         line: row.querySelector('.accounts-who small')?.textContent ?? '',
         actions: [...row.querySelectorAll('.accounts-actions button')].map((b) => b.textContent.trim()),
-        selects: [...row.querySelectorAll('.accounts-actions select')].map((select) => [...select.options].map((o) => o.textContent.trim()).join(',')),
+        signIn: row.querySelector('.accounts-signin')?.textContent.replace('▾', '').trim() ?? '',
       })),
       install: [...document.querySelectorAll('.accounts-install-row code')].map((c) => c.textContent),
       overflow: rows.some((row) => row.getBoundingClientRect().right > pane.right + 1),
@@ -590,8 +590,7 @@ try {
     );
   if (
     signedOut?.line !== "Signed out" ||
-    !signedOut.actions.includes("Sign in") ||
-    !signedOut.selects.includes("Subscription,SSO,Console") ||
+    signedOut.signIn !== "Sign in" ||
     !signedOut.actions.includes("Remove")
   )
     throw new Error(
@@ -611,8 +610,69 @@ try {
     format: "png",
   });
   await Bun.write(agentsScreenshotPath, Buffer.from(agentsShot.data, "base64"));
+  // Sign in asks which of Claude's logins, in a menu under the button.
+  await evaluate(`(() => {
+    document.querySelector('li[data-account="personal-1a2b"] .accounts-signin').click();
+  })()`);
+  await Bun.sleep(200);
+  const logins = await evaluate<string[]>(`(() =>
+    [...document.querySelectorAll('.accounts-signin-item .menu-item-label')]
+      .filter((item) => item.getClientRects().length > 0)
+      .map((item) => item.textContent.trim()))()`);
+  if (
+    JSON.stringify(logins) !==
+    JSON.stringify([
+      "Claude subscription",
+      "Single sign-on",
+      "Anthropic Console",
+    ])
+  )
+    throw new Error(`Agents: Sign in offers ${JSON.stringify(logins)}`);
+  const menuShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(
+    agentsScreenshotPath.replace(".png", "-signin.png"),
+    Buffer.from(menuShot.data, "base64"),
+  );
+  await send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key: "Escape",
+    code: "Escape",
+    windowsVirtualKeyCode: 27,
+  });
+  await send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key: "Escape",
+    code: "Escape",
+    windowsVirtualKeyCode: 27,
+  });
+  await Bun.sleep(150);
+  // Adding an account asks whether it signs in or uses an API key.
+  await evaluate(`(() => {
+    [...document.querySelectorAll('.accounts-add')]
+      .find((button) => button.textContent.includes('Claude')).click();
+  })()`);
+  await Bun.sleep(150);
+  await evaluate(`(() => {
+    [...document.querySelectorAll('.accounts-kind button')]
+      .find((button) => button.textContent.trim() === 'API key').click();
+  })()`);
+  await Bun.sleep(150);
+  const kind = await evaluate<string>(
+    "document.querySelector('.accounts-kind button[aria-checked=\"true\"]')?.textContent.trim() ?? ''",
+  );
+  if (kind !== "API key")
+    throw new Error(`Agents: the add form's kind is ${kind || "missing"}`);
+  const addShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(
+    agentsScreenshotPath.replace(".png", "-add.png"),
+    Buffer.from(addShot.data, "base64"),
+  );
   console.log(
-    `Agents: ${agents.rows.length} accounts (signed in with email, signed out with a subscription/SSO/Console choice beside Sign in, an API-key account with Set key, Codex not installed with ${agents.install.length} install commands), none past the pane`,
+    `Agents: ${agents.rows.length} accounts (signed in with email, signed out with Sign in offering subscription, SSO and Console, an API-key account with Set key, Codex not installed with ${agents.install.length} install commands), none past the pane`,
   );
   // And General, where a switch sits beside a two-line description and the
   // alignment either reads or does not.
