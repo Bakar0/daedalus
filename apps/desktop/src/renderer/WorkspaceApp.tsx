@@ -6555,40 +6555,29 @@ export function WorkspaceApp({
                   );
                 })}
               </div>
-              {sessionType !== "terminal" && sessionAccounts.length > 1 && (
-                // The selected tool's accounts, under it and pointing at it,
-                // because an account belongs to a tool.
-                <div
+            </fieldset>
+            {sessionType !== "terminal" && sessionAccounts.length > 1 && (
+              // Right under the tool it belongs to, and the same field as
+              // Create workspace's.
+              <label>
+                {providerLabel(sessionType)} account
+                <select
                   aria-label={`${providerLabel(sessionType)} account`}
-                  className="session-account-strip"
-                  role="radiogroup"
-                  style={
-                    {
-                      "--tool-index": sessionType === "codex" ? 1 : 0,
-                    } as React.CSSProperties
-                  }
+                  onChange={(event) => setSessionAccount(event.target.value)}
+                  value={chosenSessionAccount}
                 >
-                  <span>Account</span>
                   {sessionAccounts.map((item) => (
-                    <button
-                      aria-checked={chosenSessionAccount === item.account}
-                      className={
-                        chosenSessionAccount === item.account ? "selected" : ""
-                      }
-                      key={item.account}
-                      onClick={() => setSessionAccount(item.account)}
-                      role="radio"
-                      title={item.directory}
-                      type="button"
-                    >
+                    <option key={item.account} value={item.account}>
                       {item.name}
                       {item.account === workspaceDefaultAccount &&
-                        sessionWorkspace && <small>workspace default</small>}
-                    </button>
+                      sessionWorkspace
+                        ? " · workspace default"
+                        : ""}
+                    </option>
                   ))}
-                </div>
-              )}
-            </fieldset>
+                </select>
+              </label>
+            )}
             {sessionType !== "terminal" && (
               <div className="session-model-picker">
                 <span>
