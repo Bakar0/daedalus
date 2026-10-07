@@ -92,6 +92,8 @@ function addSession(
     pinnedAt: null,
     color: null,
     account: null,
+    teamId: null,
+    teamHandle: null,
   };
   context.repositories.createAgent(session);
   tmux.sessions.add(session.tmuxSession);

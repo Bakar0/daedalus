@@ -78,6 +78,7 @@ export const isDaedalusHookEntry = (entry: ClaudeHookEntry): boolean =>
 export function daedalusClaudeSettings(
   daedalExecutable: string,
   sessionId?: string,
+  options: { acceptPeerMessages?: boolean } = {},
 ): ClaudeSettings {
   // The session rides on the command, not only in the environment: Claude
   // can move a session into the background and run its hooks with another
@@ -106,6 +107,10 @@ export function daedalusClaudeSettings(
       padding: 0,
     },
     hooks,
+    // A team's chat reaches a Claude member as a message from another
+    // session. Without this, a session in bypassPermissions mode holds each
+    // one behind an approval dialog.
+    ...(options.acceptPeerMessages ? { crossSessionInbound: "accept" } : {}),
   };
 }
 

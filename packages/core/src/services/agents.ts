@@ -13,6 +13,7 @@ import {
   SESSION_COLORS,
   type AgentSession,
   type SessionColor,
+  type TeamMembership,
   type Workspace,
 } from "../domain";
 import { DaedalusError } from "../errors";
@@ -468,6 +469,13 @@ export class AgentService {
     ) => unknown = () => undefined,
   ) {}
 
+  private teamLaunchLines: (member: TeamMembership) => string[] = () => [];
+
+  /** What a team member is told at launch; set by the team service. */
+  onTeamLaunch(lines: (member: TeamMembership) => string[]): void {
+    this.teamLaunchLines = lines;
+  }
+
   /** Raises the badge for a session that stopped on a question at startup. */
   private askedAtStartup(session: AgentSession): void {
     void this.onStartupQuestion(
@@ -906,6 +914,8 @@ export class AgentService {
     abilities?: string[];
     color?: SessionColor;
     pinned?: boolean;
+    /** The team it joins, and its handle there. A successor keeps both. */
+    team?: TeamMembership;
   }): Promise<AgentSession> {
     const workspace = await this.workspaces.getActive(input.workspace);
     const task = input.taskId ? this.tasks.get(input.taskId) : undefined;
@@ -1005,9 +1015,20 @@ export class AgentService {
         "VALIDATION",
         "Drafting a brief needs the task it is for",
       );
+    const team =
+      input.continueFrom?.teamId && input.continueFrom.teamHandle
+        ? {
+            teamId: input.continueFrom.teamId,
+            handle: input.continueFrom.teamHandle,
+          }
+        : input.team;
     const launchPrompt = buildAgentPrompt({
       taskNumber: task?.number,
-      message: [...this.abilities.launchLines(abilities), input.message?.trim()]
+      message: [
+        ...this.abilities.launchLines(abilities),
+        ...(team ? this.teamLaunchLines(team) : []),
+        input.message?.trim(),
+      ]
         .filter(Boolean)
         .join("\n\n"),
       mode: input.continueFrom
@@ -1025,6 +1046,8 @@ export class AgentService {
           sessionName: name,
           prompt: launchPrompt,
           model,
+          acceptPeerMessages:
+            Boolean(team) || abilities.includes("orchestration"),
           additionalDirectories: prepared.references.map(
             (repository) =>
               repository.referencePath ?? repository.canonicalPath,
@@ -1058,6 +1081,8 @@ export class AgentService {
         (input.pinned ? new Date().toISOString() : null),
       color: input.continueFrom?.color ?? input.color ?? null,
       account,
+      teamId: team?.teamId ?? null,
+      teamHandle: team?.handle ?? null,
     };
     this.repositories.transaction(() => {
       this.repositories.createAgent(session);
@@ -1313,8 +1338,14 @@ export class AgentService {
       handoff: Boolean(handoff),
     });
     // Abilities move with the work, so the routine clock follows the
-    // successor, and archiving the predecessor below does not pause them.
-    this.repositories.abilities.moveToSession(predecessor.id, session.id);
+    // successor, and archiving the predecessor below does not pause them. A
+    // lead's team is its orchestration ability, so it moves too. A member's
+    // handle now names the successor alone.
+    this.repositories.transaction(() => {
+      this.repositories.abilities.moveToSession(predecessor.id, session.id);
+      if (predecessor.teamId)
+        this.repositories.setAgentTeam(predecessor.id, null, null);
+    });
     if (input.archive === "later") return { session, predecessor };
     try {
       return {
@@ -1610,6 +1641,10 @@ export class AgentService {
       // Archiving pauses what the session holds; its routines and their
       // tasks stay, and restoring the session resumes them.
       this.repositories.abilities.setPausedForSession(id, true);
+      // Archiving a lead ends its team, unless quitting the app archived it
+      // to bring it back at the next start.
+      const team = this.abilities.held(id, "orchestration");
+      if (team && !agent.resumeOnStart) this.repositories.clearTeam(team.id);
     });
     // Working trees used to outlive every session that ever held one, which is
     // what made a repository permanently undetachable. Only trees that
@@ -1621,7 +1656,7 @@ export class AgentService {
   }
 
   /** The Codex a restore would launch, else the one the session started with. */
-  private codexExecutable(agent: AgentSession): string | undefined {
+  codexExecutable(agent: AgentSession): string | undefined {
     const configured = this.config.agents.codex?.executable;
     return (
       (configured ? resolveAgentExecutable("codex", configured) : undefined) ??
@@ -1862,7 +1897,16 @@ export class AgentService {
           ...(await daedalusInstructionArgs(
             scoped,
             "claude",
-            await claudeDaedalusSettingsArgs(scoped, definition.args, agent.id),
+            await claudeDaedalusSettingsArgs(
+              scoped,
+              definition.args,
+              agent.id,
+              {
+                acceptPeerMessages:
+                  Boolean(agent.teamId) ||
+                  Boolean(this.abilities.held(agent.id, "orchestration")),
+              },
+            ),
           )),
           ...modelArgs,
           ...additionalDirectories,

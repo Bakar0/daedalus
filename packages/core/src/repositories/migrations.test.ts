@@ -349,7 +349,9 @@ describe("runMigrations", () => {
     ])
       expect(
         migrated
-          .query<{ count: number }, []>(`SELECT count(*) AS count FROM ${table}`)
+          .query<{ count: number }, []>(
+            `SELECT count(*) AS count FROM ${table}`,
+          )
           .get(),
       ).toEqual({ count: 0 });
     migrated.close();

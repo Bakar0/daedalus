@@ -42,6 +42,7 @@ import type {
   RoutineRunDto,
   RoutinesDetailDto,
   RoutinesStatusDto,
+  AbilityIdDto,
   SessionAbilityDto,
   RpcResult,
   SessionAttentionDto,
@@ -220,7 +221,12 @@ export async function desktopSnapshot(
       .map((item) => ({ ...item })),
     attention: context.activity.listAttention().map(sessionAttentionDto),
     toasts: context.notifications.pending("toast").map(toastDto),
-    abilities: context.repositories.abilities.list().map(sessionAbilityDto),
+    // The app shows routines only; orchestration is CLI-only until phase 2
+    // of #45.
+    abilities: context.repositories.abilities
+      .list()
+      .filter((ability) => ability.ability === "routines")
+      .map(sessionAbilityDto),
     routines: context.abilities
       .holders("routines")
       .map((ability) =>
@@ -296,10 +302,17 @@ const fingerprintStatus = (status: RoutinesStatus) => ({
     : null,
 });
 
+/** The abilities the app knows; every other one stays on the CLI for now. */
+function appAbility(ability: SessionAbility["ability"]): AbilityIdDto {
+  if (ability !== "routines")
+    throw new Error(`The app does not show the ${ability} ability yet`);
+  return ability;
+}
+
 const sessionAbilityDto = (ability: SessionAbility): SessionAbilityDto => ({
   id: ability.id,
   sessionId: ability.sessionId,
-  ability: ability.ability,
+  ability: appAbility(ability.ability),
   enabled: ability.enabled,
   paused: ability.paused,
   purpose: ability.config.purpose ?? null,

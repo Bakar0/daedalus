@@ -29,6 +29,8 @@ import { PresenceService } from "./presence";
 import { ShutdownService } from "./shutdown";
 import { TaskHistoryService } from "./task-history";
 import { TaskService } from "./tasks";
+import { ProviderTeamTransport, type TeamTransport } from "./team-transport";
+import { TeamService } from "./teams";
 import { TelemetryService } from "./telemetry";
 import { WorkspaceService } from "./workspaces";
 import { WorkspaceContentService } from "./workspace-content";
@@ -65,6 +67,8 @@ export interface ApplicationContext {
   abilities: AbilityService;
   routines: RoutineService;
   routineReports: RoutineReportService;
+  /** Teams: a lead, its members, and their chat. */
+  teams: TeamService;
   /** The routine clock; only the desktop host ticks it. */
   routineDelivery: RoutineDelivery;
   /** Keystrokes per session, and the rule for typing into a session. */
@@ -87,6 +91,8 @@ export interface ApplicationContextOptions {
    * toast in. Everywhere else a toast has to wait in the queue.
    */
   canDrawToasts?: () => boolean;
+  /** Injected so tests never write to a real session's inbox. */
+  teamTransport?: TeamTransport;
   /** Injected so staleness decay is testable without waiting ten minutes. */
   now?: () => Date;
   /** Injected so tests never reach the real Notification Center. */
@@ -211,6 +217,16 @@ export async function createApplicationContext(
   abilities.onRevoke("routines", (ability) =>
     routines.skipUndelivered(ability, "Skipped: the ability was revoked"),
   );
+  const teams = new TeamService(
+    repositories,
+    abilities,
+    agents,
+    options.teamTransport ??
+      new ProviderTeamTransport(config, (session) =>
+        agents.codexExecutable(session),
+      ),
+    options.now,
+  );
   const routineReports = new RoutineReportService(
     repositories,
     notifications,
@@ -260,6 +276,7 @@ export async function createApplicationContext(
     abilities,
     routines,
     routineReports,
+    teams,
     routineDelivery,
     deliveryGate,
     shutdown: new ShutdownService(repositories, agents, terminals, tmux),

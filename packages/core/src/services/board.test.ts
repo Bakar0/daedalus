@@ -424,6 +424,8 @@ describe("task timeline", () => {
     pinnedAt: null,
     color: null,
     account: null,
+    teamId: null,
+    teamHandle: null,
   };
 
   test("orders a join over sessions, worktrees, attention and the journal", () => {
@@ -701,6 +703,8 @@ describe("task cost", () => {
       pinnedAt: null,
       color: null,
       account: null,
+      teamId: null,
+      teamHandle: null,
     };
     const stopped = {
       ...base,

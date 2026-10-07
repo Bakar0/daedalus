@@ -31,6 +31,8 @@ export interface LaunchInput {
   sessionName?: string;
   additionalDirectories?: string[];
   model?: string;
+  /** A team lead or member: Claude accepts messages from other sessions. */
+  acceptPeerMessages?: boolean;
 }
 
 export interface ProviderLaunch {
@@ -114,13 +116,14 @@ export async function claudeDaedalusSettingsArgs(
   config: DaedalusConfig,
   existingArgs: string[],
   sessionId?: string,
+  options: { acceptPeerMessages?: boolean } = {},
 ): Promise<string[]> {
   // The skill system contributes two keys here: `outputStyle`, which is what
   // actually turns an installed writing style on, and `skillOverrides` for
   // skills the user switched off. Both ride the settings argument Daedalus
   // already passes, so neither one edits the user's own settings file.
   const daedalus: ClaudeSettings = {
-    ...daedalusClaudeSettings(daedalExecutable(config), sessionId),
+    ...daedalusClaudeSettings(daedalExecutable(config), sessionId, options),
     ...new SkillService(config).claudeSkillSettings(),
   };
   const existingValue = settingsArgumentValue(existingArgs);
@@ -671,6 +674,7 @@ class ConfiguredProvider implements AgentProvider {
           this.config,
           args,
           input.sessionId,
+          { acceptPeerMessages: input.acceptPeerMessages },
         )),
       );
     if (this.promptArgument && this.name === "claude" && input.sessionId) {

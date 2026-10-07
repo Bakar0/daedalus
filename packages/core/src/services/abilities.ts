@@ -13,6 +13,12 @@ import { channelArtifactName } from "./skills";
 export const ROUTINES_SKILL = "daedalus-routines";
 /** The managed skill a session follows to carry out one delivered run. */
 export const ROUTINE_RUN_SKILL = "daedalus-routine";
+/** The lead's playbook. */
+export const ORCHESTRATION_SKILL = "daedalus-orchestration";
+/** How every member of a team, and its lead, talks in the team chat. */
+export const TEAM_SKILL = "daedalus-team";
+/** Where a lead keeps its team's state, in its own working directory. */
+export const TEAM_FILE = "TEAM.md";
 
 /**
  * What an ability is: a definition in code. Its data, if it has any, hangs
@@ -43,6 +49,17 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilityDefinition>> = {
       `Daedalus: this session now holds the routines ability. Read the ${skill(ROUTINES_SKILL)} skill now, then wait for the user. When Daedalus types a ${skill(ROUTINE_RUN_SKILL)} line with a run id, carry out that run with the ${skill(ROUTINE_RUN_SKILL)} skill.`,
     revokeNote: () =>
       "Daedalus: the routines ability was removed from this session. Daedalus will not deliver routine runs here any more; do not run routine commands.",
+  },
+  orchestration: {
+    id: "orchestration",
+    label: "Orchestration",
+    providers: ["claude", "codex"],
+    launchLine: (skill) =>
+      `You hold the Daedalus orchestration ability: you lead a team of sessions toward one goal. You plan the work, add members with 'daedal agent spawn --team', and talk with them in the team chat ('daedal team say', 'daedal team chat', 'daedal team list'). Follow the ${skill(ORCHESTRATION_SKILL)} skill, and the ${skill(TEAM_SKILL)} skill for the chat. Keep the plan, the members, the contracts between them and every decision in ${TEAM_FILE} in your working directory; if it exists, read it before anything else.`,
+    grantNote: (skill) =>
+      `Daedalus: this session now holds the orchestration ability and leads a team. Read the ${skill(ORCHESTRATION_SKILL)} skill now, then wait for the user.`,
+    revokeNote: () =>
+      "Daedalus: the orchestration ability was removed from this session. Your team has ended and its members keep running as plain sessions; do not run team commands.",
   },
 };
 
