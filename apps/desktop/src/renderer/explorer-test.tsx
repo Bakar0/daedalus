@@ -53,6 +53,8 @@ const snapshot: DesktopSnapshotDto = {
       autoHandoffPercent: null,
       defaultProvider: null,
       defaultModel: null,
+      defaultClaudeAccount: null,
+      defaultCodexAccount: null,
     },
   ],
   tasks: [],
@@ -80,6 +82,7 @@ const snapshot: DesktopSnapshotDto = {
     workspaceInstructionFilesEnabled: true,
     autoRestoreSessionsEnabled: true,
     focusMode: false,
+    accounts: [],
     providers: [],
   },
 };

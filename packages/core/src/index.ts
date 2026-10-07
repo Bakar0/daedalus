@@ -10,6 +10,8 @@ export * from "./services/activity-detect";
 export * from "./services/activity-store";
 export * from "./services/hook-events";
 export * from "./services/hook-install";
+export * from "./services/account-homes";
+export * from "./services/accounts";
 export * from "./services/agents";
 export * from "./services/integrated-terminals";
 export * from "./services/notifications";

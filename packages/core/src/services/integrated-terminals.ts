@@ -125,6 +125,56 @@ export class IntegratedTerminalService {
     }
   }
 
+  /**
+   * A terminal that runs one command instead of a shell, such as a provider
+   * sign-in. The pane stays after the command ends, so its last words (a
+   * success, or the reason it failed) are there to read until the tab is
+   * closed. Opens in the Daedalus home: the command is about the machine,
+   * not about any one workspace.
+   */
+  async createCommand(input: {
+    name: string;
+    executable: string;
+    args: string[];
+    env?: Record<string, string>;
+  }): Promise<IntegratedTerminal> {
+    if (!(await this.tmux.probe()))
+      throw new DaedalusError("DEPENDENCY", "tmux is not available on PATH");
+    const id = crypto.randomUUID();
+    const terminal: IntegratedTerminal = {
+      id,
+      name: this.uniqueName(input.name),
+      tmuxSession: `daedalus_terminal_${id.replaceAll("-", "")}`,
+      command: input.executable,
+      args: input.args,
+      workingDirectory: this.config.home,
+      status: "starting",
+      exitCode: null,
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+      revivedAt: null,
+    };
+    this.repositories.createIntegratedTerminal(terminal);
+    try {
+      await this.tmux.createSession({
+        session: terminal.tmuxSession,
+        cwd: terminal.workingDirectory,
+        executable: terminal.command,
+        args: terminal.args,
+        ...(input.env ? { env: input.env } : {}),
+        keepOnExit: true,
+      });
+      const running = { ...terminal, status: "running" as const };
+      this.repositories.updateIntegratedTerminal(running);
+      return running;
+    } catch (error) {
+      if (await this.tmux.hasSession(terminal.tmuxSession))
+        await this.tmux.stop(terminal.tmuxSession, true).catch(() => undefined);
+      this.repositories.deleteIntegratedTerminal(terminal.id);
+      throw error;
+    }
+  }
+
   async close(id: string): Promise<IntegratedTerminal> {
     const terminal = await this.get(id);
     if (terminal.status === "running" || terminal.status === "starting")

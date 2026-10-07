@@ -33,6 +33,10 @@ const cornerScreenshotPath = join(
   projectRoot,
   "artifacts/settings-ui-update-dot.png",
 );
+const agentsScreenshotPath = join(
+  projectRoot,
+  "artifacts/settings-ui-agents.png",
+);
 const generalScreenshotPath = join(
   projectRoot,
   "artifacts/settings-ui-general.png",
@@ -262,6 +266,7 @@ try {
   const heights: Record<string, number> = {};
   for (const label of [
     "General",
+    "Agents",
     "Skills",
     "Sessions",
     "Notifications",
@@ -507,7 +512,7 @@ try {
     "The pane scrolls and the dialog does not, so the categories and the title stay put",
   );
   console.log(
-    `All five categories open at a steady ${[...distinct][0]}px: ${Object.keys(heights).join(", ")}`,
+    `All six categories open at a steady ${[...distinct][0]}px: ${Object.keys(heights).join(", ")}`,
   );
   console.log(
     `Found skills: ${grouped.length} groups (${labels.join(", ")}), ${totalRows} rows each with a ${shape.width}x${shape.height} switch that moves, collapse works, fuzzy filter narrows to ${filteredRows}, viewer opens`,
@@ -523,6 +528,152 @@ try {
     format: "png",
   });
   await Bun.write(groupsScreenshotPath, Buffer.from(groupsShot.data, "base64"));
+  // Agents: each provider with its accounts, the state the provider reported,
+  // the action that fits it, and install commands for one that is missing.
+  await evaluate(`(() => {
+    [...document.querySelectorAll('.settings-nav button')]
+      .find((one) => one.textContent.trim() === 'Agents').click();
+  })()`);
+  // The panel asks the providers once it opens; wait for its answer.
+  for (let attempt = 0; ; attempt += 1) {
+    const ready = await evaluate<boolean>(
+      "document.querySelectorAll('.accounts-install-row').length > 0",
+    );
+    if (ready) break;
+    if (attempt > 60) throw new Error("Agents: account status never arrived");
+    await Bun.sleep(50);
+  }
+  const agents = await evaluate<{
+    rows: Array<{
+      account: string;
+      line: string;
+      actions: string[];
+      signIn: string;
+    }>;
+    install: string[];
+    overflow: boolean;
+  }>(`(() => {
+    const pane = document.querySelector('.settings-pane').getBoundingClientRect();
+    const rows = [...document.querySelectorAll('.accounts-list li')];
+    return {
+      rows: rows.map((row) => ({
+        account: row.dataset.account,
+        line: row.querySelector('.accounts-who small')?.textContent ?? '',
+        actions: [...row.querySelectorAll('.accounts-actions button')].map((b) => b.textContent.trim()),
+        signIn: row.querySelector('.accounts-signin')?.textContent.replace('▾', '').trim() ?? '',
+      })),
+      install: [...document.querySelectorAll('.accounts-install-row code')].map((c) => c.textContent),
+      overflow: rows.some((row) => row.getBoundingClientRect().right > pane.right + 1),
+    };
+  })()`);
+  const byAccount = (account: string, index = 0) =>
+    agents.rows.filter((row) => row.account === account)[index];
+  const signedIn = byAccount("default");
+  const signedOut = byAccount("personal-1a2b");
+  const apiKey = byAccount("work-api-9c1d");
+  const missing = byAccount("default", 1);
+  if (
+    apiKey?.line !== "No key set" ||
+    !apiKey.actions.includes("Set key") ||
+    apiKey.actions.includes("Sign in")
+  )
+    throw new Error(
+      `Agents: the API-key row is wrong: ${JSON.stringify(apiKey)}`,
+    );
+  if (
+    !signedIn?.line.includes("someone@example.com") ||
+    !signedIn.actions.includes("Sign out") ||
+    signedIn.actions.includes("Remove")
+  )
+    throw new Error(
+      `Agents: the signed-in default row is wrong: ${JSON.stringify(signedIn)}`,
+    );
+  if (
+    signedOut?.line !== "Signed out" ||
+    signedOut.signIn !== "Sign in" ||
+    !signedOut.actions.includes("Remove")
+  )
+    throw new Error(
+      `Agents: the signed-out profile row is wrong: ${JSON.stringify(signedOut)}`,
+    );
+  if (missing?.line !== "Not installed" || missing.actions.length !== 0)
+    throw new Error(
+      `Agents: the missing provider's row is wrong: ${JSON.stringify(missing)}`,
+    );
+  if (!agents.install.includes("brew install --cask codex"))
+    throw new Error(
+      `Agents: no install command for Codex: ${JSON.stringify(agents.install)}`,
+    );
+  if (agents.overflow)
+    throw new Error("Agents: an account row runs past the pane");
+  const agentsShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(agentsScreenshotPath, Buffer.from(agentsShot.data, "base64"));
+  // Sign in asks which of Claude's logins, in a menu under the button.
+  await evaluate(`(() => {
+    document.querySelector('li[data-account="personal-1a2b"] .accounts-signin').click();
+  })()`);
+  await Bun.sleep(200);
+  const logins = await evaluate<string[]>(`(() =>
+    [...document.querySelectorAll('.accounts-signin-item .menu-item-label')]
+      .filter((item) => item.getClientRects().length > 0)
+      .map((item) => item.textContent.trim()))()`);
+  if (
+    JSON.stringify(logins) !==
+    JSON.stringify([
+      "Claude subscription",
+      "Single sign-on",
+      "Anthropic Console",
+    ])
+  )
+    throw new Error(`Agents: Sign in offers ${JSON.stringify(logins)}`);
+  const menuShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(
+    agentsScreenshotPath.replace(".png", "-signin.png"),
+    Buffer.from(menuShot.data, "base64"),
+  );
+  await send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key: "Escape",
+    code: "Escape",
+    windowsVirtualKeyCode: 27,
+  });
+  await send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key: "Escape",
+    code: "Escape",
+    windowsVirtualKeyCode: 27,
+  });
+  await Bun.sleep(150);
+  // Adding an account asks whether it signs in or uses an API key.
+  await evaluate(`(() => {
+    [...document.querySelectorAll('.accounts-add')]
+      .find((button) => button.textContent.includes('Claude')).click();
+  })()`);
+  await Bun.sleep(150);
+  await evaluate(`(() => {
+    [...document.querySelectorAll('.accounts-kind button')]
+      .find((button) => button.textContent.trim() === 'API key').click();
+  })()`);
+  await Bun.sleep(150);
+  const kind = await evaluate<string>(
+    "document.querySelector('.accounts-kind button[aria-checked=\"true\"]')?.textContent.trim() ?? ''",
+  );
+  if (kind !== "API key")
+    throw new Error(`Agents: the add form's kind is ${kind || "missing"}`);
+  const addShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(
+    agentsScreenshotPath.replace(".png", "-add.png"),
+    Buffer.from(addShot.data, "base64"),
+  );
+  console.log(
+    `Agents: ${agents.rows.length} accounts (signed in with email, signed out with Sign in offering subscription, SSO and Console, an API-key account with Set key, Codex not installed with ${agents.install.length} install commands), none past the pane`,
+  );
   // And General, where a switch sits beside a two-line description and the
   // alignment either reads or does not.
   await evaluate(`(() => {
@@ -613,7 +764,7 @@ try {
     "Closed, the offer returns to the banner and the dot stays on Settings",
   );
   console.log(
-    `Screenshots: ${screenshotPath}, ${groupsScreenshotPath}, ${generalScreenshotPath}, ${aboutScreenshotPath}, ${cornerScreenshotPath}`,
+    `Screenshots: ${screenshotPath}, ${groupsScreenshotPath}, ${agentsScreenshotPath}, ${generalScreenshotPath}, ${aboutScreenshotPath}, ${cornerScreenshotPath}`,
   );
   socket.close();
 } finally {

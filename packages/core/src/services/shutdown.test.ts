@@ -91,6 +91,7 @@ function addSession(
     position: context.repositories.nextAgentPosition(input.workspaceId),
     pinnedAt: null,
     color: null,
+    account: null,
   };
   context.repositories.createAgent(session);
   tmux.sessions.add(session.tmuxSession);

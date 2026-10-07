@@ -1759,10 +1759,17 @@ export function WorkspaceApp({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [theme, setTheme] = useState<"dark" | "light">("dark");
-  const [workspaceForm, setWorkspaceForm] = useState({ name: "" });
+  const [workspaceForm, setWorkspaceForm] = useState({
+    name: "",
+    // "default" is the provider's own account.
+    claudeAccount: "default",
+    codexAccount: "default",
+  });
   const [taskForm, setTaskForm] = useState({ title: "", description: "" });
   const [sessionType, setSessionType] = useState("claude");
   const [sessionModel, setSessionModel] = useState("");
+  // "" is the workspace's default account for the chosen provider.
+  const [sessionAccount, setSessionAccount] = useState("");
   const [rememberSessionModel, setRememberSessionModel] = useState(false);
   const [modelCatalogs, setModelCatalogs] = useState<
     Partial<Record<"codex" | "claude", ProviderModelCatalogDto>>
@@ -2734,6 +2741,11 @@ export function WorkspaceApp({
   );
   // Claude first when both are installed: it is the order the session dialog
   // lists them in, and Start has to pick something when nothing is chosen.
+  /** An account's display name, or its id once the profile is gone. */
+  const accountName = (provider: string, account: string): string =>
+    snapshot?.settings.accounts.find(
+      (item) => item.provider === provider && item.account === account,
+    )?.name ?? account;
   const availableBoardProviders = (["claude", "codex"] as const).filter(
     (name) =>
       snapshot?.settings.providers.some(
@@ -2871,12 +2883,41 @@ export function WorkspaceApp({
   const workspaceDefaultModelStale = Boolean(
     workspaceDefaultModel && sessionModelCatalog && !workspaceDefaultModelEntry,
   );
+  // The provider's accounts, offered only once there is more than one.
+  const sessionAccounts = (snapshot?.settings.accounts ?? []).filter(
+    (item) => item.provider === sessionType,
+  );
+  const workspaceDefaultAccount =
+    (sessionType === "claude"
+      ? sessionWorkspace?.defaultClaudeAccount
+      : sessionType === "codex"
+        ? sessionWorkspace?.defaultCodexAccount
+        : null) ?? "default";
+  const chosenSessionAccount = sessionAccount || workspaceDefaultAccount;
+  /**
+   * What a tool card says under its name once its provider has more than one
+   * account: the account a session would start on, the one chosen for the
+   * selected tool and the workspace default for the other.
+   */
+  const toolAccountLabel = (tool: string): string | undefined => {
+    const accounts = (snapshot?.settings.accounts ?? []).filter(
+      (item) => item.provider === tool,
+    );
+    if (accounts.length < 2) return undefined;
+    const fallback =
+      (tool === "claude"
+        ? sessionWorkspace?.defaultClaudeAccount
+        : sessionWorkspace?.defaultCodexAccount) ?? "default";
+    const account = tool === sessionType ? chosenSessionAccount : fallback;
+    return accounts.find((item) => item.account === account)?.name;
+  };
   // The first option already means the workspace default, so only another
-  // provider or an explicit model is a choice worth remembering.
+  // provider, an explicit model or another account is worth remembering.
   const sessionChoiceIsWorkspaceDefault = Boolean(
     sessionWorkspace &&
     sessionWorkspace.defaultProvider === sessionType &&
-    (sessionModel === "" || sessionModel === sessionWorkspace.defaultModel),
+    (sessionModel === "" || sessionModel === sessionWorkspace.defaultModel) &&
+    chosenSessionAccount === workspaceDefaultAccount,
   );
   const sessionModelCatalogPending =
     sessionType !== "terminal" && !sessionModelCatalog && !modelCatalogError;
@@ -3207,6 +3248,7 @@ export function WorkspaceApp({
     )
       setSessionType(target.defaultProvider);
     setSessionModel("");
+    setSessionAccount("");
     setRememberSessionModel(false);
     setModelCatalogError(undefined);
     setModal("session");
@@ -3237,12 +3279,22 @@ export function WorkspaceApp({
     const created = await perform(
       client.request.workspaceCreate({
         name: workspaceForm.name,
+        ...(workspaceForm.claudeAccount !== "default"
+          ? { defaultClaudeAccount: workspaceForm.claudeAccount }
+          : {}),
+        ...(workspaceForm.codexAccount !== "default"
+          ? { defaultCodexAccount: workspaceForm.codexAccount }
+          : {}),
       }),
     );
     if (created) {
       setScope("workspace");
       setWorkspaceId(created.id);
-      setWorkspaceForm({ name: "" });
+      setWorkspaceForm({
+        name: "",
+        claudeAccount: "default",
+        codexAccount: "default",
+      });
       setModal(undefined);
     }
   }
@@ -3311,6 +3363,14 @@ export function WorkspaceApp({
             reference: sessionWorkspace.id,
             defaultProvider: sessionType as BoardProvider,
             defaultModel: sessionModel || null,
+            ...(sessionAccount
+              ? {
+                  [sessionType === "claude"
+                    ? "defaultClaudeAccount"
+                    : "defaultCodexAccount"]:
+                    sessionAccount === "default" ? null : sessionAccount,
+                }
+              : {}),
           }),
         );
       const response = await client.request.agentSpawn({
@@ -3320,6 +3380,7 @@ export function WorkspaceApp({
         terminal: isTerminal || undefined,
         provider: isTerminal ? undefined : (sessionType as "codex" | "claude"),
         model: isTerminal || !sessionModel ? undefined : sessionModel,
+        ...(!isTerminal && sessionAccount ? { account: sessionAccount } : {}),
         ...(color ? { color } : {}),
         ...(routines && !isTerminal
           ? { abilities: ["routines" as const] }
@@ -4419,6 +4480,15 @@ export function WorkspaceApp({
           <span>
             <strong>{sessionName(session)}</strong>
             <small>
+              {session.account && (
+                // Only a non-default account is named; Default is the norm.
+                <span
+                  className="session-account-chip"
+                  title="The account this session runs on"
+                >
+                  {accountName(session.provider, session.account)}
+                </span>
+              )}
               {holdsRoutines ? (
                 <span className="session-routines-badge">
                   Routines
@@ -5013,6 +5083,7 @@ export function WorkspaceApp({
   );
   const boardView = workspace ? (
     <BoardView
+      accounts={snapshot?.settings.accounts}
       activity={activityById}
       attention={attentionById}
       availableProviders={availableBoardProviders}
@@ -5748,6 +5819,17 @@ export function WorkspaceApp({
                           {activeSessionModel}
                         </small>
                       )}
+                      {activeSession.account && (
+                        <small
+                          className="terminal-heading-model"
+                          title="The account this session runs on"
+                        >
+                          {accountName(
+                            activeSession.provider,
+                            activeSession.account,
+                          )}
+                        </small>
+                      )}
                     </>
                   ) : openingLaunch ? (
                     openingLaunch.name || "New session"
@@ -5954,9 +6036,26 @@ export function WorkspaceApp({
                 <span
                   className="provider-usage-item"
                   data-provider={usage.provider}
-                  key={usage.provider}
+                  key={`${usage.provider}:${usage.account ?? "default"}`}
                 >
-                  <strong>{providerLabel(usage.provider)}</strong>
+                  <strong>
+                    {providerLabel(usage.provider)}
+                    {usage.account
+                      ? ` · ${accountName(usage.provider, usage.account)}`
+                      : ""}
+                  </strong>
+                  {usage.windows.length === 0 && (
+                    <span
+                      className="provider-usage-none"
+                      title={
+                        usage.provider === "claude"
+                          ? "No reading yet. Claude reports its limits once a session on this account has replied."
+                          : "No reading yet."
+                      }
+                    >
+                      –
+                    </span>
+                  )}
                   {usage.windows.map((window, index) => (
                     <span key={window.label}>
                       {index > 0 && (
@@ -6102,6 +6201,36 @@ export function WorkspaceApp({
                 placeholder="My project"
               />
             </label>
+            {(["claude", "codex"] as const).map((provider) => {
+              // Asked only once a provider has an account besides Default.
+              const accounts = (snapshot?.settings.accounts ?? []).filter(
+                (item) => item.provider === provider,
+              );
+              if (accounts.length < 2) return undefined;
+              const field =
+                provider === "claude" ? "claudeAccount" : "codexAccount";
+              return (
+                <label key={provider}>
+                  {providerLabel(provider)} account
+                  <select
+                    aria-label={`Default ${providerLabel(provider)} account`}
+                    onChange={(event) =>
+                      setWorkspaceForm({
+                        ...workspaceForm,
+                        [field]: event.target.value,
+                      })
+                    }
+                    value={workspaceForm[field]}
+                  >
+                    {accounts.map((item) => (
+                      <option key={item.account} value={item.account}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              );
+            })}
             <div className="modal-actions">
               <button
                 className="quiet"
@@ -6406,6 +6535,7 @@ export function WorkspaceApp({
                       onClick={() => {
                         setSessionType(tool.id);
                         setSessionModel("");
+                        setSessionAccount("");
                         setRememberSessionModel(false);
                         setModelCatalogError(undefined);
                       }}
@@ -6416,12 +6546,38 @@ export function WorkspaceApp({
                         <ToolIcon tool={tool.id} />
                       </span>
                       <strong>{tool.label}</strong>
-                      <small>{available ? "Available" : "Unavailable"}</small>
+                      <small>
+                        {!available
+                          ? "Unavailable"
+                          : (toolAccountLabel(tool.id) ?? "Available")}
+                      </small>
                     </button>
                   );
                 })}
               </div>
             </fieldset>
+            {sessionType !== "terminal" && sessionAccounts.length > 1 && (
+              // Right under the tool it belongs to, and the same field as
+              // Create workspace's.
+              <label>
+                {providerLabel(sessionType)} account
+                <select
+                  aria-label={`${providerLabel(sessionType)} account`}
+                  onChange={(event) => setSessionAccount(event.target.value)}
+                  value={chosenSessionAccount}
+                >
+                  {sessionAccounts.map((item) => (
+                    <option key={item.account} value={item.account}>
+                      {item.name}
+                      {item.account === workspaceDefaultAccount &&
+                      sessionWorkspace
+                        ? " · workspace default"
+                        : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             {sessionType !== "terminal" && (
               <div className="session-model-picker">
                 <span>
@@ -6556,6 +6712,14 @@ export function WorkspaceApp({
             client={client}
             onError={setError}
             onFocusMode={(enabled) => void setFocusMode(enabled)}
+            onOpenTerminal={(terminal) => {
+              // A sign-in opens a browser and may ask something in its
+              // terminal, which is behind this dialog; the dialog goes so the
+              // terminal can be seen. Settings checks again when reopened.
+              setModal(undefined);
+              setTerminalPanelOpen(true);
+              setActiveTerminalId(terminal.id);
+            }}
             onSection={setSettingsSection}
             onTheme={(value) => {
               setTheme(value);

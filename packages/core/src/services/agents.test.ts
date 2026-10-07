@@ -1281,6 +1281,8 @@ describe("workspace default model", () => {
       path,
       [
         "#!/bin/sh",
+        // The sign-in check before each launch is not a catalog read.
+        '[ "$1" = "auth" ] && exit 2',
         `printf 'probe\\n' >> ${JSON.stringify(log)}`,
         options.fail ? "exit 1" : "",
         "read -r line",

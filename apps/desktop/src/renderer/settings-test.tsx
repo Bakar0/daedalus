@@ -25,6 +25,7 @@ const snapshot = {
       name: "Settings test",
       path: "/tmp/settings-test",
       createdAt: "2026-09-14T00:00:00.000Z",
+      kind: "login",
       updatedAt: "2026-09-14T00:00:00.000Z",
       archivedAt: null,
       available: true,
@@ -33,6 +34,8 @@ const snapshot = {
       autoHandoffPercent: null,
       defaultProvider: null,
       defaultModel: null,
+      defaultClaudeAccount: null,
+      defaultCodexAccount: null,
     },
   ],
   tasks: [],
@@ -60,6 +63,40 @@ const snapshot = {
     workspaceInstructionFilesEnabled: true,
     autoRestoreSessionsEnabled: true,
     focusMode: false,
+    accounts: [
+      {
+        provider: "claude",
+        account: "default",
+        name: "Default",
+        directory: "/Users/someone/.claude",
+        createdAt: null,
+        kind: "login",
+      },
+      {
+        provider: "claude",
+        account: "personal-1a2b",
+        name: "Personal",
+        directory: "/Users/someone/.daedalus-dev/accounts/claude/personal-1a2b",
+        createdAt: "2026-10-06T00:00:00.000Z",
+        kind: "login",
+      },
+      {
+        provider: "claude",
+        account: "work-api-9c1d",
+        name: "Work API",
+        directory: "/Users/someone/.daedalus-dev/accounts/claude/work-api-9c1d",
+        createdAt: "2026-10-07T00:00:00.000Z",
+        kind: "api-key",
+      },
+      {
+        provider: "codex",
+        account: "default",
+        name: "Default",
+        directory: "/Users/someone/.codex",
+        createdAt: null,
+        kind: "login",
+      },
+    ],
     providers: [
       { name: "claude", executable: "/usr/local/bin/claude", available: true },
       { name: "codex", executable: "codex", available: false },
@@ -207,6 +244,44 @@ const client = {
         repositories: [],
         worktrees: [],
       },
+    }),
+    // One of each state the Agents section draws: signed in with an email
+    // and plan, signed out, and a provider that is not installed.
+    accountStatus: async () => ({
+      ok: true,
+      data: [
+        {
+          ...snapshot.settings.accounts[0]!,
+          state: "signed-in",
+          method: "Claude subscription",
+          email: "someone@example.com",
+          plan: "max",
+          executable: "/usr/local/bin/claude",
+          checkedAt: "2026-10-06T00:00:00.000Z",
+        },
+        {
+          ...snapshot.settings.accounts[1]!,
+          state: "signed-out",
+          executable: "/usr/local/bin/claude",
+          checkedAt: "2026-10-06T00:00:00.000Z",
+        },
+        {
+          ...snapshot.settings.accounts[2]!,
+          state: "signed-out",
+          executable: "/usr/local/bin/claude",
+          checkedAt: "2026-10-06T00:00:00.000Z",
+        },
+        {
+          ...snapshot.settings.accounts[3]!,
+          state: "missing",
+          executable: "codex",
+          checkedAt: "2026-10-06T00:00:00.000Z",
+          install: [
+            { label: "Homebrew", command: "brew install --cask codex" },
+            { label: "npm", command: "npm install -g @openai/codex" },
+          ],
+        },
+      ],
     }),
     agentModels: async ({ provider }: { provider: "codex" | "claude" }) => ({
       ok: true,

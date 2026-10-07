@@ -95,14 +95,39 @@ export class WorkspaceService {
     private readonly discardCheckouts: (
       workspaceId: string,
     ) => Promise<void> = async () => {},
+    /**
+     * The profile id a reference names, null for the default account. Throws
+     * for a name with no profile behind it.
+     */
+    private readonly resolveAccount: (
+      provider: "claude" | "codex",
+      reference: string | null,
+    ) => string | null = (_provider, reference) => {
+      if (reference === null || reference.toLowerCase() === "default")
+        return null;
+      throw new DaedalusError("NOT_FOUND", `No account named '${reference}'`);
+    },
   ) {}
 
   async create(input: {
     name: string;
     slug?: string;
     path?: string;
+    /** A profile id or name per provider; omitted or `default` is the default. */
+    defaultClaudeAccount?: string | null;
+    defaultCodexAccount?: string | null;
   }): Promise<Workspace> {
     const name = requiredName(input.name);
+    // Resolved before anything is made, so a name with no profile behind it
+    // refuses without leaving a folder.
+    const defaultClaudeAccount = this.resolveAccount(
+      "claude",
+      input.defaultClaudeAccount ?? null,
+    );
+    const defaultCodexAccount = this.resolveAccount(
+      "codex",
+      input.defaultCodexAccount ?? null,
+    );
     const slug = workspaceSlug(input.slug ?? name);
     const path = resolve(input.path ?? join(this.workspaceRoot, slug));
     if (this.repositories.findWorkspace(slug))
@@ -134,6 +159,8 @@ export class WorkspaceService {
       autoHandoffPercent: null,
       defaultProvider: null,
       defaultModel: null,
+      defaultClaudeAccount,
+      defaultCodexAccount,
     };
     let created = false;
     try {
@@ -243,6 +270,9 @@ export class WorkspaceService {
       /** `null` clears it back to "no preference". */
       defaultProvider?: string | null;
       defaultModel?: string | null;
+      /** A profile id or name; `null` or `default` is the default account. */
+      defaultClaudeAccount?: string | null;
+      defaultCodexAccount?: string | null;
     },
   ): Promise<Workspace> {
     const workspace = await this.get(reference);
@@ -288,6 +318,14 @@ export class WorkspaceService {
         defaultProvider !== workspace.defaultProvider
           ? null
           : defaultModel,
+      defaultClaudeAccount:
+        changes.defaultClaudeAccount === undefined
+          ? workspace.defaultClaudeAccount
+          : this.resolveAccount("claude", changes.defaultClaudeAccount),
+      defaultCodexAccount:
+        changes.defaultCodexAccount === undefined
+          ? workspace.defaultCodexAccount
+          : this.resolveAccount("codex", changes.defaultCodexAccount),
       updatedAt: new Date().toISOString(),
     };
     // The same rule from the other side: a model with no provider to belong

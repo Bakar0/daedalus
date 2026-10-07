@@ -18,14 +18,17 @@ import React from "react";
 import type {
   AppUpdateDto,
   DesktopSettingsDto,
+  IntegratedTerminalDto,
   RpcResult,
 } from "@daedalus/protocol";
+import { AccountsPanel } from "./AccountsPanel";
 import type { DesktopClient } from "./client-types";
 import { SkillsPanel } from "./SkillsPanel";
 import { updateMessage } from "./UpdateBanner";
 
 export const SETTINGS_SECTIONS = [
   { id: "general", label: "General" },
+  { id: "agents", label: "Agents" },
   { id: "skills", label: "Skills" },
   { id: "sessions", label: "Sessions" },
   { id: "notifications", label: "Notifications" },
@@ -146,6 +149,7 @@ export function SettingsModal({
   onTheme,
   onError,
   onFocusMode,
+  onOpenTerminal,
   perform,
   updates,
 }: {
@@ -153,6 +157,8 @@ export function SettingsModal({
   client: DesktopClient;
   onError: (message: string | undefined) => void;
   onFocusMode: (enabled: boolean) => void;
+  /** Shows a terminal Settings opened, such as a sign-in, and closes it. */
+  onOpenTerminal: (terminal: IntegratedTerminalDto) => void;
   onSection: (section: SettingsSection) => void;
   onTheme: (theme: "dark" | "light") => void;
   perform: <T>(operation: Promise<RpcResult<T>>) => Promise<T | undefined>;
@@ -220,6 +226,18 @@ export function SettingsModal({
           </section>
         ) : undefined}
 
+        {section === "agents" ? (
+          <section className="settings-section">
+            <AccountsPanel
+              busy={busy}
+              client={client}
+              onOpenTerminal={onOpenTerminal}
+              perform={perform}
+              settings={settings}
+            />
+          </section>
+        ) : undefined}
+
         {section === "skills" ? (
           <section className="settings-section">
             <SkillsPanel busy={busy} client={client} onError={onError} />
@@ -238,22 +256,6 @@ export function SettingsModal({
               }
               title="Bring sessions back on startup"
             />
-
-            <h3>Agent executables</h3>
-            <div className="provider-grid">
-              {settings.providers.map((item) => (
-                <div key={item.name}>
-                  <span
-                    className={`agent-dot tone-${item.available ? "idle" : "lost"}`}
-                  />
-                  <strong>{item.name}</strong>
-                  <code>{item.executable}</code>
-                  <small>
-                    {item.available ? "Available" : "Not found on PATH"}
-                  </small>
-                </div>
-              ))}
-            </div>
           </section>
         ) : undefined}
 
