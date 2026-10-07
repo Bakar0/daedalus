@@ -122,6 +122,7 @@ const accountDto = (
   name: profile.name,
   directory: accountDirectory(context.config, profile),
   createdAt: profile.createdAt,
+  kind: profile.kind ?? "login",
 });
 const integratedTerminalDto = (
   terminal: IntegratedTerminal,
@@ -803,9 +804,16 @@ export function createDesktopRequestHandlers(
             : {}),
         })),
       ),
-    accountAdd: ({ provider, name }) =>
+    accountAdd: ({ provider, name, kind }) =>
       mutate(async () =>
-        accountDto(context, await context.accounts.add(provider, name)),
+        accountDto(context, await context.accounts.add(provider, name, kind)),
+      ),
+    accountSetApiKey: ({ provider, account, key }) =>
+      mutate(async () =>
+        accountDto(
+          context,
+          await context.accounts.setApiKey(provider, account, key),
+        ),
       ),
     accountRename: ({ provider, account, name }) =>
       mutate(async () =>
@@ -818,13 +826,14 @@ export function createDesktopRequestHandlers(
       mutate(async () =>
         accountDto(context, await context.accounts.remove(provider, account)),
       ),
-    accountSignIn: ({ provider, account }) =>
+    accountSignIn: ({ provider, account, variant }) =>
       mutate(async () =>
         integratedTerminalDto(
           await context.accounts.openSignIn(
             context.terminals,
             provider,
             account,
+            variant,
           ),
         ),
       ),

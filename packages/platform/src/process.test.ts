@@ -10,6 +10,7 @@ import {
   standardExecutableFallbacks,
   TIMED_OUT_EXIT_CODE,
 } from "./process";
+import { keychainReadCommand } from "./keychain";
 
 describe("findExecutable", () => {
   test("uses an absolute fallback when a GUI process has no shell PATH", () => {
@@ -133,5 +134,15 @@ describe("readLoginShellPath", () => {
     });
     expect(await readLoginShellPath(undefined)).toBeUndefined();
     expect(await readLoginShellPath("zsh")).toBeUndefined();
+  });
+});
+
+describe("keychainReadCommand", () => {
+  test("single-quotes every value, so a path stays one literal word", () => {
+    expect(
+      keychainReadCommand("Daedalus Claude API key", "/Users/a b/it's $HOME"),
+    ).toBe(
+      "/usr/bin/security find-generic-password -s 'Daedalus Claude API key' -a '/Users/a b/it'\\''s $HOME' -w",
+    );
   });
 });

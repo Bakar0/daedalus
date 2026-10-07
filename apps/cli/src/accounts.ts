@@ -12,10 +12,11 @@ import { expectPositionals, parseArguments, printResult } from "./arguments";
 export const accountHelp = `Account commands:
   daedal account list
   daedal account status [<claude|codex> [<account>]]
-  daedal account add <claude|codex> <name>
+  daedal account add <claude|codex> <name> [--api-key]
+  daedal account key claude <account>          (reads the key from stdin)
   daedal account rename <claude|codex> <account> <name>
   daedal account remove <claude|codex> <account> --force
-  daedal account login <claude|codex> [<account>]
+  daedal account login <claude|codex> [<account>] [--sso | --console]
   daedal account logout <claude|codex> [<account>]
 
 An account is a provider configuration folder of its own, so sessions can run
@@ -24,9 +25,16 @@ which is whatever it uses with nothing set (~/.claude, ~/.codex). An added
 account is an empty folder under the Daedalus home that shares no settings,
 plugins or memory with the default one; Daedalus links its own skills into it.
 
-<account> is the name or id; 'default' is the default account. Daedalus never
-stores credentials: 'account login' runs the provider's own sign-in in this
-terminal (claude auth login, codex login) pointed at that folder.
+<account> is the name or id; 'default' is the default account. 'account login'
+runs the provider's own sign-in in this terminal (claude auth login, codex
+login) pointed at that folder; --sso and --console pick Claude's SSO or
+Anthropic Console login instead of a Claude subscription.
+
+'account add claude <name> --api-key' makes an account that uses an Anthropic
+API key instead of a login. 'account key' reads the key from standard input,
+never from an argument, and stores it in the macOS login Keychain; the
+account's settings.json gets an apiKeyHelper that reads it from there, so no
+file holds the key. 'account logout' on such an account removes the key.
 
 A session runs on the account it was spawned on for its whole life, through
 restore, revive and handoff. 'agent spawn --account' picks one; without it a
@@ -103,20 +111,48 @@ export async function accountCommand(
     return 0;
   }
   if (action === "add") {
-    const parsed = parseArguments(args, []);
+    const parsed = parseArguments(args, [], ["api-key"]);
     expectPositionals(
       parsed.positionals,
       2,
-      "daedal account add <claude|codex> <name>",
+      "daedal account add <claude|codex> <name> [--api-key]",
     );
     const result = await context.accounts.add(
       parsed.positionals[0]!,
       parsed.positionals[1]!,
+      parsed.flags.has("api-key") ? "api-key" : "login",
     );
     printResult(result, json, () =>
       console.log(
-        `Added ${result.provider} account ${result.name} (${result.id}). Sign it in with: daedal account login ${result.provider} ${JSON.stringify(result.name)}`,
+        result.kind === "api-key"
+          ? `Added ${result.provider} account ${result.name} (${result.id}). Give it its key with: daedal account key ${result.provider} ${JSON.stringify(result.name)}`
+          : `Added ${result.provider} account ${result.name} (${result.id}). Sign it in with: daedal account login ${result.provider} ${JSON.stringify(result.name)}`,
       ),
+    );
+    return 0;
+  }
+  if (action === "key") {
+    const parsed = parseArguments(args, []);
+    expectPositionals(
+      parsed.positionals,
+      2,
+      "daedal account key claude <account>  (the key on standard input)",
+    );
+    if (process.stdin.isTTY)
+      console.error("Paste the API key, then press Return and Ctrl-D:");
+    const key = (await Bun.stdin.text()).trim();
+    if (!key)
+      throw new DaedalusError(
+        "VALIDATION",
+        "No key on standard input. Pipe it in, for example from a password manager",
+      );
+    const result = await context.accounts.setApiKey(
+      parsed.positionals[0]!,
+      parsed.positionals[1]!,
+      key,
+    );
+    printResult(result, json, () =>
+      console.log(`Stored the key for ${result.name} in the Keychain`),
     );
     return 0;
   }
@@ -160,8 +196,47 @@ export async function accountCommand(
     );
     return 0;
   }
-  if (action === "login" || action === "logout") {
+  if (action === "logout") {
     const parsed = parseArguments(args, []);
+    if (parsed.positionals.length < 1 || parsed.positionals.length > 2)
+      throw new DaedalusError(
+        "VALIDATION",
+        "Usage: daedal account logout <claude|codex> [<account>]",
+      );
+    const [provider, account] = parsed.positionals;
+    // An API-key account has no login to end; its key is what goes.
+    if (
+      provider === "claude" &&
+      account &&
+      context.accounts
+        .list()
+        .some(
+          (item) =>
+            item.provider === "claude" &&
+            item.kind === "api-key" &&
+            (item.account === account ||
+              item.name.toLowerCase() === account.toLowerCase()),
+        )
+    ) {
+      const result = await context.accounts.signOut(provider, account);
+      printResult(result, json, () =>
+        console.log(`Removed the API key from ${account}`),
+      );
+      return 0;
+    }
+  }
+  if (action === "login" || action === "logout") {
+    const parsed = parseArguments(args, [], ["sso", "console"]);
+    if (parsed.flags.has("sso") && parsed.flags.has("console"))
+      throw new DaedalusError(
+        "VALIDATION",
+        "Choose --sso or --console, not both",
+      );
+    const variant = parsed.flags.has("sso")
+      ? ("sso" as const)
+      : parsed.flags.has("console")
+        ? ("console" as const)
+        : ("subscription" as const);
     if (parsed.positionals.length < 1 || parsed.positionals.length > 2)
       throw new DaedalusError(
         "VALIDATION",
@@ -170,7 +245,7 @@ export async function accountCommand(
     const [provider, account] = parsed.positionals;
     const command =
       action === "login"
-        ? context.accounts.signInCommand(provider!, account)
+        ? context.accounts.signInCommand(provider!, account, variant)
         : context.accounts.signOutCommand(provider!, account);
     // The provider's own command, in this terminal, so it can open the
     // browser and ask what it needs to.

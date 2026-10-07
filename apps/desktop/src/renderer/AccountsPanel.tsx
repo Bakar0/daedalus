@@ -30,7 +30,8 @@ type Provider = (typeof PROVIDERS)[number]["id"];
 export function accountStateLine(status: AccountStatusDto | undefined): string {
   if (!status) return "Checking…";
   if (status.state === "missing") return "Not installed";
-  if (status.state === "signed-out") return "Signed out";
+  if (status.state === "signed-out")
+    return status.kind === "api-key" ? "No key set" : "Signed out";
   if (status.state === "unknown")
     return status.detail
       ? `Status unknown: ${status.detail}`
@@ -72,6 +73,15 @@ export function AccountsPanel({
   const [renaming, setRenaming] = useState<string>();
   const [name, setName] = useState("");
   const [copied, setCopied] = useState<string>();
+  /** The kind of account the add form makes. */
+  const [addKind, setAddKind] = useState<"login" | "api-key">("login");
+  /** The account whose key form is open, as `provider:account`. */
+  const [keying, setKeying] = useState<string>();
+  const [apiKey, setApiKey] = useState("");
+  /** Which Claude login each account's Sign in runs. */
+  const [variants, setVariants] = useState<
+    Record<string, "subscription" | "sso" | "console">
+  >({});
 
   const check = useCallback(async () => {
     setChecking(true);
@@ -107,6 +117,13 @@ export function AccountsPanel({
       client.request.accountSignIn({
         provider: account.provider,
         account: account.account,
+        ...(account.provider === "claude"
+          ? {
+              variant:
+                variants[`${account.provider}:${account.account}`] ??
+                "subscription",
+            }
+          : {}),
       }),
     );
     if (terminal) onOpenTerminal(terminal);
@@ -126,9 +143,35 @@ export function AccountsPanel({
 
   async function add(event: React.FormEvent, provider: Provider) {
     event.preventDefault();
-    if (await perform(client.request.accountAdd({ provider, name }))) {
+    const kind = provider === "claude" ? addKind : "login";
+    const added = await perform(
+      client.request.accountAdd({ provider, name, kind }),
+    );
+    if (added) {
       setAdding(undefined);
       setName("");
+      // An API-key account is no use until it has its key, so ask now.
+      if (added.kind === "api-key") {
+        setKeying(`${added.provider}:${added.account}`);
+        setApiKey("");
+      }
+    }
+  }
+
+  async function saveKey(event: React.FormEvent, account: AccountDto) {
+    event.preventDefault();
+    const saved = await perform(
+      client.request.accountSetApiKey({
+        provider: "claude",
+        account: account.account,
+        key: apiKey,
+      }),
+    );
+    // The key leaves the form either way: it is not kept in this page.
+    setApiKey("");
+    if (saved) {
+      setKeying(undefined);
+      await check();
     }
   }
 
@@ -165,8 +208,9 @@ export function AccountsPanel({
       <div className="accounts-toolbar">
         <p className="skills-note">
           Each account is a provider folder of its own. An added account shares
-          no settings, plugins or memory with the default one. Daedalus stores
-          no credentials: signing in runs the provider's own command.
+          no settings, plugins or memory with the default one. Signing in runs
+          the provider's own command; an API key is kept in your macOS Keychain,
+          never in a file.
         </p>
         <button
           className="quiet"
@@ -235,7 +279,43 @@ export function AccountsPanel({
                 return (
                   <li data-account={account.account} key={key}>
                     <span className={`agent-dot tone-${stateTone(status)}`} />
-                    {renaming === key ? (
+                    {keying === key ? (
+                      <form
+                        className="accounts-name-form"
+                        onSubmit={(event) => void saveKey(event, account)}
+                      >
+                        <input
+                          aria-label={`API key for ${account.name}`}
+                          autoComplete="off"
+                          autoFocus
+                          onChange={(event) => setApiKey(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Escape") {
+                              event.stopPropagation();
+                              setKeying(undefined);
+                              setApiKey("");
+                            }
+                          }}
+                          placeholder="sk-ant-…"
+                          spellCheck={false}
+                          type="password"
+                          value={apiKey}
+                        />
+                        <button disabled={busy || !apiKey.trim()} type="submit">
+                          Save key
+                        </button>
+                        <button
+                          className="quiet"
+                          onClick={() => {
+                            setKeying(undefined);
+                            setApiKey("");
+                          }}
+                          type="button"
+                        >
+                          Cancel
+                        </button>
+                      </form>
+                    ) : renaming === key ? (
                       <form
                         className="accounts-name-form"
                         onSubmit={(event) => void rename(event, account)}
@@ -267,7 +347,39 @@ export function AccountsPanel({
                       </span>
                     )}
                     <span className="accounts-actions">
-                      {status && status.state !== "missing" ? (
+                      {keying === key ? undefined : account.kind ===
+                        "api-key" ? (
+                        <>
+                          <button
+                            className={
+                              status?.state === "signed-in" ? "quiet" : ""
+                            }
+                            disabled={busy}
+                            onClick={() => {
+                              setKeying(key);
+                              setRenaming(undefined);
+                              setApiKey("");
+                            }}
+                            type="button"
+                          >
+                            {status?.state === "signed-in"
+                              ? "Replace key"
+                              : "Set key"}
+                          </button>
+                          {status?.state === "signed-in" ? (
+                            <ConfirmButton
+                              armedLabel="Remove key"
+                              armedTitle={`Delete ${account.name}'s key from the Keychain`}
+                              className="quiet"
+                              disabled={busy}
+                              onConfirm={() => void signOut(account)}
+                              type="button"
+                            >
+                              Remove key
+                            </ConfirmButton>
+                          ) : undefined}
+                        </>
+                      ) : status && status.state !== "missing" ? (
                         status.state === "signed-in" ? (
                           <ConfirmButton
                             armedLabel="Sign out"
@@ -280,13 +392,34 @@ export function AccountsPanel({
                             Sign out
                           </ConfirmButton>
                         ) : (
-                          <button
-                            disabled={busy}
-                            onClick={() => void signIn(account)}
-                            type="button"
-                          >
-                            Sign in
-                          </button>
+                          <>
+                            {account.provider === "claude" ? (
+                              <select
+                                aria-label={`How ${account.name} signs in`}
+                                onChange={(event) =>
+                                  setVariants((current) => ({
+                                    ...current,
+                                    [key]: event.target.value as
+                                      "subscription" | "sso" | "console",
+                                  }))
+                                }
+                                value={variants[key] ?? "subscription"}
+                              >
+                                <option value="subscription">
+                                  Subscription
+                                </option>
+                                <option value="sso">SSO</option>
+                                <option value="console">Console</option>
+                              </select>
+                            ) : undefined}
+                            <button
+                              disabled={busy}
+                              onClick={() => void signIn(account)}
+                              type="button"
+                            >
+                              Sign in
+                            </button>
+                          </>
                         )
                       ) : undefined}
                       {!isDefault && renaming !== key ? (
@@ -345,6 +478,18 @@ export function AccountsPanel({
                   placeholder="Personal"
                   value={name}
                 />
+                {provider.id === "claude" ? (
+                  <select
+                    aria-label="How the new account authenticates"
+                    onChange={(event) =>
+                      setAddKind(event.target.value as "login" | "api-key")
+                    }
+                    value={addKind}
+                  >
+                    <option value="login">Sign in</option>
+                    <option value="api-key">API key</option>
+                  </select>
+                ) : undefined}
                 <button disabled={busy || !name.trim()} type="submit">
                   Add
                 </button>
@@ -360,6 +505,7 @@ export function AccountsPanel({
                   setAdding(provider.id);
                   setRenaming(undefined);
                   setName("");
+                  setAddKind("login");
                 }}
                 type="button"
               >

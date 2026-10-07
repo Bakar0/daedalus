@@ -860,6 +860,12 @@ export class AgentService {
     const signIn = await checkSignIn(this.config, provider, account);
     if (signIn.state !== "signed-out") return;
     const name = accountName(this.config, provider, account);
+    if (accountProfile(this.config, provider, account)?.kind === "api-key")
+      throw new DaedalusError(
+        "DEPENDENCY",
+        `The ${name} account has no API key. Set it in Settings → Agents, or pipe it to 'daedal account key claude ${JSON.stringify(name)}'.`,
+        { provider, account, reason: "signed-out" },
+      );
     const reference = account
       ? ` ${JSON.stringify(accountProfile(this.config, provider, account)?.name ?? account)}`
       : "";

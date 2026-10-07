@@ -72,6 +72,12 @@ export interface AccountProfile {
   provider: AccountProvider;
   name: string;
   createdAt: string;
+  /**
+   * How it authenticates. `login` (the default) signs in through the
+   * provider's own login; `api-key` is a Claude account whose key Daedalus
+   * keeps in the login Keychain and Claude reads through `apiKeyHelper`.
+   */
+  kind?: "login" | "api-key";
 }
 
 export interface DaedalusConfig {
@@ -291,7 +297,10 @@ function storedAccounts(value: unknown): AccountProfile[] {
       ACCOUNT_ID.test(entry.id) &&
       (entry.provider === "claude" || entry.provider === "codex") &&
       typeof entry.name === "string" &&
-      typeof entry.createdAt === "string",
+      typeof entry.createdAt === "string" &&
+      (entry.kind === undefined ||
+        entry.kind === "login" ||
+        (entry.kind === "api-key" && entry.provider === "claude")),
   );
 }
 

@@ -2,9 +2,10 @@ import { chmod, lstat, readlink } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { TmuxClient, TmuxLaunch } from "@daedalus/platform";
-import { pathExists } from "@daedalus/platform";
+import { keychainReadCommand, pathExists } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
+  AccountService,
   accountConfig,
   accountEnvironment,
   createApplicationContext,
@@ -459,6 +460,70 @@ describe("account profiles", () => {
       expect(
         JSON.stringify(context.activity.attentionFor(agent.id)?.reasons),
       ).toContain("Claude is asking something before it starts");
+      context.close();
+    });
+  });
+
+  test("an API-key account keeps its key in the Keychain and points Claude at it", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context } = await setup(home);
+      const keychain = new Map<string, string>();
+      const accounts = new AccountService(
+        context.config,
+        context.repositories,
+        {
+          write: async (service, account, secret) => {
+            keychain.set(`${service}|${account}`, secret);
+          },
+          remove: async (service, account) => {
+            keychain.delete(`${service}|${account}`);
+          },
+        },
+      );
+      const profile = await accounts.add("claude", "Work API", "api-key");
+      expect(profile.kind).toBe("api-key");
+      const folder = join(home, "accounts", "claude", profile.id);
+      await expect(
+        accounts.setApiKey("claude", "Work API", "not-a-key"),
+      ).rejects.toThrow("does not look like an Anthropic API key");
+      // A login is not how this account authenticates.
+      expect(() => accounts.signInCommand("claude", "Work API")).toThrow(
+        "uses an API key",
+      );
+
+      const key = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz";
+      await accounts.setApiKey("claude", "Work API", `  ${key}\n`);
+      expect(keychain.get(`Daedalus Claude API key|${folder}`)).toBe(key);
+      const settings = await Bun.file(join(folder, "settings.json")).json();
+      expect(settings).toEqual({
+        apiKeyHelper: keychainReadCommand("Daedalus Claude API key", folder),
+      });
+      // No file Daedalus wrote holds the key.
+      expect(JSON.stringify(settings)).not.toContain(key);
+      expect(await Bun.file(join(home, "config.json")).text()).not.toContain(
+        key,
+      );
+
+      await accounts.signOut("claude", "Work API");
+      expect(keychain.size).toBe(0);
+      expect(await Bun.file(join(folder, "settings.json")).json()).toEqual({});
+      context.close();
+    });
+  });
+
+  test("Claude's sign-in can be its subscription, SSO or the Console", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context } = await setup(home);
+      expect(context.accounts.signInCommand("claude").args).toEqual([
+        "auth",
+        "login",
+      ]);
+      expect(
+        context.accounts.signInCommand("claude", null, "sso").args,
+      ).toEqual(["auth", "login", "--sso"]);
+      expect(
+        context.accounts.signInCommand("claude", null, "console").args,
+      ).toEqual(["auth", "login", "--console"]);
       context.close();
     });
   });

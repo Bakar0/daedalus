@@ -137,16 +137,21 @@ Startup reconciliation compares SQLite with tmux. Missing live sessions become `
 ```text
 daedal account list
 daedal account status [<claude|codex> [<account>]]
-daedal account add <claude|codex> <name>
+daedal account add <claude|codex> <name> [--api-key]
+daedal account key claude <account>        # the key on standard input
 daedal account rename <claude|codex> <account> <name>
 daedal account remove <claude|codex> <account> --force
-daedal account login <claude|codex> [<account>]
+daedal account login <claude|codex> [<account>] [--sso | --console]
 daedal account logout <claude|codex> [<account>]
 ```
 
 An account is a provider configuration folder, so one machine can run sessions on more than one Claude or Codex account. Each provider has a `default` account: whatever it uses with nothing set, `~/.claude` (or `CLAUDE_CONFIG_DIR`) and `~/.codex` (or `CODEX_HOME`). `add` creates another under `$DAEDALUS_HOME/accounts/<provider>/<id>`. The folder starts empty and shares no settings, plugins, MCP servers or memory with the default account. Daedalus links its own skills and writing style into it and, for Claude, writes `{"hasCompletedOnboarding": true}` to its `.claude.json` so a session does not stop on the first-run theme picker. `<account>` is the name or the id; `rename` changes only the name, because the id is the folder.
 
 Daedalus stores no credentials. A session on a profile runs with `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` (Claude), or `CODEX_HOME` and `CODEX_SQLITE_HOME` (Codex), set to its folder; a session on the default account sets none of them. Claude keeps a profile's login in the Keychain under a name made from the folder path, which is why the folder never moves, and Codex keeps it in the folder. `login` and `logout` run the provider's own `claude auth login` / `codex login` (and `logout`) in the calling terminal with those variables, then print the account's status. The desktop app runs the same sign-in in an integrated terminal from Settings → Agents.
+
+Claude accounts can sign in three ways: `login` runs `claude auth login` for a Claude subscription, `--sso` for an organization's single sign-on, and `--console` for an Anthropic Console (API billing) login. Settings → Agents offers the same choice beside Sign in.
+
+An account added with `--api-key` uses an Anthropic API key instead of a login. `account key` reads the key from standard input, never from an argument (arguments are visible to every process), checks that it looks like `sk-ant-…`, and stores it in the macOS login Keychain under the service `Daedalus Claude API key`, with the account's folder path as the Keychain account. The account's `settings.json` gets an `apiKeyHelper` that reads it back with `/usr/bin/security find-generic-password … -w`, so no file Daedalus writes ever holds the key. `account logout` on such an account deletes the Keychain item and the helper, and `account remove` does the same before deleting the folder. Claude reports such an account as signed in with "API key" and bills it to the API.
 
 `status` asks each provider now: `claude auth status --json`, and `codex login status` plus the Codex app server's `account/read` for the email and plan. The state is `signed-in`, `signed-out`, `missing` (the provider is not installed; the human output prints the install commands) or `unknown` (the provider gave no usable answer, such as a build too old to have the command).
 

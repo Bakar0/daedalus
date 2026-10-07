@@ -307,6 +307,8 @@ export interface AccountDto {
   /** The configuration folder the provider reads for it. */
   directory: string;
   createdAt: string | null;
+  /** `api-key`: a Claude key kept in the Keychain; `login` otherwise. */
+  kind: "login" | "api-key";
 }
 
 export type SignInStateDto = "missing" | "signed-out" | "signed-in" | "unknown";
@@ -319,6 +321,7 @@ export interface InstallCommandDto {
 /** What the provider says about one account's login, asked just now. */
 export interface AccountStatusDto extends AccountDto {
   state: SignInStateDto;
+  /** How the provider says it is signed in ("Claude subscription", …). */
   method?: string;
   email?: string;
   organization?: string;
@@ -1175,7 +1178,16 @@ export interface DesktopRpcSchema {
         AccountStatusDto[]
       >;
       accountAdd: Request<
-        { provider: "claude" | "codex"; name: string },
+        {
+          provider: "claude" | "codex";
+          name: string;
+          kind?: "login" | "api-key";
+        },
+        AccountDto
+      >;
+      /** Stores an API-key account's key in the Keychain. */
+      accountSetApiKey: Request<
+        { provider: "claude"; account: string; key: string },
         AccountDto
       >;
       accountRename: Request<
@@ -1192,7 +1204,12 @@ export interface DesktopRpcSchema {
        * terminal, and returns that terminal so the app can show it.
        */
       accountSignIn: Request<
-        { provider: "claude" | "codex"; account: string },
+        {
+          provider: "claude" | "codex";
+          account: string;
+          /** Claude only: its subscription, SSO or Console login. */
+          variant?: "subscription" | "sso" | "console";
+        },
         IntegratedTerminalDto
       >;
       accountSignOut: Request<

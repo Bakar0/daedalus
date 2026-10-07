@@ -28,6 +28,7 @@ const settings: DesktopSettingsDto = {
       name: "Default",
       directory: "/Users/someone/.claude",
       createdAt: null,
+      kind: "login",
     },
     {
       provider: "claude",
@@ -35,6 +36,7 @@ const settings: DesktopSettingsDto = {
       name: "Personal",
       directory: "/Users/someone/.daedalus-dev/accounts/claude/personal-1a2b",
       createdAt: "2026-10-06T00:00:00.000Z",
+      kind: "login",
     },
   ],
   providers: [
@@ -110,6 +112,7 @@ describe("SettingsModal", () => {
       name: "Default",
       directory: "/Users/someone/.claude",
       createdAt: null,
+      kind: "login" as const,
       executable: "/usr/local/bin/claude",
       checkedAt: "2026-10-06T00:00:00.000Z",
     };

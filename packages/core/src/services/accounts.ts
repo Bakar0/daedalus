@@ -1,6 +1,12 @@
-import { rm, writeFile } from "node:fs/promises";
+import { rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ensureDirectory, runCommand } from "@daedalus/platform";
+import {
+  deleteKeychainPassword,
+  ensureDirectory,
+  keychainReadCommand,
+  runCommand,
+  writeKeychainPassword,
+} from "@daedalus/platform";
 import {
   saveAccounts,
   type AccountProfile,
@@ -44,6 +50,7 @@ export interface AccountStatus extends SignIn {
   /** The configuration folder the provider reads for this account. */
   directory: string;
   createdAt: string | null;
+  kind: "login" | "api-key";
   executable: string;
   checkedAt: string;
 }
@@ -78,7 +85,21 @@ const CLAUDE_METHODS: Record<string, string> = {
   console: "Anthropic Console",
   api_key: "API key",
   apiKey: "API key",
+  api_key_helper: "API key",
 };
+
+/** How a login-based account signs in: Claude's three login flows. */
+export type SignInVariant = "subscription" | "sso" | "console";
+
+/** The Keychain item an API-key account's key lives in. */
+export const API_KEY_SERVICE = "Daedalus Claude API key";
+
+/**
+ * An Anthropic API key, as far as it can be checked without using it. Kept
+ * to the characters keys are made of, which is also what lets it travel
+ * safely through `security -i`.
+ */
+const API_KEY = /^sk-ant-[A-Za-z0-9_-]{16,}$/;
 
 const CLAUDE_API_PROVIDERS: Record<string, string> = {
   bedrock: "Amazon Bedrock",
@@ -349,6 +370,15 @@ export class AccountService {
   constructor(
     private readonly config: DaedalusConfig,
     private readonly repositories: SqliteRepositories,
+    /** The login Keychain; replaceable so tests never touch the real one. */
+    private readonly keychain: {
+      write: (
+        service: string,
+        account: string,
+        secret: string,
+      ) => Promise<void>;
+      remove: (service: string, account: string) => Promise<void>;
+    } = { write: writeKeychainPassword, remove: deleteKeychainPassword },
   ) {}
 
   /** Every account, the default ones first. */
@@ -358,6 +388,7 @@ export class AccountService {
     name: string;
     directory: string;
     createdAt: string | null;
+    kind: "login" | "api-key";
   }> {
     const defaults = (["claude", "codex"] as const).map((provider) => ({
       provider,
@@ -366,8 +397,10 @@ export class AccountService {
       directory:
         provider === "claude" ? this.config.claudeHome : this.config.codexHome,
       createdAt: null,
+      kind: "login" as const,
     }));
     const profiles = this.config.accounts.map((profile) => ({
+      kind: profile.kind ?? ("login" as const),
       provider: profile.provider,
       account: profile.id,
       name: profile.name,
@@ -411,14 +444,24 @@ export class AccountService {
    * style where that folder's sessions will look for them. The folder starts
    * empty otherwise: a profile shares no settings with the default account.
    */
-  async add(provider: string, name: string): Promise<AccountProfile> {
+  async add(
+    provider: string,
+    name: string,
+    kind: "login" | "api-key" = "login",
+  ): Promise<AccountProfile> {
     const owner = accountProvider(provider);
     const trimmed = this.validName(owner, name);
+    if (kind === "api-key" && owner !== "claude")
+      throw new DaedalusError(
+        "VALIDATION",
+        "API-key accounts are for Claude; sign Codex in with its own login",
+      );
     const profile: AccountProfile = {
       id: profileId(trimmed, new Set(this.config.accounts.map((a) => a.id))),
       provider: owner,
       name: trimmed,
       createdAt: new Date().toISOString(),
+      ...(kind === "api-key" ? { kind } : {}),
     };
     const directory = accountDirectory(this.config, profile);
     await ensureDirectory(directory);
@@ -485,9 +528,11 @@ export class AccountService {
         { sessions: live.map((session) => session.id) },
       );
     // Claude keeps the login in the Keychain under a name made from the
-    // folder path, so deleting the folder alone would leave it there.
+    // folder path, so deleting the folder alone would leave it there. An
+    // API-key account's key is a Keychain item of Daedalus's own.
     const executable = providerExecutable(this.config, owner);
-    if (executable) {
+    if (profile.kind === "api-key") await this.clearApiKey(profile);
+    else if (executable) {
       const logout = this.signOutCommand(owner, profile.id);
       await runCommand(logout.executable, logout.args, {
         env: logout.env,
@@ -550,6 +595,7 @@ export class AccountService {
           name: entry.name,
           directory: entry.directory,
           createdAt: entry.createdAt,
+          kind: entry.kind,
           executable:
             executable ??
             this.config.agents[entry.provider]?.executable ??
@@ -566,8 +612,12 @@ export class AccountService {
    * The provider's own sign-in command for one account. A terminal runs it,
    * because both providers open a browser and may ask a question or two.
    */
-  signInCommand(provider: string, reference?: string | null): AccountCommand {
-    return this.command(provider, reference, "in");
+  signInCommand(
+    provider: string,
+    reference?: string | null,
+    variant: SignInVariant = "subscription",
+  ): AccountCommand {
+    return this.command(provider, reference, "in", variant);
   }
 
   signOutCommand(provider: string, reference?: string | null): AccountCommand {
@@ -578,9 +628,20 @@ export class AccountService {
     provider: string,
     reference: string | null | undefined,
     direction: "in" | "out",
+    variant: SignInVariant = "subscription",
   ): AccountCommand {
     const owner = accountProvider(provider);
     const profile = findAccount(this.config, owner, reference);
+    if (direction === "in" && profile?.kind === "api-key")
+      throw new DaedalusError(
+        "VALIDATION",
+        `'${profile.name}' uses an API key, not a login; set its key instead`,
+      );
+    if (owner === "codex" && variant !== "subscription")
+      throw new DaedalusError(
+        "VALIDATION",
+        "SSO and Console sign-in are Claude's; Codex has one login",
+      );
     const executable = providerExecutable(this.config, owner);
     if (!executable)
       throw new DaedalusError(
@@ -590,7 +651,14 @@ export class AccountService {
       );
     const args =
       owner === "claude"
-        ? ["auth", direction === "in" ? "login" : "logout"]
+        ? [
+            "auth",
+            direction === "in" ? "login" : "logout",
+            ...(direction === "in" && variant === "sso" ? ["--sso"] : []),
+            ...(direction === "in" && variant === "console"
+              ? ["--console"]
+              : []),
+          ]
         : [direction === "in" ? "login" : "logout"];
     const name = profile?.name ?? "Default";
     return {
@@ -609,8 +677,9 @@ export class AccountService {
     terminals: IntegratedTerminalService,
     provider: string,
     reference?: string | null,
+    variant: SignInVariant = "subscription",
   ): Promise<IntegratedTerminal> {
-    const command = this.signInCommand(provider, reference);
+    const command = this.signInCommand(provider, reference, variant);
     return terminals.createCommand({
       name: command.title,
       executable: command.executable,
@@ -625,6 +694,11 @@ export class AccountService {
     reference?: string | null,
   ): Promise<{ provider: AccountProvider; account: string }> {
     const owner = accountProvider(provider);
+    const profile = findAccount(this.config, owner, reference);
+    if (profile?.kind === "api-key") {
+      await this.clearApiKey(profile);
+      return { provider: owner, account: profile.id };
+    }
     const command = this.signOutCommand(owner, reference);
     const result = await runCommand(command.executable, command.args, {
       env: command.env,
@@ -642,6 +716,89 @@ export class AccountService {
       account:
         findAccount(this.config, owner, reference)?.id ?? DEFAULT_ACCOUNT,
     };
+  }
+
+  /**
+   * Puts an API key on a Claude account made for one. The key goes to the
+   * login Keychain, and the account's `settings.json` gets an `apiKeyHelper`
+   * that reads it back, so no file Daedalus writes ever holds the key.
+   */
+  async setApiKey(
+    provider: string,
+    reference: string,
+    key: string,
+  ): Promise<AccountProfile> {
+    const owner = accountProvider(provider);
+    const profile = this.requireProfile(owner, reference);
+    if (profile.kind !== "api-key")
+      throw new DaedalusError(
+        "VALIDATION",
+        `'${profile.name}' signs in with a login; add an API-key account to use a key`,
+      );
+    const trimmed = key.trim();
+    if (!API_KEY.test(trimmed))
+      throw new DaedalusError(
+        "VALIDATION",
+        "That does not look like an Anthropic API key (sk-ant-…)",
+      );
+    const directory = accountDirectory(this.config, profile);
+    try {
+      await this.keychain.write(API_KEY_SERVICE, directory, trimmed);
+    } catch (error) {
+      throw new DaedalusError(
+        "DEPENDENCY",
+        `The Keychain did not take the key: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    await this.writeClaudeSettings(directory, (settings) => ({
+      ...settings,
+      apiKeyHelper: keychainReadCommand(API_KEY_SERVICE, directory),
+    }));
+    return profile;
+  }
+
+  /** Takes an API-key account's key out of the Keychain and its settings. */
+  private async clearApiKey(profile: AccountProfile): Promise<void> {
+    const directory = accountDirectory(this.config, profile);
+    await this.keychain
+      .remove(API_KEY_SERVICE, directory)
+      .catch(() => undefined);
+    await this.writeClaudeSettings(directory, (settings) => {
+      const { apiKeyHelper: _removed, ...rest } = settings;
+      return rest;
+    });
+  }
+
+  /** Rewrites one profile's Claude `settings.json` through `change`. */
+  private async writeClaudeSettings(
+    directory: string,
+    change: (settings: Record<string, unknown>) => Record<string, unknown>,
+  ): Promise<void> {
+    const path = join(directory, "settings.json");
+    const file = Bun.file(path);
+    let settings: Record<string, unknown> = {};
+    if (await file.exists()) {
+      try {
+        settings = (await file.json()) as Record<string, unknown>;
+      } catch {
+        throw new DaedalusError(
+          "CONFLICT",
+          `${path} is not valid JSON; fix or delete it first`,
+        );
+      }
+    }
+    const next = change(settings);
+    await ensureDirectory(directory);
+    const temporary = `${path}.${crypto.randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, {
+        flag: "wx",
+        mode: 0o600,
+      });
+      await rename(temporary, path);
+    } finally {
+      await rm(temporary, { force: true });
+    }
   }
 
   private requireProfile(

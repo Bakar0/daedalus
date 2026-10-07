@@ -25,6 +25,7 @@ const snapshot = {
       name: "Settings test",
       path: "/tmp/settings-test",
       createdAt: "2026-09-14T00:00:00.000Z",
+      kind: "login",
       updatedAt: "2026-09-14T00:00:00.000Z",
       archivedAt: null,
       available: true,
@@ -69,6 +70,7 @@ const snapshot = {
         name: "Default",
         directory: "/Users/someone/.claude",
         createdAt: null,
+        kind: "login",
       },
       {
         provider: "claude",
@@ -76,6 +78,15 @@ const snapshot = {
         name: "Personal",
         directory: "/Users/someone/.daedalus-dev/accounts/claude/personal-1a2b",
         createdAt: "2026-10-06T00:00:00.000Z",
+        kind: "login",
+      },
+      {
+        provider: "claude",
+        account: "work-api-9c1d",
+        name: "Work API",
+        directory: "/Users/someone/.daedalus-dev/accounts/claude/work-api-9c1d",
+        createdAt: "2026-10-07T00:00:00.000Z",
+        kind: "api-key",
       },
       {
         provider: "codex",
@@ -83,6 +94,7 @@ const snapshot = {
         name: "Default",
         directory: "/Users/someone/.codex",
         createdAt: null,
+        kind: "login",
       },
     ],
     providers: [
@@ -255,6 +267,12 @@ const client = {
         },
         {
           ...snapshot.settings.accounts[2]!,
+          state: "signed-out",
+          executable: "/usr/local/bin/claude",
+          checkedAt: "2026-10-06T00:00:00.000Z",
+        },
+        {
+          ...snapshot.settings.accounts[3]!,
           state: "missing",
           executable: "codex",
           checkedAt: "2026-10-06T00:00:00.000Z",

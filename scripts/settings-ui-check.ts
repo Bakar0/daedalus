@@ -544,7 +544,12 @@ try {
     await Bun.sleep(50);
   }
   const agents = await evaluate<{
-    rows: Array<{ account: string; line: string; actions: string[] }>;
+    rows: Array<{
+      account: string;
+      line: string;
+      actions: string[];
+      selects: string[];
+    }>;
     install: string[];
     overflow: boolean;
   }>(`(() => {
@@ -555,12 +560,26 @@ try {
         account: row.dataset.account,
         line: row.querySelector('.accounts-who small')?.textContent ?? '',
         actions: [...row.querySelectorAll('.accounts-actions button')].map((b) => b.textContent.trim()),
+        selects: [...row.querySelectorAll('.accounts-actions select')].map((select) => [...select.options].map((o) => o.textContent.trim()).join(',')),
       })),
       install: [...document.querySelectorAll('.accounts-install-row code')].map((c) => c.textContent),
       overflow: rows.some((row) => row.getBoundingClientRect().right > pane.right + 1),
     };
   })()`);
-  const [signedIn, signedOut, missing] = agents.rows;
+  const byAccount = (account: string, index = 0) =>
+    agents.rows.filter((row) => row.account === account)[index];
+  const signedIn = byAccount("default");
+  const signedOut = byAccount("personal-1a2b");
+  const apiKey = byAccount("work-api-9c1d");
+  const missing = byAccount("default", 1);
+  if (
+    apiKey?.line !== "No key set" ||
+    !apiKey.actions.includes("Set key") ||
+    apiKey.actions.includes("Sign in")
+  )
+    throw new Error(
+      `Agents: the API-key row is wrong: ${JSON.stringify(apiKey)}`,
+    );
   if (
     !signedIn?.line.includes("someone@example.com") ||
     !signedIn.actions.includes("Sign out") ||
@@ -572,6 +591,7 @@ try {
   if (
     signedOut?.line !== "Signed out" ||
     !signedOut.actions.includes("Sign in") ||
+    !signedOut.selects.includes("Subscription,SSO,Console") ||
     !signedOut.actions.includes("Remove")
   )
     throw new Error(
@@ -592,7 +612,7 @@ try {
   });
   await Bun.write(agentsScreenshotPath, Buffer.from(agentsShot.data, "base64"));
   console.log(
-    `Agents: ${agents.rows.length} accounts (signed in with email, signed out with Sign in, Codex not installed with ${agents.install.length} install commands), none past the pane`,
+    `Agents: ${agents.rows.length} accounts (signed in with email, signed out with a subscription/SSO/Console choice beside Sign in, an API-key account with Set key, Codex not installed with ${agents.install.length} install commands), none past the pane`,
   );
   // And General, where a switch sits beside a two-line description and the
   // alignment either reads or does not.

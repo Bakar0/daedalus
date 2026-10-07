@@ -6938,3 +6938,13 @@ dd {
   margin-right: 6px;
   padding: 0 6px;
 }
+/* Which Claude login Sign in runs: a small choice beside the button. */
+.accounts-actions select {
+  font-size: 11px;
+  height: 28px;
+  padding: 0 6px;
+  width: auto;
+}
+.accounts-actions {
+  align-items: center;
+}
