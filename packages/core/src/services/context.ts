@@ -156,6 +156,8 @@ export async function createApplicationContext(
     config,
     abilities,
     (sessionId) => activity.forget(sessionId),
+    (sessionId, reason) =>
+      activity.raise({ sessionId, reason }).catch(() => undefined),
   );
   const terminals = new IntegratedTerminalService(
     repositories,

@@ -34,10 +34,14 @@ class FakeTmux implements TmuxClient {
   async attach() {
     return 0;
   }
+  screen = "Claude Code v2.1.289\nshift+tab to cycle";
+  readonly keys: string[][] = [];
   async capture() {
-    return "Claude Code v2.1.289\nshift+tab to cycle";
+    return this.screen;
   }
-  async sendKeys() {}
+  async sendKeys(_session: string, keys: string[]) {
+    this.keys.push(keys);
+  }
   async send() {}
   async stop(session: string) {
     this.sessions.delete(session);
@@ -429,6 +433,32 @@ describe("account profiles", () => {
         }),
       ).rejects.toThrow("No Claude account named 'nobody'");
       expect(await pathExists(join(home, "workspaces", "other"))).toBe(false);
+      context.close();
+    });
+  });
+
+  test("a session that stops on a question at startup stays open and asks for the user", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, tmux } = await setup(home);
+      // A consumer account's new terms: not Daedalus's to answer.
+      tmux.screen = [
+        "Updates to Consumer Terms and Policies",
+        "❯ 1. Accept terms · Help improve our AI models: ON",
+        "  2. Accept terms · Help improve our AI models: OFF",
+        "Enter to confirm · Esc to cancel",
+      ].join("\n");
+      const workspace = await context.workspaces.create({ name: "Terms" });
+      const agent = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "claude",
+      });
+      expect(agent.status).toBe("running");
+      expect(tmux.sessions.has(agent.tmuxSession)).toBe(true);
+      expect(tmux.keys).toEqual([]);
+      await Bun.sleep(50);
+      expect(
+        JSON.stringify(context.activity.attentionFor(agent.id)?.reasons),
+      ).toContain("Claude is asking something before it starts");
       context.close();
     });
   });

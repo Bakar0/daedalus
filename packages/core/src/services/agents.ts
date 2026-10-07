@@ -76,6 +76,9 @@ const CODEX_MENTION_SETTLE_MS = 400;
 // the trust prompts for directories it created itself; it must never keep
 // typing into a session the user has taken over.
 const MAX_PROMPT_CONFIRMATIONS = 3;
+// How long an unrecognised confirm screen must stay before startup treats it
+// as a question for the user rather than a frame on the way to the prompt.
+const STARTUP_QUESTION_SETTLE_MS = 2_000;
 // How many sessions a revive sweep brings back at once. Every relaunch is a
 // provider CLI re-reading a transcript and possibly sitting on a startup trust
 // prompt that Daedalus answers with up to MAX_PROMPT_CONFIRMATIONS synthetic
@@ -458,7 +461,20 @@ export class AgentService {
      * at exactly the moment a reboot gave them a whole board of them.
      */
     private readonly onSessionEnded: (sessionId: string) => void = () => {},
+    /** Puts a session's startup question on its Needs me badge. */
+    private readonly onStartupQuestion: (
+      sessionId: string,
+      reason: string,
+    ) => unknown = () => undefined,
   ) {}
+
+  /** Raises the badge for a session that stopped on a question at startup. */
+  private askedAtStartup(session: AgentSession): void {
+    void this.onStartupQuestion(
+      session.id,
+      `${providerLabel(session.provider)} is asking something before it starts. Answer it in the session's terminal.`,
+    );
+  }
 
   /** The configuration with this session's account folders in place. */
   private sessionConfig(agent: AgentSession): DaedalusConfig {
@@ -503,11 +519,20 @@ export class AgentService {
     };
   }
 
+  /**
+   * Waits for the provider to be ready, answering the trust prompts for
+   * folders Daedalus made. Resolves `question` when the provider stopped on
+   * something else that asks the user: that is theirs to answer, so the
+   * session is left open at it rather than closed after the timeout.
+   */
   private async confirmOwnedWorkspaceTrust(
     provider: string,
     tmuxSession: string,
-  ): Promise<void> {
-    if (provider !== "codex" && provider !== "claude") return;
+  ): Promise<"ready" | "question"> {
+    if (provider !== "codex" && provider !== "claude") return "ready";
+    // When an unrecognised confirm screen was first seen, so a screen that is
+    // only passing through on the way to the prompt is not mistaken for one.
+    let questionSince: number | undefined;
     const deadline = Date.now() + PROVIDER_STARTUP_TIMEOUT_MS;
     const promptAttempts = new Map<
       string,
@@ -596,7 +621,7 @@ export class AgentService {
         (provider === "codex" && screen.includes("Ask Codex to do anything")) ||
         (provider === "claude" && claudeReady(screen))
       ) {
-        return;
+        return "ready";
       } else if (provider === "codex" && screen.includes("Hooks need review")) {
         // Daedalus injects Codex's activity hooks, and Codex gates them behind
         // a one-time review because a trusted hook runs outside the sandbox.
@@ -605,7 +630,7 @@ export class AgentService {
         // usable either way, and until it is answered Codex activity simply
         // runs on the rollout tier. Answering it here would be Daedalus
         // clicking through a security control on the user's behalf.
-        return;
+        return "ready";
       } else if (
         provider === "codex" &&
         screen.includes("Do you trust the contents of this directory?")
@@ -629,7 +654,18 @@ export class AgentService {
           screen,
           "Yes, allow external imports",
         );
-      }
+      } else if (
+        provider === "claude" &&
+        /Enter to confirm/.test(screen) &&
+        /Esc to cancel/.test(screen)
+      ) {
+        // A screen Daedalus has no business answering: an account's new
+        // terms and privacy choice, a notice about the plan. Waiting it out
+        // would close a session the user only has to answer once.
+        questionSince ??= Date.now();
+        if (Date.now() - questionSince >= STARTUP_QUESTION_SETTLE_MS)
+          return "question";
+      } else questionSince = undefined;
 
       await Bun.sleep(PROVIDER_STARTUP_POLL_MS);
     }
@@ -1040,11 +1076,12 @@ export class AgentService {
           ? launch.env
           : await this.agentEnvironment(session, launch.env),
       });
-      if (!input.terminal)
-        await this.confirmOwnedWorkspaceTrust(
-          provider!.name,
-          session.tmuxSession,
-        );
+      const startup = input.terminal
+        ? "ready"
+        : await this.confirmOwnedWorkspaceTrust(
+            provider!.name,
+            session.tmuxSession,
+          );
       let runningSession = session;
       if (provider?.name === "codex") {
         const recoveredId = await recoverCodexSessionId({
@@ -1067,6 +1104,7 @@ export class AgentService {
       this.repositories.updateAgent(running);
       if (task && !input.terminal && !input.draftBrief && !input.continueFrom)
         this.markTaskStarted(workspace, task.id);
+      if (startup === "question") this.askedAtStartup(running);
       return running;
     } catch (error) {
       if (input.continueFrom)
@@ -1864,11 +1902,13 @@ export class AgentService {
             ? await this.agentEnvironment(restoring)
             : undefined,
       });
-      if (agent.kind === "agent")
-        await this.confirmOwnedWorkspaceTrust(
-          agent.provider,
-          restoring.tmuxSession,
-        );
+      const startup =
+        agent.kind === "agent"
+          ? await this.confirmOwnedWorkspaceTrust(
+              agent.provider,
+              restoring.tmuxSession,
+            )
+          : "ready";
       let restored: AgentSession = {
         ...restoring,
         status: "running",
@@ -1893,6 +1933,7 @@ export class AgentService {
           restored = { ...restored, providerSessionId: recoveredId };
       }
       this.repositories.updateAgent(restored);
+      if (startup === "question") this.askedAtStartup(restored);
       return restored;
     } catch (error) {
       // A launch that got as far as tmux but not as far as a ready provider
