@@ -382,6 +382,8 @@ export class AccountService {
       ) => Promise<void>;
       remove: (service: string, account: string) => Promise<void>;
     } = { write: writeKeychainPassword, remove: deleteKeychainPassword },
+    /** Archives a session; how Remove clears the sessions running on it. */
+    private readonly archiveSession?: (sessionId: string) => Promise<unknown>,
   ) {}
 
   /** Every account, the default ones first. */
@@ -566,7 +568,14 @@ export class AccountService {
    * archived, and say why when someone tries to restore them. Workspaces that
    * started sessions on it by default go back to the default account.
    */
-  async remove(provider: string, reference: string): Promise<AccountProfile> {
+  async remove(
+    provider: string,
+    reference: string,
+    options: {
+      /** Archive the sessions running on it first, instead of refusing. */
+      archiveSessions?: boolean;
+    } = {},
+  ): Promise<AccountProfile> {
     const owner = accountProvider(provider);
     const profile = this.requireProfile(owner, reference);
     // Only a session that is running holds the account: it would lose its
@@ -581,7 +590,11 @@ export class AccountService {
           !session.archivedAt &&
           (session.status === "running" || session.status === "starting"),
       );
-    if (live.length)
+    // Asked for: the running sessions are archived, so their conversations
+    // stop cleanly before the login they run on goes.
+    if (live.length && options.archiveSessions && this.archiveSession)
+      for (const session of live) await this.archiveSession(session.id);
+    else if (live.length)
       throw new DaedalusError(
         "CONFLICT",
         `${live.map((session) => `'${session.name}'`).join(", ")} ${live.length === 1 ? "is" : "are"} running on '${profile.name}'. Stop or archive ${live.length === 1 ? "it" : "them"} before removing the account.`,

@@ -830,9 +830,12 @@ export function createDesktopRequestHandlers(
           await context.accounts.rename(provider, account, name),
         ),
       ),
-    accountRemove: ({ provider, account }) =>
+    accountRemove: ({ provider, account, archiveSessions }) =>
       mutate(async () =>
-        accountDto(context, await context.accounts.remove(provider, account)),
+        accountDto(
+          context,
+          await context.accounts.remove(provider, account, { archiveSessions }),
+        ),
       ),
     accountSignIn: ({ provider, account, variant }) =>
       mutate(async () =>

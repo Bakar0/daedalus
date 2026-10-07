@@ -141,7 +141,7 @@ daedal account add <claude|codex> <name> [--api-key | --sso | --console]
 daedal account method claude <account> <subscription|sso|console>
 daedal account key claude <account>        # the key on standard input
 daedal account rename <claude|codex> <account> <name>
-daedal account remove <claude|codex> <account> --force
+daedal account remove <claude|codex> <account> --force [--archive-sessions]
 daedal account login <claude|codex> [<account>] [--sso | --console]
 daedal account logout <claude|codex> [<account>]
 ```
@@ -158,7 +158,7 @@ An account added with `--api-key` uses an Anthropic API key instead of a login. 
 
 A session runs on the account it was spawned on for its whole life: restore, revive, handoff and archive all point the provider at the same folder, because that is where its conversation is. `agent spawn --account` chooses; without it the workspace's default for that provider applies, else the default account. `agent continue` keeps the predecessor's account unless `--account` says otherwise. Every launch first asks the provider whether the account is signed in and refuses with exit code 5 when it says it is not, instead of starting a terminal whose first turn fails; an `unknown` answer does not block. Model catalogs, Codex hooks and instructions, session lookup, context telemetry and rate-limit windows are all read from the session's account, and the usage footer shows a profile's windows under its own name.
 
-`remove` requires `--force`, signs the account out (which also removes Claude's Keychain entry), clears workspace defaults that named it and deletes its folder. It is refused while a session that is not archived runs on it. An archived session on a removed account cannot be restored, and says so.
+`remove` requires `--force`, signs the account out (which also removes Claude's Keychain entry), clears workspace defaults that named it and deletes its folder. It is refused while a session is running on it, unless `--archive-sessions` archives those sessions first, which is what Remove in Settings → Agents does. An archived session on a removed account cannot be restored, and says so.
 
 ## Session
 

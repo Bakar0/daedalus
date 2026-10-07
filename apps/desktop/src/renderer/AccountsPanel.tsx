@@ -707,7 +707,7 @@ export function AccountsPanel({
                           {!isDefault ? (
                             <ConfirmButton
                               armedLabel="Remove"
-                              armedTitle={`Sign ${account.name} out and delete its folder`}
+                              armedTitle={`Archive any session running on ${account.name}, sign it out and delete its folder`}
                               className="danger-link"
                               disabled={busy}
                               onConfirm={() =>
@@ -715,6 +715,7 @@ export function AccountsPanel({
                                   client.request.accountRemove({
                                     provider: account.provider,
                                     account: account.account,
+                                    archiveSessions: true,
                                   }),
                                 )
                               }

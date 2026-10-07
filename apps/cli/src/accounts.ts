@@ -16,7 +16,7 @@ export const accountHelp = `Account commands:
   daedal account method claude <account> <subscription|sso|console>
   daedal account key claude <account>          (reads the key from stdin)
   daedal account rename <claude|codex> <account> <name>
-  daedal account remove <claude|codex> <account> --force
+  daedal account remove <claude|codex> <account> --force [--archive-sessions]
   daedal account login <claude|codex> [<account>] [--sso | --console]
   daedal account logout <claude|codex> [<account>]
 
@@ -47,7 +47,8 @@ else the Default account. Spawning on an account its provider reports as
 signed out is refused.
 
 'account remove' signs the account out and deletes its folder. It is refused
-while a session that is not archived runs on it.`;
+while a session is running on it, unless --archive-sessions archives those
+sessions first. Settings → Agents' Remove does that.`;
 
 function stateLine(status: AccountStatus): string {
   if (status.state === "missing") return "not installed";
@@ -212,7 +213,7 @@ export async function accountCommand(
     return 0;
   }
   if (action === "remove") {
-    const parsed = parseArguments(args, [], ["force"]);
+    const parsed = parseArguments(args, [], ["force", "archive-sessions"]);
     expectPositionals(
       parsed.positionals,
       2,
@@ -226,6 +227,7 @@ export async function accountCommand(
     const result = await context.accounts.remove(
       parsed.positionals[0]!,
       parsed.positionals[1]!,
+      { archiveSessions: parsed.flags.has("archive-sessions") },
     );
     printResult(result, json, () =>
       console.log(`Removed ${result.provider} account ${result.name}`),

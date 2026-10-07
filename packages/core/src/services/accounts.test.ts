@@ -562,4 +562,31 @@ describe("account profiles", () => {
       context.close();
     });
   });
+
+  test("Remove can archive the sessions running on an account instead of refusing", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context } = await setup(home);
+      const profile = await context.accounts.add("claude", "Personal");
+      await Bun.write(
+        join(home, "accounts", "claude", profile.id, "signed-in"),
+        "",
+      );
+      const workspace = await context.workspaces.create({ name: "Side" });
+      const agent = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "claude",
+        account: profile.id,
+        name: "Accept terms",
+      });
+      await expect(
+        context.accounts.remove("claude", "Personal"),
+      ).rejects.toThrow("'Accept terms' is running on 'Personal'");
+      await context.accounts.remove("claude", "Personal", {
+        archiveSessions: true,
+      });
+      expect((await context.agents.get(agent.id)).archivedAt).not.toBeNull();
+      expect(context.config.accounts).toEqual([]);
+      context.close();
+    });
+  });
 });

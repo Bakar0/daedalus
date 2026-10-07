@@ -1207,7 +1207,12 @@ export interface DesktopRpcSchema {
       >;
       /** Signs the account out and deletes its folder. */
       accountRemove: Request<
-        { provider: "claude" | "codex"; account: string },
+        {
+          provider: "claude" | "codex";
+          account: string;
+          /** Archive the sessions running on it first, instead of refusing. */
+          archiveSessions?: boolean;
+        },
         AccountDto
       >;
       /**
