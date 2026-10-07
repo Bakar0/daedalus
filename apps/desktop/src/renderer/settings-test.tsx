@@ -247,6 +247,40 @@ const client = {
     }),
     // One of each state the Agents section draws: signed in with an email
     // and plan, signed out, and a provider that is not installed.
+    // The add and sign-in requests are recorded, so the check can see what
+    // a click sent.
+    accountAdd: async (params: { provider: "claude"; name: string }) => {
+      const host = window as unknown as { requests?: object[] };
+      host.requests = [...(host.requests ?? []), { accountAdd: params }];
+      return {
+        ok: true,
+        data: {
+          provider: params.provider,
+          account: "added-0001",
+          name: params.name,
+          directory: "/Users/someone/.daedalus-dev/accounts/claude/added-0001",
+          createdAt: "2026-10-07T00:00:00.000Z",
+          kind: "login",
+        },
+      };
+    },
+    accountSignIn: async (params: object) => {
+      const host = window as unknown as { requests?: object[] };
+      host.requests = [...(host.requests ?? []), { accountSignIn: params }];
+      return {
+        ok: true,
+        data: {
+          id: "sign-in-terminal",
+          name: "Claude sign in",
+          tmuxSession: "daedalus_terminal_signin",
+          workingDirectory: "/Users/someone/.daedalus-dev",
+          status: "running",
+          startedAt: "2026-10-07T00:00:00.000Z",
+          endedAt: null,
+          revivedAt: null,
+        },
+      };
+    },
     accountStatus: async () => ({
       ok: true,
       data: [

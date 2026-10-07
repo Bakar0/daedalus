@@ -527,4 +527,37 @@ describe("account profiles", () => {
       context.close();
     });
   });
+
+  test("an account remembers how it signs in, so Sign in needs no choice", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context } = await setup(home);
+      await context.accounts.add("claude", "Work", "login", "sso");
+      expect(context.accounts.signInCommand("claude", "Work").args).toEqual([
+        "auth",
+        "login",
+        "--sso",
+      ]);
+      // A one-off choice still wins over the stored one.
+      expect(
+        context.accounts.signInCommand("claude", "Work", "console").args,
+      ).toEqual(["auth", "login", "--console"]);
+      // The default account has one too, and it survives a restart.
+      await context.accounts.setLogin("claude", "default", "console");
+      expect(context.accounts.signInCommand("claude").args).toEqual([
+        "auth",
+        "login",
+        "--console",
+      ]);
+      const reloaded = await loadConfig({ DAEDALUS_HOME: home });
+      expect(reloaded.defaultLogins).toEqual({ claude: "console" });
+      expect(reloaded.accounts[0]?.login).toBe("sso");
+      expect(
+        context.accounts.list().find((item) => item.name === "Work")?.login,
+      ).toBe("sso");
+      await expect(
+        context.accounts.setLogin("codex", "default", "sso"),
+      ).rejects.toThrow("Only Claude has more than one login");
+      context.close();
+    });
+  });
 });

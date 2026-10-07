@@ -78,7 +78,18 @@ export interface AccountProfile {
    * keeps in the login Keychain and Claude reads through `apiKeyHelper`.
    */
   kind?: "login" | "api-key";
+  /**
+   * Which of Claude's logins Sign in runs for a `login` account: its
+   * subscription (the default), SSO, or the Anthropic Console. Chosen when
+   * the account is added, so signing in again is one click.
+   */
+  login?: ClaudeLogin;
 }
+
+/** Claude's three logins. */
+export type ClaudeLogin = "subscription" | "sso" | "console";
+
+const CLAUDE_LOGINS: readonly string[] = ["subscription", "sso", "console"];
 
 export interface DaedalusConfig {
   home: string;
@@ -147,6 +158,8 @@ export interface DaedalusConfig {
   claudeOutputStyleWritten?: string;
   /** Account profiles beyond each provider's default. */
   accounts: AccountProfile[];
+  /** Which login Sign in runs for each provider's default account. */
+  defaultLogins: { claude?: ClaudeLogin };
 }
 
 type StoredConfig = Partial<
@@ -164,6 +177,7 @@ type StoredConfig = Partial<
   claudeOverridesWritten?: string[];
   claudeOutputStyleWritten?: string;
   accounts?: AccountProfile[];
+  defaultLogins?: { claude?: unknown };
 };
 
 function expandHome(path: string): string {
@@ -277,6 +291,11 @@ export async function loadConfig(
       ? { claudeOutputStyleWritten: stored.claudeOutputStyleWritten }
       : {}),
     accounts: storedAccounts(stored.accounts),
+    defaultLogins:
+      typeof stored.defaultLogins?.claude === "string" &&
+      CLAUDE_LOGINS.includes(stored.defaultLogins.claude)
+        ? { claude: stored.defaultLogins.claude as ClaudeLogin }
+        : {},
   };
 }
 
@@ -300,7 +319,9 @@ function storedAccounts(value: unknown): AccountProfile[] {
       typeof entry.createdAt === "string" &&
       (entry.kind === undefined ||
         entry.kind === "login" ||
-        (entry.kind === "api-key" && entry.provider === "claude")),
+        (entry.kind === "api-key" && entry.provider === "claude")) &&
+      (entry.login === undefined ||
+        (entry.provider === "claude" && CLAUDE_LOGINS.includes(entry.login))),
   );
 }
 
@@ -403,6 +424,16 @@ export async function saveAccounts(
 ): Promise<void> {
   await saveSetting(config, { accounts });
   config.accounts = accounts;
+}
+
+/** Stores which login the default Claude account signs in with. */
+export async function saveDefaultLogin(
+  config: DaedalusConfig,
+  login: ClaudeLogin,
+): Promise<void> {
+  const defaultLogins = { ...config.defaultLogins, claude: login };
+  await saveSetting(config, { defaultLogins });
+  config.defaultLogins = defaultLogins;
 }
 
 /** Records which output style, if any, is Daedalus's in Claude's settings. */

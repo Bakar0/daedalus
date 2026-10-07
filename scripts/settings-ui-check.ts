@@ -548,7 +548,6 @@ try {
       account: string;
       line: string;
       actions: string[];
-      signIn: string;
     }>;
     install: string[];
     overflow: boolean;
@@ -560,7 +559,7 @@ try {
         account: row.dataset.account,
         line: row.querySelector('.accounts-who small')?.textContent ?? '',
         actions: [...row.querySelectorAll('.accounts-actions button')].map((b) => b.textContent.trim()),
-        signIn: row.querySelector('.accounts-signin')?.textContent.replace('▾', '').trim() ?? '',
+
       })),
       install: [...document.querySelectorAll('.accounts-install-row code')].map((c) => c.textContent),
       overflow: rows.some((row) => row.getBoundingClientRect().right > pane.right + 1),
@@ -590,7 +589,7 @@ try {
     );
   if (
     signedOut?.line !== "Signed out" ||
-    signedOut.signIn !== "Sign in" ||
+    !signedOut.actions.includes("Sign in") ||
     !signedOut.actions.includes("Remove")
   )
     throw new Error(
@@ -610,60 +609,39 @@ try {
     format: "png",
   });
   await Bun.write(agentsScreenshotPath, Buffer.from(agentsShot.data, "base64"));
-  // Sign in asks which of Claude's logins, in a menu under the button.
-  await evaluate(`(() => {
-    document.querySelector('li[data-account="personal-1a2b"] .accounts-signin').click();
-  })()`);
-  await Bun.sleep(200);
-  const logins = await evaluate<string[]>(`(() =>
-    [...document.querySelectorAll('.accounts-signin-item .menu-item-label')]
-      .filter((item) => item.getClientRects().length > 0)
-      .map((item) => item.textContent.trim()))()`);
-  if (
-    JSON.stringify(logins) !==
-    JSON.stringify([
-      "Claude subscription",
-      "Single sign-on",
-      "Anthropic Console",
-    ])
-  )
-    throw new Error(`Agents: Sign in offers ${JSON.stringify(logins)}`);
-  const menuShot = await send<{ data: string }>("Page.captureScreenshot", {
-    format: "png",
-  });
-  await Bun.write(
-    agentsScreenshotPath.replace(".png", "-signin.png"),
-    Buffer.from(menuShot.data, "base64"),
+  // Adding an account is one form and one click: a name, how it signs in,
+  // and Add and sign in, which adds it and opens the sign-in. Driven with
+  // real mouse events, the way the dialog is used.
+  const clickAt = async (expression: string) => {
+    const point = await evaluate<{ x: number; y: number } | null>(`(() => {
+      const element = ${expression};
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    })()`);
+    if (!point) throw new Error(`Agents: nothing to click for ${expression}`);
+    for (const type of ["mousePressed", "mouseReleased"])
+      await send("Input.dispatchMouseEvent", {
+        type,
+        x: point.x,
+        y: point.y,
+        button: "left",
+        clickCount: 1,
+      });
+    await Bun.sleep(150);
+  };
+  await clickAt(
+    "[...document.querySelectorAll('.accounts-add')].find((button) => button.textContent.includes('Claude'))",
   );
-  await send("Input.dispatchKeyEvent", {
-    type: "keyDown",
-    key: "Escape",
-    code: "Escape",
-    windowsVirtualKeyCode: 27,
-  });
-  await send("Input.dispatchKeyEvent", {
-    type: "keyUp",
-    key: "Escape",
-    code: "Escape",
-    windowsVirtualKeyCode: 27,
-  });
-  await Bun.sleep(150);
-  // Adding an account asks whether it signs in or uses an API key.
   await evaluate(`(() => {
-    [...document.querySelectorAll('.accounts-add')]
-      .find((button) => button.textContent.includes('Claude')).click();
+    const input = document.querySelector('.accounts-add-form input');
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(input, 'Work SSO');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
   })()`);
-  await Bun.sleep(150);
-  await evaluate(`(() => {
-    [...document.querySelectorAll('.accounts-kind button')]
-      .find((button) => button.textContent.trim() === 'API key').click();
-  })()`);
-  await Bun.sleep(150);
-  const kind = await evaluate<string>(
-    "document.querySelector('.accounts-kind button[aria-checked=\"true\"]')?.textContent.trim() ?? ''",
+  await clickAt(
+    "[...document.querySelectorAll('.accounts-add-form .accounts-methods button')].find((button) => button.textContent.trim() === 'SSO')",
   );
-  if (kind !== "API key")
-    throw new Error(`Agents: the add form's kind is ${kind || "missing"}`);
   const addShot = await send<{ data: string }>("Page.captureScreenshot", {
     format: "png",
   });
@@ -671,8 +649,40 @@ try {
     agentsScreenshotPath.replace(".png", "-add.png"),
     Buffer.from(addShot.data, "base64"),
   );
+  await clickAt(
+    "[...document.querySelectorAll('.accounts-add-form button')].find((button) => button.textContent.trim() === 'Add and sign in')",
+  );
+  await Bun.sleep(300);
+  const requests = await evaluate<string>(
+    "JSON.stringify(window.requests ?? [])",
+  );
+  if (
+    !requests.includes(
+      '"accountAdd":{"provider":"claude","name":"Work SSO","kind":"login","login":"sso"}',
+    ) ||
+    !requests.includes(
+      '"accountSignIn":{"provider":"claude","account":"added-0001"}',
+    )
+  )
+    throw new Error(`Agents: Add and sign in sent ${requests}`);
+  // Signing in closes Settings so the terminal can be seen; the rest of the
+  // check carries on in a reopened one.
+  if (
+    await evaluate<boolean>("Boolean(document.querySelector('.settings-nav'))")
+  )
+    throw new Error("Agents: Settings stayed open over the sign-in terminal");
+  await evaluate("document.querySelector('.settings-corner-button').click()");
+  for (
+    let attempt = 0;
+    attempt < 40 &&
+    !(await evaluate<boolean>(
+      "Boolean(document.querySelector('.settings-nav'))",
+    ));
+    attempt += 1
+  )
+    await Bun.sleep(50);
   console.log(
-    `Agents: ${agents.rows.length} accounts (signed in with email, signed out with Sign in offering subscription, SSO and Console, an API-key account with Set key, Codex not installed with ${agents.install.length} install commands), none past the pane`,
+    `Agents: ${agents.rows.length} accounts (signed in with email, signed out with a one-click Sign in, Add and sign in with SSO sending both requests, an API-key account with Set key, Codex not installed with ${agents.install.length} install commands), none past the pane`,
   );
   // And General, where a switch sits beside a two-line description and the
   // alignment either reads or does not.

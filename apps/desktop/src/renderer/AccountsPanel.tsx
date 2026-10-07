@@ -6,34 +6,51 @@
  * again, not carried in every snapshot: each answer is a provider subprocess.
  * Signing in opens the provider's own command in an integrated terminal,
  * because it opens a browser and may ask something; Daedalus never sees a
- * credential.
+ * credential. An API key goes to the macOS Keychain.
+ *
+ * Each Claude account remembers how it signs in, chosen when it is added, so
+ * Sign in is one click. There is no menu here: this panel lives in a modal
+ * dialog, and WebKit does not let a popover opened inside one be clicked.
  */
 import React, { useCallback, useEffect, useState } from "react";
 import type {
   AccountDto,
   AccountStatusDto,
+  ClaudeLoginDto,
   DesktopSettingsDto,
   IntegratedTerminalDto,
   RpcResult,
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { ConfirmButton } from "./ConfirmButton";
-import { Menu } from "./Menu";
 
-/** Claude's three logins, as Sign in offers them. */
-const SIGN_IN_VARIANTS = [
+/** How a Claude account signs in. */
+type ClaudeMethod = ClaudeLoginDto | "api-key";
+
+const CLAUDE_METHODS: ReadonlyArray<{
+  id: ClaudeMethod;
+  label: string;
+  hint: string;
+}> = [
   {
     id: "subscription",
-    label: "Claude subscription",
-    hint: "Pro, Max, Team or Enterprise plan",
+    label: "Subscription",
+    hint: "Claude Pro, Max, Team or Enterprise",
   },
-  { id: "sso", label: "Single sign-on", hint: "Your organization's SSO" },
+  { id: "sso", label: "SSO", hint: "Your organization's single sign-on" },
   {
     id: "console",
-    label: "Anthropic Console",
-    hint: "Billed per API use",
+    label: "Console",
+    hint: "Anthropic Console, billed per use",
   },
-] as const;
+  { id: "api-key", label: "API key", hint: "Kept in your macOS Keychain" },
+];
+
+const LOGIN_LABEL: Record<ClaudeLoginDto, string> = {
+  subscription: "Claude subscription",
+  sso: "SSO",
+  console: "Anthropic Console",
+};
 
 const PROVIDERS = [
   { id: "claude", label: "Claude" },
@@ -47,7 +64,11 @@ export function accountStateLine(status: AccountStatusDto | undefined): string {
   if (!status) return "Checking…";
   if (status.state === "missing") return "Not installed";
   if (status.state === "signed-out")
-    return status.kind === "api-key" ? "No key set" : "Signed out";
+    return status.kind === "api-key"
+      ? "No key set"
+      : status.login && status.login !== "subscription"
+        ? `Signed out · signs in with ${LOGIN_LABEL[status.login]}`
+        : "Signed out";
   if (status.state === "unknown")
     return status.detail
       ? `Status unknown: ${status.detail}`
@@ -68,6 +89,37 @@ const stateTone = (status: AccountStatusDto | undefined): string =>
         ? "ended"
         : "lost";
 
+/** A row of mutually exclusive choices, the look of a segmented control. */
+function MethodChoice({
+  label,
+  methods,
+  value,
+  onChange,
+}: {
+  label: string;
+  methods: ReadonlyArray<{ id: ClaudeMethod; label: string; hint: string }>;
+  value: ClaudeMethod;
+  onChange: (method: ClaudeMethod) => void;
+}) {
+  return (
+    <span aria-label={label} className="accounts-methods" role="radiogroup">
+      {methods.map((method) => (
+        <button
+          aria-checked={value === method.id}
+          className={value === method.id ? "selected" : ""}
+          key={method.id}
+          onClick={() => onChange(method.id)}
+          role="radio"
+          title={method.hint}
+          type="button"
+        >
+          {method.label}
+        </button>
+      ))}
+    </span>
+  );
+}
+
 export function AccountsPanel({
   busy,
   client,
@@ -85,14 +137,15 @@ export function AccountsPanel({
   const [statuses, setStatuses] = useState<AccountStatusDto[]>();
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<string>();
-  const [adding, setAdding] = useState<Provider>();
-  const [renaming, setRenaming] = useState<string>();
-  const [name, setName] = useState("");
   const [copied, setCopied] = useState<string>();
-  /** The kind of account the add form makes. */
-  const [addKind, setAddKind] = useState<"login" | "api-key">("login");
+  /** The provider whose add form is open. */
+  const [adding, setAdding] = useState<Provider>();
+  /** The account whose edit form is open, as `provider:account`. */
+  const [editing, setEditing] = useState<string>();
   /** The account whose key form is open, as `provider:account`. */
   const [keying, setKeying] = useState<string>();
+  const [name, setName] = useState("");
+  const [method, setMethod] = useState<ClaudeMethod>("subscription");
   const [apiKey, setApiKey] = useState("");
 
   const check = useCallback(async () => {
@@ -112,7 +165,7 @@ export function AccountsPanel({
   // Asked again whenever the list of accounts changes, so an added account
   // shows its state without a click.
   const accountKeys = settings.accounts
-    .map((item) => `${item.provider}:${item.account}`)
+    .map((item) => `${item.provider}:${item.account}:${item.login ?? ""}`)
     .join(",");
   useEffect(() => {
     void check();
@@ -124,16 +177,17 @@ export function AccountsPanel({
         item.provider === account.provider && item.account === account.account,
     );
 
-  async function signIn(
-    account: AccountDto,
-    variant?: (typeof SIGN_IN_VARIANTS)[number]["id"],
-  ) {
+  const closeForms = () => {
+    setAdding(undefined);
+    setEditing(undefined);
+    setKeying(undefined);
+    setName("");
+    setApiKey("");
+  };
+
+  async function signIn(provider: Provider, account: string) {
     const terminal = await perform(
-      client.request.accountSignIn({
-        provider: account.provider,
-        account: account.account,
-        ...(variant ? { variant } : {}),
-      }),
+      client.request.accountSignIn({ provider, account }),
     );
     if (terminal) onOpenTerminal(terminal);
   }
@@ -150,21 +204,70 @@ export function AccountsPanel({
       await check();
   }
 
+  /**
+   * Adds the account and goes straight on to what makes it usable: the
+   * sign-in for a login, the key for an API-key account. One click.
+   */
   async function add(event: React.FormEvent, provider: Provider) {
     event.preventDefault();
-    const kind = provider === "claude" ? addKind : "login";
+    const choice: ClaudeMethod =
+      provider === "claude" ? method : "subscription";
     const added = await perform(
-      client.request.accountAdd({ provider, name, kind }),
+      client.request.accountAdd({
+        provider,
+        name,
+        kind: choice === "api-key" ? "api-key" : "login",
+        ...(provider === "claude" && choice !== "api-key"
+          ? { login: choice }
+          : {}),
+      }),
     );
-    if (added) {
-      setAdding(undefined);
-      setName("");
-      // An API-key account is no use until it has its key, so ask now.
-      if (added.kind === "api-key") {
-        setKeying(`${added.provider}:${added.account}`);
-        setApiKey("");
-      }
+    if (!added) return;
+    const key = apiKey;
+    closeForms();
+    if (choice === "api-key") {
+      const saved = await perform(
+        client.request.accountSetApiKey({
+          provider: "claude",
+          account: added.account,
+          key,
+        }),
+      );
+      // A key that did not take leaves the account in place, asking for it.
+      if (!saved) setKeying(`${added.provider}:${added.account}`);
+      await check();
+    } else await signIn(provider, added.account);
+  }
+
+  async function saveEdit(event: React.FormEvent, account: AccountDto) {
+    event.preventDefault();
+    const isDefault = account.account === "default";
+    if (!isDefault && name.trim() && name.trim() !== account.name) {
+      const renamed = await perform(
+        client.request.accountRename({
+          provider: account.provider,
+          account: account.account,
+          name,
+        }),
+      );
+      if (!renamed) return;
     }
+    if (
+      account.provider === "claude" &&
+      account.kind === "login" &&
+      method !== "api-key" &&
+      method !== (account.login ?? "subscription")
+    ) {
+      const changed = await perform(
+        client.request.accountSetLogin({
+          provider: "claude",
+          account: account.account,
+          login: method,
+        }),
+      );
+      if (!changed) return;
+    }
+    closeForms();
   }
 
   async function saveKey(event: React.FormEvent, account: AccountDto) {
@@ -184,22 +287,6 @@ export function AccountsPanel({
     }
   }
 
-  async function rename(event: React.FormEvent, account: AccountDto) {
-    event.preventDefault();
-    if (
-      await perform(
-        client.request.accountRename({
-          provider: account.provider,
-          account: account.account,
-          name,
-        }),
-      )
-    ) {
-      setRenaming(undefined);
-      setName("");
-    }
-  }
-
   async function copy(command: string) {
     const response = await client.request.clipboardWrite({ text: command });
     if (response.ok && response.data.written) {
@@ -211,6 +298,12 @@ export function AccountsPanel({
       );
     }
   }
+
+  const escapeCloses = (event: React.KeyboardEvent) => {
+    if (event.key !== "Escape") return;
+    event.stopPropagation();
+    closeForms();
+  };
 
   return (
     <div className="accounts-panel">
@@ -285,6 +378,12 @@ export function AccountsPanel({
                 const status = statusOf(account);
                 const key = `${account.provider}:${account.account}`;
                 const isDefault = account.account === "default";
+                // Something to edit: a profile's name, or a Claude login's
+                // method. Default Codex has neither.
+                const editable =
+                  !isDefault ||
+                  (account.provider === "claude" && account.kind === "login");
+                const formOpen = editing === key || keying === key;
                 return (
                   <li data-account={account.account} key={key}>
                     <span className={`agent-dot tone-${stateTone(status)}`} />
@@ -298,13 +397,7 @@ export function AccountsPanel({
                           autoComplete="off"
                           autoFocus
                           onChange={(event) => setApiKey(event.target.value)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Escape") {
-                              event.stopPropagation();
-                              setKeying(undefined);
-                              setApiKey("");
-                            }
-                          }}
+                          onKeyDown={escapeCloses}
                           placeholder="sk-ant-…"
                           spellCheck={false}
                           type="password"
@@ -315,36 +408,55 @@ export function AccountsPanel({
                         </button>
                         <button
                           className="quiet"
-                          onClick={() => {
-                            setKeying(undefined);
-                            setApiKey("");
-                          }}
+                          onClick={closeForms}
                           type="button"
                         >
                           Cancel
                         </button>
                       </form>
-                    ) : renaming === key ? (
+                    ) : editing === key ? (
                       <form
-                        className="accounts-name-form"
-                        onSubmit={(event) => void rename(event, account)}
+                        className="accounts-edit-form"
+                        onSubmit={(event) => void saveEdit(event, account)}
                       >
-                        <input
-                          aria-label="Account name"
-                          autoFocus
-                          maxLength={60}
-                          onChange={(event) => setName(event.target.value)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Escape") {
-                              event.stopPropagation();
-                              setRenaming(undefined);
-                            }
-                          }}
-                          value={name}
-                        />
-                        <button disabled={busy || !name.trim()} type="submit">
-                          Save
-                        </button>
+                        {!isDefault ? (
+                          <input
+                            aria-label="Account name"
+                            autoFocus
+                            maxLength={60}
+                            onChange={(event) => setName(event.target.value)}
+                            onKeyDown={escapeCloses}
+                            value={name}
+                          />
+                        ) : (
+                          <strong>{account.name}</strong>
+                        )}
+                        {account.provider === "claude" &&
+                        account.kind === "login" ? (
+                          <MethodChoice
+                            label={`How ${account.name} signs in`}
+                            methods={CLAUDE_METHODS.filter(
+                              (item) => item.id !== "api-key",
+                            )}
+                            onChange={setMethod}
+                            value={method}
+                          />
+                        ) : undefined}
+                        <span className="accounts-form-actions">
+                          <button
+                            className="quiet"
+                            onClick={closeForms}
+                            type="button"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            disabled={busy || (!isDefault && !name.trim())}
+                            type="submit"
+                          >
+                            Save
+                          </button>
+                        </span>
                       </form>
                     ) : (
                       <span className="accounts-who">
@@ -355,105 +467,83 @@ export function AccountsPanel({
                         </code>
                       </span>
                     )}
-                    <span className="accounts-actions">
-                      {keying === key ? undefined : account.kind ===
-                        "api-key" ? (
-                        <>
-                          <button
-                            className={
-                              status?.state === "signed-in" ? "quiet" : ""
-                            }
-                            disabled={busy}
-                            onClick={() => {
-                              setKeying(key);
-                              setRenaming(undefined);
-                              setApiKey("");
-                            }}
-                            type="button"
-                          >
-                            {status?.state === "signed-in"
-                              ? "Replace key"
-                              : "Set key"}
-                          </button>
-                          {status?.state === "signed-in" ? (
+                    {formOpen ? undefined : (
+                      <span className="accounts-actions">
+                        {account.kind === "api-key" ? (
+                          <>
+                            <button
+                              className={
+                                status?.state === "signed-in" ? "quiet" : ""
+                              }
+                              disabled={busy}
+                              onClick={() => {
+                                closeForms();
+                                setKeying(key);
+                              }}
+                              type="button"
+                            >
+                              {status?.state === "signed-in"
+                                ? "Replace key"
+                                : "Set key"}
+                            </button>
+                            {status?.state === "signed-in" ? (
+                              <ConfirmButton
+                                armedLabel="Remove key"
+                                armedTitle={`Delete ${account.name}'s key from the Keychain`}
+                                className="quiet"
+                                disabled={busy}
+                                onConfirm={() => void signOut(account)}
+                                type="button"
+                              >
+                                Remove key
+                              </ConfirmButton>
+                            ) : undefined}
+                          </>
+                        ) : status && status.state !== "missing" ? (
+                          status.state === "signed-in" ? (
                             <ConfirmButton
-                              armedLabel="Remove key"
-                              armedTitle={`Delete ${account.name}'s key from the Keychain`}
+                              armedLabel="Sign out"
+                              armedTitle={`Sign ${account.name} out of ${provider.label}`}
                               className="quiet"
                               disabled={busy}
                               onConfirm={() => void signOut(account)}
                               type="button"
                             >
-                              Remove key
+                              Sign out
                             </ConfirmButton>
-                          ) : undefined}
-                        </>
-                      ) : status && status.state !== "missing" ? (
-                        status.state === "signed-in" ? (
-                          <ConfirmButton
-                            armedLabel="Sign out"
-                            className="quiet"
-                            armedTitle={`Sign ${account.name} out of ${provider.label}`}
-                            disabled={busy}
-                            onConfirm={() => void signOut(account)}
-                            type="button"
-                          >
-                            Sign out
-                          </ConfirmButton>
-                        ) : account.provider === "claude" ? (
-                          // Claude has three logins; the button asks which.
-                          <Menu
-                            align="end"
-                            className="accounts-signin-menu"
-                            label={`Sign ${account.name} in`}
-                            menuLabel={`How ${account.name} signs in`}
-                            summary={
-                              <>
-                                Sign in
-                                <span aria-hidden="true">▾</span>
-                              </>
-                            }
-                            summaryClassName="accounts-signin"
-                          >
-                            {SIGN_IN_VARIANTS.map((variant) => (
-                              <button
-                                className="quiet menu-item accounts-signin-item"
-                                disabled={busy}
-                                key={variant.id}
-                                onClick={() => void signIn(account, variant.id)}
-                                role="menuitem"
-                                type="button"
-                              >
-                                <span className="menu-item-label">
-                                  {variant.label}
-                                </span>
-                                <small>{variant.hint}</small>
-                              </button>
-                            ))}
-                          </Menu>
-                        ) : (
-                          <button
-                            disabled={busy}
-                            onClick={() => void signIn(account)}
-                            type="button"
-                          >
-                            Sign in
-                          </button>
-                        )
-                      ) : undefined}
-                      {!isDefault && renaming !== key ? (
-                        <>
+                          ) : (
+                            <button
+                              disabled={busy}
+                              onClick={() =>
+                                void signIn(provider.id, account.account)
+                              }
+                              title={
+                                account.login
+                                  ? `Sign in with ${LOGIN_LABEL[account.login]}`
+                                  : undefined
+                              }
+                              type="button"
+                            >
+                              Sign in
+                            </button>
+                          )
+                        ) : undefined}
+                        {editable ? (
                           <button
                             className="quiet"
                             disabled={busy}
                             onClick={() => {
-                              setRenaming(key);
+                              closeForms();
+                              setEditing(key);
                               setName(account.name);
+                              setMethod(account.login ?? "subscription");
                             }}
                             type="button"
                           >
-                            Rename
+                            Edit
                           </button>
+                        ) : undefined}
+                        {!isDefault ? (
                           <ConfirmButton
                             armedLabel="Remove"
                             armedTitle={`Sign ${account.name} out and delete its folder`}
@@ -471,77 +561,87 @@ export function AccountsPanel({
                           >
                             Remove
                           </ConfirmButton>
-                        </>
-                      ) : undefined}
-                    </span>
+                        ) : undefined}
+                      </span>
+                    )}
                   </li>
                 );
               })}
             </ul>
             {adding === provider.id ? (
               <form
-                className="accounts-name-form"
+                className="accounts-add-form"
                 onSubmit={(event) => void add(event, provider.id)}
               >
-                <input
-                  aria-label={`New ${provider.label} account name`}
-                  autoFocus
-                  maxLength={60}
-                  onChange={(event) => setName(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape") {
-                      event.stopPropagation();
-                      setAdding(undefined);
-                    }
-                  }}
-                  placeholder="Personal"
-                  value={name}
-                />
+                <label>
+                  <span>Name</span>
+                  <input
+                    aria-label={`New ${provider.label} account name`}
+                    autoFocus
+                    maxLength={60}
+                    onChange={(event) => setName(event.target.value)}
+                    onKeyDown={escapeCloses}
+                    placeholder="Personal"
+                    value={name}
+                  />
+                </label>
                 {provider.id === "claude" ? (
-                  <span
-                    aria-label="How the new account authenticates"
-                    className="accounts-kind"
-                    role="radiogroup"
-                  >
-                    {(
-                      [
-                        { id: "login", label: "Sign in" },
-                        { id: "api-key", label: "API key" },
-                      ] as const
-                    ).map((option) => (
-                      <button
-                        aria-checked={addKind === option.id}
-                        className={addKind === option.id ? "selected" : ""}
-                        key={option.id}
-                        onClick={() => setAddKind(option.id)}
-                        role="radio"
-                        type="button"
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </span>
+                  <div className="accounts-add-method">
+                    <span>Signs in with</span>
+                    <MethodChoice
+                      label="How the new account signs in"
+                      methods={CLAUDE_METHODS}
+                      onChange={setMethod}
+                      value={method}
+                    />
+                    <small>
+                      {CLAUDE_METHODS.find((item) => item.id === method)?.hint}
+                    </small>
+                  </div>
                 ) : undefined}
-                <button disabled={busy || !name.trim()} type="submit">
-                  Add
-                </button>
-                <button
-                  className="quiet"
-                  onClick={() => setAdding(undefined)}
-                  type="button"
-                >
-                  Cancel
-                </button>
+                {provider.id === "claude" && method === "api-key" ? (
+                  <label>
+                    <span>API key</span>
+                    <input
+                      aria-label="API key"
+                      autoComplete="off"
+                      onChange={(event) => setApiKey(event.target.value)}
+                      onKeyDown={escapeCloses}
+                      placeholder="sk-ant-…"
+                      spellCheck={false}
+                      type="password"
+                      value={apiKey}
+                    />
+                  </label>
+                ) : undefined}
+                <span className="accounts-form-actions">
+                  <button className="quiet" onClick={closeForms} type="button">
+                    Cancel
+                  </button>
+                  <button
+                    disabled={
+                      busy ||
+                      !name.trim() ||
+                      (provider.id === "claude" &&
+                        method === "api-key" &&
+                        !apiKey.trim())
+                    }
+                    type="submit"
+                  >
+                    {provider.id === "claude" && method === "api-key"
+                      ? "Add account"
+                      : "Add and sign in"}
+                  </button>
+                </span>
               </form>
             ) : (
               <button
                 className="accounts-add quiet"
                 disabled={busy}
                 onClick={() => {
+                  closeForms();
                   setAdding(provider.id);
-                  setRenaming(undefined);
-                  setName("");
-                  setAddKind("login");
+                  setMethod("subscription");
                 }}
                 type="button"
               >

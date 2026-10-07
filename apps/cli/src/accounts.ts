@@ -12,7 +12,8 @@ import { expectPositionals, parseArguments, printResult } from "./arguments";
 export const accountHelp = `Account commands:
   daedal account list
   daedal account status [<claude|codex> [<account>]]
-  daedal account add <claude|codex> <name> [--api-key]
+  daedal account add <claude|codex> <name> [--api-key | --sso | --console]
+  daedal account method claude <account> <subscription|sso|console>
   daedal account key claude <account>          (reads the key from stdin)
   daedal account rename <claude|codex> <account> <name>
   daedal account remove <claude|codex> <account> --force
@@ -27,8 +28,10 @@ plugins or memory with the default one; Daedalus links its own skills into it.
 
 <account> is the name or id; 'default' is the default account. 'account login'
 runs the provider's own sign-in in this terminal (claude auth login, codex
-login) pointed at that folder; --sso and --console pick Claude's SSO or
-Anthropic Console login instead of a Claude subscription.
+login) pointed at that folder. A Claude account remembers which of its
+logins it uses (a Claude subscription, SSO or the Anthropic Console): set it
+when adding with --sso or --console, or later with 'account method'; --sso or
+--console on 'account login' overrides it once.
 
 'account add claude <name> --api-key' makes an account that uses an Anthropic
 API key instead of a login. 'account key' reads the key from standard input,
@@ -111,16 +114,30 @@ export async function accountCommand(
     return 0;
   }
   if (action === "add") {
-    const parsed = parseArguments(args, [], ["api-key"]);
+    const parsed = parseArguments(args, [], ["api-key", "sso", "console"]);
     expectPositionals(
       parsed.positionals,
       2,
-      "daedal account add <claude|codex> <name> [--api-key]",
+      "daedal account add <claude|codex> <name> [--api-key | --sso | --console]",
     );
+    if (
+      [...parsed.flags].filter((flag) =>
+        ["api-key", "sso", "console"].includes(flag),
+      ).length > 1
+    )
+      throw new DaedalusError(
+        "VALIDATION",
+        "Choose one of --api-key, --sso and --console",
+      );
     const result = await context.accounts.add(
       parsed.positionals[0]!,
       parsed.positionals[1]!,
       parsed.flags.has("api-key") ? "api-key" : "login",
+      parsed.flags.has("sso")
+        ? "sso"
+        : parsed.flags.has("console")
+          ? "console"
+          : undefined,
     );
     printResult(result, json, () =>
       console.log(
@@ -128,6 +145,25 @@ export async function accountCommand(
           ? `Added ${result.provider} account ${result.name} (${result.id}). Give it its key with: daedal account key ${result.provider} ${JSON.stringify(result.name)}`
           : `Added ${result.provider} account ${result.name} (${result.id}). Sign it in with: daedal account login ${result.provider} ${JSON.stringify(result.name)}`,
       ),
+    );
+    return 0;
+  }
+  if (action === "method") {
+    const parsed = parseArguments(args, []);
+    expectPositionals(
+      parsed.positionals,
+      3,
+      "daedal account method claude <account> <subscription|sso|console>",
+    );
+    const [provider, account, login] = parsed.positionals;
+    if (login !== "subscription" && login !== "sso" && login !== "console")
+      throw new DaedalusError(
+        "VALIDATION",
+        "The method must be subscription, sso or console",
+      );
+    const result = await context.accounts.setLogin(provider!, account, login);
+    printResult(result, json, () =>
+      console.log(`${account} now signs in with ${login}`),
     );
     return 0;
   }
@@ -232,11 +268,12 @@ export async function accountCommand(
         "VALIDATION",
         "Choose --sso or --console, not both",
       );
+    // No flag: the method the account was set to sign in with.
     const variant = parsed.flags.has("sso")
       ? ("sso" as const)
       : parsed.flags.has("console")
         ? ("console" as const)
-        : ("subscription" as const);
+        : undefined;
     if (parsed.positionals.length < 1 || parsed.positionals.length > 2)
       throw new DaedalusError(
         "VALIDATION",
