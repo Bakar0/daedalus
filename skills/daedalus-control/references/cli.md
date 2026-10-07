@@ -57,7 +57,8 @@ library ID.
 
 ```text
 daedal agent models <codex|claude> [--account <account>]
-daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <configured-name>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--draft-brief] [--ability routines] [--color <color>] [--pin]
+daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <configured-name>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--draft-brief] [--ability routines|orchestration] [--color <color>] [--pin]
+daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>]
 daedal agent list [--workspace <workspace>] [--running|--archived]
 daedal agent get <agent-id>
 daedal agent attach <agent-id>
@@ -73,13 +74,20 @@ daedal session pin|unpin <session>
 daedal session color <session> <red|orange|gold|green|teal|blue|purple|pink|none>
 daedal session abilities <session>
 daedal session grant|revoke <session> <ability>
+daedal team say "<text>" [--team <lead>] [--user]
+daedal team chat [--all] [--team <lead>]
+daedal team list [--team <lead>]
+daedal team goal [<text>] [--team <lead>]
 ```
 
 `<session>` is a session id, or its name when only one live session has it.
-An ability adds something to a session; `routines` is the only one. A session
-that holds it runs routines on a schedule while the app is open; the
-`daedalus-routines` skill and `daedal routine --help` describe them. A
-handoff moves a session's abilities, name, pin and color to the successor.
+An ability adds something to a session. A session that holds `routines` runs
+routines on a schedule while the app is open; the `daedalus-routines` skill
+and `daedal routine --help` describe them. A session that holds
+`orchestration` leads a team: it adds members with `agent spawn --team` and
+talks to them with `daedal team`; the `daedalus-orchestration` and
+`daedalus-team` skills and `daedal team --help` describe it. A handoff moves a
+session's abilities, name, pin and color to the successor.
 
 `agent spawn --task` moves a `todo` or `blocked` task to `in_progress` when the
 workspace's `--start-sets-in-progress` setting is on (the default); do not set
