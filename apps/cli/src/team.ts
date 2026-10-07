@@ -131,6 +131,8 @@ export async function teamCommand(
     console.log(teamHelp);
     return 0;
   }
+  if (!["say", "chat", "list", "goal"].includes(action))
+    throw new DaedalusError("VALIDATION", `Unknown team command '${action}'`);
   const parsed = parseArguments(args, ["team", "limit"], ["user", "all"]);
   const asUser = parsed.flags.has("user");
   const caller = await callerSession(context);
