@@ -242,7 +242,8 @@ export class TeamService {
   async spawnMember(input: {
     team: string;
     addedBy: "lead" | "user";
-    instructions: string;
+    /** Required from the lead; the user may leave them out. */
+    instructions?: string;
     name?: string;
     taskId?: string;
     provider?: string;
@@ -250,11 +251,13 @@ export class TeamService {
     account?: string | null;
   }): Promise<{ session: AgentSession; handle: string; note?: TeamSayResult }> {
     const team = this.get(input.team);
-    const instructions = input.instructions.trim();
-    if (!instructions)
+    // Optional: a member added without them starts with only its place in
+    // the team, and the user tells it what to do in its own session.
+    const instructions = input.instructions?.trim() ?? "";
+    if (!instructions && input.addedBy === "lead")
       throw new DaedalusError(
         "VALIDATION",
-        "A member needs instructions; pass --message",
+        "A member the lead adds needs instructions; pass --message",
       );
     if (input.provider && input.provider !== team.lead.provider)
       throw new DaedalusError(
@@ -274,7 +277,11 @@ export class TeamService {
       ...(input.name ? { name: input.name } : {}),
       ...(input.model ? { model: input.model } : {}),
       ...(input.account !== undefined ? { account: input.account } : {}),
-      message: instructions,
+      // A team reads as one color on the board.
+      ...(team.lead.color ? { color: team.lead.color } : {}),
+      message:
+        instructions ||
+        "The user gives you your work in this session. Say you are ready, then wait for them.",
       team: { teamId: team.id, handle },
     });
     this.repositories.teams.saveCursor({
@@ -291,7 +298,9 @@ export class TeamService {
       author: DAEDALUS_HANDLE,
       // The new member has its instructions already; only the lead is told.
       tags: [LEAD_HANDLE],
-      body: `@${LEAD_HANDLE} the user added @${handle} ('${session.name}') to the team with these instructions:\n\n${instructions}`,
+      body: instructions
+        ? `@${LEAD_HANDLE} the user added @${handle} ('${session.name}') to the team with these instructions:\n\n${instructions}`
+        : `@${LEAD_HANDLE} the user added @${handle} ('${session.name}') to the team and is giving it its instructions directly. Ask it, or the user, what it is working on before you plan around it.`,
     });
     return { session, handle, note };
   }

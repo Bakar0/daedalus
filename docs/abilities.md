@@ -222,9 +222,14 @@ In the app:
 
 - **Orchestration** is a switch in Create session and in a session's card
   menu, like Routines. A member's menu does not offer it.
-- **Team** in Create session adds the new session to a team in the
-  workspace, with **Instructions**, which a member needs. Choosing a team
-  switches the tool to the lead's provider.
+- A lead's card has a **+** that adds a member: a name, which becomes its
+  `@handle`, a model, and optional **Instructions**. The member runs on the
+  lead's provider, in its workspace and in its color. Without instructions
+  it starts knowing only its team, its lead and the goal, says it is ready,
+  and waits for the user to instruct it in its own session; the lead is
+  told so in the chat.
+- Members wear their lead's color, and changing the lead's color changes
+  theirs.
 - In the session list, a lead's card says **Team lead** and a member's says
   its `@handle`. Members are listed right under their lead and indented. The
   grouping is only how the list is drawn; dragging changes the stored order

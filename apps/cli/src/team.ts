@@ -18,7 +18,7 @@ export const teamHelp = `Team commands:
   daedal team chat [--all] [--limit <n>] [--team <lead>] [--user]
   daedal team list [--team <lead>]
   daedal team goal [<text>] [--team <lead>]
-  daedal agent spawn --team [<lead>] --message <instructions> [--name <name>]
+  daedal agent spawn --team [<lead>] [--message <instructions>] [--name <name>]
       [--task <task-ref>] [--model <model>] [--account <account>]
 
 A team is a lead, a session that holds the orchestration ability, and the
@@ -28,8 +28,9 @@ members it or the user adds. Grant the ability with
 lead's session.
 
 'agent spawn --team' with no value, run by the lead, adds a member to its
-team. '--team <lead>' adds one to that lead's team; run by the user, it also
-tells the lead in the chat who was added and with which instructions.
+team, and needs --message. '--team <lead>' adds one to that lead's team for
+the user, who may leave out --message and instruct the member in its own
+session; the lead is told in the chat either way.
 Members start in the lead's workspace on the lead's provider. Each member
 has a handle, made from --name or the task's title, that the chat uses.
 
@@ -331,10 +332,10 @@ export async function spawnTeamMember(
       `Members start in the lead's workspace; leave out --workspace`,
     );
   const instructions = input.values.message;
-  if (!instructions?.trim())
+  if (callerRole && !instructions?.trim())
     throw new DaedalusError(
       "VALIDATION",
-      "A member needs instructions: pass --message <text>",
+      "A member the lead adds needs instructions: pass --message <text>",
     );
   const taskId = input.values.task
     ? await input.resolveTask(input.values.task, team.lead.workspaceId)
@@ -342,7 +343,7 @@ export async function spawnTeamMember(
   const result = await context.teams.spawnMember({
     team: team.id,
     addedBy: callerRole ? "lead" : "user",
-    instructions,
+    ...(instructions ? { instructions } : {}),
     ...(input.values.name ? { name: input.values.name } : {}),
     ...(taskId ? { taskId } : {}),
     ...(input.values.provider ? { provider: input.values.provider } : {}),

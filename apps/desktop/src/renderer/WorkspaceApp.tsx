@@ -145,6 +145,19 @@ export {
   planExplorerRefresh,
 } from "./files/explorer-state";
 
+/** The handle a member name becomes, as the core makes it. */
+function teamHandlePreview(name: string): string {
+  return (
+    name
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 32)
+      .replace(/-+$/g, "") || "member"
+  );
+}
+
 const COLLAPSED_WORKSPACES_STORAGE_KEY = "daedalus.workspaces.collapsed";
 
 /**
@@ -2906,16 +2919,9 @@ export function WorkspaceApp({
       ? workspaceById.get(sessionForm.workspaceId)
       : undefined) ??
     (showingAll ? undefined : workspace);
-  // Teams a new session in the dialog's workspace can join.
-  const workspaceTeams = (snapshot?.teams ?? []).filter(
-    (team) =>
-      agents.find((item) => item.id === team.leadId)?.workspaceId ===
-      sessionWorkspace?.id,
-  );
-  const sessionTeamLead = sessionForm.teamId
-    ? agents.find(
-        (item) => item.id === teamsById.get(sessionForm.teamId!)?.leadId,
-      )
+  // Set when the dialog adds a member from its lead's card.
+  const memberTeam = sessionForm.teamId
+    ? teamsById.get(sessionForm.teamId)
     : undefined;
   const workspaceDefaultModel =
     sessionWorkspace && sessionWorkspace.defaultProvider === sessionType
@@ -3303,6 +3309,23 @@ export function WorkspaceApp({
     setModal("session");
   }
 
+  /** The lead's + : the dialog, set up for a member of its team. */
+  function openAddMember(lead: AgentSessionDto) {
+    const team = teamsByLead.get(lead.id);
+    if (!team) return;
+    setSessionForm({
+      name: "",
+      teamId: team.id,
+      workspaceId: lead.workspaceId,
+    });
+    setSessionType(lead.provider);
+    setSessionModel("");
+    setSessionAccount("");
+    setRememberSessionModel(false);
+    setModelCatalogError(undefined);
+    setModal("session");
+  }
+
   function openRepositoryModal() {
     setSelectedRepositoryIds(new Set());
     setSelectedGitHubRepositories(new Set());
@@ -3437,7 +3460,10 @@ export function WorkspaceApp({
         ...(!isTerminal && sessionAccount ? { account: sessionAccount } : {}),
         ...(color ? { color } : {}),
         ...(teamId && !isTerminal
-          ? { teamId, message: instructions?.trim() ?? "" }
+          ? {
+              teamId,
+              ...(instructions?.trim() ? { message: instructions.trim() } : {}),
+            }
           : abilities.length && !isTerminal
             ? { abilities }
             : {}),
@@ -4695,6 +4721,17 @@ export function WorkspaceApp({
               title="Resume this conversation in a new terminal"
             >
               ↻
+            </button>
+          )}
+          {team?.role === "lead" && session.status === "running" && (
+            <button
+              aria-label={`Add a member to ${team.team.name}`}
+              className="session-card-action session-card-hover-action"
+              onClick={() => openAddMember(session)}
+              title="Add a member to this session's team"
+              type="button"
+            >
+              +
             </button>
           )}
           {session.kind === "agent" &&
@@ -6677,78 +6714,85 @@ export function WorkspaceApp({
       )}
 
       {modal === "session" && sessionWorkspace && snapshot && (
-        <Modal dismissible onClose={closeSessionModal} title="Create session">
+        <Modal
+          dismissible
+          onClose={closeSessionModal}
+          title={
+            memberTeam ? `Add a member to ${memberTeam.name}` : "Create session"
+          }
+        >
           <form className="modal-form" onSubmit={createSession}>
             <label>
-              Session name
+              {memberTeam ? "Member name" : "Session name"}
               <input
                 autoFocus
                 maxLength={240}
                 onChange={(event) =>
                   setSessionForm({ ...sessionForm, name: event.target.value })
                 }
-                placeholder="What is this session for?"
+                placeholder={
+                  memberTeam
+                    ? "What it owns; also its @handle, such as server"
+                    : "What is this session for?"
+                }
                 required
                 value={sessionForm.name}
               />
             </label>
-            <fieldset className="session-tool-picker">
-              <legend>Choose a tool</legend>
-              <div
-                aria-label="Session tool"
-                className="session-tool-row"
-                role="radiogroup"
-              >
-                {(
-                  [
-                    { id: "claude", label: "Claude" },
-                    { id: "codex", label: "Codex" },
-                    { id: "terminal", label: "Terminal" },
-                  ] as const
-                ).map((tool) => {
-                  const available =
-                    tool.id === "terminal" ||
-                    Boolean(
-                      snapshot.settings.providers.find(
-                        (item) => item.name === tool.id,
-                      )?.available,
+            {/* A member runs on its lead's provider. */}
+            {!memberTeam && (
+              <fieldset className="session-tool-picker">
+                <legend>Choose a tool</legend>
+                <div
+                  aria-label="Session tool"
+                  className="session-tool-row"
+                  role="radiogroup"
+                >
+                  {(
+                    [
+                      { id: "claude", label: "Claude" },
+                      { id: "codex", label: "Codex" },
+                      { id: "terminal", label: "Terminal" },
+                    ] as const
+                  ).map((tool) => {
+                    const available =
+                      tool.id === "terminal" ||
+                      Boolean(
+                        snapshot.settings.providers.find(
+                          (item) => item.name === tool.id,
+                        )?.available,
+                      );
+                    return (
+                      <button
+                        aria-checked={sessionType === tool.id}
+                        className={`session-tool ${sessionType === tool.id ? "selected" : ""}`}
+                        disabled={!available}
+                        key={tool.id}
+                        onClick={() => {
+                          setSessionType(tool.id);
+                          setSessionModel("");
+                          setSessionAccount("");
+                          setRememberSessionModel(false);
+                          setModelCatalogError(undefined);
+                        }}
+                        role="radio"
+                        type="button"
+                      >
+                        <span className={`session-tool-icon tool-${tool.id}`}>
+                          <ToolIcon tool={tool.id} />
+                        </span>
+                        <strong>{tool.label}</strong>
+                        <small>
+                          {!available
+                            ? "Unavailable"
+                            : (toolAccountLabel(tool.id) ?? "Available")}
+                        </small>
+                      </button>
                     );
-                  return (
-                    <button
-                      aria-checked={sessionType === tool.id}
-                      className={`session-tool ${sessionType === tool.id ? "selected" : ""}`}
-                      disabled={!available}
-                      key={tool.id}
-                      onClick={() => {
-                        setSessionType(tool.id);
-                        // A member runs on its lead's provider.
-                        if (
-                          sessionTeamLead &&
-                          sessionTeamLead.provider !== tool.id
-                        )
-                          setSessionForm({ ...sessionForm, teamId: undefined });
-                        setSessionModel("");
-                        setSessionAccount("");
-                        setRememberSessionModel(false);
-                        setModelCatalogError(undefined);
-                      }}
-                      role="radio"
-                      type="button"
-                    >
-                      <span className={`session-tool-icon tool-${tool.id}`}>
-                        <ToolIcon tool={tool.id} />
-                      </span>
-                      <strong>{tool.label}</strong>
-                      <small>
-                        {!available
-                          ? "Unavailable"
-                          : (toolAccountLabel(tool.id) ?? "Available")}
-                      </small>
-                    </button>
-                  );
-                })}
-              </div>
-            </fieldset>
+                  })}
+                </div>
+              </fieldset>
+            )}
             {sessionType !== "terminal" && sessionAccounts.length > 1 && (
               // Right under the tool it belongs to, and the same field as
               // Create workspace's.
@@ -6813,7 +6857,7 @@ export function WorkspaceApp({
                     Model list unavailable: {modelCatalogError}
                   </small>
                 )}
-                {!sessionChoiceIsWorkspaceDefault && (
+                {!sessionChoiceIsWorkspaceDefault && !memberTeam && (
                   <label className="session-model-remember">
                     <input
                       checked={rememberSessionModel}
@@ -6827,55 +6871,29 @@ export function WorkspaceApp({
                 )}
               </div>
             )}
-            <div className="session-color-picker">
-              <span>
-                <strong>Color</strong>
-              </span>
-              <ColorSwatches
-                onChange={(color) =>
-                  setSessionForm({ ...sessionForm, color: color ?? undefined })
-                }
-                value={sessionForm.color ?? null}
-              />
-            </div>
-            {sessionType !== "terminal" && workspaceTeams.length > 0 && (
-              <label className="session-color-picker session-team-picker">
+            {!memberTeam && (
+              <div className="session-color-picker">
                 <span>
-                  <strong>Team</strong>
-                  <small>Join a team as a member its lead manages</small>
+                  <strong>Color</strong>
                 </span>
-                <select
-                  onChange={(event) => {
-                    const team = workspaceTeams.find(
-                      (item) => item.id === event.target.value,
-                    );
-                    const lead = team && sessionsById.get(team.leadId);
-                    if (lead && lead.provider !== sessionType)
-                      setSessionType(lead.provider);
+                <ColorSwatches
+                  onChange={(color) =>
                     setSessionForm({
                       ...sessionForm,
-                      teamId: team?.id,
-                      routines: team ? false : sessionForm.routines,
-                      orchestration: team ? false : sessionForm.orchestration,
-                    });
-                  }}
-                  value={sessionForm.teamId ?? ""}
-                >
-                  <option value="">No team</option>
-                  {workspaceTeams.map((team) => (
-                    <option key={team.id} value={team.id}>
-                      {team.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                      color: color ?? undefined,
+                    })
+                  }
+                  value={sessionForm.color ?? null}
+                />
+              </div>
             )}
-            {sessionType !== "terminal" && sessionForm.teamId && (
+            {memberTeam && (
               <label className="session-team-instructions">
-                <strong>Instructions</strong>
+                <strong>Instructions (optional)</strong>
                 <small>
-                  What this member owns and when it is done. The lead is told,
-                  and manages it from then on.
+                  It starts knowing its team, its lead and the goal. Leave this
+                  empty to tell it what to do in its own session. The lead is
+                  told it joined, and manages it from then on.
                 </small>
                 <textarea
                   onChange={(event) =>
@@ -6884,8 +6902,7 @@ export function WorkspaceApp({
                       instructions: event.target.value,
                     })
                   }
-                  placeholder="Build the v2 endpoints; the client depends on them"
-                  required
+                  placeholder={`You are @${teamHandlePreview(sessionForm.name)}, a member of the Daedalus team "${memberTeam.name}". Its lead is the session '${memberTeam.name}' (@lead), which plans the work and may change your instructions.`}
                   rows={4}
                   value={sessionForm.instructions ?? ""}
                 />
@@ -6938,7 +6955,7 @@ export function WorkspaceApp({
                 Cancel
               </button>
               <button disabled={busy} type="submit">
-                Create session
+                {memberTeam ? "Add member" : "Create session"}
               </button>
             </div>
           </form>

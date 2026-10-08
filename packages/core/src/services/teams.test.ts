@@ -209,7 +209,7 @@ describe("teams", () => {
           addedBy: "lead",
           instructions: "  ",
         }),
-      ).rejects.toThrow("needs instructions");
+      ).rejects.toThrow("A member the lead adds needs instructions");
       // A member cannot lead a team of its own.
       expect(() =>
         context.abilities.grant(server.session.id, "orchestration", {
@@ -419,6 +419,37 @@ describe("teams", () => {
         "the user added @docs ('docs') to the team with these instructions:\n\nWrite the migration guide.",
       );
       expect(toLead!.from).toBe('[team "Checkout API"] daedalus');
+    });
+  });
+
+  test("a member the user adds without instructions waits for them, in the lead's color", async () => {
+    await withTeams(async ({ context, tmux, transport }) => {
+      const leader = await context.agents.spawn({
+        workspace: "shop",
+        provider: "claude",
+        name: "Checkout API",
+        abilities: ["orchestration"],
+        color: "teal",
+      });
+      const added = await context.teams.spawnMember({
+        team: leader.id,
+        addedBy: "user",
+        name: "docs",
+      });
+      expect(added.session.color).toBe("teal");
+      const launch = prompt(tmux.launches.at(-1)!);
+      expect(launch).toContain(
+        'You are @docs, a member of the Daedalus team "Checkout API"',
+      );
+      expect(launch).toContain("The user gives you your work in this session");
+      expect(transport.to(leader)[0]!.text).toContain(
+        "the user added @docs ('docs') to the team and is giving it its instructions directly",
+      );
+      // The lead's color is the team's: a change reaches every member.
+      await context.agents.setColor(leader.id, "gold");
+      expect(context.repositories.findAgent(added.session.id)?.color).toBe(
+        "gold",
+      );
     });
   });
 

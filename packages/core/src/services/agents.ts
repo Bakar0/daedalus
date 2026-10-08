@@ -1595,7 +1595,14 @@ export class AgentService {
   async setColor(id: string, color: string | null): Promise<AgentSession> {
     const agent = await this.get(id);
     const value = color === null ? null : sessionColor(color);
-    this.repositories.setAgentColor(agent.id, value);
+    this.repositories.transaction(() => {
+      this.repositories.setAgentColor(agent.id, value);
+      // A lead's members wear its color.
+      const team = this.abilities.held(agent.id, "orchestration");
+      if (team)
+        for (const member of this.repositories.listTeamMembers(team.id))
+          this.repositories.setAgentColor(member.id, value);
+    });
     return { ...agent, color: value };
   }
 
