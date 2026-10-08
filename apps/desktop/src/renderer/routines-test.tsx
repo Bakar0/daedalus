@@ -14,6 +14,8 @@ import type {
   RoutinesStatusDto,
   SessionAbilityDto,
   SessionColorDto,
+  TeamDetailDto,
+  TeamMessageDto,
 } from "@daedalus/protocol";
 import { App } from "./App";
 import type { DesktopClient } from "./client-types";
@@ -46,6 +48,8 @@ const agent = (
   endedAt: null,
   providerSessionId: null,
   account: null,
+  teamId: null,
+  teamHandle: null,
   archivedAt: null,
   resumeCount: 0,
   lostReason: null,
@@ -172,6 +176,11 @@ let current: DesktopSnapshotDto = {
       pinnedAt: startedAt,
     }),
     agent("reviewer", "Reviewer", "claude", 3, { color: "purple" }),
+    // A member of Reviewer's team, listed apart from it in stored order.
+    agent("api-worker", "API worker", "claude", 0, {
+      teamId: "team-1",
+      teamHandle: "api",
+    }),
   ],
   terminals: [],
   repositories: [],
@@ -183,6 +192,14 @@ let current: DesktopSnapshotDto = {
   shipped: [],
   toasts: [],
   abilities,
+  teams: [
+    {
+      id: "team-1",
+      leadId: "reviewer",
+      name: "Reviewer",
+      goal: "Ship v2 checkout",
+    },
+  ],
   routines: [status],
   routineReports: [],
   settings: {
@@ -206,6 +223,50 @@ let current: DesktopSnapshotDto = {
 
 /** Every spawn the dialog asked for, for a script to read back. */
 const spawns: unknown[] = [];
+
+/** The team chat, as the stub keeps it. */
+const teamMessages: TeamMessageDto[] = [
+  {
+    id: 1,
+    author: "daedalus",
+    body: "@lead the user added @api ('API worker') to the team with these instructions:\n\nBuild the v2 endpoints.",
+    tags: ["lead"],
+    createdAt: iso(-600),
+  },
+  {
+    id: 2,
+    author: "api",
+    body: "@lead endpoints are done; the contract is in TEAM.md",
+    tags: ["lead"],
+    createdAt: iso(-120),
+  },
+];
+const teamDetail = (): TeamDetailDto => ({
+  team: current.teams[0]!,
+  members: [
+    {
+      handle: "lead",
+      role: "lead",
+      sessionId: "reviewer",
+      name: "Reviewer",
+      status: "running",
+      unread: 0,
+      undelivered: 0,
+      lastError: null,
+    },
+    {
+      handle: "api",
+      role: "member",
+      sessionId: "api-worker",
+      name: "API worker",
+      status: "running",
+      unread: 1,
+      undelivered: 1,
+      lastError: "Claude has no live session api-worker",
+    },
+  ],
+  messages: teamMessages,
+});
 
 const listeners = new Set<() => void>();
 const publish = (changes: Partial<DesktopSnapshotDto> = {}) => {
@@ -388,6 +449,30 @@ const client = {
         summary: null,
         missedMs: 0,
       });
+    },
+    teamDetail: async () => ok(teamDetail()),
+    teamSay: async ({ body }: { body: string }) => {
+      const message: TeamMessageDto = {
+        id: teamMessages.length + 1,
+        author: "user",
+        body,
+        tags: [...body.matchAll(/@([a-z0-9-]+)/g)].map((match) => match[1]!),
+        createdAt: new Date().toISOString(),
+      };
+      teamMessages.push(message);
+      return ok({
+        message,
+        warnings: message.tags.length
+          ? []
+          : [
+              "The message tags no session, so nobody was notified; it waits in the team chat",
+            ],
+      });
+    },
+    teamGoal: async ({ goal }: { goal: string }) => {
+      const team = { ...current.teams[0]!, goal };
+      publish({ teams: [team] });
+      return ok(team);
     },
     agentSpawn: async (params: Record<string, unknown>) => {
       spawns.push(params);

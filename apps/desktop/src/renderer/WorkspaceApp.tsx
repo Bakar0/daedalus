@@ -19,6 +19,7 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from "react";
 import type {
+  TeamDetailDto,
   FileLinkTargetDto,
   AppUpdateDto,
   TaskTimelineDto,
@@ -76,6 +77,7 @@ import { buildWorldModel, worldInputFromSnapshot } from "./world/world-model";
 import { TaskPriorityMenu, TaskStatusMenu } from "./TaskStatusMenu";
 import { ColorSwatches, SessionMenu } from "./SessionMenu";
 import { RoutineBar } from "./routines/RoutineBar";
+import { TeamBar, TeamPanel } from "./teams/TeamPanel";
 import { RoutinesPanel } from "./routines/RoutinesPanel";
 import {
   AgentStatusDot,
@@ -1783,11 +1785,22 @@ export function WorkspaceApp({
     workspaceId?: string;
     color?: SessionColorDto;
     routines?: boolean;
+    orchestration?: boolean;
+    /** The team the new session joins as a member the user added. */
+    teamId?: string;
+    /** A member's instructions, which it needs. */
+    instructions?: string;
   }>({ name: "" });
   // The Routines drawer on the selected session, and what it last read.
   const [routinesPanel, setRoutinesPanel] = useState<{
     sessionId: string;
     detail?: RoutinesDetailDto;
+    error?: string;
+  }>();
+  // The Team drawer: the team, and what it last read.
+  const [teamPanel, setTeamPanel] = useState<{
+    teamId: string;
+    detail?: TeamDetailDto;
     error?: string;
   }>();
   const [sessionLaunches, setSessionLaunches] = useState<SessionLaunchState[]>(
@@ -2721,6 +2734,22 @@ export function WorkspaceApp({
   const routinesBySession = new Map(
     (snapshot?.routines ?? []).map((status) => [status.sessionId, status]),
   );
+  // Teams by lead and by id: a lead's card and bar, and a member's.
+  const teamsByLead = new Map(
+    (snapshot?.teams ?? []).map((team) => [team.leadId, team]),
+  );
+  const teamsById = new Map(
+    (snapshot?.teams ?? []).map((team) => [team.id, team]),
+  );
+  /** The team a session leads or belongs to, and its handle there. */
+  const teamOf = (session: AgentSessionDto) => {
+    const led = teamsByLead.get(session.id);
+    if (led) return { team: led, role: "lead" as const, handle: "lead" };
+    const joined = session.teamId ? teamsById.get(session.teamId) : undefined;
+    return joined && session.teamHandle
+      ? { team: joined, role: "member" as const, handle: session.teamHandle }
+      : undefined;
+  };
   const workspaceSessionLaunches = sessionLaunches.filter((item) =>
     inScope(item.workspaceId),
   );
@@ -2815,6 +2844,7 @@ export function WorkspaceApp({
   const activeSessionRoutines = snapshot?.routines.find(
     (status) => status.sessionId === activeSession?.id,
   );
+  const activeSessionTeam = activeSession ? teamOf(activeSession) : undefined;
   // The drawer reads its runs on request, so it reads again whenever the
   // session's routine status moves: a run went in, finished or was queued.
   const openRoutinesStatus =
@@ -2835,6 +2865,14 @@ export function WorkspaceApp({
     if (routinesPanel && openRoutinesFingerprint)
       void loadRoutinesDetail(routinesPanel.sessionId);
   }, [openRoutinesFingerprint]);
+  // The chat moves without the snapshot knowing, so the open drawer reads
+  // again every few seconds.
+  const openTeamId = teamPanel?.teamId;
+  useEffect(() => {
+    if (!openTeamId) return;
+    const timer = setInterval(() => void loadTeamDetail(openTeamId), 4_000);
+    return () => clearInterval(timer);
+  }, [openTeamId]);
   const activeSessionWorkspace = activeSession
     ? workspaceById.get(activeSession.workspaceId)
     : undefined;
@@ -2868,6 +2906,17 @@ export function WorkspaceApp({
       ? workspaceById.get(sessionForm.workspaceId)
       : undefined) ??
     (showingAll ? undefined : workspace);
+  // Teams a new session in the dialog's workspace can join.
+  const workspaceTeams = (snapshot?.teams ?? []).filter(
+    (team) =>
+      agents.find((item) => item.id === team.leadId)?.workspaceId ===
+      sessionWorkspace?.id,
+  );
+  const sessionTeamLead = sessionForm.teamId
+    ? agents.find(
+        (item) => item.id === teamsById.get(sessionForm.teamId!)?.leadId,
+      )
+    : undefined;
   const workspaceDefaultModel =
     sessionWorkspace && sessionWorkspace.defaultProvider === sessionType
       ? sessionWorkspace.defaultModel
@@ -3334,7 +3383,12 @@ export function WorkspaceApp({
     event.preventDefault();
     if (!sessionWorkspace) return;
     const isTerminal = sessionType === "terminal";
-    const { color, routines } = sessionForm;
+    const { color, routines, orchestration, teamId, instructions } =
+      sessionForm;
+    const abilities = [
+      ...(routines ? (["routines"] as const) : []),
+      ...(orchestration ? (["orchestration"] as const) : []),
+    ];
     const launch: SessionLaunchState = {
       key: crypto.randomUUID(),
       workspaceId: sessionWorkspace.id,
@@ -3382,9 +3436,11 @@ export function WorkspaceApp({
         model: isTerminal || !sessionModel ? undefined : sessionModel,
         ...(!isTerminal && sessionAccount ? { account: sessionAccount } : {}),
         ...(color ? { color } : {}),
-        ...(routines && !isTerminal
-          ? { abilities: ["routines" as const] }
-          : {}),
+        ...(teamId && !isTerminal
+          ? { teamId, message: instructions?.trim() ?? "" }
+          : abilities.length && !isTerminal
+            ? { abilities }
+            : {}),
       });
       if (response.ok) {
         // The launch stays until the refreshed list holds its session, so the
@@ -3746,8 +3802,58 @@ export function WorkspaceApp({
   }
 
   function openRoutinesPanel(sessionId: string) {
+    setTeamPanel(undefined);
     setRoutinesPanel({ sessionId });
     void loadRoutinesDetail(sessionId);
+  }
+
+  async function setOrchestrationAbility(
+    session: AgentSessionDto,
+    granted: boolean,
+  ) {
+    if (
+      !granted &&
+      !(await askConfirm({
+        title: `Stop ${sessionName(session)} leading its team?`,
+        message:
+          "The team ends. Its members keep running as ordinary sessions, and the chat is kept.",
+        confirmLabel: "End team",
+      }))
+    )
+      return;
+    await perform(
+      client.request.sessionAbility({
+        sessionId: session.id,
+        ability: "orchestration",
+        granted,
+      }),
+    );
+    if (!granted) setTeamPanel(undefined);
+  }
+
+  async function loadTeamDetail(teamId: string) {
+    try {
+      const response = await client.request.teamDetail({ teamId });
+      setTeamPanel((current) =>
+        current?.teamId !== teamId
+          ? current
+          : response.ok
+            ? { teamId, detail: response.data }
+            : { teamId, error: response.error.message },
+      );
+    } catch (cause) {
+      setTeamPanel((current) =>
+        current?.teamId === teamId
+          ? { teamId, error: errorMessage(cause) }
+          : current,
+      );
+    }
+  }
+
+  function openTeamPanel(teamId: string) {
+    setRoutinesPanel(undefined);
+    setTeamPanel({ teamId });
+    void loadTeamDetail(teamId);
   }
 
   /** A routines request from the bar or the drawer, then a fresh drawer. */
@@ -4435,8 +4541,10 @@ export function WorkspaceApp({
     const statusView = statusViewFor(session);
     const holdsRoutines = routinesBySession.has(session.id);
     const waitingRuns = routinesBySession.get(session.id)?.waiting.length ?? 0;
+    const team = teamOf(session);
     return (
       <div
+        data-team-member={team?.role === "member" ? "true" : undefined}
         className={`session-card tone-${statusView.tone} ${view === "session" && session.id === highlightedSessionId ? "selected" : ""}`}
         data-color={session.color ?? undefined}
         data-pinned={session.pinnedAt ? "true" : undefined}
@@ -4487,6 +4595,18 @@ export function WorkspaceApp({
                   title="The account this session runs on"
                 >
                   {accountName(session.provider, session.account)}
+                </span>
+              )}
+              {team && (
+                <span
+                  className="session-team-badge"
+                  title={
+                    team.role === "lead"
+                      ? `Leads the team ${team.team.name}`
+                      : `Member of ${team.team.name}`
+                  }
+                >
+                  {team.role === "lead" ? "Team lead" : `@${team.handle}`}
                 </span>
               )}
               {holdsRoutines ? (
@@ -4628,6 +4748,11 @@ export function WorkspaceApp({
             onPin={(pinned) => void updateSession(session, { pinned })}
             onRename={() => void renameSession(session)}
             onRoutines={(granted) => void setRoutinesAbility(session, granted)}
+            orchestration={teamsByLead.has(session.id)}
+            offerOrchestration={!session.teamId}
+            onOrchestration={(granted) =>
+              void setOrchestrationAbility(session, granted)
+            }
             pinned={Boolean(session.pinnedAt)}
             routines={holdsRoutines}
           />
@@ -4777,6 +4902,20 @@ export function WorkspaceApp({
                 : Number(Boolean(right.pinnedAt)) -
                   Number(Boolean(left.pinnedAt)),
             );
+          // Members sit right under their lead when it is in this list.
+          // Display only: the stored order is what reordering changes.
+          const grouped = ordered.flatMap((session) => {
+            const team = teamOf(session);
+            if (
+              team?.role === "member" &&
+              ordered.some((item) => item.id === team.team.leadId)
+            )
+              return [];
+            const lead = teamsByLead.get(session.id);
+            return lead
+              ? [session, ...ordered.filter((item) => item.teamId === lead.id)]
+              : [session];
+          });
           return (
             <div
               aria-label={`Sessions in ${item.name}`}
@@ -4788,7 +4927,7 @@ export function WorkspaceApp({
                 data-reordering={reorder.draggingId ? "true" : undefined}
               >
                 {launches.map(renderLaunchCard)}
-                {ordered.map((session) => renderSessionCard(session, reorder))}
+                {grouped.map((session) => renderSessionCard(session, reorder))}
               </div>
               {archived.length > 0 && (
                 <details
@@ -5869,6 +6008,22 @@ export function WorkspaceApp({
                 status={activeSessionRoutines}
               />
             )}
+            {activeSessionTeam && activeSession && (
+              <TeamBar
+                color={activeSession.color}
+                handle={activeSessionTeam.handle}
+                members={
+                  agents.filter(
+                    (item) =>
+                      item.teamId === activeSessionTeam.team.id &&
+                      !item.archivedAt,
+                  ).length
+                }
+                onOpenPanel={() => openTeamPanel(activeSessionTeam.team.id)}
+                role={activeSessionTeam.role}
+                team={activeSessionTeam.team}
+              />
+            )}
             {activeSession ? (
               // The drawer sits over the terminal, below the routine bar, so
               // the bar's buttons stay in reach while it is open.
@@ -5910,6 +6065,38 @@ export function WorkspaceApp({
                         )
                       }
                       sessionName={sessionName(activeSession)}
+                    />
+                  )}
+                {activeSessionTeam &&
+                  teamPanel?.teamId === activeSessionTeam.team.id && (
+                    <TeamPanel
+                      busy={busy}
+                      detail={teamPanel.detail}
+                      error={teamPanel.error}
+                      now={now}
+                      onClose={() => setTeamPanel(undefined)}
+                      onOpenSession={(sessionId) => {
+                        const target = sessionsById.get(sessionId);
+                        if (target) showSession(target.id, target.workspaceId);
+                      }}
+                      onPost={async (body) => {
+                        const said = await perform(
+                          client.request.teamSay({
+                            teamId: activeSessionTeam.team.id,
+                            body,
+                          }),
+                        );
+                        await loadTeamDetail(activeSessionTeam.team.id);
+                        return said?.warnings;
+                      }}
+                      onSetGoal={(goal) =>
+                        void perform(
+                          client.request.teamGoal({
+                            teamId: activeSessionTeam.team.id,
+                            goal,
+                          }),
+                        ).then(() => loadTeamDetail(activeSessionTeam.team.id))
+                      }
                     />
                   )}
                 <TerminalSurface
@@ -6534,6 +6721,12 @@ export function WorkspaceApp({
                       key={tool.id}
                       onClick={() => {
                         setSessionType(tool.id);
+                        // A member runs on its lead's provider.
+                        if (
+                          sessionTeamLead &&
+                          sessionTeamLead.provider !== tool.id
+                        )
+                          setSessionForm({ ...sessionForm, teamId: undefined });
                         setSessionModel("");
                         setSessionAccount("");
                         setRememberSessionModel(false);
@@ -6645,7 +6838,60 @@ export function WorkspaceApp({
                 value={sessionForm.color ?? null}
               />
             </div>
-            {sessionType !== "terminal" && (
+            {sessionType !== "terminal" && workspaceTeams.length > 0 && (
+              <label className="session-color-picker session-team-picker">
+                <span>
+                  <strong>Team</strong>
+                  <small>Join a team as a member its lead manages</small>
+                </span>
+                <select
+                  onChange={(event) => {
+                    const team = workspaceTeams.find(
+                      (item) => item.id === event.target.value,
+                    );
+                    const lead = team && sessionsById.get(team.leadId);
+                    if (lead && lead.provider !== sessionType)
+                      setSessionType(lead.provider);
+                    setSessionForm({
+                      ...sessionForm,
+                      teamId: team?.id,
+                      routines: team ? false : sessionForm.routines,
+                      orchestration: team ? false : sessionForm.orchestration,
+                    });
+                  }}
+                  value={sessionForm.teamId ?? ""}
+                >
+                  <option value="">No team</option>
+                  {workspaceTeams.map((team) => (
+                    <option key={team.id} value={team.id}>
+                      {team.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {sessionType !== "terminal" && sessionForm.teamId && (
+              <label className="session-team-instructions">
+                <strong>Instructions</strong>
+                <small>
+                  What this member owns and when it is done. The lead is told,
+                  and manages it from then on.
+                </small>
+                <textarea
+                  onChange={(event) =>
+                    setSessionForm({
+                      ...sessionForm,
+                      instructions: event.target.value,
+                    })
+                  }
+                  placeholder="Build the v2 endpoints; the client depends on them"
+                  required
+                  rows={4}
+                  value={sessionForm.instructions ?? ""}
+                />
+              </label>
+            )}
+            {sessionType !== "terminal" && !sessionForm.teamId && (
               // One row per ability the agent can be given at launch.
               <fieldset className="session-tool-picker session-abilities">
                 <legend>Agent abilities</legend>
@@ -6655,6 +6901,11 @@ export function WorkspaceApp({
                       key: "routines",
                       label: "Routines",
                       description: "Give the agent the ability to run routines",
+                    },
+                    {
+                      key: "orchestration",
+                      label: "Orchestration",
+                      description: "Lead a team of sessions toward one goal",
                     },
                   ] as const
                 ).map((ability) => (

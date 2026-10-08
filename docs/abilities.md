@@ -216,8 +216,23 @@ and an urgent flag. Only the session calls `daedal routine report`.
 A session holding the orchestration ability leads a team: sessions working
 toward one goal. The lead plans the work, adds members, and sends each one
 the decisions that affect it. Members are ordinary sessions the user can open,
-answer and hand off. The user is above the lead and can add a member too. Phase
-1 is CLI only; the app does not show teams yet.
+answer and hand off. The user is above the lead and can add a member too.
+
+In the app:
+
+- **Orchestration** is a switch in Create session and in a session's card
+  menu, like Routines. A member's menu does not offer it.
+- **Team** in Create session adds the new session to a team in the
+  workspace, with **Instructions**, which a member needs. Choosing a team
+  switches the tool to the lead's provider.
+- In the session list, a lead's card says **Team lead** and a member's says
+  its `@handle`. Members are listed right under their lead and indented. The
+  grouping is only how the list is drawn; dragging changes the stored order
+  as before.
+- A lead's or member's terminal has a **Team** bar. Its panel shows the
+  goal, which can be edited, each member with its status and any delivery
+  that failed, the newest 100 messages of the chat, and a box to post as
+  the user. The open panel reads the team again every 4 seconds.
 
 ```
 daedal agent spawn --workspace <w> --provider claude --name "Checkout API" --ability orchestration
@@ -244,6 +259,11 @@ handoff successor takes both, and the predecessor leaves the team.
 - **The user adds a member** with `--team <lead>`. Daedalus then posts in the
   chat, as `daedalus` and tagging only the lead, who was added with which
   instructions. The lead manages that member like its own.
+- **Status notes.** When a member needs the user, at most as often as the
+  user is notified about it, and when it stops or is archived, Daedalus
+  posts a note in the chat as `daedalus`, tagging only the lead: "@lead
+  @server needs the user: …" or "@lead @server stopped running.". A lead
+  needing the user posts nothing, and neither does a handoff.
 - **Ending a team.** Revoking the ability, or archiving the lead, clears every
   member's team; they keep running as plain sessions. Quitting the app with
   "Quit and stop sessions" archives the lead to resume it later and keeps the

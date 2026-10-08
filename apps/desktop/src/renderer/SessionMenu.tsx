@@ -70,22 +70,30 @@ export function SessionMenu({
   pinned,
   color,
   routines,
+  orchestration,
   offerAbilities,
+  offerOrchestration,
   onRename,
   onPin,
   onColor,
   onRoutines,
+  onOrchestration,
 }: {
   name: string;
   pinned: boolean;
   color: SessionColorDto | null;
   /** Whether the session holds the routines ability now. */
   routines: boolean;
+  /** Whether the session leads a team. */
+  orchestration: boolean;
   offerAbilities: boolean;
+  /** False for a team's member, which cannot lead one. */
+  offerOrchestration: boolean;
   onRename: () => void;
   onPin: (pinned: boolean) => void;
   onColor: (color: SessionColorDto | null) => void;
   onRoutines: (granted: boolean) => void;
+  onOrchestration: (granted: boolean) => void;
 }) {
   return (
     <Menu
@@ -143,6 +151,27 @@ export function SessionMenu({
               data-on={routines ? "true" : undefined}
             />
           </button>
+          {offerOrchestration && (
+            <button
+              aria-checked={orchestration}
+              className="quiet menu-item"
+              onClick={() => onOrchestration(!orchestration)}
+              role="menuitemcheckbox"
+              title={
+                orchestration
+                  ? "End the team. Members keep running as ordinary sessions."
+                  : "Lead a team: this session plans the work and adds members."
+              }
+              type="button"
+            >
+              <span className="menu-item-label">Orchestration</span>
+              <span
+                aria-hidden="true"
+                className="menu-switch"
+                data-on={orchestration ? "true" : undefined}
+              />
+            </button>
+          )}
         </>
       )}
     </Menu>

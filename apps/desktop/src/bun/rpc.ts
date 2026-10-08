@@ -20,6 +20,9 @@ import {
   type RoutineRun,
   type RoutinesStatus,
   type SessionAbility,
+  type Team,
+  type TeamMessage,
+  USER_HANDLE,
   type SessionAttention,
   type Task,
   type Workspace,
@@ -42,8 +45,10 @@ import type {
   RoutineRunDto,
   RoutinesDetailDto,
   RoutinesStatusDto,
-  AbilityIdDto,
   SessionAbilityDto,
+  TeamDetailDto,
+  TeamDto,
+  TeamMessageDto,
   RpcResult,
   SessionAttentionDto,
   TaskDto,
@@ -221,12 +226,8 @@ export async function desktopSnapshot(
       .map((item) => ({ ...item })),
     attention: context.activity.listAttention().map(sessionAttentionDto),
     toasts: context.notifications.pending("toast").map(toastDto),
-    // The app shows routines only; orchestration is CLI-only until phase 2
-    // of #45.
-    abilities: context.repositories.abilities
-      .list()
-      .filter((ability) => ability.ability === "routines")
-      .map(sessionAbilityDto),
+    abilities: context.repositories.abilities.list().map(sessionAbilityDto),
+    teams: context.teams.list().map(teamDto),
     routines: context.abilities
       .holders("routines")
       .map((ability) =>
@@ -302,23 +303,60 @@ const fingerprintStatus = (status: RoutinesStatus) => ({
     : null,
 });
 
-/** The abilities the app knows; every other one stays on the CLI for now. */
-function appAbility(ability: SessionAbility["ability"]): AbilityIdDto {
-  if (ability !== "routines")
-    throw new Error(`The app does not show the ${ability} ability yet`);
-  return ability;
-}
-
 const sessionAbilityDto = (ability: SessionAbility): SessionAbilityDto => ({
   id: ability.id,
   sessionId: ability.sessionId,
-  ability: appAbility(ability.ability),
+  ability: ability.ability,
   enabled: ability.enabled,
   paused: ability.paused,
   purpose: ability.config.purpose ?? null,
   noteWaiting: Boolean(ability.pendingNote),
   grantedAt: ability.grantedAt,
 });
+
+const teamDto = (team: Team): TeamDto => ({
+  id: team.id,
+  leadId: team.lead.id,
+  name: team.name,
+  goal: team.goal,
+});
+
+const teamMessageDto = (message: TeamMessage): TeamMessageDto => ({
+  id: message.id,
+  author: message.author,
+  body: message.body,
+  tags: [...message.tags],
+  createdAt: message.createdAt,
+});
+
+/** How many messages the Team panel shows. */
+const TEAM_PANEL_MESSAGES = 100;
+
+async function teamDetail(
+  context: ApplicationContext,
+  teamId: string,
+): Promise<TeamDetailDto> {
+  await context.teams.flush(teamId);
+  const { team, members } = context.teams.status(teamId);
+  const { messages } = context.teams.chat(teamId, USER_HANDLE, {
+    all: true,
+    limit: TEAM_PANEL_MESSAGES,
+  });
+  return {
+    team: teamDto(team),
+    members: members.map((member) => ({
+      handle: member.handle,
+      role: member.role,
+      sessionId: member.session.id,
+      name: member.session.name,
+      status: member.session.archivedAt ? "archived" : member.session.status,
+      unread: member.unread,
+      undelivered: member.undelivered,
+      lastError: member.lastError,
+    })),
+    messages: messages.map(teamMessageDto),
+  };
+}
 
 const routinesStatusDto = (status: RoutinesStatus): RoutinesStatusDto => ({
   abilityId: status.ability.id,
@@ -442,6 +480,21 @@ export function createDesktopRequestHandlers(
       ),
     routinesDetail: ({ sessionId }) =>
       result(() => routinesDetail(context, sessionId)),
+    teamDetail: ({ teamId }) => result(() => teamDetail(context, teamId)),
+    teamSay: ({ teamId, body }) =>
+      mutate(async () => {
+        const said = await context.teams.say({
+          team: teamId,
+          author: USER_HANDLE,
+          body,
+        });
+        return {
+          message: teamMessageDto(said.message),
+          warnings: said.warnings,
+        };
+      }),
+    teamGoal: ({ teamId, goal }) =>
+      mutate(() => teamDto(context.teams.setGoal(teamId, goal))),
     routinesControl: ({ sessionId, action }) =>
       mutate(() =>
         sessionAbilityDto(
@@ -864,8 +917,27 @@ export function createDesktopRequestHandlers(
       ),
     accountSignOut: ({ provider, account }) =>
       mutate(() => context.accounts.signOut(provider, account)),
-    agentSpawn: (params) =>
-      mutate(async () => agentDto(await context.agents.spawn(params))),
+    agentSpawn: ({ teamId, ...params }) =>
+      mutate(async () =>
+        agentDto(
+          teamId
+            ? (
+                await context.teams.spawnMember({
+                  team: teamId,
+                  addedBy: "user",
+                  instructions: params.message ?? "",
+                  ...(params.name ? { name: params.name } : {}),
+                  ...(params.taskId ? { taskId: params.taskId } : {}),
+                  ...(params.provider ? { provider: params.provider } : {}),
+                  ...(params.model ? { model: params.model } : {}),
+                  ...(params.account !== undefined
+                    ? { account: params.account }
+                    : {}),
+                })
+              ).session
+            : await context.agents.spawn(params),
+        ),
+      ),
     agentSend: ({ id, text }) =>
       mutate(async () => agentDto(await context.agents.send(id, text))),
     agentStop: ({ id, force }) =>

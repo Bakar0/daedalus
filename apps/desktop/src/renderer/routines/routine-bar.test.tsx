@@ -215,10 +215,13 @@ describe("the session card menu", () => {
         color="blue"
         name="Argus"
         offerAbilities={offerAbilities}
+        offerOrchestration={offerAbilities}
         onColor={() => {}}
+        onOrchestration={() => {}}
         onPin={() => {}}
         onRename={() => {}}
         onRoutines={() => {}}
+        orchestration={false}
         pinned
         routines={routines}
       />,
