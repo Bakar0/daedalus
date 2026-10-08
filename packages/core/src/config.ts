@@ -123,6 +123,13 @@ export interface DaedalusConfig {
    */
   autoRestoreSessionsEnabled: boolean;
   /**
+   * Whether Daedalus records trust for each session folder it creates in the
+   * provider's own configuration before the provider starts, so Codex and
+   * Claude open straight at their prompt. Off, the provider asks the user in
+   * the session's terminal, the same as for a folder they opened themselves.
+   */
+  trustSessionFoldersEnabled: boolean;
+  /**
    * Suppresses toasts and desktop notifications without touching activity
    * tracking, so the board stays live while the interruptions stop.
    */
@@ -168,6 +175,7 @@ type StoredConfig = Partial<
     | "workspaceRoot"
     | "workspaceInstructionFilesEnabled"
     | "autoRestoreSessionsEnabled"
+    | "trustSessionFoldersEnabled"
     | "focusMode"
     | "agents"
   >
@@ -279,6 +287,7 @@ export async function loadConfig(
     workspaceInstructionFilesEnabled:
       stored.workspaceInstructionFilesEnabled !== false,
     autoRestoreSessionsEnabled: stored.autoRestoreSessionsEnabled !== false,
+    trustSessionFoldersEnabled: stored.trustSessionFoldersEnabled !== false,
     focusMode: stored.focusMode === true,
     agents: stored.agents || {
       codex: { executable: "codex", args: [] },
@@ -367,6 +376,14 @@ export async function saveAutoRestoreSessionsEnabled(
 ): Promise<void> {
   await saveSetting(config, { autoRestoreSessionsEnabled: enabled });
   config.autoRestoreSessionsEnabled = enabled;
+}
+
+export async function saveTrustSessionFoldersEnabled(
+  config: DaedalusConfig,
+  enabled: boolean,
+): Promise<void> {
+  await saveSetting(config, { trustSessionFoldersEnabled: enabled });
+  config.trustSessionFoldersEnabled = enabled;
 }
 
 export async function saveFocusMode(

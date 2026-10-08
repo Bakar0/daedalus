@@ -114,7 +114,7 @@ test("tmux PTYs drop an agent shell's terminal state and identity", () => {
     expect(environment).not.toHaveProperty(key);
 });
 
-test("tmux PTYs use native mouse scrolling and pass OSC 8 links", () => {
+test("tmux PTYs use native mouse scrolling, pass OSC 8 links and focus", () => {
   expect(
     tmuxPtyArguments({ socketName: "isolated", session: "daedalus_123" }),
   ).toEqual([
@@ -125,6 +125,11 @@ test("tmux PTYs use native mouse scrolling and pass OSC 8 links", () => {
     "-s",
     "terminal-features[99]",
     "xterm*:hyperlinks",
+    ";",
+    "set-option",
+    "-s",
+    "focus-events",
+    "on",
     ";",
     "set-option",
     "-t",
@@ -255,6 +260,11 @@ describe("CommandTmuxClient", () => {
         "agent",
         "literal; touch /tmp/nope",
         "$(also-nope)",
+        ";",
+        "set-option",
+        "-s",
+        "focus-events",
+        "on",
       ],
       expect.anything(),
     );

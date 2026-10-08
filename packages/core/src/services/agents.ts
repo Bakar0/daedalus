@@ -1,5 +1,5 @@
 import { readdir, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import {
   findExecutable,
@@ -52,6 +52,7 @@ import {
   providerLabel,
 } from "./account-homes";
 import { checkSignIn } from "./accounts";
+import { forgetSessionFolders, trustSessionFolder } from "./folder-trust";
 import { applyManualOrder } from "./ordering";
 import type { TaskService } from "./tasks";
 import type { WorkspaceService } from "./workspaces";
@@ -72,18 +73,12 @@ const PROVIDER_STARTUP_POLL_MS = 150;
 // How long Codex takes to turn a picked `$skill` mention into a chip before
 // a second Enter can submit it.
 const CODEX_MENTION_SETTLE_MS = 400;
-// Upper bound on synthetic Enter presses per startup prompt. Daedalus answers
-// the trust prompts for directories it created itself; it must never keep
-// typing into a session the user has taken over.
-const MAX_PROMPT_CONFIRMATIONS = 3;
-// How long an unrecognised confirm screen must stay before startup treats it
-// as a question for the user rather than a frame on the way to the prompt.
+// How long a startup question must stay on screen before startup hands it to
+// the user rather than treating it as a frame on the way to the prompt.
 const STARTUP_QUESTION_SETTLE_MS = 2_000;
 // How many sessions a revive sweep brings back at once. Every relaunch is a
-// provider CLI re-reading a transcript and possibly sitting on a startup trust
-// prompt that Daedalus answers with up to MAX_PROMPT_CONFIRMATIONS synthetic
-// Enters, so ten sessions starting together at login is ten of those racing
-// each other for the machine. Two at a time is still far faster than the
+// provider CLI re-reading a transcript, so ten sessions starting together at
+// login is ten of those racing each other for the machine. Two at a time is still far faster than the
 // manual archive/restore it replaces.
 const REVIVE_CONCURRENCY = 2;
 const REVIVE_LOCK_FILE = "revive.lock";
@@ -440,6 +435,25 @@ export const claudeReady = (screen: string): boolean =>
   screen.includes("manual mode on") ||
   screen.includes("? for shortcuts");
 
+/**
+ * Screens on which the provider stopped to ask the user something before
+ * reaching its prompt. Recognising one only hands it over sooner; a screen
+ * this list misses is handed over when the startup timeout runs out.
+ */
+export const startupQuestion = (provider: string, screen: string): boolean =>
+  provider === "codex"
+    ? screen.includes("Trust this folder?") ||
+      screen.includes("Do you trust the contents of this directory?") ||
+      /enter (?:to )?continue/i.test(screen)
+    : provider === "claude"
+      ? screen.includes("Yes, I trust this folder") ||
+        screen.includes("Allow external CLAUDE.md file imports?") ||
+        (/Enter to confirm/.test(screen) && /Esc to cancel/.test(screen))
+      : false;
+
+const startupQuestionReason = (session: AgentSession): string =>
+  `${providerLabel(session.provider)} is asking something before it starts. Answer it in the session's terminal.`;
+
 export class AgentService {
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -470,9 +484,32 @@ export class AgentService {
 
   /** Raises the badge for a session that stopped on a question at startup. */
   private askedAtStartup(session: AgentSession): void {
-    void this.onStartupQuestion(
-      session.id,
-      `${providerLabel(session.provider)} is asking something before it starts. Answer it in the session's terminal.`,
+    void this.onStartupQuestion(session.id, startupQuestionReason(session));
+  }
+
+  /**
+   * Whether the session's only badge is the startup question. The provider
+   * then exited before it ever reached its prompt (Codex quits after the
+   * update its startup menu offers), so there is no conversation to revive
+   * at that point and the question is gone with the process.
+   */
+  private endedAtStartupQuestion(agent: AgentSession): boolean {
+    const reasons = this.repositories.findSessionAttention(agent.id)?.reasons;
+    const asked = startupQuestionReason(agent);
+    return (
+      !!reasons &&
+      reasons.length > 0 &&
+      reasons.every((reason) => reason.text === asked)
+    );
+  }
+
+  /** Records the provider's trust for the session folder, if allowed. */
+  private async trustFolder(session: AgentSession): Promise<void> {
+    if (!this.config.trustSessionFoldersEnabled) return;
+    await trustSessionFolder(
+      this.sessionConfig(session),
+      session.provider,
+      session.workingDirectory,
     );
   }
 
@@ -520,87 +557,25 @@ export class AgentService {
   }
 
   /**
-   * Waits for the provider to be ready, answering the trust prompts for
-   * folders Daedalus made. Resolves `question` when the provider stopped on
-   * something else that asks the user: that is theirs to answer, so the
-   * session is left open at it rather than closed after the timeout.
+   * Waits for the provider to reach its prompt. Daedalus only reads the
+   * screen here and never types into it: trust for the session folder was
+   * recorded in the provider's configuration before launch (when the user
+   * allows it). Anything the provider still asks at startup is the user's to
+   * answer: a trust prompt with that setting off, an update offer, a terms
+   * notice. Resolves `question` for those, which leaves the session
+   * open at the screen and marks it as needing the user, rather than closing
+   * it as a failed start.
    */
-  private async confirmOwnedWorkspaceTrust(
+  private async waitForProviderReady(
     provider: string,
     tmuxSession: string,
   ): Promise<"ready" | "question"> {
     if (provider !== "codex" && provider !== "claude") return "ready";
-    // When an unrecognised confirm screen was first seen, so a screen that is
-    // only passing through on the way to the prompt is not mistaken for one.
+    // When a recognised question was first seen, so a frame only passing
+    // through on the way to the prompt is not mistaken for one.
     let questionSince: number | undefined;
     const deadline = Date.now() + PROVIDER_STARTUP_TIMEOUT_MS;
-    const promptAttempts = new Map<
-      string,
-      {
-        navigationCount: number;
-        navigatedAt: number;
-        confirmCount: number;
-        confirmedAt?: number;
-      }
-    >();
     let lastScreen = "";
-
-    const confirmDefaultPrompt = async (key: string) => {
-      const previous = promptAttempts.get(key);
-      // Answered prompts stay in the scrollback, so the capture keeps matching
-      // them long after the provider moved on. Without a hard cap Daedalus
-      // would keep pressing Enter into the session the user is now typing in.
-      if (previous && previous.confirmCount >= MAX_PROMPT_CONFIRMATIONS) return;
-      if (previous?.confirmedAt && Date.now() - previous.confirmedAt < 1_000)
-        return;
-      if (!previous) await Bun.sleep(500);
-      await this.tmux.sendKeys(tmuxSession, ["Enter"]);
-      promptAttempts.set(key, {
-        navigationCount: 0,
-        navigatedAt: previous?.navigatedAt ?? 0,
-        confirmCount: (previous?.confirmCount ?? 0) + 1,
-        confirmedAt: Date.now(),
-      });
-    };
-
-    const confirmClaudePrompt = async (
-      key: string,
-      screen: string,
-      affirmativeLabel: string,
-    ) => {
-      const previous = promptAttempts.get(key);
-      const escapedLabel = affirmativeLabel.replace(
-        /[.*+?^${}()|[\]\\]/g,
-        "\\$&",
-      );
-      if (new RegExp(`❯\\s*${escapedLabel}`).test(screen)) {
-        if (previous && previous.confirmCount >= MAX_PROMPT_CONFIRMATIONS)
-          return;
-        if (previous?.confirmedAt && Date.now() - previous.confirmedAt < 1_000)
-          return;
-        await this.tmux.sendKeys(tmuxSession, ["Enter"]);
-        promptAttempts.set(key, {
-          navigationCount: previous?.navigationCount ?? 0,
-          navigatedAt: previous?.navigatedAt ?? 0,
-          confirmCount: (previous?.confirmCount ?? 0) + 1,
-          confirmedAt: Date.now(),
-        });
-        return;
-      }
-      if (
-        previous &&
-        (previous.navigationCount >= 3 ||
-          Date.now() - previous.navigatedAt < 1_000)
-      )
-        return;
-      if (!previous) await Bun.sleep(500);
-      await this.tmux.sendKeys(tmuxSession, ["Down"]);
-      promptAttempts.set(key, {
-        navigationCount: (previous?.navigationCount ?? 0) + 1,
-        navigatedAt: Date.now(),
-        confirmCount: previous?.confirmCount ?? 0,
-      });
-    };
 
     while (Date.now() < deadline) {
       if (!(await this.tmux.hasSession(tmuxSession)))
@@ -614,54 +589,21 @@ export class AgentService {
       const screen = await this.tmux.capture(tmuxSession);
       lastScreen = screen;
 
-      // Readiness is checked first: the answered prompt stays in the
-      // scrollback, so matching it ahead of the ready marker would keep
-      // driving keys into a session that already belongs to the user.
+      // Readiness is checked first: an answered prompt stays in the
+      // scrollback beside the ready marker.
       if (
         (provider === "codex" && screen.includes("Ask Codex to do anything")) ||
         (provider === "claude" && claudeReady(screen))
-      ) {
+      )
         return "ready";
-      } else if (provider === "codex" && screen.includes("Hooks need review")) {
+      if (provider === "codex" && screen.includes("Hooks need review"))
         // Daedalus injects Codex's activity hooks, and Codex gates them behind
         // a one-time review because a trusted hook runs outside the sandbox.
-        // That is the user's decision, not Daedalus's, so the prompt is left
-        // standing and startup is treated as finished: the session is live and
-        // usable either way, and until it is answered Codex activity simply
-        // runs on the rollout tier. Answering it here would be Daedalus
-        // clicking through a security control on the user's behalf.
+        // The session is usable either way, and until the user answers it
+        // activity runs on the rollout tier, so this one is not a question
+        // that blocks startup.
         return "ready";
-      } else if (
-        provider === "codex" &&
-        screen.includes("Do you trust the contents of this directory?")
-      ) {
-        await confirmDefaultPrompt("codex-workspace");
-      } else if (
-        provider === "claude" &&
-        screen.includes("Yes, I trust this folder")
-      ) {
-        await confirmClaudePrompt(
-          "claude-workspace",
-          screen,
-          "Yes, I trust this folder",
-        );
-      } else if (
-        provider === "claude" &&
-        screen.includes("Allow external CLAUDE.md file imports?")
-      ) {
-        await confirmClaudePrompt(
-          "claude-instructions",
-          screen,
-          "Yes, allow external imports",
-        );
-      } else if (
-        provider === "claude" &&
-        /Enter to confirm/.test(screen) &&
-        /Esc to cancel/.test(screen)
-      ) {
-        // A screen Daedalus has no business answering: an account's new
-        // terms and privacy choice, a notice about the plan. Waiting it out
-        // would close a session the user only has to answer once.
+      if (startupQuestion(provider, screen)) {
         questionSince ??= Date.now();
         if (Date.now() - questionSince >= STARTUP_QUESTION_SETTLE_MS)
           return "question";
@@ -672,7 +614,10 @@ export class AgentService {
 
     if (!(await this.tmux.hasSession(tmuxSession)))
       throw new Error(`${provider} exited before finishing startup`);
-    throw new Error(`${provider} did not become ready within 30 seconds`);
+    // Still running but not at its prompt: some screen this code does not
+    // know, which a new provider release can add at any time. The user can
+    // see and answer it; closing the session would take that away.
+    return "question";
   }
 
   async capabilities(): Promise<{
@@ -1073,6 +1018,7 @@ export class AgentService {
         session.id,
       );
     try {
+      if (!input.terminal) await this.trustFolder(session);
       await this.tmux.createSession({
         session: session.tmuxSession,
         cwd: session.workingDirectory,
@@ -1084,10 +1030,7 @@ export class AgentService {
       });
       const startup = input.terminal
         ? "ready"
-        : await this.confirmOwnedWorkspaceTrust(
-            provider!.name,
-            session.tmuxSession,
-          );
+        : await this.waitForProviderReady(provider!.name, session.tmuxSession);
       let runningSession = session;
       if (provider?.name === "codex") {
         const recoveredId = await recoverCodexSessionId({
@@ -1366,6 +1309,7 @@ export class AgentService {
     if (liveSessions === undefined && !(await this.tmux.probe())) return;
     const live = liveSessions ?? new Set(await this.tmux.listSessions());
     const now = new Date().toISOString();
+    const endedAtStartup: string[] = [];
     this.repositories.transaction(() => {
       for (const agent of this.repositories.listAgents()) {
         if (
@@ -1373,13 +1317,19 @@ export class AgentService {
           !live.has(agent.tmuxSession)
         ) {
           // Activity and attention are deliberately left alone: see
-          // `onSessionEnded`. `lostReason` is cleared so it always describes
-          // this disappearance rather than the last one.
+          // `onSessionEnded`. The exception is a startup question whose
+          // provider exited, which no revive brings back. `lostReason` is
+          // otherwise cleared so it always describes this disappearance
+          // rather than the last one.
+          const atStartup = this.endedAtStartupQuestion(agent);
+          if (atStartup) endedAtStartup.push(agent.id);
           this.repositories.updateAgent({
             ...agent,
             status: "lost",
             endedAt: now,
-            lostReason: null,
+            lostReason: atStartup
+              ? `${providerLabel(agent.provider)} exited before reaching its prompt. Restore the session to start it again.`
+              : null,
             handoffRequestedAt: null,
           });
         } else if (agent.status === "starting" && live.has(agent.tmuxSession)) {
@@ -1387,6 +1337,7 @@ export class AgentService {
         }
       }
     });
+    for (const id of endedAtStartup) this.onSessionEnded(id);
   }
 
   async list(filters: {
@@ -1550,6 +1501,17 @@ export class AgentService {
         "Only an archived session can be deleted; archive it first",
       );
     await this.workspaceContent.discardSessionFiles(agent);
+    // Only a folder Daedalus made for the session goes with it. A session
+    // that ran in the workspace folder itself leaves the workspace's trust
+    // for the workspace's own deletion.
+    const workspace = await this.workspaces
+      .get(agent.workspaceId)
+      .catch(() => undefined);
+    if (
+      workspace &&
+      resolve(agent.workingDirectory) !== resolve(workspace.path)
+    )
+      await forgetSessionFolders(this.config, agent.workingDirectory);
     this.repositories.deleteAgent(id);
     return agent;
   }
@@ -1898,6 +1860,7 @@ export class AgentService {
         `tmux session '${agent.tmuxSession}' is already live`,
       );
     try {
+      if (agent.kind === "agent") await this.trustFolder(agent);
       await this.tmux.createSession({
         session: restoring.tmuxSession,
         cwd: agent.workingDirectory,
@@ -1910,7 +1873,7 @@ export class AgentService {
       });
       const startup =
         agent.kind === "agent"
-          ? await this.confirmOwnedWorkspaceTrust(
+          ? await this.waitForProviderReady(
               agent.provider,
               restoring.tmuxSession,
             )

@@ -8,6 +8,7 @@ import {
   INSTALL_COMMANDS,
   normalizeError,
   saveAutoRestoreSessionsEnabled,
+  saveTrustSessionFoldersEnabled,
   type AccountProfile,
   type AgentActivityState,
   type AgentSession,
@@ -239,6 +240,7 @@ export async function desktopSnapshot(
       workspaceInstructionFilesEnabled:
         context.config.workspaceInstructionFilesEnabled,
       autoRestoreSessionsEnabled: context.config.autoRestoreSessionsEnabled,
+      trustSessionFoldersEnabled: context.config.trustSessionFoldersEnabled,
       focusMode: context.config.focusMode,
       ...capabilities,
       accounts: context.accounts.list().map((item) => ({ ...item })),
@@ -644,6 +646,11 @@ export function createDesktopRequestHandlers(
     autoRestoreSessionsSet: ({ enabled }) =>
       mutate(async () => {
         await saveAutoRestoreSessionsEnabled(context.config, enabled);
+        return { enabled };
+      }),
+    trustSessionFoldersSet: ({ enabled }) =>
+      mutate(async () => {
+        await saveTrustSessionFoldersEnabled(context.config, enabled);
         return { enabled };
       }),
     focusModeSet: ({ enabled }) =>

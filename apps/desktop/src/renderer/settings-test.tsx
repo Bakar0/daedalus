@@ -62,6 +62,7 @@ const snapshot = {
     tmuxVersion: "3.7c",
     workspaceInstructionFilesEnabled: true,
     autoRestoreSessionsEnabled: true,
+    trustSessionFoldersEnabled: true,
     focusMode: false,
     accounts: [
       {

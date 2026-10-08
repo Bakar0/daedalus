@@ -69,6 +69,7 @@ const base: DesktopSnapshotDto = {
     tmuxAvailable: false,
     workspaceInstructionFilesEnabled: true,
     autoRestoreSessionsEnabled: true,
+    trustSessionFoldersEnabled: true,
     focusMode: false,
     accounts: [],
     providers: [
