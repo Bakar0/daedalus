@@ -2207,6 +2207,31 @@ Before working in this workspace:
       });
     });
 
+    test("a tree with an open terminal survives archiving, and deleting closes the terminal", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const { context, workspace, session, worktree } = await scenario(home);
+        const terminal = await context.terminals.create({
+          workspace: workspace.id,
+          workingDirectory: worktree.path,
+        });
+
+        // A shell still working in the tree: deleting the folder under it
+        // would leave every command there failing to find its directory.
+        await context.agents.archive(session.id);
+        expect(await pathExists(worktree.path)).toBe(true);
+
+        // Deleting is the user's explicit call, so the terminal goes first.
+        await context.agents.deletePermanently(session.id);
+        expect(await pathExists(worktree.path)).toBe(false);
+        expect(
+          (await context.terminals.list()).some(
+            (item) => item.id === terminal.id,
+          ),
+        ).toBe(false);
+        context.close();
+      });
+    }, 30_000);
+
     test("archiving a session releases only the trees that hold nothing", async () => {
       await withTemporaryDaedalusHome(async (home) => {
         const { context, workspace, session, worktree } = await scenario(home);
