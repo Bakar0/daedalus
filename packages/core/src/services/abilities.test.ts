@@ -16,6 +16,7 @@ import {
   type ApplicationContext,
   type RoutineTickInput,
   type SessionAbility,
+  inboxPath,
 } from "../index";
 
 /** Claude at its prompt with an empty input box. */
@@ -308,7 +309,7 @@ describe("abilities", () => {
     });
   });
 
-  test("a grant to a running session is typed in under the delivery rule", async () => {
+  test("a grant note and a handoff request go to a Claude session's inbox", async () => {
     await withAbilities(async (harness) => {
       const { context, tmux } = harness;
       await context.workspaces.create({ name: "Ops", slug: "ops" });
@@ -317,6 +318,40 @@ describe("abilities", () => {
         provider: "claude",
         name: "Helper",
       });
+      const mailbox = Bun.file(`${inboxPath(context.config, session.id)}.mail`);
+      // The user is typing: an inbox note does not wait for that.
+      context.deliveryGate.noteKeystroke(session.id);
+      const granted = context.abilities.grant(session.id, "orchestration", {
+        live: true,
+      });
+      await tick(harness);
+      expect(tmux.sent).toEqual([]);
+      expect(await mailbox.text()).toBe(`${granted.pendingNote}\n`);
+      expect(
+        context.abilities.held(session.id, "orchestration")?.pendingNote,
+      ).toBeNull();
+      // The handoff request too, which works mid-turn.
+      const requested = await context.agents.requestHandoff(session.id);
+      expect(requested.handoffRequestedAt).not.toBeNull();
+      expect(tmux.sent).toEqual([]);
+      expect((await mailbox.text()).split("\n")[1]).toMatch(
+        /^Daedalus: hand off your work to a fresh session now\. Run the daedalus-handoff(-\w+)? skill\.$/,
+      );
+    });
+  });
+
+  test("a grant to a running session is typed in under the delivery rule", async () => {
+    await withAbilities(async (harness) => {
+      const { context, tmux } = harness;
+      await context.workspaces.create({ name: "Ops", slug: "ops" });
+      const session = withoutInbox(
+        harness,
+        await context.agents.spawn({
+          workspace: "ops",
+          provider: "claude",
+          name: "Helper",
+        }),
+      );
       expect(context.abilities.list(session.id)).toEqual([]);
       // Routines are granted without a note.
       expect(
@@ -805,7 +840,9 @@ describe("routine delivery", () => {
   test("drains before a handoff and hands the routines to the successor", async () => {
     await withAbilities(async (harness) => {
       const { context, tmux } = harness;
-      const { session, ability } = await argus(harness);
+      const { session: launched, ability } = await argus(harness);
+      // Typed in, so the handoff request is held by a keystroke below.
+      const session = withoutInbox(harness, launched);
       context.routines.add(ability, { text: routineText("ci-health") });
       await tick(harness);
       expect(context.routines.deliveredRuns(ability)).toHaveLength(1);

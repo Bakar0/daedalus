@@ -6,6 +6,7 @@ import {
   claudeDaedalusSettingsArgs,
   ensureInbox,
   inboxHook,
+  leaveInInbox,
   INBOX_HOOK_MARKER,
   INBOX_WAITER_SCRIPT,
   loadConfig,
@@ -86,6 +87,42 @@ describe("session inbox", () => {
         true,
       );
       expect(await second.ended).toEqual(["due\n", 2]);
+    });
+  });
+
+  test("a note left during a turn arrives when the next waiter starts", async () => {
+    await withHome(async (config) => {
+      const path = await ensureInbox(config, "s1");
+      // Mid-turn: no waiter. The note stays in the mailbox.
+      expect(await leaveInInbox(config, "s1", "hand off now")).toBe(false);
+      expect(await leaveInInbox(config, "s1", "second note")).toBe(false);
+      expect((await stat(`${path}.mail`)).mode & 0o777).toBe(0o600);
+      // The turn ends; Stop starts a waiter, which prints both at once.
+      expect(await startWaiter(path).ended).toEqual([
+        "hand off now\nsecond note\n",
+        2,
+      ]);
+      expect(await Bun.file(`${path}.mail`).exists()).toBe(false);
+    });
+  });
+
+  test("a note reaches a waiting session now, along with a routine line", async () => {
+    await withHome(async (config) => {
+      const path = await ensureInbox(config, "s1");
+      const waiter = startWaiter(path);
+      await waitUntil(async () => Bun.file(`${path}.pid`).exists());
+      await Bun.sleep(50);
+      expect(await leaveInInbox(config, "s1", "hand off now")).toBe(true);
+      expect(await waiter.ended).toEqual(["hand off now\n", 2]);
+      // A note waiting when a routine line arrives goes with it.
+      const next = startWaiter(path);
+      await waitUntil(async () => Bun.file(`${path}.pid`).exists());
+      const mail = Bun.file(`${path}.mail`);
+      await Bun.write(mail, "revoke note\n");
+      expect(await waitUntil(() => postToInbox(config, "s1", "run 9"))).toBe(
+        true,
+      );
+      expect(await next.ended).toEqual(["revoke note\nrun 9\n", 2]);
     });
   });
 

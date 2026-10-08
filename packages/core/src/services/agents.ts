@@ -1,4 +1,4 @@
-import { postToInbox, usesInbox } from "./session-inbox";
+import { leaveInInbox, postToInbox, usesInbox } from "./session-inbox";
 import { readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
@@ -1182,7 +1182,16 @@ export class AgentService {
    */
   async requestHandoff(id: string): Promise<AgentSession> {
     const agent = await this.requireContinuable(id);
-    await this.invokeSkill(agent.id, HANDOFF_SKILL);
+    if (usesInbox(agent)) {
+      // Left in the mailbox, so it arrives even mid-turn, and never shows
+      // as something the user typed.
+      const skill = await this.requireSkill(agent, HANDOFF_SKILL);
+      await leaveInInbox(
+        this.config,
+        agent.id,
+        `Daedalus: hand off your work to a fresh session now. Run the ${skill} skill.`,
+      );
+    } else await this.invokeSkill(agent.id, HANDOFF_SKILL);
     const requested = {
       ...agent,
       handoffRequestedAt: new Date().toISOString(),
@@ -1191,11 +1200,6 @@ export class AgentService {
     return requested;
   }
 
-  /**
-   * Types a Daedalus managed skill into a Claude or Codex session, with its
-   * arguments: `/name args` for Claude, `$name args` for Codex. Refuses with
-   * `CONFLICT` when the skill is not installed for the session's provider.
-   */
   /**
    * Hands a line to a running Claude session through its inbox, without
    * typing. False when the session has no inbox or is not waiting on it.
@@ -1206,12 +1210,23 @@ export class AgentService {
     return postToInbox(this.config, agent.id, line);
   }
 
-  async invokeSkill(
-    id: string,
-    skillId: string,
-    args = "",
-  ): Promise<AgentSession> {
+  /**
+   * Leaves a note in a running Claude session's inbox mailbox: it arrives
+   * now if the session waits at its prompt, else when its turn ends. False
+   * when the session has no inbox.
+   */
+  async leaveNote(id: string, line: string): Promise<boolean> {
     const agent = await this.requireRunning(id);
+    if (!usesInbox(agent)) return false;
+    await leaveInInbox(this.config, agent.id, line);
+    return true;
+  }
+
+  /** The skill's installed name, or `CONFLICT` when it is not installed. */
+  private async requireSkill(
+    agent: AgentSession,
+    skillId: string,
+  ): Promise<string> {
     if (agent.provider !== "claude" && agent.provider !== "codex")
       throw new DaedalusError(
         "CONFLICT",
@@ -1226,9 +1241,28 @@ export class AgentService {
         "CONFLICT",
         `The ${skillId} skill is not installed for ${agent.provider}. Turn it on in Settings, Skills, or with 'daedal skill enable ${skillId}'.`,
       );
+    return skillName;
+  }
+
+  /**
+   * Types a Daedalus managed skill into a Claude or Codex session, with its
+   * arguments: `/name args` for Claude, `$name args` for Codex. Refuses with
+   * `CONFLICT` when the skill is not installed for the session's provider.
+   */
+  async invokeSkill(
+    id: string,
+    skillId: string,
+    args = "",
+  ): Promise<AgentSession> {
+    const agent = await this.requireRunning(id);
+    const skillName = await this.requireSkill(agent, skillId);
     await this.send(
       agent.id,
-      buildSkillInvocation(agent.provider, skillName, args),
+      buildSkillInvocation(
+        agent.provider as "claude" | "codex",
+        skillName,
+        args,
+      ),
     );
     // In Codex, `$name` opens the skill mention popup, and the first Enter
     // only picks the skill from it. The second one submits. On an empty

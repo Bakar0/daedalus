@@ -342,7 +342,15 @@ export class RoutineDelivery {
     const screen = await this.agents
       .screen(session.id, { styled: true })
       .catch(() => "");
-    if (this.gate.check({ session, activity, screen })) return;
+    if (
+      this.gate.check({
+        session,
+        activity,
+        screen,
+        untyped: usesInbox(session),
+      })
+    )
+      return;
     await this.agents.requestHandoff(session.id);
     this.typed(session.id);
   }
@@ -356,6 +364,12 @@ export class RoutineDelivery {
     const session = this.repositories.findAgent(row.sessionId);
     if (!session || session.archivedAt || session.status !== "running")
       return false;
+    // An inbox takes the note at once: it reaches the session when it is
+    // next at its prompt, and nothing is typed.
+    if (usesInbox(session) && (await this.agents.leaveNote(session.id, note))) {
+      this.abilities.noteDelivered(row, note);
+      return true;
+    }
     const activity = input.activity(session.id);
     if (!this.settled(session.id, activity)) return false;
     const screen = await this.agents

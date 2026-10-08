@@ -38,8 +38,9 @@ marks the session's card, its World figure and the tasks its routines file.
 
 Abilities: ${ABILITY_IDS.join(", ")}. 'grant' gives a running session an
 ability. Routines say nothing to the session: ask it for a routine. For
-orchestration, Daedalus types one line once the session is idle, its input
-box is empty and nobody typed in it for 2 minutes. To start a session that holds
+orchestration, the app sends one note: through a Claude session's inbox,
+with nothing typed, or typed into a Codex session once it is idle, its
+input box is empty and nobody typed in it for 2 minutes. To start a session that holds
 one, use 'daedal agent spawn --ability <ability>'. 'revoke' stops what the
 ability does and keeps its data, so a later grant brings it back. A handoff
 moves the abilities, the name, the pin and the color to the successor.

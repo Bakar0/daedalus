@@ -46,9 +46,9 @@ daedal session abilities <session>
   Routines panel tells the user how to ask instead.
 - **Orchestration** adds one line to the launch prompt saying what the
   session holds and which skill to follow. Granted to a running session,
-  Daedalus types one note into it under the delivery rule below; until then
+  Daedalus sends one note, as described under Delivery below; until then
   `session abilities` shows the note as waiting.
-- **Revoke** stops what the ability does; orchestration also types a note
+- **Revoke** stops what the ability does; orchestration also sends a note
   saying so. The row and its data stay, so granting it again brings
   everything back. Tasks already filed stay on the board.
 - **Archive** pauses what a session holds; **restore** resumes it.
@@ -154,8 +154,16 @@ applies. Rules 3 and 4 do not: nothing is typed.
 A Codex session, or a Claude session launched before inboxes existed, gets
 the line typed: `$daedalus-routine <run-id>` for Codex, followed by a second
 Enter that Codex's skill popup needs, and `/daedalus-routine <run-id>` for
-Claude. A dev build's skills carry its channel suffix. The grant and revoke
-notes, and the handoff below, are still typed, under the same rule.
+Claude. A dev build's skills carry its channel suffix.
+
+The grant and revoke notes and the handoff request below go to a Claude
+session's inbox too, but to the mailbox file beside the pipe
+(`<session>.fifo.mail`), because they must arrive whatever the session is
+doing. Daedalus appends the note and pokes the pipe. A waiter that is
+reading prints the mailbox at once; otherwise the session is in a turn,
+and the waiter that `Stop` starts when the turn ends prints it. None of the
+delivery rules hold them. A Codex session, or an older Claude session, gets
+them typed under the same rules as a run.
 
 Each change in why a session's runs are held is logged as a `routines` event
 in the app log, such as "Argus: holding, you typed in this session".
