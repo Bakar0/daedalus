@@ -42,10 +42,8 @@ daedal session abilities <session>
   in the first prompt made the agent act before the user asked for
   anything. The session finds the `daedalus-routines` skill when the user
   asks for a routine, a run arrives as the run skill's own command, and the
-  `routine` commands refuse a session without the ability. The app shows
-  the user how to ask instead: under the Routines switch in Create session,
-  and in a dialog after Routines is turned on in a session's menu, each with
-  Don't show again.
+  `routine` commands refuse a session without the ability. The app's
+  Routines panel tells the user how to ask instead.
 - **Orchestration** adds one line to the launch prompt saying what the
   session holds and which skill to follow. Granted to a running session,
   Daedalus types one note into it under the delivery rule below; until then

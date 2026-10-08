@@ -6205,22 +6205,6 @@ dd {
   display: grid;
   gap: 6px;
 }
-/* How to use an ability, under its switch, until the user hides it. */
-.ability-hint {
-  align-items: flex-start;
-  color: var(--muted);
-  display: flex;
-  font-size: 11px;
-  gap: 10px;
-  line-height: 1.45;
-  margin: 0;
-  padding: 2px 2px 0;
-}
-.ability-hint button {
-  flex: none;
-  font-size: 11px;
-  padding: 0 4px;
-}
 /* A switch like the skills panel's, drawn inside a menu item that is itself
    the control. */
 .menu-switch {
@@ -6366,6 +6350,23 @@ dd {
   letter-spacing: 0.04em;
   margin: 6px 0 0;
   text-transform: uppercase;
+}
+.routines-panel-howto {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+}
+.routines-panel-howto strong {
+  font-size: 12px;
+}
+.routines-panel-howto p {
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
 }
 .routines-panel-purpose {
   display: grid;

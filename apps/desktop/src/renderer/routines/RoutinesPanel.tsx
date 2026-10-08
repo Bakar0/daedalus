@@ -76,6 +76,19 @@ export function RoutinesPanel({
       {!detail && !error && <p className="routines-panel-empty">Loading…</p>}
       {detail && (
         <>
+          {/*
+            The session is told nothing about routines, so this is where the
+            user learns how to ask for one.
+          */}
+          <section className="routines-panel-howto" aria-label="How to use">
+            <strong>How to use</strong>
+            <p>
+              Ask the session in its terminal, in plain words: "create a routine
+              that checks CI on main every 15 minutes". It writes the routine,
+              shows it to you, and adds it once you agree. Change or remove one
+              the same way. Routines run while Daedalus is open.
+            </p>
+          </section>
           <form
             className="routines-panel-purpose"
             onSubmit={(event) => {
@@ -109,10 +122,7 @@ export function RoutinesPanel({
               : `${detail.routines.length} routines`}
           </h3>
           {detail.routines.length === 0 ? (
-            <p className="routines-panel-empty">
-              No routines yet. Ask the session to add one, for example "check CI
-              on main every 15 minutes".
-            </p>
+            <p className="routines-panel-empty">No routines yet.</p>
           ) : (
             <ul className="routines-panel-list">
               {detail.routines.map((routine) => (
