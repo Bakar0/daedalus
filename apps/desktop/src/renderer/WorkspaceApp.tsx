@@ -61,7 +61,7 @@ import { taskActions } from "./task-actions";
 import { TaskCostLine, TaskTimeline } from "./TaskTimeline";
 import { TaskActionBar } from "./TaskActionBar";
 import { ConfirmButton } from "./ConfirmButton";
-import { askConfirm, askText, DialogHost } from "./dialogs";
+import { askConfirm, askNotice, askText, DialogHost } from "./dialogs";
 import { TaskActionIcon } from "./task-action-icons";
 import { type FileOpenRequest, FilesView } from "./files/FilesView";
 import {
@@ -142,6 +142,31 @@ export {
   parseRememberedDirectories,
   planExplorerRefresh,
 } from "./files/explorer-state";
+
+/**
+ * How to use routines, shown to the user when a session gets them. The
+ * session itself is told nothing: a line in its first prompt made it act
+ * before the user asked for anything.
+ */
+const ROUTINES_HINT =
+  "Ask the session for a routine in plain words, such as \u201ccheck the staging deploy every weekday at 9\u201d. It writes the routine, shows it to you, and adds it once you agree. Routines run while Daedalus is open.";
+const ROUTINES_HINT_STORAGE_KEY = "daedalus.hint.routines.hidden";
+
+function routinesHintHidden(): boolean {
+  try {
+    return window.localStorage.getItem(ROUTINES_HINT_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function hideRoutinesHint(): void {
+  try {
+    window.localStorage.setItem(ROUTINES_HINT_STORAGE_KEY, "1");
+  } catch {
+    // Without storage the hint shows again next time; nothing else breaks.
+  }
+}
 
 const COLLAPSED_WORKSPACES_STORAGE_KEY = "daedalus.workspaces.collapsed";
 
@@ -1784,6 +1809,8 @@ export function WorkspaceApp({
     color?: SessionColorDto;
     routines?: boolean;
   }>({ name: "" });
+  const [routinesHintDismissed, setRoutinesHintDismissed] =
+    useState(routinesHintHidden);
   // The Routines drawer on the selected session, and what it last read.
   const [routinesPanel, setRoutinesPanel] = useState<{
     sessionId: string;
@@ -3715,7 +3742,7 @@ export function WorkspaceApp({
       }))
     )
       return;
-    await perform(
+    const changed = await perform(
       client.request.sessionAbility({
         sessionId: session.id,
         ability: "routines",
@@ -3724,6 +3751,13 @@ export function WorkspaceApp({
     );
     if (!granted && routinesPanel?.sessionId === session.id)
       setRoutinesPanel(undefined);
+    if (granted && changed && !routinesHintHidden()) {
+      const answer = await askNotice({
+        title: `${sessionName(session)} has routines`,
+        message: ROUTINES_HINT,
+      });
+      if (answer === "never") hideRoutinesHint();
+    }
   }
 
   async function loadRoutinesDetail(sessionId: string) {
@@ -6676,6 +6710,21 @@ export function WorkspaceApp({
                     />
                   </label>
                 ))}
+                {sessionForm.routines && !routinesHintDismissed && (
+                  <p className="ability-hint" role="note">
+                    <span>{ROUTINES_HINT}</span>
+                    <button
+                      className="quiet"
+                      onClick={() => {
+                        hideRoutinesHint();
+                        setRoutinesHintDismissed(true);
+                      }}
+                      type="button"
+                    >
+                      Don't show again
+                    </button>
+                  </p>
+                )}
               </fieldset>
             )}
             <div className="modal-actions">

@@ -243,7 +243,9 @@ describe("abilities", () => {
         paused: false,
         pendingNote: null,
       });
-      expect(tmux.launches.at(-1)!.args.at(-1)).toContain("routines ability");
+      // Routines say nothing to the session: with no message there is no
+      // first prompt for it to act on.
+      expect(tmux.launches.at(-1)!.args.join(" ")).not.toContain("routine");
       // An ordinary session folder: nothing is written into it.
       expect(session.workingDirectory).not.toContain("agents");
       // A terminal or a custom command cannot hold one.
@@ -281,20 +283,27 @@ describe("abilities", () => {
         name: "Helper",
       });
       expect(context.abilities.list(session.id)).toEqual([]);
+      // Routines are granted without a note.
+      expect(
+        context.abilities.grant(session.id, "routines", { live: true })
+          .pendingNote,
+      ).toBeNull();
       context.deliveryGate.noteKeystroke(session.id);
-      const granted = context.abilities.grant(session.id, "routines", {
+      const granted = context.abilities.grant(session.id, "orchestration", {
         live: true,
       });
-      expect(granted.pendingNote).toContain("now holds the routines ability");
+      expect(granted.pendingNote).toContain(
+        "now holds the orchestration ability",
+      );
       // The user is typing: the note waits.
       await tick(harness);
       expect(tmux.sent).toEqual([]);
       harness.advance(QUIET_AFTER_TYPING_MS);
       await tick(harness);
       expect(tmux.sent.map((item) => item.text)).toEqual([granted.pendingNote]);
-      expect(context.abilities.held(session.id, "routines")?.pendingNote).toBe(
-        null,
-      );
+      expect(
+        context.abilities.held(session.id, "orchestration")?.pendingNote,
+      ).toBe(null);
       expect(() =>
         context.abilities.grant(session.id, "routines", { live: true }),
       ).toThrow("already holds");
@@ -313,15 +322,15 @@ describe("abilities", () => {
       expect(context.routines.waitingRuns(ability)).toHaveLength(1);
       const revoked = context.abilities.revoke(session.id, "routines");
       expect(revoked).toMatchObject({ enabled: false });
-      expect(revoked.pendingNote).toContain("removed");
+      expect(revoked.pendingNote).toBeNull();
       expect(context.routines.waitingRuns(ability)).toEqual([]);
       expect(context.routines.runs(ability)[0]!.summary).toContain("revoked");
       expect(() => context.abilities.require(session.id, "routines")).toThrow(
         "does not hold the routines ability",
       );
-      // The revoke note is typed; no run goes in.
+      // Nothing is typed, and no run goes in.
       await tick(harness);
-      expect(tmux.sent.map((item) => item.text)).toEqual([revoked.pendingNote]);
+      expect(tmux.sent).toEqual([]);
       harness.advance(20 * 60_000);
       await tick(harness);
       expect(routineLines(tmux)).toEqual([]);
@@ -397,7 +406,9 @@ describe("abilities", () => {
       expect(context.abilities.held(successor.id, "routines")?.paused).toBe(
         false,
       );
-      expect(tmux.launches.at(-1)!.args.at(-1)).toContain("routines ability");
+      expect(tmux.launches.at(-1)!.args.at(-1)).not.toContain(
+        "routines ability",
+      );
       // A session without abilities is numbered as before.
       const plain = await context.agents.spawn({
         workspace: "ops",

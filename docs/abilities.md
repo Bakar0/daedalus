@@ -38,14 +38,21 @@ daedal session revoke <session> routines
 daedal session abilities <session>
 ```
 
-- **At creation**, the launch prompt gets one line saying what the session
-  holds and which skill to follow.
-- **To a running session**, Daedalus types one note into it under the
-  delivery rule below. Until then `session abilities` shows the note as
-  waiting.
-- **Revoke** stops what the ability does and types a note saying so. The row
-  and its data stay, so granting it again brings everything back. Tasks
-  already filed stay on the board.
+- **Routines tell the session nothing**, at creation or on a grant. A line
+  in the first prompt made the agent act before the user asked for
+  anything. The session finds the `daedalus-routines` skill when the user
+  asks for a routine, a run arrives as the run skill's own command, and the
+  `routine` commands refuse a session without the ability. The app shows
+  the user how to ask instead: under the Routines switch in Create session,
+  and in a dialog after Routines is turned on in a session's menu, each with
+  Don't show again.
+- **Orchestration** adds one line to the launch prompt saying what the
+  session holds and which skill to follow. Granted to a running session,
+  Daedalus types one note into it under the delivery rule below; until then
+  `session abilities` shows the note as waiting.
+- **Revoke** stops what the ability does; orchestration also types a note
+  saying so. The row and its data stay, so granting it again brings
+  everything back. Tasks already filed stay on the board.
 - **Archive** pauses what a session holds; **restore** resumes it.
 - Abilities work on Claude and Codex sessions. A terminal or a custom command
   cannot hold one.

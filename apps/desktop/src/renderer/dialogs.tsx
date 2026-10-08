@@ -26,6 +26,12 @@ type Request = { id: number } & (
       resolve: (answer: boolean) => void;
     }
   | {
+      kind: "notice";
+      title: string;
+      message: string;
+      resolve: (answer: "ok" | "never") => void;
+    }
+  | {
       kind: "text";
       title: string;
       message: string;
@@ -61,6 +67,26 @@ export function askConfirm(options: {
       confirmLabel: options.confirmLabel ?? "OK",
       danger: options.danger ?? false,
       enterConfirms: options.enterConfirms ?? false,
+      resolve,
+    });
+    announce();
+  });
+}
+
+/**
+ * A hint with Got it and Don't show again. Resolves to `never` when the user
+ * asked not to see it again; dismissing it any other way is `ok`.
+ */
+export function askNotice(options: {
+  title: string;
+  message: string;
+}): Promise<"ok" | "never"> {
+  return new Promise((resolve) => {
+    queue.push({
+      id: nextId++,
+      kind: "notice",
+      title: options.title,
+      message: options.message,
       resolve,
     });
     announce();
@@ -107,7 +133,13 @@ export function DialogHost() {
   const answer = (accepted: boolean) => {
     queue.shift();
     if (request.kind === "confirm") request.resolve(accepted);
+    else if (request.kind === "notice") request.resolve("ok");
     else request.resolve(accepted ? text : null);
+    announce();
+  };
+  const never = () => {
+    queue.shift();
+    if (request.kind === "notice") request.resolve("never");
     announce();
   };
 
@@ -154,36 +186,52 @@ export function DialogHost() {
               value={text}
             />
           )}
-          <div className="modal-actions">
-            <button
-              autoFocus={
-                request.kind === "confirm" &&
-                request.danger &&
-                !request.enterConfirms
-              }
-              className="quiet"
-              data-dialog-answer="cancel"
-              onClick={() => answer(false)}
-              type="button"
-            >
-              Cancel
-            </button>
-            <button
-              autoFocus={
-                request.kind === "confirm" &&
-                (!request.danger || request.enterConfirms)
-              }
-              className={
-                request.kind === "confirm" && request.danger
-                  ? "danger-action"
-                  : undefined
-              }
-              data-dialog-answer="confirm"
-              type="submit"
-            >
-              {request.confirmLabel}
-            </button>
-          </div>
+          {request.kind === "notice" ? (
+            <div className="modal-actions">
+              <button
+                className="quiet"
+                data-dialog-answer="never"
+                onClick={never}
+                type="button"
+              >
+                Don't show again
+              </button>
+              <button autoFocus data-dialog-answer="confirm" type="submit">
+                Got it
+              </button>
+            </div>
+          ) : (
+            <div className="modal-actions">
+              <button
+                autoFocus={
+                  request.kind === "confirm" &&
+                  request.danger &&
+                  !request.enterConfirms
+                }
+                className="quiet"
+                data-dialog-answer="cancel"
+                onClick={() => answer(false)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                autoFocus={
+                  request.kind === "confirm" &&
+                  (!request.danger || request.enterConfirms)
+                }
+                className={
+                  request.kind === "confirm" && request.danger
+                    ? "danger-action"
+                    : undefined
+                }
+                data-dialog-answer="confirm"
+                type="submit"
+              >
+                {request.confirmLabel}
+              </button>
+            </div>
+          )}
         </form>
       </section>
     </div>

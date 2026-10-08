@@ -131,7 +131,7 @@ export function SessionMenu({
             title={
               routines
                 ? "Revoke routines. The routines are kept and come back on a new grant."
-                : "Grant routines. The session gets a note and can run scheduled checks."
+                : "Grant routines. Ask the session for scheduled checks; nothing is sent to it."
             }
             type="button"
           >

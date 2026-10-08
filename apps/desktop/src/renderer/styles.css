@@ -6205,6 +6205,22 @@ dd {
   display: grid;
   gap: 6px;
 }
+/* How to use an ability, under its switch, until the user hides it. */
+.ability-hint {
+  align-items: flex-start;
+  color: var(--muted);
+  display: flex;
+  font-size: 11px;
+  gap: 10px;
+  line-height: 1.45;
+  margin: 0;
+  padding: 2px 2px 0;
+}
+.ability-hint button {
+  flex: none;
+  font-size: 11px;
+  padding: 0 4px;
+}
 /* A switch like the skills panel's, drawn inside a menu item that is itself
    the control. */
 .menu-switch {
