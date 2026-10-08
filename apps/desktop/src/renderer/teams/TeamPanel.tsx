@@ -17,6 +17,7 @@ export function TeamBar({
   handle,
   members,
   color,
+  leadArchived = false,
   onOpenPanel,
 }: {
   team: TeamDto;
@@ -26,6 +27,8 @@ export function TeamBar({
   /** Members, not counting the lead. */
   members: number;
   color: SessionColorDto | null;
+  /** The team is paused until its lead is restored. */
+  leadArchived?: boolean;
   onOpenPanel: () => void;
 }) {
   return (
@@ -38,7 +41,9 @@ export function TeamBar({
         <span className="routine-bar-text">
           {role === "lead"
             ? `Leads ${team.name} · ${members} ${members === 1 ? "member" : "members"}`
-            : `@${handle} in ${team.name}`}
+            : leadArchived
+              ? `@${handle} in ${team.name} · lead archived, restore it to continue`
+              : `@${handle} in ${team.name}`}
         </span>
         <span className="routine-bar-actions">
           <button className="quiet" onClick={onOpenPanel} type="button">

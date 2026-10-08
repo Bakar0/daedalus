@@ -269,10 +269,14 @@ handoff successor takes both, and the predecessor leaves the team.
   posts a note in the chat as `daedalus`, tagging only the lead: "@lead
   @server needs the user: …" or "@lead @server stopped running.". A lead
   needing the user posts nothing, and neither does a handoff.
-- **Ending a team.** Revoking the ability, or archiving the lead, clears every
-  member's team; they keep running as plain sessions. Quitting the app with
-  "Quit and stop sessions" archives the lead to resume it later and keeps the
-  team. A member cannot be granted orchestration.
+- **Pausing and ending a team.** Archiving the lead, by hand or by quitting
+  the app with "Quit and stop sessions", pauses the team: members keep their
+  handle and color, messages to the lead wait for it, no member can be added,
+  and the app marks members "lead archived". Restoring the lead resumes the
+  team and sends what waited. Only revoking the ability (Orchestration off,
+  which asks to confirm "End team") ends a team: every member's team is
+  cleared and they keep running as plain sessions. A member cannot be granted
+  orchestration.
 
 ### The chat
 

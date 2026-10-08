@@ -4568,9 +4568,15 @@ export function WorkspaceApp({
     const holdsRoutines = routinesBySession.has(session.id);
     const waitingRuns = routinesBySession.get(session.id)?.waiting.length ?? 0;
     const team = teamOf(session);
+    // An archived lead pauses its team; its members stand on their own.
+    const leadArchived =
+      team?.role === "member" &&
+      Boolean(sessionsById.get(team.team.leadId)?.archivedAt);
     return (
       <div
-        data-team-member={team?.role === "member" ? "true" : undefined}
+        data-team-member={
+          team?.role === "member" && !leadArchived ? "true" : undefined
+        }
         className={`session-card tone-${statusView.tone} ${view === "session" && session.id === highlightedSessionId ? "selected" : ""}`}
         data-color={session.color ?? undefined}
         data-pinned={session.pinnedAt ? "true" : undefined}
@@ -4629,10 +4635,14 @@ export function WorkspaceApp({
                   title={
                     team.role === "lead"
                       ? `Leads the team ${team.team.name}`
-                      : `Member of ${team.team.name}`
+                      : leadArchived
+                        ? `Member of ${team.team.name}, whose lead is archived; restore it to continue the team`
+                        : `Member of ${team.team.name}`
                   }
                 >
-                  {team.role === "lead" ? "Team lead" : `@${team.handle}`}
+                  {team.role === "lead"
+                    ? "Team lead"
+                    : `@${team.handle}${leadArchived ? " · lead archived" : ""}`}
                 </span>
               )}
               {holdsRoutines ? (
@@ -6049,6 +6059,9 @@ export function WorkspaceApp({
               <TeamBar
                 color={activeSession.color}
                 handle={activeSessionTeam.handle}
+                leadArchived={Boolean(
+                  sessionsById.get(activeSessionTeam.team.leadId)?.archivedAt,
+                )}
                 members={
                   agents.filter(
                     (item) =>

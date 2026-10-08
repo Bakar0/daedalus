@@ -294,12 +294,21 @@ declare global {
       hold: (reason: NonNullable<RoutinesStatusDto["hold"]>["reason"]) => void;
       spawns: unknown[];
       snapshot: () => DesktopSnapshotDto;
+      /** Archives a session, such as a team's lead. */
+      archive: (sessionId: string) => void;
     };
   }
 }
 
 window.routinesTest = {
   setStatus,
+  archive: (sessionId) => {
+    updateAgent(sessionId, {
+      archivedAt: new Date().toISOString(),
+      status: "exited",
+    });
+    publish();
+  },
   hold: (reason) =>
     setStatus({
       hold:

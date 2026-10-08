@@ -520,8 +520,8 @@ describe("teams", () => {
     });
   });
 
-  test("revoking or archiving the lead ends the team, quitting does not", async () => {
-    await withTeams(async ({ context }) => {
+  test("revoking ends a team; archiving the lead only pauses it", async () => {
+    await withTeams(async ({ context, transport }) => {
       const first = await lead(context);
       const member = await context.teams.spawnMember({
         team: first.team.id,
@@ -548,20 +548,41 @@ describe("teams", () => {
         name: "kept",
         instructions: "Kept.",
       });
-      // Quitting with "Quit and stop sessions" archives to resume later.
-      context.repositories.updateAgent({ ...second, resumeOnStart: true });
+      // Archiving the lead pauses its team; it does not end it. Quitting the
+      // app archives first and marks the session for resume after.
       await context.agents.archive(second.id, true);
-      expect(context.repositories.findAgent(kept.session.id)?.teamId).not.toBe(
-        null,
-      );
-      await context.agents.restore(second.id);
       context.repositories.updateAgent({
         ...(await context.agents.get(second.id)),
-        resumeOnStart: false,
+        resumeOnStart: true,
       });
-      await context.agents.archive(second.id, true);
-      expect(context.repositories.findAgent(kept.session.id)?.teamId).toBe(
-        null,
+      expect(context.repositories.findAgent(kept.session.id)).toMatchObject({
+        teamId: context.teams.get(second.id).id,
+        teamHandle: "kept",
+      });
+      // A message to the paused lead waits, and no member can join.
+      const waiting = await context.teams.say({
+        team: second.id,
+        author: "kept",
+        body: "@lead done with the first part",
+      });
+      expect(waiting.deliveries[0]).toMatchObject({
+        handle: "lead",
+        delivered: false,
+      });
+      await expect(
+        context.teams.spawnMember({
+          team: second.id,
+          addedBy: "user",
+          name: "late",
+        }),
+      ).rejects.toThrow("its team is paused; restore it first");
+      // Restoring the lead brings the team back and sends what waited.
+      await context.agents.restore(second.id);
+      expect(
+        transport.to(await context.agents.get(second.id)).at(-1)!.text,
+      ).toContain("kept: @lead done with the first part");
+      expect(context.teams.membership(kept.session.id)?.team.lead.id).toBe(
+        second.id,
       );
     });
   });

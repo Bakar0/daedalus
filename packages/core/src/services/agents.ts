@@ -1706,11 +1706,10 @@ export class AgentService {
       this.repositories.updateAgent(archived);
       // Archiving pauses what the session holds; its routines and their
       // tasks stay, and restoring the session resumes them.
+      // A lead's team pauses with it: members keep their place, messages to
+      // the lead wait, and restoring the lead brings the team back. Only
+      // revoking orchestration ends a team.
       this.repositories.abilities.setPausedForSession(id, true);
-      // Archiving a lead ends its team, unless quitting the app archived it
-      // to bring it back at the next start.
-      const team = this.abilities.held(id, "orchestration");
-      if (team && !agent.resumeOnStart) this.repositories.clearTeam(team.id);
     });
     // Working trees used to outlive every session that ever held one, which is
     // what made a repository permanently undetachable. Only trees that

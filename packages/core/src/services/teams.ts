@@ -259,6 +259,11 @@ export class TeamService {
         "VALIDATION",
         "A member the lead adds needs instructions; pass --message",
       );
+    if (team.lead.archivedAt)
+      throw new DaedalusError(
+        "CONFLICT",
+        `The lead '${team.name}' is archived, so its team is paused; restore it first`,
+      );
     if (input.provider && input.provider !== team.lead.provider)
       throw new DaedalusError(
         "VALIDATION",
