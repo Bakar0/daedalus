@@ -451,6 +451,9 @@ export const startupQuestion = (provider: string, screen: string): boolean =>
         (/Enter to confirm/.test(screen) && /Esc to cancel/.test(screen))
       : false;
 
+const startupQuestionReason = (session: AgentSession): string =>
+  `${providerLabel(session.provider)} is asking something before it starts. Answer it in the session's terminal.`;
+
 export class AgentService {
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -481,9 +484,22 @@ export class AgentService {
 
   /** Raises the badge for a session that stopped on a question at startup. */
   private askedAtStartup(session: AgentSession): void {
-    void this.onStartupQuestion(
-      session.id,
-      `${providerLabel(session.provider)} is asking something before it starts. Answer it in the session's terminal.`,
+    void this.onStartupQuestion(session.id, startupQuestionReason(session));
+  }
+
+  /**
+   * Whether the session's only badge is the startup question. The provider
+   * then exited before it ever reached its prompt (Codex quits after the
+   * update its startup menu offers), so there is no conversation to revive
+   * at that point and the question is gone with the process.
+   */
+  private endedAtStartupQuestion(agent: AgentSession): boolean {
+    const reasons = this.repositories.findSessionAttention(agent.id)?.reasons;
+    const asked = startupQuestionReason(agent);
+    return (
+      !!reasons &&
+      reasons.length > 0 &&
+      reasons.every((reason) => reason.text === asked)
     );
   }
 
@@ -1293,6 +1309,7 @@ export class AgentService {
     if (liveSessions === undefined && !(await this.tmux.probe())) return;
     const live = liveSessions ?? new Set(await this.tmux.listSessions());
     const now = new Date().toISOString();
+    const endedAtStartup: string[] = [];
     this.repositories.transaction(() => {
       for (const agent of this.repositories.listAgents()) {
         if (
@@ -1300,13 +1317,19 @@ export class AgentService {
           !live.has(agent.tmuxSession)
         ) {
           // Activity and attention are deliberately left alone: see
-          // `onSessionEnded`. `lostReason` is cleared so it always describes
-          // this disappearance rather than the last one.
+          // `onSessionEnded`. The exception is a startup question whose
+          // provider exited, which no revive brings back. `lostReason` is
+          // otherwise cleared so it always describes this disappearance
+          // rather than the last one.
+          const atStartup = this.endedAtStartupQuestion(agent);
+          if (atStartup) endedAtStartup.push(agent.id);
           this.repositories.updateAgent({
             ...agent,
             status: "lost",
             endedAt: now,
-            lostReason: null,
+            lostReason: atStartup
+              ? `${providerLabel(agent.provider)} exited before reaching its prompt. Restore the session to start it again.`
+              : null,
             handoffRequestedAt: null,
           });
         } else if (agent.status === "starting" && live.has(agent.tmuxSession)) {
@@ -1314,6 +1337,7 @@ export class AgentService {
         }
       }
     });
+    for (const id of endedAtStartup) this.onSessionEnded(id);
   }
 
   async list(filters: {

@@ -90,6 +90,15 @@ export const tmuxPtyArguments = (target: TmuxTerminalTarget): string[] =>
     `terminal-features[${HYPERLINKS_FEATURE_INDEX}]`,
     "xterm*:hyperlinks",
     ";",
+    // Claude and Codex track whether their pane has focus, and without this
+    // tmux swallows the focus reports xterm.js sends. Claude then prints a
+    // footer hint asking for `focus-events on` in a `~/.tmux.conf` this
+    // server never reads.
+    "set-option",
+    "-s",
+    "focus-events",
+    "on",
+    ";",
     "set-option",
     "-t",
     target.session,
@@ -292,6 +301,13 @@ export class CommandTmuxClient implements TmuxClient {
       ...(launch.keepOnExit
         ? [";", "set-option", "-t", launch.session, "remain-on-exit", "on"]
         : []),
+      // Also set on attach (see `tmuxPtyArguments`), but Claude reads it once
+      // when it starts, which is usually before the app's terminal attaches.
+      ";",
+      "set-option",
+      "-s",
+      "focus-events",
+      "on",
     ];
     // tmux gives a new session's command the PATH of the client that asked
     // for it, not the `-e PATH=` above: measured on tmux 3.7c, a client with

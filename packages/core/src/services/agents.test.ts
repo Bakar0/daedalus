@@ -196,6 +196,40 @@ describe("AgentService", () => {
     });
   });
 
+  test("clears the startup question when the provider exits before its prompt", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { codex: { executable: process.execPath, args: [] } },
+        }),
+      );
+      const tmux = new FakeTmux();
+      tmux.screens = [
+        "Update available\n› 1. Update now\n  2. Skip\n  enter continue · esc skip",
+      ];
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home, CODEX_HOME: join(home, "codex") },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Update" });
+      const agent = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      await Bun.sleep(50);
+      expect(context.activity.attentionFor(agent.id)).toBeTruthy();
+      // The update ran and Codex quit, taking its tmux session with it.
+      tmux.sessions.delete(agent.tmuxSession);
+      await context.agents.reconcile();
+      const lost = await context.agents.get(agent.id);
+      expect(lost.status).toBe("lost");
+      expect(lost.lostReason).toContain("exited before reaching its prompt");
+      expect(context.activity.attentionFor(agent.id)).toBeFalsy();
+      context.close();
+    });
+  });
+
   test("hands a startup trust prompt to the user when folder trust is off", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       await Bun.write(
