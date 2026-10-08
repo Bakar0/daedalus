@@ -667,6 +667,8 @@ export interface RoutineReportDto {
 
 export interface RoutineDto {
   name: string;
+  /** What the routine asks the session to do, before placeholders are filled. */
+  prompt: string;
   schedule: string;
   until: string | null;
   model: string | null;

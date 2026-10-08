@@ -21,6 +21,34 @@ function lastRunLabel(routine: RoutineDto, now: number): string {
   return `${what} ${relativeTime(at, now)}`;
 }
 
+const HOW_TO_STORAGE_KEY = "daedalus.routines.howto.hidden";
+
+function howToHidden(): boolean {
+  try {
+    return window.localStorage.getItem(HOW_TO_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function hideHowTo(): void {
+  try {
+    window.localStorage.setItem(HOW_TO_STORAGE_KEY, "1");
+  } catch {
+    // Without storage the line shows again next time.
+  }
+}
+
+/** The routine's prompt, folded until asked for. */
+function RoutinePrompt({ prompt }: { prompt: string }) {
+  return (
+    <details className="routine-row-prompt">
+      <summary>Prompt</summary>
+      <pre>{prompt.trim()}</pre>
+    </details>
+  );
+}
+
 /**
  * The drawer on a session holding routines: what they are for and each
  * routine's schedule and last run. The user changes routines by talking to
@@ -48,6 +76,7 @@ export function RoutinesPanel({
   onRunNow: (name: string) => void;
   onSetEnabled: (name: string, enabled: boolean) => void;
 }) {
+  const [showHowTo, setShowHowTo] = useState(() => !howToHidden());
   const [purpose, setPurpose] = useState(detail?.purpose ?? "");
   useEffect(() => setPurpose(detail?.purpose ?? ""), [detail?.purpose]);
   const purposeChanged = purpose.trim() !== (detail?.purpose ?? "").trim();
@@ -76,19 +105,25 @@ export function RoutinesPanel({
       {!detail && !error && <p className="routines-panel-empty">Loading…</p>}
       {detail && (
         <>
-          {/*
-            The session is told nothing about routines, so this is where the
-            user learns how to ask for one.
-          */}
-          <section className="routines-panel-howto" aria-label="How to use">
-            <strong>How to use</strong>
-            <p>
-              Ask the session in its terminal, in plain words: "create a routine
-              that checks CI on main every 15 minutes". It writes the routine,
-              shows it to you, and adds it once you agree. Change or remove one
-              the same way. Routines run while Daedalus is open.
+          {/* The session is told nothing, so this is how the user learns. */}
+          {showHowTo && (
+            <p className="routines-panel-howto">
+              <span>
+                Ask the session in plain words, like "check CI on main every 15
+                minutes".
+              </span>
+              <button
+                className="quiet"
+                onClick={() => {
+                  hideHowTo();
+                  setShowHowTo(false);
+                }}
+                type="button"
+              >
+                Don't show again
+              </button>
             </p>
-          </section>
+          )}
           <form
             className="routines-panel-purpose"
             onSubmit={(event) => {
@@ -163,6 +198,7 @@ export function RoutinesPanel({
                         : ""}
                     </small>
                   )}
+                  <RoutinePrompt prompt={routine.prompt} />
                   <span className="routine-row-actions">
                     <button
                       className="quiet"
@@ -200,6 +236,7 @@ export function RoutinesPanel({
                     <small className="routine-row-meta">
                       Ask the session to use this template to add it.
                     </small>
+                    <RoutinePrompt prompt={template.prompt} />
                   </li>
                 ))}
               </ul>

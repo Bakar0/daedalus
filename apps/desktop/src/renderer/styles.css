@@ -6352,21 +6352,37 @@ dd {
   text-transform: uppercase;
 }
 .routines-panel-howto {
-  background: var(--raised);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  display: grid;
-  gap: 4px;
-  padding: 10px 12px;
-}
-.routines-panel-howto strong {
-  font-size: 12px;
-}
-.routines-panel-howto p {
+  align-items: flex-start;
   color: var(--secondary);
+  display: flex;
   font-size: 12px;
-  line-height: 1.5;
+  gap: 8px;
+  justify-content: space-between;
+  line-height: 1.45;
   margin: 0;
+}
+.routines-panel-howto button {
+  flex: none;
+  padding: 0 4px;
+}
+.routine-row-prompt summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+.routine-row-prompt pre {
+  background: var(--surface, rgb(0 0 0 / 0.2));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--secondary);
+  font-size: 11px;
+  line-height: 1.5;
+  margin: 6px 0 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .routines-panel-purpose {
   display: grid;

@@ -140,6 +140,7 @@ describe("the Routines panel", () => {
     routines: [
       {
         name: "ci-health",
+        prompt: "Check CI on main.",
         schedule: "every 15m",
         until: null,
         model: "haiku",
@@ -164,6 +165,7 @@ describe("the Routines panel", () => {
       },
       {
         name: "alerts",
+        prompt: "Triage new alerts.",
         schedule: "0 9 * * 1-5",
         until: null,
         model: null,

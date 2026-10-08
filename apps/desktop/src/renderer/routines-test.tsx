@@ -62,6 +62,7 @@ const routine = (
   extra: Partial<RoutineDto> = {},
 ): RoutineDto => ({
   name,
+  prompt: `Check ${name} since {{last_run}}.\nReport anything broken; key: ${name}:<id>.`,
   schedule,
   until: null,
   model: null,

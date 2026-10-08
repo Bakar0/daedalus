@@ -357,6 +357,7 @@ const routineDto = (
   lastRun: RoutineRun | null,
 ): RoutineDto => ({
   name: routine.name,
+  prompt: routine.body,
   schedule: routine.schedule.text,
   until: routine.until,
   model: routine.model,
