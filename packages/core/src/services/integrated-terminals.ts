@@ -1,4 +1,4 @@
-import { isAbsolute } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import {
   findExecutable,
   isPathInside,
@@ -185,6 +185,19 @@ export class IntegratedTerminalService {
       status: "exited",
       endedAt: terminal.endedAt ?? new Date().toISOString(),
     };
+  }
+
+  /**
+   * Closes every terminal opened at or inside `folder`, whatever its state,
+   * because the folder is about to be deleted.
+   */
+  async closeInside(folder: string): Promise<void> {
+    for (const terminal of this.repositories.listIntegratedTerminals())
+      if (
+        resolve(terminal.workingDirectory) === resolve(folder) ||
+        isPathInside(folder, terminal.workingDirectory)
+      )
+        await this.close(terminal.id).catch(() => undefined);
   }
 
   async reconcile(liveSessions?: ReadonlySet<string>): Promise<void> {

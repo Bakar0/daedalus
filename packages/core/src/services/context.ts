@@ -146,6 +146,7 @@ export async function createApplicationContext(
     workspaces,
     config,
     () => options.onRepositoriesChanged?.(),
+    (folder) => terminals.closeInside(folder),
   );
   agents = new AgentService(
     repositories,
