@@ -15,10 +15,10 @@ export const SESSION_COLORS = [
 export type SessionColor = (typeof SESSION_COLORS)[number];
 
 /**
- * What a session can be granted on top of being a session. Routines is the
- * only one so far.
+ * What a session can be granted on top of being a session: routines, and
+ * orchestration, which makes the session the lead of a team.
  */
-export type AbilityId = "routines";
+export type AbilityId = "routines" | "orchestration";
 
 /**
  * An ability a session holds. Its data hangs off `id`, which stays the same
@@ -33,7 +33,10 @@ export interface SessionAbility {
   enabled: boolean;
   /** The user's Pause: delivery stops, the ability stays granted. */
   paused: boolean;
-  /** For routines: `purpose`, what the session's routines are for. */
+  /**
+   * For routines: `purpose`, what the session's routines are for. For
+   * orchestration: `goal`, what the team is working toward.
+   */
   config: Record<string, string>;
   /** A line Daedalus still has to type into the session. */
   pendingNote: string | null;
@@ -124,4 +127,38 @@ export interface RoutineReport {
   resolvedAt: string | null;
   closedAt: string | null;
   reopenCount: number;
+}
+
+/** Who wrote a team chat message: the lead, the user, or a member's handle. */
+export type TeamAuthor = string;
+
+/** One message in a team's chat. */
+export interface TeamMessage {
+  id: number;
+  /** The lead's orchestration ability id. */
+  teamId: UUID;
+  author: TeamAuthor;
+  body: string;
+  /** The handles it was pushed to: `lead` or members' handles. */
+  tags: string[];
+  createdAt: string;
+}
+
+/** What one reader of a team chat has read and been delivered. */
+export interface TeamCursor {
+  teamId: UUID;
+  handle: string;
+  /** The last message it read with `team chat`. */
+  readThrough: number;
+  /** The last message that tags it and reached its session. */
+  deliveredThrough: number;
+  /** Why the last delivery failed, or null after one succeeded. */
+  lastError: string | null;
+  lastAttemptAt: string | null;
+}
+
+/** A member's place in a team: the team, and its handle in the chat. */
+export interface TeamMembership {
+  teamId: UUID;
+  handle: string;
 }

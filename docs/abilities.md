@@ -2,7 +2,8 @@
 
 Every agent in Daedalus is an ordinary session. A session can be named,
 pinned and colored, and it can hold abilities: things Daedalus adds to it on
-top of being a session. Routines is the only ability so far.
+top of being a session. There are two: routines, and orchestration, which
+makes a session the lead of a team.
 
 ## Name, pin and color
 
@@ -37,14 +38,19 @@ daedal session revoke <session> routines
 daedal session abilities <session>
 ```
 
-- **At creation**, the launch prompt gets one line saying what the session
-  holds and which skill to follow.
-- **To a running session**, Daedalus types one note into it under the
-  delivery rule below. Until then `session abilities` shows the note as
-  waiting.
-- **Revoke** stops what the ability does and types a note saying so. The row
-  and its data stay, so granting it again brings everything back. Tasks
-  already filed stay on the board.
+- **Routines tell the session nothing**, at creation or on a grant. A line
+  in the first prompt made the agent act before the user asked for
+  anything. The session finds the `daedalus-routines` skill when the user
+  asks for a routine, a run arrives as the run skill's own command, and the
+  `routine` commands refuse a session without the ability. The app's
+  Routines panel tells the user how to ask instead.
+- **Orchestration** adds one line to the launch prompt saying what the
+  session holds and which skill to follow. Granted to a running session,
+  Daedalus sends one note, as described under Delivery below; until then
+  `session abilities` shows the note as waiting.
+- **Revoke** stops what the ability does; orchestration also sends a note
+  saying so. The row and its data stay, so granting it again brings
+  everything back. Tasks already filed stay on the board.
 - **Archive** pauses what a session holds; **restore** resumes it.
 - Abilities work on Claude and Codex sessions. A terminal or a custom command
   cannot hold one.
@@ -110,7 +116,7 @@ most one run per routine waits: a slot that comes due while a run waits adds
 nothing, and the run counts the wait in `{{missed}}`. A slot that comes due
 while the routine's run is running is skipped.
 
-Daedalus types the oldest waiting run into the session when all of these
+Daedalus sends the oldest waiting run to the session when all of these
 hold:
 
 1. The ability is enabled and not paused, and the session is running.
@@ -120,10 +126,11 @@ hold:
    a question: Claude draws a real question or permission dialog in place of
    the box. Such a badge comes from the agent's own `daedal attention` or
    from one of the session's background agents. The badge stays on the card.
-3. Its input box is empty. Daedalus reads the pane with its escape codes just
+3. Its input box is empty (typed runs only). Daedalus reads the pane with its escape codes just
    before typing and ignores dim text, which is a placeholder: Claude's
    suggested next prompt, or Codex's "Ask Codex to do anything".
-4. Nobody pressed a key in the session's terminal in the last 2 minutes.
+4. Nobody pressed a key in the session's terminal in the last 2 minutes
+   (typed runs only).
    Scrolling and selecting are not keystrokes. The host keeps this in memory,
    so after an app restart nothing holds.
 5. No handoff is pending.
@@ -132,10 +139,31 @@ hold:
    session hands each run to a background subagent, and 1 for Codex, which
    does each run itself.
 
-The line is `/daedalus-routine <run-id>` for Claude and
-`$daedalus-routine <run-id>` for Codex, followed by a second Enter that
-Codex's skill popup needs. A dev build's skills carry its channel suffix. The
-grant and revoke notes, and the handoff below, go in under the same rule.
+A Claude session gets the run through its inbox, nothing typed: "Daedalus:
+routine run <id> is due. Carry it out now with the daedalus-routine skill,
+for run id <id>." Every Claude session Daedalus launches has an inbox: a
+named pipe at `<home>/inbox/<session>.fifo`, readable only by the user, and
+a hook on `Stop` and `SessionStart` with `asyncRewake` that waits on it in a
+`/bin/sh` of about 2 MB. Daedalus writes the line without blocking; when no
+waiter is reading, the session is in a turn and the run waits. The waiter
+prints the line to stderr and exits 2, and Claude wakes with it as a hook
+note, so it never shows as something the user sent and never touches their
+draft. A waiter stays alive through a turn the user starts, so rule 2 still
+applies. Rules 3 and 4 do not: nothing is typed.
+
+A Codex session, or a Claude session launched before inboxes existed, gets
+the line typed: `$daedalus-routine <run-id>` for Codex, followed by a second
+Enter that Codex's skill popup needs, and `/daedalus-routine <run-id>` for
+Claude. A dev build's skills carry its channel suffix.
+
+The grant and revoke notes and the handoff request below go to a Claude
+session's inbox too, but to the mailbox file beside the pipe
+(`<session>.fifo.mail`), because they must arrive whatever the session is
+doing. Daedalus appends the note and pokes the pipe. A waiter that is
+reading prints the mailbox at once; otherwise the session is in a turn,
+and the waiter that `Stop` starts when the turn ends prints it. None of the
+delivery rules hold them. A Codex session, or an older Claude session, gets
+them typed under the same rules as a run.
 
 Each change in why a session's runs are held is logged as a `routines` event
 in the app log, such as "Argus: holding, you typed in this session".
@@ -182,3 +210,120 @@ and an urgent flag. Only the session calls `daedal routine report`.
 - A run with no `routine done` before its timeout fails. After 3 failures in
   a row the session's card gets an attention badge.
 - A session holding routines ends each turn `idle`, not `done`.
+
+## Orchestration and teams
+
+A session holding the orchestration ability leads a team: sessions working
+toward one goal. The lead plans the work, adds members, and sends each one
+the decisions that affect it. Members are ordinary sessions the user can open,
+answer and hand off. The user is above the lead and can add a member too.
+
+In the app:
+
+- **Orchestration** is a switch in Create session and in a session's card
+  menu, like Routines. A member's menu does not offer it.
+- A lead's card has a **+** that adds a member: a name, which becomes its
+  `@handle`, a model, and optional **Instructions**. The member runs on the
+  lead's provider, in its workspace and in its color. Without instructions
+  it starts knowing only its team, its lead and the goal, says it is ready,
+  and waits for the user to instruct it in its own session; the lead is
+  told so in the chat.
+- Members wear their lead's color, and changing the lead's color changes
+  theirs.
+- In the session list, a lead's card says **Team lead** and a member's says
+  its `@handle`. Members are listed right under their lead and indented. The
+  grouping is only how the list is drawn; dragging changes the stored order
+  as before.
+- A lead's or member's terminal has a **Team** bar. Its panel shows the
+  goal, which can be edited, each member with its status and any delivery
+  that failed, the newest 100 messages of the chat, and a box to post as
+  the user. The open panel reads the team again every 4 seconds.
+
+```
+daedal agent spawn --workspace <w> --provider claude --name "Checkout API" --ability orchestration
+daedal agent spawn --team --name server --message "<instructions>"   # inside the lead
+daedal agent spawn --team "Checkout API" --message "<instructions>"  # the user
+daedal team say "@server the token field is access_token"
+daedal team chat [--all]
+daedal team list
+daedal team goal "<text>"
+```
+
+The team is the lead's `session_abilities` row: its id is the team id, and its
+`goal` config is the shared goal. A handoff moves the ability to the successor,
+so the team follows the lead with no other change. A member records its team
+in `agent_sessions.team_id` and its handle in `team_handle`; a member's
+handoff successor takes both, and the predecessor leaves the team.
+
+- **Members** start in the lead's workspace on the lead's provider; a team
+  never mixes Claude and Codex. A task is optional. The handle comes from
+  `--name`, else the task title, else `member`, with `-2`, `-3` for repeats.
+  `lead`, `user`, `daedalus` and `all` are reserved. The launch prompt names
+  the team, the lead, the other members and the goal, and points to the
+  `daedalus-team` skill.
+- **The user adds a member** with `--team <lead>`. Daedalus then posts in the
+  chat, as `daedalus` and tagging only the lead, who was added with which
+  instructions. The lead manages that member like its own.
+- **Status notes.** When a member needs the user, at most as often as the
+  user is notified about it, and when it stops or is archived, Daedalus
+  posts a note in the chat as `daedalus`, tagging only the lead: "@lead
+  @server needs the user: …" or "@lead @server stopped running.". A lead
+  needing the user posts nothing, and neither does a handoff.
+- **Pausing and ending a team.** Archiving the lead, by hand or by quitting
+  the app with "Quit and stop sessions", pauses the team: members keep their
+  handle and color, messages to the lead wait for it, no member can be added,
+  and the app marks members "lead archived". Restoring the lead resumes the
+  team and sends what waited. Only revoking the ability (Orchestration off,
+  which asks to confirm "End team") ends a team: every member's team is
+  cleared and they keep running as plain sessions. A member cannot be granted
+  orchestration.
+
+### The chat
+
+`team_messages` stores every post: the team, the author (`lead`, `user`,
+`daedalus` or a handle), the body and the tags. Tags decide who is told:
+`@<handle>` and `@lead` push the message into that session, `@all` into every
+one but the author's, and `@user` reaches no session. An unknown tag is
+refused with the list of handles; a message that tags no session is stored
+with a warning. The lead is not copied on members' messages to each other.
+
+Delivery runs in the process that posts, so it works with the app closed.
+Each reader has a row in `team_cursors`: `delivered_through`, the last tagged
+message that reached its session, and `read_through`, the last one `team
+chat` printed to it. One delivery carries every waiting message that tags the
+reader, as `[team "<name>"] <author>: <text>` blocks, and a footer counting
+the other new messages in the chat. The cursor moves under a write lock
+before the send, so two processes never send the same message, and moves
+back if the send fails. A failure is kept in `last_error`, shown by
+`team list`, and the send is tried again on the next post, on `team chat` and
+`team list`, on the session's own `SessionStart` and `Stop` hooks, and when a
+spawn, restore or revive has the session running. A resumed session sits
+idle, so its hooks alone would not deliver. An archived member can be
+tagged; the message waits until it is restored. `@all` reaches live sessions
+only.
+
+- **Claude** sessions get the message on their inbox socket. Daedalus finds
+  the live `<claudeHome>/sessions/<pid>.json` whose `sessionId` is the
+  session's, and writes one line to its `messagingSocketPath`:
+  `{"type":"user","message":{"role":"user","content":...},"from":...,"session_id":...}`.
+  Claude shows it as a message from another session, with `from` as the
+  sender. The line format comes from Claude's debug log, not its public
+  docs, so a Claude update can break it; the failure then shows in
+  `team list`. Leads and members launch with `crossSessionInbound: "accept"`
+  in Daedalus's settings, because a session in bypassPermissions mode would
+  otherwise hold each message behind an approval dialog. A session granted
+  orchestration while running has not got that setting until it is
+  relaunched.
+- **Codex** sessions get it through `codex queue --thread <thread> --message
+<text>`, run with the session's account. A busy session runs it after its
+  current turn, as a user turn; only the `[team ...]` prefix and the skill
+  mark it as a teammate's.
+
+Neither path types into the session's pane, so it never touches what the user
+is typing. Messages the user posts reach Claude members as peer messages too;
+an instruction that needs the user's own authority is typed in the member's
+session directly.
+
+The lead keeps the plan, the members, the contracts between them and every
+decision in `TEAM.md` in its working directory (the `daedalus-orchestration`
+skill). A handoff successor reads it first.

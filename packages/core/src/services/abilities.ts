@@ -13,23 +13,30 @@ import { channelArtifactName } from "./skills";
 export const ROUTINES_SKILL = "daedalus-routines";
 /** The managed skill a session follows to carry out one delivered run. */
 export const ROUTINE_RUN_SKILL = "daedalus-routine";
+/** The lead's playbook. */
+export const ORCHESTRATION_SKILL = "daedalus-orchestration";
+/** How every member of a team, and its lead, talks in the team chat. */
+export const TEAM_SKILL = "daedalus-team";
+/** Where a lead keeps its team's state, in its own working directory. */
+export const TEAM_FILE = "TEAM.md";
 
 /**
  * What an ability is: a definition in code. Its data, if it has any, hangs
  * off the `session_abilities` row; its skills are Daedalus managed skills
- * every session can see; what it adds to a session is a line in the launch
- * prompt, or a typed note when it is granted to a session already running.
+ * every session can see. An ability that has to tell the session adds a line
+ * to the launch prompt, or types a note when it is granted to a session
+ * already running. One whose skills find their own way in says nothing.
  */
 export interface AbilityDefinition {
   id: AbilityId;
   label: string;
   providers: ReadonlyArray<Extract<AgentProviderName, "claude" | "codex">>;
   /** Added to the launch prompt of a session that holds it. */
-  launchLine(skill: (id: string) => string): string;
+  launchLine?(skill: (id: string) => string): string;
   /** Typed into a running session the ability was just granted to. */
-  grantNote(skill: (id: string) => string): string;
+  grantNote?(skill: (id: string) => string): string;
   /** Typed into a running session the ability was just taken from. */
-  revokeNote(skill: (id: string) => string): string;
+  revokeNote?(skill: (id: string) => string): string;
 }
 
 export const ABILITIES: Readonly<Record<AbilityId, AbilityDefinition>> = {
@@ -37,12 +44,22 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilityDefinition>> = {
     id: "routines",
     label: "Routines",
     providers: ["claude", "codex"],
+    // Routines say nothing to the session. A line in the first prompt made
+    // the agent act on it before the user asked for anything. The session
+    // finds the routines skill when the user asks for a routine, a run
+    // arrives as the run skill's own command, and the routine commands
+    // refuse a session without the ability. The app tells the user instead.
+  },
+  orchestration: {
+    id: "orchestration",
+    label: "Orchestration",
+    providers: ["claude", "codex"],
     launchLine: (skill) =>
-      `You hold the Daedalus routines ability: the user can ask you for routines, checks that run on a schedule. Create and change them with the ${skill(ROUTINES_SKILL)} skill. When Daedalus types a ${skill(ROUTINE_RUN_SKILL)} line with a run id, carry out that run with the ${skill(ROUTINE_RUN_SKILL)} skill.`,
+      `You hold the Daedalus orchestration ability: you lead a team of sessions toward one goal. You plan the work, add members with 'daedal agent spawn --team', and talk with them in the team chat ('daedal team say', 'daedal team chat', 'daedal team list'). Follow the ${skill(ORCHESTRATION_SKILL)} skill, and the ${skill(TEAM_SKILL)} skill for the chat. Keep the plan, the members, the contracts between them and every decision in ${TEAM_FILE} in your working directory; if it exists, read it before anything else.`,
     grantNote: (skill) =>
-      `Daedalus: this session now holds the routines ability. Read the ${skill(ROUTINES_SKILL)} skill now, then wait for the user. When Daedalus types a ${skill(ROUTINE_RUN_SKILL)} line with a run id, carry out that run with the ${skill(ROUTINE_RUN_SKILL)} skill.`,
+      `Daedalus: this session now holds the orchestration ability and leads a team. Read the ${skill(ORCHESTRATION_SKILL)} skill now, then wait for the user.`,
     revokeNote: () =>
-      "Daedalus: the routines ability was removed from this session. Daedalus will not deliver routine runs here any more; do not run routine commands.",
+      "Daedalus: the orchestration ability was removed from this session. Your team has ended and its members keep running as plain sessions; do not run team commands.",
   },
 };
 
@@ -138,8 +155,9 @@ export class AbilityService {
 
   /** What a session holding these abilities is told at launch. */
   launchLines(abilities: readonly AbilityId[]): string[] {
-    return abilities.map((id) =>
-      ABILITIES[id].launchLine((skill) => this.skillName(skill)),
+    return abilities.flatMap(
+      (id) =>
+        ABILITIES[id].launchLine?.((skill) => this.skillName(skill)) ?? [],
     );
   }
 
@@ -164,8 +182,13 @@ export class AbilityService {
       );
     const [ability] = this.validate(session, [abilityId]) as [AbilityId];
     const definition = ABILITIES[ability];
+    if (ability === "orchestration" && session.teamId)
+      throw new DaedalusError(
+        "CONFLICT",
+        `'${session.name}' is a member of a team, and a member cannot lead one`,
+      );
     const note = options.live
-      ? definition.grantNote((skill) => this.skillName(skill))
+      ? (definition.grantNote?.((skill) => this.skillName(skill)) ?? null)
       : null;
     const at = this.now().toISOString();
     const existing = this.repositories.abilities.findForSession(
@@ -218,7 +241,9 @@ export class AbilityService {
       paused: false,
       pendingNote:
         session && !session.archivedAt
-          ? ABILITIES[ability].revokeNote((skill) => this.skillName(skill))
+          ? (ABILITIES[ability].revokeNote?.((skill) =>
+              this.skillName(skill),
+            ) ?? null)
           : null,
       revokedAt: this.now().toISOString(),
     };

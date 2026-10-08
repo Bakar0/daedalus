@@ -243,4 +243,117 @@ describe("runMigrations", () => {
     ).toEqual({ position: 1 });
     ordered.close();
   });
+  test("a foreign-keys-off migration rolls back when it breaks a key", async () => {
+    const home = await mkdtemp(join(tmpdir(), "daedalus-fk-off-"));
+    cleanup.push(home);
+    const migrations = join(home, "migrations");
+    await mkdir(migrations);
+    await Bun.write(
+      join(migrations, "001_parent.sql"),
+      "CREATE TABLE parent (id TEXT PRIMARY KEY); CREATE TABLE child (parent_id TEXT REFERENCES parent(id));",
+    );
+    await Bun.write(
+      join(migrations, "002_broken.sql"),
+      "-- daedalus:foreign-keys-off\nINSERT INTO child VALUES ('missing');",
+    );
+    const databasePath = join(home, "state.db");
+    await expect(runMigrations(databasePath, migrations)).rejects.toThrow(
+      "002_broken.sql broke foreign keys in child",
+    );
+    const database = new Database(databasePath);
+    expect(
+      database.query("SELECT version FROM schema_migrations").all(),
+    ).toEqual([{ version: "001_parent.sql" }]);
+    expect(database.query("SELECT * FROM child").all()).toEqual([]);
+    database.close();
+  });
+
+  test("teams keep every routine, run and report through the abilities rebuild", async () => {
+    const home = await mkdtemp(join(tmpdir(), "daedalus-teams-"));
+    cleanup.push(home);
+    const migrations = join(home, "migrations");
+    const source = join(import.meta.dir, "../../../../migrations");
+    await mkdir(migrations);
+    const earlier = (await readdir(source))
+      .filter((file) => file.endsWith(".sql") && file < "020_")
+      .sort();
+    for (const file of earlier)
+      await Bun.write(join(migrations, file), Bun.file(join(source, file)));
+    const databasePath = join(home, "state.db");
+    await runMigrations(databasePath, migrations);
+
+    const database = new Database(databasePath);
+    database.exec(`
+      INSERT INTO workspaces (id, slug, name, path, created_at, updated_at, task_id_prefix)
+      VALUES ('w1', 'demo', 'Demo', '/tmp/demo', 'now', 'now', 'demo');
+      INSERT INTO tasks (id, workspace_id, title, description, status, priority, created_at, updated_at, number)
+      VALUES ('t1', 'w1', 'Fix', '', 'todo', 'normal', 'now', 'now', 1);
+      INSERT INTO agent_sessions (id, workspace_id, task_id, name, provider, kind, tmux_session, command, args, working_directory, status, started_at)
+      VALUES ('s1', 'w1', NULL, 'Watcher', 'claude', 'agent', 'tmux-s1', 'claude', '[]', '/tmp/demo', 'running', 'now');
+      INSERT INTO session_abilities (id, session_id, ability, config, granted_at)
+      VALUES ('ab1', 's1', 'routines', '{"purpose":"watch CI"}', 'now');
+      INSERT INTO routines (id, ability_id, name, schedule, timeout_ms, output, body, created_at, updated_at)
+      VALUES ('r1', 'ab1', 'ci', '{"kind":"every","everyMs":60000,"text":"every 1m"}', 60000, 'task', 'check CI', 'now', 'now');
+      INSERT INTO routine_runs (ability_id, routine, status, queued_at)
+      VALUES ('ab1', 'ci', 'done', 'now');
+      INSERT INTO routine_reports (id, ability_id, routine, report_key, title, task_id, state, opened_at, last_seen_at)
+      VALUES ('rep1', 'ab1', 'ci', 'build-1', 'Build broke', 't1', 'open', 'now', 'now');
+    `);
+    database.close();
+
+    await Bun.write(
+      join(migrations, "020_teams.sql"),
+      Bun.file(join(source, "020_teams.sql")),
+    );
+    await runMigrations(databasePath, migrations);
+
+    const migrated = new Database(databasePath);
+    expect(
+      migrated
+        .query("SELECT id, session_id, ability, config FROM session_abilities")
+        .all(),
+    ).toEqual([
+      {
+        id: "ab1",
+        session_id: "s1",
+        ability: "routines",
+        config: '{"purpose":"watch CI"}',
+      },
+    ]);
+    expect(migrated.query("SELECT id FROM routines").all()).toEqual([
+      { id: "r1" },
+    ]);
+    expect(migrated.query("SELECT routine FROM routine_runs").all()).toEqual([
+      { routine: "ci" },
+    ]);
+    expect(
+      migrated.query("SELECT id, task_id FROM routine_reports").all(),
+    ).toEqual([{ id: "rep1", task_id: "t1" }]);
+    migrated.exec("PRAGMA foreign_keys = ON");
+    migrated.exec(`
+      INSERT INTO session_abilities (id, session_id, ability, granted_at)
+      VALUES ('ab2', 's1', 'orchestration', 'now');
+      UPDATE agent_sessions SET team_id = 'ab2', team_handle = 'worker' WHERE id = 's1';
+      INSERT INTO team_messages (team_id, author, body, tags, created_at)
+      VALUES ('ab2', 'user', 'hello', '["lead"]', 'now');
+    `);
+    // The children still point at the rebuilt table: deleting the session
+    // cascades through it into routines and the team chat.
+    migrated.exec("DELETE FROM agent_sessions WHERE id = 's1'");
+    for (const table of [
+      "session_abilities",
+      "routines",
+      "routine_runs",
+      "routine_reports",
+      "team_messages",
+    ])
+      expect(
+        migrated
+          .query<{ count: number }, []>(
+            `SELECT count(*) AS count FROM ${table}`,
+          )
+          .get(),
+      ).toEqual({ count: 0 });
+    migrated.close();
+  });
 });

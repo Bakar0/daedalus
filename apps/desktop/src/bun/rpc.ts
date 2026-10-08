@@ -21,6 +21,9 @@ import {
   type RoutineRun,
   type RoutinesStatus,
   type SessionAbility,
+  type Team,
+  type TeamMessage,
+  USER_HANDLE,
   type SessionAttention,
   type Task,
   type Workspace,
@@ -44,6 +47,9 @@ import type {
   RoutinesDetailDto,
   RoutinesStatusDto,
   SessionAbilityDto,
+  TeamDetailDto,
+  TeamDto,
+  TeamMessageDto,
   RpcResult,
   SessionAttentionDto,
   TaskDto,
@@ -222,6 +228,7 @@ export async function desktopSnapshot(
     attention: context.activity.listAttention().map(sessionAttentionDto),
     toasts: context.notifications.pending("toast").map(toastDto),
     abilities: context.repositories.abilities.list().map(sessionAbilityDto),
+    teams: context.teams.list().map(teamDto),
     routines: context.abilities
       .holders("routines")
       .map((ability) =>
@@ -309,6 +316,50 @@ const sessionAbilityDto = (ability: SessionAbility): SessionAbilityDto => ({
   grantedAt: ability.grantedAt,
 });
 
+const teamDto = (team: Team): TeamDto => ({
+  id: team.id,
+  leadId: team.lead.id,
+  name: team.name,
+  goal: team.goal,
+});
+
+const teamMessageDto = (message: TeamMessage): TeamMessageDto => ({
+  id: message.id,
+  author: message.author,
+  body: message.body,
+  tags: [...message.tags],
+  createdAt: message.createdAt,
+});
+
+/** How many messages the Team panel shows. */
+const TEAM_PANEL_MESSAGES = 100;
+
+async function teamDetail(
+  context: ApplicationContext,
+  teamId: string,
+): Promise<TeamDetailDto> {
+  await context.teams.flush(teamId);
+  const { team, members } = context.teams.status(teamId);
+  const { messages } = context.teams.chat(teamId, USER_HANDLE, {
+    all: true,
+    limit: TEAM_PANEL_MESSAGES,
+  });
+  return {
+    team: teamDto(team),
+    members: members.map((member) => ({
+      handle: member.handle,
+      role: member.role,
+      sessionId: member.session.id,
+      name: member.session.name,
+      status: member.session.archivedAt ? "archived" : member.session.status,
+      unread: member.unread,
+      undelivered: member.undelivered,
+      lastError: member.lastError,
+    })),
+    messages: messages.map(teamMessageDto),
+  };
+}
+
 const routinesStatusDto = (status: RoutinesStatus): RoutinesStatusDto => ({
   abilityId: status.ability.id,
   sessionId: status.ability.sessionId,
@@ -346,6 +397,7 @@ const routineDto = (
   lastRun: RoutineRun | null,
 ): RoutineDto => ({
   name: routine.name,
+  prompt: routine.body,
   schedule: routine.schedule.text,
   until: routine.until,
   model: routine.model,
@@ -430,6 +482,21 @@ export function createDesktopRequestHandlers(
       ),
     routinesDetail: ({ sessionId }) =>
       result(() => routinesDetail(context, sessionId)),
+    teamDetail: ({ teamId }) => result(() => teamDetail(context, teamId)),
+    teamSay: ({ teamId, body }) =>
+      mutate(async () => {
+        const said = await context.teams.say({
+          team: teamId,
+          author: USER_HANDLE,
+          body,
+        });
+        return {
+          message: teamMessageDto(said.message),
+          warnings: said.warnings,
+        };
+      }),
+    teamGoal: ({ teamId, goal }) =>
+      mutate(() => teamDto(context.teams.setGoal(teamId, goal))),
     routinesControl: ({ sessionId, action }) =>
       mutate(() =>
         sessionAbilityDto(
@@ -857,8 +924,27 @@ export function createDesktopRequestHandlers(
       ),
     accountSignOut: ({ provider, account }) =>
       mutate(() => context.accounts.signOut(provider, account)),
-    agentSpawn: (params) =>
-      mutate(async () => agentDto(await context.agents.spawn(params))),
+    agentSpawn: ({ teamId, ...params }) =>
+      mutate(async () =>
+        agentDto(
+          teamId
+            ? (
+                await context.teams.spawnMember({
+                  team: teamId,
+                  addedBy: "user",
+                  instructions: params.message ?? "",
+                  ...(params.name ? { name: params.name } : {}),
+                  ...(params.taskId ? { taskId: params.taskId } : {}),
+                  ...(params.provider ? { provider: params.provider } : {}),
+                  ...(params.model ? { model: params.model } : {}),
+                  ...(params.account !== undefined
+                    ? { account: params.account }
+                    : {}),
+                })
+              ).session
+            : await context.agents.spawn(params),
+        ),
+      ),
     agentSend: ({ id, text }) =>
       mutate(async () => agentDto(await context.agents.send(id, text))),
     agentStop: ({ id, force }) =>

@@ -81,6 +81,8 @@ const session = (
   endedAt: null,
   providerSessionId: null,
   account: null,
+  teamId: null,
+  teamHandle: null,
   archivedAt: null,
   resumeCount: 0,
   lostReason: null,

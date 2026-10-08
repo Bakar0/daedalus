@@ -888,3 +888,167 @@ describe("daedal CLI contract", () => {
     });
   });
 });
+
+describe("daedal team", () => {
+  test("a lead adds a member, the user adds one, and they talk in the chat", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      // Stands in for Codex: shows its ready screen, then sits on stdin.
+      const fakeCodex = join(home, "fake-codex");
+      await Bun.write(
+        fakeCodex,
+        "#!/bin/sh\necho 'Ask Codex to do anything'\nexec cat\n",
+      );
+      await runCommand("chmod", ["+x", fakeCodex]);
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { codex: { executable: fakeCodex, args: [] } },
+        }),
+      );
+      const env = {
+        CODEX_HOME: join(home, "codex"),
+        DAEDALUS_SESSION_ID: "",
+      };
+      const json = async (args: string[], cwd?: string) => {
+        const result = await cli(
+          home,
+          [...args, "--json"],
+          env,
+          undefined,
+          cwd,
+        );
+        expect(result.stderr).toBe("");
+        expect(result.exitCode).toBe(0);
+        return JSON.parse(result.stdout).data;
+      };
+      try {
+        const workspace = await json(["workspace", "create", "Shop"]);
+        const leader = await json([
+          "agent",
+          "spawn",
+          "--workspace",
+          workspace.id,
+          "--provider",
+          "codex",
+          "--name",
+          "Checkout API",
+          "--ability",
+          "orchestration",
+        ]);
+
+        // Inside the lead's folder, a bare --team is its own team.
+        const server = await json(
+          [
+            "agent",
+            "spawn",
+            "--team",
+            "--name",
+            "Server",
+            "--message",
+            "Build the endpoints.",
+          ],
+          leader.workingDirectory,
+        );
+        expect(server).toMatchObject({ teamHandle: "server", note: null });
+
+        // The user adds one from outside, naming the lead.
+        const docs = await json([
+          "agent",
+          "spawn",
+          "--team",
+          "Checkout API",
+          "--name",
+          "Docs",
+          "--message",
+          "Write the guide.",
+        ]);
+        expect(docs.teamHandle).toBe("docs");
+        expect(docs.note.message).toMatchObject({
+          author: "daedalus",
+          tags: ["lead"],
+        });
+        // The fake Codex has no thread, so the send fails and says why.
+        expect(docs.note.deliveries[0]).toMatchObject({
+          handle: "lead",
+          delivered: false,
+        });
+
+        // A member posts as its handle.
+        const said = await json(
+          ["team", "say", "@docs", "the API is in TEAM.md"],
+          server.workingDirectory,
+        );
+        expect(said.message).toMatchObject({
+          author: "server",
+          body: "@docs the API is in TEAM.md",
+          tags: ["docs"],
+        });
+
+        const unknown = await cli(
+          home,
+          ["team", "say", "@nobody hi"],
+          env,
+          undefined,
+          server.workingDirectory,
+        );
+        expect(unknown.exitCode).not.toBe(0);
+        expect(unknown.stderr).toContain("is called @nobody");
+
+        const untagged = await cli(home, ["team", "say", "status?"], env);
+        expect(untagged.exitCode).toBe(0);
+        expect(untagged.stdout).toContain(
+          "Warning: The message tags no session",
+        );
+
+        const chat = await json(["team", "chat"], docs.workingDirectory);
+        expect(chat.messages.map((m: { author: string }) => m.author)).toEqual([
+          "daedalus",
+          "server",
+          "user",
+        ]);
+        expect(
+          (await json(["team", "chat"], docs.workingDirectory)).messages,
+        ).toEqual([]);
+
+        const list = await json(["team", "list"]);
+        expect(
+          list.members.map((m: { handle: string; role: string }) => [
+            m.handle,
+            m.role,
+          ]),
+        ).toEqual([
+          ["lead", "lead"],
+          ["server", "member"],
+          ["docs", "member"],
+        ]);
+        expect(
+          list.members.find((m: { handle: string }) => m.handle === "lead"),
+        ).toMatchObject({ undelivered: 1 });
+        expect(
+          list.members.find((m: { handle: string }) => m.handle === "lead")
+            .lastError,
+        ).toContain("thread id");
+
+        expect(
+          (await json(["team", "goal", "Ship v2 checkout"])).team.goal,
+        ).toBe("Ship v2 checkout");
+
+        // Only the lead or the user adds members.
+        const byMember = await cli(
+          home,
+          ["agent", "spawn", "--team", "--message", "x"],
+          env,
+          undefined,
+          server.workingDirectory,
+        );
+        expect(byMember.exitCode).not.toBe(0);
+        expect(byMember.stderr).toContain("works only inside a lead's session");
+
+        const help = await cli(home, ["team", "--help"], env);
+        expect(help.stdout).toContain("daedal team say");
+      } finally {
+        await cli(home, ["shutdown", "--json"], env);
+      }
+    });
+  }, 60_000);
+});

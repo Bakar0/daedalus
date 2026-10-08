@@ -69,6 +69,7 @@ const snapshot: DesktopSnapshotDto = {
   shipped: [],
   toasts: [],
   abilities: [],
+  teams: [],
   routines: [],
   routineReports: [],
   settings: {

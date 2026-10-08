@@ -51,6 +51,7 @@ const snapshot = {
   shipped: [],
   toasts: [],
   abilities: [],
+  teams: [],
   routines: [],
   routineReports: [],
   repositories: [

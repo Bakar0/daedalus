@@ -211,13 +211,19 @@ export class DeliveryGate {
     session: AgentSession;
     activity: AgentActivityState | undefined;
     screen: string;
+    /**
+     * The line reaches the session without typing, through its inbox, so
+     * the user's typing and draft do not hold it. It still waits for the
+     * session to be at its prompt.
+     */
+    untyped?: boolean;
   }): DeliveryHold | null {
     const { session, activity, screen } = input;
     if (session.status !== "running" || session.archivedAt)
       return { reason: "stopped", text: "the session is not running" };
     if (session.handoffRequestedAt)
       return { reason: "handoff", text: "the session is handing off" };
-    const until = this.quietUntil(session.id);
+    const until = input.untyped ? undefined : this.quietUntil(session.id);
     if (until)
       return {
         reason: "typing",
@@ -247,6 +253,7 @@ export class DeliveryGate {
             text: "the session is waiting for an answer",
           }
         : { reason: "busy", text: "the session is busy" };
+    if (input.untyped) return null;
     const box = inputBoxText(screen, session.provider);
     if (box === undefined)
       return { reason: "busy", text: "no input box is showing" };

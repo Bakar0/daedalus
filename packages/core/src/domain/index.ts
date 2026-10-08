@@ -113,6 +113,14 @@ export interface AgentSession {
    * because that folder is where its conversation is.
    */
   account: string | null;
+  /**
+   * The team this session is a member of: the lead's orchestration ability
+   * id, which a handoff of the lead carries to its successor. Null outside a
+   * team, and for the lead itself.
+   */
+  teamId: UUID | null;
+  /** Its name in the team chat (`@client-worker`), unique among members. */
+  teamHandle: string | null;
 }
 
 export interface IntegratedTerminal {

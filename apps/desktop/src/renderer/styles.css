@@ -6065,6 +6065,14 @@ dd {
 .session-card[data-color] {
   box-shadow: inset 3px 0 0 var(--session-color);
 }
+.session-team-badge {
+  color: var(--accent);
+  font-weight: 600;
+  margin-right: 6px;
+}
+.session-card[data-team-member="true"] {
+  margin-left: 14px;
+}
 .session-routines-badge {
   color: var(--session-color, var(--muted));
   font-weight: 600;
@@ -6184,6 +6192,31 @@ dd {
   box-shadow:
     0 0 0 2px var(--elevated),
     0 0 0 3.5px var(--text);
+}
+.session-team-picker {
+  align-items: center;
+  display: flex !important;
+  flex-direction: row !important;
+  justify-content: space-between;
+}
+.session-team-picker select {
+  max-width: 55%;
+}
+.session-team-picker small {
+  display: block;
+}
+.session-team-instructions {
+  display: grid;
+  gap: 4px;
+}
+.session-team-instructions strong {
+  color: var(--secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+.session-team-instructions small {
+  color: var(--muted);
+  font-size: 11px;
 }
 .session-ability-option {
   align-items: center;
@@ -6350,6 +6383,120 @@ dd {
   letter-spacing: 0.04em;
   margin: 6px 0 0;
   text-transform: uppercase;
+}
+.team-members li {
+  padding: 0;
+}
+.team-member {
+  border-radius: 8px;
+  color: inherit;
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+  text-align: left;
+  width: 100%;
+}
+.team-member:hover:not(:disabled) {
+  background: var(--raised-hover);
+}
+.team-chat {
+  display: grid;
+  gap: 8px;
+}
+.team-message {
+  border-left: 2px solid var(--line-strong);
+  display: grid;
+  gap: 2px;
+  padding-left: 8px;
+}
+.team-message[data-author="user"] {
+  border-left-color: var(--accent);
+}
+.team-message[data-author="daedalus"] {
+  border-left-color: var(--line);
+}
+.team-message-head {
+  align-items: baseline;
+  color: var(--muted);
+  display: flex;
+  font-size: 11px;
+  gap: 4px;
+}
+.team-message-head strong {
+  color: var(--secondary);
+  font-size: 11px;
+}
+.team-message-head small {
+  margin-left: auto;
+}
+.team-message p {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.team-composer {
+  display: grid;
+  gap: 6px;
+}
+.team-composer textarea {
+  font-size: 12px;
+  resize: vertical;
+  width: 100%;
+}
+.team-composer button {
+  justify-self: end;
+}
+.team-composer-warning {
+  color: var(--warning, #f0b44c);
+  font-size: 11px;
+}
+.routines-panel-howto {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--secondary);
+  display: grid;
+  font-size: 12px;
+  gap: 6px;
+  justify-items: start;
+  line-height: 1.45;
+  margin: 0;
+  padding: 10px 12px;
+}
+.routines-panel-howto button {
+  background: none;
+  border: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 0;
+}
+.routines-panel-howto button:hover:not(:disabled) {
+  background: none;
+  text-decoration: underline;
+}
+.routine-row-prompt summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+.routine-row-prompt pre {
+  background: var(--surface, rgb(0 0 0 / 0.2));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--secondary);
+  font-size: 11px;
+  line-height: 1.5;
+  margin: 6px 0 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .routines-panel-purpose {
   display: grid;

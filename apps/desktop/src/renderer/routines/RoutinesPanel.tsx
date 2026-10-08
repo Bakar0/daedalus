@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { RoutineDto, RoutinesDetailDto } from "@daedalus/protocol";
+import { useOutsideDismiss } from "../use-outside-dismiss";
 import { durationLabel, relativeTime } from "./time";
 
 const OUTPUT_LABEL: Record<RoutineDto["output"], string> = {
@@ -19,6 +20,34 @@ function lastRunLabel(routine: RoutineDto, now: number): string {
         ? "waiting"
         : run.status;
   return `${what} ${relativeTime(at, now)}`;
+}
+
+const HOW_TO_STORAGE_KEY = "daedalus.routines.howto.hidden";
+
+function howToHidden(): boolean {
+  try {
+    return window.localStorage.getItem(HOW_TO_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function hideHowTo(): void {
+  try {
+    window.localStorage.setItem(HOW_TO_STORAGE_KEY, "1");
+  } catch {
+    // Without storage the line shows again next time.
+  }
+}
+
+/** The routine's prompt, folded until asked for. */
+function RoutinePrompt({ prompt }: { prompt: string }) {
+  return (
+    <details className="routine-row-prompt">
+      <summary>Prompt</summary>
+      <pre>{prompt.trim()}</pre>
+    </details>
+  );
 }
 
 /**
@@ -48,6 +77,9 @@ export function RoutinesPanel({
   onRunNow: (name: string) => void;
   onSetEnabled: (name: string, enabled: boolean) => void;
 }) {
+  const panel = useRef<HTMLElement>(null);
+  useOutsideDismiss(panel, onClose);
+  const [showHowTo, setShowHowTo] = useState(() => !howToHidden());
   const [purpose, setPurpose] = useState(detail?.purpose ?? "");
   useEffect(() => setPurpose(detail?.purpose ?? ""), [detail?.purpose]);
   const purposeChanged = purpose.trim() !== (detail?.purpose ?? "").trim();
@@ -56,6 +88,7 @@ export function RoutinesPanel({
     <aside
       aria-label={`Routines of ${sessionName}`}
       className="routines-panel"
+      ref={panel}
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
         event.preventDefault();
@@ -76,6 +109,24 @@ export function RoutinesPanel({
       {!detail && !error && <p className="routines-panel-empty">Loading…</p>}
       {detail && (
         <>
+          {/* The session is told nothing, so this is how the user learns. */}
+          {showHowTo && (
+            <p className="routines-panel-howto">
+              <span>
+                Ask the session in plain words, like "check CI on main every 15
+                minutes".
+              </span>
+              <button
+                onClick={() => {
+                  hideHowTo();
+                  setShowHowTo(false);
+                }}
+                type="button"
+              >
+                Don't show again
+              </button>
+            </p>
+          )}
           <form
             className="routines-panel-purpose"
             onSubmit={(event) => {
@@ -109,10 +160,7 @@ export function RoutinesPanel({
               : `${detail.routines.length} routines`}
           </h3>
           {detail.routines.length === 0 ? (
-            <p className="routines-panel-empty">
-              No routines yet. Ask the session to add one, for example "check CI
-              on main every 15 minutes".
-            </p>
+            <p className="routines-panel-empty">No routines yet.</p>
           ) : (
             <ul className="routines-panel-list">
               {detail.routines.map((routine) => (
@@ -153,6 +201,7 @@ export function RoutinesPanel({
                         : ""}
                     </small>
                   )}
+                  <RoutinePrompt prompt={routine.prompt} />
                   <span className="routine-row-actions">
                     <button
                       className="quiet"
@@ -190,6 +239,7 @@ export function RoutinesPanel({
                     <small className="routine-row-meta">
                       Ask the session to use this template to add it.
                     </small>
+                    <RoutinePrompt prompt={template.prompt} />
                   </li>
                 ))}
               </ul>

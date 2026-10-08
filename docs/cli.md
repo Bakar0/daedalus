@@ -91,7 +91,8 @@ daedal agent spawn --workspace <workspace> --provider codex [--task <task-ref>] 
 daedal agent spawn --workspace <workspace> --provider claude [--task <task-ref>] [--model <model>] [--account <account>] [--message <text>]
 daedal agent spawn --workspace <workspace> --command <configured-name> [--task <task-ref>] [--message <text>]
 daedal agent spawn --workspace <workspace> --provider <codex|claude> --task <task-ref> --draft-brief
-daedal agent spawn ... [--ability routines] [--color <color>] [--pin]
+daedal agent spawn ... [--ability routines|orchestration] [--color <color>] [--pin]
+daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>] [--model <model>] [--account <account>] [--user]
 daedal agent list [--workspace <workspace>] [--running]
 daedal agent reorder --workspace <workspace> <agent-id> [<agent-id>...]
 daedal agent get <agent-id>
@@ -170,7 +171,19 @@ daedal session abilities <session>
 daedal session grant|revoke <session> <ability>
 ```
 
-Names, pins, colors and abilities, for any session. `<session>` is an id, or a name that only one live session has. The `routines` ability and the `daedal routine` commands are in [abilities.md](abilities.md).
+Names, pins, colors and abilities, for any session. `<session>` is an id, or a name that only one live session has. The `routines` and `orchestration` abilities and the `daedal routine` and `daedal team` commands are in [abilities.md](abilities.md).
+
+## Team
+
+```text
+daedal team say "<text>" [--team <lead>] [--user]
+daedal team chat [--all] [--limit <n>] [--team <lead>] [--user]
+daedal team list [--team <lead>]
+daedal team goal [<text>] [--team <lead>]
+daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>]
+```
+
+A team is a session holding the orchestration ability, its lead, and the members it or the user adds. Inside the lead or a member, `--team` defaults to its own team and a post is signed with its handle; another session's post is refused. Outside a session the author is `user`, and `--team <lead>` is needed when more than one team exists. `--user` posts as the user from inside a session's folder. `agent spawn --team` with no value adds a member to the calling lead's team; with a lead it adds one for the user and tells the lead in the chat. `team say` prints, per tagged session, whether the message reached it; `team list --json` returns each member's `undelivered` count and `lastError`. Delivery and tags are in [abilities.md](abilities.md#the-chat).
 
 ## Shutdown
 

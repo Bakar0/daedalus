@@ -49,6 +49,7 @@ const snapshot = {
   attention: [],
   toasts: [],
   abilities: [],
+  teams: [],
   routines: [],
   routineReports: [],
   settings: {

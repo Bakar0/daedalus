@@ -1,3 +1,4 @@
+import { leaveInInbox, postToInbox, usesInbox } from "./session-inbox";
 import { readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
@@ -13,6 +14,7 @@ import {
   SESSION_COLORS,
   type AgentSession,
   type SessionColor,
+  type TeamMembership,
   type Workspace,
 } from "../domain";
 import { DaedalusError } from "../errors";
@@ -482,6 +484,26 @@ export class AgentService {
     ) => unknown = () => undefined,
   ) {}
 
+  private teamLaunchLines: (member: TeamMembership) => string[] = () => [];
+
+  /** What a team member is told at launch; set by the team service. */
+  onTeamLaunch(lines: (member: TeamMembership) => string[]): void {
+    this.teamLaunchLines = lines;
+  }
+
+  private sessionRunning: (session: AgentSession) => Promise<unknown> =
+    async () => undefined;
+
+  /**
+   * Called once a spawn, restore or revive has the session running, such as
+   * to send it team messages that waited while it was not. A resumed session
+   * sits idle, so its own hooks may not fire again for a long time. Must not
+   * throw.
+   */
+  onSessionRunning(run: (session: AgentSession) => Promise<unknown>): void {
+    this.sessionRunning = run;
+  }
+
   /** Raises the badge for a session that stopped on a question at startup. */
   private askedAtStartup(session: AgentSession): void {
     void this.onStartupQuestion(session.id, startupQuestionReason(session));
@@ -851,6 +873,8 @@ export class AgentService {
     abilities?: string[];
     color?: SessionColor;
     pinned?: boolean;
+    /** The team it joins, and its handle there. A successor keeps both. */
+    team?: TeamMembership;
   }): Promise<AgentSession> {
     const workspace = await this.workspaces.getActive(input.workspace);
     const task = input.taskId ? this.tasks.get(input.taskId) : undefined;
@@ -950,9 +974,20 @@ export class AgentService {
         "VALIDATION",
         "Drafting a brief needs the task it is for",
       );
+    const team =
+      input.continueFrom?.teamId && input.continueFrom.teamHandle
+        ? {
+            teamId: input.continueFrom.teamId,
+            handle: input.continueFrom.teamHandle,
+          }
+        : input.team;
     const launchPrompt = buildAgentPrompt({
       taskNumber: task?.number,
-      message: [...this.abilities.launchLines(abilities), input.message?.trim()]
+      message: [
+        ...this.abilities.launchLines(abilities),
+        ...(team ? this.teamLaunchLines(team) : []),
+        input.message?.trim(),
+      ]
         .filter(Boolean)
         .join("\n\n"),
       mode: input.continueFrom
@@ -970,6 +1005,8 @@ export class AgentService {
           sessionName: name,
           prompt: launchPrompt,
           model,
+          acceptPeerMessages:
+            Boolean(team) || abilities.includes("orchestration"),
           additionalDirectories: prepared.references.map(
             (repository) =>
               repository.referencePath ?? repository.canonicalPath,
@@ -1003,6 +1040,8 @@ export class AgentService {
         (input.pinned ? new Date().toISOString() : null),
       color: input.continueFrom?.color ?? input.color ?? null,
       account,
+      teamId: team?.teamId ?? null,
+      teamHandle: team?.handle ?? null,
     };
     this.repositories.transaction(() => {
       this.repositories.createAgent(session);
@@ -1054,6 +1093,7 @@ export class AgentService {
       if (task && !input.terminal && !input.draftBrief && !input.continueFrom)
         this.markTaskStarted(workspace, task.id);
       if (startup === "question") this.askedAtStartup(running);
+      await this.sessionRunning(running);
       return running;
     } catch (error) {
       if (input.continueFrom)
@@ -1085,7 +1125,16 @@ export class AgentService {
    */
   async requestHandoff(id: string): Promise<AgentSession> {
     const agent = await this.requireContinuable(id);
-    await this.invokeSkill(agent.id, HANDOFF_SKILL);
+    if (usesInbox(agent)) {
+      // Left in the mailbox, so it arrives even mid-turn, and never shows
+      // as something the user typed.
+      const skill = await this.requireSkill(agent, HANDOFF_SKILL);
+      await leaveInInbox(
+        this.config,
+        agent.id,
+        `Daedalus: hand off your work to a fresh session now. Run the ${skill} skill.`,
+      );
+    } else await this.invokeSkill(agent.id, HANDOFF_SKILL);
     const requested = {
       ...agent,
       handoffRequestedAt: new Date().toISOString(),
@@ -1095,16 +1144,32 @@ export class AgentService {
   }
 
   /**
-   * Types a Daedalus managed skill into a Claude or Codex session, with its
-   * arguments: `/name args` for Claude, `$name args` for Codex. Refuses with
-   * `CONFLICT` when the skill is not installed for the session's provider.
+   * Hands a line to a running Claude session through its inbox, without
+   * typing. False when the session has no inbox or is not waiting on it.
    */
-  async invokeSkill(
-    id: string,
-    skillId: string,
-    args = "",
-  ): Promise<AgentSession> {
+  async postToInbox(id: string, line: string): Promise<boolean> {
     const agent = await this.requireRunning(id);
+    if (!usesInbox(agent)) return false;
+    return postToInbox(this.config, agent.id, line);
+  }
+
+  /**
+   * Leaves a note in a running Claude session's inbox mailbox: it arrives
+   * now if the session waits at its prompt, else when its turn ends. False
+   * when the session has no inbox.
+   */
+  async leaveNote(id: string, line: string): Promise<boolean> {
+    const agent = await this.requireRunning(id);
+    if (!usesInbox(agent)) return false;
+    await leaveInInbox(this.config, agent.id, line);
+    return true;
+  }
+
+  /** The skill's installed name, or `CONFLICT` when it is not installed. */
+  private async requireSkill(
+    agent: AgentSession,
+    skillId: string,
+  ): Promise<string> {
     if (agent.provider !== "claude" && agent.provider !== "codex")
       throw new DaedalusError(
         "CONFLICT",
@@ -1119,9 +1184,28 @@ export class AgentService {
         "CONFLICT",
         `The ${skillId} skill is not installed for ${agent.provider}. Turn it on in Settings, Skills, or with 'daedal skill enable ${skillId}'.`,
       );
+    return skillName;
+  }
+
+  /**
+   * Types a Daedalus managed skill into a Claude or Codex session, with its
+   * arguments: `/name args` for Claude, `$name args` for Codex. Refuses with
+   * `CONFLICT` when the skill is not installed for the session's provider.
+   */
+  async invokeSkill(
+    id: string,
+    skillId: string,
+    args = "",
+  ): Promise<AgentSession> {
+    const agent = await this.requireRunning(id);
+    const skillName = await this.requireSkill(agent, skillId);
     await this.send(
       agent.id,
-      buildSkillInvocation(agent.provider, skillName, args),
+      buildSkillInvocation(
+        agent.provider as "claude" | "codex",
+        skillName,
+        args,
+      ),
     );
     // In Codex, `$name` opens the skill mention popup, and the first Enter
     // only picks the skill from it. The second one submits. On an empty
@@ -1256,8 +1340,14 @@ export class AgentService {
       handoff: Boolean(handoff),
     });
     // Abilities move with the work, so the routine clock follows the
-    // successor, and archiving the predecessor below does not pause them.
-    this.repositories.abilities.moveToSession(predecessor.id, session.id);
+    // successor, and archiving the predecessor below does not pause them. A
+    // lead's team is its orchestration ability, so it moves too. A member's
+    // handle now names the successor alone.
+    this.repositories.transaction(() => {
+      this.repositories.abilities.moveToSession(predecessor.id, session.id);
+      if (predecessor.teamId)
+        this.repositories.setAgentTeam(predecessor.id, null, null);
+    });
     if (input.archive === "later") return { session, predecessor };
     try {
       return {
@@ -1456,7 +1546,14 @@ export class AgentService {
   async setColor(id: string, color: string | null): Promise<AgentSession> {
     const agent = await this.get(id);
     const value = color === null ? null : sessionColor(color);
-    this.repositories.setAgentColor(agent.id, value);
+    this.repositories.transaction(() => {
+      this.repositories.setAgentColor(agent.id, value);
+      // A lead's members wear its color.
+      const team = this.abilities.held(agent.id, "orchestration");
+      if (team)
+        for (const member of this.repositories.listTeamMembers(team.id))
+          this.repositories.setAgentColor(member.id, value);
+    });
     return { ...agent, color: value };
   }
 
@@ -1571,6 +1668,9 @@ export class AgentService {
       this.repositories.updateAgent(archived);
       // Archiving pauses what the session holds; its routines and their
       // tasks stay, and restoring the session resumes them.
+      // A lead's team pauses with it: members keep their place, messages to
+      // the lead wait, and restoring the lead brings the team back. Only
+      // revoking orchestration ends a team.
       this.repositories.abilities.setPausedForSession(id, true);
     });
     // Working trees used to outlive every session that ever held one, which is
@@ -1583,7 +1683,7 @@ export class AgentService {
   }
 
   /** The Codex a restore would launch, else the one the session started with. */
-  private codexExecutable(agent: AgentSession): string | undefined {
+  codexExecutable(agent: AgentSession): string | undefined {
     const configured = this.config.agents.codex?.executable;
     return (
       (configured ? resolveAgentExecutable("codex", configured) : undefined) ??
@@ -1824,7 +1924,16 @@ export class AgentService {
           ...(await daedalusInstructionArgs(
             scoped,
             "claude",
-            await claudeDaedalusSettingsArgs(scoped, definition.args, agent.id),
+            await claudeDaedalusSettingsArgs(
+              scoped,
+              definition.args,
+              agent.id,
+              {
+                acceptPeerMessages:
+                  Boolean(agent.teamId) ||
+                  Boolean(this.abilities.held(agent.id, "orchestration")),
+              },
+            ),
           )),
           ...modelArgs,
           ...additionalDirectories,
@@ -1903,6 +2012,7 @@ export class AgentService {
       }
       this.repositories.updateAgent(restored);
       if (startup === "question") this.askedAtStartup(restored);
+      await this.sessionRunning(restored);
       return restored;
     } catch (error) {
       // A launch that got as far as tmux but not as far as a ready provider

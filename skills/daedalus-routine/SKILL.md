@@ -1,13 +1,14 @@
 ---
 name: daedalus-routine
-description: Carry out one Daedalus routine run. Daedalus types this skill with a run id into a session that holds the routines ability when one of its routines is due. Starts the run, does the check, judges what it found, and reports through daedal routine report.
+description: Carry out one Daedalus routine run. Use only when Daedalus says routine run <id> is due, in a note from its hook or a typed /daedalus-routine <id> line, and pass the run id. Starts the run, does the check, judges what it found, and reports through daedal routine report.
 argument-hint: "<run-id>"
-disable-model-invocation: true
 ---
 
 # Run a routine
 
-Daedalus typed this line because routine run `$ARGUMENTS` is due. The user
+Daedalus sent this because routine run `$ARGUMENTS` is due. If that is
+empty, the run id is the one in Daedalus's note; use it wherever this skill
+says `$ARGUMENTS`. Never start a run Daedalus did not say is due. The user
 may not be watching. Say at most one short line in the conversation, and
 nothing when the run is quiet. Never ask the user anything during a run; if
 something is missing, fail the run and say what.
@@ -36,7 +37,7 @@ already ran or cancelled it.
 **Claude.** Launch one subagent with the Agent tool, in the background, on
 the routine's model. Its prompt is the routine's prompt, then the run
 instructions below, word for word. Then end your turn at once. Do not wait
-for the subagent: Daedalus types the next due run while this one works, and
+for the subagent: Daedalus sends the next due run while this one works, and
 the subagent's result wakes you when it is done.
 
 **Codex, or any session without background subagents.** Follow the routine's

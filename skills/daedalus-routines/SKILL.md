@@ -1,13 +1,17 @@
 ---
 name: daedalus-routines
-description: Create, change and remove Daedalus routines for this session, and record the user's feedback on what they found. Use only in a session that holds the Daedalus routines ability, when the user asks for something on a schedule, asks about its routines, or gives feedback on tasks the routines made.
+description: Create, change and remove Daedalus routines for this session, and record the user's feedback on what they found. Use in a Daedalus session when the user asks for something on a schedule or a recurring check, asks about its routines, or gives feedback on tasks the routines made.
 ---
 
 # Routines
 
-This session holds the Daedalus routines ability. The user can ask you for
-routines: checks that run on a schedule while the Daedalus app is open. When
-one is due, Daedalus types a line with the routine run skill and a run id
+A session that holds the Daedalus routines ability can be asked for
+routines: checks that run on a schedule while the Daedalus app is open.
+Daedalus does not tell you whether this session holds it. Start with
+`daedal routine list`: if it says the session does not hold the routines
+ability, tell the user to turn on Routines in the session's menu in the
+Daedalus app, and stop. When
+one is due, Daedalus sends a line with the routine run skill and a run id
 into this session, and you carry out that run with that skill. What a run
 finds becomes a task on the workspace's board.
 

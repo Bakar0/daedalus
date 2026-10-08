@@ -92,12 +92,16 @@ export interface AgentSessionDto {
   color: SessionColorDto | null;
   /** The account profile it runs on, or null for the provider's default. */
   account: string | null;
+  /** The team it is a member of (the lead's orchestration ability id). */
+  teamId: string | null;
+  /** Its handle in the team chat, such as `server`. */
+  teamHandle: string | null;
 }
 
 export type SessionColorDto =
   "red" | "orange" | "gold" | "green" | "teal" | "blue" | "purple" | "pink";
 
-export type AbilityIdDto = "routines";
+export type AbilityIdDto = "routines" | "orchestration";
 
 export interface IntegratedTerminalDto {
   id: string;
@@ -668,6 +672,8 @@ export interface RoutineReportDto {
 
 export interface RoutineDto {
   name: string;
+  /** What the routine asks the session to do, before placeholders are filled. */
+  prompt: string;
   schedule: string;
   until: string | null;
   model: string | null;
@@ -693,6 +699,50 @@ export interface RoutineRunDto {
   missedMs: number;
   /** Set by Run now when the routine already had a run waiting. */
   alreadyQueued?: boolean;
+}
+
+/** A team, named after its lead's session. */
+export interface TeamDto {
+  /** The lead's orchestration ability id. */
+  id: string;
+  leadId: string;
+  name: string;
+  goal: string | null;
+}
+
+export interface TeamMemberDto {
+  handle: string;
+  role: "lead" | "member";
+  sessionId: string;
+  name: string;
+  /** The session's status, or `archived`. */
+  status: string;
+  /** Messages after its read marker that it did not write. */
+  unread: number;
+  /** Messages that tag it and have not reached its session. */
+  undelivered: number;
+  lastError: string | null;
+}
+
+export interface TeamMessageDto {
+  id: number;
+  /** `lead`, `user`, `daedalus` or a member's handle. */
+  author: string;
+  body: string;
+  tags: string[];
+  createdAt: string;
+}
+
+/** What the Team panel reads: the members and the newest messages. */
+export interface TeamDetailDto {
+  team: TeamDto;
+  members: TeamMemberDto[];
+  messages: TeamMessageDto[];
+}
+
+export interface TeamSayResultDto {
+  message: TeamMessageDto;
+  warnings: string[];
 }
 
 export interface RoutinesDetailDto {
@@ -725,6 +775,8 @@ export interface DesktopSnapshotDto {
   abilities: SessionAbilityDto[];
   /** One entry per session holding routines, for its bar and card badge. */
   routines: RoutinesStatusDto[];
+  /** Every team: a lead holding orchestration, and what it is called. */
+  teams: TeamDto[];
   /** Every routine report that has a task, for the task's card and drawer. */
   routineReports: RoutineReportDto[];
   settings: DesktopSettingsDto;
@@ -769,6 +821,11 @@ export interface DesktopRpcSchema {
         SessionAbilityDto
       >;
       routinesDetail: Request<{ sessionId: string }, RoutinesDetailDto>;
+      /** Sends what is waiting, then reads the team as the user. */
+      teamDetail: Request<{ teamId: string }, TeamDetailDto>;
+      /** Posts to the team chat as the user. */
+      teamSay: Request<{ teamId: string; body: string }, TeamSayResultDto>;
+      teamGoal: Request<{ teamId: string; goal: string }, TeamDto>;
       routinesControl: Request<
         {
           sessionId: string;
@@ -1170,6 +1227,12 @@ export interface DesktopRpcSchema {
           abilities?: AbilityIdDto[];
           color?: SessionColorDto;
           pinned?: boolean;
+          /**
+           * Joins this team as a member the user added; `message` holds its
+           * instructions, and the lead is told. The workspace and provider
+           * are the lead's.
+           */
+          teamId?: string;
         },
         AgentSessionDto
       >;

@@ -19,6 +19,7 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from "react";
 import type {
+  TeamDetailDto,
   FileLinkTargetDto,
   AppUpdateDto,
   TaskTimelineDto,
@@ -76,6 +77,7 @@ import { buildWorldModel, worldInputFromSnapshot } from "./world/world-model";
 import { TaskPriorityMenu, TaskStatusMenu } from "./TaskStatusMenu";
 import { ColorSwatches, SessionMenu } from "./SessionMenu";
 import { RoutineBar } from "./routines/RoutineBar";
+import { TeamBar, TeamPanel } from "./teams/TeamPanel";
 import { RoutinesPanel } from "./routines/RoutinesPanel";
 import {
   AgentStatusDot,
@@ -142,6 +144,19 @@ export {
   parseRememberedDirectories,
   planExplorerRefresh,
 } from "./files/explorer-state";
+
+/** The handle a member name becomes, as the core makes it. */
+function teamHandlePreview(name: string): string {
+  return (
+    name
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 32)
+      .replace(/-+$/g, "") || "member"
+  );
+}
 
 const COLLAPSED_WORKSPACES_STORAGE_KEY = "daedalus.workspaces.collapsed";
 
@@ -1783,11 +1798,22 @@ export function WorkspaceApp({
     workspaceId?: string;
     color?: SessionColorDto;
     routines?: boolean;
+    orchestration?: boolean;
+    /** The team the new session joins as a member the user added. */
+    teamId?: string;
+    /** A member's instructions, which it needs. */
+    instructions?: string;
   }>({ name: "" });
   // The Routines drawer on the selected session, and what it last read.
   const [routinesPanel, setRoutinesPanel] = useState<{
     sessionId: string;
     detail?: RoutinesDetailDto;
+    error?: string;
+  }>();
+  // The Team drawer: the team, and what it last read.
+  const [teamPanel, setTeamPanel] = useState<{
+    teamId: string;
+    detail?: TeamDetailDto;
     error?: string;
   }>();
   const [sessionLaunches, setSessionLaunches] = useState<SessionLaunchState[]>(
@@ -2721,6 +2747,22 @@ export function WorkspaceApp({
   const routinesBySession = new Map(
     (snapshot?.routines ?? []).map((status) => [status.sessionId, status]),
   );
+  // Teams by lead and by id: a lead's card and bar, and a member's.
+  const teamsByLead = new Map(
+    (snapshot?.teams ?? []).map((team) => [team.leadId, team]),
+  );
+  const teamsById = new Map(
+    (snapshot?.teams ?? []).map((team) => [team.id, team]),
+  );
+  /** The team a session leads or belongs to, and its handle there. */
+  const teamOf = (session: AgentSessionDto) => {
+    const led = teamsByLead.get(session.id);
+    if (led) return { team: led, role: "lead" as const, handle: "lead" };
+    const joined = session.teamId ? teamsById.get(session.teamId) : undefined;
+    return joined && session.teamHandle
+      ? { team: joined, role: "member" as const, handle: session.teamHandle }
+      : undefined;
+  };
   const workspaceSessionLaunches = sessionLaunches.filter((item) =>
     inScope(item.workspaceId),
   );
@@ -2815,6 +2857,7 @@ export function WorkspaceApp({
   const activeSessionRoutines = snapshot?.routines.find(
     (status) => status.sessionId === activeSession?.id,
   );
+  const activeSessionTeam = activeSession ? teamOf(activeSession) : undefined;
   // The drawer reads its runs on request, so it reads again whenever the
   // session's routine status moves: a run went in, finished or was queued.
   const openRoutinesStatus =
@@ -2835,6 +2878,14 @@ export function WorkspaceApp({
     if (routinesPanel && openRoutinesFingerprint)
       void loadRoutinesDetail(routinesPanel.sessionId);
   }, [openRoutinesFingerprint]);
+  // The chat moves without the snapshot knowing, so the open drawer reads
+  // again every few seconds.
+  const openTeamId = teamPanel?.teamId;
+  useEffect(() => {
+    if (!openTeamId) return;
+    const timer = setInterval(() => void loadTeamDetail(openTeamId), 4_000);
+    return () => clearInterval(timer);
+  }, [openTeamId]);
   const activeSessionWorkspace = activeSession
     ? workspaceById.get(activeSession.workspaceId)
     : undefined;
@@ -2868,6 +2919,10 @@ export function WorkspaceApp({
       ? workspaceById.get(sessionForm.workspaceId)
       : undefined) ??
     (showingAll ? undefined : workspace);
+  // Set when the dialog adds a member from its lead's card.
+  const memberTeam = sessionForm.teamId
+    ? teamsById.get(sessionForm.teamId)
+    : undefined;
   const workspaceDefaultModel =
     sessionWorkspace && sessionWorkspace.defaultProvider === sessionType
       ? sessionWorkspace.defaultModel
@@ -3254,6 +3309,23 @@ export function WorkspaceApp({
     setModal("session");
   }
 
+  /** The lead's + : the dialog, set up for a member of its team. */
+  function openAddMember(lead: AgentSessionDto) {
+    const team = teamsByLead.get(lead.id);
+    if (!team) return;
+    setSessionForm({
+      name: "",
+      teamId: team.id,
+      workspaceId: lead.workspaceId,
+    });
+    setSessionType(lead.provider);
+    setSessionModel("");
+    setSessionAccount("");
+    setRememberSessionModel(false);
+    setModelCatalogError(undefined);
+    setModal("session");
+  }
+
   function openRepositoryModal() {
     setSelectedRepositoryIds(new Set());
     setSelectedGitHubRepositories(new Set());
@@ -3334,7 +3406,12 @@ export function WorkspaceApp({
     event.preventDefault();
     if (!sessionWorkspace) return;
     const isTerminal = sessionType === "terminal";
-    const { color, routines } = sessionForm;
+    const { color, routines, orchestration, teamId, instructions } =
+      sessionForm;
+    const abilities = [
+      ...(routines ? (["routines"] as const) : []),
+      ...(orchestration ? (["orchestration"] as const) : []),
+    ];
     const launch: SessionLaunchState = {
       key: crypto.randomUUID(),
       workspaceId: sessionWorkspace.id,
@@ -3382,9 +3459,14 @@ export function WorkspaceApp({
         model: isTerminal || !sessionModel ? undefined : sessionModel,
         ...(!isTerminal && sessionAccount ? { account: sessionAccount } : {}),
         ...(color ? { color } : {}),
-        ...(routines && !isTerminal
-          ? { abilities: ["routines" as const] }
-          : {}),
+        ...(teamId && !isTerminal
+          ? {
+              teamId,
+              ...(instructions?.trim() ? { message: instructions.trim() } : {}),
+            }
+          : abilities.length && !isTerminal
+            ? { abilities }
+            : {}),
       });
       if (response.ok) {
         // The launch stays until the refreshed list holds its session, so the
@@ -3746,8 +3828,58 @@ export function WorkspaceApp({
   }
 
   function openRoutinesPanel(sessionId: string) {
+    setTeamPanel(undefined);
     setRoutinesPanel({ sessionId });
     void loadRoutinesDetail(sessionId);
+  }
+
+  async function setOrchestrationAbility(
+    session: AgentSessionDto,
+    granted: boolean,
+  ) {
+    if (
+      !granted &&
+      !(await askConfirm({
+        title: `Stop ${sessionName(session)} leading its team?`,
+        message:
+          "The team ends. Its members keep running as ordinary sessions, and the chat is kept.",
+        confirmLabel: "End team",
+      }))
+    )
+      return;
+    await perform(
+      client.request.sessionAbility({
+        sessionId: session.id,
+        ability: "orchestration",
+        granted,
+      }),
+    );
+    if (!granted) setTeamPanel(undefined);
+  }
+
+  async function loadTeamDetail(teamId: string) {
+    try {
+      const response = await client.request.teamDetail({ teamId });
+      setTeamPanel((current) =>
+        current?.teamId !== teamId
+          ? current
+          : response.ok
+            ? { teamId, detail: response.data }
+            : { teamId, error: response.error.message },
+      );
+    } catch (cause) {
+      setTeamPanel((current) =>
+        current?.teamId === teamId
+          ? { teamId, error: errorMessage(cause) }
+          : current,
+      );
+    }
+  }
+
+  function openTeamPanel(teamId: string) {
+    setRoutinesPanel(undefined);
+    setTeamPanel({ teamId });
+    void loadTeamDetail(teamId);
   }
 
   /** A routines request from the bar or the drawer, then a fresh drawer. */
@@ -4435,8 +4567,16 @@ export function WorkspaceApp({
     const statusView = statusViewFor(session);
     const holdsRoutines = routinesBySession.has(session.id);
     const waitingRuns = routinesBySession.get(session.id)?.waiting.length ?? 0;
+    const team = teamOf(session);
+    // An archived lead pauses its team; its members stand on their own.
+    const leadArchived =
+      team?.role === "member" &&
+      Boolean(sessionsById.get(team.team.leadId)?.archivedAt);
     return (
       <div
+        data-team-member={
+          team?.role === "member" && !leadArchived ? "true" : undefined
+        }
         className={`session-card tone-${statusView.tone} ${view === "session" && session.id === highlightedSessionId ? "selected" : ""}`}
         data-color={session.color ?? undefined}
         data-pinned={session.pinnedAt ? "true" : undefined}
@@ -4487,6 +4627,22 @@ export function WorkspaceApp({
                   title="The account this session runs on"
                 >
                   {accountName(session.provider, session.account)}
+                </span>
+              )}
+              {team && (
+                <span
+                  className="session-team-badge"
+                  title={
+                    team.role === "lead"
+                      ? `Leads the team ${team.team.name}`
+                      : leadArchived
+                        ? `Member of ${team.team.name}, whose lead is archived; restore it to continue the team`
+                        : `Member of ${team.team.name}`
+                  }
+                >
+                  {team.role === "lead"
+                    ? "Team lead"
+                    : `@${team.handle}${leadArchived ? " · lead archived" : ""}`}
                 </span>
               )}
               {holdsRoutines ? (
@@ -4577,6 +4733,17 @@ export function WorkspaceApp({
               ↻
             </button>
           )}
+          {team?.role === "lead" && session.status === "running" && (
+            <button
+              aria-label={`Add a member to ${team.team.name}`}
+              className="session-card-action session-card-hover-action"
+              onClick={() => openAddMember(session)}
+              title="Add a member to this session's team"
+              type="button"
+            >
+              +
+            </button>
+          )}
           {session.kind === "agent" &&
             (session.provider === "claude" || session.provider === "codex") && (
               <button
@@ -4628,6 +4795,11 @@ export function WorkspaceApp({
             onPin={(pinned) => void updateSession(session, { pinned })}
             onRename={() => void renameSession(session)}
             onRoutines={(granted) => void setRoutinesAbility(session, granted)}
+            orchestration={teamsByLead.has(session.id)}
+            offerOrchestration={!session.teamId}
+            onOrchestration={(granted) =>
+              void setOrchestrationAbility(session, granted)
+            }
             pinned={Boolean(session.pinnedAt)}
             routines={holdsRoutines}
           />
@@ -4777,6 +4949,20 @@ export function WorkspaceApp({
                 : Number(Boolean(right.pinnedAt)) -
                   Number(Boolean(left.pinnedAt)),
             );
+          // Members sit right under their lead when it is in this list.
+          // Display only: the stored order is what reordering changes.
+          const grouped = ordered.flatMap((session) => {
+            const team = teamOf(session);
+            if (
+              team?.role === "member" &&
+              ordered.some((item) => item.id === team.team.leadId)
+            )
+              return [];
+            const lead = teamsByLead.get(session.id);
+            return lead
+              ? [session, ...ordered.filter((item) => item.teamId === lead.id)]
+              : [session];
+          });
           return (
             <div
               aria-label={`Sessions in ${item.name}`}
@@ -4788,7 +4974,7 @@ export function WorkspaceApp({
                 data-reordering={reorder.draggingId ? "true" : undefined}
               >
                 {launches.map(renderLaunchCard)}
-                {ordered.map((session) => renderSessionCard(session, reorder))}
+                {grouped.map((session) => renderSessionCard(session, reorder))}
               </div>
               {archived.length > 0 && (
                 <details
@@ -5848,7 +6034,11 @@ export function WorkspaceApp({
               <RoutineBar
                 busy={busy}
                 color={activeSession.color}
-                onOpenPanel={() => openRoutinesPanel(activeSession.id)}
+                onOpenPanel={() =>
+                  routinesPanel?.sessionId === activeSession.id
+                    ? setRoutinesPanel(undefined)
+                    : openRoutinesPanel(activeSession.id)
+                }
                 onRunNow={() =>
                   void routinesAction(
                     activeSession.id,
@@ -5867,6 +6057,29 @@ export function WorkspaceApp({
                   )
                 }
                 status={activeSessionRoutines}
+              />
+            )}
+            {activeSessionTeam && activeSession && (
+              <TeamBar
+                color={activeSession.color}
+                handle={activeSessionTeam.handle}
+                leadArchived={Boolean(
+                  sessionsById.get(activeSessionTeam.team.leadId)?.archivedAt,
+                )}
+                members={
+                  agents.filter(
+                    (item) =>
+                      item.teamId === activeSessionTeam.team.id &&
+                      !item.archivedAt,
+                  ).length
+                }
+                onOpenPanel={() =>
+                  teamPanel?.teamId === activeSessionTeam.team.id
+                    ? setTeamPanel(undefined)
+                    : openTeamPanel(activeSessionTeam.team.id)
+                }
+                role={activeSessionTeam.role}
+                team={activeSessionTeam.team}
               />
             )}
             {activeSession ? (
@@ -5910,6 +6123,38 @@ export function WorkspaceApp({
                         )
                       }
                       sessionName={sessionName(activeSession)}
+                    />
+                  )}
+                {activeSessionTeam &&
+                  teamPanel?.teamId === activeSessionTeam.team.id && (
+                    <TeamPanel
+                      busy={busy}
+                      detail={teamPanel.detail}
+                      error={teamPanel.error}
+                      now={now}
+                      onClose={() => setTeamPanel(undefined)}
+                      onOpenSession={(sessionId) => {
+                        const target = sessionsById.get(sessionId);
+                        if (target) showSession(target.id, target.workspaceId);
+                      }}
+                      onPost={async (body) => {
+                        const said = await perform(
+                          client.request.teamSay({
+                            teamId: activeSessionTeam.team.id,
+                            body,
+                          }),
+                        );
+                        await loadTeamDetail(activeSessionTeam.team.id);
+                        return said?.warnings;
+                      }}
+                      onSetGoal={(goal) =>
+                        void perform(
+                          client.request.teamGoal({
+                            teamId: activeSessionTeam.team.id,
+                            goal,
+                          }),
+                        ).then(() => loadTeamDetail(activeSessionTeam.team.id))
+                      }
                     />
                   )}
                 <TerminalSurface
@@ -6490,72 +6735,85 @@ export function WorkspaceApp({
       )}
 
       {modal === "session" && sessionWorkspace && snapshot && (
-        <Modal dismissible onClose={closeSessionModal} title="Create session">
+        <Modal
+          dismissible
+          onClose={closeSessionModal}
+          title={
+            memberTeam ? `Add a member to ${memberTeam.name}` : "Create session"
+          }
+        >
           <form className="modal-form" onSubmit={createSession}>
             <label>
-              Session name
+              {memberTeam ? "Member name" : "Session name"}
               <input
                 autoFocus
                 maxLength={240}
                 onChange={(event) =>
                   setSessionForm({ ...sessionForm, name: event.target.value })
                 }
-                placeholder="What is this session for?"
+                placeholder={
+                  memberTeam
+                    ? "What it owns; also its @handle, such as server"
+                    : "What is this session for?"
+                }
                 required
                 value={sessionForm.name}
               />
             </label>
-            <fieldset className="session-tool-picker">
-              <legend>Choose a tool</legend>
-              <div
-                aria-label="Session tool"
-                className="session-tool-row"
-                role="radiogroup"
-              >
-                {(
-                  [
-                    { id: "claude", label: "Claude" },
-                    { id: "codex", label: "Codex" },
-                    { id: "terminal", label: "Terminal" },
-                  ] as const
-                ).map((tool) => {
-                  const available =
-                    tool.id === "terminal" ||
-                    Boolean(
-                      snapshot.settings.providers.find(
-                        (item) => item.name === tool.id,
-                      )?.available,
+            {/* A member runs on its lead's provider. */}
+            {!memberTeam && (
+              <fieldset className="session-tool-picker">
+                <legend>Choose a tool</legend>
+                <div
+                  aria-label="Session tool"
+                  className="session-tool-row"
+                  role="radiogroup"
+                >
+                  {(
+                    [
+                      { id: "claude", label: "Claude" },
+                      { id: "codex", label: "Codex" },
+                      { id: "terminal", label: "Terminal" },
+                    ] as const
+                  ).map((tool) => {
+                    const available =
+                      tool.id === "terminal" ||
+                      Boolean(
+                        snapshot.settings.providers.find(
+                          (item) => item.name === tool.id,
+                        )?.available,
+                      );
+                    return (
+                      <button
+                        aria-checked={sessionType === tool.id}
+                        className={`session-tool ${sessionType === tool.id ? "selected" : ""}`}
+                        disabled={!available}
+                        key={tool.id}
+                        onClick={() => {
+                          setSessionType(tool.id);
+                          setSessionModel("");
+                          setSessionAccount("");
+                          setRememberSessionModel(false);
+                          setModelCatalogError(undefined);
+                        }}
+                        role="radio"
+                        type="button"
+                      >
+                        <span className={`session-tool-icon tool-${tool.id}`}>
+                          <ToolIcon tool={tool.id} />
+                        </span>
+                        <strong>{tool.label}</strong>
+                        <small>
+                          {!available
+                            ? "Unavailable"
+                            : (toolAccountLabel(tool.id) ?? "Available")}
+                        </small>
+                      </button>
                     );
-                  return (
-                    <button
-                      aria-checked={sessionType === tool.id}
-                      className={`session-tool ${sessionType === tool.id ? "selected" : ""}`}
-                      disabled={!available}
-                      key={tool.id}
-                      onClick={() => {
-                        setSessionType(tool.id);
-                        setSessionModel("");
-                        setSessionAccount("");
-                        setRememberSessionModel(false);
-                        setModelCatalogError(undefined);
-                      }}
-                      role="radio"
-                      type="button"
-                    >
-                      <span className={`session-tool-icon tool-${tool.id}`}>
-                        <ToolIcon tool={tool.id} />
-                      </span>
-                      <strong>{tool.label}</strong>
-                      <small>
-                        {!available
-                          ? "Unavailable"
-                          : (toolAccountLabel(tool.id) ?? "Available")}
-                      </small>
-                    </button>
-                  );
-                })}
-              </div>
-            </fieldset>
+                  })}
+                </div>
+              </fieldset>
+            )}
             {sessionType !== "terminal" && sessionAccounts.length > 1 && (
               // Right under the tool it belongs to, and the same field as
               // Create workspace's.
@@ -6620,7 +6878,7 @@ export function WorkspaceApp({
                     Model list unavailable: {modelCatalogError}
                   </small>
                 )}
-                {!sessionChoiceIsWorkspaceDefault && (
+                {!sessionChoiceIsWorkspaceDefault && !memberTeam && (
                   <label className="session-model-remember">
                     <input
                       checked={rememberSessionModel}
@@ -6634,18 +6892,44 @@ export function WorkspaceApp({
                 )}
               </div>
             )}
-            <div className="session-color-picker">
-              <span>
-                <strong>Color</strong>
-              </span>
-              <ColorSwatches
-                onChange={(color) =>
-                  setSessionForm({ ...sessionForm, color: color ?? undefined })
-                }
-                value={sessionForm.color ?? null}
-              />
-            </div>
-            {sessionType !== "terminal" && (
+            {!memberTeam && (
+              <div className="session-color-picker">
+                <span>
+                  <strong>Color</strong>
+                </span>
+                <ColorSwatches
+                  onChange={(color) =>
+                    setSessionForm({
+                      ...sessionForm,
+                      color: color ?? undefined,
+                    })
+                  }
+                  value={sessionForm.color ?? null}
+                />
+              </div>
+            )}
+            {memberTeam && (
+              <label className="session-team-instructions">
+                <strong>Instructions (optional)</strong>
+                <small>
+                  It starts knowing its team, its lead and the goal. Leave this
+                  empty to tell it what to do in its own session. The lead is
+                  told it joined, and manages it from then on.
+                </small>
+                <textarea
+                  onChange={(event) =>
+                    setSessionForm({
+                      ...sessionForm,
+                      instructions: event.target.value,
+                    })
+                  }
+                  placeholder={`You are @${teamHandlePreview(sessionForm.name)}, a member of the Daedalus team "${memberTeam.name}". Its lead is the session '${memberTeam.name}' (@lead), which plans the work and may change your instructions.`}
+                  rows={4}
+                  value={sessionForm.instructions ?? ""}
+                />
+              </label>
+            )}
+            {sessionType !== "terminal" && !sessionForm.teamId && (
               // One row per ability the agent can be given at launch.
               <fieldset className="session-tool-picker session-abilities">
                 <legend>Agent abilities</legend>
@@ -6655,6 +6939,11 @@ export function WorkspaceApp({
                       key: "routines",
                       label: "Routines",
                       description: "Give the agent the ability to run routines",
+                    },
+                    {
+                      key: "orchestration",
+                      label: "Orchestration",
+                      description: "Lead a team of sessions toward one goal",
                     },
                   ] as const
                 ).map((ability) => (
@@ -6687,7 +6976,7 @@ export function WorkspaceApp({
                 Cancel
               </button>
               <button disabled={busy} type="submit">
-                Create session
+                {memberTeam ? "Add member" : "Create session"}
               </button>
             </div>
           </form>

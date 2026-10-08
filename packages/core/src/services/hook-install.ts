@@ -42,8 +42,12 @@ export interface ClaudeHookEntry {
     args?: string[];
     timeout?: number;
     async?: boolean;
+    asyncRewake?: boolean;
   }>;
 }
+
+/** Events the inbox waiter starts on: the session is at its prompt. */
+const INBOX_EVENTS = new Set(["Stop", "SessionStart"]);
 
 export interface ClaudeSettings {
   statusLine?: unknown;
@@ -60,7 +64,9 @@ export interface ClaudeSettings {
  */
 export const isDaedalusHookEntry = (entry: ClaudeHookEntry): boolean =>
   entry.hooks.some(
-    (hook) => hook.args?.[0] === "agent" && hook.args?.[1] === "event",
+    (hook) =>
+      (hook.args?.[0] === "agent" && hook.args?.[1] === "event") ||
+      hook.args?.[2] === "daedalus-inbox",
   );
 
 /**
@@ -78,6 +84,11 @@ export const isDaedalusHookEntry = (entry: ClaudeHookEntry): boolean =>
 export function daedalusClaudeSettings(
   daedalExecutable: string,
   sessionId?: string,
+  options: {
+    acceptPeerMessages?: boolean;
+    /** The session's inbox waiter; see `session-inbox.ts`. */
+    inboxHook?: ClaudeHookEntry["hooks"][number];
+  } = {},
 ): ClaudeSettings {
   // The session rides on the command, not only in the environment: Claude
   // can move a session into the background and run its hooks with another
@@ -95,6 +106,9 @@ export function daedalusClaudeSettings(
             timeout: timeoutFor(event),
             async: true,
           },
+          ...(options.inboxHook && INBOX_EVENTS.has(event)
+            ? [options.inboxHook]
+            : []),
         ],
       },
     ];
@@ -106,6 +120,10 @@ export function daedalusClaudeSettings(
       padding: 0,
     },
     hooks,
+    // A team's chat reaches a Claude member as a message from another
+    // session. Without this, a session in bypassPermissions mode holds each
+    // one behind an approval dialog.
+    ...(options.acceptPeerMessages ? { crossSessionInbound: "accept" } : {}),
   };
 }
 

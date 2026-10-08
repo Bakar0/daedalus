@@ -24,6 +24,7 @@ import type {
   WorkspaceRepositoryAccess,
 } from "../domain";
 import { AbilityRepository, RoutineRepository } from "./abilities";
+import { TeamRepository } from "./teams";
 
 interface WorkspaceRow {
   id: string;
@@ -85,6 +86,8 @@ interface AgentRow {
   pinned_at: string | null;
   color: SessionColor | null;
   account: string | null;
+  team_id: string | null;
+  team_handle: string | null;
 }
 
 interface IntegratedTerminalRow {
@@ -191,6 +194,8 @@ const agentFromRow = (row: AgentRow): AgentSession => ({
   pinnedAt: row.pinned_at,
   color: row.color,
   account: row.account,
+  teamId: row.team_id,
+  teamHandle: row.team_handle,
 });
 
 const integratedTerminalFromRow = (
@@ -338,6 +343,7 @@ export class SqliteRepositories {
 
   readonly abilities: AbilityRepository;
   readonly routines: RoutineRepository;
+  readonly teams: TeamRepository;
 
   constructor(databasePath: string) {
     this.database = new Database(databasePath, { create: true });
@@ -346,6 +352,7 @@ export class SqliteRepositories {
     );
     this.abilities = new AbilityRepository(this.database);
     this.routines = new RoutineRepository(this.database);
+    this.teams = new TeamRepository(this.database);
   }
 
   /**
@@ -806,8 +813,8 @@ export class SqliteRepositories {
           working_directory, status, exit_code, started_at, ended_at,
           provider_session_id, archived_at, resume_count, lost_reason,
           resume_on_start, handoff_requested_at, position, pinned_at, color,
-          account)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          account, team_id, team_handle)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         agent.id,
@@ -834,6 +841,8 @@ export class SqliteRepositories {
         agent.pinnedAt,
         agent.color,
         agent.account,
+        agent.teamId,
+        agent.teamHandle,
       );
   }
 
@@ -858,6 +867,37 @@ export class SqliteRepositories {
     this.database
       .query("UPDATE agent_sessions SET color = ? WHERE id = ?")
       .run(color, id);
+  }
+
+  /**
+   * Team membership is its own write for the same reason as the labels:
+   * `updateAgent` leaves it alone.
+   */
+  setAgentTeam(id: string, teamId: string | null, handle: string | null): void {
+    this.database
+      .query(
+        "UPDATE agent_sessions SET team_id = ?, team_handle = ? WHERE id = ?",
+      )
+      .run(teamId, handle, id);
+  }
+
+  /** Every session in a team, archived ones included, oldest first. */
+  listTeamMembers(teamId: string): AgentSession[] {
+    return this.database
+      .query<AgentRow, [string]>(
+        "SELECT * FROM agent_sessions WHERE team_id = ? ORDER BY started_at, id",
+      )
+      .all(teamId)
+      .map(agentFromRow);
+  }
+
+  /** Ends a team: its members keep running as plain sessions. */
+  clearTeam(teamId: string): void {
+    this.database
+      .query(
+        "UPDATE agent_sessions SET team_id = NULL, team_handle = NULL WHERE team_id = ?",
+      )
+      .run(teamId);
   }
 
   /** The slot a newly started session takes. See `nextWorkspacePosition`. */
