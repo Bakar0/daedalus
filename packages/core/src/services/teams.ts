@@ -8,6 +8,7 @@ import type {
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import { TEAM_FILE, TEAM_SKILL, type AbilityService } from "./abilities";
+import type { ActivityService } from "./activity";
 import type { AgentService } from "./agents";
 import type { TeamTransport } from "./team-transport";
 
@@ -109,9 +110,13 @@ export class TeamService {
     private readonly agents: AgentService,
     private readonly transport: TeamTransport,
     private readonly now: () => Date = () => new Date(),
+    activity?: ActivityService,
   ) {
     agents.onTeamLaunch((member) => this.memberLaunchLines(member));
     agents.onSessionRunning((session) => this.flushSession(session.id));
+    activity?.onAttention((session, reason) =>
+      this.noteMemberStatus(session.id, `needs the user: ${reason}`),
+    );
     abilities.onRevoke("orchestration", (ability) =>
       this.repositories.clearTeam(ability.id),
     );
@@ -366,6 +371,29 @@ export class TeamService {
     });
     const deliveries = await this.flushTeam(team);
     return { message, warnings, deliveries };
+  }
+
+  /**
+   * Tells a member's lead, in the chat, that the member needs the user or
+   * stopped. Only the lead is tagged. Nothing for a lead or a non-member.
+   * Never throws.
+   */
+  async noteMemberStatus(
+    sessionId: string,
+    status: string,
+  ): Promise<TeamSayResult | undefined> {
+    try {
+      const membership = this.membership(sessionId);
+      if (!membership || membership.reader.role !== "member") return undefined;
+      return await this.say({
+        team: membership.team.id,
+        author: DAEDALUS_HANDLE,
+        tags: [LEAD_HANDLE],
+        body: `@${LEAD_HANDLE} @${membership.reader.handle} ${status}`,
+      });
+    } catch {
+      return undefined;
+    }
   }
 
   /** Pushes whatever is waiting to every reader of the team. */

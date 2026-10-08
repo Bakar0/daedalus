@@ -134,6 +134,8 @@ export async function createApplicationContext(
       options.env ?? process.env,
     );
   let agents!: AgentService;
+  let teams: TeamService | undefined;
+  const endedNoted = new Map<string, number>();
   let activity!: ActivityService;
   const abilities = new AbilityService(repositories, config, options.now);
   const workspaces = new WorkspaceService(
@@ -164,7 +166,14 @@ export async function createApplicationContext(
     tmux,
     config,
     abilities,
-    (sessionId) => activity.forget(sessionId),
+    (sessionId) => {
+      activity.forget(sessionId);
+      // Archiving a running session stops it first, which ends it twice.
+      const last = endedNoted.get(sessionId) ?? 0;
+      if (Date.now() - last < 10_000) return;
+      endedNoted.set(sessionId, Date.now());
+      void teams?.noteMemberStatus(sessionId, "stopped running.");
+    },
     (sessionId, reason) =>
       activity.raise({ sessionId, reason }).catch(() => undefined),
   );
@@ -220,7 +229,7 @@ export async function createApplicationContext(
   abilities.onRevoke("routines", (ability) =>
     routines.skipUndelivered(ability, "Skipped: the ability was revoked"),
   );
-  const teams = new TeamService(
+  teams = new TeamService(
     repositories,
     abilities,
     agents,
@@ -229,6 +238,7 @@ export async function createApplicationContext(
         agents.codexExecutable(session),
       ),
     options.now,
+    activity,
   );
   const routineReports = new RoutineReportService(
     repositories,
@@ -280,7 +290,7 @@ export async function createApplicationContext(
     abilities,
     routines,
     routineReports,
-    teams,
+    teams: teams!,
     routineDelivery,
     deliveryGate,
     shutdown: new ShutdownService(repositories, agents, terminals, tmux),

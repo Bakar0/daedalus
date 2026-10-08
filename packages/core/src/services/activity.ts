@@ -170,6 +170,21 @@ export class ActivityService {
     this.now = options.now ?? (() => new Date());
   }
 
+  private attentionListener: (
+    session: AgentSession,
+    reason: string,
+  ) => Promise<unknown> = async () => undefined;
+
+  /**
+   * Told when a session starts needing the user, at most as often as the
+   * user is notified. The team service tells a member's lead.
+   */
+  onAttention(
+    listener: (session: AgentSession, reason: string) => Promise<unknown>,
+  ): void {
+    this.attentionListener = listener;
+  }
+
   /**
    * Whether an observation from `source` may overwrite what `stored` says.
    *
@@ -696,6 +711,11 @@ export class ActivityService {
     if (debounced) return undefined;
     stored.notifiedActivity = stored.activity;
     stored.notifiedAt = stored.observedAt;
+    if (isAttentionActivity(stored.activity))
+      await this.attentionListener(
+        session,
+        reason ?? this.reasonText(session, stored.activity, detail),
+      ).catch(() => undefined);
     const subtitle = this.alertSubtitle(session);
     return this.notifications.notify({
       sessionId: session.id,

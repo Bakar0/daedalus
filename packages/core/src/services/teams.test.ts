@@ -369,7 +369,7 @@ describe("teams", () => {
         delivered: false,
         error: "the session is exited; it gets the messages when it runs again",
       });
-      expect(transport.delivered).toEqual([]);
+      expect(transport.to(server.session)).toEqual([]);
 
       // An archived member can still be tagged, and is not part of @all.
       await context.agents.archive(server.session.id, true);
@@ -532,6 +532,39 @@ describe("teams", () => {
       expect(context.repositories.findAgent(kept.session.id)?.teamId).toBe(
         null,
       );
+    });
+  });
+
+  test("the lead hears when a member needs the user or stops", async () => {
+    await withTeams(async ({ context, transport }) => {
+      const { session: leader, team } = await lead(context);
+      const server = await context.teams.spawnMember({
+        team: team.id,
+        addedBy: "lead",
+        name: "server",
+        instructions: "Server.",
+      });
+      await context.activity.raise({
+        sessionId: server.session.id,
+        reason: "Which database should I use?",
+      });
+      const [asked] = transport.to(leader);
+      expect(asked!.text).toBe(
+        '[team "Checkout API"] daedalus: @lead @server needs the user: Which database should I use?',
+      );
+      // Archiving a running member stops it first; the lead hears once.
+      await context.agents.archive(server.session.id, true);
+      expect(transport.to(leader).map((item) => item.text)).toEqual([
+        asked!.text,
+        '[team "Checkout API"] daedalus: @lead @server stopped running.',
+      ]);
+      // The lead needing the user is the user's business, not the team's.
+      await context.activity.raise({
+        sessionId: leader.id,
+        reason: "Approve the plan?",
+      });
+      expect(transport.to(leader)).toHaveLength(2);
+      expect(context.repositories.teams.messages(team.id)).toHaveLength(2);
     });
   });
 
