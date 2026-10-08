@@ -6205,33 +6205,6 @@ dd {
   display: grid;
   gap: 6px;
 }
-/* First-message starters under a new session's terminal. */
-.session-starters {
-  align-items: center;
-  border-top: 1px solid var(--line);
-  color: var(--muted);
-  display: flex;
-  flex-wrap: wrap;
-  font-size: 11px;
-  gap: 6px;
-  padding: 6px 10px;
-}
-.session-starter {
-  background: var(--raised);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  color: var(--text);
-  font-size: 12px;
-  padding: 3px 10px;
-}
-.session-starter:hover {
-  border-color: var(--accent);
-}
-.session-starters-close {
-  font-size: 13px;
-  margin-left: auto;
-  padding: 0 6px;
-}
 /* How to use an ability, under its switch, until the user hides it. */
 .ability-hint {
   align-items: flex-start;

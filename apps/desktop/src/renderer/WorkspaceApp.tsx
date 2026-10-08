@@ -19,7 +19,6 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from "react";
 import type {
-  AbilityIdDto,
   FileLinkTargetDto,
   AppUpdateDto,
   TaskTimelineDto,
@@ -152,34 +151,6 @@ export {
 const ROUTINES_HINT =
   "Ask the session for a routine in plain words, such as \u201ccheck the staging deploy every weekday at 9\u201d. It writes the routine, shows it to you, and adds it once you agree. Routines run while Daedalus is open.";
 const ROUTINES_HINT_STORAGE_KEY = "daedalus.hint.routines.hidden";
-
-/**
- * The start of a first message for each ability, offered under a new
- * session's terminal. A click types it into the agent's input box without
- * sending it, so the user finishes the sentence with what they want.
- */
-const ABILITY_STARTERS: Readonly<Record<AbilityIdDto, string>> = {
-  routines: "Create a routine that ",
-};
-
-const starterStorageKey = (sessionId: string) =>
-  `daedalus.starter.done.${sessionId}`;
-
-function starterDone(sessionId: string): boolean {
-  try {
-    return window.localStorage.getItem(starterStorageKey(sessionId)) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function markStarterDone(sessionId: string): void {
-  try {
-    window.localStorage.setItem(starterStorageKey(sessionId), "1");
-  } catch {
-    // Without storage the starter shows again after a reload.
-  }
-}
 
 function routinesHintHidden(): boolean {
   try {
@@ -1048,7 +1019,6 @@ function TerminalSurface({
   fileLinks,
   status,
   session,
-  starters = [],
   telemetry,
   target,
   worktree,
@@ -1069,36 +1039,11 @@ function TerminalSurface({
   fileLinks?: FileLinks;
   status: AgentSessionDto["status"];
   session?: AgentSessionDto;
-  /** First-message starters, one per ability the session holds. */
-  starters?: string[];
   telemetry?: SessionTelemetryDto;
   target: "agent" | "integrated";
   worktree?: SessionWorktreeDto;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  // A starter is for a session nobody has talked to yet. It goes for good
-  // once the user types in the terminal, picks or closes it, or the agent
-  // starts working; a resumed session has a conversation already.
-  const [startersDone, setStartersDone] = useState(
-    () => !session || session.resumeCount > 0 || starterDone(session.id),
-  );
-  const finishStarters = () => {
-    if (session) markStarterDone(session.id);
-    setStartersDone(true);
-  };
-  const typedRef = useRef<() => void>(() => undefined);
-  typedRef.current = () => {
-    if (!startersDone) finishStarters();
-  };
-  useEffect(() => {
-    if (activity?.activity === "working") typedRef.current();
-  }, [activity?.activity]);
-  const showStarters =
-    target === "agent" &&
-    !startersDone &&
-    starters.length > 0 &&
-    status === "running" &&
-    activity?.activity !== "working";
   const fileLinksRef = useRef(fileLinks);
   fileLinksRef.current = fileLinks;
   const fitRef = useRef<() => void>(() => undefined);
@@ -1488,7 +1433,6 @@ function TerminalSurface({
       terminal.onData((data) => {
         if (socket?.readyState === WebSocket.OPEN)
           socket.send(JSON.stringify({ type: "input", data }));
-        typedRef.current();
       });
       terminal.onResize(sendSize);
       connect();
@@ -1541,35 +1485,6 @@ function TerminalSurface({
         onKeyDownCapture={captureAgentShortcut}
         ref={containerRef}
       />
-      {showStarters && (
-        <div className="session-starters" aria-label="Start with">
-          <span>Start with</span>
-          {starters.map((starter) => (
-            <button
-              className="quiet session-starter"
-              key={starter}
-              onClick={() => {
-                inputRef.current(starter);
-                finishStarters();
-                focusRef.current();
-              }}
-              title="Type this into the agent's input box, then finish the sentence"
-              type="button"
-            >
-              {starter.trim()}…
-            </button>
-          ))}
-          <button
-            aria-label="Hide"
-            className="quiet session-starters-close"
-            onClick={finishStarters}
-            title="Hide"
-            type="button"
-          >
-            ×
-          </button>
-        </div>
-      )}
       {target === "agent" && session && view && (
         <div className="agent-session-status" aria-label="Session status">
           {/*
@@ -6059,13 +5974,6 @@ export function WorkspaceApp({
                       .map((item) => item.path),
                   ])}
                   session={activeSession}
-                  starters={(snapshot?.abilities ?? [])
-                    .filter(
-                      (ability) =>
-                        ability.sessionId === activeSession.id &&
-                        ability.enabled,
-                    )
-                    .map((ability) => ABILITY_STARTERS[ability.ability])}
                   status={activeSession.status}
                   target="agent"
                   telemetry={activeSessionTelemetry}
