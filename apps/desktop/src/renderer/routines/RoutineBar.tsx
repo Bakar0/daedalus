@@ -139,7 +139,12 @@ export function RoutineBar({
           >
             {status.paused ? "Resume" : "Pause"}
           </button>
-          <button className="quiet" onClick={onOpenPanel} type="button">
+          <button
+            className="quiet"
+            data-panel-toggle
+            onClick={onOpenPanel}
+            type="button"
+          >
             Routines
           </button>
         </span>

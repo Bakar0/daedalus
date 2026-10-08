@@ -6,6 +6,7 @@ import type {
   TeamMemberDto,
 } from "@daedalus/protocol";
 import { relativeTime } from "../routines/time";
+import { useOutsideDismiss } from "../use-outside-dismiss";
 
 /**
  * The bar above the terminal of a team's lead or member: which team, and a
@@ -46,7 +47,12 @@ export function TeamBar({
               : `@${handle} in ${team.name}`}
         </span>
         <span className="routine-bar-actions">
-          <button className="quiet" onClick={onOpenPanel} type="button">
+          <button
+            className="quiet"
+            data-panel-toggle
+            onClick={onOpenPanel}
+            type="button"
+          >
             Team
           </button>
         </span>
@@ -88,6 +94,8 @@ export function TeamPanel({
   onSetGoal: (goal: string) => void;
   onOpenSession: (sessionId: string) => void;
 }) {
+  const panel = useRef<HTMLElement>(null);
+  useOutsideDismiss(panel, onClose);
   const [draft, setDraft] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
   const [goal, setGoal] = useState(detail?.team.goal ?? "");
@@ -115,6 +123,7 @@ export function TeamPanel({
     <aside
       aria-label={`Team ${detail?.team.name ?? ""}`}
       className="routines-panel team-panel"
+      ref={panel}
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
         event.preventDefault();

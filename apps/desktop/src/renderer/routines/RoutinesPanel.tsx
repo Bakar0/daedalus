@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { RoutineDto, RoutinesDetailDto } from "@daedalus/protocol";
+import { useOutsideDismiss } from "../use-outside-dismiss";
 import { durationLabel, relativeTime } from "./time";
 
 const OUTPUT_LABEL: Record<RoutineDto["output"], string> = {
@@ -76,6 +77,8 @@ export function RoutinesPanel({
   onRunNow: (name: string) => void;
   onSetEnabled: (name: string, enabled: boolean) => void;
 }) {
+  const panel = useRef<HTMLElement>(null);
+  useOutsideDismiss(panel, onClose);
   const [showHowTo, setShowHowTo] = useState(() => !howToHidden());
   const [purpose, setPurpose] = useState(detail?.purpose ?? "");
   useEffect(() => setPurpose(detail?.purpose ?? ""), [detail?.purpose]);
@@ -85,6 +88,7 @@ export function RoutinesPanel({
     <aside
       aria-label={`Routines of ${sessionName}`}
       className="routines-panel"
+      ref={panel}
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
         event.preventDefault();

@@ -6034,7 +6034,11 @@ export function WorkspaceApp({
               <RoutineBar
                 busy={busy}
                 color={activeSession.color}
-                onOpenPanel={() => openRoutinesPanel(activeSession.id)}
+                onOpenPanel={() =>
+                  routinesPanel?.sessionId === activeSession.id
+                    ? setRoutinesPanel(undefined)
+                    : openRoutinesPanel(activeSession.id)
+                }
                 onRunNow={() =>
                   void routinesAction(
                     activeSession.id,
@@ -6069,7 +6073,11 @@ export function WorkspaceApp({
                       !item.archivedAt,
                   ).length
                 }
-                onOpenPanel={() => openTeamPanel(activeSessionTeam.team.id)}
+                onOpenPanel={() =>
+                  teamPanel?.teamId === activeSessionTeam.team.id
+                    ? setTeamPanel(undefined)
+                    : openTeamPanel(activeSessionTeam.team.id)
+                }
                 role={activeSessionTeam.role}
                 team={activeSessionTeam.team}
               />
