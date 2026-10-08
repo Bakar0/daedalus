@@ -1,4 +1,4 @@
-import { chmod, mkdir, rm } from "node:fs/promises";
+import { chmod, mkdir, realpath, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { TmuxClient, TmuxLaunch } from "@daedalus/platform";
@@ -145,33 +145,91 @@ describe("AgentService", () => {
     );
   });
 
-  test("confirms provider trust only for Daedalus-owned startup folders", async () => {
+  test("records folder trust before launch and never types into the provider", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       await Bun.write(
         join(home, "config.json"),
         JSON.stringify({
-          agents: { claude: { executable: process.execPath, args: [] } },
+          agents: {
+            claude: { executable: process.execPath, args: [] },
+            codex: { executable: process.execPath, args: [] },
+          },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const claudeHome = join(home, "claude");
+      const codexHome = join(home, "codex");
+      const context = await createApplicationContext({
+        env: {
+          DAEDALUS_HOME: home,
+          CLAUDE_CONFIG_DIR: claudeHome,
+          CODEX_HOME: codexHome,
+        },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Trust" });
+      const claude = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "claude",
+      });
+      const codex = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      const claudeFolder = await realpath(claude.workingDirectory);
+      const codexFolder = await realpath(codex.workingDirectory);
+      const state = (await Bun.file(
+        join(claudeHome, ".claude.json"),
+      ).json()) as {
+        projects: Record<string, Record<string, unknown>>;
+      };
+      expect(state.projects[claudeFolder]).toMatchObject({
+        hasTrustDialogAccepted: true,
+        hasClaudeMdExternalIncludesApproved: true,
+      });
+      const codexConfig = Bun.TOML.parse(
+        await Bun.file(join(codexHome, "config.toml")).text(),
+      ) as { projects: Record<string, { trust_level: string }> };
+      expect(codexConfig.projects[codexFolder]?.trust_level).toBe("trusted");
+      expect(tmux.keys).toEqual([]);
+      context.close();
+    });
+  });
+
+  test("hands a startup trust prompt to the user when folder trust is off", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          trustSessionFoldersEnabled: false,
+          agents: { codex: { executable: process.execPath, args: [] } },
         }),
       );
       const tmux = new FakeTmux();
       tmux.screens = [
-        "Quick safety check\nNo, exit\nYes, I trust this folder",
-        "Quick safety check\nNo, exit\n❯ Yes, I trust this folder",
-        "Allow external CLAUDE.md file imports?\nNo, disable\nYes, allow",
-        "Allow external CLAUDE.md file imports?\nNo, disable\n❯ Yes, allow external imports",
-        "Claude Code v2.1.251\nshift+tab to cycle",
+        "Folder access\nTrust this folder?\n› 1. Trust and continue\n  2. Quit",
       ];
+      const codexHome = join(home, "codex");
       const context = await createApplicationContext({
-        env: { DAEDALUS_HOME: home },
+        env: { DAEDALUS_HOME: home, CODEX_HOME: codexHome },
         tmux,
       });
       const workspace = await context.workspaces.create({ name: "Trust" });
       const agent = await context.agents.spawn({
         workspace: workspace.id,
-        provider: "claude",
+        provider: "codex",
       });
       expect(agent.status).toBe("running");
-      expect(tmux.keys).toEqual([["Down"], ["Enter"], ["Down"], ["Enter"]]);
+      expect(tmux.sessions.has(agent.tmuxSession)).toBe(true);
+      expect(tmux.keys).toEqual([]);
+      const written = await Bun.file(join(codexHome, "config.toml"))
+        .text()
+        .catch(() => "");
+      expect(written).not.toContain("[projects.");
+      await Bun.sleep(50);
+      expect(
+        JSON.stringify(context.activity.attentionFor(agent.id)?.reasons),
+      ).toContain("Codex is asking something before it starts");
       context.close();
     });
   });
@@ -547,36 +605,6 @@ describe("AgentService", () => {
       const archived = await context.agents.archive(session.id);
       expect(archived.archivedAt).toBeTruthy();
       expect(tmux.sessions.has(session.tmuxSession)).toBe(false);
-      context.close();
-    });
-  });
-
-  test("stops answering startup prompts once the provider is ready", async () => {
-    await withTemporaryDaedalusHome(async (home) => {
-      await Bun.write(
-        join(home, "config.json"),
-        JSON.stringify({
-          agents: { codex: { executable: process.execPath, args: [] } },
-        }),
-      );
-      const tmux = new FakeTmux();
-      // The answered trust prompt stays in the scrollback beside the ready
-      // marker. Matching it again would keep pressing Enter in a session the
-      // user has already taken over.
-      tmux.screens = [
-        "Do you trust the contents of this directory?\n❯ 1. Yes, proceed",
-        "Do you trust the contents of this directory?\nAsk Codex to do anything",
-      ];
-      const context = await createApplicationContext({
-        env: { DAEDALUS_HOME: home, CODEX_HOME: join(home, "empty-codex") },
-        tmux,
-      });
-      const workspace = await context.workspaces.create({ name: "Trust" });
-      await context.agents.spawn({
-        workspace: workspace.id,
-        provider: "codex",
-      });
-      expect(tmux.keys).toEqual([["Enter"]]);
       context.close();
     });
   });

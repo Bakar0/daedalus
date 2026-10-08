@@ -28,6 +28,7 @@ import { NotificationService } from "./notifications";
 import { PresenceService } from "./presence";
 import { ShutdownService } from "./shutdown";
 import { TaskHistoryService } from "./task-history";
+import { forgetSessionFolders } from "./folder-trust";
 import { TaskService } from "./tasks";
 import { TelemetryService } from "./telemetry";
 import { WorkspaceService } from "./workspaces";
@@ -134,7 +135,13 @@ export async function createApplicationContext(
     (workspaceId) => agents.archiveWorkspaceSessions(workspaceId),
     config.home,
     () => config.workspaceInstructionFilesEnabled,
-    (workspaceId) => workspaceContent.discardWorkspaceCheckouts(workspaceId),
+    async (workspaceId) => {
+      // Every session folder lives under the workspace folder, so this drops
+      // their provider trust records with it.
+      const path = repositories.findWorkspace(workspaceId)?.path;
+      if (path) await forgetSessionFolders(config, path);
+      await workspaceContent.discardWorkspaceCheckouts(workspaceId);
+    },
     (provider, reference) =>
       findAccount(config, provider, reference)?.id ?? null,
   );

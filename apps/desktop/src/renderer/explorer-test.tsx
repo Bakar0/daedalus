@@ -81,6 +81,7 @@ const snapshot: DesktopSnapshotDto = {
     tmuxAvailable: true,
     workspaceInstructionFilesEnabled: true,
     autoRestoreSessionsEnabled: true,
+    trustSessionFoldersEnabled: true,
     focusMode: false,
     accounts: [],
     providers: [],

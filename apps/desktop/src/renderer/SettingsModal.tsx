@@ -256,6 +256,16 @@ export function SettingsModal({
               }
               title="Bring sessions back on startup"
             />
+            <h3>Startup</h3>
+            <SettingRow
+              checked={settings.trustSessionFoldersEnabled}
+              disabled={busy}
+              description="Codex and Claude ask before they work in a folder they have not seen. With this on, Daedalus records that answer in their settings for each session folder it creates, so a session opens at its prompt. Turn it off to answer those prompts yourself in the session's terminal."
+              onChange={(enabled) =>
+                void perform(client.request.trustSessionFoldersSet({ enabled }))
+              }
+              title="Trust session folders"
+            />
           </section>
         ) : undefined}
 
