@@ -85,9 +85,17 @@ class FakeTmux implements TmuxClient {
   }
 }
 
+/** Stands in for the inbox waiter of Claude sessions launched with one. */
+interface FakeInbox {
+  /** False: the session is not waiting at its prompt, nothing reads. */
+  open: boolean;
+  lines: Array<{ sessionId: string; line: string }>;
+}
+
 interface Harness {
   context: ApplicationContext;
   tmux: FakeTmux;
+  inbox: FakeInbox;
   home: string;
   clock: { now: Date };
   advance(ms: number): void;
@@ -115,6 +123,12 @@ async function withAbilities(run: (harness: Harness) => Promise<void>) {
     };
     const clock = { now: new Date(2026, 8, 30, 10, 0, 0) };
     const tmux = new FakeTmux();
+    const inbox: FakeInbox = { open: true, lines: [] };
+    const sessionInbox = async (session: AgentSession, line: string) => {
+      if (!inbox.open) return false;
+      inbox.lines.push({ sessionId: session.id, line });
+      return true;
+    };
     const extra: ApplicationContext[] = [];
     const notify = async () => ({
       delivered: true,
@@ -126,12 +140,14 @@ async function withAbilities(run: (harness: Harness) => Promise<void>) {
       tmux,
       now: () => clock.now,
       sendNativeNotification: notify,
+      sessionInbox,
     });
     try {
       await context.skills.sync();
       await run({
         context,
         tmux,
+        inbox,
         home,
         clock,
         advance: (ms) => {
@@ -144,6 +160,7 @@ async function withAbilities(run: (harness: Harness) => Promise<void>) {
             now: () => clock.now,
             reconcile: false,
             sendNativeNotification: notify,
+            sessionInbox,
           });
           extra.push(other);
           return other;
@@ -218,10 +235,28 @@ async function argus(
   };
 }
 
-const routineLines = (tmux: FakeTmux) =>
-  tmux.sent
+/** Runs that went in: typed as the run skill, or posted to the inbox. */
+const routineLines = ({ tmux, inbox }: Harness) => [
+  ...tmux.sent
     .map((item) => item.text)
-    .filter((text) => /^[/$]daedalus-routine(-\w+)? \d+$/.test(text));
+    .filter((text) => /^[/$]daedalus-routine(-\w+)? \d+$/.test(text)),
+  ...inbox.lines.map((item) => item.line),
+];
+
+/**
+ * A Claude session launched before sessions had an inbox: runs are typed
+ * into it, under the typing rules.
+ */
+function withoutInbox(harness: Harness, session: AgentSession): AgentSession {
+  const older = {
+    ...session,
+    args: session.args.filter(
+      (argument) => !argument.includes("daedalus-inbox"),
+    ),
+  };
+  harness.context.repositories.updateAgent(older);
+  return older;
+}
 
 describe("abilities", () => {
   test("a session spawned with an ability holds it and is told at launch", async () => {
@@ -333,7 +368,7 @@ describe("abilities", () => {
       expect(tmux.sent).toEqual([]);
       harness.advance(20 * 60_000);
       await tick(harness);
-      expect(routineLines(tmux)).toEqual([]);
+      expect(routineLines(harness)).toEqual([]);
       // Granted again: the same row and its routines.
       const back = context.abilities.grant(session.id, "routines", {
         live: true,
@@ -437,23 +472,65 @@ describe("abilities", () => {
         false,
       );
       await tick(harness);
-      expect(routineLines(tmux)).toHaveLength(1);
+      expect(routineLines(harness)).toHaveLength(1);
     });
   });
 });
 
 describe("routine delivery", () => {
+  test("posts a due run to a Claude session's inbox once it waits at its prompt", async () => {
+    await withAbilities(async (harness) => {
+      const { context, tmux, inbox } = harness;
+      const { session, ability } = await argus(harness);
+      expect(session.args.join(" ")).toContain("daedalus-inbox");
+      context.routines.add(ability, { text: routineText("ci-health") });
+      await tick(
+        harness,
+        idle(harness, { activity: reading(harness, "working", "Bash(ls)") }),
+      );
+      expect(routineLines(harness)).toEqual([]);
+      // The user is typing and the box has a draft: neither holds a run
+      // that is not typed in.
+      context.deliveryGate.noteKeystroke(session.id);
+      tmux.screen = claudeScreen("also watch the deploy");
+      // No waiter reading: the session is not at its prompt after all.
+      inbox.open = false;
+      await tick(harness);
+      expect(routineLines(harness)).toEqual([]);
+      expect(context.routineDelivery.status(ability).hold).toMatchObject({
+        reason: "busy",
+        text: "the session is not waiting at its prompt",
+      });
+      inbox.open = true;
+      await tick(harness);
+      const [run] = context.routines.deliveredRuns(ability);
+      expect(inbox.lines).toEqual([
+        {
+          sessionId: session.id,
+          line: expect.stringMatching(
+            new RegExp(
+              `^Daedalus: routine run ${run!.id} is due\\. Carry it out now with the daedalus-routine(-\\w+)? skill, for run id ${run!.id}\\.$`,
+            ),
+          ),
+        },
+      ]);
+      // Nothing was typed into the pane.
+      expect(tmux.sent).toEqual([]);
+    });
+  });
+
   test("types a due run only when the session is idle and its box is empty", async () => {
     await withAbilities(async (harness) => {
       const { context, tmux } = harness;
-      const { session, ability } = await argus(harness);
+      const { session: launched, ability } = await argus(harness);
+      const session = withoutInbox(harness, launched);
       context.routines.add(ability, { text: routineText("ci-health") });
       // Working on something of its own: queued, not typed.
       await tick(
         harness,
         idle(harness, { activity: reading(harness, "working", "Bash(ls)") }),
       );
-      expect(routineLines(tmux)).toEqual([]);
+      expect(routineLines(harness)).toEqual([]);
       const [queued] = context.routines.waitingRuns(ability);
       expect(queued).toMatchObject({ routine: "ci-health", status: "queued" });
       expect(context.routineDelivery.status(ability).hold).toMatchObject({
@@ -466,22 +543,22 @@ describe("routine delivery", () => {
           activity: reading(harness, "needs_permission", "Bash(rm)"),
         }),
       );
-      expect(routineLines(tmux)).toEqual([]);
+      expect(routineLines(harness)).toEqual([]);
       expect(context.routineDelivery.status(ability).hold?.reason).toBe(
         "waiting-on-user",
       );
       // Text in the input box: nothing is typed after it.
       tmux.screen = claudeScreen("also watch the deploy");
       await tick(harness);
-      expect(routineLines(tmux)).toEqual([]);
+      expect(routineLines(harness)).toEqual([]);
       expect(context.routineDelivery.status(ability).hold?.reason).toBe(
         "input-text",
       );
       // Claude's dim prompt suggestion is an empty box, not text.
       tmux.screen = CLAUDE_SUGGESTION_SCREEN;
       await tick(harness);
-      expect(routineLines(tmux)).toHaveLength(1);
-      expect(routineLines(tmux)[0]).toMatch(
+      expect(routineLines(harness)).toHaveLength(1);
+      expect(routineLines(harness)[0]).toMatch(
         new RegExp(`^/daedalus-routine(-\\w+)? ${queued!.id}$`),
       );
       expect(tmux.sent.at(-1)!.session).toBe(session.tmuxSession);
@@ -498,14 +575,15 @@ describe("routine delivery", () => {
 
   test("a keystroke holds delivery for two minutes, and Run now skips only that", async () => {
     await withAbilities(async (harness) => {
-      const { context, tmux } = harness;
-      const { session, ability } = await argus(harness);
+      const { context } = harness;
+      const { session: launched, ability } = await argus(harness);
+      const session = withoutInbox(harness, launched);
       context.routines.add(ability, { text: routineText("ci-health") });
       context.routines.add(ability, { text: routineText("merges") });
       context.deliveryGate.noteKeystroke(session.id);
       const typedAt = harness.clock.now.getTime();
       await tick(harness);
-      expect(routineLines(tmux)).toEqual([]);
+      expect(routineLines(harness)).toEqual([]);
       const status = context.routineDelivery.status(ability);
       expect(status.waiting.map((run) => run.routine).sort()).toEqual([
         "ci-health",
@@ -521,13 +599,13 @@ describe("routine delivery", () => {
       const forced = context.routineDelivery.runNow(ability);
       expect(forced.alreadyQueued).toBe(true);
       await tick(harness);
-      expect(routineLines(tmux)).toHaveLength(1);
+      expect(routineLines(harness)).toHaveLength(1);
       await tick(harness);
-      expect(routineLines(tmux)).toHaveLength(1);
+      expect(routineLines(harness)).toHaveLength(1);
       // Two quiet minutes after the keystroke: the rest go in.
       harness.advance(QUIET_AFTER_TYPING_MS);
       await tick(harness);
-      expect(routineLines(tmux)).toHaveLength(2);
+      expect(routineLines(harness)).toHaveLength(2);
       // A routine running now cannot be run again.
       expect(() =>
         context.routineDelivery.runNow(ability, "ci-health"),
@@ -546,10 +624,10 @@ describe("routine delivery", () => {
         "✻ Churning… (12s · esc to interrupt)",
       );
       await tick(harness, unknown);
-      expect(routineLines(tmux)).toEqual([]);
+      expect(routineLines(harness)).toEqual([]);
       tmux.screen = CLAUDE_IDLE_SCREEN;
       await tick(harness, unknown);
-      expect(routineLines(tmux)).toHaveLength(1);
+      expect(routineLines(harness)).toHaveLength(1);
     });
   });
 
@@ -568,7 +646,7 @@ describe("routine delivery", () => {
           ),
         }),
       );
-      expect(routineLines(tmux)).toHaveLength(1);
+      expect(routineLines(harness)).toHaveLength(1);
     });
   });
 
@@ -587,7 +665,7 @@ describe("routine delivery", () => {
         ),
       });
       for (let index = 0; index < 6; index += 1) await tick(harness, waiting);
-      expect(routineLines(tmux)).toHaveLength(3);
+      expect(routineLines(harness)).toHaveLength(3);
       expect(context.routineDelivery.status(ability)).toMatchObject({
         running: 3,
         hold: { reason: "in-flight-limit" },
@@ -597,7 +675,7 @@ describe("routine delivery", () => {
       context.routines.start(ability, first!.id);
       await context.routines.done(ability, first!.id, "quiet", "all green");
       await tick(harness, waiting);
-      expect(routineLines(tmux)).toHaveLength(4);
+      expect(routineLines(harness)).toHaveLength(4);
     });
   });
 
@@ -616,8 +694,10 @@ describe("routine delivery", () => {
       context.routines.add(ability, { text: routineText("one") });
       context.routines.add(ability, { text: routineText("two") });
       for (let index = 0; index < 4; index += 1) await tick(harness);
-      expect(routineLines(tmux)).toHaveLength(1);
-      expect(routineLines(tmux)[0]).toMatch(/^\$daedalus-routine(-\w+)? \d+$/);
+      expect(routineLines(harness)).toHaveLength(1);
+      expect(routineLines(harness)[0]).toMatch(
+        /^\$daedalus-routine(-\w+)? \d+$/,
+      );
       // The mention popup takes the first Enter; a second one submits.
       expect(tmux.keys.at(-1)).toEqual({
         session: session.tmuxSession,
@@ -629,10 +709,10 @@ describe("routine delivery", () => {
       await context.routines.done(ability, first!.id, "quiet", "ok");
       tmux.screen = "› check the logs\n\n  100% context left";
       await tick(harness);
-      expect(routineLines(tmux)).toHaveLength(1);
+      expect(routineLines(harness)).toHaveLength(1);
       tmux.screen = "› Ask Codex to do anything\n\n  100% context left";
       await tick(harness);
-      expect(routineLines(tmux)).toHaveLength(2);
+      expect(routineLines(harness)).toHaveLength(2);
     });
   });
 
@@ -643,13 +723,15 @@ describe("routine delivery", () => {
       context.routines.add(ability, {
         text: routineText("slow", "", "every 5m"),
       });
-      // The user talks for twenty minutes: one run waits, however many slots
-      // pass.
+      // The user talks with it for twenty minutes, so it is never waiting
+      // at its prompt: one run waits, however many slots pass.
+      harness.inbox.open = false;
       for (let index = 0; index < 4; index += 1) {
         context.deliveryGate.noteKeystroke(session.id);
         await tick(harness);
         harness.advance(5 * 60_000);
       }
+      harness.inbox.open = true;
       expect(context.routines.runs(ability).map((run) => run.status)).toEqual([
         "queued",
       ]);
@@ -739,7 +821,7 @@ describe("routine delivery", () => {
       const full = idle(harness, { contextPercent: () => 72 });
       await tick(harness, full);
       await tick(harness, full);
-      expect(routineLines(tmux)).toHaveLength(1);
+      expect(routineLines(harness)).toHaveLength(1);
       expect(context.routineDelivery.status(ability).hold).toMatchObject({
         reason: "handoff",
         text: "waiting for runs in flight before a handoff",
@@ -766,9 +848,9 @@ describe("routine delivery", () => {
       });
       // The waiting run goes to the successor.
       await tick(harness);
-      expect(tmux.sent.at(-1)).toMatchObject({
-        session: successor.tmuxSession,
-        text: expect.stringMatching(/^\/daedalus-routine(-\w+)? \d+$/),
+      expect(harness.inbox.lines.at(-1)).toMatchObject({
+        sessionId: successor.id,
+        line: expect.stringMatching(/^Daedalus: routine run \d+ is due\./),
       });
     });
   });
@@ -789,7 +871,7 @@ describe("routine delivery", () => {
       harness.advance(60 * 60_000);
       await tick(harness);
       expect(context.routines.runs(ability)).toHaveLength(1);
-      expect(routineLines(tmux)).toHaveLength(1);
+      expect(routineLines(harness)).toHaveLength(1);
     });
   });
 });

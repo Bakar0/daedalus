@@ -9,6 +9,7 @@ import {
   type TmuxClient,
 } from "@daedalus/platform";
 import { channelIdentifier, loadConfig, type DaedalusConfig } from "../config";
+import type { AgentSession } from "../domain";
 import { EventBus } from "../events";
 import { JsonLogger } from "../logging";
 import { runMigrations } from "../repositories/migrations";
@@ -93,6 +94,8 @@ export interface ApplicationContextOptions {
   canDrawToasts?: () => boolean;
   /** Injected so tests never write to a real session's inbox. */
   teamTransport?: TeamTransport;
+  /** Injected so tests stand in for a Claude session's inbox waiter. */
+  sessionInbox?: (session: AgentSession, line: string) => Promise<boolean>;
   /** Injected so staleness decay is testable without waiting ten minutes. */
   now?: () => Date;
   /** Injected so tests never reach the real Notification Center. */
@@ -241,6 +244,7 @@ export async function createApplicationContext(
     routineReports,
     deliveryGate,
     options.now,
+    options.sessionInbox,
   );
   if (options.reconcile !== false) {
     // A clone only lives as long as the process running it, so anything still

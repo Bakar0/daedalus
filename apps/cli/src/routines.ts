@@ -77,8 +77,9 @@ never fires; 'add --from' copies one with its vars filled in.
 'purpose' sets what the session's routines are for; every run prints it.
 
 The desktop app keeps the clock: routines run only while it is open. A due
-run is typed into the session as '/daedalus-routine <run-id>' once the
-session is idle, its input box is empty, and nobody typed in it for 2
+run goes to a Claude session's inbox once it is idle, as a hook note with
+nothing typed. A Codex session gets '$daedalus-routine <run-id>' typed in
+once it is idle, its input box is empty, and nobody typed in it for 2
 minutes. Until then it waits, at most one per routine, and the bar above the
 session's terminal says why. 'run' queues a run now. 'start', 'done', 'fail',
 'report' and 'resolve' are for the session itself, during a run.
@@ -650,7 +651,7 @@ export async function routineCommand(
       const run = context.routines.runNow(ability, name);
       printResult({ run }, json, () =>
         console.log(
-          `${run.alreadyQueued ? `Run ${run.id} is already queued` : `Queued run ${run.id}`}; the app types it into ${session.name} once it is idle, its input box is empty and nobody typed in it for 2 minutes`,
+          `${run.alreadyQueued ? `Run ${run.id} is already queued` : `Queued run ${run.id}`}; the app sends it to ${session.name} once it is idle`,
         ),
       );
       return 0;

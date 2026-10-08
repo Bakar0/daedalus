@@ -1,3 +1,4 @@
+import { usesInbox } from "./session-inbox";
 import type {
   AgentActivityState,
   AgentSession,
@@ -93,6 +94,12 @@ export class RoutineDelivery {
     private readonly reports: RoutineReportService,
     private readonly gate: DeliveryGate,
     private readonly now: () => Date = () => new Date(),
+    /** Hands a line to a session's inbox; injected so tests need no pipe. */
+    private readonly postToInbox: (
+      session: AgentSession,
+      line: string,
+    ) => Promise<boolean> = (session, line) =>
+      agents.postToInbox(session.id, line),
   ) {}
 
   /**
@@ -146,7 +153,12 @@ export class RoutineDelivery {
     const next = routines.sort((left, right) =>
       left.nextRunAt!.localeCompare(right.nextRunAt!),
     )[0];
-    const quiet = this.gate.quietUntil(ability.sessionId);
+    const owner = this.repositories.findAgent(ability.sessionId);
+    // Typing holds only lines that are typed in.
+    const quiet =
+      owner && usesInbox(owner)
+        ? undefined
+        : this.gate.quietUntil(ability.sessionId);
     return {
       ability,
       waiting,
@@ -259,8 +271,26 @@ export class RoutineDelivery {
     const screen = await this.agents
       .screen(session.id, { styled: true })
       .catch(() => "");
-    const hold = this.gate.check({ session, activity, screen });
+    const inbox = usesInbox(session);
+    const hold = this.gate.check({ session, activity, screen, untyped: inbox });
     if (hold) return this.hold(ability, hold);
+    if (inbox) {
+      // Claude wakes with this as a system reminder: nothing is typed, so
+      // it never shows as the user's message.
+      const posted = await this.postToInbox(
+        session,
+        `Daedalus: routine run ${next.id} is due. Carry it out now with the ${this.abilities.skillName(ROUTINE_RUN_SKILL)} skill, for run id ${next.id}.`,
+      );
+      if (!posted)
+        return this.hold(ability, {
+          reason: "busy",
+          text: "the session is not waiting at its prompt",
+        });
+      this.typed(session.id);
+      this.hold(ability, null);
+      result.delivered.push(this.routines.markDelivered(next, session.id));
+      return;
+    }
     try {
       await this.agents.invokeSkill(
         session.id,

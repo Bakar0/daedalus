@@ -116,7 +116,7 @@ most one run per routine waits: a slot that comes due while a run waits adds
 nothing, and the run counts the wait in `{{missed}}`. A slot that comes due
 while the routine's run is running is skipped.
 
-Daedalus types the oldest waiting run into the session when all of these
+Daedalus sends the oldest waiting run to the session when all of these
 hold:
 
 1. The ability is enabled and not paused, and the session is running.
@@ -126,10 +126,11 @@ hold:
    a question: Claude draws a real question or permission dialog in place of
    the box. Such a badge comes from the agent's own `daedal attention` or
    from one of the session's background agents. The badge stays on the card.
-3. Its input box is empty. Daedalus reads the pane with its escape codes just
+3. Its input box is empty (typed runs only). Daedalus reads the pane with its escape codes just
    before typing and ignores dim text, which is a placeholder: Claude's
    suggested next prompt, or Codex's "Ask Codex to do anything".
-4. Nobody pressed a key in the session's terminal in the last 2 minutes.
+4. Nobody pressed a key in the session's terminal in the last 2 minutes
+   (typed runs only).
    Scrolling and selecting are not keystrokes. The host keeps this in memory,
    so after an app restart nothing holds.
 5. No handoff is pending.
@@ -138,10 +139,23 @@ hold:
    session hands each run to a background subagent, and 1 for Codex, which
    does each run itself.
 
-The line is `/daedalus-routine <run-id>` for Claude and
-`$daedalus-routine <run-id>` for Codex, followed by a second Enter that
-Codex's skill popup needs. A dev build's skills carry its channel suffix. The
-grant and revoke notes, and the handoff below, go in under the same rule.
+A Claude session gets the run through its inbox, nothing typed: "Daedalus:
+routine run <id> is due. Carry it out now with the daedalus-routine skill,
+for run id <id>." Every Claude session Daedalus launches has an inbox: a
+named pipe at `<home>/inbox/<session>.fifo`, readable only by the user, and
+a hook on `Stop` and `SessionStart` with `asyncRewake` that waits on it in a
+`/bin/sh` of about 2 MB. Daedalus writes the line without blocking; when no
+waiter is reading, the session is in a turn and the run waits. The waiter
+prints the line to stderr and exits 2, and Claude wakes with it as a hook
+note, so it never shows as something the user sent and never touches their
+draft. A waiter stays alive through a turn the user starts, so rule 2 still
+applies. Rules 3 and 4 do not: nothing is typed.
+
+A Codex session, or a Claude session launched before inboxes existed, gets
+the line typed: `$daedalus-routine <run-id>` for Codex, followed by a second
+Enter that Codex's skill popup needs, and `/daedalus-routine <run-id>` for
+Claude. A dev build's skills carry its channel suffix. The grant and revoke
+notes, and the handoff below, are still typed, under the same rule.
 
 Each change in why a session's runs are held is logged as a `routines` event
 in the app log, such as "Argus: holding, you typed in this session".

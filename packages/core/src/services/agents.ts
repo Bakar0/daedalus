@@ -1,3 +1,4 @@
+import { postToInbox, usesInbox } from "./session-inbox";
 import { readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
@@ -1195,6 +1196,16 @@ export class AgentService {
    * arguments: `/name args` for Claude, `$name args` for Codex. Refuses with
    * `CONFLICT` when the skill is not installed for the session's provider.
    */
+  /**
+   * Hands a line to a running Claude session through its inbox, without
+   * typing. False when the session has no inbox or is not waiting on it.
+   */
+  async postToInbox(id: string, line: string): Promise<boolean> {
+    const agent = await this.requireRunning(id);
+    if (!usesInbox(agent)) return false;
+    return postToInbox(this.config, agent.id, line);
+  }
+
   async invokeSkill(
     id: string,
     skillId: string,

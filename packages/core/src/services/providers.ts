@@ -1,3 +1,4 @@
+import { ensureInbox, inboxHook } from "./session-inbox";
 import {
   ensureDirectory,
   findExecutable,
@@ -118,12 +119,23 @@ export async function claudeDaedalusSettingsArgs(
   sessionId?: string,
   options: { acceptPeerMessages?: boolean } = {},
 ): Promise<string[]> {
+  // Every Claude session gets an inbox, so routines granted later reach it
+  // without typing. A pipe that cannot be made leaves the session without
+  // one; delivery then falls back to typing.
+  const inbox = sessionId
+    ? await ensureInbox(config, sessionId)
+        .then(() => inboxHook(config, sessionId))
+        .catch(() => undefined)
+    : undefined;
   // The skill system contributes two keys here: `outputStyle`, which is what
   // actually turns an installed writing style on, and `skillOverrides` for
   // skills the user switched off. Both ride the settings argument Daedalus
   // already passes, so neither one edits the user's own settings file.
   const daedalus: ClaudeSettings = {
-    ...daedalusClaudeSettings(daedalExecutable(config), sessionId, options),
+    ...daedalusClaudeSettings(daedalExecutable(config), sessionId, {
+      ...options,
+      ...(inbox ? { inboxHook: inbox } : {}),
+    }),
     ...new SkillService(config).claudeSkillSettings(),
   };
   const existingValue = settingsArgumentValue(existingArgs);

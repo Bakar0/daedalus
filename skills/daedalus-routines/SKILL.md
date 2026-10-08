@@ -11,7 +11,7 @@ Daedalus does not tell you whether this session holds it. Start with
 `daedal routine list`: if it says the session does not hold the routines
 ability, tell the user to turn on Routines in the session's menu in the
 Daedalus app, and stop. When
-one is due, Daedalus types a line with the routine run skill and a run id
+one is due, Daedalus sends a line with the routine run skill and a run id
 into this session, and you carry out that run with that skill. What a run
 finds becomes a task on the workspace's board.
 
