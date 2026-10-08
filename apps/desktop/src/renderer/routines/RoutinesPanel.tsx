@@ -113,7 +113,6 @@ export function RoutinesPanel({
                 minutes".
               </span>
               <button
-                className="quiet"
                 onClick={() => {
                   hideHowTo();
                   setShowHowTo(false);
