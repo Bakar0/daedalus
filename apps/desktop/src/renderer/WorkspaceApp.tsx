@@ -79,6 +79,7 @@ import { ColorSwatches, SessionMenu } from "./SessionMenu";
 import { RoutineBar } from "./routines/RoutineBar";
 import { TeamBar, TeamPanel } from "./teams/TeamPanel";
 import { RoutinesPanel } from "./routines/RoutinesPanel";
+import { SecretsPanel } from "./SecretsPanel";
 import {
   AgentStatusDot,
   compactTokenLabel,
@@ -447,6 +448,23 @@ function AllWorkspacesIcon() {
       <rect height="7" rx="1.5" width="7" x="14" y="3" />
       <rect height="7" rx="1.5" width="7" x="3" y="14" />
       <rect height="7" rx="1.5" width="7" x="14" y="14" />
+    </svg>
+  );
+}
+
+function KeyIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <circle cx="8" cy="15" r="4" />
+      <path d="M10.8 12.2 20 3M16 7l3 3M14 9l2 2" />
     </svg>
   );
 }
@@ -1751,6 +1769,8 @@ export function WorkspaceApp({
   const [modal, setModal] = useState<
     "workspace" | "task" | "session" | "repository" | "settings" | undefined
   >(initialModal);
+  /** The workspace whose Secrets dialog is open. */
+  const [secretsWorkspace, setSecretsWorkspace] = useState<WorkspaceDto>();
   // Which settings category is open. Kept here rather than inside the dialog
   // so reopening Settings returns to where the user was.
   const [settingsSection, setSettingsSection] =
@@ -5675,6 +5695,16 @@ export function WorkspaceApp({
                       >
                         <SessionLaunchIcon />
                       </button>
+                      <button
+                        aria-label={`Secrets of ${item.name}`}
+                        className="session-card-action workspace-secrets-action"
+                        disabled={busy}
+                        onClick={() => setSecretsWorkspace(item)}
+                        title="Secrets"
+                        type="button"
+                      >
+                        <KeyIcon />
+                      </button>
                       <ConfirmButton
                         aria-label={`Archive ${item.name} workspace`}
                         armedTitle="All its sessions stop and move to their archived list. The workspace and its sessions can be restored later."
@@ -6980,6 +7010,21 @@ export function WorkspaceApp({
               </button>
             </div>
           </form>
+        </Modal>
+      )}
+
+      {secretsWorkspace && (
+        <Modal
+          closeButton
+          onClose={() => setSecretsWorkspace(undefined)}
+          title={`Secrets · ${secretsWorkspace.name}`}
+        >
+          <SecretsPanel
+            busy={busy}
+            client={client}
+            perform={perform}
+            workspace={secretsWorkspace}
+          />
         </Modal>
       )}
 

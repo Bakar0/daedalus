@@ -785,14 +785,19 @@ button:not(
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Terminal and archive come in on hover, to the left of the +. */
+/* Terminal, secrets and archive come in on hover, to the left of the +. */
 .workspace-group .workspace-terminal-action,
+.workspace-group .workspace-secrets-action,
 .workspace-group .workspace-card-archive {
   display: none !important;
 }
 .workspace-group
   > .workspace-card:is(:hover, :focus-within)
-  :is(.workspace-terminal-action, .workspace-card-archive) {
+  :is(
+    .workspace-terminal-action,
+    .workspace-secrets-action,
+    .workspace-card-archive
+  ) {
   display: flex !important;
 }
 .workspace-group
@@ -7200,4 +7205,17 @@ dd {
 }
 .accounts-signin-terminal > * {
   height: 100%;
+}
+.secrets-panel {
+  display: grid;
+  gap: 12px;
+}
+.secrets-intro,
+.secrets-empty {
+  color: var(--secondary);
+  font-size: 12px;
+  margin: 0;
+}
+.secrets-list form code {
+  align-self: center;
 }

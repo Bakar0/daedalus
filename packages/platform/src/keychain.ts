@@ -81,3 +81,23 @@ export function keychainReadCommand(service: string, account: string): string {
   const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
   return `${SECURITY} find-generic-password -s ${quote(service)} -a ${quote(account)} -w`;
 }
+
+/**
+ * The password of a login Keychain item, or undefined when there is none.
+ * `security` prints it on standard output with a newline after it, which is
+ * dropped. A password that is not printable text comes back as hex, so a
+ * caller storing arbitrary bytes encodes them itself.
+ */
+export async function readKeychainPassword(
+  service: string,
+  account: string,
+  run: typeof runCommand = runCommand,
+): Promise<string | undefined> {
+  const result = await run(
+    SECURITY,
+    ["find-generic-password", "-s", service, "-a", account, "-w"],
+    { timeoutMs: 10_000 },
+  );
+  if (result.exitCode !== 0) return undefined;
+  return result.stdout.replace(/\n$/, "");
+}

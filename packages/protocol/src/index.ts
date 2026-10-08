@@ -8,6 +8,12 @@ export type AgentProviderName = "claude" | "codex" | "custom";
 export type AgentSessionStatus = "starting" | "running" | "exited" | "lost";
 export type SessionKind = "agent" | "terminal";
 
+/** A workspace secret's name. The value is never sent to the renderer. */
+export interface WorkspaceSecretDto {
+  name: string;
+  updatedAt: string;
+}
+
 export interface WorkspaceDto {
   id: string;
   slug: string;
@@ -1263,6 +1269,17 @@ export interface DesktopRpcSchema {
       accountSetLogin: Request<
         { provider: "claude"; account: string; login: ClaudeLoginDto },
         { provider: "claude" | "codex"; account: string; login: ClaudeLoginDto }
+      >;
+      /** A workspace's secrets, by name; values never leave the Keychain. */
+      secretList: Request<{ workspaceId: string }, WorkspaceSecretDto[]>;
+      /** Adds a workspace secret or replaces its value. */
+      secretSet: Request<
+        { workspaceId: string; name: string; value: string },
+        WorkspaceSecretDto
+      >;
+      secretRemove: Request<
+        { workspaceId: string; name: string },
+        { name: string }
       >;
       /** Stores an API-key account's key in the Keychain. */
       accountSetApiKey: Request<

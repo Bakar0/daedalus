@@ -107,6 +107,10 @@ export class WorkspaceService {
         return null;
       throw new DaedalusError("NOT_FOUND", `No account named '${reference}'`);
     },
+    /** Deletes a workspace's secrets from the Keychain before its rows go. */
+    private readonly forgetSecrets: (
+      workspaceId: string,
+    ) => Promise<void> = async () => {},
   ) {}
 
   async create(input: {
@@ -369,6 +373,7 @@ export class WorkspaceService {
       );
     if (options.deleteFiles) await this.verifyDeletionTarget(workspace);
     if (options.deleteFiles) await removeDirectory(workspace.path);
+    await this.forgetSecrets(workspace.id);
     this.repositories.transaction(() =>
       this.repositories.deleteWorkspace(workspace.id),
     );
@@ -422,6 +427,7 @@ export class WorkspaceService {
     if (folderExists) await this.verifyDeletionTarget(workspace);
     await this.discardCheckouts(workspace.id);
     if (folderExists) await removeDirectory(workspace.path);
+    await this.forgetSecrets(workspace.id);
     this.repositories.transaction(() =>
       this.repositories.deleteWorkspace(workspace.id),
     );

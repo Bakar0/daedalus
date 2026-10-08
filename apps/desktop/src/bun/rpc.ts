@@ -890,6 +890,25 @@ export function createDesktopRequestHandlers(
       ),
     accountSetLogin: ({ provider, account, login }) =>
       mutate(() => context.accounts.setLogin(provider, account, login)),
+    secretList: ({ workspaceId }) =>
+      result(async () =>
+        (await context.secrets.list(workspaceId)).map(
+          ({ name, updatedAt }) => ({
+            name,
+            updatedAt,
+          }),
+        ),
+      ),
+    secretSet: ({ workspaceId, name, value }) =>
+      mutate(async () => {
+        const secret = await context.secrets.set(workspaceId, name, value);
+        return { name: secret.name, updatedAt: secret.updatedAt };
+      }),
+    secretRemove: ({ workspaceId, name }) =>
+      mutate(async () => {
+        await context.secrets.remove(workspaceId, name);
+        return { name };
+      }),
     accountSetApiKey: ({ provider, account, key }) =>
       mutate(async () =>
         accountDto(

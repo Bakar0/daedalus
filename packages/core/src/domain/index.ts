@@ -214,6 +214,17 @@ export interface PullRequestRef {
   mergedAt?: string;
 }
 
+/**
+ * A named secret of a workspace. Only the name is Daedalus's state; the value
+ * is a login Keychain item that `daedal exec --secret` reads.
+ */
+export interface WorkspaceSecret {
+  workspaceId: UUID;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface WorkspaceRepository {
   id: UUID;
   workspaceId: UUID;

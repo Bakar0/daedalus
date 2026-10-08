@@ -22,6 +22,7 @@ import { DeliveryGate } from "./delivery";
 import { RoutineDelivery } from "./routine-delivery";
 import { RoutineReportService } from "./routine-reports";
 import { RoutineService } from "./routines";
+import { SecretService } from "./secrets";
 import { SkillService } from "./skills";
 import { AgentService } from "./agents";
 import { IntegratedTerminalService } from "./integrated-terminals";
@@ -66,6 +67,8 @@ export interface ApplicationContext {
   activity: ActivityService;
   skills: SkillService;
   accounts: AccountService;
+  /** Workspace secrets: names in SQLite, values in the login Keychain. */
+  secrets: SecretService;
   abilities: AbilityService;
   routines: RoutineService;
   routineReports: RoutineReportService;
@@ -155,7 +158,9 @@ export async function createApplicationContext(
     },
     (provider, reference) =>
       findAccount(config, provider, reference)?.id ?? null,
+    (workspaceId) => secrets.forgetWorkspace(workspaceId),
   );
+  const secrets = new SecretService(repositories, workspaces, config.home);
   const tasks = new TaskService(repositories, workspaces, (taskId) =>
     agents.hasLiveTaskAgents(taskId),
   );
@@ -295,6 +300,7 @@ export async function createApplicationContext(
     accounts: new AccountService(config, repositories, undefined, (id) =>
       agents.archive(id, true),
     ),
+    secrets,
     abilities,
     routines,
     routineReports,

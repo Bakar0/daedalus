@@ -32,6 +32,12 @@ import { callerSession } from "./caller";
 import { accountChecks, accountCommand, accountHelp } from "./accounts";
 import { routineCommand, routineHelp, sessionCommand } from "./routines";
 import { spawnTeamMember, takeTeamOption, teamCommand, teamHelp } from "./team";
+import {
+  execCommand,
+  execJsonFlag,
+  secretCommand,
+  secretHelp,
+} from "./secrets";
 import { findTmuxExecutable, probeVersion } from "@daedalus/platform";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -332,6 +338,8 @@ Usage:
   daedal session <rename|pin|unpin|color|abilities|grant|revoke> ... [--json]
   daedal routine <add|list|get|enable|disable|run|remove|purpose|pause|resume|runs|start|done|fail|report|resolve|reports|feedback> ... [--json]
   daedal team <say|chat|list|goal> ... [--json]
+  daedal secret <list|set|remove> ... [--json]
+  daedal exec [--secret <NAME>]... -- <command> [<args>...]
   daedal attention "<reason>" [--session <agent-id>] [--clear] [--json]
   daedal notify "<message>" [--level info|success|error] [--desktop] [--json]
   daedal ui state [--json]
@@ -343,6 +351,8 @@ const commandHelp: Record<string, string> = {
   ...routineHelp,
   team: teamHelp,
   account: accountHelp,
+  secret: secretHelp,
+  exec: secretHelp,
   workspace: `Workspace commands:
   daedal workspace create <name> [--slug <slug>] [--path <path>]
       [--default-claude-account <account>] [--default-codex-account <account>]
@@ -2518,6 +2528,30 @@ export async function runCli(
   inputArgs: string[],
   options: CliOptions = {},
 ): Promise<number> {
+  // Everything after `exec --` belongs to the command it runs, its own
+  // --json and --help included.
+  if (inputArgs[0] === "exec") {
+    const own = inputArgs.indexOf("--");
+    const ownArgs = own === -1 ? inputArgs : inputArgs.slice(0, own);
+    if (ownArgs.includes("--help") || ownArgs.includes("-h")) {
+      console.log(secretHelp);
+      return 0;
+    }
+    const context = await createApplicationContext({
+      migrationsDirectory: options.migrationsDirectory,
+      reconcile: false,
+    });
+    try {
+      return await execCommand(
+        context,
+        inputArgs
+          .slice(1)
+          .filter((argument, index) => argument !== "--json" || index >= own),
+      );
+    } finally {
+      context.close();
+    }
+  }
   const json = inputArgs.includes("--json");
   const args = inputArgs.filter((argument) => argument !== "--json");
   if (args[0] === "agent" && args[1] === "telemetry")
@@ -2564,6 +2598,7 @@ export async function runCli(
       "session",
       "routine",
       "team",
+      "secret",
     ].includes(args[0]!)
   )
     throw new DaedalusError("VALIDATION", `Unknown command '${args[0]}'`);
@@ -2594,6 +2629,8 @@ export async function runCli(
       return await sessionCommand(context, args.slice(1), json);
     if (args[0] === "team")
       return await teamCommand(context, args.slice(1), json);
+    if (args[0] === "secret")
+      return await secretCommand(context, args.slice(1), json);
     if (args[0] === "routine")
       return await routineCommand(context, args.slice(1), json, (reference) =>
         resolveTaskReference(context, reference),
@@ -2605,7 +2642,7 @@ export async function runCli(
 }
 
 if (import.meta.main) {
-  const json = Bun.argv.slice(2).includes("--json");
+  const json = execJsonFlag(Bun.argv.slice(2));
   try {
     process.exitCode = await runCli(Bun.argv.slice(2));
   } catch (error) {

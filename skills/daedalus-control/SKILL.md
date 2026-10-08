@@ -93,6 +93,23 @@ continue`, which starts a fresh session on the same task, working directory
 - Prefer `agent archive` over `stop` plus `remove` when preserving the provider
   conversation is useful. Restore archived conversations with `agent restore`.
 
+## Secrets
+
+When a tool needs an API key, token or password, do not ask the user to paste
+it. Run `daedal secret list` to see the workspace's secrets, then give the
+tool the ones it needs:
+
+```bash
+"{{daedal}}" exec --secret GH_TOKEN -- gh pr list
+```
+
+The command gets `GH_TOKEN` in its environment and its piped output shows the
+value as `***`. A variable used inside a shell command needs a shell to expand
+it: `exec --secret API_KEY -- sh -c 'curl -H "Authorization: Bearer $API_KEY" …'`.
+If the secret is missing, `exec` exits 3; ask the user to add it in the
+workspace's Secrets (the key on its card) or with `daedal secret set`. Do not
+print, encode or copy a secret's value.
+
 ## Reporting on yourself
 
 Daedalus can see that a session exists; it cannot see why one is stuck. Tell it.
