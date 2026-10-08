@@ -461,6 +461,7 @@ export interface DesktopSettingsDto {
   tmuxVersion?: string;
   workspaceInstructionFilesEnabled: boolean;
   autoRestoreSessionsEnabled: boolean;
+  trustSessionFoldersEnabled: boolean;
   focusMode: boolean;
   providers: ProviderAvailabilityDto[];
   /** Every account, default ones first. Sign-in state is `accountStatus`. */
@@ -1003,6 +1004,10 @@ export interface DesktopRpcSchema {
         { enabled: boolean }
       >;
       autoRestoreSessionsSet: Request<
+        { enabled: boolean },
+        { enabled: boolean }
+      >;
+      trustSessionFoldersSet: Request<
         { enabled: boolean },
         { enabled: boolean }
       >;

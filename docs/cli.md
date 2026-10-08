@@ -355,6 +355,30 @@ on it, so the session is live and usable either way; until you choose **"Trust
 all and continue"**, Codex activity runs on the rollout tier. The approval
 persists, so it is a once-per-machine step rather than a per-session one.
 
+### Session folder trust
+
+Codex and Claude both ask before working in a folder they have not seen, and
+every Daedalus session gets a new folder. With **Settings → Sessions → Trust
+session folders** on (the default), Daedalus writes the provider's own record
+for the session folder before it launches, the same record the provider writes
+when you answer the prompt:
+
+- Codex: a `[projects."<folder>"]` table with `trust_level = "trusted"` in the
+  account's `config.toml`. Codex ignores a trusted parent folder, so the entry
+  has to name the session folder itself. A folder you already have a table for
+  is left as it is.
+- Claude: `hasTrustDialogAccepted` and the two `hasClaudeMdExternalIncludes*`
+  flags on the folder's project in `.claude.json`. The second pair answers the
+  "Allow external CLAUDE.md file imports?" prompt, which Claude asks per folder
+  because the workspace `CLAUDE.md` imports `AGENTS.md` from outside it.
+
+Deleting a session, or a workspace, removes its entries again.
+
+Daedalus never types into a starting session. With the setting off, or for any
+other startup screen (an update offer, new terms), the session stays open at
+that screen and is marked as needing you. A provider that is still not at its
+prompt after 30 seconds is handed over the same way rather than closed.
+
 Every hook is asynchronous, carries an explicit timeout (5s, 3s for teardown),
 swallows every error, and exits 0 even when the Daedalus app is not running. A
 hook that fails because the control plane is down must never surface inside your
