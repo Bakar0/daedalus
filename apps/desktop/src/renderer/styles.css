@@ -7269,3 +7269,16 @@ dd {
   padding: 0;
   text-decoration: underline;
 }
+.secrets-note {
+  align-items: center;
+  color: var(--secondary);
+  display: flex;
+  font-size: 11px;
+  gap: 6px;
+  margin: 0;
+}
+.secrets-note svg {
+  flex: none;
+  height: 12px;
+  width: 12px;
+}
