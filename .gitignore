@@ -11,3 +11,6 @@ artifacts/
 .hutch/devkit.lock
 .cottontail-tmp/
 .tmp-install/
+
+# wrangler dev state
+apps/relay/.wrangler/

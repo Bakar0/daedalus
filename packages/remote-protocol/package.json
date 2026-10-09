@@ -1,0 +1,12 @@
+{
+  "name": "@daedalus/remote-protocol",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@daedalus/protocol": "workspace:*",
+    "libsodium-wrappers": "0.8.4"
+  }
+}
