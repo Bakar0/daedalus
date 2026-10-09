@@ -2220,6 +2220,17 @@ describe("session status indicators", () => {
         source: "hook",
       }).unconfirmed,
     ).toBe(false);
+    // The prompt read at startup, before Codex fires any hook.
+    expect(
+      sessionStatusView(liveSession, {
+        sessionId: liveSession.id,
+        activity: "idle",
+        detail: null,
+        since: "2026-09-16T09:01:00.000Z",
+        observedAt: "2026-09-16T09:02:00.000Z",
+        source: "pane",
+      }),
+    ).toMatchObject({ label: "idle", unconfirmed: false });
   });
 
   test("falls back to lifecycle status when no activity has been observed", () => {

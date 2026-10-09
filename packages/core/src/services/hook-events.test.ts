@@ -453,6 +453,23 @@ describe("Claude background agents", () => {
 });
 
 describe("Codex hook payloads", () => {
+  test("the thread-title side turn does not end the turn", () => {
+    expect(
+      observeCodexHook(
+        "Stop",
+        codex("Stop", { last_assistant_message: '{"title":"Run echo hi"}' }),
+      ),
+    ).toBeUndefined();
+    expect(
+      observeCodexHook(
+        "Stop",
+        codex("Stop", {
+          last_assistant_message: '{"title":"Plan","steps":["one"]}',
+        }),
+      ),
+    ).toMatchObject({ activity: "done" });
+  });
+
   test("a tool approval wait is needs_permission", () => {
     expect(
       observeCodexHook(

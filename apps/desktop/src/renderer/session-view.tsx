@@ -265,7 +265,9 @@ export function sessionStatusView(
     since: activity.since,
     attention: false,
     reasons: [],
-    unconfirmed: activity.source === "pane",
+    // A prompt on screen is not a guess, and Daedalus reads one whenever a
+    // session starts, so only a busy reading from the pane gets the marker.
+    unconfirmed: activity.source === "pane" && activity.activity !== "idle",
   };
 }
 

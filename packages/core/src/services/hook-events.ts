@@ -465,7 +465,9 @@ export function observeCodexHook(
     case "PostCompact":
       return { activity: "working", source, detail: "Compacting context" };
     case "Stop":
-      return turnEnded(payload, source, Boolean(context.routines));
+      return isCodexTitleTurn(payload)
+        ? undefined
+        : turnEnded(payload, source, Boolean(context.routines));
     case "Interrupt":
       // Codex's Interrupt has no Claude equivalent. The turn is over and
       // nothing is blocked, so it retracts a badge the way a new prompt does.
@@ -474,6 +476,28 @@ export function observeCodexHook(
       return { activity: "unknown", source, clear: true };
     default:
       return undefined;
+  }
+}
+
+/**
+ * Codex names a new thread in a side turn that runs alongside the first real
+ * one and fires its own `Stop` about a second in, with a last message such as
+ * `{"title":"Run echo hi"}` (seen on 0.162). Read as the end of the turn, it
+ * showed a working session as done until its next tool call.
+ */
+function isCodexTitleTurn(payload: Record<string, unknown>): boolean {
+  const last = text(payload.last_assistant_message)?.trim();
+  if (!last?.startsWith("{")) return false;
+  try {
+    const parsed: unknown = JSON.parse(last);
+    return (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed) &&
+      Object.keys(parsed).join() === "title"
+    );
+  } catch {
+    return false;
   }
 }
 
