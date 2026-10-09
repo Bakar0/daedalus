@@ -8,8 +8,8 @@ import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories/sqlite";
 import type { WorkspaceService } from "./workspaces";
 
-/** The Keychain service every workspace secret is filed under. */
-export const SECRET_SERVICE = "Daedalus workspace secret";
+/** The Keychain service every secret is filed under. */
+export const SECRET_SERVICE = "Daedalus secret";
 
 /** What a secret's name may be: an environment variable name. */
 const SECRET_NAME = /^[A-Z_][A-Z0-9_]*$/;
