@@ -7229,3 +7229,12 @@ dd {
 .secrets-list li[data-overridden] code:first-child {
   text-decoration: line-through;
 }
+.secrets-intro .link {
+  background: none;
+  border: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+}

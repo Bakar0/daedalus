@@ -16,9 +16,12 @@ const SECRET_NAME = /^[A-Z_][A-Z0-9_]*$/;
 export function SecretsPanel({
   client,
   onError,
+  onOpenGlobal,
   workspace,
 }: {
   client: DesktopClient;
+  /** Opens Settings → Secrets, from a workspace's dialog. */
+  onOpenGlobal?: () => void;
   onError: (message: string | undefined) => void;
   workspace?: WorkspaceDto;
 }) {
@@ -108,13 +111,21 @@ export function SecretsPanel({
   return (
     <section className="settings-section secrets-panel">
       <p className="secrets-intro">
-        {workspace
-          ? "This workspace's own secrets, and the global ones it can also use. Its own win over a global one of the same name."
-          : "Global secrets, for every workspace. A workspace can override one with its own, from the key on its card."}{" "}
-        An agent runs <code>daedal secret list</code> to see the names and{" "}
-        <code>daedal exec --secret NAME -- &lt;command&gt;</code> to give a
-        command one, so nobody pastes a value into a prompt. Values are kept in
-        the macOS Keychain.
+        Agents use these with{" "}
+        <code>daedal exec --secret NAME -- &lt;command&gt;</code>.
+        {workspace ? (
+          <>
+            {" "}
+            Global secrets apply here too.{" "}
+            {onOpenGlobal ? (
+              <button className="link" onClick={onOpenGlobal} type="button">
+                Edit global secrets
+              </button>
+            ) : undefined}
+          </>
+        ) : (
+          " They apply in every workspace."
+        )}
       </p>
       {secrets === undefined ? undefined : secrets.length === 0 ? (
         <p className="secrets-empty">No secrets yet.</p>
@@ -167,7 +178,7 @@ export function SecretsPanel({
                         {workspace && !own(secret)
                           ? secret.overridden
                             ? "Global · overridden by this workspace's"
-                            : "Global · edit in Settings → Secrets"
+                            : "Global"
                           : `Set ${new Date(secret.updatedAt).toLocaleString()}`}
                       </small>
                       {showing ? (

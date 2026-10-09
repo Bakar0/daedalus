@@ -7022,6 +7022,11 @@ export function WorkspaceApp({
           <SecretsPanel
             client={client}
             onError={setError}
+            onOpenGlobal={() => {
+              setSecretsWorkspace(undefined);
+              setSettingsSection("secrets");
+              setModal("settings");
+            }}
             workspace={secretsWorkspace}
           />
         </Modal>
