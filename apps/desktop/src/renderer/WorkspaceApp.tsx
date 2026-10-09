@@ -79,6 +79,7 @@ import { ColorSwatches, SessionMenu } from "./SessionMenu";
 import { RoutineBar } from "./routines/RoutineBar";
 import { TeamBar, TeamPanel } from "./teams/TeamPanel";
 import { RoutinesPanel } from "./routines/RoutinesPanel";
+import { SecretsPanel } from "./SecretsPanel";
 import {
   AgentStatusDot,
   compactTokenLabel,
@@ -447,6 +448,23 @@ function AllWorkspacesIcon() {
       <rect height="7" rx="1.5" width="7" x="14" y="3" />
       <rect height="7" rx="1.5" width="7" x="3" y="14" />
       <rect height="7" rx="1.5" width="7" x="14" y="14" />
+    </svg>
+  );
+}
+
+function KeyIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <circle cx="8" cy="15" r="4" />
+      <path d="M10.8 12.2 20 3M16 7l3 3M14 9l2 2" />
     </svg>
   );
 }
@@ -1751,6 +1769,10 @@ export function WorkspaceApp({
   const [modal, setModal] = useState<
     "workspace" | "task" | "session" | "repository" | "settings" | undefined
   >(initialModal);
+  /** Whose Secrets dialog is open: a workspace's, or the global ones. */
+  const [secretsWorkspace, setSecretsWorkspace] = useState<
+    WorkspaceDto | "global"
+  >();
   // Which settings category is open. Kept here rather than inside the dialog
   // so reopening Settings returns to where the user was.
   const [settingsSection, setSettingsSection] =
@@ -5100,6 +5122,17 @@ export function WorkspaceApp({
           )}
         </strong>
       </button>
+      <span className="workspace-card-actions" data-no-drag>
+        <button
+          aria-label="Global secrets"
+          className="session-card-action workspace-secrets-action"
+          onClick={() => setSecretsWorkspace("global")}
+          title="Global secrets"
+          type="button"
+        >
+          <KeyIcon />
+        </button>
+      </span>
     </div>
   );
 
@@ -5674,6 +5707,16 @@ export function WorkspaceApp({
                         type="button"
                       >
                         <SessionLaunchIcon />
+                      </button>
+                      <button
+                        aria-label={`Secrets of ${item.name}`}
+                        className="session-card-action workspace-secrets-action"
+                        disabled={busy}
+                        onClick={() => setSecretsWorkspace(item)}
+                        title="Secrets"
+                        type="button"
+                      >
+                        <KeyIcon />
                       </button>
                       <ConfirmButton
                         aria-label={`Archive ${item.name} workspace`}
@@ -6980,6 +7023,28 @@ export function WorkspaceApp({
               </button>
             </div>
           </form>
+        </Modal>
+      )}
+
+      {secretsWorkspace && (
+        <Modal
+          closeButton
+          onClose={() => setSecretsWorkspace(undefined)}
+          title={
+            secretsWorkspace === "global"
+              ? "Global secrets"
+              : `Secrets · ${secretsWorkspace.name}`
+          }
+        >
+          <SecretsPanel
+            client={client}
+            key={secretsWorkspace === "global" ? "global" : secretsWorkspace.id}
+            onError={setError}
+            onOpenGlobal={() => setSecretsWorkspace("global")}
+            {...(secretsWorkspace === "global"
+              ? {}
+              : { workspace: secretsWorkspace })}
+          />
         </Modal>
       )}
 

@@ -8,6 +8,16 @@ export type AgentProviderName = "claude" | "codex" | "custom";
 export type AgentSessionStatus = "starting" | "running" | "exited" | "lost";
 export type SessionKind = "agent" | "terminal";
 
+/** A secret's name. A value only travels when the user asks to see it. */
+export interface SecretDto {
+  name: string;
+  /** Null for a global secret. */
+  workspaceId: string | null;
+  /** A global secret the workspace has its own of the same name for. */
+  overridden: boolean;
+  updatedAt: string;
+}
+
 export interface WorkspaceDto {
   id: string;
   slug: string;
@@ -1263,6 +1273,25 @@ export interface DesktopRpcSchema {
       accountSetLogin: Request<
         { provider: "claude"; account: string; login: ClaudeLoginDto },
         { provider: "claude" | "codex"; account: string; login: ClaudeLoginDto }
+      >;
+      /**
+       * The secrets a workspace's commands can use: its own, then the global
+       * ones. With a null workspace, only the global ones.
+       */
+      secretList: Request<{ workspaceId: string | null }, SecretDto[]>;
+      /** Adds a secret or replaces its value; null is global. */
+      secretSet: Request<
+        { workspaceId: string | null; name: string; value: string },
+        SecretDto
+      >;
+      secretRemove: Request<
+        { workspaceId: string | null; name: string },
+        { name: string }
+      >;
+      /** One secret's value, read from the Keychain for the user to see. */
+      secretReveal: Request<
+        { workspaceId: string | null; name: string },
+        { value: string }
       >;
       /** Stores an API-key account's key in the Keychain. */
       accountSetApiKey: Request<

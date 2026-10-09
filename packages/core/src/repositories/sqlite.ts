@@ -24,6 +24,7 @@ import type {
   WorkspaceRepositoryAccess,
 } from "../domain";
 import { AbilityRepository, RoutineRepository } from "./abilities";
+import { SecretRepository } from "./secrets";
 import { TeamRepository } from "./teams";
 
 interface WorkspaceRow {
@@ -344,6 +345,7 @@ export class SqliteRepositories {
   readonly abilities: AbilityRepository;
   readonly routines: RoutineRepository;
   readonly teams: TeamRepository;
+  readonly secrets: SecretRepository;
 
   constructor(databasePath: string) {
     this.database = new Database(databasePath, { create: true });
@@ -353,6 +355,7 @@ export class SqliteRepositories {
     this.abilities = new AbilityRepository(this.database);
     this.routines = new RoutineRepository(this.database);
     this.teams = new TeamRepository(this.database);
+    this.secrets = new SecretRepository(this.database);
   }
 
   /**

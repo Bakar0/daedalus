@@ -214,6 +214,17 @@ export interface PullRequestRef {
   mergedAt?: string;
 }
 
+/**
+ * A named secret, global (`workspaceId` null) or a workspace's own. Only the
+ * name is Daedalus's state; the value is a login Keychain item.
+ */
+export interface Secret {
+  workspaceId: UUID | null;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface WorkspaceRepository {
   id: UUID;
   workspaceId: UUID;

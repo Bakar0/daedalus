@@ -1,6 +1,6 @@
 ---
 name: daedalus-control
-description: Operate Daedalus with the daedal CLI. Use when the user asks to open or create a board task, spawn or start a Codex or Claude agent, or inspect or change Daedalus workspace, repository, worktree, task, or session state; do not use for ordinary work inside an already-selected repository.
+description: Operate Daedalus with the daedal CLI. Use when the user asks to open or create a board task, spawn or start a Codex or Claude agent, inspect or change Daedalus workspace, repository, worktree, task, or session state, or when a command needs an API key, token or password (Daedalus secrets); do not use for ordinary work inside an already-selected repository.
 ---
 
 # Daedalus control
@@ -92,6 +92,24 @@ continue`, which starts a fresh session on the same task, working directory
   is unsuitable for machine-readable automation.
 - Prefer `agent archive` over `stop` plus `remove` when preserving the provider
   conversation is useful. Restore archived conversations with `agent restore`.
+
+## Secrets
+
+When a tool needs an API key, token or password, do not ask the user to paste
+it. Run `daedal secret list` to see the secrets you can use (the workspace's
+own and the global ones), then give the tool the ones it needs:
+
+```bash
+"{{daedal}}" exec --secret GH_TOKEN -- gh pr list
+```
+
+The command gets `GH_TOKEN` in its environment and its piped output shows the
+value as `***`. A variable used inside a shell command needs a shell to expand
+it: `exec --secret API_KEY -- sh -c 'curl -H "Authorization: Bearer $API_KEY" …'`.
+If the secret is missing, `exec` exits 3; ask the user to add it in the
+app (the key on the All workspaces card for everywhere, the key on the
+workspace's card for this workspace) or with `daedal secret set`. Do not
+print, encode or copy a secret's value.
 
 ## Reporting on yourself
 

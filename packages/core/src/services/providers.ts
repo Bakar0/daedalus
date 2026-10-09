@@ -212,7 +212,8 @@ export const codexConfigPath = (config: DaedalusConfig): string =>
 export const DAEDALUS_STATUS_INSTRUCTIONS = `You are running inside Daedalus, which shows the user whether each session is working, done, or needs them.
 - When you need the user to decide, answer, or approve something before you can continue, run \`daedal attention "<what you need from them>"\`. If you have a tool for asking the user a question (AskUserQuestion), you may use that instead. A question written only in your reply is shown as done, not as waiting on the user.
 - Run \`daedal attention --clear\` as soon as that is resolved.
-- When you finish what you were asked, just end your turn. Daedalus marks it done.`;
+- When you finish what you were asked, just end your turn. Daedalus marks it done.
+- When a command needs an API key, token or password, do not ask the user to paste it. Run \`daedal secret list\` and use one with \`daedal exec --secret NAME -- <command>\`. If it is not there, ask the user to add it from the key icon on the workspace's card in Daedalus (on All workspaces for every workspace).`;
 
 const CLAUDE_APPEND_PROMPT = "--append-system-prompt";
 

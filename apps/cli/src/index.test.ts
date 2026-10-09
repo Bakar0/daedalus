@@ -1052,3 +1052,104 @@ describe("daedal team", () => {
     });
   }, 60_000);
 });
+
+describe("daedal secret and exec", () => {
+  // These stop before the Keychain: a test must never write to the real one.
+  test("exec runs the command with its own --json and --help and its exit code", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const printArgs = await cli(home, [
+        "exec",
+        "--",
+        "/bin/echo",
+        "--json",
+        "--help",
+      ]);
+      expect(printArgs).toMatchObject({
+        exitCode: 0,
+        stdout: "--json --help\n",
+      });
+
+      const failing = await cli(home, [
+        "exec",
+        "--",
+        process.execPath,
+        "-e",
+        "process.exit(7)",
+      ]);
+      expect(failing.exitCode).toBe(7);
+    });
+  }, 30_000);
+
+  test("exec stops before the command when a secret is not set", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await cli(home, ["workspace", "create", "Keys", "--json"]);
+      const result = await cli(home, [
+        "exec",
+        "--secret",
+        "MISSING_TOKEN",
+        "--workspace",
+        "keys",
+        "--json",
+        "--",
+        process.execPath,
+        "-e",
+        "console.log('ran')",
+      ]);
+      expect(result.exitCode).toBe(3);
+      expect(result.stdout).toBe("");
+      const error = JSON.parse(result.stderr) as {
+        ok: boolean;
+        error: { code: string; message: string };
+      };
+      expect(error.ok).toBe(false);
+      expect(error.error.code).toBe("NOT_FOUND");
+      expect(error.error.message).toContain("MISSING_TOKEN");
+    });
+  }, 30_000);
+
+  test("exec needs -- before the command", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const result = await cli(home, ["exec", "--secret", "A_TOKEN", "echo"]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("Usage: daedal exec");
+    });
+  });
+
+  test("secret list starts empty and set refuses bad input", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await cli(home, ["workspace", "create", "Keys", "--json"]);
+      const listed = await cli(home, [
+        "secret",
+        "list",
+        "--workspace",
+        "keys",
+        "--json",
+      ]);
+      expect(JSON.parse(listed.stdout)).toEqual({ ok: true, data: [] });
+      const outside = await cli(
+        home,
+        ["secret", "set", "GH_TOKEN"],
+        { DAEDALUS_WORKSPACE_ID: "", DAEDALUS_SESSION_ID: "" },
+        "value\n",
+        "/",
+      );
+      expect(outside.exitCode).toBe(2);
+      expect(outside.stderr).toContain("--global");
+      const lowercase = await cli(
+        home,
+        ["secret", "set", "gh_token", "--workspace", "keys"],
+        {},
+        "value\n",
+      );
+      expect(lowercase.exitCode).toBe(2);
+      const empty = await cli(
+        home,
+        ["secret", "set", "GH_TOKEN", "--workspace", "keys"],
+        {},
+        "\n",
+      );
+      expect(empty.exitCode).toBe(2);
+      expect(empty.stderr).toContain("cannot be empty");
+    });
+  }, 30_000);
+});

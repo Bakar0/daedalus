@@ -131,6 +131,23 @@ the workspace's `--default-claude-account` / `--default-codex-account`, else
 exit code 5; `account login` is interactive and is for the user to run, so ask
 them rather than running it yourself.
 
+## Secrets
+
+```bash
+daedal secret list [--workspace <workspace> | --global]
+daedal secret set <NAME> [--workspace <workspace> | --global]      # value on standard input
+daedal secret remove <NAME> [--workspace <workspace> | --global]
+daedal exec [--secret <NAME>]... [--workspace <workspace>] -- <command> [<args>...]
+```
+
+A secret is a value a tool needs, like an API key, that the user stored once,
+globally or for one workspace. `secret list` shows the workspace's own and the
+global ones (a workspace's wins over a global one of the same name). `exec`
+starts the command with each named secret in its environment under its own
+name, masks the values as `***` in output read through a pipe, and returns the
+command's exit code. A secret set nowhere exits 3 before the command starts.
+Everything after `--` belongs to the command, `--json` included.
+
 ## Attention and notifications
 
 ```text
