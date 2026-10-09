@@ -569,7 +569,7 @@ button:not(
   height: 13px;
   width: 13px;
 }
-/* The key to the global secrets comes in on hover, like a workspace's. */
+/* The key to the global secrets, always shown. */
 .all-workspaces-card {
   align-items: center;
   display: flex;
@@ -589,12 +589,8 @@ button:not(
   height: 20px;
   justify-content: center;
   min-height: 0;
-  opacity: 0;
   padding: 0 !important;
   width: 20px;
-}
-.all-workspaces-card:is(:hover, :focus-within) .workspace-secrets-action {
-  opacity: 1;
 }
 .all-workspaces-card .workspace-secrets-action svg {
   height: 13px;
