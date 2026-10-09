@@ -1,6 +1,6 @@
 ---
 name: daedalus-control
-description: Operate Daedalus with the daedal CLI. Use when the user asks to open or create a board task, spawn or start a Codex or Claude agent, or inspect or change Daedalus workspace, repository, worktree, task, or session state; do not use for ordinary work inside an already-selected repository.
+description: Operate Daedalus with the daedal CLI. Use when the user asks to open or create a board task, spawn or start a Codex or Claude agent, inspect or change Daedalus workspace, repository, worktree, task, or session state, or when a command needs an API key, token or password (Daedalus secrets); do not use for ordinary work inside an already-selected repository.
 ---
 
 # Daedalus control
