@@ -19,8 +19,10 @@ daedal session color <session> <red|orange|gold|green|teal|blue|purple|pink|none
 session has it. Pinned sessions sit at the top of their workspace's list, in
 the order they were pinned. The color marks the session's card on its left
 edge, and the chip on tasks its routines file. A handoff successor keeps the
-pin and the color, and a session that holds an ability also keeps its exact
-name rather than gaining a ` · 2`.
+pin and the color, and a session that holds routines also keeps its exact
+name rather than gaining a ` · 2`, because its routines' tasks are signed
+with it. A team's lead is numbered like any other session; the team's name
+leaves the counter out, so it stays the same.
 
 `agent spawn` takes the same choices at creation: `--color <color>` and
 `--pin`.

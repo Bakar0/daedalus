@@ -10,6 +10,7 @@ import type { SqliteRepositories } from "../repositories";
 import { TEAM_FILE, TEAM_SKILL, type AbilityService } from "./abilities";
 import type { ActivityService } from "./activity";
 import type { AgentService } from "./agents";
+import { sessionBaseName } from "./providers";
 import type { TeamTransport } from "./team-transport";
 
 /** The lead's handle, and the tag that reaches it. */
@@ -630,7 +631,8 @@ export class TeamService {
     return {
       id: ability.id,
       lead,
-      name: lead.name,
+      // The lead's handoff counter is not part of the team's name.
+      name: sessionBaseName(lead.name),
       goal: ability.config.goal ?? null,
       ability,
     };

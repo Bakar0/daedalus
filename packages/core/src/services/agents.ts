@@ -1316,15 +1316,16 @@ export class AgentService {
         `${handoff}\n`,
         "utf8",
       );
-    // A session holding an ability keeps its name: it is one agent over
-    // time, and the name is how its tasks and notifications are signed.
-    const holdsAbilities = this.abilities
-      .list(predecessor.id)
-      .some((row) => row.enabled);
+    // A session holding routines keeps its name: it is one agent over time,
+    // and the name is how its routines' tasks and notifications are signed.
+    // A team's lead is numbered like any session; its team keeps one name.
+    const holdsRoutines = Boolean(
+      this.abilities.held(predecessor.id, "routines"),
+    );
     const session = await this.spawn({
       workspace: predecessor.workspaceId,
       taskId: predecessor.taskId ?? undefined,
-      name: holdsAbilities
+      name: holdsRoutines
         ? predecessor.name
         : handoffSessionName(predecessor.name),
       provider,

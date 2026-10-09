@@ -781,6 +781,11 @@ export function handoffSessionName(name: string): string {
   return match ? `${match[1]} · ${Number(match[2]) + 1}` : `${name} · 2`;
 }
 
+/** A name without its handoff counter: `API · 3` is `API`. */
+export function sessionBaseName(name: string): string {
+  return /^(.*) · \d+$/.exec(name)?.[1] ?? name;
+}
+
 /** The skill every handoff runs, whoever asks for it. */
 export const HANDOFF_SKILL = "daedalus-handoff";
 

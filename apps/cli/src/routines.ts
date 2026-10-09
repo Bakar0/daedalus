@@ -43,7 +43,8 @@ with nothing typed, or typed into a Codex session once it is idle, its
 input box is empty and nobody typed in it for 2 minutes. To start a session that holds
 one, use 'daedal agent spawn --ability <ability>'. 'revoke' stops what the
 ability does and keeps its data, so a later grant brings it back. A handoff
-moves the abilities, the name, the pin and the color to the successor.
+moves the abilities, the pin and the color to the successor; a session with
+routines keeps its exact name, any other gets ' · 2'.
 Archiving a session pauses its abilities; restoring it resumes them.`,
   routine: `Routine commands:
   daedal routine add --file <path|-> [--template] [--replace] [--session <s>]
