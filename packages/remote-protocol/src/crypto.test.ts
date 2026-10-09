@@ -37,7 +37,7 @@ describe("pairing", () => {
     const mac = createIdentity();
     const phone = createIdentity();
     const offer = decodePairingOffer(
-      encodePairingOffer(createPairingOffer(mac, "wss://relay.example")),
+      encodePairingOffer(createPairingOffer(mac, "wss://relay.example", "Mac")),
     );
     expect(offer.macKey).toBe(mac.publicKey);
     expect(verifyPairingProof(offer, phone, pairingProof(offer, phone))).toBe(
@@ -49,7 +49,7 @@ describe("pairing", () => {
     const mac = createIdentity();
     const phone = createIdentity();
     const intruder = createIdentity();
-    const offer = createPairingOffer(mac, "wss://relay.example");
+    const offer = createPairingOffer(mac, "wss://relay.example", "Mac");
     const proof = pairingProof(offer, phone);
     expect(
       verifyPairingProof(
@@ -58,7 +58,7 @@ describe("pairing", () => {
         proof,
       ),
     ).toBe(false);
-    const otherOffer = createPairingOffer(mac, "wss://relay.example");
+    const otherOffer = createPairingOffer(mac, "wss://relay.example", "Mac");
     expect(verifyPairingProof(otherOffer, phone, proof)).toBe(false);
     expect(verifyPairingProof(offer, phone, "not-base64!")).toBe(false);
   });

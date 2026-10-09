@@ -1,147 +1,364 @@
-import { DurableObject } from "cloudflare:workers";
+import {
+  activeEntitlement,
+  countActiveDevices,
+  createInvite,
+  deleteSession,
+  device,
+  PLANS,
+  redeemInvite,
+  setEntitlement,
+  type User,
+  userDevices,
+  userForSession,
+} from "./accounts";
+import { googleCallback, googleStart } from "./google";
+import {
+  bearer,
+  CLOSE,
+  constantTimeEqual,
+  currentMonth,
+  type Env,
+  fail,
+  ID,
+  json,
+  nowIso,
+  protocolToken,
+  randomToken,
+  refuse,
+  sha256,
+} from "./util";
+
+export { Room } from "./room";
 
 /**
- * The Daedalus relay. One Durable Object ("room") per Mac holds that Mac's
- * WebSocket and those of the phones talking to it, and forwards binary frames
- * between them. Frames are end-to-end encrypted by the devices; the relay
- * reads only the routing id at the front of each frame (see
- * `packages/remote-protocol/src/frames.ts`).
- *
- * Phase 0 has no accounts: anyone who knows a Mac's id can join its room.
- * They cannot read or forge anything, because pairing and every message are
- * checked by the devices, but they can knock. Accounts and entitlements come
- * in phase 1 and gate `connect` here.
+ * The Daedalus relay: phone accounts (Google sign-in plus an entitlement),
+ * Mac claiming, device revocation, admin routes, and the WebSocket entry
+ * that admits a device into its Mac's room. See `room.ts` for forwarding.
  */
-
-interface Env {
-  ROOMS: DurableObjectNamespace<Room>;
-}
-
-type Role = "mac" | "phone";
-
-interface Attachment {
-  role: Role;
-  deviceId: string;
-}
-
-const ID = /^[A-Za-z0-9_-]{8,64}$/;
-const MAX_FRAME_BYTES = 1024 * 1024;
-const MAX_PHONES = 10;
-
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/health") return new Response("ok");
-    if (url.pathname !== "/v1/connect")
-      return new Response("Not found", { status: 404 });
-    const room = url.searchParams.get("room") ?? "";
-    const role = url.searchParams.get("role");
-    const device = url.searchParams.get("device") ?? "";
-    if (
-      !ID.test(room) ||
-      !ID.test(device) ||
-      (role !== "mac" && role !== "phone") ||
-      (role === "mac" && device !== room)
-    )
-      return new Response("Bad connect request", { status: 400 });
-    if (request.headers.get("Upgrade") !== "websocket")
-      return new Response("Expected a WebSocket upgrade", { status: 426 });
-    return env.ROOMS.get(env.ROOMS.idFromName(room)).fetch(request);
+    const route = `${request.method} ${url.pathname}`;
+    try {
+      if (route === "GET /health") return new Response("ok");
+      if (route === "GET /v1/connect") return await connect(request, env);
+      if (route === "GET /auth/google/start")
+        return await googleStart(request, env);
+      if (route === "GET /auth/google/callback")
+        return await googleCallback(request, env);
+      if (url.pathname.startsWith("/admin/"))
+        return await admin(request, env, route);
+      if (url.pathname.startsWith("/v1/"))
+        return await account(request, env, route);
+      return fail(404, "NOT_FOUND", "Not found");
+    } catch (error) {
+      console.error(error);
+      return fail(500, "INTERNAL", "Something went wrong.");
+    }
   },
 } satisfies ExportedHandler<Env>;
 
-export class Room extends DurableObject<Env> {
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
-    // Keepalive pings are answered without waking the object, so an idle
-    // connected Mac is not billed for duration.
-    ctx.setWebSocketAutoResponse(
-      new WebSocketRequestResponsePair("ping", "pong"),
+const room = (env: Env, macId: string) =>
+  env.ROOMS.get(env.ROOMS.idFromName(macId));
+
+/**
+ * Admits a device to a Mac's room, or accepts and closes it with a code the
+ * client acts on (see `CLOSE`).
+ *
+ * - A Mac with a device token joins its room as its account. A Mac with no
+ *   token joins as unclaimed, which lets it wait for a phone to claim it and
+ *   nothing else, unless it was claimed before: then the token is required.
+ * - A phone needs a session, an active entitlement, and a Mac of the same
+ *   account. Its first connection registers it, within the plan's limit.
+ */
+async function connect(request: Request, env: Env): Promise<Response> {
+  if (request.headers.get("Upgrade") !== "websocket")
+    return fail(426, "UPGRADE", "Expected a WebSocket upgrade");
+  const url = new URL(request.url);
+  const macId = url.searchParams.get("room") ?? "";
+  const role = url.searchParams.get("role");
+  const deviceId = url.searchParams.get("device") ?? "";
+  const { hasProtocol, token } = protocolToken(request);
+  if (
+    !hasProtocol ||
+    !ID.test(macId) ||
+    !ID.test(deviceId) ||
+    (role !== "mac" && role !== "phone") ||
+    (role === "mac" && deviceId !== macId)
+  )
+    return fail(400, "BAD_CONNECT", "Bad connect request");
+
+  let userId: string | null = null;
+  const mac = await device(env.DB, macId);
+  if (role === "mac") {
+    if (mac && mac.kind !== "mac") return refuse(CLOSE.forbidden, "Not a Mac");
+    if (mac?.revokedAt) return refuse(CLOSE.unauthorized, "Device revoked");
+    if (mac?.userId) {
+      if (!token || (await sha256(token)) !== mac.tokenHash)
+        return refuse(CLOSE.unauthorized, "Device token required");
+      if (!(await activeEntitlement(env.DB, mac.userId)))
+        return refuse(CLOSE.noEntitlement, "No active access");
+      userId = mac.userId;
+    } else if (!mac) {
+      await env.DB.prepare(
+        "INSERT INTO devices (id, user_id, kind, created_at) VALUES (?, NULL, 'mac', ?)",
+      )
+        .bind(macId, nowIso())
+        .run();
+    }
+  } else {
+    const user = await userForSession(env.DB, token);
+    if (!user) return refuse(CLOSE.unauthorized, "Sign in again");
+    const entitlement = await activeEntitlement(env.DB, user.id);
+    if (!entitlement) return refuse(CLOSE.noEntitlement, "No active access");
+    if (!mac || mac.userId !== user.id || mac.revokedAt)
+      return refuse(CLOSE.forbidden, "That Mac is not on this account");
+    const phone = await device(env.DB, deviceId);
+    if (
+      phone &&
+      (phone.userId !== user.id || phone.revokedAt || phone.kind !== "phone")
+    )
+      return refuse(CLOSE.forbidden, "This phone was removed");
+    if (!phone) {
+      if (
+        (await countActiveDevices(env.DB, user.id, "phone")) >=
+        entitlement.maxPhones
+      )
+        return refuse(CLOSE.forbidden, "Phone limit reached");
+      await env.DB.prepare(
+        "INSERT INTO devices (id, user_id, kind, name, created_at, claimed_at) VALUES (?, ?, 'phone', ?, ?, ?)",
+      )
+        .bind(
+          deviceId,
+          user.id,
+          url.searchParams.get("name")?.slice(0, 80) ?? "",
+          nowIso(),
+          nowIso(),
+        )
+        .run();
+    }
+    userId = user.id;
+  }
+  await env.DB.prepare("UPDATE devices SET last_seen_at = ? WHERE id = ?")
+    .bind(nowIso(), deviceId)
+    .run();
+
+  const headers = new Headers(request.headers);
+  headers.set("X-Daedalus-Role", role);
+  headers.set("X-Daedalus-Device", deviceId);
+  headers.set("X-Daedalus-User", userId ?? "");
+  return room(env, macId).fetch(new Request(request, { headers }));
+}
+
+async function signedIn(request: Request, env: Env): Promise<User | Response> {
+  const user = await userForSession(env.DB, bearer(request));
+  return user ?? fail(401, "UNAUTHORIZED", "Sign in again.");
+}
+
+async function body<T>(request: Request): Promise<Partial<T>> {
+  try {
+    return (await request.json()) as Partial<T>;
+  } catch {
+    return {};
+  }
+}
+
+/** What a signed-in phone can do with its account. */
+async function account(
+  request: Request,
+  env: Env,
+  route: string,
+): Promise<Response> {
+  const user = await signedIn(request, env);
+  if (user instanceof Response) return user;
+
+  if (route === "GET /v1/me") {
+    const usage = await env.DB.prepare(
+      "SELECT bytes FROM usage WHERE user_id = ? AND month = ?",
+    )
+      .bind(user.id, currentMonth())
+      .first<{ bytes: number }>();
+    return json({
+      ok: true,
+      data: {
+        user,
+        entitlement: (await activeEntitlement(env.DB, user.id)) ?? null,
+        devices: await userDevices(env.DB, user.id),
+        usageBytes: usage?.bytes ?? 0,
+      },
+    });
+  }
+
+  if (route === "POST /v1/signout") {
+    await deleteSession(env.DB, bearer(request) ?? "");
+    return json({ ok: true, data: null });
+  }
+
+  if (route === "POST /v1/invites/redeem") {
+    const { code } = await body<{ code: string }>(request);
+    if (!code || !(await redeemInvite(env.DB, user.id, code)))
+      return fail(400, "INVITE_INVALID", "That invite code is not valid.");
+    return json({ ok: true, data: await activeEntitlement(env.DB, user.id) });
+  }
+
+  if (route === "POST /v1/pairings/claim") {
+    const { macId, name } = await body<{ macId: string; name: string }>(
+      request,
     );
+    if (!macId || !ID.test(macId))
+      return fail(400, "BAD_REQUEST", "Missing Mac id.");
+    const entitlement = await activeEntitlement(env.DB, user.id);
+    if (!entitlement)
+      return fail(402, "NO_ENTITLEMENT", "This account has no active access.");
+    const mac = await device(env.DB, macId);
+    if (!mac || mac.kind !== "mac" || mac.revokedAt)
+      return fail(
+        404,
+        "NOT_FOUND",
+        "That Mac is not online. Open Daedalus on it.",
+      );
+    if (mac.userId === user.id) return json({ ok: true, data: { macId } });
+    if (mac.userId)
+      return fail(409, "CLAIMED", "That Mac belongs to another account.");
+    if (
+      (await countActiveDevices(env.DB, user.id, "mac")) >= entitlement.maxMacs
+    )
+      return fail(403, "MAC_LIMIT", "This account has reached its Mac limit.");
+    const token = randomToken();
+    const claimed = await env.DB.prepare(
+      `UPDATE devices SET user_id = ?, name = ?, token_hash = ?, claimed_at = ?
+       WHERE id = ? AND user_id IS NULL AND revoked_at IS NULL`,
+    )
+      .bind(
+        user.id,
+        (name ?? "").slice(0, 80),
+        await sha256(token),
+        nowIso(),
+        macId,
+      )
+      .run();
+    if (!claimed.meta.changes)
+      return fail(409, "CLAIMED", "That Mac was claimed a moment ago.");
+    await room(env, macId).fetch("https://room/claimed", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    });
+    return json({ ok: true, data: { macId } });
   }
 
-  override async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-    const role = url.searchParams.get("role") as Role;
-    const deviceId = url.searchParams.get("device") as string;
-
-    if (role === "phone") {
-      const phones = this.ctx.getWebSockets("phone");
-      if (phones.length >= MAX_PHONES && !this.#socket("phone", deviceId))
-        return new Response("Too many phones", { status: 429 });
-    }
-    // A second connection from the same device replaces the first, which is
-    // what a reconnect after a network change looks like.
-    for (const old of this.ctx.getWebSockets(`${role}:${deviceId}`)) {
-      old.send(JSON.stringify({ relay: "replaced" }));
-      old.close(4000, "Replaced by a newer connection");
-    }
-
-    const pair = new WebSocketPair();
-    const server = pair[1];
-    this.ctx.acceptWebSocket(server, [role, `${role}:${deviceId}`]);
-    server.serializeAttachment({ role, deviceId } satisfies Attachment);
-    this.#notice(role, deviceId, true);
-    return new Response(null, { status: 101, webSocket: pair[0] });
+  const remove = /^DELETE \/v1\/devices\/([A-Za-z0-9_-]+)$/.exec(route);
+  if (remove) {
+    const target = await device(env.DB, remove[1]!);
+    if (!target || target.userId !== user.id)
+      return fail(404, "NOT_FOUND", "No such device.");
+    await env.DB.prepare(
+      "UPDATE devices SET revoked_at = ?, token_hash = NULL WHERE id = ?",
+    )
+      .bind(nowIso(), target.id)
+      .run();
+    const rooms =
+      target.kind === "mac"
+        ? [target.id]
+        : (await userDevices(env.DB, user.id))
+            .filter((item) => item.kind === "mac")
+            .map((item) => item.id);
+    for (const macId of rooms)
+      await room(env, macId).fetch("https://room/kick", {
+        method: "POST",
+        body: JSON.stringify({ deviceId: target.id }),
+      });
+    return json({ ok: true, data: null });
   }
 
-  override async webSocketMessage(
-    ws: WebSocket,
-    message: string | ArrayBuffer,
-  ): Promise<void> {
-    if (typeof message === "string") return;
-    if (message.byteLength > MAX_FRAME_BYTES) {
-      ws.close(1009, "Frame too large");
-      return;
-    }
-    const sender = ws.deserializeAttachment() as Attachment;
-    const frame = new Uint8Array(message);
-    const length = frame[0];
-    if (length === undefined || frame.length < 1 + length) return;
-    const payload = frame.subarray(1 + length);
+  return fail(404, "NOT_FOUND", "Not found");
+}
 
-    const target =
-      sender.role === "phone"
-        ? this.#socket("mac")
-        : this.#socket(
-            "phone",
-            new TextDecoder().decode(frame.subarray(1, 1 + length)),
-          );
-    if (!target) return;
+/** Invites, grants and usage, for the owner, with `ADMIN_KEY`. */
+async function admin(
+  request: Request,
+  env: Env,
+  route: string,
+): Promise<Response> {
+  const key = bearer(request);
+  if (!env.ADMIN_KEY || !key || !constantTimeEqual(key, env.ADMIN_KEY))
+    return fail(401, "UNAUTHORIZED", "Admin key required.");
 
-    const from = new TextEncoder().encode(sender.deviceId);
-    const out = new Uint8Array(1 + from.length + payload.length);
-    out[0] = from.length;
-    out.set(from, 1);
-    out.set(payload, 1 + from.length);
-    target.send(out);
+  if (route === "POST /admin/invites") {
+    const options = await body<{
+      plan: string;
+      maxUses: number;
+      days: number;
+      note: string;
+    }>(request);
+    if (options.plan && !PLANS[options.plan])
+      return fail(400, "BAD_PLAN", `Plans: ${Object.keys(PLANS).join(", ")}`);
+    return json({
+      ok: true,
+      data: { code: await createInvite(env.DB, options) },
+    });
   }
 
-  override async webSocketClose(ws: WebSocket): Promise<void> {
-    const { role, deviceId } = ws.deserializeAttachment() as Attachment;
-    // A replaced socket closes after its successor joined; only the last
-    // socket for a device leaving means the device went offline.
-    const remaining = this.ctx
-      .getWebSockets(`${role}:${deviceId}`)
-      .filter((socket) => socket !== ws);
-    if (remaining.length === 0) this.#notice(role, deviceId, false);
+  if (route === "GET /admin/invites") {
+    const { results } = await env.DB.prepare(
+      "SELECT code, plan, max_uses AS maxUses, used, expires_at AS expiresAt, note, created_at AS createdAt FROM invites ORDER BY created_at DESC",
+    ).all();
+    return json({ ok: true, data: results });
   }
 
-  override async webSocketError(ws: WebSocket): Promise<void> {
-    await this.webSocketClose(ws);
+  if (route === "GET /admin/users") {
+    const { results } = await env.DB.prepare(
+      `SELECT users.id, users.email, users.created_at AS createdAt,
+              entitlements.plan, entitlements.status, entitlements.source,
+              (SELECT COUNT(*) FROM devices WHERE devices.user_id = users.id AND kind = 'mac' AND revoked_at IS NULL) AS macs,
+              (SELECT COUNT(*) FROM devices WHERE devices.user_id = users.id AND kind = 'phone' AND revoked_at IS NULL) AS phones,
+              COALESCE((SELECT bytes FROM usage WHERE usage.user_id = users.id AND month = ?), 0) AS usageBytes
+       FROM users LEFT JOIN entitlements ON entitlements.user_id = users.id
+       ORDER BY users.created_at`,
+    )
+      .bind(currentMonth())
+      .all();
+    return json({ ok: true, data: results });
   }
 
-  #socket(role: Role, deviceId?: string): WebSocket | undefined {
-    const sockets = this.ctx.getWebSockets(
-      deviceId === undefined ? role : `${role}:${deviceId}`,
+  if (route === "POST /admin/entitlements") {
+    const { email, status, plan } = await body<{
+      email: string;
+      status: "active" | "revoked";
+      plan: string;
+    }>(request);
+    const user = await env.DB.prepare("SELECT id FROM users WHERE email = ?")
+      .bind(email ?? "")
+      .first<{ id: string }>();
+    if (!user) return fail(404, "NOT_FOUND", "No user with that email.");
+    if (plan && !PLANS[plan])
+      return fail(400, "BAD_PLAN", `Plans: ${Object.keys(PLANS).join(", ")}`);
+    const current = await env.DB.prepare(
+      "SELECT plan FROM entitlements WHERE user_id = ?",
+    )
+      .bind(user.id)
+      .first<{ plan: string }>();
+    await setEntitlement(
+      env.DB,
+      user.id,
+      plan ?? current?.plan ?? "beta",
+      "admin",
+      status === "revoked" ? "revoked" : "active",
     );
-    return sockets[sockets.length - 1];
+    if (status === "revoked") {
+      const macs = (await userDevices(env.DB, user.id)).filter(
+        (item) => item.kind === "mac",
+      );
+      for (const mac of macs)
+        await room(env, mac.id).fetch("https://room/kick", {
+          method: "POST",
+          body: JSON.stringify({ code: CLOSE.noEntitlement }),
+        });
+    }
+    return json({
+      ok: true,
+      data: (await activeEntitlement(env.DB, user.id)) ?? null,
+    });
   }
 
-  /** Tells the other side that a device came or went. */
-  #notice(role: Role, deviceId: string, online: boolean): void {
-    const text = JSON.stringify({ relay: "peer", deviceId, online });
-    if (role === "phone") this.#socket("mac")?.send(text);
-    else for (const phone of this.ctx.getWebSockets("phone")) phone.send(text);
-  }
+  return fail(404, "NOT_FOUND", "Not found");
 }

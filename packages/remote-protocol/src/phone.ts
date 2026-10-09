@@ -27,13 +27,38 @@ export function relayConnectUrl(
   macId: string,
   role: "mac" | "phone",
   deviceId: string,
+  name?: string,
 ): string {
   const url = new URL("/v1/connect", relay);
   url.searchParams.set("room", macId);
   url.searchParams.set("role", role);
   url.searchParams.set("device", deviceId);
+  if (name) url.searchParams.set("name", name);
   return url.toString();
 }
+
+/** The relay's HTTP address, from the WebSocket one in a pairing code. */
+export function relayHttpUrl(relay: string): string {
+  const url = new URL(relay);
+  url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+  return url.origin;
+}
+
+/** Sent with every connection; the token rides as `auth.<token>`. */
+export const RELAY_PROTOCOL = "daedalus.v1";
+
+export const relayProtocols = (token?: string): string[] =>
+  token ? [RELAY_PROTOCOL, `auth.${token}`] : [RELAY_PROTOCOL];
+
+/** Close codes the relay uses when it refuses or ends a connection. */
+export const RELAY_CLOSE = {
+  replaced: 4000,
+  claimed: 4001,
+  unauthorized: 4401,
+  noEntitlement: 4402,
+  forbidden: 4403,
+  overQuota: 4429,
+} as const;
 
 /** Counts what crossed the wire, as the relay saw it. */
 export interface WireStats {
@@ -62,35 +87,141 @@ interface PhoneOptions {
   tap?: (direction: "in" | "out", frame: Uint8Array) => void;
 }
 
-function openSocket(url: string): Promise<WebSocket> {
+export class RelayError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Opens a socket and waits until it is usable. A refusal arrives as an
+ * accepted socket closed at once with a `RELAY_CLOSE` code, which becomes
+ * the error.
+ */
+function openSocket(url: string, token?: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url);
+    const socket = new WebSocket(url, relayProtocols(token));
     socket.binaryType = "arraybuffer";
-    socket.addEventListener("open", () => resolve(socket), { once: true });
+    let settled = false;
     socket.addEventListener(
-      "error",
-      () => reject(new Error(`Could not reach the relay at ${url}`)),
+      "open",
+      () => {
+        // A refused socket opens and closes in the same moment; give the
+        // close a turn to arrive before calling it usable.
+        setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          resolve(socket);
+        }, 50);
+      },
+      { once: true },
+    );
+    socket.addEventListener(
+      "close",
+      (event) => {
+        if (settled) return;
+        settled = true;
+        reject(
+          new RelayError(
+            String(event.code),
+            event.reason || `Could not reach the relay at ${url}`,
+          ),
+        );
+      },
       { once: true },
     );
   });
 }
 
+/** The signed-in phone's account on the relay. */
+export class RelayAccount {
+  readonly base: string;
+
+  constructor(
+    relay: string,
+    private readonly token: string,
+  ) {
+    this.base = relayHttpUrl(relay);
+  }
+
+  async #call<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const response = await fetch(`${this.base}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    const result = (await response.json()) as
+      | { ok: true; data: T }
+      | { ok: false; error: { code: string; message: string } };
+    if (!result.ok)
+      throw new RelayError(result.error.code, result.error.message);
+    return result.data;
+  }
+
+  me(): Promise<{
+    user: { id: string; email: string };
+    entitlement: {
+      plan: string;
+      maxMacs: number;
+      maxPhones: number;
+      monthlyMb: number;
+    } | null;
+    devices: Array<{
+      id: string;
+      kind: "mac" | "phone";
+      name: string;
+      lastSeenAt: string | null;
+    }>;
+    usageBytes: number;
+  }> {
+    return this.#call("GET", "/v1/me");
+  }
+
+  claimMac(macId: string, name: string): Promise<{ macId: string }> {
+    return this.#call("POST", "/v1/pairings/claim", { macId, name });
+  }
+
+  redeemInvite(code: string): Promise<unknown> {
+    return this.#call("POST", "/v1/invites/redeem", { code });
+  }
+
+  removeDevice(id: string): Promise<null> {
+    return this.#call("DELETE", `/v1/devices/${encodeURIComponent(id)}`);
+  }
+
+  signOut(): Promise<null> {
+    return this.#call("POST", "/v1/signout");
+  }
+}
+
 /**
- * Pairs this phone with the Mac that showed `offer`. Resolves once the Mac
- * accepts the proof; the Mac's public key comes from the offer itself, never
- * from the relay.
+ * Pairs this phone with the Mac that showed `offer`: the account claims the
+ * Mac on the relay, then the phone proves to the Mac that it scanned the
+ * code. The Mac's public key comes from the offer itself, never from the
+ * relay. Claiming makes the Mac reconnect with its new device token, so the
+ * request is repeated until the Mac is back and answers.
  */
 export async function pairWithMac(
   phone: DeviceIdentity,
   offer: PairingOffer,
-  name: string,
-  timeoutMs = 15_000,
+  phoneName: string,
+  token: string,
+  timeoutMs = 20_000,
 ): Promise<PairedMac> {
   if (offer.expiresAt < Date.now())
     throw new Error("This pairing code has expired");
+  await new RelayAccount(offer.relay, token).claimMac(offer.macId, offer.name);
   const socket = await openSocket(
-    relayConnectUrl(offer.relay, offer.macId, "phone", phone.id),
+    relayConnectUrl(offer.relay, offer.macId, "phone", phone.id, phoneName),
+    token,
   );
+  let resend: ReturnType<typeof setInterval> | undefined;
   try {
     const answer = await new Promise<PlainMessage>((resolve, reject) => {
       const timer = setTimeout(
@@ -107,18 +238,24 @@ export async function pairWithMac(
         clearTimeout(timer);
         resolve(decoded.message);
       });
-      socket.send(
-        encodeRelayFrame(
-          "",
-          encodePlain({
-            type: "pair",
-            phoneId: phone.id,
-            phoneKey: phone.publicKey,
-            name,
-            proof: pairingProof(offer, phone),
-          }),
-        ),
+      socket.addEventListener("close", (event) => {
+        clearTimeout(timer);
+        reject(
+          new RelayError(String(event.code), event.reason || "Disconnected"),
+        );
+      });
+      const request = encodeRelayFrame(
+        "",
+        encodePlain({
+          type: "pair",
+          phoneId: phone.id,
+          phoneKey: phone.publicKey,
+          name: phoneName,
+          proof: pairingProof(offer, phone),
+        }),
       );
+      socket.send(request);
+      resend = setInterval(() => socket.send(request), 1_000);
     });
     if (answer.type === "refused") throw new Error(answer.reason);
     if (answer.type !== "paired")
@@ -130,6 +267,7 @@ export async function pairWithMac(
       macName: answer.macName,
     };
   } finally {
+    if (resend) clearInterval(resend);
     socket.close();
   }
 }
@@ -161,16 +299,18 @@ export class PhoneConnection {
   private constructor(
     private readonly phone: DeviceIdentity,
     private readonly mac: PairedMac,
+    private readonly token: string,
     private readonly options: PhoneOptions,
   ) {}
 
   static async connect(
     phone: DeviceIdentity,
     mac: PairedMac,
+    token: string,
     options: PhoneOptions = {},
     timeoutMs = 15_000,
   ): Promise<PhoneConnection> {
-    const connection = new PhoneConnection(phone, mac, options);
+    const connection = new PhoneConnection(phone, mac, token, options);
     await connection.#open(timeoutMs);
     return connection;
   }
@@ -178,6 +318,7 @@ export class PhoneConnection {
   async #open(timeoutMs: number): Promise<void> {
     this.#socket = await openSocket(
       relayConnectUrl(this.mac.relay, this.mac.macId, "phone", this.phone.id),
+      this.token,
     );
     const handshake = startHandshake(this.phone, this.mac.macKey);
     await new Promise<void>((resolve, reject) => {
@@ -217,10 +358,11 @@ export class PhoneConnection {
           );
         }
       });
-      this.#socket.addEventListener("close", () => {
+      this.#socket.addEventListener("close", (event) => {
         clearTimeout(timer);
-        if (!ready) reject(new Error("The relay closed the connection"));
-        this.#emitClose("closed");
+        const reason = event.reason || "The relay closed the connection";
+        if (!ready) reject(new RelayError(String(event.code), reason));
+        this.#emitClose(reason);
       });
       this.#sendPlain(handshake.hello);
     });

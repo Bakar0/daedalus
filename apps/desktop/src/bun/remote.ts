@@ -25,7 +25,9 @@ import {
   type PairingOffer,
   type PlainMessage,
   type Ready,
+  RELAY_CLOSE,
   relayConnectUrl,
+  relayProtocols,
   type RelayNotice,
   type SecureChannel,
   type SecureMessage,
@@ -71,12 +73,14 @@ export interface PairedPhone {
 interface RemoteFile {
   identity: DeviceIdentity;
   phones: PairedPhone[];
+  /** Given by the relay when a phone claims this Mac for its account. */
+  relayToken?: string;
 }
 
 /**
- * The Mac's device key and its paired phones, in `<home>/remote/device.json`
- * readable only by the user. Phase 0 keeps the secret key in that file; the
- * Keychain is the place for it before this ships.
+ * The Mac's device key, its relay token and its paired phones, in
+ * `<home>/remote/device.json` readable only by the user. The secret key and
+ * the token belong in the Keychain before this ships.
  */
 export class RemoteStore {
   private constructor(
@@ -106,6 +110,25 @@ export class RemoteStore {
 
   get phones(): readonly PairedPhone[] {
     return this.data.phones;
+  }
+
+  get relayToken(): string | undefined {
+    return this.data.relayToken;
+  }
+
+  /** Updates memory at once, so a reconnect right after sees the token. */
+  setRelayToken(token: string): Promise<void> {
+    this.data.relayToken = token;
+    return this.save();
+  }
+
+  /**
+   * Starts over as a new device: the account removed this Mac, so its id,
+   * keys and phones are of no further use, and a fresh id can be paired.
+   */
+  reset(): Promise<void> {
+    this.data = { identity: createIdentity(), phones: [] };
+    return this.save();
   }
 
   phone(id: string): PairedPhone | undefined {
@@ -153,7 +176,19 @@ export interface RemoteConnectorOptions {
   log?: (event: string, fields: Record<string, unknown>) => void;
   /** Sees every raw frame in both directions, as the relay does. */
   tap?: (direction: "in" | "out", frame: Uint8Array) => void;
+  /** How long to wait before retrying while locked. Tests shorten it. */
+  lockedRetryMs?: number;
 }
+
+/**
+ * - `waiting_for_phone`: connected, not yet claimed by an account.
+ * - `online`: connected as an account's Mac.
+ * - `locked`: the account has no access or is over its data limit.
+ */
+export type RemoteStatus =
+  "connecting" | "waiting_for_phone" | "online" | "offline" | "locked";
+
+const LOCKED_RETRY_MS = 5 * 60_000;
 
 interface PhoneState {
   handshake?: { finish(ready: Ready): SecureChannel };
@@ -172,6 +207,11 @@ export class RemoteConnector {
   #retryMs = 1_000;
   #ping: ReturnType<typeof setInterval> | undefined;
   #offer: PairingOffer | undefined;
+  /** The last accepted pairing, so a repeated request is answered again. */
+  #lastPairing: { offer: PairingOffer; phoneId: string } | undefined;
+  #status: RemoteStatus = "connecting";
+  #statusListeners = new Set<(status: RemoteStatus) => void>();
+  #overQuota = false;
   #phones = new Map<string, PhoneState>();
   #connected: Promise<void>;
   #markConnected!: () => void;
@@ -184,6 +224,21 @@ export class RemoteConnector {
 
   get macId(): string {
     return this.options.store.identity.id;
+  }
+
+  get status(): RemoteStatus {
+    return this.#status;
+  }
+
+  onStatus(listener: (status: RemoteStatus) => void): () => void {
+    this.#statusListeners.add(listener);
+    return () => this.#statusListeners.delete(listener);
+  }
+
+  #setStatus(status: RemoteStatus): void {
+    if (status === this.#status) return;
+    this.#status = status;
+    for (const listener of this.#statusListeners) listener(status);
   }
 
   /** Resolves on the first successful connection to the relay. */
@@ -204,6 +259,7 @@ export class RemoteConnector {
     this.#offer = createPairingOffer(
       this.options.store.identity,
       this.options.relay,
+      this.options.macName,
       lifetimeMs,
     );
     return this.#offer;
@@ -218,16 +274,29 @@ export class RemoteConnector {
 
   #connect(): void {
     if (this.#stopped) return;
+    const token = this.options.store.relayToken;
     const socket = new WebSocket(
       relayConnectUrl(this.options.relay, this.macId, "mac", this.macId),
+      relayProtocols(token),
     );
     socket.binaryType = "arraybuffer";
     this.#socket = socket;
+    let opened = false;
     socket.addEventListener("open", () => {
-      this.#retryMs = 1_000;
-      this.options.log?.("remote_connected", { relay: this.options.relay });
-      this.#ping = setInterval(() => socket.send("ping"), 30_000);
-      this.#markConnected();
+      // A refused socket opens and closes in the same moment.
+      setTimeout(() => {
+        if (socket.readyState !== WebSocket.OPEN) return;
+        opened = true;
+        this.#retryMs = 1_000;
+        this.#overQuota = false;
+        this.options.log?.("remote_connected", {
+          relay: this.options.relay,
+          claimed: Boolean(token),
+        });
+        this.#ping = setInterval(() => socket.send("ping"), 30_000);
+        this.#setStatus(token ? "online" : "waiting_for_phone");
+        this.#markConnected();
+      }, 50);
     });
     socket.addEventListener("message", (event) => {
       if (typeof event.data === "string") {
@@ -236,24 +305,72 @@ export class RemoteConnector {
       }
       void this.#frame(new Uint8Array(event.data as ArrayBuffer));
     });
-    socket.addEventListener("close", () => {
+    socket.addEventListener("close", (event) => {
       if (this.#ping) clearInterval(this.#ping);
       for (const id of [...this.#phones.keys()]) this.#dropPhone(id);
       if (this.#stopped) return;
-      this.options.log?.("remote_disconnected", { retryMs: this.#retryMs });
-      setTimeout(() => this.#connect(), this.#retryMs);
-      this.#retryMs = Math.min(this.#retryMs * 2, 30_000);
+      void this.#closed(event.code, event.reason, token, opened);
     });
+  }
+
+  /** What a closed connection means, and when to try again. */
+  async #closed(
+    code: number,
+    reason: string,
+    token: string | undefined,
+    opened: boolean,
+  ): Promise<void> {
+    this.options.log?.("remote_disconnected", { code, reason, opened });
+    let delay = this.#retryMs;
+    if (code === RELAY_CLOSE.claimed) {
+      delay = 0;
+    } else if (
+      code === RELAY_CLOSE.unauthorized ||
+      code === RELAY_CLOSE.forbidden
+    ) {
+      // The account removed this Mac (or the relay no longer knows its
+      // token). Start over as a new device that can be paired again.
+      await this.options.store.reset();
+      this.#offer = undefined;
+      this.#lastPairing = undefined;
+      this.options.log?.("remote_device_reset", { code, hadToken: !!token });
+      delay = 1_000;
+    } else if (
+      code === RELAY_CLOSE.noEntitlement ||
+      code === RELAY_CLOSE.overQuota
+    ) {
+      this.#setStatus("locked");
+      setTimeout(
+        () => this.#connect(),
+        this.options.lockedRetryMs ?? LOCKED_RETRY_MS,
+      );
+      return;
+    } else {
+      this.#retryMs = Math.min(this.#retryMs * 2, 30_000);
+    }
+    this.#setStatus("offline");
+    setTimeout(() => this.#connect(), delay);
   }
 
   #notice(text: string): void {
     if (text === "pong") return;
+    let notice: RelayNotice;
     try {
-      const notice = JSON.parse(text) as RelayNotice;
-      if (notice.relay === "peer" && !notice.online)
-        this.#dropPhone(notice.deviceId);
+      notice = JSON.parse(text) as RelayNotice;
     } catch {
-      // Not a notice this version knows.
+      return;
+    }
+    if (notice.relay === "peer" && !notice.online)
+      this.#dropPhone(notice.deviceId);
+    else if (notice.relay === "claimed")
+      void this.options.store.setRelayToken(notice.token);
+    else if (notice.relay === "quota") {
+      // Over the month's data: stop the heavy part, keep requests going.
+      this.#overQuota = true;
+      for (const state of this.#phones.values()) {
+        for (const terminal of state.terminals.values()) terminal.close();
+        state.terminals.clear();
+      }
     }
   }
 
@@ -314,8 +431,20 @@ export class RemoteConnector {
 
   async #plain(phoneId: string, message: PlainMessage): Promise<void> {
     if (message.type === "pair") {
-      const offer = this.#offer;
       const phone = { id: phoneId, publicKey: message.phoneKey };
+      const last = this.#lastPairing;
+      if (
+        last?.phoneId === phoneId &&
+        this.options.store.phone(phoneId)?.publicKey === message.phoneKey &&
+        verifyPairingProof(last.offer, phone, message.proof)
+      ) {
+        this.#sendPlain(phoneId, {
+          type: "paired",
+          macName: this.options.macName,
+        });
+        return;
+      }
+      const offer = this.#offer;
       if (
         !offer ||
         offer.expiresAt < Date.now() ||
@@ -329,6 +458,7 @@ export class RemoteConnector {
         return;
       }
       this.#offer = undefined;
+      this.#lastPairing = { offer, phoneId };
       await this.options.store.addPhone({
         ...phone,
         name: message.name.slice(0, 80),
@@ -425,6 +555,18 @@ export class RemoteConnector {
     message: Extract<SecureMessage, { t: "term.open" }>,
   ): Promise<void> {
     const { ch } = message;
+    if (this.#overQuota) {
+      this.#sendSecure(phoneId, {
+        t: "term.server",
+        ch,
+        message: {
+          type: "error",
+          message: "This account reached its monthly data limit.",
+        },
+      });
+      this.#sendSecure(phoneId, { t: "term.close", ch });
+      return;
+    }
     const socket: TerminalSocket = {
       send: (data) => {
         if (typeof data === "string")

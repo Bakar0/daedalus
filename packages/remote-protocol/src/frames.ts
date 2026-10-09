@@ -38,7 +38,11 @@ export function decodeRelayFrame(frame: Uint8Array): {
 
 /** What the relay itself says, as text frames. */
 export type RelayNotice =
-  { relay: "peer"; deviceId: string; online: boolean } | { relay: "replaced" };
+  | { relay: "peer"; deviceId: string; online: boolean }
+  | { relay: "replaced" }
+  /** A phone claimed this Mac; the token lets it rejoin as that account's. */
+  | { relay: "claimed"; token: string }
+  | { relay: "quota"; limitMb: number };
 
 /** Sent before a secure channel exists. Nothing secret travels this way. */
 export type PlainMessage =

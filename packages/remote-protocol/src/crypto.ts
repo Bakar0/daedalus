@@ -50,6 +50,8 @@ export interface PairingOffer {
   relay: string;
   macId: string;
   macKey: string;
+  /** The Mac's name, shown on the phone before it connects. */
+  name: string;
   secret: string;
   expiresAt: number;
 }
@@ -59,6 +61,7 @@ const OFFER_PREFIX = "daedalus-pair:";
 export function createPairingOffer(
   mac: DeviceIdentity,
   relay: string,
+  name: string,
   lifetimeMs = 5 * 60_000,
   now = Date.now(),
 ): PairingOffer {
@@ -67,6 +70,7 @@ export function createPairingOffer(
     relay,
     macId: mac.id,
     macKey: mac.publicKey,
+    name,
     secret: toBase64(sodium.randombytes_buf(32)),
     expiresAt: now + lifetimeMs,
   };
@@ -86,6 +90,7 @@ export function decodePairingOffer(text: string): PairingOffer {
     typeof offer.relay !== "string" ||
     typeof offer.macId !== "string" ||
     typeof offer.macKey !== "string" ||
+    typeof offer.name !== "string" ||
     typeof offer.secret !== "string" ||
     typeof offer.expiresAt !== "number"
   )
