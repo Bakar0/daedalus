@@ -26,6 +26,7 @@ import {
   USER_HANDLE,
   type SessionAttention,
   type Task,
+  type VisibleSecret,
   type Workspace,
   type WorkspaceContent,
   type WorkspaceRepository,
@@ -57,6 +58,7 @@ import type {
   WorkspaceContentDto,
   WorkspaceDto,
   WorkspaceRepositoryDto,
+  SecretDto,
 } from "@daedalus/protocol";
 
 /**
@@ -892,23 +894,24 @@ export function createDesktopRequestHandlers(
       mutate(() => context.accounts.setLogin(provider, account, login)),
     secretList: ({ workspaceId }) =>
       result(async () =>
-        (await context.secrets.list(workspaceId)).map(
-          ({ name, updatedAt }) => ({
-            name,
-            updatedAt,
-          }),
-        ),
+        (await context.secrets.visible(workspaceId)).map(secretDto),
       ),
     secretSet: ({ workspaceId, name, value }) =>
-      mutate(async () => {
-        const secret = await context.secrets.set(workspaceId, name, value);
-        return { name: secret.name, updatedAt: secret.updatedAt };
-      }),
+      mutate(async () =>
+        secretDto({
+          ...(await context.secrets.set(workspaceId, name, value)),
+          overridden: false,
+        }),
+      ),
     secretRemove: ({ workspaceId, name }) =>
       mutate(async () => {
         await context.secrets.remove(workspaceId, name);
         return { name };
       }),
+    secretReveal: ({ workspaceId, name }) =>
+      result(async () => ({
+        value: await context.secrets.reveal(workspaceId, name),
+      })),
     accountSetApiKey: ({ provider, account, key }) =>
       mutate(async () =>
         accountDto(
@@ -996,5 +999,14 @@ export function createDesktopRequestHandlers(
       mutate(async () =>
         integratedTerminalDto(await context.terminals.close(id)),
       ),
+  };
+}
+
+function secretDto(secret: VisibleSecret): SecretDto {
+  return {
+    name: secret.name,
+    workspaceId: secret.workspaceId,
+    overridden: secret.overridden,
+    updatedAt: secret.updatedAt,
   };
 }

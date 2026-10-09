@@ -1126,6 +1126,15 @@ describe("daedal secret and exec", () => {
         "--json",
       ]);
       expect(JSON.parse(listed.stdout)).toEqual({ ok: true, data: [] });
+      const outside = await cli(
+        home,
+        ["secret", "set", "GH_TOKEN"],
+        { DAEDALUS_WORKSPACE_ID: "", DAEDALUS_SESSION_ID: "" },
+        "value\n",
+        "/",
+      );
+      expect(outside.exitCode).toBe(2);
+      expect(outside.stderr).toContain("--global");
       const lowercase = await cli(
         home,
         ["secret", "set", "gh_token", "--workspace", "keys"],

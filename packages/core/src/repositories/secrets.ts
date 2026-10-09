@@ -1,14 +1,14 @@
 import type { Database } from "bun:sqlite";
-import type { WorkspaceSecret } from "../domain";
+import type { Secret } from "../domain";
 
-interface WorkspaceSecretRow {
-  workspace_id: string;
+interface SecretRow {
+  workspace_id: string | null;
   name: string;
   created_at: string;
   updated_at: string;
 }
 
-const secretFromRow = (row: WorkspaceSecretRow): WorkspaceSecret => ({
+const secretFromRow = (row: SecretRow): Secret => ({
   workspaceId: row.workspace_id,
   name: row.name,
   createdAt: row.created_at,
@@ -16,41 +16,55 @@ const secretFromRow = (row: WorkspaceSecretRow): WorkspaceSecret => ({
 });
 
 /**
- * The names of each workspace's secrets. The values are Keychain items, never
- * rows. Shares the one connection `SqliteRepositories` opens.
+ * The names of the secrets, global (`workspaceId` null) and per workspace.
+ * The values are Keychain items, never rows. Shares the one connection
+ * `SqliteRepositories` opens.
  */
 export class SecretRepository {
   constructor(private readonly database: Database) {}
 
-  list(workspaceId: string): WorkspaceSecret[] {
+  /** One scope's secrets: a workspace's, or the global ones for null. */
+  list(workspaceId: string | null): Secret[] {
     return this.database
-      .query<WorkspaceSecretRow, [string]>(
-        "SELECT * FROM workspace_secrets WHERE workspace_id = ? ORDER BY name",
+      .query<SecretRow, [string | null]>(
+        "SELECT * FROM secrets WHERE workspace_id IS ? ORDER BY name",
       )
       .all(workspaceId)
       .map(secretFromRow);
   }
 
-  /** Adds the name, or moves `updated_at` when it is already there. */
-  save(workspaceId: string, name: string, at: string): WorkspaceSecret {
+  find(workspaceId: string | null, name: string): Secret | undefined {
     const row = this.database
-      .query<WorkspaceSecretRow, [string, string, string, string]>(
-        `INSERT INTO workspace_secrets (workspace_id, name, created_at, updated_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT (workspace_id, name) DO UPDATE SET updated_at = excluded.updated_at
-         RETURNING *`,
+      .query<SecretRow, [string | null, string]>(
+        "SELECT * FROM secrets WHERE workspace_id IS ? AND name = ?",
       )
-      .get(workspaceId, name, at, at);
-    if (!row) throw new Error("The secret was not stored");
-    return secretFromRow(row);
+      .get(workspaceId, name);
+    return row ? secretFromRow(row) : undefined;
   }
 
-  delete(workspaceId: string, name: string): boolean {
-    return (
+  /** Adds the name, or moves `updated_at` when it is already there. */
+  save(workspaceId: string | null, name: string, at: string): Secret {
+    const existing = this.find(workspaceId, name);
+    if (existing) {
       this.database
         .query(
-          "DELETE FROM workspace_secrets WHERE workspace_id = ? AND name = ?",
+          "UPDATE secrets SET updated_at = ? WHERE workspace_id IS ? AND name = ?",
         )
+        .run(at, workspaceId, name);
+      return { ...existing, updatedAt: at };
+    }
+    this.database
+      .query(
+        "INSERT INTO secrets (workspace_id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+      )
+      .run(workspaceId, name, at, at);
+    return { workspaceId, name, createdAt: at, updatedAt: at };
+  }
+
+  delete(workspaceId: string | null, name: string): boolean {
+    return (
+      this.database
+        .query("DELETE FROM secrets WHERE workspace_id IS ? AND name = ?")
         .run(workspaceId, name).changes > 0
     );
   }

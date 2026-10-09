@@ -7219,3 +7219,13 @@ dd {
 .secrets-list form code {
   align-self: center;
 }
+.secret-value {
+  color: var(--primary);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  user-select: text;
+  white-space: pre-wrap;
+}
+.secrets-list li[data-overridden] code:first-child {
+  text-decoration: line-through;
+}

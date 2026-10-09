@@ -96,8 +96,8 @@ continue`, which starts a fresh session on the same task, working directory
 ## Secrets
 
 When a tool needs an API key, token or password, do not ask the user to paste
-it. Run `daedal secret list` to see the workspace's secrets, then give the
-tool the ones it needs:
+it. Run `daedal secret list` to see the secrets you can use (the workspace's
+own and the global ones), then give the tool the ones it needs:
 
 ```bash
 "{{daedal}}" exec --secret GH_TOKEN -- gh pr list
@@ -107,7 +107,8 @@ The command gets `GH_TOKEN` in its environment and its piped output shows the
 value as `***`. A variable used inside a shell command needs a shell to expand
 it: `exec --secret API_KEY -- sh -c 'curl -H "Authorization: Bearer $API_KEY" …'`.
 If the secret is missing, `exec` exits 3; ask the user to add it in the
-workspace's Secrets (the key on its card) or with `daedal secret set`. Do not
+app (Settings → Secrets for everywhere, the key on the workspace's card for
+this workspace) or with `daedal secret set`. Do not
 print, encode or copy a secret's value.
 
 ## Reporting on yourself

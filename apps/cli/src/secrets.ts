@@ -12,41 +12,51 @@ import { callerSession } from "./caller";
 import { expectPositionals, parseArguments, printResult } from "./arguments";
 
 export const secretHelp = `Secret commands:
-  daedal secret list [--workspace <workspace>]
-  daedal secret set <NAME> [--workspace <workspace>]   (the value on stdin)
-  daedal secret remove <NAME> [--workspace <workspace>]
+  daedal secret list [--workspace <workspace> | --global]
+  daedal secret set <NAME> [--workspace <workspace> | --global]   (the value on stdin)
+  daedal secret remove <NAME> [--workspace <workspace> | --global]
   daedal exec [--secret <NAME>]... [--workspace <workspace>] -- <command> [<args>...]
 
-A workspace's secrets are values its agents' tools need, like API keys and
-tokens, stored once so nobody pastes them into a prompt. An agent runs
-'daedal secret list' to see the names, then gives a tool the ones it needs:
+Secrets are values agents' tools need, like API keys and tokens, stored once
+so nobody pastes them into a prompt. A secret is global, for every
+workspace, or a workspace's own; a workspace's wins over a global one of the
+same name. An agent runs 'daedal secret list' to see the names it can use,
+then gives a tool the ones it needs:
 
   daedal exec --secret GH_TOKEN -- gh pr list
 
+'secret list' shows the workspace's own secrets and the global ones, and
+marks a global one the workspace overrides. With --global, or outside any
+workspace, it shows only the global ones.
+
 'exec' starts the command with each named secret in its environment, under
-its own name. Output that goes to a pipe, as an agent's tool calls do, has
-each value replaced with ***; output to a terminal is passed through as it
-is. Values shorter than ${MIN_MASKED_LENGTH} characters are not masked. The exit code is the
-command's. A secret that is not set stops the command before it starts, with
-exit code 3.
+its own name: the workspace's if it has one, else the global one. Output that
+goes to a pipe, as an agent's tool calls do, has each value replaced with
+***; output to a terminal is passed through as it is. Values shorter than
+${MIN_MASKED_LENGTH} characters are not masked. The exit code is the command's. A secret that
+is not set stops the command before it starts, with exit code 3.
 
 This keeps values out of prompts and transcripts by default; it is not a
 security boundary. Any command the agent runs with a secret can read it.
 
 'secret set' reads the value from standard input; at a terminal it asks for
 it without echoing. The value goes to the macOS login Keychain, and Daedalus
-keeps only the name. No command prints a value. The workspace's settings in
-the app do the same.
+keeps only the name. The app's Secrets (Settings for global ones, the key on
+a workspace's card for its own) do the same and can show a value.
 
 Without --workspace, the workspace is the one of the session the command runs
 in, else the one whose folder holds the current directory, else
-DAEDALUS_WORKSPACE_ID.`;
+DAEDALUS_WORKSPACE_ID. 'set' and 'remove' need a workspace or --global.`;
 
-/** The workspace a secret command is about. */
+/**
+ * The workspace a secret command is about: --workspace, else the calling
+ * session's, else the one whose folder holds the current directory, else
+ * DAEDALUS_WORKSPACE_ID. Undefined outside all of them.
+ */
 async function secretWorkspace(
   context: ApplicationContext,
   reference: string | undefined,
-): Promise<Workspace> {
+): Promise<Workspace | undefined> {
   if (reference) return context.workspaces.get(reference);
   const caller = await callerSession(context).catch(() => undefined);
   if (caller) return context.workspaces.get(caller.workspaceId);
@@ -61,11 +71,7 @@ async function secretWorkspace(
       return workspace;
   }
   const fromEnvironment = process.env.DAEDALUS_WORKSPACE_ID;
-  if (fromEnvironment) return context.workspaces.get(fromEnvironment);
-  throw new DaedalusError(
-    "VALIDATION",
-    "Outside a Daedalus session or workspace folder, pass --workspace <workspace>",
-  );
+  return fromEnvironment ? context.workspaces.get(fromEnvironment) : undefined;
 }
 
 /**
@@ -97,28 +103,59 @@ export async function secretCommand(
     console.log(secretHelp);
     return 0;
   }
-  const parsed = parseArguments(rest, ["workspace"]);
-  const workspace = await secretWorkspace(context, parsed.values.workspace);
+  const parsed = parseArguments(rest, ["workspace"], ["global"]);
+  const global = parsed.flags.has("global");
+  if (global && parsed.values.workspace !== undefined)
+    throw new DaedalusError(
+      "VALIDATION",
+      "Pass --workspace or --global, not both",
+    );
+  const workspace = global
+    ? undefined
+    : await secretWorkspace(context, parsed.values.workspace);
+  const where = workspace ? `workspace '${workspace.slug}'` : "global";
+  /** set and remove change one scope, so it has to be clear which. */
+  const scope = (): string | null => {
+    if (global) return null;
+    if (workspace) return workspace.id;
+    throw new DaedalusError(
+      "VALIDATION",
+      "Outside a Daedalus session or workspace folder, pass --workspace <workspace> or --global",
+    );
+  };
   if (action === "list") {
     expectPositionals(parsed.positionals, 0, "daedal secret list");
-    const secrets = await context.secrets.list(workspace.id);
-    printResult(secrets, json, () => {
-      if (!secrets.length) {
-        console.log(`Workspace '${workspace.slug}' has no secrets`);
+    const secrets = await context.secrets.visible(workspace?.id ?? null);
+    const rows = secrets.map((secret) => ({
+      name: secret.name,
+      scope: secret.workspaceId === null ? "global" : "workspace",
+      overridden: secret.overridden,
+      updatedAt: secret.updatedAt,
+    }));
+    printResult(rows, json, () => {
+      if (!rows.length) {
+        console.log(
+          workspace
+            ? `No secrets for workspace '${workspace.slug}' or global`
+            : "No global secrets",
+        );
         return;
       }
-      for (const secret of secrets)
-        console.log(`${secret.name}\tset ${secret.updatedAt}`);
+      for (const row of rows)
+        console.log(
+          `${row.name}\t${row.scope}${row.overridden ? " (overridden by the workspace's)" : ""}\tset ${row.updatedAt}`,
+        );
     });
     return 0;
   }
   if (action === "set") {
     expectPositionals(parsed.positionals, 1, "daedal secret set <NAME>");
     const name = parsed.positionals[0]!;
+    const target = scope();
     const value = await readSecretValue(name);
-    const secret = await context.secrets.set(workspace.id, name, value);
+    const secret = await context.secrets.set(target, name, value);
     printResult(secret, json, () => {
-      console.log(`Set ${secret.name} for workspace '${workspace.slug}'`);
+      console.log(`Set ${secret.name} (${where})`);
       if (value.length < MIN_MASKED_LENGTH)
         console.error(
           `Note: values shorter than ${MIN_MASKED_LENGTH} characters are not masked in 'daedal exec' output`,
@@ -129,9 +166,10 @@ export async function secretCommand(
   if (action === "remove") {
     expectPositionals(parsed.positionals, 1, "daedal secret remove <NAME>");
     const name = parsed.positionals[0]!;
-    await context.secrets.remove(workspace.id, name);
-    printResult({ workspaceId: workspace.id, name }, json, () =>
-      console.log(`Removed ${name} from workspace '${workspace.slug}'`),
+    const target = scope();
+    await context.secrets.remove(target, name);
+    printResult({ workspaceId: target, name }, json, () =>
+      console.log(`Removed ${name} (${where})`),
     );
     return 0;
   }
@@ -207,7 +245,7 @@ export async function execCommand(
   const parsed = parseExecArguments(args);
   const values = parsed.secrets.length
     ? await context.secrets.values(
-        (await secretWorkspace(context, parsed.workspace)).id,
+        (await secretWorkspace(context, parsed.workspace))?.id ?? null,
         parsed.secrets,
       )
     : {};

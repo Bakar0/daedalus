@@ -14,6 +14,7 @@
  * only facts about the install are their own section instead of the first
  * thing between the user and every control.
  */
+import { SecretsPanel } from "./SecretsPanel";
 import React from "react";
 import type {
   AppUpdateDto,
@@ -30,6 +31,7 @@ export const SETTINGS_SECTIONS = [
   { id: "general", label: "General" },
   { id: "agents", label: "Agents" },
   { id: "skills", label: "Skills" },
+  { id: "secrets", label: "Secrets" },
   { id: "sessions", label: "Sessions" },
   { id: "notifications", label: "Notifications" },
   { id: "about", label: "About" },
@@ -224,6 +226,10 @@ export function SettingsModal({
               title="Create workspace agent guidance"
             />
           </section>
+        ) : undefined}
+
+        {section === "secrets" ? (
+          <SecretsPanel client={client} onError={onError} />
         ) : undefined}
 
         {section === "agents" ? (

@@ -152,7 +152,7 @@ describe("SecretService", () => {
       expect(keychain.items.size).toBe(0);
       expect(await secrets.list(workspace.id)).toEqual([]);
       await expect(secrets.remove(workspace.id, "TOKEN")).rejects.toThrow(
-        "has no secret",
+        "There is no workspace 'secrets' secret 'TOKEN'",
       );
     });
   });
@@ -166,6 +166,57 @@ describe("SecretService", () => {
       await secrets.set(second.id, "A_TOKEN", "other");
       await secrets.forgetWorkspace(first.id);
       expect(keychain.items.size).toBe(1);
+    });
+  });
+
+  test("global secrets are used where a workspace has none of that name", async () => {
+    await withSecrets(async ({ context, secrets, keychain }) => {
+      const workspace = await context.workspaces.create({ name: "Secrets" });
+      await secrets.set(null, "SHARED", "global-shared");
+      await secrets.set(null, "ONLY_GLOBAL", "global-only");
+      await secrets.set(workspace.id, "SHARED", "workspace-shared");
+      expect(
+        keychain.items.has(`${SECRET_SERVICE}|${context.config.home}/SHARED`),
+      ).toBe(true);
+
+      expect(
+        await secrets.values(workspace.id, ["SHARED", "ONLY_GLOBAL"]),
+      ).toEqual({ SHARED: "workspace-shared", ONLY_GLOBAL: "global-only" });
+      expect(await secrets.values(null, ["SHARED"])).toEqual({
+        SHARED: "global-shared",
+      });
+
+      const visible = await secrets.visible(workspace.id);
+      expect(
+        visible.map((secret) => [
+          secret.name,
+          secret.workspaceId === null ? "global" : "workspace",
+          secret.overridden,
+        ]),
+      ).toEqual([
+        ["SHARED", "workspace", false],
+        ["ONLY_GLOBAL", "global", false],
+        ["SHARED", "global", true],
+      ]);
+      expect((await secrets.visible(null)).map((s) => s.name)).toEqual([
+        "ONLY_GLOBAL",
+        "SHARED",
+      ]);
+
+      // Removing the workspace keeps the global ones.
+      await secrets.forgetWorkspace(workspace.id);
+      expect(keychain.items.size).toBe(2);
+    });
+  });
+
+  test("reveal reads one scope's value", async () => {
+    await withSecrets(async ({ context, secrets }) => {
+      const workspace = await context.workspaces.create({ name: "Secrets" });
+      await secrets.set(null, "TOKEN", "global-token");
+      expect(await secrets.reveal(null, "TOKEN")).toBe("global-token");
+      await expect(secrets.reveal(workspace.id, "TOKEN")).rejects.toThrow(
+        "There is no workspace 'secrets' secret 'TOKEN'",
+      );
     });
   });
 });

@@ -215,11 +215,11 @@ export interface PullRequestRef {
 }
 
 /**
- * A named secret of a workspace. Only the name is Daedalus's state; the value
- * is a login Keychain item that `daedal exec --secret` reads.
+ * A named secret, global (`workspaceId` null) or a workspace's own. Only the
+ * name is Daedalus's state; the value is a login Keychain item.
  */
-export interface WorkspaceSecret {
-  workspaceId: UUID;
+export interface Secret {
+  workspaceId: UUID | null;
   name: string;
   createdAt: string;
   updatedAt: string;

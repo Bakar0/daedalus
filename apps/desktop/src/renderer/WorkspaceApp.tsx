@@ -7020,9 +7020,8 @@ export function WorkspaceApp({
           title={`Secrets · ${secretsWorkspace.name}`}
         >
           <SecretsPanel
-            busy={busy}
             client={client}
-            perform={perform}
+            onError={setError}
             workspace={secretsWorkspace}
           />
         </Modal>
