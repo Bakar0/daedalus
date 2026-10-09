@@ -1769,8 +1769,10 @@ export function WorkspaceApp({
   const [modal, setModal] = useState<
     "workspace" | "task" | "session" | "repository" | "settings" | undefined
   >(initialModal);
-  /** The workspace whose Secrets dialog is open. */
-  const [secretsWorkspace, setSecretsWorkspace] = useState<WorkspaceDto>();
+  /** Whose Secrets dialog is open: a workspace's, or the global ones. */
+  const [secretsWorkspace, setSecretsWorkspace] = useState<
+    WorkspaceDto | "global"
+  >();
   // Which settings category is open. Kept here rather than inside the dialog
   // so reopening Settings returns to where the user was.
   const [settingsSection, setSettingsSection] =
@@ -5120,6 +5122,17 @@ export function WorkspaceApp({
           )}
         </strong>
       </button>
+      <span className="workspace-card-actions" data-no-drag>
+        <button
+          aria-label="Global secrets"
+          className="session-card-action workspace-secrets-action"
+          onClick={() => setSecretsWorkspace("global")}
+          title="Global secrets"
+          type="button"
+        >
+          <KeyIcon />
+        </button>
+      </span>
     </div>
   );
 
@@ -7017,17 +7030,20 @@ export function WorkspaceApp({
         <Modal
           closeButton
           onClose={() => setSecretsWorkspace(undefined)}
-          title={`Secrets · ${secretsWorkspace.name}`}
+          title={
+            secretsWorkspace === "global"
+              ? "Global secrets"
+              : `Secrets · ${secretsWorkspace.name}`
+          }
         >
           <SecretsPanel
             client={client}
+            key={secretsWorkspace === "global" ? "global" : secretsWorkspace.id}
             onError={setError}
-            onOpenGlobal={() => {
-              setSecretsWorkspace(undefined);
-              setSettingsSection("secrets");
-              setModal("settings");
-            }}
-            workspace={secretsWorkspace}
+            onOpenGlobal={() => setSecretsWorkspace("global")}
+            {...(secretsWorkspace === "global"
+              ? {}
+              : { workspace: secretsWorkspace })}
           />
         </Modal>
       )}

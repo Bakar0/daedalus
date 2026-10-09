@@ -20,7 +20,7 @@ export function SecretsPanel({
   workspace,
 }: {
   client: DesktopClient;
-  /** Opens Settings → Secrets, from a workspace's dialog. */
+  /** Opens the global secrets, from a workspace's dialog. */
   onOpenGlobal?: () => void;
   onError: (message: string | undefined) => void;
   workspace?: WorkspaceDto;

@@ -569,6 +569,37 @@ button:not(
   height: 13px;
   width: 13px;
 }
+/* The key to the global secrets comes in on hover, like a workspace's. */
+.all-workspaces-card {
+  align-items: center;
+  display: flex;
+}
+.all-workspaces-card > .all-workspaces-item {
+  flex: 1;
+  min-width: 0;
+}
+.all-workspaces-card > .workspace-card-actions {
+  flex: none;
+  padding-right: 4px;
+}
+.all-workspaces-card .workspace-secrets-action {
+  align-items: center;
+  border-radius: 5px !important;
+  display: flex;
+  height: 20px;
+  justify-content: center;
+  min-height: 0;
+  opacity: 0;
+  padding: 0 !important;
+  width: 20px;
+}
+.all-workspaces-card:is(:hover, :focus-within) .workspace-secrets-action {
+  opacity: 1;
+}
+.all-workspaces-card .workspace-secrets-action svg {
+  height: 13px;
+  width: 13px;
+}
 .all-workspaces-card.selected .all-workspaces-icon,
 .all-workspaces-card.selected .workspace-card-name {
   color: inherit;
