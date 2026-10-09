@@ -87,7 +87,8 @@ and `daedal routine --help` describe them. A session that holds
 `orchestration` leads a team: it adds members with `agent spawn --team` and
 talks to them with `daedal team`; the `daedalus-orchestration` and
 `daedalus-team` skills and `daedal team --help` describe it. A handoff moves a
-session's abilities, name, pin and color to the successor.
+session's abilities, pin and color to the successor. A session with routines
+keeps its exact name; any other, a team's lead included, gets ` · 2`.
 
 `agent spawn --task` moves a `todo` or `blocked` task to `in_progress` when the
 workspace's `--start-sets-in-progress` setting is on (the default); do not set

@@ -507,7 +507,9 @@ describe("teams", () => {
         id: leader.id,
       });
       expect(context.teams.get(nextLead.id).id).toBe(team.id);
-      expect(nextLead.name).toBe("Checkout API");
+      // The lead is numbered like any successor; the team keeps its name.
+      expect(nextLead.name).toBe("Checkout API · 2");
+      expect(context.teams.get(nextLead.id).name).toBe("Checkout API");
       expect(prompt(tmux.launches.at(-1)!)).toContain("orchestration ability");
       expect(
         context.teams
