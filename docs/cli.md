@@ -111,7 +111,7 @@ daedal agent remove <agent-id>
 
 `delete` is for an archived session you no longer want, and is the trash button in the app's archived sessions list. It removes the session's worktrees together with their branches, unpushed commits included, deletes its folder under `worktrees/` unless another session runs in the same folder (a session continued by handoff shares its predecessor's), and then deletes the session. It refuses a session that is not archived. `remove` deletes only the record and leaves every file in place.
 
-Built-in provider definitions come from `config.json`. Named custom definitions use `--command`. Executables and arguments are always passed as arrays. A task-backed launch receives only `Execute task #<number>` plus optional `--message` guidance; the installed skill supplies the workflow, so task content and CLI instructions are not duplicated in the prompt. Claude and Codex receive the prompt through their native initial-prompt argument, while custom launches receive it in `DAEDALUS_TASK_PROMPT`. Daedalus never types the initial prompt into the terminal. Agent processes receive their current session, workspace, internal task ID, and task number through `DAEDALUS_SESSION_ID`, `DAEDALUS_WORKSPACE_ID`, `DAEDALUS_TASK_ID`, and `DAEDALUS_TASK_NUMBER`. These variables are restored when a session resumes.
+Built-in provider definitions come from `config.json`. Named custom definitions use `--command`. Executables and arguments are always passed as arrays. A task-backed launch receives only `Execute task #<number>` plus optional `--message` guidance; the installed skill supplies the workflow, so task content and CLI instructions are not duplicated in the prompt. Claude and Codex receive the prompt through their native initial-prompt argument, while custom launches receive it in `DAEDALUS_TASK_PROMPT`. Daedalus never types the initial prompt into the terminal. Agent processes receive their current session, workspace, internal task ID, and task number through `DAEDALUS_SESSION_ID`, `DAEDALUS_WORKSPACE_ID`, `DAEDALUS_TASK_ID`, and `DAEDALUS_TASK_NUMBER`, and their working folder through `DAEDALUS_SESSION_DIRECTORY`. These variables are restored when a session resumes.
 
 `--draft-brief` links the session to the task but asks it to write the brief instead of doing the work: its one instruction is to read the workspace and send the brief back with `task update <number> --description-file -`. It leaves the task's status alone.
 
@@ -373,6 +373,18 @@ indicator has earned. Startup treats the prompt as finished rather than blocking
 on it, so the session is live and usable either way; until you choose **"Trust
 all and continue"**, Codex activity runs on the rollout tier. The approval
 persists, so it is a once-per-machine step rather than a per-session one.
+
+From about 0.160 Codex runs every thread on one shared background server, and
+that server runs the hooks with its own environment: the environment of
+whatever process started it, not the session's. Hooks then carried no
+`DAEDALUS_SESSION_ID`, or another session's, and no Codex session reported
+activity. When `codex --help` lists `--no-daemon`, Daedalus starts Codex
+sessions with it, so each session runs its own server and its hooks see the
+session's variables. `codex queue`, which team messages use, still reaches
+these sessions. Sessions also get `DAEDALUS_SESSION_DIRECTORY`, and the hook
+sink ignores a Codex hook whose `cwd` is outside that folder, so the user's own
+Codex on a shared server that inherited a session's variables cannot report as
+that session.
 
 ### Session folder trust
 

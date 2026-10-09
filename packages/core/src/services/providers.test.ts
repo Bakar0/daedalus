@@ -454,6 +454,26 @@ describe("ensureCodexHooks and the user's skill settings", () => {
     });
   });
 
+  test("a Codex with a shared app server runs the session without it", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await loadConfig({
+        DAEDALUS_HOME: home,
+        CODEX_HOME: join(home, "codex"),
+      });
+      // The shared server runs hooks with its own environment, so they could
+      // not tell which Daedalus session they belonged to.
+      const args = await ensureCodexHooks(config, "codex", async (_, argv) => ({
+        exitCode: 0,
+        stdout:
+          argv[0] === "--help"
+            ? "Options:\n      --no-daemon\n          Run without the shared background server\n"
+            : "codex-cli 0.162.0",
+        stderr: "",
+      }));
+      expect(args).toEqual(["-c", "features.hooks=true", "--no-daemon"]);
+    });
+  });
+
   test("an old Codex with nothing switched off leaves the file alone", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const config = await loadConfig({

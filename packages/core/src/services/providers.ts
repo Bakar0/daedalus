@@ -346,7 +346,35 @@ export async function ensureCodexHooks(
   // Stable and on by default from 0.154, but not on every build in the
   // supported range, and a per-session flag costs nothing. A build that does
   // not understand hooks gets no flag, only its skill settings.
-  return hooks ? ["-c", "features.hooks=true"] : [];
+  if (!hooks) return [];
+  return [
+    "-c",
+    "features.hooks=true",
+    ...((await codexHasNoDaemonFlag(executable, run)) ? ["--no-daemon"] : []),
+  ];
+}
+
+/**
+ * Whether this Codex can run a session without the shared app server.
+ *
+ * From about 0.160 the TUI hands its turns to one background server that
+ * every Codex on the machine shares, and that server runs the hooks. They
+ * inherit the server's environment, which is whatever process happened to
+ * start it, so `DAEDALUS_SESSION_ID` was missing or named some other session
+ * and no Codex session reported activity. With `--no-daemon` the session runs
+ * its own server and its hooks see the session's environment. `codex queue`
+ * still reaches such a session (checked with 0.162).
+ */
+async function codexHasNoDaemonFlag(
+  executable: string,
+  run: typeof runCommand,
+): Promise<boolean> {
+  try {
+    const help = await run(executable, ["--help"]);
+    return help.exitCode === 0 && /^\s*--no-daemon\b/m.test(help.stdout);
+  } catch {
+    return false;
+  }
 }
 
 interface ClaudeModelInfo {

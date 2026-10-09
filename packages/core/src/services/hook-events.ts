@@ -1,3 +1,4 @@
+import { isAbsolute, relative } from "node:path";
 import type { AgentActivity, AgentActivitySource } from "../domain";
 
 /**
@@ -474,6 +475,27 @@ export function observeCodexHook(
     default:
       return undefined;
   }
+}
+
+/**
+ * Whether a Codex hook came from the session it claims to be.
+ *
+ * Codex's shared app server runs the hooks of every thread it hosts with the
+ * environment of whichever process started it. That process may have been a
+ * Daedalus session, so `DAEDALUS_SESSION_ID` there names a session that has
+ * nothing to do with the thread, and the user's own Codex in a terminal would
+ * report as that session. Every Daedalus session has a folder nothing else
+ * uses, so a thread working outside it is not the session's. Both paths must
+ * already be resolved. With either one missing the hook is believed, as it
+ * was before sessions carried their folder.
+ */
+export function codexHookInSession(
+  cwd: string | undefined,
+  sessionDirectory: string | undefined,
+): boolean {
+  if (!cwd || !sessionDirectory) return true;
+  const inside = relative(sessionDirectory, cwd);
+  return !inside.startsWith("..") && !isAbsolute(inside);
 }
 
 /**

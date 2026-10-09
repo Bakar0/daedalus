@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  codexHookInSession,
   observeClaudeHook,
   observeClaudePane,
   observeClaudeTranscript,
@@ -541,6 +542,27 @@ describe("Codex hook payloads", () => {
     expect(
       observeCodexHook("Stop", codex("Stop", { agent_type: "title" })),
     ).toBeUndefined();
+  });
+});
+
+describe("codexHookInSession", () => {
+  const folder = "/Users/x/.daedalus/workspaces/w/worktrees/t/codex-1";
+
+  test("a thread in the session's folder belongs to it", () => {
+    expect(codexHookInSession(folder, folder)).toBe(true);
+    expect(codexHookInSession(`${folder}/repo`, folder)).toBe(true);
+  });
+
+  test("a thread elsewhere on the shared app server does not", () => {
+    // The user's own Codex, run while the server carried this session's
+    // environment.
+    expect(codexHookInSession("/Users/x/code/app", folder)).toBe(false);
+    expect(codexHookInSession(`${folder}-2`, folder)).toBe(false);
+  });
+
+  test("a session launched before sessions carried their folder is believed", () => {
+    expect(codexHookInSession("/Users/x/code/app", undefined)).toBe(true);
+    expect(codexHookInSession(undefined, folder)).toBe(true);
   });
 });
 

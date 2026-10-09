@@ -568,6 +568,7 @@ export class AgentService {
       PATH: path,
       DAEDALUS_HOME: this.config.home,
       DAEDALUS_SESSION_ID: session.id,
+      DAEDALUS_SESSION_DIRECTORY: session.workingDirectory,
       DAEDALUS_WORKSPACE_ID: session.workspaceId,
       ...(task
         ? {

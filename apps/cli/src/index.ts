@@ -5,6 +5,7 @@ import {
   normalizeError,
   channelName,
   codexActivityTier,
+  codexHookInSession,
   codexConfigPath,
   HEARTBEAT_INTERVAL_MS,
   observeClaudeHook,
@@ -39,7 +40,7 @@ import {
   secretHelp,
 } from "./secrets";
 import { findTmuxExecutable, probeVersion } from "@daedalus/platform";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { DoctorCheck } from "@daedalus/protocol";
 import packageJson from "../../../package.json";
@@ -138,6 +139,7 @@ async function captureAgentEvent(
       typeof payload.thread_id === "string"
         ? "codex"
         : "claude";
+    if (provider === "codex" && !(await codexHookIsOwn(payload))) return 0;
     // A session with routines sits at its prompt after every run, so its
     // turns end `idle` rather than `done`. Only `Stop` depends on it, and
     // only `Stop` pays for the database read.
@@ -166,6 +168,20 @@ async function captureAgentEvent(
     // An activity hook must never interfere with the provider session.
   }
   return 0;
+}
+
+/** `codexHookInSession` for this hook process, with both paths resolved. */
+async function codexHookIsOwn(
+  payload: Record<string, unknown>,
+): Promise<boolean> {
+  const resolved = (path: unknown) =>
+    typeof path === "string" && path
+      ? realpath(path).catch(() => resolve(path))
+      : undefined;
+  return codexHookInSession(
+    await resolved(payload.cwd),
+    await resolved(process.env.DAEDALUS_SESSION_DIRECTORY),
+  );
 }
 
 /**
