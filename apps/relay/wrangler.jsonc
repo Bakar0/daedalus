@@ -11,7 +11,7 @@
     {
       "binding": "DB",
       "database_name": "daedalus-relay",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "329ca47f-6f5e-4489-86fa-fb01c51b1a38",
       "migrations_dir": "migrations",
     },
   ],
