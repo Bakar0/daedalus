@@ -60,6 +60,46 @@ export function QrCode({ text, label }: { text: string; label: string }) {
   );
 }
 
+/** What phone access promises about privacy, shown before it is turned on. */
+function EncryptionNotice() {
+  return (
+    <aside className="remote-e2e" aria-label="End-to-end encryption">
+      <svg
+        aria-hidden="true"
+        className="remote-e2e-icon"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+        viewBox="0 0 24 24"
+      >
+        <rect height="10" rx="2.5" width="15" x="4.5" y="10.5" />
+        <path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" />
+        <path d="M12 14.5v2.5" />
+      </svg>
+      <div>
+        <strong>End-to-end encrypted</strong>
+        <p>
+          When you pair a phone, it and this Mac make keys that never leave
+          them. Every message is locked on one device and opened on the other,
+          so the relay in between carries only data it cannot read.
+        </p>
+        <dl>
+          <div>
+            <dt>The relay sees</dt>
+            <dd>Which devices are connected, when, and how much data moves.</dd>
+          </div>
+          <div>
+            <dt>The relay never sees</dt>
+            <dd>Your code, terminal output, prompts, file names or tasks.</dd>
+          </div>
+        </dl>
+      </div>
+    </aside>
+  );
+}
+
 function useCountdown(until: number | undefined): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -131,7 +171,7 @@ export function RemotePanel({
       <SettingRow
         checked={state?.enabled ?? false}
         disabled={busy || !state}
-        description="Operate this Mac's sessions from your phone, from anywhere, while Daedalus is open. Phones reach it through the Daedalus relay, and everything between them is end-to-end encrypted: the relay sees which devices talk and when, never what they say."
+        description="Operate this Mac's sessions from your phone, from anywhere, while Daedalus is open."
         onChange={async (enabled) => {
           setPairing(undefined);
           const next = await perform(
@@ -141,6 +181,7 @@ export function RemotePanel({
         }}
         title="Allow phone access"
       />
+      <EncryptionNotice />
       {state?.enabled ? (
         <p className="remote-status" data-status={state.status}>
           <span aria-hidden="true" className="remote-status-dot" />
