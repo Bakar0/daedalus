@@ -1,3 +1,15 @@
+/* Claude Code marks its turns with ⏺ (U+23FA), and its spinner and
+   controls use ✻ ⏵ ⏸ and the like. Android's monospace font has none of
+   them, so the phone fell back to the emoji font and drew yellow boxes. This
+   is Noto Sans Symbols 2 (OFL, fonts/OFL.txt), cut to those blocks, tried
+   first for them only. */
+@font-face {
+  font-display: block;
+  font-family: "Daedalus Terminal Symbols";
+  src: url("/fonts/terminal-symbols.woff2") format("woff2");
+  unicode-range: U+2300-23FF, U+25A0-25FF, U+2700-27BF;
+}
+
 :root {
   color-scheme: light dark;
   --bg: #f3f6fc;
@@ -769,4 +781,60 @@ li:has(> .session-row[data-team-member="true"]) {
     animation: none;
     opacity: 0.5;
   }
+}
+
+/* Notifications */
+.push-prompt {
+  background: var(--accent-wash, rgb(69 150 254 / 0.13));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: var(--radius);
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+}
+.push-prompt p {
+  color: var(--secondary);
+  font-size: 14px;
+  margin: 0;
+}
+.push-row {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+.push-row span {
+  display: grid;
+  gap: 2px;
+}
+.push-row small {
+  color: var(--secondary);
+}
+.switch {
+  appearance: none;
+  background: var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+  flex: none;
+  height: 28px;
+  position: relative;
+  transition: background 0.15s;
+  width: 46px;
+}
+.switch::after {
+  background: #fff;
+  border-radius: 50%;
+  content: "";
+  height: 22px;
+  left: 3px;
+  position: absolute;
+  top: 3px;
+  transition: transform 0.15s;
+  width: 22px;
+}
+.switch:checked {
+  background: var(--success);
+}
+.switch:checked::after {
+  transform: translateX(18px);
 }

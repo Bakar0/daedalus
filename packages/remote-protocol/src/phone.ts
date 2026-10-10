@@ -196,6 +196,18 @@ export class RelayAccount {
     return this.#call("DELETE", `/v1/devices/${encodeURIComponent(id)}`);
   }
 
+  pushKey(): Promise<{ publicKey: string }> {
+    return this.#call("GET", "/v1/push/key");
+  }
+
+  setPushSubscription(deviceId: string, endpoint: string): Promise<null> {
+    return this.#call("PUT", "/v1/push/subscription", { deviceId, endpoint });
+  }
+
+  removePushSubscription(deviceId: string): Promise<null> {
+    return this.#call("DELETE", "/v1/push/subscription", { deviceId });
+  }
+
   signOut(): Promise<null> {
     return this.#call("POST", "/v1/signout");
   }

@@ -12,6 +12,7 @@ import {
   userForSession,
 } from "./accounts";
 import { googleCallback, googleStart } from "./google";
+import { allowedEndpoint, sendPush } from "./push";
 import {
   bearer,
   CLOSE,
@@ -46,6 +47,8 @@ export default {
         return await googleStart(request, env);
       if (route === "GET /auth/google/callback")
         return await googleCallback(request, env);
+      if (route === "POST /v1/push/notify")
+        return await pushNotify(request, env);
       if (url.pathname.startsWith("/admin/"))
         return await admin(request, env, route);
       if (url.pathname.startsWith("/v1/"))
@@ -150,6 +153,70 @@ async function connect(request: Request, env: Env): Promise<Response> {
   return room(env, macId).fetch(new Request(request, { headers }));
 }
 
+/** Pushes at most this often per account; later asks within it are dropped. */
+const PUSH_INTERVAL_MS = 15_000;
+
+/**
+ * A Mac asking for its account's phones to be told a session needs them. It
+ * proves itself with its device token. The push carries nothing.
+ */
+async function pushNotify(request: Request, env: Env): Promise<Response> {
+  const macId = request.headers.get("X-Daedalus-Device") ?? "";
+  const token = bearer(request);
+  const mac = ID.test(macId) ? await device(env.DB, macId) : undefined;
+  if (
+    !mac ||
+    mac.kind !== "mac" ||
+    !mac.userId ||
+    mac.revokedAt ||
+    !token ||
+    (await sha256(token)) !== mac.tokenHash
+  )
+    return fail(401, "UNAUTHORIZED", "Device token required.");
+  if (!(await activeEntitlement(env.DB, mac.userId)))
+    return fail(402, "NO_ENTITLEMENT", "This account has no active access.");
+  if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_JWK)
+    return fail(503, "NOT_CONFIGURED", "Notifications are not set up.");
+  // One push per window per account, claimed in one statement so two Macs
+  // asking at once send one push.
+  const cutoff = new Date(Date.now() - PUSH_INTERVAL_MS).toISOString();
+  const claimed = await env.DB.prepare(
+    `INSERT INTO push_state (user_id, last_sent_at) VALUES (?, ?)
+     ON CONFLICT (user_id) DO UPDATE SET last_sent_at = excluded.last_sent_at
+     WHERE push_state.last_sent_at < ?`,
+  )
+    .bind(mac.userId, nowIso(), cutoff)
+    .run();
+  if (!claimed.meta.changes)
+    return json({ ok: true, data: { sent: 0, throttled: true } });
+  const { results } = await env.DB.prepare(
+    `SELECT push_subscriptions.device_id AS deviceId, endpoint FROM push_subscriptions
+     JOIN devices ON devices.id = push_subscriptions.device_id
+     WHERE push_subscriptions.user_id = ? AND devices.revoked_at IS NULL`,
+  )
+    .bind(mac.userId)
+    .all<{ deviceId: string; endpoint: string }>();
+  const keys = {
+    publicKey: env.VAPID_PUBLIC_KEY,
+    privateJwk: env.VAPID_PRIVATE_JWK,
+    subject: env.VAPID_SUBJECT ?? new URL(request.url).origin,
+  };
+  let sent = 0;
+  for (const subscription of results) {
+    const outcome = await sendPush(subscription.endpoint, keys).catch(() => ({
+      ok: false,
+      gone: false,
+      status: 0,
+    }));
+    if (outcome.ok) sent += 1;
+    if (outcome.gone)
+      await env.DB.prepare("DELETE FROM push_subscriptions WHERE device_id = ?")
+        .bind(subscription.deviceId)
+        .run();
+  }
+  return json({ ok: true, data: { sent, throttled: false } });
+}
+
 async function signedIn(request: Request, env: Env): Promise<User | Response> {
   const user = await userForSession(env.DB, bearer(request));
   return user ?? fail(401, "UNAUTHORIZED", "Sign in again.");
@@ -187,6 +254,50 @@ async function account(
         usageBytes: usage?.bytes ?? 0,
       },
     });
+  }
+
+  if (route === "GET /v1/push/key") {
+    if (!env.VAPID_PUBLIC_KEY)
+      return fail(503, "NOT_CONFIGURED", "Notifications are not set up.");
+    return json({ ok: true, data: { publicKey: env.VAPID_PUBLIC_KEY } });
+  }
+
+  if (
+    route === "PUT /v1/push/subscription" ||
+    route === "DELETE /v1/push/subscription"
+  ) {
+    const { deviceId, endpoint } = await body<{
+      deviceId: string;
+      endpoint: string;
+    }>(request);
+    const phone = deviceId ? await device(env.DB, deviceId) : undefined;
+    if (
+      !phone ||
+      phone.kind !== "phone" ||
+      phone.userId !== user.id ||
+      phone.revokedAt
+    )
+      return fail(404, "NOT_FOUND", "This phone is not on this account.");
+    if (route.startsWith("DELETE")) {
+      await env.DB.prepare("DELETE FROM push_subscriptions WHERE device_id = ?")
+        .bind(phone.id)
+        .run();
+      return json({ ok: true, data: null });
+    }
+    if (!endpoint || !allowedEndpoint(endpoint, env.PUSH_TEST_ENDPOINT))
+      return fail(
+        400,
+        "BAD_ENDPOINT",
+        "That is not a push service this relay sends to.",
+      );
+    await env.DB.prepare(
+      `INSERT INTO push_subscriptions (device_id, user_id, endpoint, created_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT (device_id) DO UPDATE SET endpoint = excluded.endpoint`,
+    )
+      .bind(phone.id, user.id, endpoint, nowIso())
+      .run();
+    return json({ ok: true, data: null });
   }
 
   if (route === "POST /v1/signout") {

@@ -107,6 +107,31 @@ async function cli(args: string[]): Promise<unknown> {
 
 // Google, as far as the relay talks to it: the token endpoint turns a code
 // into an ID token. The code here is just the email to sign in as.
+// A push service: records each push, so the check sees what the relay sent.
+const pushes: Array<{ path: string; authorization: string; length: number }> =
+  [];
+const pushService = Bun.serve({
+  hostname: "127.0.0.1",
+  port: 0,
+  async fetch(request) {
+    pushes.push({
+      path: new URL(request.url).pathname,
+      authorization: request.headers.get("Authorization") ?? "",
+      length: (await request.arrayBuffer()).byteLength,
+    });
+    return new Response(null, { status: 201 });
+  },
+});
+const pushOrigin = `http://127.0.0.1:${pushService.port}`;
+const vapid = (await crypto.subtle.generateKey(
+  { name: "ECDSA", namedCurve: "P-256" },
+  true,
+  ["sign", "verify"],
+)) as CryptoKeyPair;
+const vapidPublic = Buffer.from(
+  await crypto.subtle.exportKey("raw", vapid.publicKey),
+).toString("base64url");
+
 const google = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
@@ -202,6 +227,12 @@ const vars = {
   GOOGLE_TOKEN_URL: `http://127.0.0.1:${google.port}/token`,
   ADMIN_KEY,
   APP_ORIGINS: APP,
+  VAPID_PUBLIC_KEY: vapidPublic,
+  VAPID_PRIVATE_JWK: JSON.stringify(
+    await crypto.subtle.exportKey("jwk", vapid.privateKey),
+  ),
+  VAPID_SUBJECT: "https://relay.test",
+  PUSH_TEST_ENDPOINT: `${pushOrigin}/`,
 };
 const relay = Bun.spawn(
   [
@@ -620,6 +651,110 @@ try {
   )) as RpcResult<unknown>;
   if (!hostSnapshot.ok) throw new Error("Snapshot through the host failed");
   viaHost.close();
+
+  // Push: the tablet subscribes; a session on the second Mac starts needing
+  // the user while nobody is at that Mac (no app has written presence).
+  const aliceAccount = new RelayAccount(relayUrl, aliceToken);
+  if ((await aliceAccount.pushKey()).publicKey !== vapidPublic)
+    throw new Error("The relay handed out the wrong push key");
+  const badEndpoint = await aliceAccount
+    .setPushSubscription(secondPhone.id, "https://evil.example/push")
+    .then(
+      () => "accepted",
+      (error: RelayError) => error.code,
+    );
+  if (badEndpoint !== "BAD_ENDPOINT")
+    throw new Error(`An unknown push host was accepted: ${badEndpoint}`);
+  await aliceAccount.setPushSubscription(
+    secondPhone.id,
+    `${pushOrigin}/tablet`,
+  );
+  const hostEnv = { ...env, DAEDALUS_HOME: secondHome };
+  const hostCli = async (args: string[]) => {
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "run",
+        join(root, "apps/cli/src/index.ts"),
+        ...args,
+        "--json",
+      ],
+      { cwd: root, env: hostEnv, stdout: "pipe", stderr: "pipe" },
+    );
+    const out = await new Response(child.stdout).text();
+    await child.exited;
+    return (JSON.parse(out) as { data: unknown }).data;
+  };
+  await Bun.write(
+    join(secondHome, "config.json"),
+    JSON.stringify({
+      ...((await Bun.file(join(secondHome, "config.json")).json()) as object),
+      agents: { shell: { executable: "/bin/sh", args: ["-i"] } },
+    }),
+  );
+  const hostWorkspace = (await hostCli(["workspace", "create", "Second"])) as {
+    id: string;
+  };
+  const asking = (await hostCli([
+    "agent",
+    "spawn",
+    "--workspace",
+    hostWorkspace.id,
+    "--command",
+    "shell",
+  ])) as { id: string };
+  host.announce(); // the baseline: nothing needs the user yet
+  await sleep(200);
+  await hostCli(["attention", "Pick a database", "--session", asking.id]);
+  host.announce();
+  await until("push", () => pushes.length > 0, 10_000);
+  const push = pushes[0]!;
+  const [jwt, key] =
+    /^vapid t=([^,]+), k=(.+)$/.exec(push.authorization)?.slice(1) ?? [];
+  const [head, claims, signature] = (jwt ?? "").split(".");
+  const verifies = await crypto.subtle.verify(
+    { name: "ECDSA", hash: "SHA-256" },
+    vapid.publicKey,
+    Buffer.from(signature ?? "", "base64url"),
+    new TextEncoder().encode(`${head}.${claims}`),
+  );
+  const aud = (
+    JSON.parse(Buffer.from(claims ?? "", "base64url").toString()) as {
+      aud: string;
+    }
+  ).aud;
+  if (
+    push.path !== "/tablet" ||
+    push.length !== 0 ||
+    key !== vapidPublic ||
+    !verifies ||
+    aud !== pushOrigin
+  )
+    throw new Error(
+      `Push is wrong: ${JSON.stringify({ push, aud, verifies })}`,
+    );
+  const second = (await hostCli([
+    "agent",
+    "spawn",
+    "--workspace",
+    hostWorkspace.id,
+    "--command",
+    "shell",
+  ])) as { id: string };
+  await hostCli(["attention", "Pick a port", "--session", second.id]);
+  host.announce();
+  await sleep(1_500);
+  if (pushes.length !== 1)
+    throw new Error("A second push inside 15 s went out");
+  pass(
+    "a session needing the user while they are away pushes an empty, VAPID-signed notification; one per 15 s",
+  );
+  await runCommand("tmux", [
+    "-L",
+    `daedalus-${createHash("sha256").update(secondHome).digest("hex").slice(0, 12)}`,
+    "kill-server",
+  ]);
+
   await host.removePhone(secondPhone.id);
   const forgotten = await PhoneConnection.connect(
     secondPhone,
@@ -664,6 +799,7 @@ try {
   relay.kill();
   await relay.exited;
   google.stop(true);
+  pushService.stop(true);
   await runCommand("tmux", ["-L", socket, "kill-server"]);
   await rm(home, { recursive: true, force: true });
   await rm(secondHome, { recursive: true, force: true });

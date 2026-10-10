@@ -12,6 +12,12 @@ export interface Env {
   GOOGLE_TOKEN_URL?: string;
   /** Comma-separated origins a sign-in may return to. */
   APP_ORIGINS?: string;
+  /** VAPID keys for Web Push (see push.ts). The private key is a secret. */
+  VAPID_PUBLIC_KEY?: string;
+  VAPID_PRIVATE_JWK?: string;
+  VAPID_SUBJECT?: string;
+  /** An extra push endpoint prefix, for the local check's push service. */
+  PUSH_TEST_ENDPOINT?: string;
 }
 
 /** Device and room ids: 16 random bytes in base64url, from the devices. */

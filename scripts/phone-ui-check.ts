@@ -361,7 +361,7 @@ try {
     while (!(await evaluate<boolean>(`Boolean(${expression})`))) {
       if (Date.now() > deadline)
         throw new Error(
-          `Timed out waiting for ${label}. Page: ${await evaluate<string>("document.body.innerText.slice(0, 300)")}. Errors: ${errors.join(" | ") || "none"}`,
+          `Timed out waiting for ${label}. Page: ${await evaluate<string>("document.body.innerText.slice(0, 300) + ' | terminal: ' + (document.querySelector('.xterm-rows')?.textContent ?? '').slice(-400)")}. Errors: ${errors.join(" | ") || "none"}`,
         );
       await sleep(100);
     }
@@ -506,6 +506,22 @@ try {
   );
   await tap(`document.querySelector('.keys button[aria-label="Control C"]')`);
   await tap(`document.querySelector('.keys button[aria-label="Enter"]')`);
+  // Claude's turn marker draws from the bundled symbol font, not as emoji.
+  await evaluate(`(() => {
+    const box = document.querySelector('.compose textarea');
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(box, "printf '\\\\342\\\\217\\\\272 MARKED\\\\n'");
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await tap(byText(".compose button", "Send"));
+  await waitFor(
+    "turn marker",
+    "document.querySelector('.xterm-rows').textContent.includes('\u23fa MARKED')",
+  );
+  const symbols = await evaluate<string>(
+    "[...document.fonts].find((face) => face.family.includes('Daedalus Terminal Symbols'))?.status ?? 'missing'",
+  );
+  if (symbols !== "loaded")
+    throw new Error(`The terminal symbol font is ${symbols}`);
   const layout = await evaluate<{
     overflow: boolean;
     terminalHeight: number;

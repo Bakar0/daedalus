@@ -24,5 +24,8 @@
   ],
   "vars": {
     "APP_ORIGINS": "https://daedalus-relay.daedalus-relay.workers.dev",
+    // Web Push (push.ts). The private key is the VAPID_PRIVATE_JWK secret.
+    "VAPID_PUBLIC_KEY": "BGYgU2JV1AUydFbYc4CqiA5id-dhU2hemqeazSDaACWog3yxBFibBDByeVDqXwRnStmtlyPU8gA3ZjlQF6QLIdM",
+    "VAPID_SUBJECT": "https://daedalus-relay.daedalus-relay.workers.dev",
   },
 }

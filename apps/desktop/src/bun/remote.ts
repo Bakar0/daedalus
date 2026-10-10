@@ -3,6 +3,7 @@ import { join } from "node:path";
 import {
   type ApplicationContext,
   DaedalusError,
+  IDLE_SECONDS_THRESHOLD,
   saveRemoteEnabled,
 } from "@daedalus/core";
 import { runCommand, TmuxPtyBridge } from "@daedalus/platform";
@@ -34,6 +35,7 @@ import {
   type Ready,
   RELAY_CLOSE,
   relayConnectUrl,
+  relayHttpUrl,
   relayProtocols,
   type RelayNotice,
   type SecureChannel,
@@ -272,6 +274,35 @@ export class RemoteConnector {
       lifetimeMs,
     );
     return this.#offer;
+  }
+
+  /**
+   * Asks the relay to wake this account's phones with a push that says only
+   * that a session needs them. Nothing about the session leaves the Mac.
+   */
+  async notifyPhones(): Promise<"sent" | "throttled" | "skipped" | "failed"> {
+    const token = this.options.store.relayToken;
+    if (!token) return "skipped";
+    try {
+      const response = await fetch(
+        `${relayHttpUrl(this.options.relay)}/v1/push/notify`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "X-Daedalus-Device": this.macId,
+          },
+        },
+      );
+      const result = (await response.json()) as
+        | { ok: true; data: { sent: number; throttled: boolean } }
+        | { ok: false };
+      if (!result.ok) return "failed";
+      this.options.log?.("remote_push", { ...result.data });
+      return result.data.throttled ? "throttled" : "sent";
+    } catch {
+      return "failed";
+    }
   }
 
   /** Ends a forgotten phone's connection; its next hello is refused. */
@@ -799,6 +830,39 @@ export class RemoteHost implements DesktopRemoteHost {
 
   announce(): void {
     this.#connector?.announce();
+    void this.#watchAttention().catch(() => undefined);
+  }
+
+  /** Sessions that needed the user at the last look; undefined before it. */
+  #needing: Set<string> | undefined;
+
+  /**
+   * A session that starts needing the user while they are away from this
+   * Mac wakes their phones. Away is the same rule that sends a desktop
+   * notification (app in the background, or idle five minutes), and Focus
+   * mode holds pushes as it holds every other alert. Sessions that already
+   * needed the user when the app started do not push.
+   */
+  async #watchAttention(): Promise<void> {
+    const { context } = this.options;
+    const now = new Set(
+      context.activity
+        .listAttention()
+        .filter((item) => item.reasons.length > 0)
+        .map((item) => item.sessionId),
+    );
+    const before = this.#needing;
+    this.#needing = now;
+    if (!before || ![...now].some((id) => !before.has(id))) return;
+    const connector = this.#connector;
+    if (!connector || connector.status !== "online") return;
+    if (context.presence.focusMode) return;
+    const presence = await context.presence.read();
+    const away =
+      !presence.appRunning ||
+      !presence.appForeground ||
+      presence.userIdleSeconds >= IDLE_SECONDS_THRESHOLD;
+    if (away) await connector.notifyPhones();
   }
 
   state(): RemoteStateDto {

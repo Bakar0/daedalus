@@ -6,6 +6,7 @@ import {
   SessionRowView,
   workspaceInsight,
 } from "./sessions";
+import { PushControl } from "./PushControl";
 import { Shell } from "./Shell";
 import { useMac } from "./useMac";
 
@@ -107,6 +108,7 @@ export function Home({
         </section>
       ) : rows ? (
         <>
+          <PushControl compact token={token} />
           {rows.needsMe.length > 0 ? (
             <section className="group">
               <h2 className="group-title">Needs me</h2>

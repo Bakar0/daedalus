@@ -56,7 +56,8 @@ export function SessionScreen({
       allowProposedApi: false,
       convertEol: false,
       cursorBlink: false,
-      fontFamily: "ui-monospace, Menlo, monospace",
+      fontFamily:
+        '"Daedalus Terminal Symbols", ui-monospace, Menlo, "Roboto Mono", monospace',
       fontSize: 11,
       scrollback: 2_000,
       theme: DARK,
@@ -64,6 +65,11 @@ export function SessionScreen({
     const fit = new FitAddon();
     xterm.loadAddon(fit);
     xterm.open(host.current);
+    // The symbol font arrives after the first paint; redraw once it is in.
+    void document.fonts
+      .load('11px "Daedalus Terminal Symbols"', "\u23fa")
+      .then(() => xterm.refresh(0, xterm.rows - 1))
+      .catch(() => undefined);
     fit.fit();
 
     const remote = connection.openTerminal(

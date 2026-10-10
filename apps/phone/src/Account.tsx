@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { type PairedMac, RelayAccount } from "@daedalus/remote-protocol";
+import { PushControl } from "./PushControl";
 import { Shell } from "./Shell";
 import { phoneIdentity, removeMac } from "./storage";
 
@@ -49,6 +50,7 @@ export function Account({
               </small>
             </div>
           </section>
+          <PushControl token={token} />
           <section className="group">
             <h2 className="group-title">Devices</h2>
             <ul className="rows">
