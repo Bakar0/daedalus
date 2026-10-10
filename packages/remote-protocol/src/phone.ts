@@ -3,6 +3,7 @@ import type {
   TerminalServerMessage,
 } from "@daedalus/protocol";
 import {
+  claimKey,
   type DeviceIdentity,
   type PairingOffer,
   pairingProof,
@@ -187,8 +188,16 @@ export class RelayAccount {
     return this.#call("GET", "/v1/me");
   }
 
-  claimMac(macId: string, name: string): Promise<{ macId: string }> {
-    return this.#call("POST", "/v1/pairings/claim", { macId, name });
+  claimMac(
+    macId: string,
+    name: string,
+    key: string,
+  ): Promise<{ macId: string }> {
+    return this.#call("POST", "/v1/pairings/claim", {
+      macId,
+      name,
+      claimKey: key,
+    });
   }
 
   redeemInvite(code: string): Promise<unknown> {
@@ -214,13 +223,31 @@ export class RelayAccount {
   signOut(): Promise<null> {
     return this.#call("POST", "/v1/signout");
   }
+
+  /** Ends every sign-in of this account, this one included. */
+  signOutEverywhere(): Promise<null> {
+    return this.#call("POST", "/v1/signout-all");
+  }
+}
+
+export interface PairOptions {
+  /**
+   * The relay this app talks to. A code naming any other is refused, since
+   * claiming sends the session token to the relay the code names.
+   */
+  relay?: string;
+  /** The Mac is now asking its user to allow this phone. */
+  onWaiting?: () => void;
+  /** How long to wait for the Mac and its user. */
+  timeoutMs?: number;
 }
 
 /**
  * Pairs this phone with the Mac that showed `offer`: the account claims the
- * Mac on the relay, then the phone proves to the Mac that it scanned the
- * code. The Mac's public key comes from the offer itself, never from the
- * relay. Claiming makes the Mac reconnect with its new device token, so the
+ * Mac on the relay with the claim key from the code, then the phone proves
+ * to the Mac that it scanned the code, and the Mac's user allows it there.
+ * The Mac's public key comes from the offer itself, never from the relay.
+ * Claiming makes the Mac reconnect with its new device token, so the
  * request is repeated until the Mac is back and answers.
  */
 export async function pairWithMac(
@@ -228,11 +255,20 @@ export async function pairWithMac(
   offer: PairingOffer,
   phoneName: string,
   token: string,
-  timeoutMs = 20_000,
+  options: PairOptions = {},
 ): Promise<PairedMac> {
+  if (
+    options.relay !== undefined &&
+    relayHttpUrl(offer.relay) !== relayHttpUrl(options.relay)
+  )
+    throw new Error("This pairing code is for a different relay.");
   if (offer.expiresAt < Date.now())
     throw new Error("This pairing code has expired");
-  await new RelayAccount(offer.relay, token).claimMac(offer.macId, offer.name);
+  await new RelayAccount(offer.relay, token).claimMac(
+    offer.macId,
+    offer.name,
+    claimKey(offer),
+  );
   const socket = await openSocket(
     relayConnectUrl(offer.relay, offer.macId, "phone", phone.id, phoneName),
     token,
@@ -242,8 +278,9 @@ export async function pairWithMac(
     const answer = await new Promise<PlainMessage>((resolve, reject) => {
       const timer = setTimeout(
         () => reject(new Error("The Mac did not answer the pairing request")),
-        timeoutMs,
+        options.timeoutMs ?? 150_000,
       );
+      let waiting = false;
       socket.addEventListener("message", (event) => {
         if (typeof event.data === "string") return;
         const { payload } = decodeRelayFrame(
@@ -251,6 +288,11 @@ export async function pairWithMac(
         );
         const decoded = decodePayload(payload);
         if (decoded.kind !== "plain") return;
+        if (decoded.message.type === "waiting") {
+          if (!waiting) options.onWaiting?.();
+          waiting = true;
+          return;
+        }
         clearTimeout(timer);
         resolve(decoded.message);
       });
@@ -267,7 +309,7 @@ export async function pairWithMac(
           phoneId: phone.id,
           phoneKey: phone.publicKey,
           name: phoneName,
-          proof: pairingProof(offer, phone),
+          proof: pairingProof(offer, phone, phoneName),
         }),
       );
       socket.send(request);
@@ -339,7 +381,7 @@ export class PhoneConnection {
       relayConnectUrl(this.mac.relay, this.mac.macId, "phone", this.phone.id),
       this.token,
     );
-    const handshake = startHandshake(this.phone, this.mac.macKey);
+    const handshake = startHandshake(this.phone, this.mac);
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(
         () => reject(new Error("The Mac did not finish the handshake")),

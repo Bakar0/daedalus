@@ -7,7 +7,12 @@ export interface Env {
   ADMIN_KEY?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
-  /** Overridable so the local check can stand in for Google. */
+  /**
+   * "1" on a local relay only. It lets the overrides below take effect, and
+   * the relay refuses to run with it next to an https app origin.
+   */
+  DEV_MODE?: string;
+  /** Dev only: so the local check can stand in for Google. */
   GOOGLE_AUTH_URL?: string;
   GOOGLE_TOKEN_URL?: string;
   /** Comma-separated origins a sign-in may return to. */
@@ -16,7 +21,7 @@ export interface Env {
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_JWK?: string;
   VAPID_SUBJECT?: string;
-  /** An extra push endpoint prefix, for the local check's push service. */
+  /** Dev only: an extra push endpoint prefix, for the local check. */
   PUSH_TEST_ENDPOINT?: string;
   BUDGET: DurableObjectNamespace<import("./budget").Budget>;
   /** Estimated overage, in dollars a month, past which the relay pauses. */
@@ -38,6 +43,13 @@ export const ID = /^[A-Za-z0-9_-]{8,64}$/;
 export const PROTOCOL = "daedalus.v1";
 
 export const nowIso = (): string => new Date().toISOString();
+
+/** Whether the dev-only overrides apply (see `DEV_MODE`). */
+export const isDev = (env: Env): boolean => env.DEV_MODE === "1";
+
+/** A dev relay serving a real (https) app origin is a mistake; refuse it. */
+export const misconfigured = (env: Env): boolean =>
+  isDev(env) && (env.APP_ORIGINS ?? "").includes("https://");
 
 export function base64url(bytes: Uint8Array): string {
   let text = "";

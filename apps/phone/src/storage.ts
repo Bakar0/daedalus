@@ -21,6 +21,7 @@ interface Stored {
 
 const KEY = "daedalus.phone.v1";
 const PENDING_PAIR = "daedalus.phone.pending-pair";
+const SIGN_IN = "daedalus.phone.signin";
 let memory: Stored = {};
 
 function read(): Stored {
@@ -98,5 +99,34 @@ export function setPendingPair(code: string | undefined): void {
   } catch {
     // Without storage the code is lost on the sign-in round trip; the user
     // scans it again.
+  }
+}
+
+/**
+ * A sign-in this tab started: a random nonce that goes out in the return
+ * address and must come back with the token. Kept per tab, so a link opened
+ * anywhere else cannot plant a token.
+ */
+export function startSignIn(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  const nonce = [...bytes]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  try {
+    sessionStorage.setItem(SIGN_IN, nonce);
+  } catch {
+    // Without storage the token cannot be accepted; the user sees the
+    // sign-in page again.
+  }
+  return nonce;
+}
+
+export function signInNonce(): string | undefined {
+  try {
+    const nonce = sessionStorage.getItem(SIGN_IN) ?? undefined;
+    sessionStorage.removeItem(SIGN_IN);
+    return nonce;
+  } catch {
+    return undefined;
   }
 }

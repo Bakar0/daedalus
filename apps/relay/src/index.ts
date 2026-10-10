@@ -1,11 +1,14 @@
 import {
   activeEntitlement,
+  bindSession,
   countActiveDevices,
   createInvite,
+  type Device,
   deleteSession,
   device,
   PLANS,
   redeemInvite,
+  sessionFor,
   setEntitlement,
   type User,
   userDevices,
@@ -22,7 +25,9 @@ import {
   type Env,
   fail,
   ID,
+  isDev,
   json,
+  misconfigured,
   nowIso,
   protocolToken,
   randomToken,
@@ -47,6 +52,8 @@ export default {
     const url = new URL(request.url);
     const route = `${request.method} ${url.pathname}`;
     try {
+      if (misconfigured(env))
+        return fail(503, "MISCONFIGURED", "DEV_MODE is set on a live relay.");
       if (route === "GET /health") return new Response("ok");
       if (route === "GET /v1/connect") return await connect(request, env);
       // Every other API request counts toward the budget; connects count
@@ -70,6 +77,8 @@ export default {
       }
       if (route === "POST /v1/push/notify")
         return await pushNotify(request, env);
+      if (url.pathname.startsWith("/v1/macs/"))
+        return await macRoutes(request, env, route);
       if (url.pathname.startsWith("/admin/"))
         return await admin(request, env, route);
       if (url.pathname.startsWith("/v1/"))
@@ -226,6 +235,7 @@ async function connect(request: Request, env: Env): Promise<Response> {
     );
 
   let userId: string | null = null;
+  let email = "";
   const mac = await device(env.DB, macId);
   if (role === "mac") {
     if (mac && mac.kind !== "mac") return refuse(CLOSE.forbidden, "Not a Mac");
@@ -236,19 +246,43 @@ async function connect(request: Request, env: Env): Promise<Response> {
       if (!(await activeEntitlement(env.DB, mac.userId)))
         return refuse(CLOSE.noEntitlement, "No active access");
       userId = mac.userId;
+      email =
+        (
+          await env.DB.prepare("SELECT email FROM users WHERE id = ?")
+            .bind(userId)
+            .first<{ email: string }>()
+        )?.email ?? "";
     } else if (!(await allowed(env.UNCLAIMED_LIMITER, request))) {
       // Unclaimed Macs connect with no sign-in, so they are limited per IP.
       return refuse(CLOSE.rateLimited, "Too many new Macs from here");
-    } else if (!mac) {
-      await env.DB.prepare(
-        "INSERT INTO devices (id, user_id, kind, created_at) VALUES (?, NULL, 'mac', ?)",
-      )
-        .bind(macId, nowIso())
-        .run();
+    } else {
+      // An unclaimed Mac proves it is the same Mac with a secret of its own,
+      // registered on its first connection, before its id was ever shown.
+      // Someone who read the id off a QR code cannot take its place.
+      if (!token) return refuse(CLOSE.unauthorized, "Device secret required");
+      const hash = await sha256(token);
+      if (!mac)
+        await env.DB.prepare(
+          "INSERT INTO devices (id, user_id, kind, token_hash, created_at) VALUES (?, NULL, 'mac', ?, ?)",
+        )
+          .bind(macId, hash, nowIso())
+          .run();
+      else if (!mac.tokenHash)
+        await env.DB.prepare(
+          "UPDATE devices SET token_hash = ? WHERE id = ? AND token_hash IS NULL",
+        )
+          .bind(hash, macId)
+          .run();
+      else if (hash !== mac.tokenHash)
+        return refuse(CLOSE.unauthorized, "Device secret does not match");
     }
   } else {
-    const user = await userForSession(env.DB, token);
-    if (!user) return refuse(CLOSE.unauthorized, "Sign in again");
+    const session = await sessionFor(env.DB, token);
+    if (!session) return refuse(CLOSE.unauthorized, "Sign in again");
+    const { user } = session;
+    // A sign-in is one phone's: a copied token cannot add other phones.
+    if (session.deviceId && session.deviceId !== deviceId)
+      return refuse(CLOSE.forbidden, "This sign-in belongs to another phone");
     const entitlement = await activeEntitlement(env.DB, user.id);
     if (!entitlement) return refuse(CLOSE.noEntitlement, "No active access");
     if (!mac || mac.userId !== user.id || mac.revokedAt)
@@ -277,6 +311,8 @@ async function connect(request: Request, env: Env): Promise<Response> {
         )
         .run();
     }
+    if (!session.deviceId)
+      await bindSession(env.DB, session.tokenHash, deviceId);
     userId = user.id;
   }
   await env.DB.prepare("UPDATE devices SET last_seen_at = ? WHERE id = ?")
@@ -287,6 +323,7 @@ async function connect(request: Request, env: Env): Promise<Response> {
   headers.set("X-Daedalus-Role", role);
   headers.set("X-Daedalus-Device", deviceId);
   headers.set("X-Daedalus-User", userId ?? "");
+  headers.set("X-Daedalus-Email", email);
   return room(env, macId).fetch(new Request(request, { headers }));
 }
 
@@ -298,18 +335,8 @@ const PUSH_INTERVAL_MS = 15_000;
  * proves itself with its device token. The push carries nothing.
  */
 async function pushNotify(request: Request, env: Env): Promise<Response> {
-  const macId = request.headers.get("X-Daedalus-Device") ?? "";
-  const token = bearer(request);
-  const mac = ID.test(macId) ? await device(env.DB, macId) : undefined;
-  if (
-    !mac ||
-    mac.kind !== "mac" ||
-    !mac.userId ||
-    mac.revokedAt ||
-    !token ||
-    (await sha256(token)) !== mac.tokenHash
-  )
-    return fail(401, "UNAUTHORIZED", "Device token required.");
+  const mac = await macFrom(request, env);
+  if (!mac?.userId) return fail(401, "UNAUTHORIZED", "Device token required.");
   if (!(await activeEntitlement(env.DB, mac.userId)))
     return fail(402, "NO_ENTITLEMENT", "This account has no active access.");
   if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_JWK)
@@ -354,6 +381,76 @@ async function pushNotify(request: Request, env: Env): Promise<Response> {
         .run();
   }
   return json({ ok: true, data: { sent, throttled: false } });
+}
+
+/**
+ * A Mac proving itself over HTTP: its id, and its device token (claimed) or
+ * its own secret (unclaimed) as the bearer token.
+ */
+async function macFrom(
+  request: Request,
+  env: Env,
+): Promise<Device | undefined> {
+  const macId = request.headers.get("X-Daedalus-Device") ?? "";
+  const token = bearer(request);
+  const mac = ID.test(macId) ? await device(env.DB, macId) : undefined;
+  if (
+    !mac ||
+    mac.kind !== "mac" ||
+    mac.revokedAt ||
+    !token ||
+    !mac.tokenHash ||
+    (await sha256(token)) !== mac.tokenHash
+  )
+    return undefined;
+  return mac;
+}
+
+/** A pairing code lasts two minutes; the relay keeps its claim key 5. */
+const CLAIM_MAX_MS = 5 * 60_000;
+
+/** What a Mac asks of the relay about itself. */
+async function macRoutes(
+  request: Request,
+  env: Env,
+  route: string,
+): Promise<Response> {
+  const mac = await macFrom(request, env);
+  if (!mac) return fail(401, "UNAUTHORIZED", "Device secret required.");
+
+  // The Mac is showing a pairing code: a claim must present its key.
+  if (route === "POST /v1/macs/offer") {
+    const { claimHash, expiresAt } = await body<{
+      claimHash: string;
+      expiresAt: number;
+    }>(request);
+    if (!claimHash || typeof expiresAt !== "number")
+      return fail(400, "BAD_REQUEST", "Missing claim hash.");
+    const until = Math.min(expiresAt, Date.now() + CLAIM_MAX_MS);
+    await env.DB.prepare(
+      "UPDATE devices SET claim_hash = ?, claim_expires_at = ? WHERE id = ?",
+    )
+      .bind(claimHash, new Date(until).toISOString(), mac.id)
+      .run();
+    return json({ ok: true, data: null });
+  }
+
+  // The Mac leaves its account: its user declined the first phone, which
+  // means someone else claimed it, or chose Leave this account.
+  if (route === "POST /v1/macs/leave") {
+    await env.DB.prepare(
+      "UPDATE devices SET revoked_at = ?, token_hash = NULL, claim_hash = NULL WHERE id = ?",
+    )
+      .bind(nowIso(), mac.id)
+      .run();
+    await room(env, mac.id).fetch("https://room/kick", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    return json({ ok: true, data: null });
+  }
+
+  return fail(404, "NOT_FOUND", "Not found");
 }
 
 async function signedIn(request: Request, env: Env): Promise<User | Response> {
@@ -423,7 +520,13 @@ async function account(
         .run();
       return json({ ok: true, data: null });
     }
-    if (!endpoint || !allowedEndpoint(endpoint, env.PUSH_TEST_ENDPOINT))
+    if (
+      !endpoint ||
+      !allowedEndpoint(
+        endpoint,
+        isDev(env) ? env.PUSH_TEST_ENDPOINT : undefined,
+      )
+    )
       return fail(
         400,
         "BAD_ENDPOINT",
@@ -444,6 +547,13 @@ async function account(
     return json({ ok: true, data: null });
   }
 
+  if (route === "POST /v1/signout-all") {
+    await env.DB.prepare("DELETE FROM sessions WHERE user_id = ?")
+      .bind(user.id)
+      .run();
+    return json({ ok: true, data: null });
+  }
+
   if (
     (route === "POST /v1/invites/redeem" ||
       route === "POST /v1/pairings/claim") &&
@@ -459,9 +569,11 @@ async function account(
   }
 
   if (route === "POST /v1/pairings/claim") {
-    const { macId, name } = await body<{ macId: string; name: string }>(
-      request,
-    );
+    const { macId, name, claimKey } = await body<{
+      macId: string;
+      name: string;
+      claimKey: string;
+    }>(request);
     if (!macId || !ID.test(macId))
       return fail(400, "BAD_REQUEST", "Missing Mac id.");
     const entitlement = await activeEntitlement(env.DB, user.id);
@@ -478,13 +590,26 @@ async function account(
     if (mac.userId)
       return fail(409, "CLAIMED", "That Mac belongs to another account.");
     if (
+      !claimKey ||
+      !mac.claimHash ||
+      !mac.claimExpiresAt ||
+      Date.parse(mac.claimExpiresAt) < Date.now() ||
+      !constantTimeEqual(await sha256(claimKey), mac.claimHash)
+    )
+      return fail(
+        403,
+        "BAD_CLAIM",
+        "This pairing code is not valid any more. Show a new one on your Mac.",
+      );
+    if (
       (await countActiveDevices(env.DB, user.id, "mac")) >= entitlement.maxMacs
     )
       return fail(403, "MAC_LIMIT", "This account has reached its Mac limit.");
     const token = randomToken();
     const claimed = await env.DB.prepare(
-      `UPDATE devices SET user_id = ?, name = ?, token_hash = ?, claimed_at = ?
-       WHERE id = ? AND user_id IS NULL AND revoked_at IS NULL`,
+      `UPDATE devices SET user_id = ?, name = ?, token_hash = ?, claimed_at = ?,
+         claim_hash = NULL, claim_expires_at = NULL
+       WHERE id = ? AND user_id IS NULL AND revoked_at IS NULL AND claim_hash = ?`,
     )
       .bind(
         user.id,
@@ -492,6 +617,7 @@ async function account(
         await sha256(token),
         nowIso(),
         macId,
+        mac.claimHash,
       )
       .run();
     if (!claimed.meta.changes)
@@ -508,11 +634,15 @@ async function account(
     const target = await device(env.DB, remove[1]!);
     if (!target || target.userId !== user.id)
       return fail(404, "NOT_FOUND", "No such device.");
-    await env.DB.prepare(
-      "UPDATE devices SET revoked_at = ?, token_hash = NULL WHERE id = ?",
-    )
-      .bind(nowIso(), target.id)
-      .run();
+    await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE devices SET revoked_at = ?, token_hash = NULL WHERE id = ?",
+      ).bind(nowIso(), target.id),
+      // A removed phone's sign-in ends with it.
+      env.DB.prepare("DELETE FROM sessions WHERE device_id = ?").bind(
+        target.id,
+      ),
+    ]);
     const rooms =
       target.kind === "mac"
         ? [target.id]
@@ -616,6 +746,9 @@ async function admin(
         : {},
     );
     if (status === "revoked") {
+      await env.DB.prepare("DELETE FROM sessions WHERE user_id = ?")
+        .bind(user.id)
+        .run();
       const macs = (await userDevices(env.DB, user.id)).filter(
         (item) => item.kind === "mac",
       );

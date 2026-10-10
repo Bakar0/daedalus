@@ -1,5 +1,14 @@
 import { activeEntitlement, createSession, redeemInvite } from "./accounts";
-import { base64url, type Env, fail, nowIso, randomToken } from "./util";
+import {
+  base64url,
+  type Env,
+  fail,
+  ID,
+  isDev,
+  nowIso,
+  randomToken,
+  sha256,
+} from "./util";
 
 /**
  * Google sign-in, authorization code flow with PKCE. The phone page sends
@@ -12,12 +21,34 @@ import { base64url, type Env, fail, nowIso, randomToken } from "./util";
  * without checking its signature (OpenID Connect Core 3.1.3.7).
  *
  * A new account needs an invite code. Without one, nothing is stored.
+ *
+ * The start sets a cookie holding a random nonce and keeps its hash with
+ * the state; the callback needs the same cookie. A callback URL made by
+ * someone else, from a sign-in they started, does not work in another
+ * browser (login CSRF).
  */
 
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const ISSUERS = new Set(["https://accounts.google.com", "accounts.google.com"]);
 const STATE_MINUTES = 10;
+const COOKIE = "__Host-daedalus-signin";
+
+function cookie(request: Request, name: string): string | undefined {
+  for (const part of (request.headers.get("Cookie") ?? "").split(";")) {
+    const [key, ...value] = part.trim().split("=");
+    if (key === name) return value.join("=");
+  }
+  return undefined;
+}
+
+const redirect = (location: string, setCookie: string): Response =>
+  new Response(null, {
+    status: 302,
+    headers: { Location: location, "Set-Cookie": setCookie },
+  });
+
+const clearCookie = `${COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0`;
 
 function allowedReturn(env: Env, returnTo: string): boolean {
   let origin: string;
@@ -39,7 +70,7 @@ const callbackUrl = (request: Request) =>
 function back(returnTo: string, fragment: Record<string, string>): Response {
   const url = new URL(returnTo);
   url.hash = new URLSearchParams(fragment).toString();
-  return Response.redirect(url.toString(), 302);
+  return redirect(url.toString(), clearCookie);
 }
 
 export async function googleStart(
@@ -53,8 +84,10 @@ export async function googleStart(
   if (!allowedReturn(env, returnTo))
     return fail(400, "BAD_RETURN", "That return address is not allowed.");
   const invite = url.searchParams.get("invite")?.trim() || null;
+  const device = url.searchParams.get("device") ?? "";
 
   const state = randomToken(24);
+  const nonce = randomToken(24);
   const verifier = randomToken(48);
   const challenge = base64url(
     new Uint8Array(
@@ -62,7 +95,7 @@ export async function googleStart(
     ),
   );
   await env.DB.prepare(
-    "INSERT INTO oauth_states (state, verifier, return_to, invite, expires_at) VALUES (?, ?, ?, ?, ?)",
+    "INSERT INTO oauth_states (state, verifier, return_to, invite, expires_at, browser_hash, device_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
   )
     .bind(
       state,
@@ -70,6 +103,8 @@ export async function googleStart(
       returnTo,
       invite,
       new Date(Date.now() + STATE_MINUTES * 60_000).toISOString(),
+      await sha256(nonce),
+      ID.test(device) ? device : null,
     )
     .run();
   // Old abandoned sign-ins are swept as new ones start.
@@ -77,7 +112,7 @@ export async function googleStart(
     .bind(nowIso())
     .run();
 
-  const google = new URL(env.GOOGLE_AUTH_URL ?? AUTH_URL);
+  const google = new URL((isDev(env) && env.GOOGLE_AUTH_URL) || AUTH_URL);
   google.search = new URLSearchParams({
     client_id: env.GOOGLE_CLIENT_ID,
     redirect_uri: callbackUrl(request),
@@ -88,7 +123,10 @@ export async function googleStart(
     code_challenge_method: "S256",
     prompt: "select_account",
   }).toString();
-  return Response.redirect(google.toString(), 302);
+  return redirect(
+    google.toString(),
+    `${COOKIE}=${nonce}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${STATE_MINUTES * 60}`,
+  );
 }
 
 interface IdClaims {
@@ -116,28 +154,41 @@ export async function googleCallback(
 ): Promise<Response> {
   const url = new URL(request.url);
   const state = url.searchParams.get("state") ?? "";
+  const nonce = cookie(request, COOKIE) ?? "";
   const pending = await env.DB.prepare(
-    "DELETE FROM oauth_states WHERE state = ? AND expires_at > ? RETURNING verifier, return_to AS returnTo, invite",
+    "DELETE FROM oauth_states WHERE state = ? AND expires_at > ? AND browser_hash = ? RETURNING verifier, return_to AS returnTo, invite, device_id AS deviceId",
   )
-    .bind(state, nowIso())
-    .first<{ verifier: string; returnTo: string; invite: string | null }>();
+    .bind(state, nowIso(), await sha256(nonce))
+    .first<{
+      verifier: string;
+      returnTo: string;
+      invite: string | null;
+      deviceId: string | null;
+    }>();
   if (!pending)
-    return fail(400, "BAD_STATE", "This sign-in expired. Start again.");
+    return fail(
+      400,
+      "BAD_STATE",
+      "This sign-in expired or was started in another browser. Start again.",
+    );
   const code = url.searchParams.get("code");
   if (!code) return back(pending.returnTo, { error: "cancelled" });
 
-  const exchange = await fetch(env.GOOGLE_TOKEN_URL ?? TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      code,
-      client_id: env.GOOGLE_CLIENT_ID ?? "",
-      client_secret: env.GOOGLE_CLIENT_SECRET ?? "",
-      redirect_uri: callbackUrl(request),
-      grant_type: "authorization_code",
-      code_verifier: pending.verifier,
-    }),
-  });
+  const exchange = await fetch(
+    (isDev(env) && env.GOOGLE_TOKEN_URL) || TOKEN_URL,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code,
+        client_id: env.GOOGLE_CLIENT_ID ?? "",
+        client_secret: env.GOOGLE_CLIENT_SECRET ?? "",
+        redirect_uri: callbackUrl(request),
+        grant_type: "authorization_code",
+        code_verifier: pending.verifier,
+      }),
+    },
+  );
   if (!exchange.ok) return back(pending.returnTo, { error: "google_failed" });
   const { id_token: idToken } = (await exchange.json()) as {
     id_token?: string;
@@ -178,6 +229,6 @@ export async function googleCallback(
       await redeemInvite(env.DB, user.id, pending.invite);
   }
   return back(pending.returnTo, {
-    token: await createSession(env.DB, user.id),
+    token: await createSession(env.DB, user.id, pending.deviceId),
   });
 }

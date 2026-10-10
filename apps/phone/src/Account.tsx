@@ -79,11 +79,15 @@ export function Account({
                         !confirm(
                           device.kind === "mac"
                             ? "Remove this Mac from your account? It has to be paired again."
-                            : "Remove this phone from your account? It can no longer connect.",
+                            : "Remove this phone from your account? It can no longer connect, and its sign-in ends.",
                         )
                       )
                         return;
                       await account.removeDevice(device.id);
+                      if (device.id === thisPhone) {
+                        onSignOut();
+                        return;
+                      }
                       if (device.kind === "mac") removeMac(device.id);
                       void reload();
                     }}
@@ -102,6 +106,21 @@ export function Account({
             }}
           >
             Sign out
+          </button>
+          <button
+            className="link danger"
+            onClick={async () => {
+              if (
+                !confirm(
+                  "Sign out on every phone and browser signed in to this account? Each has to sign in with Google again.",
+                )
+              )
+                return;
+              await account.signOutEverywhere().catch(() => undefined);
+              onSignOut();
+            }}
+          >
+            Sign out everywhere
           </button>
         </>
       ) : error ? undefined : (

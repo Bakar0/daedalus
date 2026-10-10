@@ -457,7 +457,7 @@ const NO_REMOTE: DesktopRemoteHost = {
       "Phone access is not available here.",
     );
   },
-  pairingCode: () => {
+  pairingCode: async () => {
     throw new DaedalusError(
       "DEPENDENCY",
       "Phone access is not available here.",
@@ -476,6 +476,10 @@ const NO_REMOTE: DesktopRemoteHost = {
     );
   },
   removePhone: async () => NO_REMOTE.state(),
+  confirmPairing: async () => NO_REMOTE.state(),
+  leaveAccount: async () => NO_REMOTE.state(),
+  startOver: async () => NO_REMOTE.state(),
+  activity: async () => [],
 };
 
 const MAIN_WINDOW_ONLY: DesktopWindowHost = {
@@ -760,6 +764,11 @@ export function createDesktopRequestHandlers(
     remoteSetMacName: ({ name }) => mutate(() => remote.setMacName(name)),
     remotePairingCode: () => result(() => remote.pairingCode()),
     remotePhoneRemove: ({ id }) => mutate(() => remote.removePhone(id)),
+    remoteConfirmPairing: ({ allow }) =>
+      mutate(() => remote.confirmPairing(allow)),
+    remoteLeaveAccount: () => mutate(() => remote.leaveAccount()),
+    remoteStartOver: () => mutate(() => remote.startOver()),
+    remoteActivity: () => result(() => remote.activity()),
     autoRestoreSessionsSet: ({ enabled }) =>
       mutate(async () => {
         await saveAutoRestoreSessionsEnabled(context.config, enabled);

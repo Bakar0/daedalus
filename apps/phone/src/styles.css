@@ -870,3 +870,11 @@ li:has(> .session-row[data-team-member="true"]) {
 .mac-state[data-state="blocked"] .dot {
   background: var(--danger);
 }
+
+.pair-code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  margin: 8px 0;
+}

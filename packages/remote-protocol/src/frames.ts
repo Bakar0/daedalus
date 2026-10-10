@@ -42,6 +42,8 @@ export type RelayNotice =
   | { relay: "replaced" }
   /** A phone claimed this Mac; the token lets it rejoin as that account's. */
   | { relay: "claimed"; token: string }
+  /** Sent to a claimed Mac as it joins: which account it belongs to. */
+  | { relay: "account"; email: string }
   | { relay: "quota"; limitMb: number };
 
 /** Sent before a secure channel exists. Nothing secret travels this way. */
@@ -53,6 +55,8 @@ export type PlainMessage =
       name: string;
       proof: string;
     }
+  /** The Mac is asking its user to allow this phone. */
+  | { type: "waiting" }
   | { type: "paired"; macName: string }
   | { type: "refused"; reason: string }
   | Hello

@@ -25,7 +25,7 @@ interface Attachment {
 
 const MAX_FRAME_BYTES = 1024 * 1024;
 const MAX_PHONES = 10;
-const BUSY_CHECK_MS = 5 * 60_000;
+const BUSY_CHECK_MS = 60_000;
 const IDLE_CHECK_MS = 60 * 60_000;
 /** Frames after which a room flushes at once; the local check lowers it. */
 const flushEvery = (env: Env) => Number(env.FRAME_FLUSH_EVERY ?? "50000");
@@ -58,6 +58,7 @@ export class Room extends DurableObject<Env> {
     const role = request.headers.get("X-Daedalus-Role") as Role;
     const deviceId = request.headers.get("X-Daedalus-Device") ?? "";
     const userId = request.headers.get("X-Daedalus-User") || null;
+    const email = request.headers.get("X-Daedalus-Email") ?? "";
 
     if (
       role === "phone" &&
@@ -76,6 +77,9 @@ export class Room extends DurableObject<Env> {
     const server = pair[1];
     this.ctx.acceptWebSocket(server, [role, `${role}:${deviceId}`]);
     server.serializeAttachment({ role, deviceId, userId } satisfies Attachment);
+    // A claimed Mac learns which account it is on, to show its user.
+    if (role === "mac" && userId)
+      server.send(JSON.stringify({ relay: "account", email }));
     this.#notice(role, deviceId, true);
     await this.#ensureAlarm(IDLE_CHECK_MS);
     return new Response(null, {
@@ -175,10 +179,13 @@ export class Room extends DurableObject<Env> {
 
   /**
    * Flushes usage, then checks every connected account still has access and
-   * is under its monthly data. Runs every 5 minutes while frames flow and
+   * is under its monthly data. Runs every minute while frames flow and
    * hourly otherwise, so revoking access takes effect within the hour even
    * with no traffic. Usage counted since the last flush is lost if the room
    * is evicted first, which makes the limit a little generous, not unsafe.
+   *
+   * At the data limit, terminals stop (the Mac is told); past a tenth more,
+   * which covers the minute between checks, the account's sockets close.
    */
   override async alarm(): Promise<void> {
     this.#alarmAt = 0;
@@ -224,7 +231,7 @@ export class Room extends DurableObject<Env> {
       const limit = entitlement.monthlyMb * 1024 * 1024;
       if (
         total.frames >= entitlement.monthlyFrames ||
-        total.bytes >= 2 * limit
+        total.bytes >= 1.1 * limit
       ) {
         for (const socket of mine)
           socket.close(CLOSE.overQuota, "Monthly limit reached");

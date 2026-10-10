@@ -17,10 +17,13 @@ import {
 import type { DesktopSnapshotDto, RpcResult } from "@daedalus/protocol";
 import {
   createIdentity,
+  type DeviceIdentity,
   decodePairingOffer,
   encodePairingOffer,
   type PairedMac,
+  type PairingOffer,
   PhoneConnection,
+  pairingCode,
   pairWithMac,
   RELAY_CLOSE,
   RelayAccount,
@@ -30,7 +33,9 @@ import {
 } from "@daedalus/remote-protocol";
 import {
   agentTerminalOpener,
+  type PairingRequest,
   PhoneWindowSize,
+  RemoteAudit,
   RemoteConnector,
   RemoteHost,
   type RemoteStatus,
@@ -38,6 +43,8 @@ import {
 } from "../apps/desktop/src/bun/remote";
 import { createDesktopRequestHandlers } from "../apps/desktop/src/bun/rpc";
 
+// The Mac's key goes to a file here, never to the user's Keychain.
+process.env.DAEDALUS_REMOTE_VAULT = "file";
 const root = join(import.meta.dir, "..");
 const relayDir = join(root, "apps/relay");
 const wrangler = join(relayDir, "node_modules/.bin/wrangler");
@@ -162,22 +169,34 @@ const google = Bun.serve({
   },
 });
 
-/** Runs the browser's part of a Google sign-in; returns the URL fragment. */
+/**
+ * Runs the browser's part of a Google sign-in; returns the URL fragment.
+ * The relay's cookie goes back with the callback, as a browser sends it;
+ * `withoutCookie` finishes the sign-in somewhere else instead.
+ */
 async function signIn(
   email: string,
   invite?: string,
+  options: { device?: string; withoutCookie?: boolean } = {},
 ): Promise<URLSearchParams> {
   const start = new URL("/auth/google/start", relayHttp);
   start.searchParams.set("return", `${APP}/signed-in`);
   if (invite) start.searchParams.set("invite", invite);
+  if (options.device) start.searchParams.set("device", options.device);
   const toGoogle = await fetch(start, { redirect: "manual" });
   const state = new URL(
     toGoogle.headers.get("Location") ?? "",
   ).searchParams.get("state");
+  const cookie = (toGoogle.headers.get("Set-Cookie") ?? "").split(";")[0]!;
   const callback = new URL("/auth/google/callback", relayHttp);
   callback.searchParams.set("state", state ?? "");
   callback.searchParams.set("code", email);
-  const back = await fetch(callback, { redirect: "manual" });
+  const back = await fetch(callback, {
+    redirect: "manual",
+    headers: options.withoutCookie ? {} : { Cookie: cookie },
+  });
+  if (options.withoutCookie)
+    return new URLSearchParams({ status: String(back.status) });
   const location = new URL(back.headers.get("Location") ?? "");
   if (location.origin !== APP)
     throw new Error(`Sign-in returned to ${location.origin}`);
@@ -222,6 +241,7 @@ if (migrate.exitCode !== 0)
   throw new Error(`D1 migrations failed: ${migrate.stderr.toString()}`);
 
 const vars = {
+  DEV_MODE: "1",
   GOOGLE_CLIENT_ID: CLIENT_ID,
   GOOGLE_CLIENT_SECRET: "test-secret",
   GOOGLE_AUTH_URL: `http://127.0.0.1:${google.port}/auth`,
@@ -269,6 +289,50 @@ const rawFrames: Uint8Array[] = [];
 const tap = (_direction: "in" | "out", frame: Uint8Array) => {
   if (rawFrames.length < 50_000) rawFrames.push(frame.slice());
 };
+
+/** A sign-in that belongs to this phone from the start. */
+async function signInPhone(email: string, phone: DeviceIdentity) {
+  const token = (await signIn(email, undefined, { device: phone.id })).get(
+    "token",
+  );
+  if (!token) throw new Error(`${email} could not sign in`);
+  return token;
+}
+
+/**
+ * Pairs as the app does, with the Mac's user answering: the Mac asks, and
+ * the six digits it shows must be the phone's.
+ */
+async function pairAndAnswer(
+  phone: DeviceIdentity,
+  offer: PairingOffer,
+  name: string,
+  token: string,
+  mac: {
+    request(): PairingRequest | undefined;
+    confirm(allow: boolean): Promise<unknown>;
+  },
+  allow = true,
+): Promise<PairedMac> {
+  let waited = false;
+  const pairing = pairWithMac(phone, offer, name, token, {
+    onWaiting: () => {
+      waited = true;
+    },
+  });
+  void pairing.catch(() => undefined);
+  await until(
+    "the Mac asks its user",
+    () => mac.request() !== undefined,
+    20_000,
+  );
+  await until("the phone hears the Mac is asking", () => waited);
+  const asked = mac.request()!;
+  if (asked.code !== pairingCode(offer, phone) || asked.phoneName !== name)
+    throw new Error(`The Mac asked about ${JSON.stringify(asked)}`);
+  await mac.confirm(allow);
+  return pairing;
+}
 
 let connector: RemoteConnector | undefined;
 let host: RemoteHost | undefined;
@@ -325,6 +389,16 @@ try {
   pass(
     "Google sign-in with an invite grants the beta plan; invites are one-use",
   );
+  const elsewhere = await signIn("alice@example.com", undefined, {
+    withoutCookie: true,
+  });
+  if (elsewhere.get("status") !== "400")
+    throw new Error(
+      `A callback without the browser's cookie signed in: ${elsewhere.get("status")}`,
+    );
+  pass(
+    "a sign-in finishes only in the browser that started it (cookie), so a callback link cannot sign someone in",
+  );
 
   // The Mac.
   await Bun.write(
@@ -350,6 +424,7 @@ try {
   if (!(context.tmux instanceof CommandTmuxClient))
     throw new Error("Expected the command tmux client");
   const store = await RemoteStore.open(home);
+  const audit = new RemoteAudit(home);
   const phoneSizes = new PhoneWindowSize(context.tmux);
   const statuses: RemoteStatus[] = [];
   connector = new RemoteConnector({
@@ -363,6 +438,7 @@ try {
     openTerminal: agentTerminalOpener(context, context.tmux, phoneSizes),
     tap,
     lockedRetryMs: 1_000,
+    audit,
   });
   connector.onStatus((status) => statuses.push(status));
   await connector.start();
@@ -370,21 +446,75 @@ try {
     throw new Error(`Unclaimed Mac status: ${connector.status}`);
   pass("an unclaimed Mac connects out and waits for a phone");
 
+  // Someone who read the Mac's id off a QR code cannot take its place.
+  const squat = (token?: string) =>
+    new Promise<number>((resolve) => {
+      const socket = new WebSocket(
+        `${relayUrl}/v1/connect?room=${connector!.macId}&role=mac&device=${connector!.macId}`,
+        token ? ["daedalus.v1", `auth.${token}`] : ["daedalus.v1"],
+      );
+      socket.addEventListener("close", (event) => resolve(event.code));
+      setTimeout(() => resolve(0), 3_000);
+    });
+  const squatted = [await squat(), await squat("guessed-secret")];
+  await sleep(300);
+  if (
+    squatted.some((code) => code !== RELAY_CLOSE.unauthorized) ||
+    connector.status !== "waiting_for_phone" ||
+    statuses.includes("offline")
+  )
+    throw new Error(`A squatter got in: ${squatted.join()} ${statuses.join()}`);
+  pass(
+    "an unclaimed Mac proves itself with its own secret: a second connection with only its id is refused and the Mac stays",
+  );
+
   // Pairing claims the Mac for Alice's account.
   const phone = createIdentity();
-  const code = encodePairingOffer(connector.createPairingOffer());
+  const macAnswers = {
+    request: () => connector!.pairingRequest,
+    confirm: (allow: boolean) => connector!.confirmPairing(allow),
+  };
+  const beforeCode = await new RelayAccount(relayUrl, bobToken)
+    .claimMac(connector.macId, "x", "no-code")
+    .then(
+      () => "claimed",
+      (error: RelayError) => error.code,
+    );
+  const code = encodePairingOffer(await connector.createPairingOffer());
   const offer = decodePairingOffer(code);
-  const mac: PairedMac = await pairWithMac(
+  const wrongKey = await new RelayAccount(relayUrl, bobToken)
+    .claimMac(connector.macId, "x", "not-the-claim-key")
+    .then(
+      () => "claimed",
+      (error: RelayError) => error.code,
+    );
+  if (beforeCode !== "BAD_CLAIM" || wrongKey !== "BAD_CLAIM")
+    throw new Error(`Claimed without the code: ${beforeCode} ${wrongKey}`);
+  pass("claiming a Mac needs the claim key from its pairing code, not its id");
+
+  const otherRelay = await pairWithMac(phone, offer, "x", aliceToken, {
+    relay: "wss://elsewhere.example",
+  }).then(
+    () => "paired",
+    (error: Error) => error.message,
+  );
+  if (!otherRelay.includes("different relay"))
+    throw new Error(`A code for another relay was used: ${otherRelay}`);
+  pass("a code naming another relay is refused before the token is sent");
+
+  const mac: PairedMac = await pairAndAnswer(
     phone,
     offer,
     "Alice's phone",
     aliceToken,
+    macAnswers,
   );
   if (!store.relayToken || connector.status !== "online")
     throw new Error(`Mac not claimed: ${connector.status}`);
   if (mac.macName !== "Check Mac") throw new Error("Mac name not passed on");
+  await until("account notice", () => store.account === "alice@example.com");
   pass(
-    `paired by code (${code.length} characters for the QR); the Mac rejoined as Alice's`,
+    `paired by code (${code.length} characters for the QR) after the Mac's user allowed it, with the same six digits on both screens; the Mac rejoined as Alice's and knows the account`,
   );
 
   await expectRefusal(
@@ -393,7 +523,7 @@ try {
     RELAY_CLOSE.forbidden,
   );
   const bobClaim = await new RelayAccount(relayUrl, bobToken)
-    .claimMac(mac.macId, "x")
+    .claimMac(mac.macId, "x", "x")
     .then(
       () => "claimed",
       (error: RelayError) => error.code,
@@ -409,13 +539,22 @@ try {
     createIdentity(),
     offer,
     "Second phone",
-    aliceToken,
+    await signIn("alice@example.com").then((fragment) =>
+      fragment.get("token")!,
+    ),
   ).then(
     () => "accepted",
     (error: Error) => error.message,
   );
   if (reuse === "accepted") throw new Error("A pairing code worked twice");
-  pass("other accounts, signed-out phones and reused codes are refused");
+  await expectRefusal(
+    "another phone with Alice's phone's sign-in",
+    PhoneConnection.connect(createIdentity(), mac, aliceToken),
+    RELAY_CLOSE.forbidden,
+  );
+  pass(
+    "other accounts, signed-out phones, reused codes, and a sign-in used by a second phone are refused",
+  );
 
   connection = await PhoneConnection.connect(phone, mac, aliceToken, { tap });
   const phoneConnection = connection;
@@ -573,6 +712,27 @@ try {
   if (leaked) throw new Error("Plaintext reached the relay");
   pass(`none of ${rawFrames.length} relay frames contained plaintext`);
 
+  const logged = await audit.recent(500);
+  const did = (action: string) =>
+    logged.find(
+      (entry) => entry.action === action && entry.phone === "Alice's phone",
+    );
+  const closed = did("terminal.close");
+  const auditText = await Bun.file(join(home, "remote", "audit.log")).text();
+  if (
+    !did("agentSend")?.ok ||
+    did("agentSend")?.target !== agent.id ||
+    !did("terminal.open") ||
+    !closed?.bytesIn ||
+    !closed.bytesOut ||
+    did("workspaceDelete")?.ok !== false ||
+    markers.some((marker) => auditText.includes(marker))
+  )
+    throw new Error(`Audit log: ${JSON.stringify(logged.slice(0, 8))}`);
+  pass(
+    `the Mac logs what the phone did (${logged.length} entries: requests with the ids they touched, refusals, terminals with byte counts) and never what it typed`,
+  );
+
   // Taking access away.
   let phoneClosed = "";
   phoneConnection.onClose((reason) => {
@@ -587,33 +747,71 @@ try {
   await expectRefusal(
     "a phone on a revoked account",
     PhoneConnection.connect(phone, mac, aliceToken),
+    RELAY_CLOSE.unauthorized,
+  );
+  const revokedToken = await signInPhone("alice@example.com", phone);
+  await expectRefusal(
+    "a revoked account signing in again",
+    PhoneConnection.connect(phone, mac, revokedToken),
     RELAY_CLOSE.noEntitlement,
   );
-  pass("revoking an account closes its Mac and phones and keeps them out");
+  const redeemed = await new RelayAccount(relayUrl, revokedToken)
+    .redeemInvite(await newInvite())
+    .then(
+      () => "redeemed",
+      (error: RelayError) => error.code,
+    );
+  if (redeemed !== "INVITE_INVALID")
+    throw new Error(`An invite undid the revoke: ${redeemed}`);
+  pass(
+    "revoking an account closes its Mac and phones, ends its sign-ins, and an invite does not undo it",
+  );
 
   await adminCall("POST", "/admin/entitlements", {
     email: "alice@example.com",
     status: "active",
   });
   await until("Mac back online", () => connector!.status === "online", 15_000);
-  connection = await PhoneConnection.connect(phone, mac, aliceToken);
+  connection = await PhoneConnection.connect(phone, mac, revokedToken);
   pass("granting access again brings the Mac and phone back");
 
   let removedReason = "";
   connection.onClose((reason) => {
     removedReason = reason;
   });
-  await alice.removeDevice(phone.id);
+  // From another browser, as the owner of a lost phone would.
+  const owner = new RelayAccount(
+    relayUrl,
+    (await signIn("alice@example.com")).get("token")!,
+  );
+  await owner.removeDevice(phone.id);
   await until("removed phone closed", () => removedReason !== "");
   await expectRefusal(
     "a removed phone",
-    PhoneConnection.connect(phone, mac, aliceToken),
-    RELAY_CLOSE.forbidden,
+    PhoneConnection.connect(phone, mac, revokedToken),
+    RELAY_CLOSE.unauthorized,
   );
-  pass("removing a phone from the account disconnects it for good");
+  await expectRefusal(
+    "a removed phone's sign-in on a new phone id",
+    PhoneConnection.connect(createIdentity(), mac, revokedToken),
+    RELAY_CLOSE.unauthorized,
+  );
+  const removedMe = await new RelayAccount(relayUrl, revokedToken).me().then(
+    () => "answered",
+    (error: RelayError) => error.code,
+  );
+  if (removedMe !== "UNAUTHORIZED")
+    throw new Error(`A removed phone's sign-in still works: ${removedMe}`);
+  pass(
+    "removing a phone from the account disconnects it for good and ends its sign-in",
+  );
 
   const oldMacId = connector.macId;
-  await alice.removeDevice(oldMacId);
+  await owner.removeDevice(oldMacId);
+  await until("Mac removed", () => connector!.status === "removed", 15_000);
+  if (connector.macId !== oldMacId || store.phones.length === 0)
+    throw new Error("A removed Mac erased itself without asking");
+  await connector.startOver();
   await until(
     "Mac reset",
     () =>
@@ -622,8 +820,10 @@ try {
     15_000,
   );
   if (store.relayToken || store.phones.length !== 0)
-    throw new Error("A removed Mac kept its token or phones");
-  pass("removing the Mac makes it start over as a new, unpaired device");
+    throw new Error("Starting over kept the token or phones");
+  pass(
+    "a removed Mac stops and keeps its keys until its user starts over, then pairs as a new device",
+  );
 
   // The app's own path: Settings › Remote's switch and pairing code, on a
   // second Mac with its own home.
@@ -650,13 +850,47 @@ try {
     "host waiting",
     () => host!.state().status === "waiting_for_phone",
   );
-  const hostOffer = decodePairingOffer(host.pairingCode().url);
+  const hostAnswers = {
+    request: () => host!.state().pairingRequest,
+    confirm: (allow: boolean) => host!.confirmPairing(allow),
+  };
+  // Someone else saw the code and was faster: their account claims the
+  // Mac, and its user declines their phone. The Mac leaves that account.
+  const firstHostId = host.state().phones.length;
+  const seenOffer = decodePairingOffer((await host.pairingCode()).url);
+  const intruder = createIdentity();
+  const declined = await pairAndAnswer(
+    intruder,
+    seenOffer,
+    "iPhone",
+    await signInPhone("bob@example.com", intruder),
+    hostAnswers,
+    false,
+  ).then(
+    () => "paired",
+    (error: Error) => error.message,
+  );
+  await until(
+    "the declined Mac starts over",
+    () =>
+      host!.state().status === "waiting_for_phone" && !host!.state().account,
+    15_000,
+  );
+  if (!declined.includes("declined") || firstHostId !== 0)
+    throw new Error(`Declining: ${declined}`);
+  pass(
+    "declining a Mac's first phone takes the Mac off the account that claimed it, and it waits to be paired again",
+  );
+
+  const hostOffer = decodePairingOffer((await host.pairingCode()).url);
   const secondPhone = createIdentity();
-  const secondMac = await pairWithMac(
+  const tabletToken = await signInPhone("alice@example.com", secondPhone);
+  const secondMac = await pairAndAnswer(
     secondPhone,
     hostOffer,
     "Alice's tablet",
-    aliceToken,
+    tabletToken,
+    hostAnswers,
   );
   await until("host online", () => host!.state().status === "online");
   if (
@@ -669,7 +903,10 @@ try {
   const viaHost = await PhoneConnection.connect(
     secondPhone,
     secondMac,
-    aliceToken,
+    tabletToken,
+  );
+  await until("phone connected notice", () =>
+    macNotified.some((body) => body.startsWith("Alice's tablet is connected")),
   );
   const hostSnapshot = (await viaHost.request(
     "snapshot",
@@ -679,7 +916,7 @@ try {
 
   // Push: the tablet subscribes; a session on the second Mac starts needing
   // the user while nobody is at that Mac (no app has written presence).
-  const aliceAccount = new RelayAccount(relayUrl, aliceToken);
+  const aliceAccount = new RelayAccount(relayUrl, tabletToken);
   if ((await aliceAccount.pushKey()).publicKey !== vapidPublic)
     throw new Error("The relay handed out the wrong push key");
   const badEndpoint = await aliceAccount
@@ -762,7 +999,7 @@ try {
   const onScreen = await PhoneConnection.connect(
     secondPhone,
     secondMac,
-    aliceToken,
+    tabletToken,
   );
   onScreen.setVisible(true);
   await sleep(300);
@@ -828,7 +1065,7 @@ try {
   const forgotten = await PhoneConnection.connect(
     secondPhone,
     secondMac,
-    aliceToken,
+    tabletToken,
   ).then(
     (open) => {
       open.close();
@@ -840,11 +1077,13 @@ try {
 
   // The cost caps (artifacts/remote-work/cost-analysis.md).
   const capPhone = createIdentity();
-  const capMac = await pairWithMac(
+  const capToken = await signInPhone("alice@example.com", capPhone);
+  const capMac = await pairAndAnswer(
     capPhone,
-    decodePairingOffer(host.pairingCode().url),
+    decodePairingOffer((await host.pairingCode()).url),
     "Cap phone",
-    aliceToken,
+    capToken,
+    hostAnswers,
   );
   const closedWith = (open: PhoneConnection) =>
     new Promise<string>((resolve) => open.onClose(resolve));
@@ -864,11 +1103,7 @@ try {
     status: "active",
     monthlyFrames: 1,
   });
-  let capConnection = await PhoneConnection.connect(
-    capPhone,
-    capMac,
-    aliceToken,
-  );
+  let capConnection = await PhoneConnection.connect(capPhone, capMac, capToken);
   const overLimit = await busy(capConnection, closedWith(capConnection));
   if (overLimit !== "Monthly limit reached")
     throw new Error(`Frame limit: closed with ${overLimit}`);
@@ -888,13 +1123,13 @@ try {
 
   // 2. The relay's own monthly budget: closed, nothing connects; reopened,
   // everything comes back.
-  capConnection = await PhoneConnection.connect(capPhone, capMac, aliceToken);
+  capConnection = await PhoneConnection.connect(capPhone, capMac, capToken);
   const paused = closedWith(capConnection);
   await adminCall("POST", "/admin/budget", { open: false });
   if ((await paused) === "") throw new Error("Budget close left a phone open");
   await expectRefusal(
     "a phone while the budget is closed",
-    PhoneConnection.connect(capPhone, capMac, aliceToken),
+    PhoneConnection.connect(capPhone, capMac, capToken),
     RELAY_CLOSE.budgetExhausted,
   );
   const status = (await adminCall("GET", "/admin/budget")).data as {
@@ -913,7 +1148,7 @@ try {
     () => host!.state().status === "online",
     15_000,
   );
-  (await PhoneConnection.connect(capPhone, capMac, aliceToken)).close();
+  (await PhoneConnection.connect(capPhone, capMac, capToken)).close();
   pass(
     `the monthly budget pauses the whole relay and reopens it (counted ${status.units.frames} frames, ${status.units.workerRequests} Worker requests)`,
   );
@@ -992,7 +1227,7 @@ try {
       const id = createIdentity().id;
       const socket = new WebSocket(
         `${relayUrl}/v1/connect?room=${id}&role=mac&device=${id}`,
-        ["daedalus.v1"],
+        ["daedalus.v1", `auth.secret-${id}`],
       );
       return new Promise<number>((resolve) => {
         socket.addEventListener("close", (event) => resolve(event.code));

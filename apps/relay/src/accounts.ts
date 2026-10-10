@@ -49,39 +49,89 @@ export interface Device {
   claimedAt: string | null;
   revokedAt: string | null;
   lastSeenAt: string | null;
+  /** The hash of the current pairing code's claim key, while it works. */
+  claimHash: string | null;
+  claimExpiresAt: string | null;
 }
 
-const SESSION_DAYS = 90;
+/**
+ * A sign-in lasts this long after its last use: a phone in use stays
+ * signed in, and a lost one drops out on its own.
+ */
+const SESSION_DAYS = 14;
+const sessionExpiry = () =>
+  new Date(Date.now() + SESSION_DAYS * 86_400_000).toISOString();
 
 export async function createSession(
   db: D1Database,
   userId: string,
+  deviceId: string | null = null,
 ): Promise<string> {
   const token = randomToken();
-  const expires = new Date(Date.now() + SESSION_DAYS * 86_400_000);
   await db
     .prepare(
-      "INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+      "INSERT INTO sessions (token_hash, user_id, created_at, expires_at, device_id) VALUES (?, ?, ?, ?, ?)",
     )
-    .bind(await sha256(token), userId, nowIso(), expires.toISOString())
+    .bind(await sha256(token), userId, nowIso(), sessionExpiry(), deviceId)
     .run();
   return token;
+}
+
+export interface Session {
+  user: User;
+  tokenHash: string;
+  /** The phone this sign-in belongs to, once it has connected as one. */
+  deviceId: string | null;
+}
+
+export async function sessionFor(
+  db: D1Database,
+  token: string | undefined,
+): Promise<Session | undefined> {
+  if (!token) return undefined;
+  const tokenHash = await sha256(token);
+  const row = await db
+    .prepare(
+      `SELECT users.id, users.email, sessions.device_id AS deviceId,
+              sessions.expires_at AS expiresAt
+       FROM sessions JOIN users ON users.id = sessions.user_id
+       WHERE sessions.token_hash = ? AND sessions.expires_at > ?`,
+    )
+    .bind(tokenHash, nowIso())
+    .first<User & { deviceId: string | null; expiresAt: string }>();
+  if (!row) return undefined;
+  // Slide the expiry along with use, at most once a day.
+  if (Date.parse(row.expiresAt) - Date.now() < (SESSION_DAYS - 1) * 86_400_000)
+    await db
+      .prepare("UPDATE sessions SET expires_at = ? WHERE token_hash = ?")
+      .bind(sessionExpiry(), tokenHash)
+      .run();
+  return {
+    user: { id: row.id, email: row.email },
+    tokenHash,
+    deviceId: row.deviceId,
+  };
 }
 
 export async function userForSession(
   db: D1Database,
   token: string | undefined,
 ): Promise<User | undefined> {
-  if (!token) return undefined;
-  const row = await db
+  return (await sessionFor(db, token))?.user;
+}
+
+/** Ties a sign-in to the phone that first connected with it. */
+export async function bindSession(
+  db: D1Database,
+  tokenHash: string,
+  deviceId: string,
+): Promise<void> {
+  await db
     .prepare(
-      `SELECT users.id, users.email FROM sessions
-       JOIN users ON users.id = sessions.user_id
-       WHERE sessions.token_hash = ? AND sessions.expires_at > ?`,
+      "UPDATE sessions SET device_id = ? WHERE token_hash = ? AND device_id IS NULL",
     )
-    .bind(await sha256(token), nowIso())
-    .first<User>();
-  return row ?? undefined;
+    .bind(deviceId, tokenHash)
+    .run();
 }
 
 export async function deleteSession(
@@ -154,12 +204,21 @@ export async function setEntitlement(
 /**
  * Uses one place on an invite and grants its plan. The single UPDATE is
  * what keeps two sign-ups from taking the last place together.
+ *
+ * An account that already has access, or that an admin revoked, cannot
+ * redeem: otherwise any unused invite would undo the revoke.
  */
 export async function redeemInvite(
   db: D1Database,
   userId: string,
   code: string,
 ): Promise<boolean> {
+  const current = await db
+    .prepare("SELECT source, status FROM entitlements WHERE user_id = ?")
+    .bind(userId)
+    .first<{ source: string; status: string }>();
+  if (current?.source === "admin" && current.status === "revoked") return false;
+  if (await activeEntitlement(db, userId)) return false;
   const invite = await db
     .prepare(
       `UPDATE invites SET used = used + 1
@@ -212,7 +271,8 @@ export async function device(
     .prepare(
       `SELECT id, user_id AS userId, kind, name, token_hash AS tokenHash,
               created_at AS createdAt, claimed_at AS claimedAt,
-              revoked_at AS revokedAt, last_seen_at AS lastSeenAt
+              revoked_at AS revokedAt, last_seen_at AS lastSeenAt,
+              claim_hash AS claimHash, claim_expires_at AS claimExpiresAt
        FROM devices WHERE id = ?`,
     )
     .bind(id)
@@ -228,7 +288,8 @@ export async function userDevices(
     .prepare(
       `SELECT id, user_id AS userId, kind, name, NULL AS tokenHash,
               created_at AS createdAt, claimed_at AS claimedAt,
-              revoked_at AS revokedAt, last_seen_at AS lastSeenAt
+              revoked_at AS revokedAt, last_seen_at AS lastSeenAt,
+              NULL AS claimHash, NULL AS claimExpiresAt
        FROM devices WHERE user_id = ? AND revoked_at IS NULL
        ORDER BY created_at`,
     )

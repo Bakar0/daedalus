@@ -1,5 +1,4 @@
-import { chmod, mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
 import {
   type ApplicationContext,
   DaedalusError,
@@ -10,6 +9,7 @@ import {
 } from "@daedalus/core";
 import { runCommand, TmuxPtyBridge } from "@daedalus/platform";
 import type {
+  RemoteActivityDto,
   RemotePairingDto,
   RemoteStateDto,
   RpcResult,
@@ -18,7 +18,7 @@ import type {
 } from "@daedalus/protocol";
 import {
   acceptHandshake,
-  createIdentity,
+  claimKey,
   createPairingOffer,
   decodePayload,
   decodeRelayFrame,
@@ -32,6 +32,7 @@ import {
   encodeTerminalOutput,
   type Hello,
   type PairingOffer,
+  pairingCode,
   pairingUrl,
   type PlainMessage,
   type Ready,
@@ -42,18 +43,37 @@ import {
   type RelayNotice,
   type SecureChannel,
   type SecureMessage,
-  sodiumReady,
   verifyPairingProof,
   type Welcome,
   type WireStats,
 } from "@daedalus/remote-protocol";
+import {
+  type AuditEntry,
+  excludeFromBackups,
+  RemoteAudit,
+  RemoteStore,
+  type SecretVault,
+} from "./remote-store";
 import { isTyping, TerminalConnection, type TerminalSocket } from "./terminal";
+
+export {
+  type AuditEntry,
+  KeychainVault,
+  type PairedPhone,
+  RemoteAudit,
+  RemoteStore,
+} from "./remote-store";
 
 /**
  * The requests a paired phone may make. Everything else (deletes, settings,
- * accounts, secrets, files, the clipboard) stays desktop-only. A phone that
- * can type into a session can already run anything there; the list keeps
- * the rest of the Mac out of reach of a stolen phone or a broken page.
+ * accounts, secrets, files, the clipboard) has no handler for a phone.
+ *
+ * This is not a security boundary, and Settings › Remote says so: a phone
+ * can start a terminal session (`agentSpawn` with `terminal: true`) or type
+ * into any session, and from a shell everything on the Mac is reachable. A
+ * paired phone is as trusted as the Mac's own keyboard. What protects the
+ * Mac is pairing (confirmed on both screens), the phone's app lock, and
+ * removing a lost phone; what records it is the audit log.
  */
 export const REMOTE_ALLOWED_METHODS: ReadonlySet<string> = new Set([
   "snapshot",
@@ -73,97 +93,6 @@ export const REMOTE_ALLOWED_METHODS: ReadonlySet<string> = new Set([
   "agentRevive",
   "attentionClear",
 ]);
-
-export interface PairedPhone {
-  id: string;
-  publicKey: string;
-  name: string;
-  pairedAt: string;
-}
-
-interface RemoteFile {
-  identity: DeviceIdentity;
-  phones: PairedPhone[];
-  /** Given by the relay when a phone claims this Mac for its account. */
-  relayToken?: string;
-}
-
-/**
- * The Mac's device key, its relay token and its paired phones, in
- * `<home>/remote/device.json` readable only by the user. The secret key and
- * the token belong in the Keychain before this ships.
- */
-export class RemoteStore {
-  private constructor(
-    private readonly path: string,
-    private data: RemoteFile,
-  ) {}
-
-  static async open(home: string): Promise<RemoteStore> {
-    await sodiumReady();
-    const directory = join(home, "remote");
-    const path = join(directory, "device.json");
-    const file = Bun.file(path);
-    if (await file.exists())
-      return new RemoteStore(path, (await file.json()) as RemoteFile);
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-    const store = new RemoteStore(path, {
-      identity: createIdentity(),
-      phones: [],
-    });
-    await store.save();
-    return store;
-  }
-
-  get identity(): DeviceIdentity {
-    return this.data.identity;
-  }
-
-  get phones(): readonly PairedPhone[] {
-    return this.data.phones;
-  }
-
-  get relayToken(): string | undefined {
-    return this.data.relayToken;
-  }
-
-  /** Updates memory at once, so a reconnect right after sees the token. */
-  setRelayToken(token: string): Promise<void> {
-    this.data.relayToken = token;
-    return this.save();
-  }
-
-  /**
-   * Starts over as a new device: the account removed this Mac, so its id,
-   * keys and phones are of no further use, and a fresh id can be paired.
-   */
-  reset(): Promise<void> {
-    this.data = { identity: createIdentity(), phones: [] };
-    return this.save();
-  }
-
-  phone(id: string): PairedPhone | undefined {
-    return this.data.phones.find((phone) => phone.id === id);
-  }
-
-  async addPhone(phone: PairedPhone): Promise<void> {
-    this.data.phones = [
-      ...this.data.phones.filter((existing) => existing.id !== phone.id),
-      phone,
-    ];
-    await this.save();
-  }
-
-  async removePhone(id: string): Promise<void> {
-    this.data.phones = this.data.phones.filter((phone) => phone.id !== id);
-    await this.save();
-  }
-
-  private async save(): Promise<void> {
-    await Bun.write(this.path, JSON.stringify(this.data, null, 2));
-    await chmod(this.path, 0o600);
-  }
-}
 
 export interface RemoteTerminal {
   message(payload: string): Promise<void>;
@@ -191,15 +120,44 @@ export interface RemoteConnectorOptions {
   tap?: (direction: "in" | "out", frame: Uint8Array) => void;
   /** How long to wait before retrying while locked. Tests shorten it. */
   lockedRetryMs?: number;
+  /** Records what phones do; see `RemoteAudit`. */
+  audit?: Pick<RemoteAudit, "record">;
+  /** A phone finished a handshake. */
+  onPhoneConnected?: (phone: { id: string; name: string }) => void;
+  /** A phone asks to pair, or the request ended (undefined). */
+  onPairingRequest?: (request: PairingRequest | undefined) => void;
 }
 
 /**
  * - `waiting_for_phone`: connected, not yet claimed by an account.
  * - `online`: connected as an account's Mac.
  * - `locked`: the account has no access or is over its data limit.
+ * - `removed`: the relay refused this Mac's credentials, which is what a Mac
+ *   removed from its account sees. It stops and waits for the user to start
+ *   over rather than erasing its keys on the relay's word.
  */
 export type RemoteStatus =
-  "connecting" | "waiting_for_phone" | "online" | "offline" | "locked";
+  | "connecting"
+  | "waiting_for_phone"
+  | "online"
+  | "offline"
+  | "locked"
+  | "removed";
+
+/** A phone that proved it scanned the code, waiting for the user to allow it. */
+export interface PairingRequest {
+  phoneId: string;
+  phoneName: string;
+  /** Six digits the phone shows too. */
+  code: string;
+  expiresAt: number;
+}
+
+/** How long the user has to allow or deny a phone. */
+const CONFIRM_MS = 2 * 60_000;
+
+const sha256 = (text: string) =>
+  createHash("sha256").update(text).digest("base64url");
 
 const LOCKED_RETRY_MS = 5 * 60_000;
 
@@ -228,8 +186,18 @@ export class RemoteConnector {
   #ping: ReturnType<typeof setInterval> | undefined;
   #lastPong = 0;
   #offer: PairingOffer | undefined;
+  /** Whether this Mac had no account when the current code was shown. */
+  #offerUnclaimed = false;
   /** The last accepted pairing, so a repeated request is answered again. */
   #lastPairing: { offer: PairingOffer; phoneId: string } | undefined;
+  #asking:
+    | (PairingRequest & {
+        offer: PairingOffer;
+        phoneKey: string;
+        firstPairing: boolean;
+        timer: ReturnType<typeof setTimeout>;
+      })
+    | undefined;
   #status: RemoteStatus = "connecting";
   #statusListeners = new Set<(status: RemoteStatus) => void>();
   #overQuota = false;
@@ -276,15 +244,125 @@ export class RemoteConnector {
     this.#socket?.close();
   }
 
-  /** A one-time code for the QR code. A new one replaces the last. */
-  createPairingOffer(lifetimeMs?: number): PairingOffer {
-    this.#offer = createPairingOffer(
+  /**
+   * A one-time code for the QR code. A new one replaces the last. The relay
+   * is told the hash of its claim key first, so only someone holding the
+   * code can claim this Mac.
+   */
+  async createPairingOffer(lifetimeMs?: number): Promise<PairingOffer> {
+    const offer = createPairingOffer(
       this.options.store.identity,
       this.options.relay,
       this.#macName,
       lifetimeMs,
     );
-    return this.#offer;
+    const response = await this.#macCall("/v1/macs/offer", {
+      claimHash: sha256(claimKey(offer)),
+      expiresAt: offer.expiresAt,
+    });
+    if (!response.ok)
+      throw new DaedalusError(
+        "DEPENDENCY",
+        "The relay did not accept the pairing code. Try again.",
+      );
+    this.#offer = offer;
+    this.#offerUnclaimed = !this.options.store.relayToken;
+    return offer;
+  }
+
+  /** A request to the relay as this Mac. */
+  async #macCall(path: string, body: unknown = {}): Promise<{ ok: boolean }> {
+    try {
+      const response = await fetch(
+        `${relayHttpUrl(this.options.relay)}${path}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.options.store.relayCredential}`,
+            "X-Daedalus-Device": this.macId,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+        },
+      );
+      return (await response.json()) as { ok: boolean };
+    } catch {
+      return { ok: false };
+    }
+  }
+
+  /** The phone waiting for the user to allow it, if any. */
+  get pairingRequest(): PairingRequest | undefined {
+    const request = this.#asking;
+    return request
+      ? {
+          phoneId: request.phoneId,
+          phoneName: request.phoneName,
+          code: request.code,
+          expiresAt: request.expiresAt,
+        }
+      : undefined;
+  }
+
+  /**
+   * The user's answer. Declining the first phone of a Mac that had no
+   * account means someone else claimed it with the code, so the Mac also
+   * leaves that account and starts over.
+   */
+  async confirmPairing(allow: boolean): Promise<void> {
+    const request = this.#asking;
+    if (!request) return;
+    clearTimeout(request.timer);
+    this.#asking = undefined;
+    this.options.onPairingRequest?.(undefined);
+    if (!allow) {
+      this.options.log?.("remote_pairing_declined", {
+        phoneId: request.phoneId,
+      });
+      this.#sendPlain(request.phoneId, {
+        type: "refused",
+        reason: "Your Mac declined this phone.",
+      });
+      if (request.firstPairing && this.options.store.phones.length === 0)
+        await this.leaveAccount();
+      return;
+    }
+    this.#lastPairing = { offer: request.offer, phoneId: request.phoneId };
+    await this.options.store.addPhone({
+      id: request.phoneId,
+      publicKey: request.phoneKey,
+      name: request.phoneName,
+      pairedAt: new Date().toISOString(),
+    });
+    this.options.log?.("remote_phone_paired", { phoneId: request.phoneId });
+    this.#sendPlain(request.phoneId, {
+      type: "paired",
+      macName: this.#macName,
+    });
+  }
+
+  /**
+   * Takes this Mac off its account on the relay and starts over as a new,
+   * unpaired device.
+   */
+  async leaveAccount(): Promise<void> {
+    if (this.options.store.relayToken) await this.#macCall("/v1/macs/leave");
+    await this.startOver();
+  }
+
+  /** A new identity and no phones; connects again as an unclaimed Mac. */
+  async startOver(): Promise<void> {
+    await this.options.store.reset();
+    this.#offer = undefined;
+    this.#lastPairing = undefined;
+    this.options.log?.("remote_device_reset", {});
+    for (const id of [...this.#phones.keys()]) this.#dropPhone(id);
+    const removed = this.#status === "removed";
+    this.#setStatus("connecting");
+    // A live socket closes and reconnects with the new identity; a removed
+    // Mac has none and connects now.
+    if (removed) this.#connect();
+    else this.#socket?.close();
   }
 
   /**
@@ -355,7 +433,8 @@ export class RemoteConnector {
 
   #connect(): void {
     if (this.#stopped) return;
-    const token = this.options.store.relayToken;
+    const token = this.options.store.relayCredential;
+    const claimed = Boolean(this.options.store.relayToken);
     const socket = new WebSocket(
       relayConnectUrl(this.options.relay, this.macId, "mac", this.macId),
       relayProtocols(token),
@@ -372,7 +451,7 @@ export class RemoteConnector {
         this.#overQuota = false;
         this.options.log?.("remote_connected", {
           relay: this.options.relay,
-          claimed: Boolean(token),
+          claimed,
         });
         // The relay answers every ping. Two and a half intervals without an
         // answer means the connection is gone without saying so (a sleep,
@@ -386,7 +465,7 @@ export class RemoteConnector {
           }
           socket.send("ping");
         }, 30_000);
-        this.#setStatus(token ? "online" : "waiting_for_phone");
+        this.#setStatus(claimed ? "online" : "waiting_for_phone");
         this.#markConnected();
       }, 50);
     });
@@ -409,24 +488,27 @@ export class RemoteConnector {
   async #closed(
     code: number,
     reason: string,
-    token: string | undefined,
+    token: string,
     opened: boolean,
   ): Promise<void> {
     this.options.log?.("remote_disconnected", { code, reason, opened });
     let delay = this.#retryMs;
-    if (code === RELAY_CLOSE.claimed) {
+    if (
+      code === RELAY_CLOSE.claimed ||
+      token !== this.options.store.relayCredential
+    ) {
+      // Claimed, or this Mac started over while connected: go again with the
+      // new credentials.
       delay = 0;
     } else if (
       code === RELAY_CLOSE.unauthorized ||
       code === RELAY_CLOSE.forbidden
     ) {
-      // The account removed this Mac (or the relay no longer knows its
-      // token). Start over as a new device that can be paired again.
-      await this.options.store.reset();
-      this.#offer = undefined;
-      this.#lastPairing = undefined;
-      this.options.log?.("remote_device_reset", { code, hadToken: !!token });
-      delay = 1_000;
+      // The account removed this Mac, or the relay no longer knows its
+      // credentials. The user decides whether to start over (Settings).
+      this.options.log?.("remote_removed", { code, reason });
+      this.#setStatus("removed");
+      return;
     } else if (
       code === RELAY_CLOSE.noEntitlement ||
       code === RELAY_CLOSE.overQuota ||
@@ -461,6 +543,8 @@ export class RemoteConnector {
       this.#dropPhone(notice.deviceId);
     else if (notice.relay === "claimed")
       void this.options.store.setRelayToken(notice.token);
+    else if (notice.relay === "account")
+      void this.options.store.setAccount(notice.email);
     else if (notice.relay === "quota") {
       // Over the month's data: stop the heavy part, keep requests going.
       this.#overQuota = true;
@@ -528,44 +612,7 @@ export class RemoteConnector {
 
   async #plain(phoneId: string, message: PlainMessage): Promise<void> {
     if (message.type === "pair") {
-      const phone = { id: phoneId, publicKey: message.phoneKey };
-      const last = this.#lastPairing;
-      if (
-        last?.phoneId === phoneId &&
-        this.options.store.phone(phoneId)?.publicKey === message.phoneKey &&
-        verifyPairingProof(last.offer, phone, message.proof)
-      ) {
-        this.#sendPlain(phoneId, {
-          type: "paired",
-          macName: this.#macName,
-        });
-        return;
-      }
-      const offer = this.#offer;
-      if (
-        !offer ||
-        offer.expiresAt < Date.now() ||
-        message.phoneId !== phoneId ||
-        !verifyPairingProof(offer, phone, message.proof)
-      ) {
-        this.#sendPlain(phoneId, {
-          type: "refused",
-          reason: "The pairing code is wrong or has expired.",
-        });
-        return;
-      }
-      this.#offer = undefined;
-      this.#lastPairing = { offer, phoneId };
-      await this.options.store.addPhone({
-        ...phone,
-        name: message.name.slice(0, 80),
-        pairedAt: new Date().toISOString(),
-      });
-      this.options.log?.("remote_phone_paired", { phoneId });
-      this.#sendPlain(phoneId, {
-        type: "paired",
-        macName: this.#macName,
-      });
+      await this.#pairRequest(phoneId, message);
       return;
     }
     if (message.type === "hello") {
@@ -597,7 +644,71 @@ export class RemoteConnector {
       delete state.handshake;
       this.#sendSecure(phoneId, { t: "mac", name: this.#macName });
       this.options.log?.("remote_phone_connected", { phoneId });
+      this.options.onPhoneConnected?.({
+        id: phoneId,
+        name: this.options.store.phone(phoneId)?.name ?? "A phone",
+      });
     }
+  }
+
+  /**
+   * A phone that scanned the code proves it with the code's secret. It is
+   * then held until the user allows it on this Mac, comparing six digits
+   * with the phone's screen. The phone repeats its request every second
+   * until answered, so each repeat gets `waiting`.
+   */
+  async #pairRequest(
+    phoneId: string,
+    message: Extract<PlainMessage, { type: "pair" }>,
+  ): Promise<void> {
+    const phone = { id: phoneId, publicKey: message.phoneKey };
+    const name = message.name.slice(0, 80);
+    const last = this.#lastPairing;
+    if (
+      last?.phoneId === phoneId &&
+      this.options.store.phone(phoneId)?.publicKey === message.phoneKey &&
+      verifyPairingProof(last.offer, phone, message.name, message.proof)
+    ) {
+      this.#sendPlain(phoneId, { type: "paired", macName: this.#macName });
+      return;
+    }
+    const pending = this.#asking;
+    if (
+      pending?.phoneId === phoneId &&
+      pending.phoneKey === message.phoneKey &&
+      verifyPairingProof(pending.offer, phone, message.name, message.proof)
+    ) {
+      this.#sendPlain(phoneId, { type: "waiting" });
+      return;
+    }
+    const offer = this.#offer;
+    if (
+      !offer ||
+      offer.expiresAt < Date.now() ||
+      message.phoneId !== phoneId ||
+      !verifyPairingProof(offer, phone, message.name, message.proof)
+    ) {
+      this.#sendPlain(phoneId, {
+        type: "refused",
+        reason: "The pairing code is wrong or has expired.",
+      });
+      return;
+    }
+    this.#offer = undefined;
+    const expiresAt = Date.now() + CONFIRM_MS;
+    this.#asking = {
+      phoneId,
+      phoneName: name,
+      phoneKey: message.phoneKey,
+      code: pairingCode(offer, phone),
+      expiresAt,
+      offer,
+      firstPairing: this.#offerUnclaimed,
+      timer: setTimeout(() => void this.confirmPairing(false), CONFIRM_MS),
+    };
+    this.options.log?.("remote_pairing_requested", { phoneId });
+    this.options.onPairingRequest?.(this.pairingRequest);
+    this.#sendPlain(phoneId, { type: "waiting" });
   }
 
   async #sealed(phoneId: string, ciphertext: Uint8Array): Promise<void> {
@@ -608,6 +719,12 @@ export class RemoteConnector {
     const message = decoded.message;
     if (message.t === "req") {
       const result = await this.#request(message.method, message.params);
+      this.#audit(phoneId, {
+        action: message.method,
+        ...auditTarget(message.params),
+        ok: result.ok,
+        ...(result.ok ? {} : { code: result.error.code }),
+      });
       this.#sendSecure(phoneId, { t: "res", id: message.id, result });
     } else if (message.t === "term.open") {
       await this.#openTerminal(phoneId, state, message);
@@ -623,6 +740,14 @@ export class RemoteConnector {
     } else if (message.t === "presence") {
       state.visibleUntil = message.visible ? Date.now() + 45_000 : 0;
     }
+  }
+
+  #audit(phoneId: string, entry: Omit<AuditEntry, "at" | "phoneId" | "phone">) {
+    this.options.audit?.record({
+      phoneId,
+      phone: this.options.store.phone(phoneId)?.name ?? "",
+      ...entry,
+    });
   }
 
   async #request(method: string, params: unknown): Promise<RpcResult<unknown>> {
@@ -655,6 +780,18 @@ export class RemoteConnector {
     message: Extract<SecureMessage, { t: "term.open" }>,
   ): Promise<void> {
     const { ch } = message;
+    const counted = { bytesIn: 0, bytesOut: 0, done: false };
+    const recordClose = () => {
+      if (counted.done) return;
+      counted.done = true;
+      this.#audit(phoneId, {
+        action: "terminal.close",
+        target: message.agentId,
+        ok: true,
+        bytesIn: counted.bytesIn,
+        bytesOut: counted.bytesOut,
+      });
+    };
     if (this.#overQuota) {
       this.#sendSecure(phoneId, {
         t: "term.server",
@@ -675,11 +812,15 @@ export class RemoteConnector {
             ch,
             message: JSON.parse(data) as TerminalServerMessage,
           });
-        else this.#sendSecureBytes(phoneId, encodeTerminalOutput(ch, data));
+        else {
+          counted.bytesOut += data.byteLength;
+          this.#sendSecureBytes(phoneId, encodeTerminalOutput(ch, data));
+        }
       },
       getBufferedAmount: () => this.#socket?.bufferedAmount ?? 0,
       close: () => {
         state.terminals.delete(ch);
+        recordClose();
         this.#sendSecure(phoneId, { t: "term.close", ch });
       },
     };
@@ -688,11 +829,32 @@ export class RemoteConnector {
         ? { cols: message.cols, rows: message.rows }
         : undefined;
     try {
-      state.terminals.set(
-        ch,
-        await this.options.openTerminal(message.agentId, socket, size),
+      const terminal = await this.options.openTerminal(
+        message.agentId,
+        socket,
+        size,
       );
+      this.#audit(phoneId, {
+        action: "terminal.open",
+        target: message.agentId,
+        ok: true,
+      });
+      state.terminals.set(ch, {
+        message: (payload) => {
+          counted.bytesIn += inputBytes(payload);
+          return terminal.message(payload);
+        },
+        close: () => {
+          recordClose();
+          terminal.close();
+        },
+      });
     } catch (error) {
+      this.#audit(phoneId, {
+        action: "terminal.open",
+        target: message.agentId,
+        ok: false,
+      });
       socket.send(
         JSON.stringify({
           type: "error",
@@ -701,6 +863,59 @@ export class RemoteConnector {
       );
       socket.close?.();
     }
+  }
+}
+
+/** The ids a request touched, for the audit log; never its text. */
+function auditTarget(params: unknown): { target?: string } {
+  if (!params || typeof params !== "object") return {};
+  const ids = [
+    "workspace",
+    "workspaceId",
+    "reference",
+    "taskId",
+    "id",
+    "agentId",
+    "sessionId",
+  ]
+    .map((key) => (params as Record<string, unknown>)[key])
+    .filter(
+      (value): value is string =>
+        typeof value === "string" && value.length <= 80,
+    );
+  return ids.length ? { target: [...new Set(ids)].join(" ") } : {};
+}
+
+/** How many bytes a terminal message typed, for the audit log. */
+function inputBytes(payload: string): number {
+  try {
+    const message = JSON.parse(payload) as TerminalClientMessage;
+    return message.type === "input" ? message.data.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * tmux's prefix key. From the phone it is dropped, so typing cannot reach
+ * tmux's own command prompt (prefix, then `:`), where `run-shell` would run
+ * anything outside the session. Programs in the session do not get Ctrl-B
+ * from a phone.
+ */
+const TMUX_PREFIX = "\u0002";
+
+export function withoutTmuxPrefix(payload: string): string {
+  if (!payload.includes("\\u0002") && !payload.includes(TMUX_PREFIX))
+    return payload;
+  try {
+    const message = JSON.parse(payload) as TerminalClientMessage;
+    if (message.type !== "input") return payload;
+    return JSON.stringify({
+      ...message,
+      data: message.data.replaceAll(TMUX_PREFIX, ""),
+    });
+  } catch {
+    return payload;
   }
 }
 
@@ -835,7 +1050,8 @@ export function agentTerminalOpener(
     });
     await connection.start();
     return {
-      async message(payload) {
+      async message(raw) {
+        const payload = withoutTmuxPrefix(raw);
         await connection.message(payload);
         try {
           const parsed = JSON.parse(payload) as TerminalClientMessage;
@@ -864,8 +1080,12 @@ export interface DesktopRemoteHost {
   setEnabled(enabled: boolean): Promise<RemoteStateDto>;
   setKeepAwake(enabled: boolean): Promise<RemoteStateDto>;
   setMacName(name: string): Promise<RemoteStateDto>;
-  pairingCode(): RemotePairingDto;
+  pairingCode(): Promise<RemotePairingDto>;
+  confirmPairing(allow: boolean): Promise<RemoteStateDto>;
+  leaveAccount(): Promise<RemoteStateDto>;
+  startOver(): Promise<RemoteStateDto>;
   removePhone(id: string): Promise<RemoteStateDto>;
+  activity(): Promise<RemoteActivityDto[]>;
 }
 
 export interface RemoteHostOptions {
@@ -876,7 +1096,15 @@ export interface RemoteHostOptions {
   log?: (event: string, fields: Record<string, unknown>) => void;
   /** Passed to the connector; tests shorten it. */
   lockedRetryMs?: number;
+  /**
+   * Where the Mac's key goes. Left out, the Keychain on macOS, unless
+   * DAEDALUS_REMOTE_VAULT=file (the checks, which must not touch it).
+   */
+  vault?: SecretVault | null;
 }
+
+/** A phone that reconnects within this long is not announced again. */
+const ANNOUNCE_AFTER_MS = 30 * 60_000;
 
 /**
  * Keeps a connector running while Settings › Remote is on, and none while
@@ -887,8 +1115,13 @@ export class RemoteHost implements DesktopRemoteHost {
   #store: RemoteStore | undefined;
   #connector: RemoteConnector | undefined;
   #awake: Bun.Subprocess | undefined;
+  readonly #audit: RemoteAudit;
+  /** When each phone last finished a handshake. */
+  readonly #lastSeen = new Map<string, number>();
 
-  constructor(private readonly options: RemoteHostOptions) {}
+  constructor(private readonly options: RemoteHostOptions) {
+    this.#audit = new RemoteAudit(options.context.config.home);
+  }
 
   /** Starts the connector if the setting is on. Call once at launch. */
   async start(): Promise<void> {
@@ -947,7 +1180,15 @@ export class RemoteHost implements DesktopRemoteHost {
 
   async #run(): Promise<void> {
     if (this.#connector) return;
-    this.#store ??= await RemoteStore.open(this.options.context.config.home);
+    const { home } = this.options.context.config;
+    if (!this.#store) {
+      this.#store = await RemoteStore.open(
+        home,
+        this.options.vault,
+        this.options.log,
+      );
+      excludeFromBackups(home);
+    }
     this.#connector = new RemoteConnector({
       relay: this.options.context.config.remoteRelay,
       macName: this.macName,
@@ -958,6 +1199,17 @@ export class RemoteHost implements DesktopRemoteHost {
       ...(this.options.lockedRetryMs
         ? { lockedRetryMs: this.options.lockedRetryMs }
         : {}),
+      audit: this.#audit,
+      onPhoneConnected: (phone) => this.#phoneConnected(phone),
+      onPairingRequest: (request) => {
+        if (request)
+          void this.options.context.notifications.notify({
+            level: "info",
+            title: "A phone asks to pair",
+            body: `${request.phoneName} wants to pair. Check the code in Settings › Remote, then allow or decline it.`,
+            desktop: true,
+          });
+      },
     });
     void this.#connector.start();
     this.options.context.notifications.setPhone((alert) =>
@@ -978,6 +1230,22 @@ export class RemoteHost implements DesktopRemoteHost {
     if (connector.phoneOnScreen) return true;
     const pushed = await connector.notifyPhones();
     return pushed === "sent" || pushed === "throttled";
+  }
+
+  /**
+   * Says so on the Mac when a phone connects, so an unexpected one is
+   * noticed. A phone that comes back within half an hour is not repeated.
+   */
+  #phoneConnected(phone: { id: string; name: string }): void {
+    const last = this.#lastSeen.get(phone.id) ?? 0;
+    this.#lastSeen.set(phone.id, Date.now());
+    if (Date.now() - last < ANNOUNCE_AFTER_MS) return;
+    void this.options.context.notifications.notify({
+      level: "info",
+      title: "Phone connected",
+      body: `${phone.name} is connected to this Mac and can run commands on it.`,
+      desktop: true,
+    });
   }
 
   stop(): void {
@@ -1006,6 +1274,12 @@ export class RemoteHost implements DesktopRemoteHost {
         name,
         pairedAt,
       })),
+      ...(this.#store?.relayToken && this.#store.account
+        ? { account: this.#store.account }
+        : {}),
+      ...(this.#connector?.pairingRequest
+        ? { pairingRequest: this.#connector.pairingRequest }
+        : {}),
     };
   }
 
@@ -1017,7 +1291,7 @@ export class RemoteHost implements DesktopRemoteHost {
     return this.state();
   }
 
-  pairingCode(): RemotePairingDto {
+  async pairingCode(): Promise<RemotePairingDto> {
     const connector = this.#connector;
     if (
       !connector ||
@@ -1028,8 +1302,27 @@ export class RemoteHost implements DesktopRemoteHost {
         "CONFLICT",
         "Pairing needs this Mac connected to the relay.",
       );
-    const offer = connector.createPairingOffer();
+    const offer = await connector.createPairingOffer();
     return { url: pairingUrl(offer), expiresAt: offer.expiresAt };
+  }
+
+  async confirmPairing(allow: boolean): Promise<RemoteStateDto> {
+    await this.#connector?.confirmPairing(allow);
+    return this.state();
+  }
+
+  async leaveAccount(): Promise<RemoteStateDto> {
+    await this.#connector?.leaveAccount();
+    return this.state();
+  }
+
+  async startOver(): Promise<RemoteStateDto> {
+    await this.#connector?.startOver();
+    return this.state();
+  }
+
+  activity(): Promise<RemoteActivityDto[]> {
+    return this.#audit.recent(50);
   }
 
   async removePhone(id: string): Promise<RemoteStateDto> {

@@ -1,4 +1,10 @@
 import sodium, { type StateAddress } from "libsodium-wrappers";
+import {
+  type CipherState,
+  type KeyPair,
+  kkInitiator,
+  kkResponder,
+} from "./noise";
 
 /**
  * End-to-end encryption between a phone and a Mac. The relay forwards these
@@ -6,12 +12,12 @@ import sodium, { type StateAddress } from "libsodium-wrappers";
  *
  * Each device has a long-lived X25519 key pair. Pairing tells the phone the
  * Mac's public key (from the QR code) and the Mac the phone's (proved with
- * the one-time secret in that QR code). Every connection then runs a short
- * handshake: both sides send a fresh ephemeral key, and the session keys
- * hash the static-static and the ephemeral-ephemeral exchanges together. The
- * static part means only the paired devices can derive the keys, so a relay
- * that swaps in its own ephemeral key gets a channel nobody can read. The
- * ephemeral part means a stolen device key does not open old traffic.
+ * the one-time secret in that QR code). Every connection then runs a Noise
+ * KK handshake (noise.ts): only the paired devices can derive the keys, so a
+ * relay that swaps in its own ephemeral key gets a channel nobody can read;
+ * the ephemeral keys mean a stolen device key does not open old traffic; and
+ * a stolen key lets its holder pose as neither device to the one it stole
+ * from.
  *
  * Messages go through libsodium's secretstream, which rejects a tampered,
  * replayed, reordered or dropped message. A connection that hits one is
@@ -46,7 +52,7 @@ export function createIdentity(): DeviceIdentity {
 
 /** What the Mac shows as a QR code. */
 export interface PairingOffer {
-  v: 1;
+  v: 2;
   relay: string;
   macId: string;
   macKey: string;
@@ -58,15 +64,18 @@ export interface PairingOffer {
 
 const OFFER_PREFIX = "daedalus-pair:";
 
+/** How long a pairing code works. Short, since anyone who sees it can use it. */
+export const PAIRING_LIFETIME_MS = 2 * 60_000;
+
 export function createPairingOffer(
   mac: DeviceIdentity,
   relay: string,
   name: string,
-  lifetimeMs = 5 * 60_000,
+  lifetimeMs = PAIRING_LIFETIME_MS,
   now = Date.now(),
 ): PairingOffer {
   return {
-    v: 1,
+    v: 2,
     relay,
     macId: mac.id,
     macKey: mac.publicKey,
@@ -99,8 +108,11 @@ export function decodePairingOffer(input: string): PairingOffer {
   const offer = JSON.parse(
     sodium.to_string(fromBase64(text.slice(OFFER_PREFIX.length))),
   ) as PairingOffer;
+  if (offer.v !== 2)
+    throw new Error(
+      "This pairing code is from an older Daedalus. Update the Mac.",
+    );
   if (
-    offer.v !== 1 ||
     typeof offer.relay !== "string" ||
     typeof offer.macId !== "string" ||
     typeof offer.macKey !== "string" ||
@@ -112,17 +124,52 @@ export function decodePairingOffer(input: string): PairingOffer {
   return offer;
 }
 
-const pairingInput = (macId: string, phoneId: string, phoneKey: string) =>
-  sodium.from_string(`daedalus-pair-v1|${macId}|${phoneId}|${phoneKey}`);
+/** A keyed BLAKE2b of `label`, under the offer's one-time secret. */
+const fromSecret = (offer: PairingOffer, bytes: number, label: string) =>
+  sodium.crypto_generichash(
+    bytes,
+    sodium.from_string(label),
+    fromBase64(offer.secret),
+  );
 
-/** The phone's proof that it scanned this offer. */
+/**
+ * What the phone shows the relay to claim the Mac. The Mac registers its
+ * hash when it shows the code, so knowing the Mac's id is not enough.
+ */
+export const claimKey = (offer: PairingOffer): string =>
+  toBase64(fromSecret(offer, 32, `daedalus-claim-v2|${offer.macId}`));
+
+type PhoneKey = Pick<DeviceIdentity, "id" | "publicKey">;
+
+/**
+ * Six digits both screens show while the Mac asks the user to allow the
+ * phone. They depend on the phone's key, so a phone that raced the owner's
+ * with the same QR code shows different digits from the owner's phone.
+ */
+export function pairingCode(offer: PairingOffer, phone: PhoneKey): string {
+  const digest = fromSecret(
+    offer,
+    16,
+    `daedalus-pair-code-v2|${offer.macId}|${phone.id}|${phone.publicKey}`,
+  );
+  const value = new DataView(digest.buffer, digest.byteOffset).getUint32(0);
+  return String(value % 1_000_000).padStart(6, "0");
+}
+
+const pairingInput = (macId: string, phone: PhoneKey, name: string) =>
+  sodium.from_string(
+    `daedalus-pair-v2|${macId}|${phone.id}|${phone.publicKey}|${name}`,
+  );
+
+/** The phone's proof that it scanned this offer, covering its name too. */
 export function pairingProof(
   offer: PairingOffer,
-  phone: Pick<DeviceIdentity, "id" | "publicKey">,
+  phone: PhoneKey,
+  name: string,
 ): string {
   return toBase64(
     sodium.crypto_auth(
-      pairingInput(offer.macId, phone.id, phone.publicKey),
+      pairingInput(offer.macId, phone, name),
       fromBase64(offer.secret),
     ),
   );
@@ -130,13 +177,14 @@ export function pairingProof(
 
 export function verifyPairingProof(
   offer: PairingOffer,
-  phone: Pick<DeviceIdentity, "id" | "publicKey">,
+  phone: PhoneKey,
+  name: string,
   proof: string,
 ): boolean {
   try {
     return sodium.crypto_auth_verify(
       fromBase64(proof),
-      pairingInput(offer.macId, phone.id, phone.publicKey),
+      pairingInput(offer.macId, phone, name),
       fromBase64(offer.secret),
     );
   } catch {
@@ -175,124 +223,131 @@ export class SecureChannel {
   }
 }
 
-function sessionKeys(
-  role: "mac" | "phone",
-  staticPair: { publicKey: Uint8Array; privateKey: Uint8Array },
-  ephemeralPair: { publicKey: Uint8Array; privateKey: Uint8Array },
-  peerStatic: Uint8Array,
-  peerEphemeral: Uint8Array,
-): { rx: Uint8Array; tx: Uint8Array } {
-  const derive =
-    role === "mac"
-      ? sodium.crypto_kx_server_session_keys
-      : sodium.crypto_kx_client_session_keys;
-  const fixed = derive(staticPair.publicKey, staticPair.privateKey, peerStatic);
-  const fresh = derive(
-    ephemeralPair.publicKey,
-    ephemeralPair.privateKey,
-    peerEphemeral,
-  );
-  const mix = (a: Uint8Array, b: Uint8Array) => {
-    const joined = new Uint8Array(a.length + b.length);
-    joined.set(a);
-    joined.set(b, a.length);
-    return sodium.crypto_generichash(
-      sodium.crypto_secretstream_xchacha20poly1305_KEYBYTES,
-      joined,
-      sodium.from_string("daedalus-remote-v1"),
-    );
-  };
-  return {
-    rx: mix(fixed.sharedRx, fresh.sharedRx),
-    tx: mix(fixed.sharedTx, fresh.sharedTx),
-  };
-}
-
-const keyPair = (identity: DeviceIdentity) => ({
+const keyPair = (identity: DeviceIdentity): KeyPair => ({
   publicKey: fromBase64(identity.publicKey),
   privateKey: fromBase64(identity.secretKey),
 });
 
+/**
+ * Binds the handshake to this protocol, this Mac and this phone: a hello
+ * meant for another Mac, or one from v1, fails to decrypt.
+ */
+const prologue = (macId: string, phoneId: string) =>
+  sodium.from_string(`daedalus-remote-v2|${macId}|${phoneId}`);
+
+/** Secretstream keys from Noise's split, kept apart from Noise's own use. */
+const streamKey = (cipher: CipherState) =>
+  sodium.crypto_generichash(
+    sodium.crypto_secretstream_xchacha20poly1305_KEYBYTES,
+    sodium.from_string("daedalus-secretstream"),
+    cipher.key,
+  );
+
+const EMPTY = new Uint8Array();
+
 export interface Hello {
   type: "hello";
   phoneId: string;
-  ephemeral: string;
+  /** Noise KK message 1. */
+  message: string;
 }
 
 export interface Welcome {
   type: "welcome";
-  ephemeral: string;
+  /** Noise KK message 2. */
+  message: string;
+  /** The Mac's secretstream header, sealed with the Mac's transport key. */
   header: string;
 }
 
 export interface Ready {
   type: "ready";
-  header: string;
+  /**
+   * The phone's secretstream header, sealed with the first Noise transport
+   * key. The Mac trusts the phone only once this opens: it is the first
+   * message that needs the phone's own static key.
+   */
+  message: string;
 }
 
 /** Phone side: send `hello`, then finish with the Mac's `welcome`. */
 export function startHandshake(
   phone: DeviceIdentity,
-  macKey: string,
+  mac: { macId: string; macKey: string },
 ): {
   hello: Hello;
   finish(welcome: Welcome): { channel: SecureChannel; ready: Ready };
 } {
-  const ephemeral = sodium.crypto_kx_keypair();
+  const noise = kkInitiator({
+    prologue: prologue(mac.macId, phone.id),
+    local: keyPair(phone),
+    remoteStatic: fromBase64(mac.macKey),
+  });
   return {
     hello: {
       type: "hello",
       phoneId: phone.id,
-      ephemeral: toBase64(ephemeral.publicKey),
+      message: toBase64(noise.writeMessage1(EMPTY)),
     },
     finish(welcome) {
-      const keys = sessionKeys(
-        "phone",
-        keyPair(phone),
-        ephemeral,
-        fromBase64(macKey),
-        fromBase64(welcome.ephemeral),
+      const { result } = noise.readMessage2(fromBase64(welcome.message));
+      const macHeader = result.responderToInitiator.decrypt(
+        EMPTY,
+        fromBase64(welcome.header),
       );
       const push = sodium.crypto_secretstream_xchacha20poly1305_init_push(
-        keys.tx,
+        streamKey(result.initiatorToResponder),
       );
       const pull = sodium.crypto_secretstream_xchacha20poly1305_init_pull(
-        fromBase64(welcome.header),
-        keys.rx,
+        macHeader,
+        streamKey(result.responderToInitiator),
       );
       return {
         channel: new SecureChannel(push.state, pull),
-        ready: { type: "ready", header: toBase64(push.header) },
+        ready: {
+          type: "ready",
+          message: toBase64(
+            result.initiatorToResponder.encrypt(EMPTY, push.header),
+          ),
+        },
       };
     },
   };
 }
 
-/** Mac side: answer a paired phone's `hello`, then finish with its `ready`. */
+/**
+ * Mac side: answer a paired phone's `hello`, then finish with its `ready`.
+ * Throws on a hello or ready that does not come from that phone.
+ */
 export function acceptHandshake(
   mac: DeviceIdentity,
   phoneKey: string,
   hello: Hello,
 ): { welcome: Welcome; finish(ready: Ready): SecureChannel } {
-  const ephemeral = sodium.crypto_kx_keypair();
-  const keys = sessionKeys(
-    "mac",
-    keyPair(mac),
-    ephemeral,
-    fromBase64(phoneKey),
-    fromBase64(hello.ephemeral),
+  const noise = kkResponder({
+    prologue: prologue(mac.id, hello.phoneId),
+    local: keyPair(mac),
+    remoteStatic: fromBase64(phoneKey),
+  });
+  noise.readMessage1(fromBase64(hello.message));
+  const { message, result } = noise.writeMessage2(EMPTY);
+  const push = sodium.crypto_secretstream_xchacha20poly1305_init_push(
+    streamKey(result.responderToInitiator),
   );
-  const push = sodium.crypto_secretstream_xchacha20poly1305_init_push(keys.tx);
   return {
     welcome: {
       type: "welcome",
-      ephemeral: toBase64(ephemeral.publicKey),
-      header: toBase64(push.header),
+      message: toBase64(message),
+      header: toBase64(result.responderToInitiator.encrypt(EMPTY, push.header)),
     },
     finish(ready) {
+      const phoneHeader = result.initiatorToResponder.decrypt(
+        EMPTY,
+        fromBase64(ready.message),
+      );
       const pull = sodium.crypto_secretstream_xchacha20poly1305_init_pull(
-        fromBase64(ready.header),
-        keys.rx,
+        phoneHeader,
+        streamKey(result.initiatorToResponder),
       );
       return new SecureChannel(push.state, pull);
     },

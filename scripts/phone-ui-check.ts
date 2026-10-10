@@ -18,6 +18,8 @@ import {
 } from "../apps/desktop/src/bun/remote";
 import { createDesktopRequestHandlers } from "../apps/desktop/src/bun/rpc";
 
+// The Mac's key goes to a file here, never to the user's Keychain.
+process.env.DAEDALUS_REMOTE_VAULT = "file";
 const root = join(import.meta.dir, "..");
 const relayDir = join(root, "apps/relay");
 const wrangler = join(relayDir, "node_modules/.bin/wrangler");
@@ -150,6 +152,7 @@ const migrate = Bun.spawnSync(
 if (migrate.exitCode !== 0)
   throw new Error(`Migrations failed: ${migrate.stderr}`);
 const vars = {
+  DEV_MODE: "1",
   GOOGLE_CLIENT_ID: CLIENT_ID,
   GOOGLE_CLIENT_SECRET: "test-secret",
   GOOGLE_AUTH_URL: `http://127.0.0.1:${google.port}/auth`,
@@ -283,7 +286,7 @@ try {
     openTerminal: agentTerminalOpener(context, context.tmux),
   });
   await connector.start();
-  const scanned = pairingUrl(connector.createPairingOffer());
+  const scanned = pairingUrl(await connector.createPairingOffer());
 
   chrome = Bun.spawn(
     [
@@ -404,9 +407,21 @@ try {
     maxTouchPoints: 5,
   });
 
+  // A link with someone else's token in it signs nobody in.
+  await send("Page.navigate", { url: `${origin}/#token=planted-token` });
+  await waitFor("sign-in", byText("button", "Continue with Google"));
+  if (
+    (
+      await evaluate<string>("localStorage.getItem('daedalus.phone.v1') ?? ''")
+    ).includes("planted-token") ||
+    (await evaluate<string>("location.hash")) !== ""
+  )
+    throw new Error("A token in a link was taken");
+  console.log("PASS a #token= link from elsewhere does not sign the phone in");
+
   // The camera opens the scanned link.
   await send("Page.navigate", { url: scanned });
-  await waitFor("sign-in", byText("a", "Continue with Google"));
+  await waitFor("sign-in", byText("button", "Continue with Google"));
   if (
     !(await evaluate<string>("document.body.innerText")).includes(
       "finish pairing",
@@ -425,7 +440,31 @@ try {
   await screenshot("sign-in");
   console.log("PASS a scanned pairing link opens sign-in and keeps the code");
 
-  await tap(byText("a", "Continue with Google"));
+  await tap(byText("button", "Continue with Google"));
+  // A link can come from anywhere, so the phone asks before pairing.
+  await waitFor("pairing question", byText("h2", "Pair with"), 30_000);
+  if (
+    !(await evaluate<string>("document.body.innerText")).includes("Studio Mac")
+  )
+    throw new Error("The pairing question does not name the Mac");
+  await screenshot("pair-ask");
+  await tap(byText("button", "Pair"));
+  await waitFor("the code to compare", "document.querySelector('.pair-code')");
+  await waitFor("the Mac asks", "true");
+  for (let attempt = 0; !connector.pairingRequest && attempt < 100; attempt++)
+    await sleep(100);
+  const shown = (
+    await evaluate<string>("document.querySelector('.pair-code').textContent")
+  ).replace(/\s/g, "");
+  if (!connector.pairingRequest || shown !== connector.pairingRequest.code)
+    throw new Error(
+      `Codes differ: phone ${shown}, Mac ${connector.pairingRequest?.code}`,
+    );
+  await screenshot("pair-code");
+  await connector.confirmPairing(true);
+  console.log(
+    "PASS the phone asks before pairing, then shows the same six digits the Mac asks its user to allow",
+  );
   await waitFor("paired home", byText(".bar h1", "Studio Mac"), 30_000);
   await waitFor(
     "waiting session row",

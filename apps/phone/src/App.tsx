@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import {
   decodePairingOffer,
   type PairedMac,
+  type PairingOffer,
+  pairingCode,
   pairWithMac,
 } from "@daedalus/remote-protocol";
 import { Account } from "./Account";
@@ -15,6 +17,8 @@ import {
   removeMac,
   setPendingPair,
   setToken,
+  signInNonce,
+  startSignIn,
   storedToken,
 } from "./storage";
 
@@ -40,6 +44,10 @@ function phoneName(): string {
  * Reads what the address brought: a session token or error from a sign-in
  * (in the fragment, which no server sees), or a pairing code from a scanned
  * QR code (`/pair#…`). Both are taken out of the address at once.
+ *
+ * A token is taken only from a sign-in this tab started: the return address
+ * carries a nonce this tab keeps. A link someone sent with their own token
+ * in it does nothing.
  */
 function takeFromAddress(): { error?: string } {
   const fragment = location.hash.slice(1);
@@ -51,8 +59,12 @@ function takeFromAddress(): { error?: string } {
   const params = new URLSearchParams(fragment);
   const token = params.get("token");
   const error = params.get("error");
+  const nonce = new URLSearchParams(location.search).get("signin");
+  const ours = nonce !== null && nonce === signInNonce();
+  if (token || error || nonce !== null)
+    history.replaceState(null, "", location.pathname);
+  if (!ours) return {};
   if (token) setToken(token);
-  if (token || error) history.replaceState(null, "", location.pathname);
   return error ? { error } : {};
 }
 
@@ -135,8 +147,17 @@ function SignIn({ error }: { error?: string }) {
     error === "invite_required" || error === "invite_invalid",
   );
   const start = new URL("/auth/google/start", location.origin);
-  start.searchParams.set("return", `${location.origin}/`);
   if (invite.trim()) start.searchParams.set("invite", invite.trim());
+  // The sign-in is this phone's from the start, so it can only ever let
+  // this phone in.
+  start.searchParams.set("device", phoneIdentity().id);
+  const go = () => {
+    start.searchParams.set(
+      "return",
+      `${location.origin}/?signin=${startSignIn()}`,
+    );
+    location.assign(start.toString());
+  };
   return (
     <div className="signin">
       <img alt="" className="signin-logo" src="/icon-192.png" />
@@ -164,16 +185,17 @@ function SignIn({ error }: { error?: string }) {
           />
         </label>
       ) : undefined}
-      <a className="button primary google" href={start.toString()}>
+      <button className="button primary google" onClick={go}>
         Continue with Google
-      </a>
+      </button>
       {showInvite ? undefined : (
         <button className="link" onClick={() => setShowInvite(true)}>
           I have an invite code
         </button>
       )}
       <p className="fine">
-        🔒 Everything between your phone and your Mac is end-to-end encrypted.
+        🔒 The relay forwards encrypted data between your phone and your Mac and
+        cannot read it. This page itself comes from the relay.
       </p>
     </div>
   );
@@ -184,21 +206,39 @@ function SignIn({ error }: { error?: string }) {
  * re-render) must join the first rather than spend the code again.
  */
 const pairings = new Map<string, Promise<PairedMac>>();
-function pairOnce(code: string, token: string): Promise<PairedMac> {
+function pairOnce(
+  offer: PairingOffer,
+  code: string,
+  token: string,
+  onWaiting: () => void,
+): Promise<PairedMac> {
   let pairing = pairings.get(code);
   if (!pairing) {
-    pairing = (async () =>
-      pairWithMac(
-        phoneIdentity(),
-        decodePairingOffer(code),
-        phoneName(),
-        token,
-      ))();
+    pairing = pairWithMac(phoneIdentity(), offer, phoneName(), token, {
+      relay: location.origin,
+      onWaiting,
+    });
     pairings.set(code, pairing);
   }
   return pairing;
 }
 
+function readOffer(code: string): PairingOffer | string {
+  try {
+    const offer = decodePairingOffer(code);
+    if (new URL(offer.relay).host !== location.host)
+      return "This pairing code is for a different relay.";
+    return offer;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+/**
+ * Pairing asks first: a link can arrive from anywhere, not only from the
+ * Mac's screen. Then both screens show the same six digits, and the Mac's
+ * user allows the phone there.
+ */
 function Pairing({
   code,
   token,
@@ -208,12 +248,19 @@ function Pairing({
   token: string;
   onDone: (mac: PairedMac | undefined) => void;
 }) {
-  const [error, setError] = useState<string>();
+  const [offer] = useState(() => readOffer(code));
+  const [stage, setStage] = useState<"ask" | "claiming" | "waiting">("ask");
+  const [error, setError] = useState<string>(
+    typeof offer === "string" ? offer : "",
+  );
   const finish = useRef(onDone);
   finish.current = onDone;
   useEffect(() => {
+    if (stage === "ask" || typeof offer === "string") return;
     let cancelled = false;
-    pairOnce(code, token).then(
+    pairOnce(offer, code, token, () => {
+      if (!cancelled) setStage("waiting");
+    }).then(
       (mac) => {
         if (!cancelled) finish.current(mac);
       },
@@ -227,7 +274,10 @@ function Pairing({
     return () => {
       cancelled = true;
     };
-  }, [code, token]);
+  }, [stage === "ask", code, token]);
+
+  const digits =
+    typeof offer === "string" ? "" : pairingCode(offer, phoneIdentity());
   return (
     <Shell title="Pairing">
       <section className="empty">
@@ -239,6 +289,33 @@ function Pairing({
             <button className="button" onClick={() => onDone(undefined)}>
               OK
             </button>
+          </>
+        ) : stage === "ask" && typeof offer !== "string" ? (
+          <>
+            <h2>Pair with “{offer.name}”?</h2>
+            <p>
+              Only continue if you just scanned the code on your own Mac's
+              screen. A paired Mac sees what you type and send here.
+            </p>
+            <button
+              className="button primary"
+              onClick={() => setStage("claiming")}
+            >
+              Pair
+            </button>
+            <button className="link" onClick={() => onDone(undefined)}>
+              Cancel
+            </button>
+          </>
+        ) : stage === "waiting" ? (
+          <>
+            <h2>Allow this phone on your Mac</h2>
+            <p>Your Mac shows a code. Check that it matches:</p>
+            <p className="pair-code">
+              {digits.slice(0, 3)} {digits.slice(3)}
+            </p>
+            <p>Then click Allow in Daedalus › Settings › Remote.</p>
+            <div className="spinner" />
           </>
         ) : (
           <>
