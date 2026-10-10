@@ -482,6 +482,14 @@ export class AgentService {
       sessionId: string,
       reason: string,
     ) => unknown = () => undefined,
+    /**
+     * Called when a Claude or Codex session reached its prompt at startup.
+     * Codex fires no hook until the first prompt, and a resumed session none
+     * until it is used, so without this the card has no reading and shows the
+     * lifecycle word "Running" for a session that is sitting idle.
+     */
+    private readonly onStartupReady: (sessionId: string) => unknown = () =>
+      undefined,
   ) {}
 
   private teamLaunchLines: (member: TeamMembership) => string[] = () => [];
@@ -507,6 +515,11 @@ export class AgentService {
   /** Raises the badge for a session that stopped on a question at startup. */
   private askedAtStartup(session: AgentSession): void {
     void this.onStartupQuestion(session.id, startupQuestionReason(session));
+  }
+
+  private async readyAtStartup(session: AgentSession): Promise<void> {
+    if (session.provider === "codex" || session.provider === "claude")
+      await this.onStartupReady(session.id);
   }
 
   /**
@@ -568,6 +581,7 @@ export class AgentService {
       PATH: path,
       DAEDALUS_HOME: this.config.home,
       DAEDALUS_SESSION_ID: session.id,
+      DAEDALUS_SESSION_DIRECTORY: session.workingDirectory,
       DAEDALUS_WORKSPACE_ID: session.workspaceId,
       ...(task
         ? {
@@ -1093,6 +1107,7 @@ export class AgentService {
       if (task && !input.terminal && !input.draftBrief && !input.continueFrom)
         this.markTaskStarted(workspace, task.id);
       if (startup === "question") this.askedAtStartup(running);
+      else if (!input.terminal) await this.readyAtStartup(running);
       await this.sessionRunning(running);
       return running;
     } catch (error) {
@@ -2013,6 +2028,7 @@ export class AgentService {
       }
       this.repositories.updateAgent(restored);
       if (startup === "question") this.askedAtStartup(restored);
+      else if (agent.kind === "agent") await this.readyAtStartup(restored);
       await this.sessionRunning(restored);
       return restored;
     } catch (error) {

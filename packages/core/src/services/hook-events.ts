@@ -1,3 +1,4 @@
+import { isAbsolute, relative } from "node:path";
 import type { AgentActivity, AgentActivitySource } from "../domain";
 
 /**
@@ -464,7 +465,9 @@ export function observeCodexHook(
     case "PostCompact":
       return { activity: "working", source, detail: "Compacting context" };
     case "Stop":
-      return turnEnded(payload, source, Boolean(context.routines));
+      return isCodexTitleTurn(payload)
+        ? undefined
+        : turnEnded(payload, source, Boolean(context.routines));
     case "Interrupt":
       // Codex's Interrupt has no Claude equivalent. The turn is over and
       // nothing is blocked, so it retracts a badge the way a new prompt does.
@@ -474,6 +477,49 @@ export function observeCodexHook(
     default:
       return undefined;
   }
+}
+
+/**
+ * Codex names a new thread in a side turn that runs alongside the first real
+ * one and fires its own `Stop` about a second in, with a last message such as
+ * `{"title":"Run echo hi"}` (seen on 0.162). Read as the end of the turn, it
+ * showed a working session as done until its next tool call.
+ */
+function isCodexTitleTurn(payload: Record<string, unknown>): boolean {
+  const last = text(payload.last_assistant_message)?.trim();
+  if (!last?.startsWith("{")) return false;
+  try {
+    const parsed: unknown = JSON.parse(last);
+    return (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed) &&
+      Object.keys(parsed).join() === "title"
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a Codex hook came from the session it claims to be.
+ *
+ * Codex's shared app server runs the hooks of every thread it hosts with the
+ * environment of whichever process started it. That process may have been a
+ * Daedalus session, so `DAEDALUS_SESSION_ID` there names a session that has
+ * nothing to do with the thread, and the user's own Codex in a terminal would
+ * report as that session. Every Daedalus session has a folder nothing else
+ * uses, so a thread working outside it is not the session's. Both paths must
+ * already be resolved. With either one missing the hook is believed, as it
+ * was before sessions carried their folder.
+ */
+export function codexHookInSession(
+  cwd: string | undefined,
+  sessionDirectory: string | undefined,
+): boolean {
+  if (!cwd || !sessionDirectory) return true;
+  const inside = relative(sessionDirectory, cwd);
+  return !inside.startsWith("..") && !isAbsolute(inside);
 }
 
 /**
