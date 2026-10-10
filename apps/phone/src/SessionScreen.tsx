@@ -6,6 +6,7 @@ import type { RpcResult, TerminalServerMessage } from "@daedalus/protocol";
 import type { PhoneConnection, PhoneTerminal } from "@daedalus/remote-protocol";
 import { ACTIVITY_LABEL, type SessionRow } from "./Home";
 import { Shell } from "./Shell";
+import { phoneTerminalInput } from "./terminal-input";
 
 /**
  * Keys a phone keyboard does not have, or hides. They go to the terminal as
@@ -82,7 +83,10 @@ export function SessionScreen({
       },
     );
     terminal.current = remote;
-    const typing = xterm.onData((data) => remote.write(data));
+    const typing = xterm.onData((data) => {
+      const input = phoneTerminalInput(data);
+      if (input) remote.write(input);
+    });
 
     // The keyboard opening and the phone turning both change the size.
     const resize = () => {
