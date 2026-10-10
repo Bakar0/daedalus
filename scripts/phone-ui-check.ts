@@ -57,6 +57,37 @@ async function cli(args: string[]): Promise<unknown> {
   return (JSON.parse(stdout) as { data: unknown }).data;
 }
 
+/**
+ * A team needs a Claude or Codex lead, which this check cannot start, so the
+ * Mac's snapshot gets one added on its way out: Builder as Lead's member.
+ * Everything the phone does with it is the real code.
+ */
+function withTeam(
+  handlers: ReturnType<typeof createDesktopRequestHandlers>,
+  leadId: string,
+  memberId: string,
+) {
+  return {
+    ...handlers,
+    snapshot: async (params: Record<string, never>) => {
+      const result = await handlers.snapshot(params);
+      if (!result.ok) return result;
+      return {
+        ...result,
+        data: {
+          ...result.data,
+          teams: [{ id: "team-check", leadId, name: "Lead", goal: null }],
+          agents: result.data.agents.map((session) =>
+            session.id === memberId
+              ? { ...session, teamId: "team-check", teamHandle: "builder" }
+              : session,
+          ),
+        },
+      };
+    },
+  };
+}
+
 // Google: the authorize page sends the browser straight back with a code,
 // and the token endpoint turns it into an ID token for phone@example.com.
 const google = Bun.serve({
@@ -208,14 +239,27 @@ try {
     "--task",
     task.id,
   ])) as { id: string };
-  await cli([
+  const lead = (await cli([
     "agent",
     "spawn",
     "--workspace",
     workspace.id,
     "--command",
     "shell",
-  ]);
+    "--name",
+    "Lead",
+  ])) as { id: string };
+  const member = (await cli([
+    "agent",
+    "spawn",
+    "--workspace",
+    workspace.id,
+    "--command",
+    "shell",
+    "--name",
+    "Builder",
+  ])) as { id: string };
+  await cli(["session", "color", lead.id, "blue"]);
   await cli([
     "attention",
     "Approve the database migration",
@@ -231,7 +275,11 @@ try {
     relay: `ws://127.0.0.1:${port}`,
     macName: "Studio Mac",
     store,
-    handlers: createDesktopRequestHandlers(context),
+    handlers: withTeam(
+      createDesktopRequestHandlers(context),
+      lead.id,
+      member.id,
+    ),
     openTerminal: agentTerminalOpener(context, context.tmux),
   });
   await connector.start();
@@ -381,27 +429,69 @@ try {
   await waitFor("paired home", byText(".bar h1", "Studio Mac"), 30_000);
   await waitFor(
     "Needs me row",
-    byText(".row", "Approve the database migration"),
+    byText(".session-row", "Approve the database migration"),
   );
   if ((await evaluate<string>("location.hash")) !== "")
     throw new Error("The session token stayed in the address bar");
   const homeView = await evaluate<{
     needs: string[];
-    groups: string[];
-  }>(`(() => ({
-    needs: [...document.querySelectorAll('.group')][0] ? [...[...document.querySelectorAll('.group')][0].querySelectorAll('.row strong')].map((one) => one.textContent) : [],
-    groups: [...document.querySelectorAll('.group-title')].map((one) => one.textContent),
-  }))()`);
-  if (homeView.needs.length !== 1 || !homeView.groups.includes("Phone check"))
+    workspace: {
+      name: string;
+      insight: string;
+      rows: Array<{
+        name: string;
+        second: string;
+        tool: string;
+        color: string | null;
+        edge: string;
+        indent: number;
+      }>;
+    };
+  }>(`(() => {
+    const group = document.querySelector('.workspace-group');
+    const base = group.querySelector('.session-rows').getBoundingClientRect().left;
+    return {
+      needs: [...document.querySelectorAll('.group .session-row strong')].map((one) => one.textContent),
+      workspace: {
+        name: group.querySelector('.workspace-head strong').textContent,
+        insight: group.querySelector('.workspace-head small').textContent,
+        rows: [...group.querySelectorAll('.session-row')].map((row) => ({
+          name: row.querySelector('strong').textContent,
+          second: row.querySelector('small').textContent,
+          tool: row.querySelector('.session-kind-icon').className,
+          color: row.dataset.color ?? null,
+          edge: getComputedStyle(row).boxShadow,
+          indent: Math.round(row.getBoundingClientRect().left - base),
+        })),
+      },
+    };
+  })()`);
+  const rowsByName = Object.fromEntries(
+    homeView.workspace.rows.map((row) => [row.name, row]),
+  );
+  const names = homeView.workspace.rows.map((row) => row.name);
+  if (
+    homeView.needs.length !== 1 ||
+    homeView.workspace.name !== "Phone check" ||
+    homeView.workspace.insight !== "1 needs you" ||
+    names.indexOf("Builder") !== names.indexOf("Lead") + 1 ||
+    rowsByName.Lead?.second !== "Team leadWorkspace session" ||
+    rowsByName.Builder?.second !== "@builderWorkspace session" ||
+    (rowsByName.Builder?.indent ?? 0) < 12 ||
+    rowsByName.Lead?.indent !== 0 ||
+    rowsByName.Lead?.color !== "blue" ||
+    !rowsByName.Lead?.edge.includes("inset") ||
+    !rowsByName.Lead?.tool.includes("tool-terminal")
+  )
     throw new Error(`Home is wrong: ${JSON.stringify(homeView)}`);
   if (store.phones.length !== 1)
     throw new Error("The Mac did not store the phone");
   await screenshot("home");
   console.log(
-    "PASS Google sign-in with the invite, pairing, and Needs me with the waiting session",
+    "PASS sign-in, pairing, and the Mac's list: Needs me, the workspace box, tool icons, a session colour, and a team member indented under its lead",
   );
 
-  await tap(byText(".row", "Approve the database migration"));
+  await tap(byText(".group .session-row", "Approve the database migration"));
   await waitFor("terminal", "document.querySelector('.xterm-rows')");
   await sleep(800);
   await evaluate(`(() => {

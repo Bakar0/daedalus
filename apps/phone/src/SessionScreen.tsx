@@ -4,7 +4,8 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import type { RpcResult, TerminalServerMessage } from "@daedalus/protocol";
 import type { PhoneConnection, PhoneTerminal } from "@daedalus/remote-protocol";
-import { ACTIVITY_LABEL, type SessionRow } from "./Home";
+import { AgentStatusDot } from "../../desktop/src/renderer/session-view";
+import { type SessionRow, statusText } from "./sessions";
 import { Shell } from "./Shell";
 import { phoneTerminalInput } from "./terminal-input";
 
@@ -125,13 +126,16 @@ export function SessionScreen({
     <Shell onBack={onBack} title={row.session.name}>
       <div className="session">
         <p className="session-meta">
-          <span className="row-dot" data-activity={row.activity} />
-          {ACTIVITY_LABEL[row.activity]}
-          <span className="session-where">{row.task ?? row.workspace}</span>
+          <AgentStatusDot count={row.view.reasons.length} view={row.view} />
+          {/* The reason has its own box below. */}
+          {statusText({ ...row.view, detail: null })}
+          <span className="session-where">
+            {row.task ?? row.workspace?.name}
+          </span>
         </p>
-        {row.reason ? (
+        {row.view.attention && row.view.reasons.length > 0 ? (
           <div className="reason">
-            <p>{row.reason}</p>
+            <p>{row.view.reasons.at(-1)?.text}</p>
             <button className="link" onClick={clearAttention}>
               Dismiss
             </button>

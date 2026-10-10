@@ -1,12 +1,12 @@
 :root {
   color-scheme: light dark;
-  --bg: #f4f6fa;
-  --surface: #ffffff;
-  --raised: #eef1f6;
-  --line: rgb(16 24 40 / 0.1);
-  --text: #121826;
-  --secondary: #4a5568;
-  --muted: #7a8599;
+  --bg: #f3f6fc;
+  --surface: #f9fbfe;
+  --raised: rgb(255 255 255 / 0.64);
+  --line: rgb(80 99 130 / 0.15);
+  --text: #111a2f;
+  --secondary: #445167;
+  --muted: #71809a;
   --accent: #0c75e6;
   --accent-text: #ffffff;
   --success: #16815b;
@@ -17,13 +17,13 @@
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0f1420;
-    --surface: #171d2b;
-    --raised: #1e2535;
-    --line: rgb(255 255 255 / 0.09);
-    --text: #eef1f6;
-    --secondary: #b4bccb;
-    --muted: #7f8aa0;
+    --bg: #0e1321;
+    --surface: #151b2b;
+    --raised: rgb(255 255 255 / 0.045);
+    --line: rgb(151 164 190 / 0.16);
+    --text: #eff4fc;
+    --secondary: #c8d3e7;
+    --muted: #8491a9;
     --accent: #4596fe;
     --accent-text: #ffffff;
     --success: #58c79a;
@@ -411,12 +411,13 @@ main {
 }
 .session-meta {
   align-items: center;
+  min-height: 20px;
   color: var(--secondary);
   display: flex;
   font-size: 13px;
-  gap: 8px;
+  gap: 9px;
   margin: 0;
-  padding: 0 16px;
+  padding: 0 16px 0 20px;
 }
 .session-where {
   color: var(--muted);
@@ -488,4 +489,284 @@ main {
 }
 .session .error {
   padding: 0 16px;
+}
+
+/* Sessions, as the Mac's left column draws them (apps/desktop styles.css:
+   .workspace-group, .session-card, .agent-dot, the session palette). */
+:root {
+  --session-red: #c2413a;
+  --session-orange: #bf5f1d;
+  --session-gold: #b4740b;
+  --session-green: #2f8a4c;
+  --session-teal: #1f857e;
+  --session-blue: #2f6fc0;
+  --session-purple: #7651c0;
+  --session-pink: #b8448a;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --session-red: #e5675f;
+    --session-orange: #e8894a;
+    --session-gold: #f0b44c;
+    --session-green: #5fb878;
+    --session-teal: #4cb5ad;
+    --session-blue: #5b9be6;
+    --session-purple: #a07ee0;
+    --session-pink: #e076b0;
+  }
+}
+[data-color="red"] {
+  --session-color: var(--session-red);
+}
+[data-color="orange"] {
+  --session-color: var(--session-orange);
+}
+[data-color="gold"] {
+  --session-color: var(--session-gold);
+}
+[data-color="green"] {
+  --session-color: var(--session-green);
+}
+[data-color="teal"] {
+  --session-color: var(--session-teal);
+}
+[data-color="blue"] {
+  --session-color: var(--session-blue);
+}
+[data-color="purple"] {
+  --session-color: var(--session-purple);
+}
+[data-color="pink"] {
+  --session-color: var(--session-pink);
+}
+
+.workspace-group {
+  background: rgb(255 255 255 / 0.018);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  display: grid;
+  gap: 6px;
+  padding: 8px 8px 10px;
+}
+@media (prefers-color-scheme: light) {
+  .workspace-group {
+    background: rgb(255 255 255 / 0.45);
+  }
+}
+.workspace-head {
+  align-items: center;
+  display: grid;
+  gap: 2px 8px;
+  grid-template-columns: 18px minmax(0, 1fr);
+  padding: 4px 6px 2px;
+}
+.workspace-head strong {
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-head small {
+  color: var(--muted);
+  font-size: 12px;
+  grid-column: 2;
+}
+.workspace-head small.needs-attention {
+  color: var(--danger);
+}
+.workspace-folder-icon {
+  color: var(--accent);
+  display: flex;
+}
+.workspace-folder-icon svg {
+  height: 17px;
+  width: 17px;
+}
+.session-rows {
+  display: grid;
+  gap: 5px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.workspace-sessions {
+  margin-left: 15px;
+}
+.session-row {
+  align-items: start;
+  background: var(--raised);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 24px minmax(0, 1fr);
+  padding: 10px 12px;
+  text-align: left;
+  width: 100%;
+}
+.session-row:active {
+  background: var(--accent-wash, rgb(69 150 254 / 0.13));
+}
+.session-row[data-color] {
+  box-shadow: inset 3px 0 0 var(--session-color);
+}
+li:has(> .session-row[data-team-member="true"]) {
+  margin-left: 14px;
+}
+.session-kind-icon {
+  align-items: center;
+  color: #eef4ff;
+  display: flex;
+  height: 24px;
+  justify-content: center;
+  width: 24px;
+}
+.session-kind-icon svg {
+  height: 20px;
+  width: 20px;
+}
+.session-kind-icon.tool-claude {
+  color: #d97757;
+}
+.session-kind-icon.tool-terminal {
+  color: #75dfb5;
+}
+@media (prefers-color-scheme: light) {
+  .session-kind-icon.tool-codex {
+    color: #172033;
+  }
+  .session-kind-icon.tool-terminal {
+    color: #187a59;
+  }
+}
+.session-row-main {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+.session-row-main strong {
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-row-main small {
+  color: var(--secondary);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The dot's attention ring sits outside its box, so this line does not clip;
+   only the text beside it is cut short. */
+.session-row-status {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 13px;
+  font-style: normal;
+  gap: 9px;
+  margin-top: 3px;
+  min-width: 0;
+  padding-left: 4px;
+}
+.session-row-status[data-tone="attention"] {
+  color: #ff8282;
+}
+.session-row-status span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-team-badge {
+  color: var(--accent);
+  font-weight: 600;
+  margin-right: 6px;
+}
+
+.agent-dot {
+  align-items: center;
+  background: #66758f;
+  border-radius: 50%;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 7px;
+  justify-content: center;
+  position: relative;
+  width: 7px;
+}
+.agent-dot.tone-idle {
+  background: #8a97ad;
+}
+.agent-dot.tone-working {
+  background: #afbaff;
+}
+.agent-dot.tone-working::after {
+  animation: agent-dot-pulse 1.6s ease-out infinite;
+  border: 1px solid #afbaff;
+  border-radius: 50%;
+  content: "";
+  inset: -3px;
+  position: absolute;
+}
+.agent-dot.tone-done {
+  background: #58c79a;
+}
+.agent-dot.tone-error {
+  background: #ffb454;
+}
+.agent-dot.tone-lost,
+.agent-dot.tone-attention {
+  background: #ff8282;
+}
+.agent-dot.tone-ended {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px #66758f;
+}
+.agent-dot.tone-attention {
+  height: 9px;
+  outline: 2px solid #ff8282;
+  outline-offset: 2px;
+  width: 9px;
+}
+.agent-dot.tone-lost {
+  outline: 1px solid rgb(255 130 130 / 0.5);
+  outline-offset: 2px;
+}
+.agent-dot.unconfirmed {
+  opacity: 0.55;
+  outline-style: dashed;
+}
+.agent-dot-count {
+  background: #ff8282;
+  border-radius: 999px;
+  color: #1b0b0b;
+  font-size: 9px;
+  font-weight: 700;
+  left: 50%;
+  line-height: 12px;
+  min-width: 13px;
+  padding: 0 3px;
+  position: absolute;
+  text-align: center;
+  top: -9px;
+  transform: translateX(-50%);
+}
+@keyframes agent-dot-pulse {
+  from {
+    opacity: 0.85;
+    transform: scale(0.75);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-dot.tone-working::after {
+    animation: none;
+    opacity: 0.5;
+  }
 }

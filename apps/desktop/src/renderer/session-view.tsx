@@ -284,6 +284,21 @@ export function waitingLabel(since: string | null, now: number): string {
   return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
 }
 
+/** A row's status line: "needs input 4m · Approve the migration". */
+export function sessionStatusLine(
+  view: SessionStatusView,
+  now: number,
+): string {
+  return [
+    view.attention && view.since
+      ? `${view.label} ${waitingLabel(view.since, now)}`
+      : view.label,
+    view.detail,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 /** Screen readers get the activity and the wait, never the colour. */
 export function statusAriaLabel(
   session: AgentSessionDto,
