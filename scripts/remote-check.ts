@@ -9,7 +9,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApplicationContext } from "@daedalus/core";
-import { CommandTmuxClient, runCommand } from "@daedalus/platform";
+import {
+  CommandTmuxClient,
+  runCommand,
+  TmuxPtyBridge,
+} from "@daedalus/platform";
 import type { DesktopSnapshotDto, RpcResult } from "@daedalus/protocol";
 import {
   createIdentity,
@@ -405,6 +409,37 @@ try {
   await until("dataChanged", () => changed > 0);
   pass("data-changed events reach the phone");
 
+  // The Mac's own view of the session, as the desktop window attaches it.
+  const agentRow = (await cli(["agent", "get", agent.id])) as {
+    tmuxSession: string;
+  };
+  const tmuxTarget = { socketName: socket, session: agentRow.tmuxSession };
+  const windowSize = async () =>
+    (
+      await runCommand(
+        context.tmux instanceof CommandTmuxClient
+          ? context.tmux.executable
+          : "tmux",
+        [
+          "-L",
+          socket,
+          "display-message",
+          "-p",
+          "-t",
+          agentRow.tmuxSession,
+          "#{window_width}x#{window_height} #{window-size}",
+        ],
+      )
+    ).stdout.trim();
+  const desktopView = new TmuxPtyBridge(() => {}, tmuxTarget, {
+    cols: 150,
+    rows: 40,
+  });
+  void desktopView.start();
+  await sleep(400);
+  if (!(await windowSize()).startsWith("150x40"))
+    throw new Error(`Desktop view not attached: ${await windowSize()}`);
+
   const decoder = new TextDecoder();
   let screen = "";
   const terminal = phoneConnection.openTerminal(
@@ -419,6 +454,19 @@ try {
   terminal.write(`printf '%s\\n' ${markers[0]}\r`);
   await until("terminal marker", () => screen.includes(markers[0]!));
   pass("live terminal: phone typing reaches tmux, output comes back");
+
+  if ((await windowSize()) !== "80x24 manual")
+    throw new Error(`Phone open, window is ${await windowSize()}`);
+  terminal.resize(60, 30);
+  await sleep(400);
+  if ((await windowSize()) !== "60x30 manual")
+    throw new Error(`Phone resized, window is ${await windowSize()}`);
+  desktopView.write("x");
+  await sleep(300);
+  if ((await windowSize()) !== "60x30 manual")
+    throw new Error(`Typing on the Mac took the size: ${await windowSize()}`);
+  desktopView.write("\u007f");
+  pass("while the phone has a session open, the window keeps the phone's size");
 
   const sent = (await phoneConnection.request("agentSend", {
     id: agent.id,
@@ -460,6 +508,11 @@ try {
     ),
   );
   terminal.close();
+  await sleep(500);
+  if (!(await windowSize()).startsWith("150x40"))
+    throw new Error(`Phone closed, window is ${await windowSize()}`);
+  desktopView.close();
+  pass("when the phone leaves, the window goes back to the Mac's size");
 
   const leaked = rawFrames.some((frame) => {
     const raw = decoder.decode(frame);

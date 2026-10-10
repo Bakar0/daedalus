@@ -5,7 +5,7 @@ import {
   DaedalusError,
   saveRemoteEnabled,
 } from "@daedalus/core";
-import { TmuxPtyBridge } from "@daedalus/platform";
+import { runCommand, TmuxPtyBridge } from "@daedalus/platform";
 import type {
   RemotePairingDto,
   RemoteStateDto,
@@ -619,27 +619,104 @@ export class RemoteConnector {
 }
 
 /**
+ * A phone and the Mac show one tmux window, which can have one size, and by
+ * default tmux gives it to whichever client was used last. A phone-sized
+ * window then shows up narrower on the Mac, and a Mac-sized one leaves the
+ * phone's extra rows and columns dotted. While a phone has the session open
+ * the window is pinned to the phone's size (`window-size manual`); when the
+ * last phone leaves, the pin is removed and tmux sizes it from the Mac again.
+ */
+export class PhoneWindowSize {
+  readonly #open = new Map<string, number>();
+
+  constructor(
+    private readonly tmux: { socketName: string; executable: string },
+    private readonly run: typeof runCommand = runCommand,
+  ) {}
+
+  async #tmux(args: string[]): Promise<void> {
+    await this.run(this.tmux.executable, ["-L", this.tmux.socketName, ...args]);
+  }
+
+  async hold(session: string, size: { cols: number; rows: number }) {
+    this.#open.set(session, (this.#open.get(session) ?? 0) + 1);
+    await this.resize(session, size);
+  }
+
+  async resize(
+    session: string,
+    { cols, rows }: { cols: number; rows: number },
+  ) {
+    const width = Math.max(20, Math.min(500, Math.floor(cols)));
+    const height = Math.max(5, Math.min(300, Math.floor(rows)));
+    await this.#tmux([
+      "set-option",
+      "-w",
+      "-t",
+      session,
+      "window-size",
+      "manual",
+      ";",
+      "resize-window",
+      "-t",
+      session,
+      "-x",
+      String(width),
+      "-y",
+      String(height),
+    ]);
+  }
+
+  async release(session: string) {
+    const count = (this.#open.get(session) ?? 1) - 1;
+    if (count > 0) {
+      this.#open.set(session, count);
+      return;
+    }
+    this.#open.delete(session);
+    await this.#tmux(["set-option", "-w", "-u", "-t", session, "window-size"]);
+  }
+}
+
+/**
  * Opens an agent's tmux session for a phone the way the loopback terminal
  * server does for the window: a running session only, typing noted for the
- * delivery gate.
+ * delivery gate, and the window sized to the phone while it is open.
  */
 export function agentTerminalOpener(
   context: ApplicationContext,
   tmux: { socketName: string; executable: string },
+  sizes = new PhoneWindowSize(tmux),
 ): OpenRemoteTerminal {
   return async (agentId, socket, size) => {
     const agent = await context.agents.get(agentId);
     if (agent.status !== "running" && agent.status !== "starting")
       throw new Error(`Session is ${agent.status}`);
+    const session = agent.tmuxSession;
+    const initial = size ?? { cols: 80, rows: 24 };
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      void sizes.release(session).catch(() => undefined);
+    };
+    await sizes.hold(session, initial);
     const connection = new TerminalConnection({
       agentId: agent.id,
-      socket,
+      socket: {
+        ...socket,
+        send: (data) => socket.send(data),
+        close: () => {
+          release();
+          socket.close?.();
+        },
+      },
       status: "reconnected",
       createBridge: (onOutput) =>
         new TmuxPtyBridge(
           onOutput,
-          { socketName: tmux.socketName, session: agent.tmuxSession },
-          size,
+          { socketName: tmux.socketName, session },
+          initial,
           tmux.executable,
         ),
       onInput: (data) => {
@@ -647,7 +724,25 @@ export function agentTerminalOpener(
       },
     });
     await connection.start();
-    return connection;
+    return {
+      async message(payload) {
+        await connection.message(payload);
+        try {
+          const parsed = JSON.parse(payload) as TerminalClientMessage;
+          if (parsed.type === "resize")
+            await sizes.resize(session, {
+              cols: parsed.cols,
+              rows: parsed.rows,
+            });
+        } catch {
+          // Not JSON; the connection already reported it.
+        }
+      },
+      close() {
+        connection.close();
+        release();
+      },
+    };
   };
 }
 
