@@ -2,6 +2,13 @@
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "daedalus-relay",
   "main": "src/index.ts",
+  // The phone app (apps/phone, `bun run --cwd apps/phone build`). The API
+  // routes reach the Worker first; any other path gets the app.
+  "assets": {
+    "directory": "../phone/dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/v1/*", "/auth/*", "/admin/*", "/health"],
+  },
   "compatibility_date": "2026-10-01",
   "durable_objects": {
     "bindings": [{ "name": "ROOMS", "class_name": "Room" }],

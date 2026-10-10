@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "deploy": "bun run --cwd ../phone build && wrangler deploy"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261009.1",

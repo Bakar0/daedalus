@@ -54,6 +54,17 @@
         "uqr": "0.1.3",
       },
     },
+    "apps/phone": {
+      "name": "@daedalus/phone",
+      "dependencies": {
+        "@daedalus/protocol": "workspace:*",
+        "@daedalus/remote-protocol": "workspace:*",
+        "@xterm/addon-fit": "0.11.0",
+        "@xterm/xterm": "6.1.0-beta.303",
+        "react": "19.3.0",
+        "react-dom": "19.3.0",
+      },
+    },
     "apps/relay": {
       "name": "@daedalus/relay",
       "devDependencies": {
@@ -110,6 +121,8 @@
     "@daedalus/core": ["@daedalus/core@workspace:packages/core"],
 
     "@daedalus/desktop": ["@daedalus/desktop@workspace:apps/desktop"],
+
+    "@daedalus/phone": ["@daedalus/phone@workspace:apps/phone"],
 
     "@daedalus/platform": ["@daedalus/platform@workspace:packages/platform"],
 

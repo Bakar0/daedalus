@@ -40,7 +40,8 @@ export function relayConnectUrl(
 /** The relay's HTTP address, from the WebSocket one in a pairing code. */
 export function relayHttpUrl(relay: string): string {
   const url = new URL(relay);
-  url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+  if (url.protocol === "wss:") url.protocol = "https:";
+  else if (url.protocol === "ws:") url.protocol = "http:";
   return url.origin;
 }
 

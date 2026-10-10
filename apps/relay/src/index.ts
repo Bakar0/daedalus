@@ -12,7 +12,6 @@ import {
   userForSession,
 } from "./accounts";
 import { googleCallback, googleStart } from "./google";
-import { SIGNED_IN_PAGE } from "./signed-in";
 import {
   bearer,
   CLOSE,
@@ -42,15 +41,6 @@ export default {
     const route = `${request.method} ${url.pathname}`;
     try {
       if (route === "GET /health") return new Response("ok");
-      if (route === "GET /signed-in")
-        return new Response(SIGNED_IN_PAGE, {
-          headers: {
-            "Content-Type": "text/html; charset=utf-8",
-            "Content-Security-Policy":
-              "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'",
-            "Referrer-Policy": "no-referrer",
-          },
-        });
       if (route === "GET /v1/connect") return await connect(request, env);
       if (route === "GET /auth/google/start")
         return await googleStart(request, env);
