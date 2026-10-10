@@ -24,6 +24,7 @@
     "react-dom": "19.3.0",
     "react-markdown": "10.1.0",
     "remark-gfm": "4.0.1",
-    "seti-icons": "0.0.4"
+    "seti-icons": "0.0.4",
+    "uqr": "0.1.3"
   }
 }

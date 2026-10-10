@@ -1,8 +1,14 @@
 import { chmod, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { ApplicationContext } from "@daedalus/core";
+import {
+  type ApplicationContext,
+  DaedalusError,
+  saveRemoteEnabled,
+} from "@daedalus/core";
 import { TmuxPtyBridge } from "@daedalus/platform";
 import type {
+  RemotePairingDto,
+  RemoteStateDto,
   RpcResult,
   TerminalClientMessage,
   TerminalServerMessage,
@@ -23,6 +29,7 @@ import {
   encodeTerminalOutput,
   type Hello,
   type PairingOffer,
+  pairingUrl,
   type PlainMessage,
   type Ready,
   RELAY_CLOSE,
@@ -165,13 +172,15 @@ export type OpenRemoteTerminal = (
   size: { cols: number; rows: number } | undefined,
 ) => Promise<RemoteTerminal>;
 
+/** Any of the desktop request handlers; the allowlist picks which. */
 type RequestHandler = (params: never) => unknown;
+type RequestHandlers = Partial<Record<string, RequestHandler>>;
 
 export interface RemoteConnectorOptions {
   relay: string;
   macName: string;
   store: RemoteStore;
-  handlers: Record<string, RequestHandler>;
+  handlers: RequestHandlers;
   openTerminal: OpenRemoteTerminal;
   log?: (event: string, fields: Record<string, unknown>) => void;
   /** Sees every raw frame in both directions, as the relay does. */
@@ -263,6 +272,11 @@ export class RemoteConnector {
       lifetimeMs,
     );
     return this.#offer;
+  }
+
+  /** Ends a forgotten phone's connection; its next hello is refused. */
+  forgetPhone(id: string): void {
+    this.#dropPhone(id);
   }
 
   /** Tells every connected phone that data changed, like `dataChanged`. */
@@ -635,4 +649,103 @@ export function agentTerminalOpener(
     await connection.start();
     return connection;
   };
+}
+
+/** What the RPC layer needs of the remote host. */
+export interface DesktopRemoteHost {
+  state(): RemoteStateDto;
+  setEnabled(enabled: boolean): Promise<RemoteStateDto>;
+  pairingCode(): RemotePairingDto;
+  removePhone(id: string): Promise<RemoteStateDto>;
+}
+
+export interface RemoteHostOptions {
+  context: ApplicationContext;
+  macName: string;
+  handlers: () => RequestHandlers;
+  openTerminal: OpenRemoteTerminal;
+  log?: (event: string, fields: Record<string, unknown>) => void;
+}
+
+/**
+ * Keeps a connector running while Settings › Remote is on, and none while
+ * it is off. The store is opened on first use, so a user who never turns
+ * remote access on never gets a device key.
+ */
+export class RemoteHost implements DesktopRemoteHost {
+  #store: RemoteStore | undefined;
+  #connector: RemoteConnector | undefined;
+
+  constructor(private readonly options: RemoteHostOptions) {}
+
+  /** Starts the connector if the setting is on. Call once at launch. */
+  async start(): Promise<void> {
+    if (this.options.context.config.remoteEnabled) await this.#run();
+  }
+
+  async #run(): Promise<void> {
+    if (this.#connector) return;
+    this.#store ??= await RemoteStore.open(this.options.context.config.home);
+    this.#connector = new RemoteConnector({
+      relay: this.options.context.config.remoteRelay,
+      macName: this.options.macName,
+      store: this.#store,
+      handlers: this.options.handlers(),
+      openTerminal: this.options.openTerminal,
+      ...(this.options.log ? { log: this.options.log } : {}),
+    });
+    void this.#connector.start();
+  }
+
+  stop(): void {
+    this.#connector?.stop();
+    this.#connector = undefined;
+  }
+
+  announce(): void {
+    this.#connector?.announce();
+  }
+
+  state(): RemoteStateDto {
+    const { config } = this.options.context;
+    return {
+      enabled: config.remoteEnabled,
+      status: this.#connector?.status ?? "off",
+      relay: config.remoteRelay,
+      macName: this.options.macName,
+      phones: (this.#store?.phones ?? []).map(({ id, name, pairedAt }) => ({
+        id,
+        name,
+        pairedAt,
+      })),
+    };
+  }
+
+  async setEnabled(enabled: boolean): Promise<RemoteStateDto> {
+    await saveRemoteEnabled(this.options.context.config, enabled);
+    if (enabled) await this.#run();
+    else this.stop();
+    return this.state();
+  }
+
+  pairingCode(): RemotePairingDto {
+    const connector = this.#connector;
+    if (
+      !connector ||
+      (connector.status !== "waiting_for_phone" &&
+        connector.status !== "online")
+    )
+      throw new DaedalusError(
+        "CONFLICT",
+        "Pairing needs this Mac connected to the relay.",
+      );
+    const offer = connector.createPairingOffer();
+    return { url: pairingUrl(offer), expiresAt: offer.expiresAt };
+  }
+
+  async removePhone(id: string): Promise<RemoteStateDto> {
+    await this.#store?.removePhone(id);
+    this.#connector?.forgetPhone(id);
+    return this.state();
+  }
 }

@@ -37,6 +37,10 @@ const agentsScreenshotPath = join(
   projectRoot,
   "artifacts/settings-ui-agents.png",
 );
+const remoteScreenshotPath = join(
+  projectRoot,
+  "artifacts/settings-ui-remote.png",
+);
 const generalScreenshotPath = join(
   projectRoot,
   "artifacts/settings-ui-general.png",
@@ -270,6 +274,7 @@ try {
     "Skills",
     "Sessions",
     "Notifications",
+    "Remote",
     "About",
   ]) {
     const opened = await evaluate<string>(`(() => {
@@ -512,7 +517,7 @@ try {
     "The pane scrolls and the dialog does not, so the categories and the title stay put",
   );
   console.log(
-    `All six categories open at a steady ${[...distinct][0]}px: ${Object.keys(heights).join(", ")}`,
+    `All ${Object.keys(heights).length} categories open at a steady ${[...distinct][0]}px: ${Object.keys(heights).join(", ")}`,
   );
   console.log(
     `Found skills: ${grouped.length} groups (${labels.join(", ")}), ${totalRows} rows each with a ${shape.width}x${shape.height} switch that moves, collapse works, fuzzy filter narrows to ${filteredRows}, viewer opens`,
@@ -737,6 +742,90 @@ try {
   console.log(
     `Agents: ${agents.rows.length} accounts (signed in with email, signed out with a one-click Sign in, Add and sign in with SSO sending both requests, a sign-in running under its row and turning it signed in, an API-key account with Set key, Codex not installed with ${agents.install.length} install commands), none past the pane`,
   );
+  // Remote: off, then on and waiting; a pairing code as a QR code; a phone
+  // finishing pairing hides the code and lists the phone; Remove (two
+  // clicks, in place) forgets it.
+  await evaluate(`(() => {
+    [...document.querySelectorAll('.settings-nav button')]
+      .find((one) => one.textContent.trim() === 'Remote').click();
+  })()`);
+  await Bun.sleep(150);
+  const remoteSwitch =
+    "document.querySelector('.remote-panel .settings-row input')";
+  if (await evaluate<boolean>(`${remoteSwitch}.checked`))
+    throw new Error("Remote: phone access starts on");
+  await clickAt(remoteSwitch);
+  await Bun.sleep(300);
+  const waiting = await evaluate<string>(
+    "document.querySelector('.remote-status')?.dataset.status ?? ''",
+  );
+  if (waiting !== "waiting_for_phone")
+    throw new Error(`Remote: turned on, the status is ${waiting}`);
+  await clickAt(
+    "[...document.querySelectorAll('.remote-panel button')].find((one) => one.textContent.trim() === 'Show pairing code')",
+  );
+  await Bun.sleep(200);
+  const qr = await evaluate<{
+    modules: number;
+    text: string;
+    width: number;
+  }>(`(() => {
+    const svg = document.querySelector('.remote-qr');
+    return {
+      modules: svg?.querySelector('path')?.getAttribute('d')?.split('M').length ?? 0,
+      text: document.querySelector('.remote-pairing p')?.textContent ?? '',
+      width: svg?.getBoundingClientRect().width ?? 0,
+    };
+  })()`);
+  if (qr.modules < 200 || qr.width < 190 || !/expires in \d:\d\d/.test(qr.text))
+    throw new Error(`Remote: the pairing code is wrong: ${JSON.stringify(qr)}`);
+  const remoteShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(remoteScreenshotPath, Buffer.from(remoteShot.data, "base64"));
+  await evaluate("window.remotePair()");
+  for (
+    let attempt = 0;
+    attempt < 40 &&
+    (await evaluate<boolean>("Boolean(document.querySelector('.remote-qr'))"));
+    attempt += 1
+  )
+    await Bun.sleep(100);
+  const paired = await evaluate<{
+    qr: boolean;
+    phones: string[];
+    status: string;
+  }>(`(() => ({
+    qr: Boolean(document.querySelector('.remote-qr')),
+    phones: [...document.querySelectorAll('.remote-phones li strong')].map((one) => one.textContent),
+    status: document.querySelector('.remote-status')?.dataset.status ?? '',
+  }))()`);
+  if (
+    paired.qr ||
+    paired.phones.join() !== "Pixel 9" ||
+    paired.status !== "online"
+  )
+    throw new Error(`Remote: pairing did not show: ${JSON.stringify(paired)}`);
+  const pairedShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(
+    remoteScreenshotPath.replace(".png", "-paired.png"),
+    Buffer.from(pairedShot.data, "base64"),
+  );
+  const removeButton =
+    "document.querySelector('.remote-phones li .accounts-actions button')";
+  await clickAt(removeButton);
+  await Bun.sleep(400);
+  await clickAt(removeButton);
+  await Bun.sleep(300);
+  const left = await evaluate<number>(
+    "document.querySelectorAll('.remote-phones li').length",
+  );
+  if (left !== 0) throw new Error("Remote: Remove did not forget the phone");
+  console.log(
+    "Remote: off by default; on, it waits for a phone; the pairing code is a QR code with a countdown; a paired phone hides the code and is listed; Remove forgets it",
+  );
   // And General, where a switch sits beside a two-line description and the
   // alignment either reads or does not.
   await evaluate(`(() => {
@@ -827,7 +916,7 @@ try {
     "Closed, the offer returns to the banner and the dot stays on Settings",
   );
   console.log(
-    `Screenshots: ${screenshotPath}, ${groupsScreenshotPath}, ${agentsScreenshotPath}, ${generalScreenshotPath}, ${aboutScreenshotPath}, ${cornerScreenshotPath}`,
+    `Screenshots: ${screenshotPath}, ${groupsScreenshotPath}, ${agentsScreenshotPath}, ${remoteScreenshotPath}, ${generalScreenshotPath}, ${aboutScreenshotPath}, ${cornerScreenshotPath}`,
   );
   socket.close();
 } finally {

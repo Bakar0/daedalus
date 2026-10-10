@@ -6,6 +6,7 @@ import {
   decodePairingOffer,
   encodePairingOffer,
   pairingProof,
+  pairingUrl,
   sodiumReady,
   startHandshake,
   verifyPairingProof,
@@ -61,6 +62,19 @@ describe("pairing", () => {
     const otherOffer = createPairingOffer(mac, "wss://relay.example", "Mac");
     expect(verifyPairingProof(otherOffer, phone, proof)).toBe(false);
     expect(verifyPairingProof(offer, phone, "not-base64!")).toBe(false);
+  });
+
+  test("the QR link carries the code in its fragment", () => {
+    const offer = createPairingOffer(
+      createIdentity(),
+      "wss://relay.example",
+      "Mac",
+    );
+    const url = pairingUrl(offer);
+    expect(url.startsWith("https://relay.example/pair#daedalus-pair:")).toBe(
+      true,
+    );
+    expect(decodePairingOffer(url)).toEqual(offer);
   });
 
   test("anything but a pairing code is rejected", () => {

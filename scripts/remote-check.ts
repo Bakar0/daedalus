@@ -27,6 +27,7 @@ import {
 import {
   agentTerminalOpener,
   RemoteConnector,
+  RemoteHost,
   type RemoteStatus,
   RemoteStore,
 } from "../apps/desktop/src/bun/remote";
@@ -37,6 +38,7 @@ const relayDir = join(root, "apps/relay");
 const wrangler = join(relayDir, "node_modules/.bin/wrangler");
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const home = await mkdtemp(join(tmpdir(), "daedalus-remote-"));
+const secondHome = await mkdtemp(join(tmpdir(), "daedalus-remote-host-"));
 const relayState = await mkdtemp(join(tmpdir(), "daedalus-relay-"));
 const socket = `daedalus-${createHash("sha256").update(home).digest("hex").slice(0, 12)}`;
 const port = 18_700 + Math.floor(Math.random() * 1_000);
@@ -229,6 +231,7 @@ const tap = (_direction: "in" | "out", frame: Uint8Array) => {
 };
 
 let connector: RemoteConnector | undefined;
+let host: RemoteHost | undefined;
 let connection: PhoneConnection | undefined;
 try {
   await sodiumReady();
@@ -519,6 +522,72 @@ try {
     throw new Error("A removed Mac kept its token or phones");
   pass("removing the Mac makes it start over as a new, unpaired device");
 
+  // The app's own path: Settings › Remote's switch and pairing code, on a
+  // second Mac with its own home.
+  const hostContext = await createApplicationContext({
+    env: { ...env, DAEDALUS_HOME: secondHome, DAEDALUS_REMOTE_RELAY: relayUrl },
+  });
+  host = new RemoteHost({
+    context: hostContext,
+    macName: "Second Mac",
+    handlers: () => createDesktopRequestHandlers(hostContext),
+    openTerminal: agentTerminalOpener(context, context.tmux),
+  });
+  await host.start();
+  if (host.state().status !== "off")
+    throw new Error("Remote started while off");
+  await host.setEnabled(true);
+  await until(
+    "host waiting",
+    () => host!.state().status === "waiting_for_phone",
+  );
+  const hostOffer = decodePairingOffer(host.pairingCode().url);
+  const secondPhone = createIdentity();
+  const secondMac = await pairWithMac(
+    secondPhone,
+    hostOffer,
+    "Alice's tablet",
+    aliceToken,
+  );
+  await until("host online", () => host!.state().status === "online");
+  if (
+    host
+      .state()
+      .phones.map((item) => item.name)
+      .join() !== "Alice's tablet"
+  )
+    throw new Error(`Host phones: ${JSON.stringify(host.state().phones)}`);
+  const viaHost = await PhoneConnection.connect(
+    secondPhone,
+    secondMac,
+    aliceToken,
+  );
+  const hostSnapshot = (await viaHost.request(
+    "snapshot",
+  )) as RpcResult<unknown>;
+  if (!hostSnapshot.ok) throw new Error("Snapshot through the host failed");
+  viaHost.close();
+  await host.removePhone(secondPhone.id);
+  const forgotten = await PhoneConnection.connect(
+    secondPhone,
+    secondMac,
+    aliceToken,
+  ).then(
+    (open) => {
+      open.close();
+      return "connected";
+    },
+    (error: Error) => error.message,
+  );
+  if (forgotten === "connected") throw new Error("A forgotten phone connected");
+  await host.setEnabled(false);
+  const stored = (await Bun.file(join(secondHome, "config.json")).json()) as {
+    remoteEnabled?: boolean;
+  };
+  if (host.state().status !== "off" || stored.remoteEnabled !== false)
+    throw new Error("Turning remote off did not stick");
+  pass("Settings › Remote's host: on, pairing code, paired phone, forget, off");
+
   const requestPrice = 0.15 / 1_000_000;
   const durationPrice = 12.5 / 1_000_000;
   console.log("\nMeasured relay traffic per minute (one phone, one session):");
@@ -536,6 +605,7 @@ try {
   );
   console.log(`  Mac status changes: ${statuses.join(" → ")}`);
 } finally {
+  host?.stop();
   connection?.close();
   connector?.stop();
   relay.kill();
@@ -543,5 +613,6 @@ try {
   google.stop(true);
   await runCommand("tmux", ["-L", socket, "kill-server"]);
   await rm(home, { recursive: true, force: true });
+  await rm(secondHome, { recursive: true, force: true });
   await rm(relayState, { recursive: true, force: true });
 }

@@ -762,6 +762,28 @@ export interface RoutinesDetailDto {
   runs: RoutineRunDto[];
 }
 
+/**
+ * Phone access through the relay. `status` is the connector's: `off` while
+ * the setting is off, `waiting_for_phone` until a phone claims this Mac,
+ * `locked` while the account has no access or is over its data limit.
+ */
+export type RemoteStatusDto =
+  "off" | "connecting" | "waiting_for_phone" | "online" | "offline" | "locked";
+
+export interface RemoteStateDto {
+  enabled: boolean;
+  status: RemoteStatusDto;
+  relay: string;
+  macName: string;
+  phones: Array<{ id: string; name: string; pairedAt: string }>;
+}
+
+/** What the QR code says, and until when it can be used. */
+export interface RemotePairingDto {
+  url: string;
+  expiresAt: number;
+}
+
 export interface DesktopSnapshotDto {
   workspaces: WorkspaceDto[];
   tasks: TaskDto[];
@@ -871,6 +893,12 @@ export interface DesktopRpcSchema {
        * to load — so it is fetched over RPC rather than passed in the URL.
        */
       terminalEndpoint: Request<Record<string, never>, { endpoint: string }>;
+      remoteGet: Request<Record<string, never>, RemoteStateDto>;
+      remoteSetEnabled: Request<{ enabled: boolean }, RemoteStateDto>;
+      /** A new one-time pairing code; any earlier one stops working. */
+      remotePairingCode: Request<Record<string, never>, RemotePairingDto>;
+      /** Forgets a phone on this Mac, so it can no longer connect to it. */
+      remotePhoneRemove: Request<{ id: string }, RemoteStateDto>;
       workspaceCreate: Request<
         {
           name: string;

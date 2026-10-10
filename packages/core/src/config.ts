@@ -134,6 +134,12 @@ export interface DaedalusConfig {
    * tracking, so the board stays live while the interruptions stop.
    */
   focusMode: boolean;
+  /**
+   * Whether a paired phone may operate this Mac through the relay. Off until
+   * the user turns it on; the Mac then connects out to `remoteRelay`.
+   */
+  remoteEnabled: boolean;
+  remoteRelay: string;
   agents: Record<string, AgentDefinition>;
   /**
    * Per-capability state for the skills Daedalus ships. Absent means the
@@ -177,6 +183,8 @@ type StoredConfig = Partial<
     | "autoRestoreSessionsEnabled"
     | "trustSessionFoldersEnabled"
     | "focusMode"
+    | "remoteEnabled"
+    | "remoteRelay"
     | "agents"
   >
 > & {
@@ -187,6 +195,10 @@ type StoredConfig = Partial<
   accounts?: AccountProfile[];
   defaultLogins?: { claude?: unknown };
 };
+
+/** The Daedalus relay phones reach this Mac through (see `apps/relay`). */
+export const DEFAULT_REMOTE_RELAY =
+  "wss://daedalus-relay.daedalus-relay.workers.dev";
 
 function expandHome(path: string): string {
   return path === "~"
@@ -289,6 +301,9 @@ export async function loadConfig(
     autoRestoreSessionsEnabled: stored.autoRestoreSessionsEnabled !== false,
     trustSessionFoldersEnabled: stored.trustSessionFoldersEnabled !== false,
     focusMode: stored.focusMode === true,
+    remoteEnabled: stored.remoteEnabled === true,
+    remoteRelay:
+      env.DAEDALUS_REMOTE_RELAY || stored.remoteRelay || DEFAULT_REMOTE_RELAY,
     agents: stored.agents || {
       codex: { executable: "codex", args: [] },
       claude: { executable: "claude", args: [] },
@@ -384,6 +399,14 @@ export async function saveTrustSessionFoldersEnabled(
 ): Promise<void> {
   await saveSetting(config, { trustSessionFoldersEnabled: enabled });
   config.trustSessionFoldersEnabled = enabled;
+}
+
+export async function saveRemoteEnabled(
+  config: DaedalusConfig,
+  enabled: boolean,
+): Promise<void> {
+  await saveSetting(config, { remoteEnabled: enabled });
+  config.remoteEnabled = enabled;
 }
 
 export async function saveFocusMode(

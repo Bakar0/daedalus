@@ -36,6 +36,7 @@
         "@daedalus/core": "workspace:*",
         "@daedalus/platform": "workspace:*",
         "@daedalus/protocol": "workspace:*",
+        "@daedalus/remote-protocol": "workspace:*",
         "@headless-tree/core": "1.7.0",
         "@headless-tree/react": "1.7.0",
         "@xterm/addon-fit": "0.11.0",
@@ -50,6 +51,7 @@
         "react-markdown": "10.1.0",
         "remark-gfm": "4.0.1",
         "seti-icons": "0.0.4",
+        "uqr": "0.1.3",
       },
     },
     "apps/relay": {
@@ -74,6 +76,7 @@
     "packages/remote-protocol": {
       "name": "@daedalus/remote-protocol",
       "dependencies": {
+        "@daedalus/protocol": "workspace:*",
         "libsodium-wrappers": "0.8.4",
       },
     },
@@ -1011,6 +1014,8 @@
     "unist-util-visit-parents": ["unist-util-visit-parents@6.0.2", "", { "dependencies": { "@types/unist": "^3.0.0", "unist-util-is": "^6.0.0" } }, "sha512-goh1s1TBrqSqukSc8wrjwWhL0hiJxgA8m4kFxGlQ+8FYQ3C/m11FcTs4YYem7V664AhHVvgoQLk890Ssdsr2IQ=="],
 
     "unquote": ["unquote@1.1.1", "", {}, "sha512-vRCqFv6UhXpWxZPyGDh/F3ZpNv8/qo7w6iufLpQg9aKnQ71qM4B5KiI7Mia9COcjEhrO9LueHpMYjYzsWH3OIg=="],
+
+    "uqr": ["uqr@0.1.3", "", {}, "sha512-0rjE8iEJe4YmT9TOhwsZtqCMRLc5DXZUI2UEYUUg63ikBkqqE5EYWaI0etFe/5KUcmcYwLih2RND1kq+hrUJXA=="],
 
     "util.promisify": ["util.promisify@1.0.1", "", { "dependencies": { "define-properties": "^1.1.3", "es-abstract": "^1.17.2", "has-symbols": "^1.0.1", "object.getownpropertydescriptors": "^2.1.0" } }, "sha512-g9JpC/3He3bm38zsLupWryXHoEcS22YHthuPQSJdMy6KNrzIRzWqcsHzD/WUnqe45whVou4VIsPew37DoXWNrA=="],
 

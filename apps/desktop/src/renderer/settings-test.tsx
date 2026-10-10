@@ -375,6 +375,51 @@ const client = {
   subscribeWorkspaceFiles: () => () => undefined,
 } as unknown as DesktopClient;
 
+// Settings → Remote's host side. The check calls `remotePair()` to stand in
+// for a phone finishing pairing.
+const remote = {
+  enabled: false,
+  status: "off" as string,
+  relay: "wss://relay.example.dev",
+  macName: "Settings Mac",
+  phones: [] as Array<{ id: string; name: string; pairedAt: string }>,
+};
+const remoteState = () => ({
+  ok: true,
+  data: { ...remote, phones: [...remote.phones] },
+});
+Object.assign(client.request, {
+  remoteGet: async () => remoteState(),
+  remoteSetEnabled: async ({ enabled }: { enabled: boolean }) => {
+    remote.enabled = enabled;
+    remote.status = enabled
+      ? remote.phones.length
+        ? "online"
+        : "waiting_for_phone"
+      : "off";
+    return remoteState();
+  },
+  remotePairingCode: async () => ({
+    ok: true,
+    data: {
+      url: `https://relay.example.dev/pair#daedalus-pair:${"eyJ2IjoxLCJyZWxheSI6IndzczovL3JlbGF5LmV4YW1wbGUuZGV2In0".repeat(5)}`,
+      expiresAt: Date.now() + 5 * 60_000,
+    },
+  }),
+  remotePhoneRemove: async ({ id }: { id: string }) => {
+    remote.phones = remote.phones.filter((phone) => phone.id !== id);
+    return remoteState();
+  },
+});
+(window as unknown as { remotePair: () => void }).remotePair = () => {
+  remote.phones.push({
+    id: "phone-0001",
+    name: "Pixel 9",
+    pairedAt: "2026-10-10T09:00:00.000Z",
+  });
+  remote.status = "online";
+};
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <App

@@ -61,6 +61,8 @@ import type {
   SecretDto,
 } from "@daedalus/protocol";
 
+import type { DesktopRemoteHost } from "./remote";
+
 /**
  * The host's side of the quit dialog. It lives in `index.ts` because only the
  * host can end the process; the RPC layer just carries the two answers back.
@@ -438,6 +440,30 @@ export interface DesktopWindowHost {
   focusSession(sessionId: string): void;
 }
 
+/** Where no host runs a connector, as in tests: phone access is off. */
+const NO_REMOTE: DesktopRemoteHost = {
+  state: () => ({
+    enabled: false,
+    status: "off",
+    relay: "",
+    macName: "",
+    phones: [],
+  }),
+  setEnabled: async () => {
+    throw new DaedalusError(
+      "DEPENDENCY",
+      "Phone access is not available here.",
+    );
+  },
+  pairingCode: () => {
+    throw new DaedalusError(
+      "DEPENDENCY",
+      "Phone access is not available here.",
+    );
+  },
+  removePhone: async () => NO_REMOTE.state(),
+};
+
 const MAIN_WINDOW_ONLY: DesktopWindowHost = {
   role: "main",
   openWorld: () => {},
@@ -456,6 +482,7 @@ export function createDesktopRequestHandlers(
   updates: DesktopUpdateHost = NO_UPDATES,
   windows: DesktopWindowHost = MAIN_WINDOW_ONLY,
   clipboardWrite: (text: string) => boolean = () => false,
+  remote: DesktopRemoteHost = NO_REMOTE,
 ): DesktopRequestHandlers {
   const mutate = async <T>(operation: () => T | Promise<T>) => {
     const response = await result(operation);
@@ -712,6 +739,10 @@ export function createDesktopRequestHandlers(
         await context.workspaceContent.setInstructionFilesEnabled(enabled);
         return { enabled };
       }),
+    remoteGet: () => result(() => remote.state()),
+    remoteSetEnabled: ({ enabled }) => mutate(() => remote.setEnabled(enabled)),
+    remotePairingCode: () => result(() => remote.pairingCode()),
+    remotePhoneRemove: ({ id }) => mutate(() => remote.removePhone(id)),
     autoRestoreSessionsSet: ({ enabled }) =>
       mutate(async () => {
         await saveAutoRestoreSessionsEnabled(context.config, enabled);

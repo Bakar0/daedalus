@@ -79,7 +79,21 @@ export function createPairingOffer(
 export const encodePairingOffer = (offer: PairingOffer): string =>
   OFFER_PREFIX + toBase64(sodium.from_string(JSON.stringify(offer)));
 
-export function decodePairingOffer(text: string): PairingOffer {
+/**
+ * What the QR code holds: a link to the phone page on the relay, with the
+ * code in the fragment. A phone camera opens the link; the fragment never
+ * reaches a server.
+ */
+export function pairingUrl(offer: PairingOffer): string {
+  const url = new URL(offer.relay);
+  url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+  return `${url.origin}/pair#${encodePairingOffer(offer)}`;
+}
+
+/** Accepts the bare code or the link `pairingUrl` makes. */
+export function decodePairingOffer(input: string): PairingOffer {
+  const hash = input.indexOf("#");
+  const text = hash >= 0 ? input.slice(hash + 1) : input;
   if (!text.startsWith(OFFER_PREFIX))
     throw new Error("Not a Daedalus pairing code");
   const offer = JSON.parse(
