@@ -73,7 +73,9 @@ export type SecureMessage =
     }
   | { t: "term.client"; ch: number; message: TerminalClientMessage }
   | { t: "term.server"; ch: number; message: TerminalServerMessage }
-  | { t: "term.close"; ch: number };
+  | { t: "term.close"; ch: number }
+  /** The phone app came to the front or left it. */
+  | { t: "presence"; visible: boolean };
 
 const PLAIN = 0;
 const SEALED = 1;

@@ -3,8 +3,9 @@ import { join } from "node:path";
 import {
   type ApplicationContext,
   DaedalusError,
-  IDLE_SECONDS_THRESHOLD,
+  type PhoneAlert,
   saveRemoteEnabled,
+  saveRemoteKeepAwake,
 } from "@daedalus/core";
 import { runCommand, TmuxPtyBridge } from "@daedalus/platform";
 import type {
@@ -205,6 +206,12 @@ interface PhoneState {
   handshake?: { finish(ready: Ready): SecureChannel };
   channel?: SecureChannel;
   terminals: Map<number, RemoteTerminal>;
+  /**
+   * Until when the phone app counts as open and in front, so it shows
+   * alerts itself. The phone repeats "visible" every 20 s; one suspended
+   * mid-report stops counting after 45 s.
+   */
+  visibleUntil?: number;
 }
 
 /**
@@ -280,7 +287,9 @@ export class RemoteConnector {
    * Asks the relay to wake this account's phones with a push that says only
    * that a session needs them. Nothing about the session leaves the Mac.
    */
-  async notifyPhones(): Promise<"sent" | "throttled" | "skipped" | "failed"> {
+  async notifyPhones(): Promise<
+    "sent" | "throttled" | "none" | "skipped" | "failed"
+  > {
     const token = this.options.store.relayToken;
     if (!token) return "skipped";
     try {
@@ -299,10 +308,21 @@ export class RemoteConnector {
         | { ok: false };
       if (!result.ok) return "failed";
       this.options.log?.("remote_push", { ...result.data });
-      return result.data.throttled ? "throttled" : "sent";
+      return result.data.throttled
+        ? "throttled"
+        : result.data.sent > 0
+          ? "sent"
+          : "none";
     } catch {
       return "failed";
     }
+  }
+
+  /** Whether a connected phone has the app open on screen right now. */
+  get phoneOnScreen(): boolean {
+    return [...this.#phones.values()].some(
+      (state) => state.channel && (state.visibleUntil ?? 0) > Date.now(),
+    );
   }
 
   /** Ends a forgotten phone's connection; its next hello is refused. */
@@ -567,6 +587,8 @@ export class RemoteConnector {
     } else if (message.t === "term.close") {
       state.terminals.get(message.ch)?.close();
       state.terminals.delete(message.ch);
+    } else if (message.t === "presence") {
+      state.visibleUntil = message.visible ? Date.now() + 45_000 : 0;
     }
   }
 
@@ -659,6 +681,10 @@ export class RemoteConnector {
  */
 export class PhoneWindowSize {
   readonly #open = new Map<string, number>();
+  /** The phone's last size per session, to take the window back with. */
+  readonly #sizes = new Map<string, { cols: number; rows: number }>();
+  /** Sessions the Mac took back by typing in them. */
+  readonly #yielded = new Set<string>();
 
   constructor(
     private readonly tmux: { socketName: string; executable: string },
@@ -678,6 +704,8 @@ export class PhoneWindowSize {
     session: string,
     { cols, rows }: { cols: number; rows: number },
   ) {
+    this.#sizes.set(session, { cols, rows });
+    this.#yielded.delete(session);
     const width = Math.max(20, Math.min(500, Math.floor(cols)));
     const height = Math.max(5, Math.min(300, Math.floor(rows)));
     await this.#tmux([
@@ -698,6 +726,22 @@ export class PhoneWindowSize {
     ]);
   }
 
+  /**
+   * Typing on the Mac means the user is back there: the window returns to
+   * the Mac's size while the phone stays attached. Typing on the phone takes
+   * it again (`reclaim`).
+   */
+  async yieldToMac(session: string) {
+    if (!this.#open.has(session) || this.#yielded.has(session)) return;
+    this.#yielded.add(session);
+    await this.#tmux(["set-option", "-w", "-u", "-t", session, "window-size"]);
+  }
+
+  async reclaim(session: string) {
+    const size = this.#sizes.get(session);
+    if (this.#yielded.has(session) && size) await this.resize(session, size);
+  }
+
   async release(session: string) {
     const count = (this.#open.get(session) ?? 1) - 1;
     if (count > 0) {
@@ -705,6 +749,8 @@ export class PhoneWindowSize {
       return;
     }
     this.#open.delete(session);
+    this.#sizes.delete(session);
+    this.#yielded.delete(session);
     await this.#tmux(["set-option", "-w", "-u", "-t", session, "window-size"]);
   }
 }
@@ -765,6 +811,8 @@ export function agentTerminalOpener(
               cols: parsed.cols,
               rows: parsed.rows,
             });
+          else if (parsed.type === "input" && isTyping(parsed.data))
+            await sizes.reclaim(session);
         } catch {
           // Not JSON; the connection already reported it.
         }
@@ -781,6 +829,7 @@ export function agentTerminalOpener(
 export interface DesktopRemoteHost {
   state(): RemoteStateDto;
   setEnabled(enabled: boolean): Promise<RemoteStateDto>;
+  setKeepAwake(enabled: boolean): Promise<RemoteStateDto>;
   pairingCode(): RemotePairingDto;
   removePhone(id: string): Promise<RemoteStateDto>;
 }
@@ -801,12 +850,47 @@ export interface RemoteHostOptions {
 export class RemoteHost implements DesktopRemoteHost {
   #store: RemoteStore | undefined;
   #connector: RemoteConnector | undefined;
+  #awake: Bun.Subprocess | undefined;
 
   constructor(private readonly options: RemoteHostOptions) {}
 
   /** Starts the connector if the setting is on. Call once at launch. */
   async start(): Promise<void> {
     if (this.options.context.config.remoteEnabled) await this.#run();
+    this.#keepAwake();
+  }
+
+  /**
+   * `caffeinate -i` while phone access and Keep awake are both on: no idle
+   * sleep, so a session can still reach the phone with nobody at the Mac.
+   * The display still sleeps, and a closed lid still sleeps a laptop. `-w`
+   * ends it with this process, so a crash cannot leave the Mac awake.
+   */
+  #keepAwake(): void {
+    const { config } = this.options.context;
+    const wanted = config.remoteEnabled && config.remoteKeepAwake;
+    if (wanted && !this.#awake) {
+      this.#awake = Bun.spawn(
+        ["/usr/bin/caffeinate", "-i", "-w", String(process.pid)],
+        { stdout: "ignore", stderr: "ignore" },
+      );
+      this.options.log?.("remote_keep_awake", { on: true });
+    } else if (!wanted && this.#awake) {
+      this.#awake.kill();
+      this.#awake = undefined;
+      this.options.log?.("remote_keep_awake", { on: false });
+    }
+  }
+
+  /** Whether the Mac is being kept awake right now. */
+  get keepingAwake(): boolean {
+    return Boolean(this.#awake);
+  }
+
+  async setKeepAwake(enabled: boolean): Promise<RemoteStateDto> {
+    await saveRemoteKeepAwake(this.options.context.config, enabled);
+    this.#keepAwake();
+    return this.state();
   }
 
   async #run(): Promise<void> {
@@ -821,54 +905,43 @@ export class RemoteHost implements DesktopRemoteHost {
       ...(this.options.log ? { log: this.options.log } : {}),
     });
     void this.#connector.start();
+    this.options.context.notifications.setPhone((alert) =>
+      this.takeAlert(alert),
+    );
+  }
+
+  /**
+   * The notification service hands over a blocking alert when nobody has
+   * been at this Mac for five minutes. True means a phone has it, and the
+   * Mac shows no macOS notification of its own: a phone with the app open
+   * shows it there, otherwise a push says a session needs the user. With
+   * no phone to reach, the Mac notifies as it always did.
+   */
+  async takeAlert(_alert: Parameters<PhoneAlert>[0]): Promise<boolean> {
+    const connector = this.#connector;
+    if (!connector || connector.status !== "online") return false;
+    if (connector.phoneOnScreen) return true;
+    const pushed = await connector.notifyPhones();
+    return pushed === "sent" || pushed === "throttled";
   }
 
   stop(): void {
+    this.#awake?.kill();
+    this.#awake = undefined;
+    this.options.context.notifications.setPhone(undefined);
     this.#connector?.stop();
     this.#connector = undefined;
   }
 
   announce(): void {
     this.#connector?.announce();
-    void this.#watchAttention().catch(() => undefined);
-  }
-
-  /** Sessions that needed the user at the last look; undefined before it. */
-  #needing: Set<string> | undefined;
-
-  /**
-   * A session that starts needing the user while they are away from this
-   * Mac wakes their phones. Away is the same rule that sends a desktop
-   * notification (app in the background, or idle five minutes), and Focus
-   * mode holds pushes as it holds every other alert. Sessions that already
-   * needed the user when the app started do not push.
-   */
-  async #watchAttention(): Promise<void> {
-    const { context } = this.options;
-    const now = new Set(
-      context.activity
-        .listAttention()
-        .filter((item) => item.reasons.length > 0)
-        .map((item) => item.sessionId),
-    );
-    const before = this.#needing;
-    this.#needing = now;
-    if (!before || ![...now].some((id) => !before.has(id))) return;
-    const connector = this.#connector;
-    if (!connector || connector.status !== "online") return;
-    if (context.presence.focusMode) return;
-    const presence = await context.presence.read();
-    const away =
-      !presence.appRunning ||
-      !presence.appForeground ||
-      presence.userIdleSeconds >= IDLE_SECONDS_THRESHOLD;
-    if (away) await connector.notifyPhones();
   }
 
   state(): RemoteStateDto {
     const { config } = this.options.context;
     return {
       enabled: config.remoteEnabled,
+      keepAwake: config.remoteKeepAwake,
       status: this.#connector?.status ?? "off",
       relay: config.remoteRelay,
       macName: this.options.macName,
@@ -884,6 +957,7 @@ export class RemoteHost implements DesktopRemoteHost {
     await saveRemoteEnabled(this.options.context.config, enabled);
     if (enabled) await this.#run();
     else this.stop();
+    this.#keepAwake();
     return this.state();
   }
 

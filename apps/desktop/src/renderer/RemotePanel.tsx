@@ -178,6 +178,20 @@ export function RemotePanel({
           {relayHost ? <code>{relayHost}</code> : undefined}
         </p>
       ) : undefined}
+      {state?.enabled ? (
+        <SettingRow
+          checked={state.keepAwake}
+          disabled={busy}
+          description="Stops this Mac from going to sleep on its own while phone access is on, so your sessions keep running and can reach your phone. The display still turns off, and closing a laptop's lid still puts it to sleep."
+          onChange={async (enabled) => {
+            const next = await perform(
+              client.request.remoteSetKeepAwake({ enabled }),
+            );
+            if (next) setState(next);
+          }}
+          title="Keep the Mac awake while away"
+        />
+      ) : undefined}
 
       {state?.enabled ? (
         <>

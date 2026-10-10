@@ -41,7 +41,7 @@ import { acceptFirstMouse } from "./first-mouse";
 import { installCliShim } from "./cli-shim";
 import { QuitController } from "./quit";
 import { UpdateController } from "./updates";
-import { agentTerminalOpener, RemoteHost } from "./remote";
+import { agentTerminalOpener, PhoneWindowSize, RemoteHost } from "./remote";
 import { createDesktopRequestHandlers, desktopDataFingerprint } from "./rpc";
 import {
   authorizeTerminalRequest,
@@ -183,6 +183,7 @@ await context.skills.sync().catch(async (error: unknown) => {
 const terminalTmux = context.tmux;
 if (!(terminalTmux instanceof CommandTmuxClient))
   throw new Error("Desktop terminal requires the command tmux adapter");
+const phoneSizes = new PhoneWindowSize(terminalTmux);
 const terminalTarget = (session: string) => ({
   socketName: terminalTmux.socketName,
   session,
@@ -262,8 +263,12 @@ const server = Bun.serve<SocketData>({
           onInput: (data) => {
             // A real keystroke holds Daedalus's own typing into this
             // session for a while, so a routine never lands in a draft.
-            if (socket.data.targetKind === "agent" && isTyping(data))
+            if (socket.data.targetKind === "agent" && isTyping(data)) {
               context.deliveryGate.noteKeystroke(target.id);
+              // Back at the Mac: a session a phone has open goes back to
+              // the Mac's size.
+              void phoneSizes.yieldToMac(target.tmuxSession).catch(() => {});
+            }
           },
           onError: (error) =>
             void context.logger.write("error", "terminal_connection_failed", {
@@ -407,7 +412,7 @@ const remote = new RemoteHost({
   macName: hostname().replace(/\.local$/, ""),
   handlers: () =>
     createDesktopRequestHandlers(context, () => announce("desktop")),
-  openTerminal: agentTerminalOpener(context, terminalTmux),
+  openTerminal: agentTerminalOpener(context, terminalTmux, phoneSizes),
   log: (event, fields) => void context.logger.write("info", event, fields),
 });
 announceRemote = () => remote.announce();
@@ -806,12 +811,18 @@ setInterval(async () => {
       300_000,
       Date.now(),
       (notification, result) =>
-        void context.logger.write("info", "desktop_notification", {
-          sessionId: notification.sessionId,
-          delivered: result.delivered,
-          backend: result.backend,
-          degraded: result.degraded,
-        }),
+        void context.logger.write(
+          "info",
+          "desktop_notification",
+          result === "phone"
+            ? { sessionId: notification.sessionId, sentTo: "phone" }
+            : {
+                sessionId: notification.sessionId,
+                delivered: result.delivered,
+                backend: result.backend,
+                degraded: result.degraded,
+              },
+        ),
     );
     await recordAttentionCount(
       context.repositories.listSessionAttention().length,

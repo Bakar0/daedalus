@@ -761,6 +761,17 @@ try {
   );
   if (waiting !== "waiting_for_phone")
     throw new Error(`Remote: turned on, the status is ${waiting}`);
+  const awake = await evaluate<{
+    title: string;
+    checked: boolean;
+  } | null>(`(() => {
+    const row = [...document.querySelectorAll('.remote-panel .settings-row')][1];
+    return row ? { title: row.querySelector('strong').textContent, checked: row.querySelector('input').checked } : null;
+  })()`);
+  if (awake?.title !== "Keep the Mac awake while away" || awake.checked)
+    throw new Error(
+      `Remote: keep-awake row is wrong: ${JSON.stringify(awake)}`,
+    );
   await clickAt(
     "[...document.querySelectorAll('.remote-panel button')].find((one) => one.textContent.trim() === 'Show pairing code')",
   );
@@ -824,7 +835,7 @@ try {
   );
   if (left !== 0) throw new Error("Remote: Remove did not forget the phone");
   console.log(
-    "Remote: off by default; on, it waits for a phone; the pairing code is a QR code with a countdown; a paired phone hides the code and is listed; Remove forgets it",
+    "Remote: off by default; on, it waits for a phone and offers Keep the Mac awake (off); the pairing code is a QR code with a countdown; a paired phone hides the code and is listed; Remove forgets it",
   );
   // And General, where a switch sits beside a two-line description and the
   // alignment either reads or does not.

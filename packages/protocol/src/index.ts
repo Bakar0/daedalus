@@ -772,6 +772,8 @@ export type RemoteStatusDto =
 
 export interface RemoteStateDto {
   enabled: boolean;
+  /** The Mac is kept from idle sleep while phone access is on. */
+  keepAwake: boolean;
   status: RemoteStatusDto;
   relay: string;
   macName: string;
@@ -895,6 +897,7 @@ export interface DesktopRpcSchema {
       terminalEndpoint: Request<Record<string, never>, { endpoint: string }>;
       remoteGet: Request<Record<string, never>, RemoteStateDto>;
       remoteSetEnabled: Request<{ enabled: boolean }, RemoteStateDto>;
+      remoteSetKeepAwake: Request<{ enabled: boolean }, RemoteStateDto>;
       /** A new one-time pairing code; any earlier one stops working. */
       remotePairingCode: Request<Record<string, never>, RemotePairingDto>;
       /** Forgets a phone on this Mac, so it can no longer connect to it. */

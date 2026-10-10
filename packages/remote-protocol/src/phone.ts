@@ -444,6 +444,11 @@ export class PhoneConnection {
     });
   }
 
+  /** Tells the Mac whether the app is on screen, so it can skip pushes. */
+  setVisible(visible: boolean): void {
+    this.#sendSecure({ t: "presence", visible });
+  }
+
   onDataChanged(listener: () => void): () => void {
     this.#eventListeners.add(listener);
     return () => this.#eventListeners.delete(listener);

@@ -379,6 +379,7 @@ const client = {
 // for a phone finishing pairing.
 const remote = {
   enabled: false,
+  keepAwake: false,
   status: "off" as string,
   relay: "wss://relay.example.dev",
   macName: "Settings Mac",
@@ -406,6 +407,10 @@ Object.assign(client.request, {
       expiresAt: Date.now() + 5 * 60_000,
     },
   }),
+  remoteSetKeepAwake: async ({ enabled }: { enabled: boolean }) => {
+    remote.keepAwake = enabled;
+    return remoteState();
+  },
   remotePhoneRemove: async ({ id }: { id: string }) => {
     remote.phones = remote.phones.filter((phone) => phone.id !== id);
     return remoteState();

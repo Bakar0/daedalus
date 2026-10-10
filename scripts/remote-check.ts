@@ -30,6 +30,7 @@ import {
 } from "@daedalus/remote-protocol";
 import {
   agentTerminalOpener,
+  PhoneWindowSize,
   RemoteConnector,
   RemoteHost,
   type RemoteStatus,
@@ -345,6 +346,7 @@ try {
   if (!(context.tmux instanceof CommandTmuxClient))
     throw new Error("Expected the command tmux client");
   const store = await RemoteStore.open(home);
+  const phoneSizes = new PhoneWindowSize(context.tmux);
   const statuses: RemoteStatus[] = [];
   connector = new RemoteConnector({
     relay: relayUrl,
@@ -354,7 +356,7 @@ try {
       string,
       (params: never) => unknown
     >,
-    openTerminal: agentTerminalOpener(context, context.tmux),
+    openTerminal: agentTerminalOpener(context, context.tmux, phoneSizes),
     tap,
     lockedRetryMs: 1_000,
   });
@@ -492,12 +494,25 @@ try {
   await sleep(400);
   if ((await windowSize()) !== "60x30 manual")
     throw new Error(`Phone resized, window is ${await windowSize()}`);
+  // Typing on the Mac: the app's terminal tells the size keeper, as here.
   desktopView.write("x");
+  await phoneSizes.yieldToMac(agentRow.tmuxSession);
   await sleep(300);
-  if ((await windowSize()) !== "60x30 manual")
-    throw new Error(`Typing on the Mac took the size: ${await windowSize()}`);
+  if (!(await windowSize()).startsWith("150x40"))
+    throw new Error(
+      `Typing on the Mac kept the phone's size: ${await windowSize()}`,
+    );
   desktopView.write("\u007f");
-  pass("while the phone has a session open, the window keeps the phone's size");
+  terminal.write(" ");
+  await sleep(500);
+  if ((await windowSize()) !== "60x30 manual")
+    throw new Error(
+      `Typing on the phone did not take it back: ${await windowSize()}`,
+    );
+  terminal.write("\u007f");
+  pass(
+    "the phone sets the size while it has a session open; typing on the Mac gives it back, typing on the phone takes it again",
+  );
 
   const sent = (await phoneConnection.request("agentSend", {
     id: agent.id,
@@ -608,7 +623,12 @@ try {
 
   // The app's own path: Settings › Remote's switch and pairing code, on a
   // second Mac with its own home.
+  const macNotified: string[] = [];
   const hostContext = await createApplicationContext({
+    sendNativeNotification: async (notification) => {
+      macNotified.push(notification.body);
+      return { delivered: true, backend: "app", degraded: false };
+    },
     env: { ...env, DAEDALUS_HOME: secondHome, DAEDALUS_REMOTE_RELAY: relayUrl },
   });
   host = new RemoteHost({
@@ -695,19 +715,63 @@ try {
   const hostWorkspace = (await hostCli(["workspace", "create", "Second"])) as {
     id: string;
   };
-  const asking = (await hostCli([
-    "agent",
-    "spawn",
-    "--workspace",
-    hostWorkspace.id,
-    "--command",
-    "shell",
-  ])) as { id: string };
-  host.announce(); // the baseline: nothing needs the user yet
-  await sleep(200);
-  await hostCli(["attention", "Pick a database", "--session", asking.id]);
-  host.announce();
+  const spawnShell = async () =>
+    (
+      (await hostCli([
+        "agent",
+        "spawn",
+        "--workspace",
+        hostWorkspace.id,
+        "--command",
+        "shell",
+      ])) as { id: string }
+    ).id;
+  // The app is running in the background and the user idle `seconds`.
+  const idleFor = (seconds: number) =>
+    Bun.write(
+      join(secondHome, "presence.json"),
+      JSON.stringify({
+        appForeground: false,
+        workspaceId: null,
+        sessionId: null,
+        userIdleSeconds: seconds,
+        observedAt: new Date().toISOString(),
+        pid: process.pid,
+      }),
+    );
+  /** A hook raises attention in a CLI; the app's next tick delivers it. */
+  const raiseAndDeliver = async (sessionId: string, reason: string) => {
+    await hostCli(["attention", reason, "--session", sessionId]);
+    const reports: string[] = [];
+    await hostContext.notifications.flushDesktop(
+      5,
+      60_000,
+      Date.now(),
+      (_n, result) =>
+        reports.push(result === "phone" ? "phone" : `mac:${result.backend}`),
+    );
+    return reports;
+  };
+
+  await idleFor(600);
+  const onScreen = await PhoneConnection.connect(
+    secondPhone,
+    secondMac,
+    aliceToken,
+  );
+  onScreen.setVisible(true);
+  await sleep(300);
+  const whileOpen = await raiseAndDeliver(await spawnShell(), "Look here");
+  onScreen.close();
+  await sleep(500);
+  if (whileOpen.join() !== "phone" || pushes.length !== 0)
+    throw new Error(
+      `Phone on screen: ${JSON.stringify({ whileOpen, pushes: pushes.length })}`,
+    );
+
+  const away = await raiseAndDeliver(await spawnShell(), "Pick a database");
   await until("push", () => pushes.length > 0, 10_000);
+  if (away.join() !== "phone") throw new Error(`Away: ${away.join()}`);
   const push = pushes[0]!;
   const [jwt, key] =
     /^vapid t=([^,]+), k=(.+)$/.exec(push.authorization)?.slice(1) ?? [];
@@ -733,21 +797,21 @@ try {
     throw new Error(
       `Push is wrong: ${JSON.stringify({ push, aud, verifies })}`,
     );
-  const second = (await hostCli([
-    "agent",
-    "spawn",
-    "--workspace",
-    hostWorkspace.id,
-    "--command",
-    "shell",
-  ])) as { id: string };
-  await hostCli(["attention", "Pick a port", "--session", second.id]);
-  host.announce();
-  await sleep(1_500);
-  if (pushes.length !== 1)
+
+  const soonAfter = await raiseAndDeliver(await spawnShell(), "Pick a port");
+  await sleep(1_000);
+  if (soonAfter.join() !== "phone" || pushes.length !== 1)
     throw new Error("A second push inside 15 s went out");
+
+  await idleFor(20);
+  const atMac = await raiseAndDeliver(await spawnShell(), "Pick a name");
+  await sleep(1_000);
+  if (atMac.join() !== "mac:app" || pushes.length !== 1)
+    throw new Error(
+      `At the Mac: ${JSON.stringify({ atMac, pushes: pushes.length })}`,
+    );
   pass(
-    "a session needing the user while they are away pushes an empty, VAPID-signed notification; one per 15 s",
+    "alerts go to one place: the phone app on screen shows them, away (idle 5 min) gets one empty VAPID-signed push and no macOS notification, at most one push per 15 s, and at the Mac only macOS",
   );
   await runCommand("tmux", [
     "-L",
@@ -768,7 +832,26 @@ try {
     (error: Error) => error.message,
   );
   if (forgotten === "connected") throw new Error("A forgotten phone connected");
+  // Keep awake: a caffeinate tied to this process, while phone access is on.
+  const caffeinate = () =>
+    Bun.spawnSync(["pgrep", "-f", `caffeinate -i -w ${process.pid}`])
+      .stdout.toString()
+      .trim();
+  if (caffeinate()) throw new Error("Keeping awake before it was asked");
+  if (!(await host.setKeepAwake(true)).keepAwake || !caffeinate())
+    throw new Error("Keep awake did not start caffeinate");
+  await host.setKeepAwake(false);
+  await sleep(200);
+  if (caffeinate()) throw new Error("caffeinate outlived Keep awake");
+  await host.setKeepAwake(true);
   await host.setEnabled(false);
+  await sleep(200);
+  if (caffeinate()) throw new Error("caffeinate outlived phone access");
+  await host.setKeepAwake(false);
+  pass(
+    "Keep the Mac awake holds caffeinate only while phone access and the setting are on",
+  );
+
   const stored = (await Bun.file(join(secondHome, "config.json")).json()) as {
     remoteEnabled?: boolean;
   };

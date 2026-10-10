@@ -102,7 +102,18 @@ export interface NotificationServiceOptions {
   showInApp?: (notification: NativeNotification) => void;
 }
 
+/**
+ * Hands a blocking alert to the user's phone. True when a phone has it: a
+ * push reached one, or one is open on screen and shows it itself.
+ */
+export type PhoneAlert = (alert: {
+  sessionId: string | null;
+  title: string;
+  body: string;
+}) => Promise<boolean>;
+
 export class NotificationService {
+  private phone: PhoneAlert | undefined;
   private readonly sendNative: (
     notification: NativeNotification,
   ) => Promise<NativeNotifierResult>;
@@ -126,6 +137,28 @@ export class NotificationService {
     this.canDrawToasts = options.canDrawToasts ?? (() => false);
     this.cliExecutable = options.cliExecutable;
     this.bundleId = options.bundleId;
+  }
+
+  /**
+   * Set by the desktop host while phone access is on. A CLI never has one:
+   * it hands desktop alerts to the running app, which decides there.
+   */
+  setPhone(phone: PhoneAlert | undefined): void {
+    this.phone = phone;
+  }
+
+  /**
+   * Away from the Mac (no input for five minutes, in any app), a blocking
+   * alert goes to the phone instead of macOS, so it arrives once and where
+   * the user is. At the Mac the phone is never told.
+   */
+  private async toPhone(
+    presence: PresenceState,
+    alert: Parameters<PhoneAlert>[0],
+  ): Promise<boolean> {
+    if (!this.phone || presence.userIdleSeconds < IDLE_SECONDS_THRESHOLD)
+      return false;
+    return this.phone(alert).catch(() => false);
   }
 
   async notify(request: NotificationRequest): Promise<NotificationDecision> {
@@ -158,6 +191,20 @@ export class NotificationService {
         queued,
       };
     }
+    if (
+      request.blocking &&
+      (await this.toPhone(presence, {
+        sessionId: request.sessionId ?? null,
+        title: request.title,
+        body: request.body,
+      }))
+    )
+      return {
+        delivered: [...delivered, "phone"],
+        suppressed: null,
+        reason: "sent to the phone; nobody is at the Mac",
+        queued: false,
+      };
     // A CLI has no bundle of its own, so its AppleScript alerts are attributed
     // to Script Editor. When the app is up it can deliver the same alert as
     // Daedalus, so hand it over rather than shouting under a borrowed name.
@@ -250,14 +297,33 @@ export class NotificationService {
     /** Told what became of each one, so the host can log it. */
     report?: (
       notification: PendingNotification,
-      result: NativeNotifierResult,
+      result: NativeNotifierResult | "phone",
     ) => void,
   ): Promise<number> {
+    const presence = await this.presence.read();
     const queued = this.repositories
       .listPendingNotifications("desktop")
       .filter((item) => now - Date.parse(item.createdAt) <= maxAgeMs)
       .slice(0, limit);
     for (const notification of queued) {
+      // A badge still open is the blocking kind; the queue does not keep the
+      // flag, and an open badge is what blocking means.
+      const blocking = Boolean(
+        notification.sessionId &&
+        this.repositories.findSessionAttention(notification.sessionId)?.reasons
+          .length,
+      );
+      if (
+        blocking &&
+        (await this.toPhone(presence, {
+          sessionId: notification.sessionId,
+          title: notification.title,
+          body: notification.body,
+        }))
+      ) {
+        report?.(notification, "phone");
+        continue;
+      }
       const result = await this.sendNative({
         title: notification.title,
         body: notification.body,

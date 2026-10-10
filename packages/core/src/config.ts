@@ -140,6 +140,8 @@ export interface DaedalusConfig {
    */
   remoteEnabled: boolean;
   remoteRelay: string;
+  /** Hold off idle sleep while phone access is on, so phones can reach it. */
+  remoteKeepAwake: boolean;
   agents: Record<string, AgentDefinition>;
   /**
    * Per-capability state for the skills Daedalus ships. Absent means the
@@ -185,6 +187,7 @@ type StoredConfig = Partial<
     | "focusMode"
     | "remoteEnabled"
     | "remoteRelay"
+    | "remoteKeepAwake"
     | "agents"
   >
 > & {
@@ -302,6 +305,7 @@ export async function loadConfig(
     trustSessionFoldersEnabled: stored.trustSessionFoldersEnabled !== false,
     focusMode: stored.focusMode === true,
     remoteEnabled: stored.remoteEnabled === true,
+    remoteKeepAwake: stored.remoteKeepAwake === true,
     remoteRelay:
       env.DAEDALUS_REMOTE_RELAY || stored.remoteRelay || DEFAULT_REMOTE_RELAY,
     agents: stored.agents || {
@@ -407,6 +411,14 @@ export async function saveRemoteEnabled(
 ): Promise<void> {
   await saveSetting(config, { remoteEnabled: enabled });
   config.remoteEnabled = enabled;
+}
+
+export async function saveRemoteKeepAwake(
+  config: DaedalusConfig,
+  enabled: boolean,
+): Promise<void> {
+  await saveSetting(config, { remoteKeepAwake: enabled });
+  config.remoteKeepAwake = enabled;
 }
 
 export async function saveFocusMode(

@@ -69,6 +69,7 @@ export function useMac(mac: PairedMac, token: string) {
         }
         current = connection;
         attempt.current = 0;
+        connection.setVisible(document.visibilityState === "visible");
         setState({ kind: "online", connection });
         connection.onDataChanged(() => {
           if (refresh) clearTimeout(refresh);
@@ -99,7 +100,15 @@ export function useMac(mac: PairedMac, token: string) {
 
     void open();
     // Coming back to the app after the phone slept: reconnect at once.
+    // While on screen the app keeps telling the Mac so, which is how the Mac
+    // knows not to push to a phone the user is already looking at.
+    const report = () =>
+      current?.setVisible(document.visibilityState === "visible");
+    const heartbeat = setInterval(() => {
+      if (document.visibilityState === "visible") report();
+    }, 20_000);
     const wake = () => {
+      report();
       if (document.visibilityState !== "visible" || stopped) return;
       if (waiting) {
         clearTimeout(timer);
@@ -113,6 +122,7 @@ export function useMac(mac: PairedMac, token: string) {
       if (timer) clearTimeout(timer);
       if (refresh) clearTimeout(refresh);
       document.removeEventListener("visibilitychange", wake);
+      clearInterval(heartbeat);
       current?.close();
     };
   }, [mac, token, load]);
