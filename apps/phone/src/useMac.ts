@@ -16,7 +16,7 @@ export type MacState =
   /** Needs the user: signed out, no access, or this phone was removed. */
   | {
       kind: "blocked";
-      code: "signed_out" | "no_access" | "removed";
+      code: "signed_out" | "no_access" | "removed" | "paused";
       reason: string;
     };
 
@@ -89,7 +89,12 @@ export function useMac(mac: PairedMac, token: string) {
         const message = error instanceof Error ? error.message : String(error);
         if (code === RELAY_CLOSE.unauthorized)
           setState({ kind: "blocked", code: "signed_out", reason: message });
-        else if (code === RELAY_CLOSE.noEntitlement)
+        else if (code === RELAY_CLOSE.budgetExhausted)
+          setState({ kind: "blocked", code: "paused", reason: message });
+        else if (
+          code === RELAY_CLOSE.noEntitlement ||
+          code === RELAY_CLOSE.overQuota
+        )
           setState({ kind: "blocked", code: "no_access", reason: message });
         else if (
           code === RELAY_CLOSE.forbidden ||

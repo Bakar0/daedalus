@@ -59,6 +59,9 @@ export const RELAY_CLOSE = {
   noEntitlement: 4402,
   forbidden: 4403,
   overQuota: 4429,
+  /** The relay's monthly budget is spent; it reopens on the 1st. */
+  budgetExhausted: 4430,
+  rateLimited: 4431,
 } as const;
 
 /** Counts what crossed the wire, as the relay saw it. */
@@ -309,6 +312,7 @@ export class PhoneConnection {
   #eventListeners = new Set<() => void>();
   #nameListeners = new Set<(name: string) => void>();
   #macName: string | undefined;
+  #closedReason: string | undefined;
   #closeListeners = new Set<(reason: string) => void>();
 
   private constructor(
@@ -433,6 +437,7 @@ export class PhoneConnection {
   }
 
   #emitClose(reason: string): void {
+    this.#closedReason ??= reason;
     for (const resolve of this.#pending.values())
       resolve({ ok: false, error: { code: "DEPENDENCY", message: reason } });
     this.#pending.clear();
@@ -442,6 +447,13 @@ export class PhoneConnection {
 
   /** Same request names and result envelope as the desktop RPC. */
   request(method: string, params: unknown = {}): Promise<unknown> {
+    // A closed connection answers at once rather than leaving the caller
+    // waiting for a reply that cannot come.
+    if (this.#closedReason !== undefined)
+      return Promise.resolve({
+        ok: false,
+        error: { code: "DEPENDENCY", message: this.#closedReason },
+      });
     const id = this.#nextRequest++;
     return new Promise((resolve) => {
       this.#pending.set(id, resolve);

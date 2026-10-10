@@ -18,6 +18,17 @@ export interface Env {
   VAPID_SUBJECT?: string;
   /** An extra push endpoint prefix, for the local check's push service. */
   PUSH_TEST_ENDPOINT?: string;
+  BUDGET: DurableObjectNamespace<import("./budget").Budget>;
+  /** Estimated overage, in dollars a month, past which the relay pauses. */
+  MONTHLY_BUDGET_USD?: string;
+  /** Frames after which a room flushes usage at once (default 50,000). */
+  FRAME_FLUSH_EVERY?: string;
+  /** Per-IP limits for requests made before anyone is known. */
+  AUTH_LIMITER: RateLimit;
+  UNCLAIMED_LIMITER: RateLimit;
+  /** The watchdog's own token: Workers Scripts edit, Account Analytics read. */
+  CF_ACCOUNT_ID?: string;
+  CF_WATCHDOG_TOKEN?: string;
 }
 
 /** Device and room ids: 16 random bytes in base64url, from the devices. */
@@ -100,6 +111,9 @@ export const CLOSE = {
   noEntitlement: 4402,
   forbidden: 4403,
   overQuota: 4429,
+  /** The relay's monthly budget is spent; it reopens on the 1st. */
+  budgetExhausted: 4430,
+  rateLimited: 4431,
 } as const;
 
 export function refuse(code: number, reason: string): Response {

@@ -11,9 +11,33 @@
   },
   "compatibility_date": "2026-10-01",
   "durable_objects": {
-    "bindings": [{ "name": "ROOMS", "class_name": "Room" }],
+    "bindings": [
+      { "name": "ROOMS", "class_name": "Room" },
+      // One instance: the relay-wide monthly budget (budget.ts).
+      { "name": "BUDGET", "class_name": "Budget" },
+    ],
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Room"] },
+    { "tag": "v2", "new_sqlite_classes": ["Budget"] },
+  ],
+  // Per IP, for requests made before anyone is known (sign-in, unclaimed
+  // Macs, invite codes). Cloudflare's WAF rules need a zone, which a
+  // workers.dev relay does not have.
+  "ratelimits": [
+    {
+      "name": "AUTH_LIMITER",
+      "namespace_id": "1001",
+      "simple": { "limit": 30, "period": 60 },
+    },
+    {
+      "name": "UNCLAIMED_LIMITER",
+      "namespace_id": "1002",
+      "simple": { "limit": 10, "period": 60 },
+    },
+  ],
+  // Hourly housekeeping and the budget watchdog (index.ts, scheduled).
+  "triggers": { "crons": ["17 * * * *"] },
   "d1_databases": [
     {
       "binding": "DB",
@@ -27,5 +51,9 @@
     // Web Push (push.ts). The private key is the VAPID_PRIVATE_JWK secret.
     "VAPID_PUBLIC_KEY": "BGYgU2JV1AUydFbYc4CqiA5id-dhU2hemqeazSDaACWog3yxBFibBDByeVDqXwRnStmtlyPU8gA3ZjlQF6QLIdM",
     "VAPID_SUBJECT": "https://daedalus-relay.daedalus-relay.workers.dev",
+    // Estimated overage past the plan's included amounts, in dollars a
+    // month, at which the relay pauses (budget.ts).
+    "MONTHLY_BUDGET_USD": "10",
+    "CF_ACCOUNT_ID": "bf29a7106c3368837caf07bc6be35a00",
   },
 }

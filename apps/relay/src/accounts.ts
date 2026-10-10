@@ -4,12 +4,23 @@ export interface Plan {
   maxMacs: number;
   maxPhones: number;
   monthlyMb: number;
+  /**
+   * Frames the relay forwards for the account in a month. A frame is what
+   * Cloudflare bills (1/20 of a request); 3 million is about $0.03, three
+   * times a heavy user (artifacts/remote-work/cost-analysis.md).
+   */
+  monthlyFrames: number;
 }
 
 /** What each plan allows. An invite or a grant names one of these. */
 export const PLANS: Record<string, Plan> = {
-  beta: { maxMacs: 2, maxPhones: 3, monthlyMb: 2048 },
-  admin: { maxMacs: 10, maxPhones: 10, monthlyMb: 20_480 },
+  beta: { maxMacs: 2, maxPhones: 3, monthlyMb: 2048, monthlyFrames: 3_000_000 },
+  admin: {
+    maxMacs: 10,
+    maxPhones: 10,
+    monthlyMb: 20_480,
+    monthlyFrames: 30_000_000,
+  },
 };
 
 export interface User {
@@ -25,6 +36,7 @@ export interface Entitlement {
   maxMacs: number;
   maxPhones: number;
   monthlyMb: number;
+  monthlyFrames: number;
 }
 
 export interface Device {
@@ -90,7 +102,8 @@ export async function activeEntitlement(
   const row = await db
     .prepare(
       `SELECT plan, source, status, expires_at AS expiresAt, max_macs AS maxMacs,
-              max_phones AS maxPhones, monthly_mb AS monthlyMb
+              max_phones AS maxPhones, monthly_mb AS monthlyMb,
+              monthly_frames AS monthlyFrames
        FROM entitlements
        WHERE user_id = ? AND status = 'active'
          AND (expires_at IS NULL OR expires_at > ?)`,
@@ -106,18 +119,22 @@ export async function setEntitlement(
   planName: string,
   source: "invite" | "admin",
   status: "active" | "revoked" = "active",
+  /** Overrides for one account, from the admin routes. */
+  limits: Partial<Plan> = {},
 ): Promise<void> {
-  const plan = PLANS[planName];
-  if (!plan) throw new Error(`Unknown plan ${planName}`);
+  const base = PLANS[planName];
+  if (!base) throw new Error(`Unknown plan ${planName}`);
+  const plan = { ...base, ...limits };
   await db
     .prepare(
       `INSERT INTO entitlements
-         (user_id, plan, source, status, expires_at, max_macs, max_phones, monthly_mb, updated_at)
-       VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)
+         (user_id, plan, source, status, expires_at, max_macs, max_phones, monthly_mb, monthly_frames, updated_at)
+       VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
        ON CONFLICT (user_id) DO UPDATE SET
          plan = excluded.plan, source = excluded.source, status = excluded.status,
          expires_at = NULL, max_macs = excluded.max_macs,
          max_phones = excluded.max_phones, monthly_mb = excluded.monthly_mb,
+         monthly_frames = excluded.monthly_frames,
          updated_at = excluded.updated_at`,
     )
     .bind(
@@ -128,6 +145,7 @@ export async function setEntitlement(
       plan.maxMacs,
       plan.maxPhones,
       plan.monthlyMb,
+      plan.monthlyFrames,
       nowIso(),
     )
     .run();
@@ -233,18 +251,21 @@ export async function countActiveDevices(
   return row?.n ?? 0;
 }
 
+/** Adds to this month's usage and returns the month's totals. */
 export async function addUsage(
   db: D1Database,
   userId: string,
   bytes: number,
-): Promise<number> {
+  frames: number,
+): Promise<{ bytes: number; frames: number }> {
   const row = await db
     .prepare(
-      `INSERT INTO usage (user_id, month, bytes) VALUES (?, ?, ?)
-       ON CONFLICT (user_id, month) DO UPDATE SET bytes = bytes + excluded.bytes
-       RETURNING bytes`,
+      `INSERT INTO usage (user_id, month, bytes, frames) VALUES (?, ?, ?, ?)
+       ON CONFLICT (user_id, month) DO UPDATE SET
+         bytes = bytes + excluded.bytes, frames = frames + excluded.frames
+       RETURNING bytes, frames`,
     )
-    .bind(userId, currentMonth(), bytes)
-    .first<{ bytes: number }>();
-  return row?.bytes ?? bytes;
+    .bind(userId, currentMonth(), bytes, frames)
+    .first<{ bytes: number; frames: number }>();
+  return row ?? { bytes, frames };
 }

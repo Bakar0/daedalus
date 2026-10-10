@@ -43,7 +43,7 @@ export function remoteStatusText(state: RemoteStateDto | undefined): string {
     case "offline":
       return "Can't reach the relay. Retrying.";
     case "locked":
-      return "The relay refused this Mac: the account has no active access or used its data for the month.";
+      return "The relay refused this Mac: the account has no active access or used its allowance for the month, or the relay is paused until the 1st.";
     case "waiting_for_phone":
       return "On. Waiting for a phone to pair.";
     case "online":

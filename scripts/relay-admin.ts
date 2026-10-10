@@ -8,6 +8,8 @@
 //   users
 //   grant <email> [--plan beta]
 //   revoke <email>
+//   budget                 month-to-date units and estimated overage
+//   budget close|reopen    pause or resume the whole relay
 //
 // Keep the key in a Daedalus secret and run through `daedal exec --secret
 // RELAY_ADMIN_KEY -- bun run relay-admin …`, so it never lands in a shell
@@ -74,6 +76,13 @@ switch (command) {
   case "users":
     console.table(await call("GET", "/admin/users"));
     break;
+  case "budget":
+    if (argument === "close" || argument === "reopen")
+      console.log(
+        await call("POST", "/admin/budget", { open: argument === "reopen" }),
+      );
+    else console.log(await call("GET", "/admin/budget"));
+    break;
   case "grant":
   case "revoke":
     if (!argument) {
@@ -90,7 +99,7 @@ switch (command) {
     break;
   default:
     console.error(
-      "Commands: invite, invites, users, grant <email>, revoke <email>",
+      "Commands: invite, invites, users, grant <email>, revoke <email>, budget [close|reopen]",
     );
     process.exit(2);
 }

@@ -234,6 +234,9 @@ const vars = {
   ),
   VAPID_SUBJECT: "https://relay.test",
   PUSH_TEST_ENDPOINT: `${pushOrigin}/`,
+  // A room flushes usage after this many frames, so the frame limit is
+  // reached within the check rather than at the next 5-minute alarm.
+  FRAME_FLUSH_EVERY: "100",
 };
 const relay = Bun.spawn(
   [
@@ -247,6 +250,7 @@ const relay = Bun.spawn(
     relayState,
     "--log-level",
     "warn",
+    "--test-scheduled",
     ...Object.entries(vars).flatMap(([name, value]) => [
       "--var",
       `${name}:${value}`,
@@ -636,6 +640,7 @@ try {
     macName: "Second Mac",
     handlers: () => createDesktopRequestHandlers(hostContext),
     openTerminal: agentTerminalOpener(context, context.tmux),
+    lockedRetryMs: 1_000,
   });
   await host.start();
   if (host.state().status !== "off")
@@ -832,6 +837,86 @@ try {
     (error: Error) => error.message,
   );
   if (forgotten === "connected") throw new Error("A forgotten phone connected");
+
+  // The cost caps (artifacts/remote-work/cost-analysis.md).
+  const capPhone = createIdentity();
+  const capMac = await pairWithMac(
+    capPhone,
+    decodePairingOffer(host.pairingCode().url),
+    "Cap phone",
+    aliceToken,
+  );
+  const closedWith = (open: PhoneConnection) =>
+    new Promise<string>((resolve) => open.onClose(resolve));
+  const busy = async (open: PhoneConnection, closed: Promise<string>) => {
+    let done = false;
+    void closed.then(() => {
+      done = true;
+    });
+    for (let index = 0; index < 400 && !done; index += 1)
+      await open.request("snapshot");
+    return closed;
+  };
+
+  // 1. An account's frames for the month: past them, its connections close.
+  await adminCall("POST", "/admin/entitlements", {
+    email: "alice@example.com",
+    status: "active",
+    monthlyFrames: 1,
+  });
+  let capConnection = await PhoneConnection.connect(
+    capPhone,
+    capMac,
+    aliceToken,
+  );
+  const overLimit = await busy(capConnection, closedWith(capConnection));
+  if (overLimit !== "Monthly limit reached")
+    throw new Error(`Frame limit: closed with ${overLimit}`);
+  await adminCall("POST", "/admin/entitlements", {
+    email: "alice@example.com",
+    status: "active",
+    monthlyFrames: 30_000_000,
+  });
+  await until(
+    "Mac back after the frame limit",
+    () => host!.state().status === "online",
+    15_000,
+  );
+  pass(
+    "an account past its monthly frames is closed at once, and raising the limit lets it back",
+  );
+
+  // 2. The relay's own monthly budget: closed, nothing connects; reopened,
+  // everything comes back.
+  capConnection = await PhoneConnection.connect(capPhone, capMac, aliceToken);
+  const paused = closedWith(capConnection);
+  await adminCall("POST", "/admin/budget", { open: false });
+  if ((await paused) === "") throw new Error("Budget close left a phone open");
+  await expectRefusal(
+    "a phone while the budget is closed",
+    PhoneConnection.connect(capPhone, capMac, aliceToken),
+    RELAY_CLOSE.budgetExhausted,
+  );
+  const status = (await adminCall("GET", "/admin/budget")).data as {
+    open: boolean;
+    closedBy: string | null;
+    units: { frames: number; workerRequests: number };
+  };
+  if (status.open || status.closedBy !== "admin" || status.units.frames < 100)
+    throw new Error(`Budget status: ${JSON.stringify(status)}`);
+  const phonePage = await fetch(`${relayHttp}/health`);
+  if (!phonePage.ok)
+    throw new Error("The relay stopped answering while paused");
+  await adminCall("POST", "/admin/budget", { open: true });
+  await until(
+    "Mac back after the budget",
+    () => host!.state().status === "online",
+    15_000,
+  );
+  (await PhoneConnection.connect(capPhone, capMac, aliceToken)).close();
+  pass(
+    `the monthly budget pauses the whole relay and reopens it (counted ${status.units.frames} frames, ${status.units.workerRequests} Worker requests)`,
+  );
   // Keep awake: a caffeinate tied to this process, while phone access is on.
   const caffeinate = () =>
     Bun.spawnSync(["pgrep", "-f", `caffeinate -i -w ${process.pid}`])
@@ -859,6 +944,71 @@ try {
     throw new Error("Turning remote off did not stick");
   pass("Settings › Remote's host: on, pairing code, paired phone, forget, off");
 
+  // 3. Hourly housekeeping drops unclaimed Macs older than a day.
+  const d1 = (command: string) =>
+    Bun.spawnSync(
+      [
+        wrangler,
+        "d1",
+        "execute",
+        "DB",
+        "--local",
+        "--persist-to",
+        relayState,
+        "--json",
+        "--command",
+        command,
+      ],
+      {
+        cwd: relayDir,
+        env: { ...process.env, CI: "1" },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    ).stdout.toString();
+  const inserted = d1(
+    `INSERT INTO devices (id, user_id, kind, created_at) VALUES ('stale-unclaimed-mac', NULL, 'mac', '${new Date(Date.now() - 2 * 86_400_000).toISOString()}')`,
+  );
+  // `/__scheduled` is now the phone app's page; this one reaches the Worker.
+  if (
+    !d1("SELECT id FROM devices WHERE id = 'stale-unclaimed-mac'").includes(
+      "stale-unclaimed-mac",
+    )
+  )
+    throw new Error(`Could not plant a stale Mac: ${inserted.slice(0, 200)}`);
+  await fetch(`${relayHttp}/cdn-cgi/handler/scheduled?cron=17+*+*+*+*`);
+  await sleep(1_000);
+  if (
+    d1("SELECT id FROM devices WHERE id = 'stale-unclaimed-mac'").includes(
+      "stale-unclaimed-mac",
+    )
+  )
+    throw new Error("Housekeeping kept a day-old unclaimed Mac");
+  pass("hourly housekeeping removes unclaimed Macs older than a day");
+
+  // 4. Unclaimed Macs connect without sign-in, so they are limited per IP.
+  const attempts = await Promise.all(
+    Array.from({ length: 14 }, async () => {
+      const id = createIdentity().id;
+      const socket = new WebSocket(
+        `${relayUrl}/v1/connect?room=${id}&role=mac&device=${id}`,
+        ["daedalus.v1"],
+      );
+      return new Promise<number>((resolve) => {
+        socket.addEventListener("close", (event) => resolve(event.code));
+        setTimeout(() => {
+          socket.close();
+          resolve(0);
+        }, 3_000);
+      });
+    }),
+  );
+  if (!attempts.includes(RELAY_CLOSE.rateLimited))
+    throw new Error(`No unclaimed connect was limited: ${attempts.join(",")}`);
+  pass(
+    `unclaimed Macs are limited per IP (${attempts.filter((code) => code === RELAY_CLOSE.rateLimited).length} of 14 refused)`,
+  );
+
   const requestPrice = 0.15 / 1_000_000;
   const durationPrice = 12.5 / 1_000_000;
   console.log("\nMeasured relay traffic per minute (one phone, one session):");
@@ -870,7 +1020,8 @@ try {
       `  ${label}: ${Math.round(row.frames)} frames, ${(row.bytes / 1024).toFixed(1)} KiB, ~${(row.frames / 20).toFixed(1)} billed requests`,
     );
   const hourRequests = (working.frames / 20) * 60;
-  const hourDuration = 0.128 * 3_600;
+  // Duration is billed only while a handler runs: about 1.45 ms a frame.
+  const hourDuration = 0.125 * 0.00145 * working.frames * 60;
   console.log(
     `  one hour of watching a busy session: ~$${(hourRequests * requestPrice + hourDuration * durationPrice).toFixed(4)} at list price`,
   );

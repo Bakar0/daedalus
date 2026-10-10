@@ -226,6 +226,7 @@ export class RemoteConnector {
   #stopped = false;
   #retryMs = 1_000;
   #ping: ReturnType<typeof setInterval> | undefined;
+  #lastPong = 0;
   #offer: PairingOffer | undefined;
   /** The last accepted pairing, so a repeated request is answered again. */
   #lastPairing: { offer: PairingOffer; phoneId: string } | undefined;
@@ -373,7 +374,18 @@ export class RemoteConnector {
           relay: this.options.relay,
           claimed: Boolean(token),
         });
-        this.#ping = setInterval(() => socket.send("ping"), 30_000);
+        // The relay answers every ping. Two and a half intervals without an
+        // answer means the connection is gone without saying so (a sleep,
+        // a network change, a relay redeploy): close it and reconnect.
+        this.#lastPong = Date.now();
+        this.#ping = setInterval(() => {
+          if (Date.now() - this.#lastPong > 75_000) {
+            this.options.log?.("remote_silent", {});
+            socket.close();
+            return;
+          }
+          socket.send("ping");
+        }, 30_000);
         this.#setStatus(token ? "online" : "waiting_for_phone");
         this.#markConnected();
       }, 50);
@@ -417,7 +429,9 @@ export class RemoteConnector {
       delay = 1_000;
     } else if (
       code === RELAY_CLOSE.noEntitlement ||
-      code === RELAY_CLOSE.overQuota
+      code === RELAY_CLOSE.overQuota ||
+      code === RELAY_CLOSE.budgetExhausted ||
+      code === RELAY_CLOSE.rateLimited
     ) {
       this.#setStatus("locked");
       setTimeout(
@@ -433,7 +447,10 @@ export class RemoteConnector {
   }
 
   #notice(text: string): void {
-    if (text === "pong") return;
+    if (text === "pong") {
+      this.#lastPong = Date.now();
+      return;
+    }
     let notice: RelayNotice;
     try {
       notice = JSON.parse(text) as RelayNotice;
@@ -857,6 +874,8 @@ export interface RemoteHostOptions {
   handlers: () => RequestHandlers;
   openTerminal: OpenRemoteTerminal;
   log?: (event: string, fields: Record<string, unknown>) => void;
+  /** Passed to the connector; tests shorten it. */
+  lockedRetryMs?: number;
 }
 
 /**
@@ -936,6 +955,9 @@ export class RemoteHost implements DesktopRemoteHost {
       handlers: this.options.handlers(),
       openTerminal: this.options.openTerminal,
       ...(this.options.log ? { log: this.options.log } : {}),
+      ...(this.options.lockedRetryMs
+        ? { lockedRetryMs: this.options.lockedRetryMs }
+        : {}),
     });
     void this.#connector.start();
     this.options.context.notifications.setPhone((alert) =>

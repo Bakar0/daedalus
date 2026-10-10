@@ -17,6 +17,22 @@ const SessionScreen = lazy(() =>
   })),
 );
 
+const BLOCKED = {
+  signed_out: { title: "Signed out", body: "Sign in again to reach your Mac." },
+  no_access: {
+    title: "No active access",
+    body: "Your account has no active access right now, or it used this month's allowance.",
+  },
+  removed: {
+    title: "This phone was removed",
+    body: "Your Mac or your account no longer knows this phone. Pair it again from Settings › Remote on your Mac.",
+  },
+  paused: {
+    title: "Remote access is paused",
+    body: "The relay reached its monthly budget. It starts again on the 1st.",
+  },
+} as const;
+
 export function Home({
   mac,
   macs,
@@ -105,16 +121,8 @@ export function Home({
 
       {state.kind === "blocked" ? (
         <section className="empty">
-          <h2>
-            {state.code === "no_access"
-              ? "No active access"
-              : "This phone was removed"}
-          </h2>
-          <p>
-            {state.code === "no_access"
-              ? "Your account has no active access right now."
-              : "Your Mac or your account no longer knows this phone. Pair it again from Settings › Remote on your Mac."}
-          </p>
+          <h2>{BLOCKED[state.code].title}</h2>
+          <p>{BLOCKED[state.code].body}</p>
           {state.code === "removed" ? (
             <button className="button" onClick={onForget}>
               Forget {mac.macName}

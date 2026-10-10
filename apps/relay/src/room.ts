@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { activeEntitlement, addUsage } from "./accounts";
+import { budget } from "./budget";
 import { CLOSE, type Env, PROTOCOL } from "./util";
 
 /**
@@ -26,10 +27,16 @@ const MAX_FRAME_BYTES = 1024 * 1024;
 const MAX_PHONES = 10;
 const BUSY_CHECK_MS = 5 * 60_000;
 const IDLE_CHECK_MS = 60 * 60_000;
+/** Frames after which a room flushes at once; the local check lowers it. */
+const flushEvery = (env: Env) => Number(env.FRAME_FLUSH_EVERY ?? "50000");
 
 export class Room extends DurableObject<Env> {
   /** Bytes forwarded per user since the last flush to D1. */
-  #unflushed = new Map<string, number>();
+  #unflushed = new Map<string, { bytes: number; frames: number }>();
+  /** Frames counted since the last flush, across accounts. */
+  #unflushedFrames = 0;
+  /** Durable Object requests this room served since the last flush. */
+  #requests = 0;
   /** When the next alarm fires: 0 for none, undefined until read. */
   #alarmAt: number | undefined;
 
@@ -43,6 +50,7 @@ export class Room extends DurableObject<Env> {
   }
 
   override async fetch(request: Request): Promise<Response> {
+    this.#requests += 1;
     const url = new URL(request.url);
     if (url.pathname === "/claimed") return this.#claimed(request);
     if (url.pathname === "/kick") return this.#kick(request);
@@ -136,11 +144,19 @@ export class Room extends DurableObject<Env> {
     out.set(payload, 1 + from.length);
     target.send(out);
 
-    this.#unflushed.set(
-      sender.userId,
-      (this.#unflushed.get(sender.userId) ?? 0) + message.byteLength,
+    const counted = this.#unflushed.get(sender.userId) ?? {
+      bytes: 0,
+      frames: 0,
+    };
+    counted.bytes += message.byteLength;
+    counted.frames += 1;
+    this.#unflushed.set(sender.userId, counted);
+    this.#unflushedFrames += 1;
+    // A burst is flushed at once rather than left to run until the next
+    // alarm, so a frame limit cannot be overrun by minutes of traffic.
+    await this.#ensureAlarm(
+      this.#unflushedFrames >= flushEvery(this.env) ? 0 : BUSY_CHECK_MS,
     );
-    await this.#ensureAlarm(BUSY_CHECK_MS);
   }
 
   override async webSocketClose(ws: WebSocket): Promise<void> {
@@ -173,13 +189,28 @@ export class Room extends DurableObject<Env> {
       if (userId) users.add(userId);
     }
     const flushed = new Map(this.#unflushed);
+    const frames = this.#unflushedFrames;
+    const requests = this.#requests + 2; // this alarm, and setting the next
     this.#unflushed.clear();
+    this.#unflushedFrames = 0;
+    this.#requests = 0;
+
+    // The relay-wide budget first: past it, everyone here is closed.
+    const open = (await budget(this.env).add({ frames, doRequests: requests }))
+      .open;
+    if (!open) {
+      for (const socket of sockets)
+        socket.close(CLOSE.budgetExhausted, "Remote access is paused");
+    }
     for (const userId of new Set([...users, ...flushed.keys()])) {
+      const counted = flushed.get(userId) ?? { bytes: 0, frames: 0 };
       const total = await addUsage(
         this.env.DB,
         userId,
-        flushed.get(userId) ?? 0,
+        counted.bytes,
+        counted.frames,
       );
+      if (!open) continue;
       const entitlement = await activeEntitlement(this.env.DB, userId);
       const mine = sockets.filter(
         (socket) =>
@@ -191,10 +222,13 @@ export class Room extends DurableObject<Env> {
         continue;
       }
       const limit = entitlement.monthlyMb * 1024 * 1024;
-      if (total >= 2 * limit) {
+      if (
+        total.frames >= entitlement.monthlyFrames ||
+        total.bytes >= 2 * limit
+      ) {
         for (const socket of mine)
-          socket.close(CLOSE.overQuota, "Monthly data limit reached");
-      } else if (total >= limit) {
+          socket.close(CLOSE.overQuota, "Monthly limit reached");
+      } else if (total.bytes >= limit) {
         const notice = JSON.stringify({
           relay: "quota",
           limitMb: entitlement.monthlyMb,
