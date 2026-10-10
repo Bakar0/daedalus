@@ -20,7 +20,7 @@ import { SettingRow } from "./SettingsModal";
 
 const POLL_MS = 2_000;
 
-const STATUS_TEXT: Record<RemoteStatusDto, string> = {
+export const STATUS_TEXT: Record<RemoteStatusDto, string> = {
   off: "Off",
   connecting: "Connecting to the relay…",
   waiting_for_phone: "Connected. Waiting for a phone to pair.",

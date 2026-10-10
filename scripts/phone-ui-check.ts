@@ -506,6 +506,32 @@ try {
   );
   await tap(`document.querySelector('.keys button[aria-label="Control C"]')`);
   await tap(`document.querySelector('.keys button[aria-label="Enter"]')`);
+  // Scrolling the keys row presses nothing.
+  const beforeSwipe = await evaluate<string>(
+    "document.querySelector('.xterm-rows').textContent",
+  );
+  const start = await evaluate<{ x: number; y: number }>(`(() => {
+    const rect = document.querySelector('.keys button[aria-label="2"]').getBoundingClientRect();
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  })()`);
+  await send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [start],
+  });
+  for (let step = 1; step <= 6; step += 1)
+    await send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: start.x - step * 20, y: start.y }],
+    });
+  await send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await sleep(600);
+  if (
+    (await evaluate<string>(
+      "document.querySelector('.xterm-rows').textContent",
+    )) !== beforeSwipe
+  )
+    throw new Error("Swiping the keys row typed a key");
+
   // Claude's turn marker draws from the bundled symbol font, not as emoji.
   await evaluate(`(() => {
     const box = document.querySelector('.compose textarea');
@@ -534,7 +560,7 @@ try {
     throw new Error(`Terminal too short: ${layout.terminalHeight}`);
   await screenshot("session");
   console.log(
-    "PASS the session opens on a live terminal; Send and the quick keys reach it",
+    "PASS the session opens on a live terminal; the box types into it as it changes, Send presses Enter, keys work and a swipe across them types nothing",
   );
 
   await send("Runtime.evaluate", { expression: "history.back()" });

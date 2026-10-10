@@ -799,7 +799,20 @@ setInterval(async () => {
     // and a queue that shouts a week of history is worse than a dropped ping.
     // Five minutes rather than one: a CLI hands over whenever this process is
     // alive, and this tick is what runs late when the machine is loaded.
-    await context.notifications.flushDesktop(5, 300_000);
+    // Logged, because "I got no notification" has to be answerable: whether
+    // macOS took it, and through which backend.
+    await context.notifications.flushDesktop(
+      5,
+      300_000,
+      Date.now(),
+      (notification, result) =>
+        void context.logger.write("info", "desktop_notification", {
+          sessionId: notification.sessionId,
+          delivered: result.delivered,
+          backend: result.backend,
+          degraded: result.degraded,
+        }),
+    );
     await recordAttentionCount(
       context.repositories.listSessionAttention().length,
     );

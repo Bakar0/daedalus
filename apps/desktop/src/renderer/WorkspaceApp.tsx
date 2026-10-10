@@ -79,6 +79,7 @@ import { ColorSwatches, SessionMenu } from "./SessionMenu";
 import { RoutineBar } from "./routines/RoutineBar";
 import { TeamBar, TeamPanel } from "./teams/TeamPanel";
 import { RoutinesPanel } from "./routines/RoutinesPanel";
+import { RemoteMenu } from "./RemoteMenu";
 import { SecretsPanel } from "./SecretsPanel";
 import {
   sessionStatusLine,
@@ -5087,17 +5088,6 @@ export function WorkspaceApp({
           )}
         </strong>
       </button>
-      <span className="workspace-card-actions" data-no-drag>
-        <button
-          aria-label="Global secrets"
-          className="session-card-action workspace-secrets-action"
-          onClick={() => setSecretsWorkspace("global")}
-          title="Global secrets"
-          type="button"
-        >
-          <KeyIcon />
-        </button>
-      </span>
     </div>
   );
 
@@ -5466,6 +5456,23 @@ export function WorkspaceApp({
               <h1>Workspaces</h1>
             </div>
             <div className="panel-heading-actions">
+              <RemoteMenu
+                client={client}
+                onPair={() => {
+                  setSettingsSection("remote");
+                  setModal("settings");
+                }}
+                perform={perform}
+              />
+              <button
+                aria-label="Global secrets"
+                className="quiet workspace-heading-action"
+                onClick={() => setSecretsWorkspace("global")}
+                title="Global secrets"
+                type="button"
+              >
+                <KeyIcon />
+              </button>
               <button
                 aria-label="Create workspace"
                 className="quiet workspace-heading-create"

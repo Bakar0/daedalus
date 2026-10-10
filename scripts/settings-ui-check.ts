@@ -901,6 +901,84 @@ try {
   if (!closed.banner.includes("Daedalus 0.8.3 is available"))
     throw new Error(`The banner did not return: ${closed.banner}`);
   if (!closed.corner) throw new Error("No Settings button to show the dot on");
+  // The Workspaces heading holds phone access and global secrets beside New
+  // workspace; the All workspaces card no longer has its own key.
+  const heading = await evaluate<{
+    actions: string[];
+    cardKey: boolean;
+    box: { x: number; y: number; width: number; height: number } | null;
+  }>(`(() => {
+    const actions = document.querySelector('.workspace-column-heading .panel-heading-actions');
+    const box = document.querySelector('.workspace-column-heading')?.getBoundingClientRect();
+    return {
+      actions: [...(actions?.querySelectorAll(':scope > details > summary, :scope > button') ?? [])].map((one) => one.getAttribute('aria-label') ?? ''),
+      cardKey: Boolean(document.querySelector('.all-workspaces-card [aria-label="Global secrets"]')),
+      box: box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null,
+    };
+  })()`);
+  if (
+    !heading.actions[0]?.startsWith("Phone access") ||
+    heading.actions[1] !== "Global secrets" ||
+    heading.actions[2] !== "Create workspace" ||
+    heading.cardKey
+  )
+    throw new Error(`Workspaces heading is wrong: ${JSON.stringify(heading)}`);
+  if (heading.box) {
+    const headingShot = await send<{ data: string }>("Page.captureScreenshot", {
+      format: "png",
+      clip: { ...heading.box, scale: 2 },
+    });
+    await Bun.write(
+      join(projectRoot, "artifacts/settings-ui-heading.png"),
+      Buffer.from(headingShot.data, "base64"),
+    );
+  }
+  await evaluate(
+    "document.querySelector('.workspace-column-heading .remote-menu summary').click()",
+  );
+  await Bun.sleep(300);
+  const menu = await evaluate<{
+    items: string[];
+    status: string;
+    box: { x: number; y: number; width: number; height: number } | null;
+  }>(`(() => {
+    const popover = document.querySelector('.remote-menu .menu-popover');
+    const box = popover?.getBoundingClientRect();
+    return {
+      items: [...(popover?.querySelectorAll('[role^="menuitem"]') ?? [])].map((one) => one.textContent.trim()),
+      status: popover?.querySelector('.remote-menu-status')?.textContent ?? '',
+      box: box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null,
+    };
+  })()`);
+  if (
+    menu.items.join(" | ") !== "Allow phone access | Pair a phone…" ||
+    !menu.status.startsWith("Connected")
+  )
+    throw new Error(`Phone access menu is wrong: ${JSON.stringify(menu)}`);
+  if (menu.box) {
+    const menuShot = await send<{ data: string }>("Page.captureScreenshot", {
+      format: "png",
+      clip: {
+        x: Math.max(0, menu.box.x - 12),
+        y: Math.max(0, menu.box.y - 40),
+        width: menu.box.width + 24,
+        height: menu.box.height + 52,
+        scale: 2,
+      },
+    });
+    await Bun.write(
+      join(projectRoot, "artifacts/settings-ui-phone-menu.png"),
+      Buffer.from(menuShot.data, "base64"),
+    );
+  }
+  await send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key: "Escape",
+    code: "Escape",
+  });
+  console.log(
+    "Workspaces heading: phone access (menu: status, Allow phone access, Pair a phone…), global secrets, new workspace; no key on All workspaces",
+  );
   const cornerShot = await send<{ data: string }>("Page.captureScreenshot", {
     format: "png",
     clip: {

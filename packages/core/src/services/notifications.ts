@@ -247,13 +247,18 @@ export class NotificationService {
     limit = 10,
     maxAgeMs = Number.POSITIVE_INFINITY,
     now = Date.now(),
+    /** Told what became of each one, so the host can log it. */
+    report?: (
+      notification: PendingNotification,
+      result: NativeNotifierResult,
+    ) => void,
   ): Promise<number> {
     const queued = this.repositories
       .listPendingNotifications("desktop")
       .filter((item) => now - Date.parse(item.createdAt) <= maxAgeMs)
       .slice(0, limit);
-    for (const notification of queued)
-      await this.sendNative({
+    for (const notification of queued) {
+      const result = await this.sendNative({
         title: notification.title,
         body: notification.body,
         ...(notification.sessionId && this.cliExecutable
@@ -266,6 +271,8 @@ export class NotificationService {
           : {}),
         ...(this.bundleId ? { bundleId: this.bundleId } : {}),
       });
+      report?.(notification, result);
+    }
     this.repositories.deletePendingNotifications(
       this.repositories
         .listPendingNotifications("desktop")

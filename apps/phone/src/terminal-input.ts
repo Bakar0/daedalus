@@ -15,3 +15,22 @@ const MOUSE_REPORTS =
 export function phoneTerminalInput(data: string): string {
   return data.replace(MOUSE_REPORTS, "");
 }
+
+/** What a terminal receives as Backspace. */
+export const BACKSPACE = "\u007f";
+
+/**
+ * The keystrokes that turn the text the terminal was typed so far into the
+ * message box's new text: Backspace back to where they differ, then the
+ * rest. Counted in characters, not UTF-16 units, so an emoji is one
+ * Backspace. Newlines become spaces: in a terminal a newline is Enter, and
+ * only Send presses that.
+ */
+export function typingDiff(before: string, after: string): string {
+  const old = Array.from(before);
+  const next = Array.from(after.replaceAll(/\r?\n/g, " "));
+  let same = 0;
+  while (same < old.length && same < next.length && old[same] === next[same])
+    same += 1;
+  return BACKSPACE.repeat(old.length - same) + next.slice(same).join("");
+}

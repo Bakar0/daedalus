@@ -2,12 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import type { RpcResult, TerminalServerMessage } from "@daedalus/protocol";
+import type { TerminalServerMessage } from "@daedalus/protocol";
 import type { PhoneConnection, PhoneTerminal } from "@daedalus/remote-protocol";
 import { AgentStatusDot } from "../../desktop/src/renderer/session-view";
 import { type SessionRow, statusText } from "./sessions";
 import { Shell } from "./Shell";
-import { phoneTerminalInput } from "./terminal-input";
+import { BACKSPACE, phoneTerminalInput, typingDiff } from "./terminal-input";
 
 /**
  * Keys a phone keyboard does not have, or hides. They go to the terminal as
@@ -23,6 +23,7 @@ const KEYS: Array<{ label: string; data: string; aria?: string }> = [
   { label: "1", data: "1" },
   { label: "2", data: "2" },
   { label: "3", data: "3" },
+  { label: "⌫", data: BACKSPACE, aria: "Backspace" },
   { label: "^C", data: "\u0003", aria: "Control C" },
   { label: "⏎", data: "\r", aria: "Enter" },
 ];
@@ -47,8 +48,6 @@ export function SessionScreen({
   const terminal = useRef<PhoneTerminal>(undefined);
   const [ended, setEnded] = useState<string>();
   const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string>();
 
   useEffect(() => {
     if (!host.current) return;
@@ -65,6 +64,10 @@ export function SessionScreen({
     const fit = new FitAddon();
     xterm.loadAddon(fit);
     xterm.open(host.current);
+    // Typing goes through the message box, which keeps the box and the
+    // agent's input line the same; a tap on the terminal opens no keyboard.
+    xterm.textarea?.setAttribute("inputmode", "none");
+    xterm.textarea?.setAttribute("readonly", "");
     // The symbol font arrives after the first paint; redraw once it is in.
     void document.fonts
       .load('11px "Daedalus Terminal Symbols"', "\u23fa")
@@ -111,19 +114,34 @@ export function SessionScreen({
     };
   }, [connection, row.session.id]);
 
-  const send = async () => {
-    const message = text.trim();
-    if (!message || sending) return;
-    setSending(true);
-    setError(undefined);
-    const result = (await connection.request("agentSend", {
-      id: row.session.id,
-      text: message,
-    })) as RpcResult<unknown>;
-    setSending(false);
-    if (result.ok) setText("");
-    else setError(result.error.message);
+  // The message box types into the terminal as it changes, so the agent's
+  // own input line always shows what is in the box. `typed` is what the
+  // terminal has been sent since the last Send or Clear.
+  const typed = useRef("");
+  const type = (value: string) => {
+    const keys = typingDiff(typed.current, value);
+    if (keys) terminal.current?.write(keys);
+    typed.current = value.replaceAll(/\r?\n/g, " ");
+    setText(typed.current);
   };
+  const send = () => {
+    terminal.current?.write("\r");
+    typed.current = "";
+    setText("");
+  };
+  const clear = () => type("");
+  const press = (data: string) => {
+    // Backspace from the keys row deletes from the box too, so the two stay
+    // the same; any other key edits only the terminal.
+    if (data === BACKSPACE && typed.current) {
+      type(Array.from(typed.current).slice(0, -1).join(""));
+      return;
+    }
+    terminal.current?.write(data);
+  };
+  // A key fires on lifting a finger that did not move, so scrolling the row
+  // presses nothing.
+  const touch = useRef<{ x: number; y: number } | undefined>(undefined);
 
   const clearAttention = () =>
     void connection.request("attentionClear", { sessionId: row.session.id });
@@ -154,12 +172,29 @@ export function SessionScreen({
             <button
               aria-label={key.aria ?? key.label}
               key={key.label}
-              // Pointer down, not click, and no focus change: the phone
-              // keyboard stays where it is.
+              // No focus change on press, so the phone keyboard stays open.
+              onMouseDown={(event) => event.preventDefault()}
+              onPointerCancel={() => {
+                touch.current = undefined;
+              }}
               onPointerDown={(event) => {
                 event.preventDefault();
-                terminal.current?.write(key.data);
+                touch.current = { x: event.clientX, y: event.clientY };
               }}
+              onPointerMove={(event) => {
+                const start = touch.current;
+                if (
+                  start &&
+                  Math.hypot(event.clientX - start.x, event.clientY - start.y) >
+                    8
+                )
+                  touch.current = undefined;
+              }}
+              onPointerUp={() => {
+                if (touch.current) press(key.data);
+                touch.current = undefined;
+              }}
+              type="button"
             >
               {key.label}
             </button>
@@ -169,32 +204,30 @@ export function SessionScreen({
           className="compose"
           onSubmit={(event) => {
             event.preventDefault();
-            void send();
+            send();
           }}
         >
           <textarea
             aria-label="Message to the agent"
             enterKeyHint="send"
-            onChange={(event) => setText(event.target.value)}
+            onChange={(event) => type(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
-                void send();
+                send();
               }
             }}
-            placeholder="Message the agent"
+            placeholder="Type to the agent"
             rows={1}
             value={text}
           />
-          <button className="button primary" disabled={!text.trim() || sending}>
-            Send
-          </button>
+          {text ? (
+            <button className="button" onClick={clear} type="button">
+              Clear
+            </button>
+          ) : undefined}
+          <button className="button primary">Send</button>
         </form>
-        {error ? (
-          <p className="error" role="alert">
-            {error}
-          </p>
-        ) : undefined}
       </div>
     </Shell>
   );
