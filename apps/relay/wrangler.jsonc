@@ -15,5 +15,7 @@
       "migrations_dir": "migrations",
     },
   ],
-  "vars": { "APP_ORIGINS": "" },
+  "vars": {
+    "APP_ORIGINS": "https://daedalus-relay.daedalus-relay.workers.dev",
+  },
 }
