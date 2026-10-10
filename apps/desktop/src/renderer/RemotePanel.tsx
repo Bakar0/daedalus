@@ -81,20 +81,9 @@ function EncryptionNotice() {
       <div>
         <strong>End-to-end encrypted</strong>
         <p>
-          When you pair a phone, it and this Mac make keys that never leave
-          them. Every message is locked on one device and opened on the other,
-          so the relay in between carries only data it cannot read.
+          Everything between your phone and this Mac is end-to-end encrypted. No
+          one else, not even Daedalus, can read it.
         </p>
-        <dl>
-          <div>
-            <dt>The relay sees</dt>
-            <dd>Which devices are connected, when, and how much data moves.</dd>
-          </div>
-          <div>
-            <dt>The relay never sees</dt>
-            <dd>Your code, terminal output, prompts, file names or tasks.</dd>
-          </div>
-        </dl>
       </div>
     </aside>
   );

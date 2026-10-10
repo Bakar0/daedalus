@@ -7293,13 +7293,13 @@ dd {
   border-radius: 10px;
   display: grid;
   gap: 12px;
-  grid-template-columns: 28px minmax(0, 1fr);
-  padding: 14px 16px;
+  grid-template-columns: 24px minmax(0, 1fr);
+  padding: 12px 14px;
 }
 .remote-e2e-icon {
   color: var(--success);
-  height: 28px;
-  width: 28px;
+  height: 24px;
+  width: 24px;
 }
 .remote-e2e strong {
   display: block;
@@ -7310,26 +7310,6 @@ dd {
   color: var(--secondary);
   font-size: 12px;
   line-height: 1.5;
-  margin: 0 0 10px;
-}
-.remote-e2e dl {
-  display: grid;
-  gap: 8px;
-  grid-template-columns: 1fr 1fr;
-  margin: 0;
-}
-.remote-e2e dt {
-  color: var(--muted);
-  font-family: var(--font-sans);
-  font-size: 10px;
-  letter-spacing: 0.05em;
-  margin-bottom: 2px;
-  text-transform: uppercase;
-}
-.remote-e2e dd {
-  color: var(--text);
-  font-family: var(--font-sans);
-  font-size: 12px;
   margin: 0;
 }
 .remote-status {
