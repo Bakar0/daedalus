@@ -75,7 +75,9 @@ export type SecureMessage =
   | { t: "term.server"; ch: number; message: TerminalServerMessage }
   | { t: "term.close"; ch: number }
   /** The phone app came to the front or left it. */
-  | { t: "presence"; visible: boolean };
+  | { t: "presence"; visible: boolean }
+  /** What the Mac is called; sent on connecting and on a rename. */
+  | { t: "mac"; name: string };
 
 const PLAIN = 0;
 const SEALED = 1;

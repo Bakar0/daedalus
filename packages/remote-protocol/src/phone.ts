@@ -307,6 +307,8 @@ export class PhoneConnection {
     }
   >();
   #eventListeners = new Set<() => void>();
+  #nameListeners = new Set<(name: string) => void>();
+  #macName: string | undefined;
   #closeListeners = new Set<(reason: string) => void>();
 
   private constructor(
@@ -424,6 +426,9 @@ export class PhoneConnection {
       this.#terminals.get(message.ch)?.onMessage(message.message);
     } else if (message.t === "term.close") {
       this.#terminals.delete(message.ch);
+    } else if (message.t === "mac") {
+      this.#macName = message.name;
+      for (const listener of this.#nameListeners) listener(message.name);
     }
   }
 
@@ -447,6 +452,13 @@ export class PhoneConnection {
   /** Tells the Mac whether the app is on screen, so it can skip pushes. */
   setVisible(visible: boolean): void {
     this.#sendSecure({ t: "presence", visible });
+  }
+
+  /** The Mac's name, on connecting and whenever it is renamed. */
+  onMacName(listener: (name: string) => void): () => void {
+    this.#nameListeners.add(listener);
+    if (this.#macName !== undefined) listener(this.#macName);
+    return () => this.#nameListeners.delete(listener);
   }
 
   onDataChanged(listener: () => void): () => void {

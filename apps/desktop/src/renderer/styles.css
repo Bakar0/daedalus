@@ -718,19 +718,25 @@ button:not(
   right: 2px;
   width: 7px;
 }
-.remote-menu-dot[data-status="off"] {
+.remote-menu-dot[data-look="off"] {
   display: none;
 }
-.remote-menu-dot[data-status="waiting_for_phone"],
-.remote-menu-dot[data-status="online"] {
+/* Ready: on, nobody connected. A ring, not a dot. */
+.remote-menu-dot[data-look="ready"] {
+  background: var(--panel);
+  box-shadow: inset 0 0 0 1.5px var(--success);
+}
+.remote-menu-dot[data-look="live"] {
   background: var(--success);
 }
-.remote-menu-dot[data-status="connecting"] {
+.remote-menu-dot[data-look="connecting"] {
   background: var(--muted);
 }
-.remote-menu-dot[data-status="offline"],
-.remote-menu-dot[data-status="locked"] {
+.remote-menu-dot[data-look="trouble"] {
   background: var(--danger);
+}
+.workspace-heading-action:has(.remote-menu-dot[data-look="off"]) {
+  opacity: 0.6;
 }
 .remote-menu-status {
   color: var(--secondary);
@@ -7369,13 +7375,34 @@ dd {
   height: 8px;
   width: 8px;
 }
-.remote-status[data-status="waiting_for_phone"] .remote-status-dot,
-.remote-status[data-status="online"] .remote-status-dot {
+.remote-status[data-look="ready"] .remote-status-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--success);
+}
+.remote-status[data-look="live"] .remote-status-dot {
   background: var(--success);
 }
-.remote-status[data-status="offline"] .remote-status-dot,
-.remote-status[data-status="locked"] .remote-status-dot {
+.remote-status[data-look="trouble"] .remote-status-dot {
   background: var(--danger);
+}
+.remote-name > span:first-child {
+  display: grid;
+  gap: 2px;
+}
+.remote-name small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.remote-name-edit {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+.remote-name-edit input {
+  font-size: 12px;
+  min-height: 28px;
+  padding: 4px 8px;
+  width: 180px;
 }
 .remote-pairing {
   align-items: center;

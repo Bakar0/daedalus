@@ -2,7 +2,7 @@
 // relay (wrangler dev, local D1) serves the built app, a stand-in for Google
 // signs the user in, a Mac connector serves a real shell session. The page
 // opens a scanned pairing link, signs in with an invite, pairs, finds the
-// session under Needs me, and drives it: a message, a quick key, the
+// waiting session in its workspace, and drives it: a message, a quick key, the
 // terminal's output. Screenshots land in artifacts/.
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
@@ -428,13 +428,15 @@ try {
   await tap(byText("a", "Continue with Google"));
   await waitFor("paired home", byText(".bar h1", "Studio Mac"), 30_000);
   await waitFor(
-    "Needs me row",
+    "waiting session row",
     byText(".session-row", "Approve the database migration"),
   );
   if ((await evaluate<string>("location.hash")) !== "")
     throw new Error("The session token stayed in the address bar");
   const homeView = await evaluate<{
     needs: string[];
+    title: string;
+    subtitle: string;
     workspace: {
       name: string;
       insight: string;
@@ -452,6 +454,8 @@ try {
     const base = group.querySelector('.session-rows').getBoundingClientRect().left;
     return {
       needs: [...document.querySelectorAll('.group .session-row strong')].map((one) => one.textContent),
+      title: document.querySelector('.bar-title h1')?.textContent ?? '',
+      subtitle: document.querySelector('.bar-title small')?.textContent ?? '',
       workspace: {
         name: group.querySelector('.workspace-head strong').textContent,
         insight: group.querySelector('.workspace-head small').textContent,
@@ -471,7 +475,9 @@ try {
   );
   const names = homeView.workspace.rows.map((row) => row.name);
   if (
-    homeView.needs.length !== 1 ||
+    homeView.needs.length !== 0 ||
+    homeView.title !== "Studio Mac" ||
+    homeView.subtitle !== "Connected" ||
     homeView.workspace.name !== "Phone check" ||
     homeView.workspace.insight !== "1 needs you" ||
     names.indexOf("Builder") !== names.indexOf("Lead") + 1 ||
@@ -488,10 +494,19 @@ try {
     throw new Error("The Mac did not store the phone");
   await screenshot("home");
   console.log(
-    "PASS sign-in, pairing, and the Mac's list: Needs me, the workspace box, tool icons, a session colour, and a team member indented under its lead",
+    "PASS sign-in, pairing, the title bar (Mac name, Connected), and the Mac's list: no separate Needs me, the workspace box, tool icons, a session colour, and a team member indented under its lead",
   );
 
-  await tap(byText(".group .session-row", "Approve the database migration"));
+  // Renaming the Mac (Settings › Remote) reaches the open phone at once.
+  connector.setMacName("Desk Mac");
+  await waitFor("renamed Mac", byText(".bar h1", "Desk Mac"));
+  connector.setMacName("Studio Mac");
+  await waitFor("name back", byText(".bar h1", "Studio Mac"));
+  console.log("PASS renaming the Mac updates the open phone's title");
+
+  await tap(
+    byText(".workspace-group .session-row", "Approve the database migration"),
+  );
   await waitFor("terminal", "document.querySelector('.xterm-rows')");
   await sleep(800);
   await evaluate(`(() => {

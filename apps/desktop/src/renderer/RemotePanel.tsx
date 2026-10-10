@@ -11,7 +11,6 @@ import { encode } from "uqr";
 import type {
   RemotePairingDto,
   RemoteStateDto,
-  RemoteStatusDto,
   RpcResult,
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
@@ -20,15 +19,39 @@ import { SettingRow } from "./SettingsModal";
 
 const POLL_MS = 2_000;
 
-export const STATUS_TEXT: Record<RemoteStatusDto, string> = {
-  off: "Off",
-  connecting: "Connecting to the relay…",
-  waiting_for_phone: "Connected. Waiting for a phone to pair.",
-  online: "Connected. Paired phones can reach this Mac.",
-  offline: "Can't reach the relay. Retrying.",
-  locked:
-    "The relay refused this Mac: the account has no active access or used its data for the month.",
-};
+/**
+ * How phone access stands, in four looks shared by the heading's icon and
+ * this panel: off (no dot), ready (a ring: on, no phone connected right now),
+ * live (a solid dot: a phone is connected now) and trouble (red).
+ */
+export type RemoteLook = "off" | "connecting" | "ready" | "live" | "trouble";
+
+export function remoteLook(state: RemoteStateDto | undefined): RemoteLook {
+  if (!state?.enabled) return "off";
+  if (state.status === "offline" || state.status === "locked") return "trouble";
+  if (state.status === "connecting" || state.status === "off")
+    return "connecting";
+  return state.connectedPhones > 0 ? "live" : "ready";
+}
+
+export function remoteStatusText(state: RemoteStateDto | undefined): string {
+  if (!state?.enabled) return "Off. No phone can reach this Mac.";
+  switch (state.status) {
+    case "connecting":
+    case "off":
+      return "Connecting to the relay…";
+    case "offline":
+      return "Can't reach the relay. Retrying.";
+    case "locked":
+      return "The relay refused this Mac: the account has no active access or used its data for the month.";
+    case "waiting_for_phone":
+      return "On. Waiting for a phone to pair.";
+    case "online":
+      return state.connectedPhones === 0
+        ? "On. No phone is connected right now."
+        : `On. ${state.connectedPhones === 1 ? "A phone is" : `${state.connectedPhones} phones are`} connected now.`;
+  }
+}
 
 /**
  * A QR code as SVG, dark on light whatever the theme, so cameras read it.
@@ -86,6 +109,52 @@ function EncryptionNotice() {
         </p>
       </div>
     </aside>
+  );
+}
+
+/** The name the phone shows in its title bar for this Mac. */
+function MacNameField({
+  name,
+  busy,
+  onSave,
+}: {
+  name: string;
+  busy: boolean;
+  onSave: (name: string) => void;
+}) {
+  const [draft, setDraft] = useState(name);
+  useEffect(() => setDraft(name), [name]);
+  const changed = draft.trim() !== name;
+  return (
+    <form
+      className="settings-choice remote-name"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (changed) onSave(draft);
+      }}
+    >
+      <span>
+        <strong>Name on your phone</strong>
+        <small>
+          What your phone calls this Mac. Leave it empty for the computer's own
+          name.
+        </small>
+      </span>
+      <span className="remote-name-edit">
+        <input
+          aria-label="Name on your phone"
+          disabled={busy}
+          maxLength={60}
+          onChange={(event) => setDraft(event.target.value)}
+          value={draft}
+        />
+        {changed ? (
+          <button disabled={busy} type="submit">
+            Save
+          </button>
+        ) : undefined}
+      </span>
+    </form>
   );
 }
 
@@ -172,11 +241,23 @@ export function RemotePanel({
       />
       <EncryptionNotice />
       {state?.enabled ? (
-        <p className="remote-status" data-status={state.status}>
+        <p className="remote-status" data-look={remoteLook(state)}>
           <span aria-hidden="true" className="remote-status-dot" />
-          {STATUS_TEXT[state.status]}
+          {remoteStatusText(state)}
           {relayHost ? <code>{relayHost}</code> : undefined}
         </p>
+      ) : undefined}
+      {state?.enabled ? (
+        <MacNameField
+          busy={busy}
+          name={state.macName}
+          onSave={async (name) => {
+            const next = await perform(
+              client.request.remoteSetMacName({ name }),
+            );
+            if (next) setState(next);
+          }}
+        />
       ) : undefined}
       {state?.enabled ? (
         <SettingRow

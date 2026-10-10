@@ -6,7 +6,7 @@ import {
   RELAY_CLOSE,
   RelayError,
 } from "@daedalus/remote-protocol";
-import { phoneIdentity } from "./storage";
+import { addMac, phoneIdentity } from "./storage";
 
 export type MacState =
   | { kind: "connecting" }
@@ -29,6 +29,7 @@ const RETRY_MS = [2_000, 4_000, 8_000, 15_000, 30_000];
 export function useMac(mac: PairedMac, token: string) {
   const [state, setState] = useState<MacState>({ kind: "connecting" });
   const [snapshot, setSnapshot] = useState<DesktopSnapshotDto>();
+  const [macName, setMacName] = useState(mac.macName);
   const attempt = useRef(0);
 
   const load = useCallback(async (connection: PhoneConnection) => {
@@ -69,6 +70,12 @@ export function useMac(mac: PairedMac, token: string) {
         }
         current = connection;
         attempt.current = 0;
+        // Its name can arrive before this subscribes; it is sent again on a
+        // rename, and a reconnect sends it first thing.
+        connection.onMacName((name) => {
+          setMacName(name);
+          addMac({ ...mac, macName: name });
+        });
         connection.setVisible(document.visibilityState === "visible");
         setState({ kind: "online", connection });
         connection.onDataChanged(() => {
@@ -127,5 +134,5 @@ export function useMac(mac: PairedMac, token: string) {
     };
   }, [mac, token, load]);
 
-  return { state, snapshot };
+  return { state, snapshot, macName };
 }

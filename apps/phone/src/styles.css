@@ -838,3 +838,35 @@ li:has(> .session-row[data-team-member="true"]) {
 .switch:checked::after {
   transform: translateX(18px);
 }
+
+/* The title bar: the Mac's name, and whether this phone is connected to it. */
+.bar-title {
+  display: grid;
+  justify-items: center;
+  min-width: 0;
+}
+.bar-title h1 {
+  max-width: 100%;
+}
+.bar-title small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.mac-state {
+  align-items: center;
+  display: inline-flex;
+  gap: 5px;
+}
+.mac-state .dot {
+  background: var(--muted);
+  border-radius: 50%;
+  height: 6px;
+  width: 6px;
+}
+.mac-state[data-state="online"] .dot {
+  background: var(--success);
+}
+.mac-state[data-state="offline"] .dot,
+.mac-state[data-state="blocked"] .dot {
+  background: var(--danger);
+}

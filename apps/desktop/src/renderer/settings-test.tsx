@@ -383,6 +383,7 @@ const remote = {
   status: "off" as string,
   relay: "wss://relay.example.dev",
   macName: "Settings Mac",
+  connectedPhones: 0,
   phones: [] as Array<{ id: string; name: string; pairedAt: string }>,
 };
 const remoteState = () => ({
@@ -407,6 +408,10 @@ Object.assign(client.request, {
       expiresAt: Date.now() + 5 * 60_000,
     },
   }),
+  remoteSetMacName: async ({ name }: { name: string }) => {
+    remote.macName = name || "Settings Mac";
+    return remoteState();
+  },
   remoteSetKeepAwake: async ({ enabled }: { enabled: boolean }) => {
     remote.keepAwake = enabled;
     return remoteState();

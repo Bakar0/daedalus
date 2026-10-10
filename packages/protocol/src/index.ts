@@ -776,8 +776,11 @@ export interface RemoteStateDto {
   keepAwake: boolean;
   status: RemoteStatusDto;
   relay: string;
+  /** What phones call this Mac. */
   macName: string;
   phones: Array<{ id: string; name: string; pairedAt: string }>;
+  /** Phones with an open connection right now. */
+  connectedPhones: number;
 }
 
 /** What the QR code says, and until when it can be used. */
@@ -898,6 +901,8 @@ export interface DesktopRpcSchema {
       remoteGet: Request<Record<string, never>, RemoteStateDto>;
       remoteSetEnabled: Request<{ enabled: boolean }, RemoteStateDto>;
       remoteSetKeepAwake: Request<{ enabled: boolean }, RemoteStateDto>;
+      /** An empty name goes back to the computer's own name. */
+      remoteSetMacName: Request<{ name: string }, RemoteStateDto>;
       /** A new one-time pairing code; any earlier one stops working. */
       remotePairingCode: Request<Record<string, never>, RemotePairingDto>;
       /** Forgets a phone on this Mac, so it can no longer connect to it. */

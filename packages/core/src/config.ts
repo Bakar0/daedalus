@@ -142,6 +142,8 @@ export interface DaedalusConfig {
   remoteRelay: string;
   /** Hold off idle sleep while phone access is on, so phones can reach it. */
   remoteKeepAwake: boolean;
+  /** What phones call this Mac; empty means the computer's own name. */
+  remoteMacName: string;
   agents: Record<string, AgentDefinition>;
   /**
    * Per-capability state for the skills Daedalus ships. Absent means the
@@ -188,6 +190,7 @@ type StoredConfig = Partial<
     | "remoteEnabled"
     | "remoteRelay"
     | "remoteKeepAwake"
+    | "remoteMacName"
     | "agents"
   >
 > & {
@@ -306,6 +309,8 @@ export async function loadConfig(
     focusMode: stored.focusMode === true,
     remoteEnabled: stored.remoteEnabled === true,
     remoteKeepAwake: stored.remoteKeepAwake === true,
+    remoteMacName:
+      typeof stored.remoteMacName === "string" ? stored.remoteMacName : "",
     remoteRelay:
       env.DAEDALUS_REMOTE_RELAY || stored.remoteRelay || DEFAULT_REMOTE_RELAY,
     agents: stored.agents || {
@@ -419,6 +424,14 @@ export async function saveRemoteKeepAwake(
 ): Promise<void> {
   await saveSetting(config, { remoteKeepAwake: enabled });
   config.remoteKeepAwake = enabled;
+}
+
+export async function saveRemoteMacName(
+  config: DaedalusConfig,
+  name: string,
+): Promise<void> {
+  await saveSetting(config, { remoteMacName: name });
+  config.remoteMacName = name;
 }
 
 export async function saveFocusMode(

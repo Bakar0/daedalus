@@ -43,7 +43,6 @@ export interface WorkspaceGroup {
 }
 
 export function sessionGroups(snapshot: DesktopSnapshotDto): {
-  needsMe: SessionRow[];
   groups: WorkspaceGroup[];
 } {
   const activity = new Map(
@@ -102,9 +101,6 @@ export function sessionGroups(snapshot: DesktopSnapshotDto): {
       ];
     });
   return {
-    needsMe: groups.flatMap((group) =>
-      group.rows.filter((row) => row.view.attention),
-    ),
     groups,
   };
 }
@@ -138,20 +134,14 @@ export function FolderIcon() {
 /** One session, as a row of the Mac's left column. */
 export function SessionRowView({
   row,
-  context,
   onOpen,
 }: {
   row: SessionRow;
-  /** What the second line names when there is no team: task or workspace. */
-  context: "task" | "workspace";
   onOpen: (id: string) => void;
 }) {
   const { session, view, team } = row;
   const tool = sessionTool(session);
-  const second =
-    context === "workspace"
-      ? (row.workspace?.name ?? "Workspace")
-      : (row.task ?? "Workspace session");
+  const second = row.task ?? "Workspace session";
   return (
     <li>
       <button

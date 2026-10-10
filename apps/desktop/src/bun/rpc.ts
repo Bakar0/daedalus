@@ -449,6 +449,7 @@ const NO_REMOTE: DesktopRemoteHost = {
     relay: "",
     macName: "",
     phones: [],
+    connectedPhones: 0,
   }),
   setEnabled: async () => {
     throw new DaedalusError(
@@ -463,6 +464,12 @@ const NO_REMOTE: DesktopRemoteHost = {
     );
   },
   setKeepAwake: async () => {
+    throw new DaedalusError(
+      "DEPENDENCY",
+      "Phone access is not available here.",
+    );
+  },
+  setMacName: async () => {
     throw new DaedalusError(
       "DEPENDENCY",
       "Phone access is not available here.",
@@ -750,6 +757,7 @@ export function createDesktopRequestHandlers(
     remoteSetEnabled: ({ enabled }) => mutate(() => remote.setEnabled(enabled)),
     remoteSetKeepAwake: ({ enabled }) =>
       mutate(() => remote.setKeepAwake(enabled)),
+    remoteSetMacName: ({ name }) => mutate(() => remote.setMacName(name)),
     remotePairingCode: () => result(() => remote.pairingCode()),
     remotePhoneRemove: ({ id }) => mutate(() => remote.removePhone(id)),
     autoRestoreSessionsSet: ({ enabled }) =>

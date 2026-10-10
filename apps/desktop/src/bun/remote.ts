@@ -6,6 +6,7 @@ import {
   type PhoneAlert,
   saveRemoteEnabled,
   saveRemoteKeepAwake,
+  saveRemoteMacName,
 } from "@daedalus/core";
 import { runCommand, TmuxPtyBridge } from "@daedalus/platform";
 import type {
@@ -220,6 +221,7 @@ interface PhoneState {
  */
 export class RemoteConnector {
   readonly stats: WireStats = emptyWireStats();
+  #macName: string;
   #socket: WebSocket | undefined;
   #stopped = false;
   #retryMs = 1_000;
@@ -235,6 +237,7 @@ export class RemoteConnector {
   #markConnected!: () => void;
 
   constructor(private readonly options: RemoteConnectorOptions) {
+    this.#macName = options.macName;
     this.#connected = new Promise((resolve) => {
       this.#markConnected = resolve;
     });
@@ -277,7 +280,7 @@ export class RemoteConnector {
     this.#offer = createPairingOffer(
       this.options.store.identity,
       this.options.relay,
-      this.options.macName,
+      this.#macName,
       lifetimeMs,
     );
     return this.#offer;
@@ -316,6 +319,18 @@ export class RemoteConnector {
     } catch {
       return "failed";
     }
+  }
+
+  /** Phones with a finished handshake right now. */
+  get connectedPhones(): number {
+    return [...this.#phones.values()].filter((state) => state.channel).length;
+  }
+
+  /** Renames this Mac on every connected phone; later ones hear on connect. */
+  setMacName(name: string): void {
+    this.#macName = name;
+    for (const [id, state] of this.#phones)
+      if (state.channel) this.#sendSecure(id, { t: "mac", name });
   }
 
   /** Whether a connected phone has the app open on screen right now. */
@@ -505,7 +520,7 @@ export class RemoteConnector {
       ) {
         this.#sendPlain(phoneId, {
           type: "paired",
-          macName: this.options.macName,
+          macName: this.#macName,
         });
         return;
       }
@@ -532,7 +547,7 @@ export class RemoteConnector {
       this.options.log?.("remote_phone_paired", { phoneId });
       this.#sendPlain(phoneId, {
         type: "paired",
-        macName: this.options.macName,
+        macName: this.#macName,
       });
       return;
     }
@@ -563,6 +578,7 @@ export class RemoteConnector {
       if (!state?.handshake) throw new Error("Ready without a handshake");
       state.channel = state.handshake.finish(message);
       delete state.handshake;
+      this.#sendSecure(phoneId, { t: "mac", name: this.#macName });
       this.options.log?.("remote_phone_connected", { phoneId });
     }
   }
@@ -830,6 +846,7 @@ export interface DesktopRemoteHost {
   state(): RemoteStateDto;
   setEnabled(enabled: boolean): Promise<RemoteStateDto>;
   setKeepAwake(enabled: boolean): Promise<RemoteStateDto>;
+  setMacName(name: string): Promise<RemoteStateDto>;
   pairingCode(): RemotePairingDto;
   removePhone(id: string): Promise<RemoteStateDto>;
 }
@@ -887,6 +904,22 @@ export class RemoteHost implements DesktopRemoteHost {
     return Boolean(this.#awake);
   }
 
+  /** What phones call this Mac: the chosen name, else the computer's. */
+  get macName(): string {
+    return (
+      this.options.context.config.remoteMacName.trim() || this.options.macName
+    );
+  }
+
+  async setMacName(name: string): Promise<RemoteStateDto> {
+    await saveRemoteMacName(
+      this.options.context.config,
+      name.trim().slice(0, 60),
+    );
+    this.#connector?.setMacName(this.macName);
+    return this.state();
+  }
+
   async setKeepAwake(enabled: boolean): Promise<RemoteStateDto> {
     await saveRemoteKeepAwake(this.options.context.config, enabled);
     this.#keepAwake();
@@ -898,7 +931,7 @@ export class RemoteHost implements DesktopRemoteHost {
     this.#store ??= await RemoteStore.open(this.options.context.config.home);
     this.#connector = new RemoteConnector({
       relay: this.options.context.config.remoteRelay,
-      macName: this.options.macName,
+      macName: this.macName,
       store: this.#store,
       handlers: this.options.handlers(),
       openTerminal: this.options.openTerminal,
@@ -944,7 +977,8 @@ export class RemoteHost implements DesktopRemoteHost {
       keepAwake: config.remoteKeepAwake,
       status: this.#connector?.status ?? "off",
       relay: config.remoteRelay,
-      macName: this.options.macName,
+      macName: this.macName,
+      connectedPhones: this.#connector?.connectedPhones ?? 0,
       phones: (this.#store?.phones ?? []).map(({ id, name, pairedAt }) => ({
         id,
         name,

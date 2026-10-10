@@ -8,7 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { RemoteStateDto, RpcResult } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { Menu, MenuCheck } from "./Menu";
-import { STATUS_TEXT } from "./RemotePanel";
+import { remoteLook, remoteStatusText } from "./RemotePanel";
 
 const POLL_MS = 3_000;
 
@@ -50,13 +50,12 @@ export function RemoteMenu({
     return () => window.clearInterval(timer);
   }, [refresh]);
 
-  const status = state?.enabled ? state.status : "off";
-  const phones = state?.phones.length ?? 0;
+  const look = remoteLook(state);
   return (
     <Menu
       align="end"
       className="remote-menu"
-      label={`Phone access: ${STATUS_TEXT[status]}`}
+      label={`Phone access: ${remoteStatusText(state)}`}
       menuLabel="Phone access"
       summary={
         <>
@@ -64,19 +63,16 @@ export function RemoteMenu({
           <span
             aria-hidden="true"
             className="remote-menu-dot"
-            data-status={status}
+            data-look={look}
           />
         </>
       }
       summaryClassName="quiet workspace-heading-action"
-      title="Phone access"
+      title={`Phone access: ${remoteStatusText(state)}`}
     >
       <span className="menu-heading">Phone access</span>
-      <p className="remote-menu-status" data-status={status}>
-        {STATUS_TEXT[status]}
-        {state?.enabled && phones > 0
-          ? ` ${phones} paired phone${phones === 1 ? "" : "s"}.`
-          : ""}
+      <p className="remote-menu-status" data-look={look}>
+        {remoteStatusText(state)}
       </p>
       <button
         aria-checked={state?.enabled ?? false}

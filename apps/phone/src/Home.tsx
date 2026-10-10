@@ -34,7 +34,7 @@ export function Home({
   onSelectMac: (macId: string) => void;
   onSignOut: () => void;
 }) {
-  const { state, snapshot } = useMac(mac, token);
+  const { state, snapshot, macName } = useMac(mac, token);
   const [open, setOpen] = useState<string>();
   const rows = useMemo(
     () => (snapshot ? sessionGroups(snapshot) : undefined),
@@ -70,7 +70,22 @@ export function Home({
     );
 
   return (
-    <Shell onAccount={onAccount} title={mac.macName}>
+    <Shell
+      onAccount={onAccount}
+      subtitle={
+        <span className="mac-state" data-state={state.kind}>
+          <span aria-hidden="true" className="dot" />
+          {state.kind === "online"
+            ? "Connected"
+            : state.kind === "connecting"
+              ? "Connecting…"
+              : state.kind === "offline"
+                ? "Offline · retrying"
+                : "Not connected"}
+        </span>
+      }
+      title={macName}
+    >
       {macs.length > 1 ? (
         <div className="mac-picker" role="tablist">
           {macs.map((item) => (
@@ -109,21 +124,6 @@ export function Home({
       ) : rows ? (
         <>
           <PushControl compact token={token} />
-          {rows.needsMe.length > 0 ? (
-            <section className="group">
-              <h2 className="group-title">Needs me</h2>
-              <ul className="session-rows">
-                {rows.needsMe.map((row) => (
-                  <SessionRowView
-                    context="workspace"
-                    key={row.session.id}
-                    onOpen={openSession}
-                    row={row}
-                  />
-                ))}
-              </ul>
-            </section>
-          ) : undefined}
           {rows.groups.map((group) => (
             <section className="workspace-group" key={group.workspace.id}>
               <header className="workspace-head">
@@ -140,7 +140,6 @@ export function Home({
               <ul className="session-rows workspace-sessions">
                 {group.rows.map((row) => (
                   <SessionRowView
-                    context="task"
                     key={row.session.id}
                     onOpen={openSession}
                     row={row}

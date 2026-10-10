@@ -757,10 +757,15 @@ try {
   await clickAt(remoteSwitch);
   await Bun.sleep(300);
   const waiting = await evaluate<string>(
-    "document.querySelector('.remote-status')?.dataset.status ?? ''",
+    "document.querySelector('.remote-status')?.dataset.look ?? ''",
   );
-  if (waiting !== "waiting_for_phone")
+  if (waiting !== "ready")
     throw new Error(`Remote: turned on, the status is ${waiting}`);
+  const nameField = await evaluate<string>(
+    "document.querySelector('.remote-name input')?.value ?? ''",
+  );
+  if (nameField !== "Settings Mac")
+    throw new Error(`Remote: the phone name field shows ${nameField}`);
   const awake = await evaluate<{
     title: string;
     checked: boolean;
@@ -809,12 +814,12 @@ try {
   }>(`(() => ({
     qr: Boolean(document.querySelector('.remote-qr')),
     phones: [...document.querySelectorAll('.remote-phones li strong')].map((one) => one.textContent),
-    status: document.querySelector('.remote-status')?.dataset.status ?? '',
+    status: document.querySelector('.remote-status')?.dataset.look ?? '',
   }))()`);
   if (
     paired.qr ||
     paired.phones.join() !== "Pixel 9" ||
-    paired.status !== "online"
+    paired.status !== "ready"
   )
     throw new Error(`Remote: pairing did not show: ${JSON.stringify(paired)}`);
   const pairedShot = await send<{ data: string }>("Page.captureScreenshot", {
@@ -963,7 +968,7 @@ try {
   })()`);
   if (
     menu.items.join(" | ") !== "Allow phone access | Pair a phone…" ||
-    !menu.status.startsWith("Connected")
+    menu.status !== "On. No phone is connected right now."
   )
     throw new Error(`Phone access menu is wrong: ${JSON.stringify(menu)}`);
   if (menu.box) {

@@ -3,11 +3,14 @@ import type { ReactNode } from "react";
 /** The top bar and the page under it. */
 export function Shell({
   title,
+  subtitle,
   onAccount,
   onBack,
   children,
 }: {
   title: string;
+  /** A short line under the title: the connection, for a Mac. */
+  subtitle?: ReactNode;
   onAccount?: () => void;
   onBack?: () => void;
   children: ReactNode;
@@ -22,7 +25,10 @@ export function Shell({
         ) : (
           <img alt="" className="bar-logo" src="/icon-192.png" />
         )}
-        <h1>{title}</h1>
+        <div className="bar-title">
+          <h1>{title}</h1>
+          {subtitle ? <small>{subtitle}</small> : undefined}
+        </div>
         {onAccount ? (
           <button aria-label="Account" className="bar-icon" onClick={onAccount}>
             <span aria-hidden="true" className="avatar" />
