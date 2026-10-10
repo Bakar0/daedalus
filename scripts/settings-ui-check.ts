@@ -621,6 +621,7 @@ try {
     const point = await evaluate<{ x: number; y: number } | null>(`(() => {
       const element = ${expression};
       if (!element) return null;
+      element.scrollIntoView({ block: "center" });
       const rect = element.getBoundingClientRect();
       return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
     })()`);
@@ -803,6 +804,32 @@ try {
   for (
     let attempt = 0;
     attempt < 40 &&
+    !(await evaluate<boolean>(
+      "Boolean(document.querySelector('.remote-request'))",
+    ));
+    attempt += 1
+  )
+    await Bun.sleep(100);
+  const asked = await evaluate<string>(
+    "document.querySelector('.remote-request')?.textContent ?? ''",
+  );
+  if (!asked.includes("Pixel 9") || !asked.includes("650 182"))
+    throw new Error(`Remote: the pairing question is wrong: ${asked}`);
+  const askShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(
+    remoteScreenshotPath.replace(".png", "-ask.png"),
+    Buffer.from(askShot.data, "base64"),
+  );
+  await clickAt(
+    "[...document.querySelectorAll('.remote-request button')].find((one) => one.textContent.trim() === 'Allow')",
+  );
+  // The panel reads the host every two seconds.
+  await Bun.sleep(2_500);
+  for (
+    let attempt = 0;
+    attempt < 40 &&
     (await evaluate<boolean>("Boolean(document.querySelector('.remote-qr'))"));
     attempt += 1
   )
@@ -816,12 +843,19 @@ try {
     phones: [...document.querySelectorAll('.remote-phones li strong')].map((one) => one.textContent),
     status: document.querySelector('.remote-status')?.dataset.look ?? '',
   }))()`);
+  const afterPairing = await evaluate<string>(
+    "document.querySelector('.remote-panel')?.textContent ?? ''",
+  );
   if (
     paired.qr ||
     paired.phones.join() !== "Pixel 9" ||
-    paired.status !== "ready"
+    paired.status !== "ready" ||
+    !afterPairing.includes("owner@example.com") ||
+    !afterPairing.includes("Pixel 9: Sent a message")
   )
-    throw new Error(`Remote: pairing did not show: ${JSON.stringify(paired)}`);
+    throw new Error(
+      `Remote: pairing did not show: ${JSON.stringify(paired)} ${afterPairing.slice(0, 600)} ${(await evaluate<string>("document.body.innerText")).slice(0, 400)}`,
+    );
   const pairedShot = await send<{ data: string }>("Page.captureScreenshot", {
     format: "png",
   });
@@ -840,7 +874,7 @@ try {
   );
   if (left !== 0) throw new Error("Remote: Remove did not forget the phone");
   console.log(
-    "Remote: off by default; on, it waits for a phone and offers Keep the Mac awake (off); the pairing code is a QR code with a countdown; a paired phone hides the code and is listed; Remove forgets it",
+    "Remote: off by default; on, it waits for a phone and offers Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account and its recent activity; Remove forgets it",
   );
   // And General, where a switch sits beside a two-line description and the
   // alignment either reads or does not.

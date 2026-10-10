@@ -31,7 +31,8 @@ const relayState = await mkdtemp(join(tmpdir(), "daedalus-phone-relay-"));
 const socket = `daedalus-${createHash("sha256").update(home).digest("hex").slice(0, 12)}`;
 const port = 19_700 + Math.floor(Math.random() * 500);
 const debuggingPort = 19_300 + Math.floor(Math.random() * 300);
-const origin = `http://127.0.0.1:${port}`;
+// A host name, not an IP: passkeys (the app lock) refuse an IP as their site.
+const origin = `http://localhost:${port}`;
 const env = { ...process.env, DAEDALUS_HOME: home };
 const ADMIN_KEY = "admin-test-key";
 const CLIENT_ID = "test-client.apps.googleusercontent.com";
@@ -275,7 +276,7 @@ try {
     throw new Error("tmux client");
   const store = await RemoteStore.open(home);
   connector = new RemoteConnector({
-    relay: `ws://127.0.0.1:${port}`,
+    relay: `ws://localhost:${port}`,
     macName: "Studio Mac",
     store,
     handlers: withTeam(
@@ -631,10 +632,44 @@ try {
     `PASS Account shows the email, plan and both devices (${devices.join(", ")})`,
   );
 
+  // The app lock, with a virtual passkey that has PRF, as a phone's does.
+  await send("WebAuthn.enable");
+  const added = await send<{ authenticatorId?: string; message?: string }>(
+    "WebAuthn.addVirtualAuthenticator",
+    {
+      options: {
+        protocol: "ctap2",
+        ctap2Version: "ctap2_1",
+        transport: "internal",
+        hasResidentKey: true,
+        hasUserVerification: true,
+        isUserVerified: true,
+        hasPrf: true,
+      },
+    },
+  );
+  if (!added.authenticatorId)
+    throw new Error(`No virtual passkey: ${added.message}`);
+  await tap(byText("button", "Lock with a passkey"));
+  await waitFor("locked", byText(".card strong", "Locked with a passkey"));
+  const stored = await evaluate<string>(
+    "localStorage.getItem('daedalus.phone.v1')",
+  );
+  if (stored.includes('"token"') || stored.includes("secretKey"))
+    throw new Error("The app lock left the key or token readable");
+  await send("Page.reload");
+  await waitFor("lock screen", byText("h1", "Daedalus is locked"));
+  await screenshot("locked");
+  await tap(byText("button", "Unlock"));
+  await waitFor("unlocked home", byText(".bar h1", "Studio Mac"), 30_000);
+  console.log(
+    "PASS the app lock seals the key and sign-in under a passkey; a reload asks for it and the passkey opens the app",
+  );
+
   const blocking = errors.filter((text) => !text.includes("favicon"));
   if (blocking.length) throw new Error(`Page errors: ${blocking.join(" | ")}`);
   console.log(
-    `Screenshots: ${["sign-in", "home", "session", "account"].map(shot).join(", ")}`,
+    `Screenshots: ${["sign-in", "pair-ask", "pair-code", "home", "session", "account", "locked"].map(shot).join(", ")}`,
   );
   cdp.close();
 } finally {

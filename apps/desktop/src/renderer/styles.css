@@ -7362,6 +7362,9 @@ dd {
   display: grid;
   gap: 2px;
 }
+.remote-account button {
+  white-space: nowrap;
+}
 .remote-account small {
   color: var(--muted);
   font-size: 11px;

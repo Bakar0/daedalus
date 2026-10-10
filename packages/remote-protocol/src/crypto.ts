@@ -353,3 +353,44 @@ export function acceptHandshake(
     },
   };
 }
+
+/**
+ * Seals data at rest under a 32-byte secret (the phone's app lock: a
+ * passkey's PRF output). The key is hashed first, so the raw secret is
+ * never used as a cipher key directly.
+ */
+export function sealAtRest(secret: Uint8Array, plaintext: string): string {
+  const key = sodium.crypto_generichash(
+    sodium.crypto_secretbox_KEYBYTES,
+    sodium.from_string("daedalus-app-lock-v1"),
+    secret,
+  );
+  const nonce = sodium.randombytes_buf(sodium.crypto_secretbox_NONCEBYTES);
+  const box = sodium.crypto_secretbox_easy(
+    sodium.from_string(plaintext),
+    nonce,
+    key,
+  );
+  const out = new Uint8Array(nonce.length + box.length);
+  out.set(nonce);
+  out.set(box, nonce.length);
+  return toBase64(out);
+}
+
+/** Throws when the secret is not the one the data was sealed with. */
+export function openAtRest(secret: Uint8Array, sealed: string): string {
+  const key = sodium.crypto_generichash(
+    sodium.crypto_secretbox_KEYBYTES,
+    sodium.from_string("daedalus-app-lock-v1"),
+    secret,
+  );
+  const bytes = fromBase64(sealed);
+  const nonceBytes = sodium.crypto_secretbox_NONCEBYTES;
+  return sodium.to_string(
+    sodium.crypto_secretbox_open_easy(
+      bytes.subarray(nonceBytes),
+      bytes.subarray(0, nonceBytes),
+      key,
+    ),
+  );
+}

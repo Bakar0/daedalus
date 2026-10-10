@@ -7,10 +7,15 @@ import {
   pairWithMac,
 } from "@daedalus/remote-protocol";
 import { Account } from "./Account";
+import { RELOCK_AFTER_MS, unlockApp } from "./lock";
 import { Home } from "./Home";
 import { Shell } from "./Shell";
 import {
   addMac,
+  appLock,
+  forgetEverything,
+  isLocked,
+  relock,
   pairedMacs,
   pendingPair,
   phoneIdentity,
@@ -64,8 +69,77 @@ function takeFromAddress(): { error?: string } {
   if (token || error || nonce !== null)
     history.replaceState(null, "", location.pathname);
   if (!ours) return {};
-  if (token) setToken(token);
+  if (token) {
+    // Locked, the token waits in this tab until the passkey opens storage.
+    if (isLocked()) arriving = token;
+    else setToken(token);
+  }
   return error ? { error } : {};
+}
+
+let arriving: string | undefined;
+
+/**
+ * Locked when the app opens, and again after five minutes in the
+ * background. Returns whether it is locked now, and how to mark it open.
+ */
+function useAppLock(): [boolean, () => void] {
+  const [locked, setLocked] = useState(isLocked);
+  useEffect(() => {
+    let hiddenAt = 0;
+    const change = () => {
+      if (document.visibilityState === "hidden") hiddenAt = Date.now();
+      else if (
+        appLock() &&
+        hiddenAt &&
+        Date.now() - hiddenAt > RELOCK_AFTER_MS
+      ) {
+        relock();
+        setLocked(true);
+      }
+    };
+    document.addEventListener("visibilitychange", change);
+    return () => document.removeEventListener("visibilitychange", change);
+  }, []);
+  return [locked, () => setLocked(false)];
+}
+
+function Unlock({ onUnlocked }: { onUnlocked: () => void }) {
+  const [error, setError] = useState<string>();
+  const open = () =>
+    unlockApp().then(onUnlocked, (failure: unknown) =>
+      setError(failure instanceof Error ? failure.message : String(failure)),
+    );
+  return (
+    <div className="signin">
+      <img alt="" className="signin-logo" src="/icon-192.png" />
+      <h1>Daedalus is locked</h1>
+      <p className="signin-lead">Unlock with this phone's passkey.</p>
+      {error ? (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      ) : undefined}
+      <button className="button primary" onClick={open}>
+        Unlock
+      </button>
+      <button
+        className="link danger"
+        onClick={() => {
+          if (
+            !confirm(
+              "Forget everything on this phone? You sign in and pair again, and should remove the old phone from your Mac.",
+            )
+          )
+            return;
+          forgetEverything();
+          location.reload();
+        }}
+      >
+        Lost the passkey? Start over
+      </button>
+    </div>
+  );
 }
 
 export function App() {
@@ -74,11 +148,25 @@ export function App() {
   const [macs, setMacs] = useState(pairedMacs);
   const [selected, setSelected] = useState<string>();
   const [view, setView] = useState<"home" | "account">("home");
+  const [locked, markUnlocked] = useAppLock();
 
   const signOut = () => {
     setToken(undefined);
     setTokenState(undefined);
   };
+
+  if (locked)
+    return (
+      <Unlock
+        onUnlocked={() => {
+          if (arriving) setToken(arriving);
+          arriving = undefined;
+          setTokenState(storedToken());
+          setMacs(pairedMacs());
+          markUnlocked();
+        }}
+      />
+    );
 
   if (!token) return <SignIn error={signInError} />;
 

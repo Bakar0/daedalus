@@ -376,7 +376,7 @@ const client = {
 } as unknown as DesktopClient;
 
 // Settings → Remote's host side. The check calls `remotePair()` to stand in
-// for a phone finishing pairing.
+// for a phone asking to pair; Allow in the panel finishes it.
 const remote = {
   enabled: false,
   keepAwake: false,
@@ -385,6 +385,10 @@ const remote = {
   macName: "Settings Mac",
   connectedPhones: 0,
   phones: [] as Array<{ id: string; name: string; pairedAt: string }>,
+  account: undefined as string | undefined,
+  pairingRequest: undefined as
+    | { phoneId: string; phoneName: string; code: string; expiresAt: number }
+    | undefined,
 };
 const remoteState = () => ({
   ok: true,
@@ -420,14 +424,55 @@ Object.assign(client.request, {
     remote.phones = remote.phones.filter((phone) => phone.id !== id);
     return remoteState();
   },
+  remoteConfirmPairing: async ({ allow }: { allow: boolean }) => {
+    const request = remote.pairingRequest;
+    remote.pairingRequest = undefined;
+    if (allow && request) {
+      remote.phones.push({
+        id: request.phoneId,
+        name: request.phoneName,
+        pairedAt: "2026-10-10T09:00:00.000Z",
+      });
+      remote.status = "online";
+      remote.account = "owner@example.com";
+    }
+    return remoteState();
+  },
+  remoteLeaveAccount: async () => remoteState(),
+  remoteStartOver: async () => remoteState(),
+  remoteActivity: async () => ({
+    ok: true,
+    data: remote.phones.length
+      ? [
+          {
+            at: "2026-10-10T09:05:00.000Z",
+            phoneId: "phone-0001",
+            phone: "Pixel 9",
+            action: "terminal.close",
+            target: "session-1",
+            ok: true,
+            bytesIn: 42,
+            bytesOut: 9000,
+          },
+          {
+            at: "2026-10-10T09:02:00.000Z",
+            phoneId: "phone-0001",
+            phone: "Pixel 9",
+            action: "agentSend",
+            target: "session-1",
+            ok: true,
+          },
+        ]
+      : [],
+  }),
 });
 (window as unknown as { remotePair: () => void }).remotePair = () => {
-  remote.phones.push({
-    id: "phone-0001",
-    name: "Pixel 9",
-    pairedAt: "2026-10-10T09:00:00.000Z",
-  });
-  remote.status = "online";
+  remote.pairingRequest = {
+    phoneId: "phone-0001",
+    phoneName: "Pixel 9",
+    code: "650182",
+    expiresAt: Date.now() + 2 * 60_000,
+  };
 };
 
 createRoot(document.getElementById("root")!).render(
