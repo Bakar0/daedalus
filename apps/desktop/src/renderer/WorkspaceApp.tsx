@@ -79,8 +79,10 @@ import { ColorSwatches, SessionMenu } from "./SessionMenu";
 import { RoutineBar } from "./routines/RoutineBar";
 import { TeamBar, TeamPanel } from "./teams/TeamPanel";
 import { RoutinesPanel } from "./routines/RoutinesPanel";
+import { RemoteMenu } from "./RemoteMenu";
 import { SecretsPanel } from "./SecretsPanel";
 import {
+  sessionStatusLine,
   AgentStatusDot,
   compactTokenLabel,
   lifecycleTone,
@@ -96,6 +98,7 @@ import {
   waitingLabel,
   type SessionStatusView,
 } from "./session-view";
+import { sessionDisplayOrder, teamLookup } from "./session-order";
 
 // Pixi is about 290 kB (87 kB gzipped) that the app only needs once someone
 // opens the World, so the view and everything under it load on first open.
@@ -2776,15 +2779,7 @@ export function WorkspaceApp({
   const teamsById = new Map(
     (snapshot?.teams ?? []).map((team) => [team.id, team]),
   );
-  /** The team a session leads or belongs to, and its handle there. */
-  const teamOf = (session: AgentSessionDto) => {
-    const led = teamsByLead.get(session.id);
-    if (led) return { team: led, role: "lead" as const, handle: "lead" };
-    const joined = session.teamId ? teamsById.get(session.teamId) : undefined;
-    return joined && session.teamHandle
-      ? { team: joined, role: "member" as const, handle: session.teamHandle }
-      : undefined;
-  };
+  const teamOf = teamLookup(snapshot?.teams ?? []);
   const workspaceSessionLaunches = sessionLaunches.filter((item) =>
     inScope(item.workspaceId),
   );
@@ -4706,14 +4701,7 @@ export function WorkspaceApp({
               >
                 {startupError
                   ? `failed to start · ${startupError}`
-                  : [
-                      statusView.attention && statusView.since
-                        ? `${statusView.label} ${waitingLabel(statusView.since, now)}`
-                        : statusView.label,
-                      statusView.detail,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
+                  : sessionStatusLine(statusView, now)}
               </span>
             </em>
           </span>
@@ -4959,32 +4947,10 @@ export function WorkspaceApp({
         }
       >
         {(reorder) => {
-          // Pinned sessions sit above the rest, in the order they were
-          // pinned; the manual order holds within each group.
-          const ordered = reorder.order
-            .flatMap(
-              (id) => liveSessions.find((session) => session.id === id) ?? [],
-            )
-            .sort((left, right) =>
-              left.pinnedAt && right.pinnedAt
-                ? left.pinnedAt.localeCompare(right.pinnedAt)
-                : Number(Boolean(right.pinnedAt)) -
-                  Number(Boolean(left.pinnedAt)),
-            );
-          // Members sit right under their lead when it is in this list.
-          // Display only: the stored order is what reordering changes.
-          const grouped = ordered.flatMap((session) => {
-            const team = teamOf(session);
-            if (
-              team?.role === "member" &&
-              ordered.some((item) => item.id === team.team.leadId)
-            )
-              return [];
-            const lead = teamsByLead.get(session.id);
-            return lead
-              ? [session, ...ordered.filter((item) => item.teamId === lead.id)]
-              : [session];
-          });
+          const ordered = reorder.order.flatMap(
+            (id) => liveSessions.find((session) => session.id === id) ?? [],
+          );
+          const grouped = sessionDisplayOrder(ordered, snapshot?.teams ?? []);
           return (
             <div
               aria-label={`Sessions in ${item.name}`}
@@ -5122,17 +5088,6 @@ export function WorkspaceApp({
           )}
         </strong>
       </button>
-      <span className="workspace-card-actions" data-no-drag>
-        <button
-          aria-label="Global secrets"
-          className="session-card-action workspace-secrets-action"
-          onClick={() => setSecretsWorkspace("global")}
-          title="Global secrets"
-          type="button"
-        >
-          <KeyIcon />
-        </button>
-      </span>
     </div>
   );
 
@@ -5501,6 +5456,23 @@ export function WorkspaceApp({
               <h1>Workspaces</h1>
             </div>
             <div className="panel-heading-actions">
+              <RemoteMenu
+                client={client}
+                onPair={() => {
+                  setSettingsSection("remote");
+                  setModal("settings");
+                }}
+                perform={perform}
+              />
+              <button
+                aria-label="Global secrets"
+                className="quiet workspace-heading-action"
+                onClick={() => setSecretsWorkspace("global")}
+                title="Global secrets"
+                type="button"
+              >
+                <KeyIcon />
+              </button>
               <button
                 aria-label="Create workspace"
                 className="quiet workspace-heading-create"

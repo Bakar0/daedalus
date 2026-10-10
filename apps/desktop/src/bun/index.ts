@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { join, resolve } from "node:path";
 import Electrobun, {
   ApplicationMenu,
@@ -41,6 +41,7 @@ import { acceptFirstMouse } from "./first-mouse";
 import { installCliShim } from "./cli-shim";
 import { QuitController } from "./quit";
 import { UpdateController } from "./updates";
+import { agentTerminalOpener, PhoneWindowSize, RemoteHost } from "./remote";
 import { createDesktopRequestHandlers, desktopDataFingerprint } from "./rpc";
 import {
   authorizeTerminalRequest,
@@ -88,6 +89,10 @@ for (const key of Object.keys(process.env))
 // The window is the only surface that can draw a toast, so the host is the
 // only adapter that may claim it; everywhere else a toast waits in the queue.
 let windowReady = false;
+// Set once the remote host exists; `announce` can run before that, from a
+// repository finishing in the background during startup.
+let announceRemote = (): void => {};
+
 const context = await createApplicationContext({
   migrationsDirectory: resolve(PATHS.RESOURCES_FOLDER, "app/migrations"),
   canDrawToasts: () => windowReady,
@@ -178,6 +183,7 @@ await context.skills.sync().catch(async (error: unknown) => {
 const terminalTmux = context.tmux;
 if (!(terminalTmux instanceof CommandTmuxClient))
   throw new Error("Desktop terminal requires the command tmux adapter");
+const phoneSizes = new PhoneWindowSize(terminalTmux);
 const terminalTarget = (session: string) => ({
   socketName: terminalTmux.socketName,
   session,
@@ -257,8 +263,12 @@ const server = Bun.serve<SocketData>({
           onInput: (data) => {
             // A real keystroke holds Daedalus's own typing into this
             // session for a while, so a routine never lands in a draft.
-            if (socket.data.targetKind === "agent" && isTyping(data))
+            if (socket.data.targetKind === "agent" && isTyping(data)) {
               context.deliveryGate.noteKeystroke(target.id);
+              // Back at the Mac: a session a phone has open goes back to
+              // the Mac's size.
+              void phoneSizes.yieldToMac(target.tmuxSession).catch(() => {});
+            }
           },
           onError: (error) =>
             void context.logger.write("error", "terminal_connection_failed", {
@@ -323,6 +333,7 @@ function announce(source: "desktop" | "external"): void {
   revision += 1;
   if (windowOpen) rpc.send.dataChanged({ revision, source });
   if (worldOpen) worldRpc.send.dataChanged({ revision, source });
+  announceRemote();
 }
 
 /**
@@ -393,6 +404,24 @@ const updates = new UpdateController({
   log: (event, fields) => void context.logger.write("info", event, fields),
 });
 
+// Phone access (#53). Off until Settings › Remote turns it on. A phone's
+// requests go through their own handler set: no window, clipboard or
+// browser, and the connector's allowlist on top.
+const remote = new RemoteHost({
+  context,
+  macName: hostname().replace(/\.local$/, ""),
+  handlers: () =>
+    createDesktopRequestHandlers(context, () => announce("desktop")),
+  openTerminal: agentTerminalOpener(context, terminalTmux, phoneSizes),
+  log: (event, fields) => void context.logger.write("info", event, fields),
+});
+announceRemote = () => remote.announce();
+void remote.start().catch((error) =>
+  context.logger.write("error", "remote_start_failed", {
+    message: error instanceof Error ? error.message : String(error),
+  }),
+);
+
 const createRpc = (role: DesktopWindowRole = "main") =>
   BrowserView.defineRPC<DesktopRpcSchema>({
     // Initial repository clones and fetches can legitimately take several
@@ -423,6 +452,7 @@ const createRpc = (role: DesktopWindowRole = "main") =>
           Utils.clipboardWriteText(text);
           return true;
         },
+        remote,
       ),
     },
   });
@@ -774,7 +804,26 @@ setInterval(async () => {
     // and a queue that shouts a week of history is worse than a dropped ping.
     // Five minutes rather than one: a CLI hands over whenever this process is
     // alive, and this tick is what runs late when the machine is loaded.
-    await context.notifications.flushDesktop(5, 300_000);
+    // Logged, because "I got no notification" has to be answerable: whether
+    // macOS took it, and through which backend.
+    await context.notifications.flushDesktop(
+      5,
+      300_000,
+      Date.now(),
+      (notification, result) =>
+        void context.logger.write(
+          "info",
+          "desktop_notification",
+          result === "phone"
+            ? { sessionId: notification.sessionId, sentTo: "phone" }
+            : {
+                sessionId: notification.sessionId,
+                delivered: result.delivered,
+                backend: result.backend,
+                degraded: result.degraded,
+              },
+        ),
+    );
     await recordAttentionCount(
       context.repositories.listSessionAttention().length,
     );

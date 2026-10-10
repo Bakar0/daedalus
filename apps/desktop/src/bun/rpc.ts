@@ -61,6 +61,8 @@ import type {
   SecretDto,
 } from "@daedalus/protocol";
 
+import type { DesktopRemoteHost } from "./remote";
+
 /**
  * The host's side of the quit dialog. It lives in `index.ts` because only the
  * host can end the process; the RPC layer just carries the two answers back.
@@ -438,6 +440,48 @@ export interface DesktopWindowHost {
   focusSession(sessionId: string): void;
 }
 
+/** Where no host runs a connector, as in tests: phone access is off. */
+const NO_REMOTE: DesktopRemoteHost = {
+  state: () => ({
+    enabled: false,
+    keepAwake: false,
+    status: "off",
+    relay: "",
+    macName: "",
+    phones: [],
+    connectedPhones: 0,
+  }),
+  setEnabled: async () => {
+    throw new DaedalusError(
+      "DEPENDENCY",
+      "Phone access is not available here.",
+    );
+  },
+  pairingCode: async () => {
+    throw new DaedalusError(
+      "DEPENDENCY",
+      "Phone access is not available here.",
+    );
+  },
+  setKeepAwake: async () => {
+    throw new DaedalusError(
+      "DEPENDENCY",
+      "Phone access is not available here.",
+    );
+  },
+  setMacName: async () => {
+    throw new DaedalusError(
+      "DEPENDENCY",
+      "Phone access is not available here.",
+    );
+  },
+  removePhone: async () => NO_REMOTE.state(),
+  confirmPairing: async () => NO_REMOTE.state(),
+  leaveAccount: async () => NO_REMOTE.state(),
+  startOver: async () => NO_REMOTE.state(),
+  activity: async () => [],
+};
+
 const MAIN_WINDOW_ONLY: DesktopWindowHost = {
   role: "main",
   openWorld: () => {},
@@ -456,6 +500,7 @@ export function createDesktopRequestHandlers(
   updates: DesktopUpdateHost = NO_UPDATES,
   windows: DesktopWindowHost = MAIN_WINDOW_ONLY,
   clipboardWrite: (text: string) => boolean = () => false,
+  remote: DesktopRemoteHost = NO_REMOTE,
 ): DesktopRequestHandlers {
   const mutate = async <T>(operation: () => T | Promise<T>) => {
     const response = await result(operation);
@@ -712,6 +757,18 @@ export function createDesktopRequestHandlers(
         await context.workspaceContent.setInstructionFilesEnabled(enabled);
         return { enabled };
       }),
+    remoteGet: () => result(() => remote.state()),
+    remoteSetEnabled: ({ enabled }) => mutate(() => remote.setEnabled(enabled)),
+    remoteSetKeepAwake: ({ enabled }) =>
+      mutate(() => remote.setKeepAwake(enabled)),
+    remoteSetMacName: ({ name }) => mutate(() => remote.setMacName(name)),
+    remotePairingCode: () => result(() => remote.pairingCode()),
+    remotePhoneRemove: ({ id }) => mutate(() => remote.removePhone(id)),
+    remoteConfirmPairing: ({ allow }) =>
+      mutate(() => remote.confirmPairing(allow)),
+    remoteLeaveAccount: () => mutate(() => remote.leaveAccount()),
+    remoteStartOver: () => mutate(() => remote.startOver()),
+    remoteActivity: () => result(() => remote.activity()),
     autoRestoreSessionsSet: ({ enabled }) =>
       mutate(async () => {
         await saveAutoRestoreSessionsEnabled(context.config, enabled);

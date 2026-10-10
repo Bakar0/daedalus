@@ -375,6 +375,106 @@ const client = {
   subscribeWorkspaceFiles: () => () => undefined,
 } as unknown as DesktopClient;
 
+// Settings → Remote's host side. The check calls `remotePair()` to stand in
+// for a phone asking to pair; Allow in the panel finishes it.
+const remote = {
+  enabled: false,
+  keepAwake: false,
+  status: "off" as string,
+  relay: "wss://relay.example.dev",
+  macName: "Settings Mac",
+  connectedPhones: 0,
+  phones: [] as Array<{ id: string; name: string; pairedAt: string }>,
+  account: undefined as string | undefined,
+  pairingRequest: undefined as
+    | { phoneId: string; phoneName: string; code: string; expiresAt: number }
+    | undefined,
+};
+const remoteState = () => ({
+  ok: true,
+  data: { ...remote, phones: [...remote.phones] },
+});
+Object.assign(client.request, {
+  remoteGet: async () => remoteState(),
+  remoteSetEnabled: async ({ enabled }: { enabled: boolean }) => {
+    remote.enabled = enabled;
+    remote.status = enabled
+      ? remote.phones.length
+        ? "online"
+        : "waiting_for_phone"
+      : "off";
+    return remoteState();
+  },
+  remotePairingCode: async () => ({
+    ok: true,
+    data: {
+      url: `https://relay.example.dev/pair#daedalus-pair:${"eyJ2IjoxLCJyZWxheSI6IndzczovL3JlbGF5LmV4YW1wbGUuZGV2In0".repeat(5)}`,
+      expiresAt: Date.now() + 5 * 60_000,
+    },
+  }),
+  remoteSetMacName: async ({ name }: { name: string }) => {
+    remote.macName = name || "Settings Mac";
+    return remoteState();
+  },
+  remoteSetKeepAwake: async ({ enabled }: { enabled: boolean }) => {
+    remote.keepAwake = enabled;
+    return remoteState();
+  },
+  remotePhoneRemove: async ({ id }: { id: string }) => {
+    remote.phones = remote.phones.filter((phone) => phone.id !== id);
+    return remoteState();
+  },
+  remoteConfirmPairing: async ({ allow }: { allow: boolean }) => {
+    const request = remote.pairingRequest;
+    remote.pairingRequest = undefined;
+    if (allow && request) {
+      remote.phones.push({
+        id: request.phoneId,
+        name: request.phoneName,
+        pairedAt: "2026-10-10T09:00:00.000Z",
+      });
+      remote.status = "online";
+      remote.account = "owner@example.com";
+    }
+    return remoteState();
+  },
+  remoteLeaveAccount: async () => remoteState(),
+  remoteStartOver: async () => remoteState(),
+  remoteActivity: async () => ({
+    ok: true,
+    data: remote.phones.length
+      ? [
+          {
+            at: "2026-10-10T09:05:00.000Z",
+            phoneId: "phone-0001",
+            phone: "Pixel 9",
+            action: "terminal.close",
+            target: "session-1",
+            ok: true,
+            bytesIn: 42,
+            bytesOut: 9000,
+          },
+          {
+            at: "2026-10-10T09:02:00.000Z",
+            phoneId: "phone-0001",
+            phone: "Pixel 9",
+            action: "agentSend",
+            target: "session-1",
+            ok: true,
+          },
+        ]
+      : [],
+  }),
+});
+(window as unknown as { remotePair: () => void }).remotePair = () => {
+  remote.pairingRequest = {
+    phoneId: "phone-0001",
+    phoneName: "Pixel 9",
+    code: "650182",
+    expiresAt: Date.now() + 2 * 60_000,
+  };
+};
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <App

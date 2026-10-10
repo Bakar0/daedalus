@@ -762,6 +762,64 @@ export interface RoutinesDetailDto {
   runs: RoutineRunDto[];
 }
 
+/**
+ * Phone access through the relay. `status` is the connector's: `off` while
+ * the setting is off, `waiting_for_phone` until a phone claims this Mac,
+ * `locked` while the account has no access or is over its data limit.
+ */
+export type RemoteStatusDto =
+  | "off"
+  | "connecting"
+  | "waiting_for_phone"
+  | "online"
+  | "offline"
+  | "locked"
+  /** The relay refused this Mac: it was removed from its account. */
+  | "removed";
+
+export interface RemoteStateDto {
+  enabled: boolean;
+  /** The Mac is kept from idle sleep while phone access is on. */
+  keepAwake: boolean;
+  status: RemoteStatusDto;
+  relay: string;
+  /** What phones call this Mac. */
+  macName: string;
+  phones: Array<{ id: string; name: string; pairedAt: string }>;
+  /** Phones with an open connection right now. */
+  connectedPhones: number;
+  /** The account that claimed this Mac, once the relay has said. */
+  account?: string;
+  /** A phone that scanned the code, waiting for the user to allow it. */
+  pairingRequest?: {
+    phoneId: string;
+    phoneName: string;
+    /** Six digits the phone shows too. */
+    code: string;
+    expiresAt: number;
+  };
+}
+
+/** One thing a phone did on this Mac, from the audit log. */
+export interface RemoteActivityDto {
+  at: string;
+  phoneId: string;
+  phone: string;
+  /** A request's method, or `terminal.open` / `terminal.close`. */
+  action: string;
+  target?: string;
+  ok: boolean;
+  code?: string;
+  bytesIn?: number;
+  bytesOut?: number;
+}
+
+/** What the QR code says, and until when it can be used. */
+export interface RemotePairingDto {
+  url: string;
+  expiresAt: number;
+}
+
 export interface DesktopSnapshotDto {
   workspaces: WorkspaceDto[];
   tasks: TaskDto[];
@@ -871,6 +929,22 @@ export interface DesktopRpcSchema {
        * to load — so it is fetched over RPC rather than passed in the URL.
        */
       terminalEndpoint: Request<Record<string, never>, { endpoint: string }>;
+      remoteGet: Request<Record<string, never>, RemoteStateDto>;
+      remoteSetEnabled: Request<{ enabled: boolean }, RemoteStateDto>;
+      remoteSetKeepAwake: Request<{ enabled: boolean }, RemoteStateDto>;
+      /** An empty name goes back to the computer's own name. */
+      remoteSetMacName: Request<{ name: string }, RemoteStateDto>;
+      /** A new one-time pairing code; any earlier one stops working. */
+      remotePairingCode: Request<Record<string, never>, RemotePairingDto>;
+      /** Forgets a phone on this Mac, so it can no longer connect to it. */
+      remotePhoneRemove: Request<{ id: string }, RemoteStateDto>;
+      /** Allow or decline the phone waiting to pair. */
+      remoteConfirmPairing: Request<{ allow: boolean }, RemoteStateDto>;
+      /** Take this Mac off its relay account and start over. */
+      remoteLeaveAccount: Request<Record<string, never>, RemoteStateDto>;
+      /** After the relay removed this Mac: a new identity, no phones. */
+      remoteStartOver: Request<Record<string, never>, RemoteStateDto>;
+      remoteActivity: Request<Record<string, never>, RemoteActivityDto[]>;
       workspaceCreate: Request<
         {
           name: string;

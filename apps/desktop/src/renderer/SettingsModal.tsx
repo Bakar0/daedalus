@@ -23,6 +23,7 @@ import type {
 } from "@daedalus/protocol";
 import { AccountsPanel } from "./AccountsPanel";
 import type { DesktopClient } from "./client-types";
+import { RemotePanel } from "./RemotePanel";
 import { SkillsPanel } from "./SkillsPanel";
 import { updateMessage } from "./UpdateBanner";
 
@@ -32,6 +33,7 @@ export const SETTINGS_SECTIONS = [
   { id: "skills", label: "Skills" },
   { id: "sessions", label: "Sessions" },
   { id: "notifications", label: "Notifications" },
+  { id: "remote", label: "Remote" },
   { id: "about", label: "About" },
 ] as const;
 
@@ -279,6 +281,12 @@ export function SettingsModal({
               onChange={onFocusMode}
               title="Focus mode"
             />
+          </section>
+        ) : undefined}
+
+        {section === "remote" ? (
+          <section className="settings-section">
+            <RemotePanel busy={busy} client={client} perform={perform} />
           </section>
         ) : undefined}
 

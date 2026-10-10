@@ -10,6 +10,7 @@
     "@daedalus/core": "workspace:*",
     "@daedalus/platform": "workspace:*",
     "@daedalus/protocol": "workspace:*",
+    "@daedalus/remote-protocol": "workspace:*",
     "@headless-tree/core": "1.7.0",
     "@headless-tree/react": "1.7.0",
     "@xterm/addon-fit": "0.11.0",
@@ -23,6 +24,7 @@
     "react-dom": "19.3.0",
     "react-markdown": "10.1.0",
     "remark-gfm": "4.0.1",
-    "seti-icons": "0.0.4"
+    "seti-icons": "0.0.4",
+    "uqr": "0.1.3"
   }
 }
