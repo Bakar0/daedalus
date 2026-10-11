@@ -14,6 +14,12 @@ import {
   DAEDALUS_STATUS_INSTRUCTIONS,
 } from "../index";
 
+/** The settings file a Claude session launches with, inbox hook included. */
+const settingsFile = (id: string) =>
+  expect.stringMatching(
+    new RegExp(`/claude-settings/${id}\\.daedalus-inbox\\.json$`),
+  );
+
 /** What every launch adds so the agent knows how to report its state. */
 const CLAUDE_INSTRUCTIONS = [
   "--append-system-prompt",
@@ -473,12 +479,15 @@ describe("AgentService", () => {
         "auto",
         ...CLAUDE_INSTRUCTIONS,
         "--settings",
-        expect.stringContaining('"agent","event","Notification"'),
+        settingsFile(session.id),
         "--session-id",
         session.id,
         "--name",
         "Persistent context",
       ]);
+      const launched = tmux.launches[0]!.args;
+      const settingsPath = launched[launched.indexOf("--settings") + 1]!;
+      expect(await Bun.file(settingsPath).text()).toContain('"Notification"');
       const archived = await context.agents.archive(session.id);
       expect(archived.archivedAt).not.toBeNull();
       expect(archived.status).toBe("exited");
@@ -495,7 +504,7 @@ describe("AgentService", () => {
       expect(tmux.launches[1]?.args).toEqual([
         "run",
         "--settings",
-        expect.stringContaining('"agent","event","Notification"'),
+        settingsFile(session.id),
         ...CLAUDE_INSTRUCTIONS,
         "--model",
         "claude-fable-5-1[1m]",
@@ -555,7 +564,7 @@ describe("AgentService", () => {
       expect(tmux.launches[1]?.args).toEqual([
         "run",
         "--settings",
-        expect.stringContaining('"agent","event","Notification"'),
+        settingsFile(session.id),
         ...CLAUDE_INSTRUCTIONS,
         "--model",
         "default",

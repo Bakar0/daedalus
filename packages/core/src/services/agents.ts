@@ -34,6 +34,7 @@ import {
   handoffSessionName,
   modelArgument,
   type ProviderModelCatalog,
+  removeClaudeSettingsFiles,
   resolveAgentExecutable,
   resolveProvider,
   sessionLaunchModel,
@@ -1621,6 +1622,7 @@ export class AgentService {
         "CONFLICT",
         "Running agent sessions must be stopped before removal",
       );
+    await removeClaudeSettingsFiles(this.config, id).catch(() => undefined);
     this.repositories.deleteAgent(id);
     return agent;
   }
@@ -1646,6 +1648,7 @@ export class AgentService {
       resolve(agent.workingDirectory) !== resolve(workspace.path)
     )
       await forgetSessionFolders(this.config, agent.workingDirectory);
+    await removeClaudeSettingsFiles(this.config, id).catch(() => undefined);
     this.repositories.deleteAgent(id);
     return agent;
   }

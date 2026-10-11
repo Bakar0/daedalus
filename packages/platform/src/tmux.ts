@@ -186,6 +186,17 @@ export const tmuxPtyEnvironment = (
  */
 export const TMUX_COMMAND_TIMEOUT_MS = 10_000;
 
+/**
+ * The most a tmux client sends as one command: its arguments, each with a
+ * NUL, in a 16 KB message less its header and argument count. Over this the
+ * client prints "command too long" and starts nothing. Measured on tmux 3.7c.
+ */
+export const TMUX_COMMAND_MAX_BYTES = 16_364;
+
+/** The size tmux counts for a command's arguments. */
+export const tmuxCommandBytes = (args: readonly string[]): number =>
+  args.reduce((total, arg) => total + Buffer.byteLength(arg) + 1, 0);
+
 export class CommandTmuxClient implements TmuxClient {
   /** The version the executable reported, once it has: see `probe`. */
   private probed: string | undefined;
@@ -314,6 +325,14 @@ export class CommandTmuxClient implements TmuxClient {
       "focus-events",
       "on",
     ];
+    // tmux's own message for this, "command too long", names neither the
+    // limit nor what filled it.
+    const bytes = tmuxCommandBytes(args);
+    if (bytes > TMUX_COMMAND_MAX_BYTES)
+      throw new Error(
+        `The launch command is ${bytes} bytes and tmux accepts at most ${TMUX_COMMAND_MAX_BYTES}. ` +
+          `Each attached repository adds an --add-dir argument; detach repositories this workspace does not need.`,
+      );
     // tmux gives a new session's command the PATH of the client that asked
     // for it, not the `-e PATH=` above: measured on tmux 3.7c, a client with
     // PATH=/a and `-e PATH=/b` starts a command that sees /a. So the client

@@ -10,6 +10,7 @@ import {
   INBOX_HOOK_MARKER,
   INBOX_WAITER_SCRIPT,
   loadConfig,
+  parseClaudeSettingsArgument,
   postToInbox,
   usesInbox,
   type AgentSession,
@@ -129,7 +130,10 @@ describe("session inbox", () => {
   test("every Claude launch carries the waiter on Stop and SessionStart", async () => {
     await withHome(async (config) => {
       const args = await claudeDaedalusSettingsArgs(config, [], "s1");
-      const settings = JSON.parse(args.at(-1)!) as {
+      expect(args.at(-1)).toBe(
+        join(config.home, "claude-settings", `s1.${INBOX_HOOK_MARKER}.json`),
+      );
+      const settings = (await parseClaudeSettingsArgument(args.at(-1)!)) as {
         hooks: Record<string, Array<{ hooks: unknown[] }>>;
       };
       const hook = inboxHook(config, "s1");

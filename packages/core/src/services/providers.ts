@@ -1,4 +1,4 @@
-import { ensureInbox, inboxHook } from "./session-inbox";
+import { ensureInbox, INBOX_HOOK_MARKER, inboxHook } from "./session-inbox";
 import {
   ensureDirectory,
   findExecutable,
@@ -7,7 +7,7 @@ import {
   standardExecutableFallbacks,
 } from "@daedalus/platform";
 import { runCommand } from "@daedalus/platform";
-import { rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import {
@@ -17,7 +17,7 @@ import {
   type DaedalusConfig,
 } from "../config";
 import { DaedalusError } from "../errors";
-import { SkillService } from "./skills";
+import { claudeSettingsPath, SkillService } from "./skills";
 import {
   codexSupportsHooks,
   daedalusClaudeSettings,
@@ -147,15 +147,99 @@ export async function claudeDaedalusSettingsArgs(
     ...new SkillService(config).claudeSkillSettings(),
   };
   const existingValue = settingsArgumentValue(existingArgs);
-  if (existingValue === undefined)
-    return [...existingArgs, "--settings", JSON.stringify(daedalus)];
-  const parsed = await parseClaudeSettingsArgument(existingValue);
-  if (!parsed) return [...existingArgs];
+  const parsed =
+    existingValue === undefined
+      ? undefined
+      : await parseClaudeSettingsArgument(existingValue);
+  if (existingValue !== undefined && !parsed) return [...existingArgs];
+  const merged = parsed ? mergeClaudeSettings(parsed, daedalus) : daedalus;
+  // Settings passed here override the user's own file, so the renderer is
+  // only a default: a user who chose one in either place keeps it.
+  const settings =
+    "tui" in merged || (await userSetsClaudeRenderer(config))
+      ? merged
+      : { ...merged, tui: CLAUDE_DEFAULT_RENDERER };
   return [
     ...withoutSettingsArgument(existingArgs),
     "--settings",
-    JSON.stringify(mergeClaudeSettings(parsed, daedalus)),
+    sessionId
+      ? await writeClaudeSettingsFile(config, sessionId, settings, {
+          inbox: Boolean(inbox),
+        })
+      : JSON.stringify(settings),
   ];
+}
+
+/**
+ * The renderer a Claude session starts with when the user has not picked one.
+ * Fullscreen draws in the alternate screen without flicker and scrolls its own
+ * transcript; the Daedalus terminal's tmux passes it the mouse wheel.
+ */
+export const CLAUDE_DEFAULT_RENDERER = "fullscreen";
+
+/** Whether the user's own Claude settings choose a renderer. */
+async function userSetsClaudeRenderer(
+  config: DaedalusConfig,
+): Promise<boolean> {
+  const settings = await parseClaudeSettingsArgument(
+    claudeSettingsPath(config),
+  );
+  return settings !== undefined && "tui" in settings;
+}
+
+/**
+ * Where a session's Claude settings are written. The name carries the inbox
+ * marker when the inbox hook is inside, so `usesInbox` still finds it in the
+ * launch arguments without reading the file.
+ */
+export const sessionClaudeSettingsPath = (
+  config: DaedalusConfig,
+  sessionId: string,
+  options: { inbox: boolean },
+): string =>
+  join(
+    config.home,
+    "claude-settings",
+    options.inbox
+      ? `${sessionId}.${INBOX_HOOK_MARKER}.json`
+      : `${sessionId}.json`,
+  );
+
+/**
+ * Writes the settings to a file and returns its path, which Claude's
+ * `--settings` takes in place of the JSON. Passed inline, the hooks are about
+ * 4 KB of the launch command, and tmux refuses a command over 16 KB.
+ */
+async function writeClaudeSettingsFile(
+  config: DaedalusConfig,
+  sessionId: string,
+  settings: ClaudeSettings,
+  options: { inbox: boolean },
+): Promise<string> {
+  const path = sessionClaudeSettingsPath(config, sessionId, options);
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  // Written beside and renamed, so a session starting from the old file
+  // never reads half of the new one.
+  const temporary = `${path}.${process.pid}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(settings, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  await rename(temporary, path);
+  return path;
+}
+
+/** Removes a session's settings files, whichever name it was written under. */
+export async function removeClaudeSettingsFiles(
+  config: DaedalusConfig,
+  sessionId: string,
+): Promise<void> {
+  await Promise.all(
+    [true, false].map((inbox) =>
+      rm(sessionClaudeSettingsPath(config, sessionId, { inbox }), {
+        force: true,
+      }),
+    ),
+  );
 }
 
 /**
@@ -768,9 +852,6 @@ class ConfiguredProvider implements AgentProvider {
       else env.DAEDALUS_TASK_PROMPT = input.prompt;
     }
     if (input.taskId) env.DAEDALUS_TASK_ID = input.taskId;
-    if (input.additionalDirectories?.length)
-      env.DAEDALUS_ADDITIONAL_DIRECTORIES =
-        input.additionalDirectories.join(":");
     return {
       executable:
         resolveAgentExecutable(this.name, this.definition.executable) ??
