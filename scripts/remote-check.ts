@@ -28,6 +28,8 @@ import {
   pairWithMac,
   RELAY_CLOSE,
   RelayAccount,
+  relayConnectUrl,
+  relayProtocols,
   RelayError,
   sodiumReady,
   type WireStats,
@@ -664,8 +666,13 @@ try {
     throw new Error(
       `Snapshot failed: ${JSON.stringify(snapshot).slice(0, 300)}`,
     );
+  // A real Mac's snapshot passed 1 MB; a 2 MB message gets through.
+  const large = (await phoneConnection.request("snapshot", {
+    pad: "x".repeat(2_000_000),
+  })) as RpcResult<DesktopSnapshotDto>;
+  if (!large.ok) throw new Error("A 2 MB message did not get through");
   pass(
-    `snapshot over the channel (${JSON.stringify(snapshot).length} bytes of JSON)`,
+    `snapshot over the channel (${JSON.stringify(snapshot).length} bytes of JSON), and a 2 MB message gets through`,
   );
 
   const forbidden = (await phoneConnection.request("workspaceDelete", {
@@ -906,6 +913,28 @@ try {
     "an ended plan locks the Mac (no_plan) and refuses the phone but keeps its sign-in, and an invite code renews it",
   );
 
+  // The Mac's connection is replaced (as a network change does): the phone
+  // hears it, drops its channel, and connects again with a new handshake.
+  let staleReason = "";
+  connection.onClose((reason) => {
+    staleReason ||= reason;
+  });
+  const rival = new WebSocket(
+    relayConnectUrl(relayUrl, connector.macId, "mac", connector.macId),
+    relayProtocols(store.relayCredential),
+  );
+  await until("the phone hears its Mac reconnect", () => staleReason !== "");
+  rival.close();
+  await until("Mac online again", () => connector!.status === "online", 15_000);
+  await sleep(500);
+  connection = await PhoneConnection.connect(phone, mac, revokedToken);
+  const fresh = (await connection.request("snapshot")) as RpcResult<unknown>;
+  if (staleReason !== "Your Mac reconnected" || !fresh.ok)
+    throw new Error(`After the Mac reconnected: ${staleReason}`);
+  pass(
+    "when the Mac reconnects, the phone drops its old channel and connects again with a new handshake",
+  );
+
   let removedReason = "";
   connection.onClose((reason) => {
     removedReason = reason;
@@ -933,8 +962,19 @@ try {
   );
   if (removedMe !== "UNAUTHORIZED")
     throw new Error(`A removed phone's sign-in still works: ${removedMe}`);
+  // Its owner adds it back with a Google sign-in made on it after the
+  // removal; the old sign-in stays dead.
+  const backToken = await signInPhone("alice@example.com", phone);
+  const back = await PhoneConnection.connect(phone, mac, backToken);
+  const readded = (await new RelayAccount(relayUrl, backToken).me()).devices;
+  back.close();
+  if (!readded.some((item) => item.id === phone.id))
+    throw new Error("The re-added phone is not on the account");
+  // Removed again, so the account's phone limit is as the steps after
+  // expect.
+  await owner.removeDevice(phone.id);
   pass(
-    "removing a phone from the account disconnects it for good and ends its sign-in",
+    "removing a phone from the account disconnects it and ends its sign-in; its old sign-in stays dead, and a new Google sign-in on it adds it back",
   );
 
   const oldMacId = connector.macId;

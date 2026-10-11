@@ -23,7 +23,13 @@ interface Attachment {
   userId: string | null;
 }
 
-const MAX_FRAME_BYTES = 1024 * 1024;
+/**
+ * The largest message a room forwards. A Mac's snapshot is one message, and
+ * with a few hundred sessions it passes 1 MB (a real one measured 1.24 MB),
+ * so the cap leaves room above that. Cloudflare bills a message, not its
+ * bytes, and the account's monthly data limit still counts them.
+ */
+const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 const MAX_PHONES = 10;
 const BUSY_CHECK_MS = 60_000;
 const IDLE_CHECK_MS = 60 * 60_000;
