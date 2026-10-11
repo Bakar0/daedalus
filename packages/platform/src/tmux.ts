@@ -49,6 +49,10 @@ export interface TmuxClient {
   probe(): Promise<string | undefined>;
   createSession(launch: TmuxLaunch): Promise<void>;
   hasSession(session: string): Promise<boolean>;
+  /**
+   * The live session names; empty when no server is running. Throws when
+   * tmux did not answer, which is not the same as no sessions.
+   */
   listSessions(): Promise<string[]>;
   attach(session: string): Promise<number>;
   /** `styled` keeps the escape codes, so dim text can be told apart. */
@@ -331,7 +335,19 @@ export class CommandTmuxClient implements TmuxClient {
 
   async listSessions(): Promise<string[]> {
     const result = await this.run(["list-sessions", "-F", "#{session_name}"]);
-    if (result.exitCode !== 0) return [];
+    if (result.exitCode !== 0) {
+      // No server, or a socket left by one that exited: there are no sessions.
+      if (/no server running|error connecting to/i.test(result.stderr))
+        return [];
+      // Anything else, a timeout above all, says nothing about the sessions.
+      // A Mac waking from sleep was seen to get here, and reading it as "no
+      // sessions" marked every session lost while all of them kept running.
+      throw new Error(
+        result.timedOut
+          ? "tmux did not answer list-sessions in time"
+          : result.stderr.trim() || "tmux list-sessions failed",
+      );
+    }
     return result.stdout
       .split(/\r?\n/)
       .map((value) => value.trim())
