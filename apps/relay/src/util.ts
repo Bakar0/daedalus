@@ -39,6 +39,10 @@ export interface Env {
 /** Device and room ids: 16 random bytes in base64url, from the devices. */
 export const ID = /^[A-Za-z0-9_-]{8,64}$/;
 
+/** The Durable Object that holds one Mac's connections. */
+export const room = (env: Env, macId: string) =>
+  env.ROOMS.get(env.ROOMS.idFromName(macId));
+
 /** Sent by every client, and echoed, so browsers accept the upgrade. */
 export const PROTOCOL = "daedalus.v1";
 

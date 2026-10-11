@@ -51,7 +51,7 @@ export function remoteStatusText(state: RemoteStateDto | undefined): string {
     case "locked":
       switch (state.lockedBy) {
         case "no_plan":
-          return "The relay refused this Mac: its account has no Pro plan, or the plan ended. Phone access needs Pro.";
+          return "Waiting for a Pro plan. Phones can't connect until the account has one.";
         case "over_quota":
           return "The relay refused this Mac: the account used its data allowance for the month.";
         case "paused":
@@ -62,7 +62,7 @@ export function remoteStatusText(state: RemoteStateDto | undefined): string {
     case "removed":
       return "The relay no longer accepts this Mac: it was removed from its account. Start over to pair it again.";
     case "waiting_for_phone":
-      return "On. Waiting for a phone to pair.";
+      return "On. Sign in to finish setting up.";
     case "online":
       return state.connectedPhones === 0
         ? "On. No phone is connected right now."
@@ -142,6 +142,99 @@ function EncryptionNotice() {
         </p>
       </div>
     </aside>
+  );
+}
+
+/** Whether the Mac's account has a plan that lets phones in right now. */
+export const hasPlan = (state: RemoteStateDto) =>
+  state.signedIn && Boolean(state.plan) && state.lockedBy !== "no_plan";
+
+/**
+ * Who this Mac is signed in as and the plan: a Sign in button before, and
+ * an invite code field while the account has no Pro plan.
+ */
+function AccountCard({
+  state,
+  busy,
+  onSignIn,
+  onRedeem,
+  onSignOut,
+}: {
+  state: RemoteStateDto;
+  busy: boolean;
+  onSignIn: () => void;
+  onRedeem: (code: string) => Promise<boolean>;
+  onSignOut: () => void;
+}) {
+  const [code, setCode] = useState("");
+  if (!state.signedIn)
+    return (
+      <div className="remote-pro">
+        <strong>Sign in to use phone access</strong>
+        <p>
+          Phone access is part of Daedalus Pro. Sign in with Google here, then
+          sign in on your phone with the same account.
+        </p>
+        <div className="remote-pairing-start">
+          <button
+            disabled={busy || state.status !== "waiting_for_phone"}
+            onClick={onSignIn}
+            type="button"
+          >
+            Sign in with Google
+          </button>
+          <small>
+            {state.status === "waiting_for_phone"
+              ? "Opens your browser. Come back here when it says your Mac is signed in."
+              : "Signing in needs this Mac connected to the relay."}
+          </small>
+        </div>
+      </div>
+    );
+  const pro = hasPlan(state);
+  return (
+    <div className="remote-pro">
+      <div className="remote-pro-who">
+        <span>
+          <strong>{state.account ?? "Signed in"}</strong>
+          <small>
+            {pro && state.plan
+              ? planText(state.plan)
+              : "No Pro plan. Phone access needs Daedalus Pro."}
+          </small>
+        </span>
+        <ConfirmButton
+          armedLabel="Sign out"
+          armedTitle="Sign this Mac out and forget every paired phone"
+          className="quiet"
+          disabled={busy}
+          onConfirm={onSignOut}
+          type="button"
+        >
+          Sign out
+        </ConfirmButton>
+      </div>
+      {pro ? undefined : (
+        <form
+          className="remote-invite"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            if (await onRedeem(code)) setCode("");
+          }}
+        >
+          <input
+            aria-label="Invite code"
+            disabled={busy}
+            onChange={(event) => setCode(event.target.value)}
+            placeholder="Invite code"
+            value={code}
+          />
+          <button disabled={busy || !code.trim()} type="submit">
+            Use invite code
+          </button>
+        </form>
+      )}
+    </div>
   );
 }
 
@@ -229,8 +322,7 @@ function PairingRequest({
         {request.code.slice(0, 3)} {request.code.slice(3)}
       </p>
       <small>
-        If the code differs, or you did not just scan the code, decline.
-        Declining the first phone also takes this Mac off that account.{" "}
+        If the code differs, or you did not just scan the code, decline.{" "}
         {minutes(left)} left.
       </small>
       <div className="remote-pairing-actions">
@@ -405,30 +497,40 @@ export function RemotePanel({
           </small>
         </div>
       ) : undefined}
-      {state?.enabled && state.account ? (
-        <div className="settings-choice remote-account">
-          <span>
-            <strong>Account</strong>
-            <small>
-              This Mac is on {state.account}'s account on the relay
-              {state.plan ? ` (${planText(state.plan)})` : ""}. Only phones
-              signed in to it can reach this Mac.
-            </small>
-          </span>
-          <ConfirmButton
-            armedLabel="Leave"
-            armedTitle="Take this Mac off the account and forget every paired phone"
-            className="quiet"
-            disabled={busy}
-            onConfirm={async () => {
-              const next = await perform(client.request.remoteLeaveAccount({}));
-              if (next) setState(next);
-            }}
-            type="button"
-          >
-            Leave this account
-          </ConfirmButton>
-        </div>
+      {state?.enabled && state.status !== "removed" ? (
+        <AccountCard
+          busy={busy}
+          onRedeem={async (code) => {
+            setError(undefined);
+            const next = await client.request.remoteRedeemInvite({ code });
+            if (!next.ok) {
+              setError(next.error.message);
+              return false;
+            }
+            setState(next.data);
+            return true;
+          }}
+          onSignIn={async () => {
+            setError(undefined);
+            const started = await client.request.remoteSignIn({});
+            if (!started.ok) {
+              setError(started.error.message);
+              return;
+            }
+            await client.request.openExternal({ url: started.data.url });
+          }}
+          onSignOut={async () => {
+            setPairing(undefined);
+            const next = await perform(client.request.remoteLeaveAccount({}));
+            if (next) setState(next);
+          }}
+          state={state}
+        />
+      ) : undefined}
+      {error ? (
+        <p className="accounts-error" role="alert">
+          {error}
+        </p>
       ) : undefined}
       {state?.enabled ? (
         <MacNameField
@@ -457,7 +559,7 @@ export function RemotePanel({
         />
       ) : undefined}
 
-      {state?.enabled ? (
+      {state?.enabled && state.signedIn ? (
         <>
           <h3>Pair a phone</h3>
           {request ? (
@@ -498,19 +600,22 @@ export function RemotePanel({
             </div>
           ) : (
             <div className="remote-pairing-start">
-              <button disabled={!connected} onClick={showCode} type="button">
+              <button
+                disabled={!connected || !hasPlan(state)}
+                onClick={showCode}
+                type="button"
+              >
                 Show pairing code
               </button>
-              {connected ? undefined : (
-                <small>Pairing needs this Mac connected to the relay.</small>
-              )}
+              <small>
+                {!hasPlan(state)
+                  ? "Pairing needs a Pro plan."
+                  : connected
+                    ? `Scan it with your phone and sign in there as ${state.account ?? "this Mac's account"}.`
+                    : "Pairing needs this Mac connected to the relay."}
+              </small>
             </div>
           )}
-          {error ? (
-            <p className="accounts-error" role="alert">
-              {error}
-            </p>
-          ) : undefined}
 
           <h3>Paired phones</h3>
           {phoneCount === 0 ? (

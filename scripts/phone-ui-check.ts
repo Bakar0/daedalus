@@ -1,7 +1,7 @@
 // The phone app (#53), end to end in a phone-sized headless Chrome: the
 // relay (wrangler dev, local D1) serves the built app, a stand-in for Google
 // signs the user in, a Mac connector serves a real shell session. The page
-// opens a scanned pairing link, signs in with an invite, pairs, finds the
+// opens a scanned pairing link, signs in, takes an invite code, pairs, finds the
 // waiting session in its workspace, and drives it: a message, a quick key, the
 // terminal's output. Screenshots land in artifacts/.
 import { createHash } from "node:crypto";
@@ -290,8 +290,47 @@ try {
       member.id,
     ),
     openTerminal: agentTerminalOpener(context, context.tmux),
+    lockedRetryMs: 1_000,
   });
   await connector.start();
+
+  // The Mac signs in first, in a browser, as Settings › Remote does. The
+  // account has no plan yet, so the relay holds the Mac back.
+  for (
+    let attempt = 0;
+    connector.status !== "waiting_for_phone" && attempt < 100;
+    attempt++
+  )
+    await sleep(100);
+  let next = await connector.signInUrl();
+  let cookie = "";
+  let page = "";
+  for (let hop = 0; hop < 4; hop++) {
+    const response = await fetch(next, {
+      redirect: "manual",
+      headers: cookie ? { Cookie: cookie } : {},
+    });
+    cookie = (response.headers.get("Set-Cookie") ?? cookie).split(";")[0]!;
+    const location = response.headers.get("Location");
+    if (!location) {
+      page = await response.text();
+      break;
+    }
+    next = new URL(location, next).toString();
+  }
+  if (!page.includes("Your Mac is signed in"))
+    throw new Error(`Mac sign-in: ${page.slice(0, 200)}`);
+  for (
+    let attempt = 0;
+    connector.status !== "locked" && attempt < 100;
+    attempt++
+  )
+    await sleep(100);
+  if (connector.lockedBy !== "no_plan")
+    throw new Error(`The Mac is ${connector.status}, not waiting for a plan`);
+  console.log(
+    "PASS the Mac signs in through the browser and waits for its account to get Pro",
+  );
   const scanned = pairingUrl(await connector.createPairingOffer());
 
   chrome = Bun.spawn(
@@ -436,23 +475,54 @@ try {
     throw new Error("The scanned code was not kept for after sign-in");
   if ((await evaluate<string>("location.hash")) !== "")
     throw new Error("The pairing code stayed in the address bar");
-  await tap(byText("button", "I have an invite code"));
+  const signInText = await evaluate<string>("document.body.innerText");
+  if (
+    !signInText.includes("Sign in to Daedalus") ||
+    !signInText.includes("Daedalus Pro")
+  )
+    throw new Error(`Sign-in screen: ${signInText.slice(0, 300)}`);
+  await screenshot("sign-in");
+  console.log(
+    "PASS a scanned pairing link opens Sign in to Daedalus, says phone access is Pro, and keeps the code",
+  );
+
+  await tap(byText("button", "Continue with Google"));
+  // No plan yet: the phone says who is signed in and what Pro is, and takes
+  // an invite code before pairing.
+  await waitFor(
+    "the Pro screen",
+    byText("h2", "Phone access needs Daedalus Pro"),
+    30_000,
+  );
+  if (
+    (await evaluate<string>(
+      "document.querySelector('.signed-in-as strong')?.textContent ?? ''",
+    )) !== "phone@example.com"
+  )
+    throw new Error("The Pro screen does not say who is signed in");
   await evaluate(`(() => {
-    const input = document.querySelector('.field input');
+    const input = document.querySelector('.invite input');
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(invite)});
     input.dispatchEvent(new Event('input', { bubbles: true }));
   })()`);
   await sleep(100);
-  await screenshot("sign-in");
-  console.log("PASS a scanned pairing link opens sign-in and keeps the code");
-
-  await tap(byText("button", "Continue with Google"));
+  await screenshot("pro");
+  await tap(byText("button", "Get Pro with this code"));
+  console.log(
+    "PASS signed in without a plan, the phone shows who is signed in and what Pro gives, and takes an invite code",
+  );
   // A link can come from anywhere, so the phone asks before pairing.
   await waitFor("pairing question", byText("h2", "Pair with"), 30_000);
   if (
     !(await evaluate<string>("document.body.innerText")).includes("Studio Mac")
   )
     throw new Error("The pairing question does not name the Mac");
+  if (
+    !(await evaluate<string>("document.body.innerText")).includes(
+      "Use a different account",
+    )
+  )
+    throw new Error("Pairing does not offer another account");
   await screenshot("pair-ask");
   await tap(byText("button", "Pair"));
   await waitFor("the code to compare", "document.querySelector('.pair-code')");

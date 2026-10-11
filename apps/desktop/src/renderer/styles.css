@@ -7358,16 +7358,50 @@ dd {
 .remote-e2e p + p {
   margin-top: 6px;
 }
-.remote-account > span:first-child {
+.remote-pro {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+}
+.remote-pro > strong {
+  font-size: 13px;
+}
+.remote-pro p {
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+.remote-pro-who {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+.remote-pro-who > span {
   display: grid;
   gap: 2px;
+  min-width: 0;
 }
-.remote-account button {
-  white-space: nowrap;
+.remote-pro-who strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.remote-account small {
+.remote-pro-who small {
   color: var(--muted);
   font-size: 11px;
+}
+.remote-invite {
+  display: flex;
+  gap: 6px;
+}
+.remote-invite input {
+  flex: 1;
+  min-width: 0;
+  text-transform: uppercase;
 }
 .remote-request {
   background: var(--raised);

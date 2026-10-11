@@ -16,6 +16,7 @@ import {
 } from "@daedalus/platform";
 import type { DesktopSnapshotDto, RpcResult } from "@daedalus/protocol";
 import {
+  claimKey,
   createIdentity,
   type DeviceIdentity,
   decodePairingOffer,
@@ -51,6 +52,7 @@ const wrangler = join(relayDir, "node_modules/.bin/wrangler");
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const home = await mkdtemp(join(tmpdir(), "daedalus-remote-"));
 const secondHome = await mkdtemp(join(tmpdir(), "daedalus-remote-host-"));
+const thirdHome = await mkdtemp(join(tmpdir(), "daedalus-remote-signin-"));
 const relayState = await mkdtemp(join(tmpdir(), "daedalus-relay-"));
 const socket = `daedalus-${createHash("sha256").update(home).digest("hex").slice(0, 12)}`;
 const port = 18_700 + Math.floor(Math.random() * 1_000);
@@ -203,6 +205,31 @@ async function signIn(
   return new URLSearchParams(location.hash.slice(1));
 }
 
+/**
+ * A Mac's sign-in as the browser runs it: the address Daedalus opens, then
+ * Google, then the relay's page.
+ */
+async function browserSignIn(
+  startUrl: string,
+  email: string,
+): Promise<{ status: number; page: string }> {
+  const toGoogle = await fetch(startUrl, { redirect: "manual" });
+  if (toGoogle.status !== 302)
+    return { status: toGoogle.status, page: await toGoogle.text() };
+  const state = new URL(
+    toGoogle.headers.get("Location") ?? "",
+  ).searchParams.get("state");
+  const cookie = (toGoogle.headers.get("Set-Cookie") ?? "").split(";")[0]!;
+  const callback = new URL("/auth/google/callback", relayHttp);
+  callback.searchParams.set("state", state ?? "");
+  callback.searchParams.set("code", email);
+  const back = await fetch(callback, {
+    redirect: "manual",
+    headers: { Cookie: cookie },
+  });
+  return { status: back.status, page: await back.text() };
+}
+
 async function adminCall(method: string, path: string, body?: unknown) {
   const response = await fetch(new URL(path, relayHttp), {
     method,
@@ -336,6 +363,7 @@ async function pairAndAnswer(
 
 let connector: RemoteConnector | undefined;
 let host: RemoteHost | undefined;
+let signInHost: RemoteHost | undefined;
 let connection: PhoneConnection | undefined;
 try {
   await sodiumReady();
@@ -357,16 +385,26 @@ try {
     throw new Error("Admin routes answered without a key");
   pass("admin routes need the admin key");
 
-  if ((await signIn("stranger@example.com")).get("error") !== "invite_required")
-    throw new Error("A new account was made without an invite");
-  if (
-    (await signIn("stranger@example.com", "WRONG-CODE")).get("error") !==
-    "invite_invalid"
-  )
-    throw new Error("A wrong invite was accepted");
-  const users = (await adminCall("GET", "/admin/users")).data as unknown[];
-  if (users.length !== 0) throw new Error("A refused sign-up left an account");
-  pass("sign-up without a valid invite is refused and stores nothing");
+  // Anyone can sign up; without a plan the account reaches nothing.
+  const strangerToken = (
+    await signIn("stranger@example.com", "WRONG-CODE")
+  ).get("token");
+  if (!strangerToken) throw new Error("Sign-up without an invite failed");
+  const stranger = new RelayAccount(relayUrl, strangerToken);
+  const strangerMe = await stranger.me();
+  const strangerClaim = await stranger
+    .claimMac(createIdentity().id, "x", "no-code")
+    .then(
+      () => "claimed",
+      (error: RelayError) => error.code,
+    );
+  if (strangerMe.entitlement !== null || strangerClaim !== "NO_ENTITLEMENT")
+    throw new Error(
+      `A plan without an invite: ${JSON.stringify(strangerMe.entitlement)} ${strangerClaim}`,
+    );
+  pass(
+    "anyone can sign up with Google; a wrong invite grants nothing, and an account without a plan cannot claim a Mac",
+  );
 
   const invite = await newInvite();
   const aliceToken = (await signIn("alice@example.com", invite)).get("token");
@@ -375,8 +413,10 @@ try {
   const me = await alice.me();
   if (me.entitlement?.plan !== "pro" || me.entitlement.expiresAt !== null)
     throw new Error(`Not Pro with no end after invite: ${JSON.stringify(me)}`);
+  const reused = (await signIn("bob@example.com", invite)).get("token");
   if (
-    (await signIn("bob@example.com", invite)).get("error") !== "invite_invalid"
+    !reused ||
+    (await new RelayAccount(relayUrl, reused).me()).entitlement !== null
   )
     throw new Error("A one-use invite worked twice");
   const bobToken = (await signIn("bob@example.com", await newInvite())).get(
@@ -1261,6 +1301,109 @@ try {
     throw new Error("Turning remote off did not stick");
   pass("Settings › Remote's host: on, pairing code, paired phone, forget, off");
 
+  // A Mac that signs itself in, as Settings › Remote does now: the browser
+  // signs in, the relay puts the Mac on that account, and with no plan the
+  // Mac shows the account and takes an invite code.
+  const signInContext = await createApplicationContext({
+    env: { ...env, DAEDALUS_HOME: thirdHome, DAEDALUS_REMOTE_RELAY: relayUrl },
+  });
+  signInHost = new RemoteHost({
+    context: signInContext,
+    macName: "Dave's Mac",
+    handlers: () => createDesktopRequestHandlers(signInContext),
+    openTerminal: agentTerminalOpener(context, context.tmux),
+    lockedRetryMs: 60_000,
+  });
+  await signInHost.start();
+  await signInHost.setEnabled(true);
+  await until(
+    "signing-in Mac waiting",
+    () => signInHost!.state().status === "waiting_for_phone",
+  );
+  if (signInHost.state().signedIn) throw new Error("Signed in before it was");
+  const { url: macSignIn } = await signInHost.signIn();
+  const signedInPage = await browserSignIn(macSignIn, "dave@example.com");
+  if (
+    signedInPage.status !== 200 ||
+    !signedInPage.page.includes("Your Mac is signed in") ||
+    !signedInPage.page.includes("dave@example.com") ||
+    !signedInPage.page.includes("needs Daedalus Pro")
+  )
+    throw new Error(`Mac sign-in page: ${signedInPage.status}`);
+  await until(
+    "the Mac signed in without a plan",
+    () => {
+      const state = signInHost!.state();
+      return (
+        state.signedIn &&
+        state.status === "locked" &&
+        state.lockedBy === "no_plan" &&
+        state.account === "dave@example.com"
+      );
+    },
+    15_000,
+  );
+  const replayed = await browserSignIn(macSignIn, "eve@example.com");
+  if (replayed.status !== 400 || !replayed.page.includes("Sign-in expired"))
+    throw new Error(`A spent Mac sign-in worked again: ${replayed.status}`);
+  pass(
+    "a Mac signs itself in through the browser: the relay puts it on that account and says so on a page; without a plan the Mac shows the account and why it is locked; the sign-in address works once",
+  );
+
+  const badInvite = await signInHost.redeemInvite("WRONG-CODE").then(
+    () => "redeemed",
+    (error: Error) => error.message,
+  );
+  if (!badInvite.includes("not valid"))
+    throw new Error(`A wrong invite on the Mac: ${badInvite}`);
+  await signInHost.redeemInvite(await newInvite());
+  await until(
+    "the Mac online with Pro",
+    () =>
+      signInHost!.state().status === "online" &&
+      signInHost!.state().plan?.name === "pro",
+    15_000,
+  );
+  pass(
+    "an invite code typed on the Mac gives its account Pro, and the Mac connects at once",
+  );
+
+  const daveOffer = decodePairingOffer((await signInHost.pairingCode()).url);
+  const wrongAccount = await new RelayAccount(
+    relayUrl,
+    (await signIn("alice@example.com")).get("token")!,
+  )
+    .claimMac(daveOffer.macId, "x", claimKey(daveOffer))
+    .then(
+      () => "claimed",
+      (error: RelayError) => `${error.code}: ${error.message}`,
+    );
+  if (
+    !wrongAccount.startsWith("WRONG_ACCOUNT") ||
+    !wrongAccount.includes("dave@example.com")
+  )
+    throw new Error(`Another account's phone: ${wrongAccount}`);
+  const davePhone = createIdentity();
+  const daveMac = await pairAndAnswer(
+    davePhone,
+    daveOffer,
+    "Dave's phone",
+    await signInPhone("dave@example.com", davePhone),
+    {
+      request: () => signInHost!.state().pairingRequest,
+      confirm: (allow: boolean) => signInHost!.confirmPairing(allow),
+    },
+  );
+  if (daveMac.macName !== "Dave's Mac")
+    throw new Error(`Paired with ${daveMac.macName}`);
+  await signInHost.leaveAccount();
+  if (signInHost.state().signedIn || signInHost.state().phones.length)
+    throw new Error("Signing out kept the account or phones");
+  await signInHost.setEnabled(false);
+  pass(
+    "a phone on another account is told which account the Mac is on; one on the Mac's account pairs; signing the Mac out forgets the account and its phones",
+  );
+
   // 3. Hourly housekeeping drops unclaimed Macs older than a day.
   const d1 = (command: string) =>
     Bun.spawnSync(
@@ -1345,6 +1488,7 @@ try {
   console.log(`  Mac status changes: ${statuses.join(" → ")}`);
 } finally {
   host?.stop();
+  signInHost?.stop();
   connection?.close();
   connector?.stop();
   relay.kill();
@@ -1354,5 +1498,6 @@ try {
   await runCommand("tmux", ["-L", socket, "kill-server"]);
   await rm(home, { recursive: true, force: true });
   await rm(secondHome, { recursive: true, force: true });
+  await rm(thirdHome, { recursive: true, force: true });
   await rm(relayState, { recursive: true, force: true });
 }

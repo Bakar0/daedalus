@@ -450,6 +450,7 @@ const NO_REMOTE: DesktopRemoteHost = {
     macName: "",
     phones: [],
     connectedPhones: 0,
+    signedIn: false,
   }),
   setEnabled: async () => {
     throw new DaedalusError(
@@ -477,6 +478,13 @@ const NO_REMOTE: DesktopRemoteHost = {
   },
   removePhone: async () => NO_REMOTE.state(),
   confirmPairing: async () => NO_REMOTE.state(),
+  signIn: async () => {
+    throw new DaedalusError(
+      "DEPENDENCY",
+      "Phone access is not available here.",
+    );
+  },
+  redeemInvite: async () => NO_REMOTE.state(),
   leaveAccount: async () => NO_REMOTE.state(),
   startOver: async () => NO_REMOTE.state(),
   activity: async () => [],
@@ -766,6 +774,8 @@ export function createDesktopRequestHandlers(
     remotePhoneRemove: ({ id }) => mutate(() => remote.removePhone(id)),
     remoteConfirmPairing: ({ allow }) =>
       mutate(() => remote.confirmPairing(allow)),
+    remoteSignIn: () => result(() => remote.signIn()),
+    remoteRedeemInvite: ({ code }) => mutate(() => remote.redeemInvite(code)),
     remoteLeaveAccount: () => mutate(() => remote.leaveAccount()),
     remoteStartOver: () => mutate(() => remote.startOver()),
     remoteActivity: () => result(() => remote.activity()),

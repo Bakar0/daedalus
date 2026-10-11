@@ -788,6 +788,8 @@ export interface RemoteStateDto {
   phones: Array<{ id: string; name: string; pairedAt: string }>;
   /** Phones with an open connection right now. */
   connectedPhones: number;
+  /** The Mac is signed in to an account on the relay. */
+  signedIn: boolean;
   /** The account that claimed this Mac, once the relay has said. */
   account?: string;
   /** That account's plan (e.g. "pro"), and when it ends (null for never). */
@@ -944,6 +946,10 @@ export interface DesktopRpcSchema {
       remotePhoneRemove: Request<{ id: string }, RemoteStateDto>;
       /** Allow or decline the phone waiting to pair. */
       remoteConfirmPairing: Request<{ allow: boolean }, RemoteStateDto>;
+      /** Where to sign this Mac in with Google, in the browser. */
+      remoteSignIn: Request<Record<string, never>, { url: string }>;
+      /** Redeems an invite code for the Mac's account. */
+      remoteRedeemInvite: Request<{ code: string }, RemoteStateDto>;
       /** Take this Mac off its relay account and start over. */
       remoteLeaveAccount: Request<Record<string, never>, RemoteStateDto>;
       /** After the relay removed this Mac: a new identity, no phones. */

@@ -384,8 +384,10 @@ const remote = {
   relay: "wss://relay.example.dev",
   macName: "Settings Mac",
   connectedPhones: 0,
+  signedIn: false,
   phones: [] as Array<{ id: string; name: string; pairedAt: string }>,
   account: undefined as string | undefined,
+  lockedBy: undefined as string | undefined,
   plan: undefined as { name: string; expiresAt: string | null } | undefined,
   pairingRequest: undefined as
     | { phoneId: string; phoneName: string; code: string; expiresAt: number }
@@ -435,10 +437,41 @@ Object.assign(client.request, {
         pairedAt: "2026-10-10T09:00:00.000Z",
       });
       remote.status = "online";
-      remote.account = "owner@example.com";
-      remote.plan = { name: "pro", expiresAt: "2026-11-01T12:00:00.000Z" };
     }
     return remoteState();
+  },
+  // The browser's part is instant here: the Mac comes back signed in, with
+  // no plan yet.
+  remoteSignIn: async () => {
+    remote.signedIn = true;
+    remote.account = "owner@example.com";
+    remote.status = "locked";
+    remote.lockedBy = "no_plan";
+    return {
+      ok: true,
+      data: { url: "https://relay.example.dev/auth/google/start?mac=m" },
+    };
+  },
+  remoteRedeemInvite: async ({ code }: { code: string }) => {
+    if (code !== "GOOD-CODE")
+      return {
+        ok: false,
+        error: {
+          code: "VALIDATION",
+          message: "That invite code is not valid.",
+        },
+      };
+    remote.plan = { name: "pro", expiresAt: "2026-11-01T12:00:00.000Z" };
+    remote.lockedBy = undefined;
+    remote.status = "online";
+    return remoteState();
+  },
+  openExternal: async ({ url }: { url: string }) => {
+    (window as unknown as { opened: string[] }).opened = [
+      ...((window as unknown as { opened?: string[] }).opened ?? []),
+      url,
+    ];
+    return { ok: true, data: { opened: true } };
   },
   remoteLeaveAccount: async () => remoteState(),
   remoteStartOver: async () => remoteState(),

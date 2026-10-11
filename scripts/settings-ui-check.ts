@@ -778,6 +778,74 @@ try {
     throw new Error(
       `Remote: keep-awake row is wrong: ${JSON.stringify(awake)}`,
     );
+  // Signing in comes first: no pairing code until the Mac is signed in to
+  // an account with Pro.
+  const panelText = () =>
+    evaluate<string>(
+      "document.querySelector('.remote-panel')?.textContent ?? ''",
+    );
+  const beforeSignIn = await panelText();
+  if (
+    !beforeSignIn.includes("Sign in to use phone access") ||
+    !beforeSignIn.includes("Daedalus Pro") ||
+    beforeSignIn.includes("Show pairing code")
+  )
+    throw new Error(`Remote: before sign-in: ${beforeSignIn.slice(0, 400)}`);
+  await clickAt(
+    "[...document.querySelectorAll('.remote-panel button')].find((one) => one.textContent.trim() === 'Sign in with Google')",
+  );
+  // The panel learns it is signed in on its next poll, as it would once the
+  // browser finishes.
+  for (
+    let attempt = 0;
+    attempt < 40 && !(await panelText()).includes("No Pro plan");
+    attempt++
+  )
+    await Bun.sleep(100);
+  const opened = await evaluate<string[]>("window.opened ?? []");
+  const noPlan = await panelText();
+  if (
+    !opened[0]?.includes("/auth/google/start") ||
+    !noPlan.includes("owner@example.com") ||
+    !noPlan.includes("No Pro plan") ||
+    !(await evaluate<boolean>(
+      "[...document.querySelectorAll('.remote-panel button')].find((one) => one.textContent.trim() === 'Show pairing code')?.disabled ?? false",
+    ))
+  )
+    throw new Error(
+      `Remote: after sign-in: ${JSON.stringify(opened)} ${noPlan.slice(0, 400)}`,
+    );
+  const typeInvite = (code: string) =>
+    evaluate(`(() => {
+      const input = document.querySelector('.remote-invite input');
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, ${JSON.stringify(code)});
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`);
+  const useInvite =
+    "[...document.querySelectorAll('.remote-invite button')].find((one) => one.textContent.trim() === 'Use invite code')";
+  await typeInvite("WRONG-CODE");
+  await clickAt(useInvite);
+  await Bun.sleep(200);
+  if (!(await panelText()).includes("That invite code is not valid"))
+    throw new Error("Remote: a wrong invite code said nothing");
+  const signedInShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(
+    remoteScreenshotPath.replace(".png", "-no-plan.png"),
+    Buffer.from(signedInShot.data, "base64"),
+  );
+  await typeInvite("GOOD-CODE");
+  await clickAt(useInvite);
+  await Bun.sleep(300);
+  const withPro = await panelText();
+  if (
+    !withPro.includes("Pro plan until") ||
+    withPro.includes("Use invite code")
+  )
+    throw new Error(`Remote: after the invite: ${withPro.slice(0, 400)}`);
+
   await clickAt(
     "[...document.querySelectorAll('.remote-panel button')].find((one) => one.textContent.trim() === 'Show pairing code')",
   );
@@ -875,7 +943,7 @@ try {
   );
   if (left !== 0) throw new Error("Remote: Remove did not forget the phone");
   console.log(
-    "Remote: off by default; on, it waits for a phone and offers Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account, its Pro plan and recent activity; Remove forgets it",
+    "Remote: off by default; on, it asks to sign in first (Pro) with no pairing code; Sign in with Google opens the browser; signed in with no plan it says so and takes an invite code (a wrong one says it is not valid); with Pro it offers Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account, its Pro plan and recent activity; Remove forgets it",
   );
   // And General, where a switch sits beside a two-line description and the
   // alignment either reads or does not.

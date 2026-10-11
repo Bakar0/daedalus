@@ -1,6 +1,8 @@
 import {
   activeEntitlement,
   bindSession,
+  claimKeyValid,
+  claimMac,
   countActiveDevices,
   createInvite,
   daysFromNow,
@@ -8,6 +10,7 @@ import {
   type Entitlement,
   deleteSession,
   device,
+  emailOf,
   PLANS,
   redeemInvite,
   sessionFor,
@@ -34,6 +37,7 @@ import {
   protocolToken,
   randomToken,
   refuse,
+  room,
   sha256,
 } from "./util";
 
@@ -198,9 +202,6 @@ async function closeEverything(env: Env, by: string): Promise<void> {
       body: JSON.stringify({ code: CLOSE.budgetExhausted }),
     });
 }
-
-const room = (env: Env, macId: string) =>
-  env.ROOMS.get(env.ROOMS.idFromName(macId));
 
 /**
  * Admits a device to a Mac's room, or accepts and closes it with a code the
@@ -441,6 +442,33 @@ async function macRoutes(
     return json({ ok: true, data: null });
   }
 
+  // A signed-in Mac asks who it belongs to and the account's plan. It asks
+  // over HTTP because without a plan the relay refuses its connection.
+  if (route === "POST /v1/macs/account") {
+    if (!mac.userId) return json({ ok: true, data: null });
+    return json({
+      ok: true,
+      data: {
+        email: await emailOf(env.DB, mac.userId),
+        plan: (await activeEntitlement(env.DB, mac.userId)) ?? null,
+      },
+    });
+  }
+
+  // An invite code typed on the Mac, for the Mac's account.
+  if (route === "POST /v1/macs/invite") {
+    if (!mac.userId) return fail(409, "NOT_SIGNED_IN", "Sign in first.");
+    if (!(await allowed(env.AUTH_LIMITER, request)))
+      return fail(429, "RATE_LIMITED", "Too many attempts. Wait a minute.");
+    const { code } = await body<{ code: string }>(request);
+    if (!code || !(await redeemInvite(env.DB, mac.userId, code)))
+      return fail(400, "INVITE_INVALID", "That invite code is not valid.");
+    return json({
+      ok: true,
+      data: await activeEntitlement(env.DB, mac.userId),
+    });
+  }
+
   // The Mac leaves its account: its user declined the first phone, which
   // means someone else claimed it, or chose Leave this account.
   if (route === "POST /v1/macs/leave") {
@@ -593,15 +621,18 @@ async function account(
         "That Mac is not online. Open Daedalus on it.",
       );
     if (mac.userId === user.id) return json({ ok: true, data: { macId } });
+    const keyValid = await claimKeyValid(mac, claimKey);
+    // Someone holding this Mac's code is looking at its screen, so it is
+    // fine to say which account the Mac is on.
     if (mac.userId)
-      return fail(409, "CLAIMED", "That Mac belongs to another account.");
-    if (
-      !claimKey ||
-      !mac.claimHash ||
-      !mac.claimExpiresAt ||
-      Date.parse(mac.claimExpiresAt) < Date.now() ||
-      !constantTimeEqual(await sha256(claimKey), mac.claimHash)
-    )
+      return keyValid
+        ? fail(
+            409,
+            "WRONG_ACCOUNT",
+            `This Mac is signed in as ${await emailOf(env.DB, mac.userId)}. Sign in with that account on this phone.`,
+          )
+        : fail(409, "CLAIMED", "That Mac belongs to another account.");
+    if (!keyValid)
       return fail(
         403,
         "BAD_CLAIM",
@@ -611,22 +642,8 @@ async function account(
       (await countActiveDevices(env.DB, user.id, "mac")) >= entitlement.maxMacs
     )
       return fail(403, "MAC_LIMIT", "This account has reached its Mac limit.");
-    const token = randomToken();
-    const claimed = await env.DB.prepare(
-      `UPDATE devices SET user_id = ?, name = ?, token_hash = ?, claimed_at = ?,
-         claim_hash = NULL, claim_expires_at = NULL
-       WHERE id = ? AND user_id IS NULL AND revoked_at IS NULL AND claim_hash = ?`,
-    )
-      .bind(
-        user.id,
-        (name ?? "").slice(0, 80),
-        await sha256(token),
-        nowIso(),
-        macId,
-        mac.claimHash,
-      )
-      .run();
-    if (!claimed.meta.changes)
+    const token = await claimMac(env.DB, mac, user.id, name ?? "");
+    if (!token)
       return fail(409, "CLAIMED", "That Mac was claimed a moment ago.");
     await room(env, macId).fetch("https://room/claimed", {
       method: "POST",

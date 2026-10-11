@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
   decodePairingOffer,
+  RelayAccount,
+  RelayError,
   type PairedMac,
   type PairingOffer,
   pairingCode,
@@ -28,8 +30,6 @@ import {
 } from "./storage";
 
 const SIGN_IN_ERRORS: Record<string, string> = {
-  invite_required: "This Google account is new here. Enter your invite code.",
-  invite_invalid: "That invite code is not valid or was already used.",
   google_failed: "Google did not confirm the sign-in. Try again.",
   cancelled: "Sign-in was cancelled.",
 };
@@ -154,6 +154,16 @@ export function App() {
     setToken(undefined);
     setTokenState(undefined);
   };
+  /** Signs out here and goes straight back to Google to pick another. */
+  const switchAccount = async () => {
+    if (token)
+      await new RelayAccount(location.origin, token)
+        .signOut()
+        .catch(() => undefined);
+    setToken(undefined);
+    startGoogleSignIn();
+  };
+  const me = useMe(locked ? undefined : token, signOut);
 
   if (locked)
     return (
@@ -170,11 +180,28 @@ export function App() {
 
   if (!token) return <SignIn error={signInError} />;
 
+  // Who is signed in, before anything else. If the relay cannot be reached
+  // the app goes on with what it has; the Mac's screen says the rest.
+  if (me.state === "loading")
+    return (
+      <Shell title="Daedalus">
+        <div className="spinner centered" />
+      </Shell>
+    );
+  const who =
+    me.state === "ready" ? (
+      <SignedInAs email={me.email} onSwitch={switchAccount} />
+    ) : undefined;
+  if (me.state === "ready" && !me.plan)
+    return <ProScreen onRedeemed={me.reload} token={token} who={who} />;
+
   const pending = pendingPair();
   if (pending)
     return (
       <Pairing
         code={pending}
+        onSwitch={switchAccount}
+        who={who}
         token={token}
         onDone={(mac) => {
           setPendingPair(undefined);
@@ -201,11 +228,14 @@ export function App() {
     return (
       <Shell onAccount={() => setView("account")} title="Daedalus">
         <section className="empty">
+          {who}
           <h2>Pair your Mac</h2>
           <ol>
             <li>On your Mac, open Daedalus › Settings › Remote.</li>
-            <li>Turn on Allow phone access.</li>
-            <li>Tap Show pairing code and scan it with this phone's camera.</li>
+            <li>Turn on Allow phone access and sign in with this account.</li>
+            <li>
+              Click Show pairing code and scan it with this phone's camera.
+            </li>
           </ol>
         </section>
       </Shell>
@@ -229,29 +259,27 @@ export function App() {
   );
 }
 
-function SignIn({ error }: { error?: string }) {
-  const [invite, setInvite] = useState("");
-  const [showInvite, setShowInvite] = useState(
-    error === "invite_required" || error === "invite_invalid",
-  );
+/** Sends this tab to Google; it comes back with a sign-in for this phone. */
+function startGoogleSignIn(): void {
   const start = new URL("/auth/google/start", location.origin);
-  if (invite.trim()) start.searchParams.set("invite", invite.trim());
   // The sign-in is this phone's from the start, so it can only ever let
   // this phone in.
   start.searchParams.set("device", phoneIdentity().id);
-  const go = () => {
-    start.searchParams.set(
-      "return",
-      `${location.origin}/?signin=${startSignIn()}`,
-    );
-    location.assign(start.toString());
-  };
+  start.searchParams.set(
+    "return",
+    `${location.origin}/?signin=${startSignIn()}`,
+  );
+  location.assign(start.toString());
+}
+
+function SignIn({ error }: { error?: string }) {
   return (
     <div className="signin">
       <img alt="" className="signin-logo" src="/icon-192.png" />
-      <h1>Daedalus</h1>
+      <h1>Sign in to Daedalus</h1>
       <p className="signin-lead">
-        Operate the sessions on your Mac from your phone.
+        Operate the sessions on your Mac from your phone. Use the Google account
+        your Mac is signed in with.
       </p>
       {pendingPair() ? (
         <p className="note">Sign in to finish pairing with your Mac.</p>
@@ -261,31 +289,164 @@ function SignIn({ error }: { error?: string }) {
           {SIGN_IN_ERRORS[error] ?? error}
         </p>
       ) : undefined}
-      {showInvite ? (
-        <label className="field">
-          <span>Invite code</span>
-          <input
-            autoCapitalize="characters"
-            autoComplete="off"
-            onChange={(event) => setInvite(event.target.value)}
-            placeholder="XXXXX-XXXXX"
-            value={invite}
-          />
-        </label>
-      ) : undefined}
-      <button className="button primary google" onClick={go}>
+      <button className="button primary google" onClick={startGoogleSignIn}>
         Continue with Google
       </button>
-      {showInvite ? undefined : (
-        <button className="link" onClick={() => setShowInvite(true)}>
-          I have an invite code
-        </button>
-      )}
       <p className="fine">
-        🔒 The relay forwards encrypted data between your phone and your Mac and
-        cannot read it. This page itself comes from the relay.
+        Phone access is part of Daedalus Pro. 🔒 The relay forwards encrypted
+        data between your phone and your Mac and cannot read it. This page
+        itself comes from the relay.
       </p>
     </div>
+  );
+}
+
+type Me =
+  | { state: "loading" }
+  | { state: "unknown" }
+  | {
+      state: "ready";
+      email: string;
+      plan: { name: string; expiresAt: string | null } | null;
+      reload: () => void;
+    };
+
+/** The signed-in account and its plan, asked of the relay once per open. */
+function useMe(token: string | undefined, onSignedOut: () => void): Me {
+  const [me, setMe] = useState<Me>({ state: "loading" });
+  const [round, setRound] = useState(0);
+  const shownFor = useRef<string | undefined>(undefined);
+  const signedOut = useRef(onSignedOut);
+  signedOut.current = onSignedOut;
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    // A new sign-in starts from nothing; a reload keeps the screen.
+    if (shownFor.current !== token) setMe({ state: "loading" });
+    shownFor.current = token;
+    new RelayAccount(location.origin, token).me().then(
+      (data) => {
+        if (cancelled) return;
+        setMe({
+          state: "ready",
+          email: data.user.email,
+          plan: data.entitlement
+            ? {
+                name: data.entitlement.plan,
+                expiresAt: data.entitlement.expiresAt,
+              }
+            : null,
+          reload: () => setRound((value) => value + 1),
+        });
+      },
+      (failure: unknown) => {
+        if (cancelled) return;
+        if (failure instanceof RelayError && failure.code === "UNAUTHORIZED")
+          signedOut.current();
+        else setMe({ state: "unknown" });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [token, round]);
+  return me;
+}
+
+/**
+ * Who is signed in, with a way to pick another Google account. Google may
+ * pick the phone's only account without asking, so this is where a wrong
+ * one is noticed and changed.
+ */
+function SignedInAs({
+  email,
+  onSwitch,
+}: {
+  email: string;
+  onSwitch: () => void;
+}) {
+  return (
+    <p className="signed-in-as">
+      Signed in as <strong>{email}</strong>
+      <button className="link" onClick={onSwitch}>
+        Use a different account
+      </button>
+    </p>
+  );
+}
+
+/** An account with no plan: what Pro is, and an invite code. */
+function ProScreen({
+  token,
+  who,
+  onRedeemed,
+}: {
+  token: string;
+  who: ReactNode;
+  onRedeemed: () => void;
+}) {
+  const [code, setCode] = useState("");
+  const [error, setError] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  return (
+    <Shell title="Daedalus Pro">
+      <section className="empty pro">
+        {who}
+        <h2>Phone access needs Daedalus Pro</h2>
+        <ul className="pro-list">
+          <li>Watch and steer your Mac's sessions from anywhere</li>
+          <li>Open a live terminal and answer an agent that needs you</li>
+          <li>Notifications when a session needs you while you're away</li>
+          <li>The board, end-to-end encrypted through the relay</li>
+        </ul>
+        <p>
+          This account has no Pro plan
+          {pendingPair() ? ", so it can't pair yet" : ""}. Paid plans are on the
+          way. For now, Pro comes with an invite code.
+        </p>
+        <form
+          className="invite"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            setError(undefined);
+            setBusy(true);
+            try {
+              await new RelayAccount(location.origin, token).redeemInvite(code);
+              onRedeemed();
+            } catch (failure) {
+              setError(
+                failure instanceof Error ? failure.message : String(failure),
+              );
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          <label className="field">
+            <span>Invite code</span>
+            <input
+              autoCapitalize="characters"
+              autoComplete="off"
+              onChange={(event) => setCode(event.target.value)}
+              placeholder="XXXXX-XXXXX"
+              value={code}
+            />
+          </label>
+          {error ? (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          ) : undefined}
+          <button
+            className="button primary"
+            disabled={busy || !code.trim()}
+            type="submit"
+          >
+            Get Pro with this code
+          </button>
+        </form>
+      </section>
+    </Shell>
   );
 }
 
@@ -330,10 +491,14 @@ function readOffer(code: string): PairingOffer | string {
 function Pairing({
   code,
   token,
+  who,
+  onSwitch,
   onDone,
 }: {
   code: string;
   token: string;
+  who: ReactNode;
+  onSwitch: () => void;
   onDone: (mac: PairedMac | undefined) => void;
 }) {
   const [offer] = useState(() => readOffer(code));
@@ -341,6 +506,7 @@ function Pairing({
   const [error, setError] = useState<string>(
     typeof offer === "string" ? offer : "",
   );
+  const [wrongAccount, setWrongAccount] = useState(false);
   const finish = useRef(onDone);
   finish.current = onDone;
   useEffect(() => {
@@ -353,10 +519,11 @@ function Pairing({
         if (!cancelled) finish.current(mac);
       },
       (failure: unknown) => {
-        if (!cancelled)
-          setError(
-            failure instanceof Error ? failure.message : String(failure),
-          );
+        if (cancelled) return;
+        setWrongAccount(
+          failure instanceof RelayError && failure.code === "WRONG_ACCOUNT",
+        );
+        setError(failure instanceof Error ? failure.message : String(failure));
       },
     );
     return () => {
@@ -371,15 +538,27 @@ function Pairing({
       <section className="empty">
         {error ? (
           <>
-            <h2>Pairing failed</h2>
+            <h2>{wrongAccount ? "Different account" : "Pairing failed"}</h2>
             <p className="error">{error}</p>
-            <p>Show a new pairing code on your Mac and scan it again.</p>
+            {wrongAccount ? (
+              <>
+                <p>
+                  Sign in with the Mac's account, then scan a new pairing code.
+                </p>
+                <button className="button primary" onClick={onSwitch}>
+                  Use a different account
+                </button>
+              </>
+            ) : (
+              <p>Show a new pairing code on your Mac and scan it again.</p>
+            )}
             <button className="button" onClick={() => onDone(undefined)}>
               OK
             </button>
           </>
         ) : stage === "ask" && typeof offer !== "string" ? (
           <>
+            {who}
             <h2>Pair with “{offer.name}”?</h2>
             <p>
               Only continue if you just scanned the code on your own Mac's

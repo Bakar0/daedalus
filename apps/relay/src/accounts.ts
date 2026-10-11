@@ -1,4 +1,10 @@
-import { currentMonth, nowIso, randomToken, sha256 } from "./util";
+import {
+  constantTimeEqual,
+  currentMonth,
+  nowIso,
+  randomToken,
+  sha256,
+} from "./util";
 
 export interface Plan {
   maxMacs: number;
@@ -355,4 +361,60 @@ export async function addUsage(
     .bind(userId, currentMonth(), bytes, frames)
     .first<{ bytes: number; frames: number }>();
   return row ?? { bytes, frames };
+}
+
+/** Whether `claimKey` is the one from the Mac's current pairing code. */
+export async function claimKeyValid(
+  mac: Device,
+  claimKey: string | undefined,
+): Promise<boolean> {
+  return Boolean(
+    claimKey &&
+    mac.claimHash &&
+    mac.claimExpiresAt &&
+    Date.parse(mac.claimExpiresAt) >= Date.now() &&
+    constantTimeEqual(await sha256(claimKey), mac.claimHash),
+  );
+}
+
+/**
+ * Puts an unclaimed Mac on an account and returns its new device token,
+ * or undefined if someone claimed it first. The claim hash in the WHERE
+ * makes a code good for one claim. The caller hands the token to the Mac.
+ */
+export async function claimMac(
+  db: D1Database,
+  mac: Device,
+  userId: string,
+  name: string,
+): Promise<string | undefined> {
+  if (!mac.claimHash) return undefined;
+  const token = randomToken();
+  const claimed = await db
+    .prepare(
+      `UPDATE devices SET user_id = ?, name = ?, token_hash = ?, claimed_at = ?,
+         claim_hash = NULL, claim_expires_at = NULL
+       WHERE id = ? AND user_id IS NULL AND revoked_at IS NULL AND claim_hash = ?`,
+    )
+    .bind(
+      userId,
+      name.slice(0, 80),
+      await sha256(token),
+      nowIso(),
+      mac.id,
+      mac.claimHash,
+    )
+    .run();
+  return claimed.meta.changes ? token : undefined;
+}
+
+export async function emailOf(db: D1Database, userId: string): Promise<string> {
+  return (
+    (
+      await db
+        .prepare("SELECT email FROM users WHERE id = ?")
+        .bind(userId)
+        .first<{ email: string }>()
+    )?.email ?? ""
+  );
 }
