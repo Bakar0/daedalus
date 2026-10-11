@@ -312,23 +312,39 @@ async function connect(request: Request, env: Env): Promise<Response> {
     const phone = await device(env.DB, deviceId);
     if (phone && phone.kind !== "phone")
       return refuse(CLOSE.forbidden, "Not a phone");
-    if (phone?.userId === user.id && phone.revokedAt)
-      return refuse(CLOSE.forbidden, "This phone was removed");
+    // A phone removed from its account comes back only with a Google
+    // sign-in made on it after the removal: the sign-ins it had ended with
+    // it, so a lost phone stays out, and its owner can add it back.
+    const returning = Boolean(phone?.userId === user.id && phone.revokedAt);
+    if (
+      returning &&
+      (session.deviceId !== deviceId ||
+        session.createdAt <= (phone?.revokedAt ?? ""))
+    )
+      return refuse(
+        CLOSE.forbidden,
+        "This phone was removed. Sign in again on it to add it back",
+      );
     // A phone is on one account at a time. Signed in to another account on
     // this same phone (the sign-in names it), it moves there: the account
-    // it leaves loses it and its sign-ins on it. A phone removed from an
-    // account still cannot come back to that account.
+    // it leaves loses it and its sign-ins on it.
     const moving = Boolean(phone && phone.userId !== user.id);
     if (moving && session.deviceId !== deviceId)
       return refuse(CLOSE.forbidden, "This phone is on another account");
-    if (!phone || moving) {
+    if (!phone || moving || returning) {
       if (
         (await countActiveDevices(env.DB, user.id, "phone")) >=
         entitlement.maxPhones
       )
         return refuse(CLOSE.forbidden, "Phone limit reached");
       const name = url.searchParams.get("name")?.slice(0, 80) ?? "";
-      if (moving)
+      if (returning)
+        await env.DB.prepare(
+          "UPDATE devices SET name = ?, claimed_at = ?, revoked_at = NULL WHERE id = ?",
+        )
+          .bind(name, nowIso(), deviceId)
+          .run();
+      else if (moving)
         await env.DB.batch([
           env.DB.prepare(
             "UPDATE devices SET user_id = ?, name = ?, claimed_at = ?, revoked_at = NULL WHERE id = ?",

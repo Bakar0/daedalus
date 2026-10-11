@@ -94,6 +94,7 @@ export interface Session {
   tokenHash: string;
   /** The phone this sign-in belongs to, once it has connected as one. */
   deviceId: string | null;
+  createdAt: string;
 }
 
 export async function sessionFor(
@@ -105,12 +106,14 @@ export async function sessionFor(
   const row = await db
     .prepare(
       `SELECT users.id, users.email, sessions.device_id AS deviceId,
-              sessions.expires_at AS expiresAt
+              sessions.expires_at AS expiresAt, sessions.created_at AS createdAt
        FROM sessions JOIN users ON users.id = sessions.user_id
        WHERE sessions.token_hash = ? AND sessions.expires_at > ?`,
     )
     .bind(tokenHash, nowIso())
-    .first<User & { deviceId: string | null; expiresAt: string }>();
+    .first<
+      User & { deviceId: string | null; expiresAt: string; createdAt: string }
+    >();
   if (!row) return undefined;
   // Slide the expiry along with use, at most once a day.
   if (Date.parse(row.expiresAt) - Date.now() < (SESSION_DAYS - 1) * 86_400_000)
@@ -122,6 +125,7 @@ export async function sessionFor(
     user: { id: row.id, email: row.email },
     tokenHash,
     deviceId: row.deviceId,
+    createdAt: row.createdAt,
   };
 }
 

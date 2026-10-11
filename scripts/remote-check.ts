@@ -933,8 +933,19 @@ try {
   );
   if (removedMe !== "UNAUTHORIZED")
     throw new Error(`A removed phone's sign-in still works: ${removedMe}`);
+  // Its owner adds it back with a Google sign-in made on it after the
+  // removal; the old sign-in stays dead.
+  const backToken = await signInPhone("alice@example.com", phone);
+  const back = await PhoneConnection.connect(phone, mac, backToken);
+  const readded = (await new RelayAccount(relayUrl, backToken).me()).devices;
+  back.close();
+  if (!readded.some((item) => item.id === phone.id))
+    throw new Error("The re-added phone is not on the account");
+  // Removed again, so the account's phone limit is as the steps after
+  // expect.
+  await owner.removeDevice(phone.id);
   pass(
-    "removing a phone from the account disconnects it for good and ends its sign-in",
+    "removing a phone from the account disconnects it and ends its sign-in; its old sign-in stays dead, and a new Google sign-in on it adds it back",
   );
 
   const oldMacId = connector.macId;
