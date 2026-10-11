@@ -196,6 +196,47 @@ describe("AgentService", () => {
     });
   });
 
+  test("keeps sessions when tmux does not answer, and takes back a lost one that is live", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { codex: { executable: process.execPath, args: [] } },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home, CODEX_HOME: join(home, "codex") },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Wake" });
+      const agent = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      // Right after a wake, tmux timed out instead of listing the sessions.
+      const listSessions = tmux.listSessions.bind(tmux);
+      tmux.listSessions = async () => {
+        throw new Error("tmux did not answer list-sessions in time");
+      };
+      await context.agents.reconcile();
+      expect((await context.agents.get(agent.id)).status).toBe("running");
+      tmux.listSessions = listSessions;
+      // Marked lost by an earlier build's reading of that timeout.
+      context.repositories.updateAgent({
+        ...(await context.agents.get(agent.id)),
+        status: "lost",
+        endedAt: new Date().toISOString(),
+      });
+      await context.agents.reconcile();
+      const back = await context.agents.get(agent.id);
+      expect(back.status).toBe("running");
+      expect(back.endedAt).toBeNull();
+      expect(tmux.launches).toHaveLength(1);
+      context.close();
+    });
+  });
+
   test("clears the startup question when the provider exits before its prompt", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       await Bun.write(

@@ -182,6 +182,35 @@ describe("CommandTmuxClient", () => {
     );
   });
 
+  test("tells no server apart from a tmux that did not answer", async () => {
+    const answer = (result: {
+      exitCode: number;
+      stderr: string;
+      timedOut?: boolean;
+    }) =>
+      new CommandTmuxClient("isolated", "tmux", async () => ({
+        stdout: "",
+        ...result,
+      }));
+    expect(
+      await answer({
+        exitCode: 1,
+        stderr:
+          "error connecting to /private/tmp/tmux-501/isolated (No such file or directory)",
+      }).listSessions(),
+    ).toEqual([]);
+    expect(
+      await answer({
+        exitCode: 1,
+        stderr: "no server running on /private/tmp/tmux-501/isolated",
+      }).listSessions(),
+    ).toEqual([]);
+    // Seen after the Mac woke: a timeout must not read as "no sessions".
+    await expect(
+      answer({ exitCode: 124, stderr: "", timedOut: true }).listSessions(),
+    ).rejects.toThrow("did not answer");
+  });
+
   test("starts a session from a client carrying the session's PATH", async () => {
     // tmux hands the new command its client's PATH and ignores `-e PATH=`, so
     // the PATH has to travel on the client or the agent never sees it.

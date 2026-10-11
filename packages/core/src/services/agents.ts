@@ -1413,7 +1413,14 @@ export class AgentService {
     // The host asks tmux once per tick and shares the answer with the
     // terminals; anyone else asks here.
     if (liveSessions === undefined && !(await this.tmux.probe())) return;
-    const live = liveSessions ?? new Set(await this.tmux.listSessions());
+    // A tmux that did not answer settles nothing; the next call asks again.
+    const live =
+      liveSessions ??
+      (await this.tmux.listSessions().then(
+        (sessions) => new Set(sessions),
+        () => undefined,
+      ));
+    if (!live) return;
     const now = new Date().toISOString();
     const endedAtStartup: string[] = [];
     this.repositories.transaction(() => {
@@ -1440,6 +1447,20 @@ export class AgentService {
           });
         } else if (agent.status === "starting" && live.has(agent.tmuxSession)) {
           this.repositories.updateAgent({ ...agent, status: "running" });
+        } else if (
+          agent.status === "lost" &&
+          !agent.archivedAt &&
+          live.has(agent.tmuxSession)
+        ) {
+          // Its tmux session is running, so it was never lost, or something
+          // brought it back. The revive sweep adopts such a session the same
+          // way.
+          this.repositories.updateAgent({
+            ...agent,
+            status: "running",
+            endedAt: null,
+            lostReason: null,
+          });
         }
       }
     });
