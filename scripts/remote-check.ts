@@ -1476,6 +1476,18 @@ try {
       ?.note !== "Dave's friends"
   )
     throw new Error("Renaming a key did not stick");
+  // A used-up key leaves the list; the account it went to shows its plan.
+  const oneUse = await signInHost.adminCreateKey({ maxUses: 1 });
+  const erinToken = (await signIn("erin@example.com", oneUse.code)).get(
+    "token",
+  );
+  const erinPlan = (await new RelayAccount(relayUrl, erinToken!).me())
+    .entitlement?.plan;
+  if (
+    erinPlan !== "pro" ||
+    (await signInHost.adminKeys()).some((key) => key.code === oneUse.code)
+  )
+    throw new Error(`A used-up key: Erin ${erinPlan}, still listed`);
   await signInHost.adminDeleteKey(madeKey.code);
   if ((await signInHost.adminKeys()).some((key) => key.code === madeKey.code))
     throw new Error("A deleted key is still listed");
@@ -1486,7 +1498,7 @@ try {
   if (!notAdmin.includes("not an admin"))
     throw new Error(`Alice's Mac read the keys: ${notAdmin}`);
   pass(
-    "an account on ADMIN_EMAILS manages Pro keys (create with uses, trial and expiry, list, rename, delete) and plans (end, grant for days) from its Mac, and sees accounts without devices; another account's Mac is refused",
+    "an account on ADMIN_EMAILS manages Pro keys (create with uses, trial and expiry, list, rename, delete; a used-up key leaves the list) and plans (end, grant for days) from its Mac, and sees accounts without devices; another account's Mac is refused",
   );
 
   // Settings › Account works with phone access off: it still shows the

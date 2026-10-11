@@ -50,8 +50,14 @@ export async function adminAction(
 ): Promise<Response> {
   if (action === "invites.list") {
     const { results } = await env.DB.prepare(
-      "SELECT code, plan, max_uses AS maxUses, used, expires_at AS expiresAt, grant_days AS grantDays, note, created_at AS createdAt FROM invites ORDER BY created_at DESC",
-    ).all();
+      `SELECT code, plan, max_uses AS maxUses, used, expires_at AS expiresAt,
+              grant_days AS grantDays, note, created_at AS createdAt
+       FROM invites
+       WHERE used < max_uses AND (expires_at IS NULL OR expires_at > ?)
+       ORDER BY created_at DESC`,
+    )
+      .bind(nowIso())
+      .all();
     return json({ ok: true, data: results });
   }
 

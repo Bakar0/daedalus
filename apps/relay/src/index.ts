@@ -121,6 +121,10 @@ async function housekeeping(env: Env): Promise<void> {
       nowIso(),
     ),
     env.DB.prepare("DELETE FROM sessions WHERE expires_at < ?").bind(nowIso()),
+    // Keys that cannot be used any more; their accounts show their plans.
+    env.DB.prepare(
+      "DELETE FROM invites WHERE used >= max_uses OR expires_at < ?",
+    ).bind(nowIso()),
   ]);
   await watchdog(env);
 }

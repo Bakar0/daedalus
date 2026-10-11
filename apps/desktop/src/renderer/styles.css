@@ -7798,10 +7798,6 @@ dd {
   min-width: 0;
   padding: 5px 8px;
 }
-.admin-list li.is-spent code,
-.admin-list li.is-spent small {
-  opacity: 0.5;
-}
 .admin-row-menu {
   align-items: center;
   display: flex;

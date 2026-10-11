@@ -289,22 +289,16 @@ const wholeNumber = (text: string): number | undefined => {
     : undefined;
 };
 
-/** "1/3 used · 7-day Pro · until Oct 17". */
-function keyLine(key: AdminKeyDto): { text: string; spent: boolean } {
-  const usedUp = key.used >= key.maxUses;
-  const expired = Boolean(
-    key.expiresAt && Date.parse(key.expiresAt) < Date.now(),
-  );
-  const parts = [
-    usedUp ? "Used" : `${key.used}/${key.maxUses} used`,
+/**
+ * "1/3 used · 7-day Pro · until Oct 17". The relay lists only keys that
+ * still work, and removes a key once it is used up or expired.
+ */
+function keyLine(key: AdminKeyDto): string {
+  return [
+    `${key.used}/${key.maxUses} used`,
     key.grantDays ? `${key.grantDays}-day Pro` : "Pro",
-    ...(expired
-      ? ["expired"]
-      : key.expiresAt && !usedUp
-        ? [`until ${shortDate(key.expiresAt)}`]
-        : []),
-  ];
-  return { text: parts.join(" · "), spent: usedUp || expired };
+    ...(key.expiresAt ? [`until ${shortDate(key.expiresAt)}`] : []),
+  ].join(" · ");
 }
 
 /** "Pro until Oct 19", "Admin", "Pro · ended" or "No plan". */
@@ -368,7 +362,7 @@ function AdminSection({
   const shownKeys = ranked(
     keys ?? [],
     (key) => key.note || key.code,
-    (key) => `${key.code} ${keyLine(key).text}`,
+    (key) => `${key.code} ${keyLine(key)}`,
   );
   const shownAccounts = ranked(
     accounts ?? [],
@@ -572,14 +566,14 @@ function AdminSection({
                 </li>
               );
             return (
-              <li className={line.spent ? "is-spent" : ""} key={key.code}>
+              <li key={key.code}>
                 <span className="admin-key-name">
                   {key.note ? (
                     <strong title={key.note}>{key.note}</strong>
                   ) : undefined}
                   <code>{key.code}</code>
                 </span>
-                <small title={line.text}>{line.text}</small>
+                <small title={line}>{line}</small>
                 <Menu
                   align="end"
                   label={`Actions for ${key.code}`}

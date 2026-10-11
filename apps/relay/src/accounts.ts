@@ -256,6 +256,11 @@ export async function redeemInvite(
   await setEntitlement(db, userId, invite.plan, "invite", {
     expiresAt: daysFromNow(invite.grantDays),
   });
+  // A used-up key is worth nothing: the account it went to shows its plan.
+  await db
+    .prepare("DELETE FROM invites WHERE code = ? AND used >= max_uses")
+    .bind(code.trim().toUpperCase())
+    .run();
   return true;
 }
 
