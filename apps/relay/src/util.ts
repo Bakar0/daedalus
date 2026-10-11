@@ -5,6 +5,11 @@ export interface Env {
   ROOMS: DurableObjectNamespace<Room>;
   /** Shared secret for the admin routes. Unset means no admin access. */
   ADMIN_KEY?: string;
+  /**
+   * Comma-separated emails of accounts that may manage keys and plans from
+   * Settings › Account. A secret, so the list stays out of the repository.
+   */
+  ADMIN_EMAILS?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   /**

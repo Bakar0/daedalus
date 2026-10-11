@@ -4,21 +4,18 @@ import {
   claimKeyValid,
   claimMac,
   countActiveDevices,
-  createInvite,
-  daysFromNow,
   type Device,
   type Entitlement,
   deleteSession,
   device,
   emailOf,
-  PLANS,
   redeemInvite,
   sessionFor,
-  setEntitlement,
   type User,
   userDevices,
   userForSession,
 } from "./accounts";
+import { type AdminAction, adminAction, isAdmin } from "./admin";
 import { googleCallback, googleStart } from "./google";
 import { budget, budgetUsd, overageUsd } from "./budget";
 import { allowedEndpoint, sendPush } from "./push";
@@ -463,13 +460,34 @@ async function macRoutes(
   // over HTTP because without a plan the relay refuses its connection.
   if (route === "POST /v1/macs/account") {
     if (!mac.userId) return json({ ok: true, data: null });
+    const email = await emailOf(env.DB, mac.userId);
     return json({
       ok: true,
       data: {
-        email: await emailOf(env.DB, mac.userId),
+        email,
         plan: (await activeEntitlement(env.DB, mac.userId)) ?? null,
+        admin: isAdmin(env, email),
       },
     });
+  }
+
+  // Settings › Account's admin section, for an account on ADMIN_EMAILS.
+  const macAdmin: Record<string, AdminAction> = {
+    "POST /v1/macs/admin/invites": "invites.list",
+    "POST /v1/macs/admin/invites/create": "invites.create",
+    "POST /v1/macs/admin/invites/delete": "invites.delete",
+    "POST /v1/macs/admin/users": "users.list",
+    "POST /v1/macs/admin/plan": "plan.set",
+  };
+  const action = macAdmin[route];
+  if (action) {
+    if (!mac.userId || !isAdmin(env, await emailOf(env.DB, mac.userId)))
+      return fail(403, "FORBIDDEN", "This account is not an admin.");
+    return adminAction(
+      env,
+      action,
+      await body<Record<string, unknown>>(request),
+    );
   }
 
   // An invite code typed on the Mac, for the Mac's account.
@@ -710,44 +728,22 @@ async function admin(
   if (!env.ADMIN_KEY || !key || !constantTimeEqual(key, env.ADMIN_KEY))
     return fail(401, "UNAUTHORIZED", "Admin key required.");
 
-  if (route === "POST /admin/invites") {
-    const options = await body<{
-      plan: string;
-      maxUses: number;
-      days: number;
-      grantDays: number;
-      note: string;
-    }>(request);
-    if (options.plan && !PLANS[options.plan])
-      return fail(400, "BAD_PLAN", `Plans: ${Object.keys(PLANS).join(", ")}`);
-    return json({
-      ok: true,
-      data: { code: await createInvite(env.DB, options) },
-    });
-  }
-
-  if (route === "GET /admin/invites") {
-    const { results } = await env.DB.prepare(
-      "SELECT code, plan, max_uses AS maxUses, used, expires_at AS expiresAt, grant_days AS grantDays, note, created_at AS createdAt FROM invites ORDER BY created_at DESC",
-    ).all();
-    return json({ ok: true, data: results });
-  }
-
-  if (route === "GET /admin/users") {
-    const { results } = await env.DB.prepare(
-      `SELECT users.id, users.email, users.created_at AS createdAt,
-              entitlements.plan, entitlements.status, entitlements.source,
-              entitlements.expires_at AS expiresAt,
-              (SELECT COUNT(*) FROM devices WHERE devices.user_id = users.id AND kind = 'mac' AND revoked_at IS NULL) AS macs,
-              (SELECT COUNT(*) FROM devices WHERE devices.user_id = users.id AND kind = 'phone' AND revoked_at IS NULL) AS phones,
-              COALESCE((SELECT bytes FROM usage WHERE usage.user_id = users.id AND month = ?), 0) AS usageBytes
-       FROM users LEFT JOIN entitlements ON entitlements.user_id = users.id
-       ORDER BY users.created_at`,
-    )
-      .bind(currentMonth())
-      .all();
-    return json({ ok: true, data: results });
-  }
+  const actions: Record<string, AdminAction> = {
+    "GET /admin/invites": "invites.list",
+    "POST /admin/invites": "invites.create",
+    "GET /admin/users": "users.list",
+    "POST /admin/entitlements": "plan.set",
+  };
+  const action = actions[route];
+  if (action)
+    return adminAction(
+      env,
+      action,
+      route.startsWith("GET ")
+        ? {}
+        : await body<Record<string, unknown>>(request),
+      { devices: true },
+    );
 
   if (route === "GET /admin/budget")
     return json({ ok: true, data: await budget(env).status() });
@@ -757,73 +753,6 @@ async function admin(
     if (open) return json({ ok: true, data: await budget(env).reopen() });
     await closeEverything(env, "admin");
     return json({ ok: true, data: await budget(env).status() });
-  }
-
-  if (route === "POST /admin/entitlements") {
-    const { email, status, plan, monthlyFrames, days } = await body<{
-      email: string;
-      /**
-       * `expired` ends the plan now; the account keeps its sign-ins and can
-       * redeem an invite. `revoked` also ends its sign-ins, and invites no
-       * longer work for it.
-       */
-      status: "active" | "expired" | "revoked";
-      plan: string;
-      monthlyFrames: number;
-      /** How long the plan lasts from now; 0 for no end. */
-      days: number;
-    }>(request);
-    const user = await env.DB.prepare("SELECT id FROM users WHERE email = ?")
-      .bind(email ?? "")
-      .first<{ id: string }>();
-    if (!user) return fail(404, "NOT_FOUND", "No user with that email.");
-    if (plan && !PLANS[plan])
-      return fail(400, "BAD_PLAN", `Plans: ${Object.keys(PLANS).join(", ")}`);
-    const current = await env.DB.prepare(
-      "SELECT plan, expires_at AS expiresAt FROM entitlements WHERE user_id = ?",
-    )
-      .bind(user.id)
-      .first<{ plan: string; expiresAt: string | null }>();
-    await setEntitlement(
-      env.DB,
-      user.id,
-      plan ?? current?.plan ?? "pro",
-      "admin",
-      {
-        status:
-          status === "revoked" || status === "expired" ? status : "active",
-        limits:
-          typeof monthlyFrames === "number" && monthlyFrames > 0
-            ? { monthlyFrames }
-            : {},
-        // Without `days`, a plan that has not ended keeps its end; one that
-        // has is granted again with none.
-        expiresAt:
-          typeof days === "number"
-            ? daysFromNow(days)
-            : current?.expiresAt && current.expiresAt > nowIso()
-              ? current.expiresAt
-              : null,
-      },
-    );
-    if (status === "revoked" || status === "expired") {
-      if (status === "revoked")
-        await env.DB.prepare("DELETE FROM sessions WHERE user_id = ?")
-          .bind(user.id)
-          .run();
-      const macs = (await userDevices(env.DB, user.id)).filter(
-        (item) => item.kind === "mac",
-      );
-      for (const mac of macs)
-        await room(env, mac.id).fetch("https://room/kick", {
-          method: "POST",
-          body: JSON.stringify({ code: CLOSE.noEntitlement }),
-        });
-    }
-    return json({
-      ok: true,
-      data: (await activeEntitlement(env.DB, user.id)) ?? null,
-    });
   }
 
   return fail(404, "NOT_FOUND", "Not found");

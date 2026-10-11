@@ -790,6 +790,8 @@ export interface RemoteStateDto {
   connectedPhones: number;
   /** The Mac is signed in to an account on the relay. */
   signedIn: boolean;
+  /** That account is on the relay's admin list (Settings › Account). */
+  admin?: boolean;
   /** The account that claimed this Mac, once the relay has said. */
   account?: string;
   /** That account's plan (e.g. "pro"), and when it ends (null for never). */
@@ -804,6 +806,49 @@ export interface RemoteStateDto {
     code: string;
     expiresAt: number;
   };
+}
+
+/** A Pro key (an invite code), as an admin sees it. */
+export interface AdminKeyDto {
+  code: string;
+  plan: string;
+  maxUses: number;
+  used: number;
+  /** When the code stops working; null for never. */
+  expiresAt: string | null;
+  /** How long the plan it grants lasts; null for no end. */
+  grantDays: number | null;
+  note: string;
+  createdAt: string;
+}
+
+export interface AdminKeyInput {
+  maxUses?: number;
+  /** How long the code works. */
+  days?: number;
+  /** How long the plan it grants lasts; none for no end. */
+  grantDays?: number;
+  note?: string;
+}
+
+/** An account on the relay, as an admin sees it. */
+export interface AdminAccountDto {
+  id: string;
+  email: string;
+  createdAt: string;
+  plan: string | null;
+  status: "active" | "expired" | "revoked" | null;
+  source: string | null;
+  expiresAt: string | null;
+  usageBytes: number;
+}
+
+export interface AdminPlanInput {
+  email: string;
+  /** Grant Pro, end the plan now, or revoke the account. */
+  status: "active" | "expired" | "revoked";
+  /** For a grant: how long it lasts; 0 or none for no end. */
+  days?: number;
 }
 
 /** One thing a phone did on this Mac, from the audit log. */
@@ -950,6 +995,12 @@ export interface DesktopRpcSchema {
       remoteSignIn: Request<Record<string, never>, { url: string }>;
       /** Redeems an invite code for the Mac's account. */
       remoteRedeemInvite: Request<{ code: string }, RemoteStateDto>;
+      /** Admin (Settings › Account): Pro keys and accounts. */
+      remoteAdminKeys: Request<Record<string, never>, AdminKeyDto[]>;
+      remoteAdminCreateKey: Request<AdminKeyInput, { code: string }>;
+      remoteAdminDeleteKey: Request<{ code: string }, null>;
+      remoteAdminAccounts: Request<Record<string, never>, AdminAccountDto[]>;
+      remoteAdminSetPlan: Request<AdminPlanInput, null>;
       /** Reads the Mac's account and plan from the relay again. */
       remoteRefreshAccount: Request<Record<string, never>, RemoteStateDto>;
       /** Take this Mac off its relay account and start over. */

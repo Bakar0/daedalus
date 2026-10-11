@@ -284,6 +284,8 @@ const vars = {
   // The check signs in many accounts from one address; the relay's limit
   // of 30 a minute would refuse some.
   AUTH_LIMIT_OFF: "1",
+  // Dave's Mac manages keys and plans from Settings › Account.
+  ADMIN_EMAILS: "Dave@example.com, owner@example.org",
   // A room flushes usage after this many frames, so the frame limit is
   // reached within the check rather than at the next 5-minute alarm.
   FRAME_FLUSH_EVERY: "100",
@@ -1422,6 +1424,63 @@ try {
     throw new Error("The tablet stayed on Alice's account");
   pass(
     "a phone on another account is told which account the Mac is on; one on the Mac's account pairs; a phone signed in to another account moves to it and pairs there",
+  );
+
+  // Settings › Account's admin section, for an account on ADMIN_EMAILS.
+  if (!(await signInHost.refreshAccount()).admin)
+    throw new Error("Dave is on ADMIN_EMAILS but not an admin");
+  const madeKey = await signInHost.adminCreateKey({
+    maxUses: 2,
+    grantDays: 7,
+    days: 30,
+    note: "for the check",
+  });
+  const listed = (await signInHost.adminKeys()).find(
+    (key) => key.code === madeKey.code,
+  );
+  if (
+    listed?.plan !== "pro" ||
+    listed.maxUses !== 2 ||
+    listed.grantDays !== 7 ||
+    !listed.expiresAt ||
+    listed.note !== "for the check"
+  )
+    throw new Error(`Admin key: ${JSON.stringify(listed)}`);
+  const accounts = await signInHost.adminAccounts();
+  const carol = accounts.find((item) => item.email === "carol@example.com");
+  if (!carol || "macs" in carol || "phones" in carol)
+    throw new Error(`Admin accounts: ${JSON.stringify(carol)}`);
+  const carolAccount = new RelayAccount(
+    relayUrl,
+    (await signIn("carol@example.com")).get("token")!,
+  );
+  await signInHost.adminSetPlan({
+    email: "carol@example.com",
+    status: "expired",
+  });
+  const carolEnded = (await carolAccount.me()).entitlement;
+  await signInHost.adminSetPlan({
+    email: "carol@example.com",
+    status: "active",
+    days: 10,
+  });
+  const carolDays =
+    (Date.parse((await carolAccount.me()).entitlement?.expiresAt ?? "") -
+      Date.now()) /
+    86_400_000;
+  if (carolEnded !== null || !(carolDays > 9.9 && carolDays <= 10))
+    throw new Error(`Admin plan: ${JSON.stringify(carolEnded)} ${carolDays}`);
+  await signInHost.adminDeleteKey(madeKey.code);
+  if ((await signInHost.adminKeys()).some((key) => key.code === madeKey.code))
+    throw new Error("A deleted key is still listed");
+  const notAdmin = await host!.adminKeys().then(
+    () => "listed",
+    (error: Error) => error.message,
+  );
+  if (!notAdmin.includes("not an admin"))
+    throw new Error(`Alice's Mac read the keys: ${notAdmin}`);
+  pass(
+    "an account on ADMIN_EMAILS manages Pro keys (create with uses, trial and expiry, list, delete) and plans (end, grant for days) from its Mac, and sees accounts without devices; another account's Mac is refused",
   );
 
   // Settings › Account works with phone access off: it still shows the

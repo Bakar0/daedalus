@@ -7665,3 +7665,54 @@ dd {
   text-transform: uppercase;
   vertical-align: 1px;
 }
+
+/* Settings › Account's admin section: Pro keys and accounts. */
+.admin-section {
+  display: grid;
+  gap: 10px;
+}
+.admin-section h3 {
+  margin-top: 8px;
+}
+.admin-key-form {
+  align-items: end;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 90px minmax(0, 1fr) minmax(0, 1fr);
+}
+.admin-key-form .admin-key-note {
+  grid-column: 1 / 3;
+}
+.admin-key-form label,
+.admin-grant-days {
+  display: grid;
+  gap: 4px;
+}
+.admin-key-form span,
+.admin-grant-days span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.admin-key-form input,
+.admin-grant-days input {
+  font-size: 12px;
+  min-width: 0;
+  padding: 6px 8px;
+  width: 100%;
+}
+.admin-grant-days {
+  max-width: 160px;
+}
+.admin-made {
+  align-items: center;
+  color: var(--secondary);
+  display: flex;
+  font-size: 12px;
+  gap: 8px;
+  margin: 0;
+}
+.admin-made code,
+.admin-keys code {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}

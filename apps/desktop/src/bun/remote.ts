@@ -9,6 +9,10 @@ import {
 } from "@daedalus/core";
 import { runCommand, TmuxPtyBridge } from "@daedalus/platform";
 import type {
+  AdminAccountDto,
+  AdminKeyDto,
+  AdminKeyInput,
+  AdminPlanInput,
   RemoteActivityDto,
   RemotePairingDto,
   RemoteStateDto,
@@ -207,22 +211,28 @@ export async function macRelayCall<T = unknown>(
   }
 }
 
-/** Asks the relay which account this Mac is on and its plan, and keeps it. */
+/**
+ * Asks the relay which account this Mac is on and its plan, and keeps it.
+ * Returns whether the account is on the relay's admin list, or undefined
+ * when the relay did not say.
+ */
 export async function refreshMacAccount(
   relay: string,
   store: RemoteStore,
-): Promise<void> {
-  if (!store.relayToken) return;
+): Promise<boolean | undefined> {
+  if (!store.relayToken) return undefined;
   const response = await macRelayCall<{
     email: string;
     plan: { plan: string; expiresAt: string | null } | null;
+    admin?: boolean;
   } | null>(relay, store, "/v1/macs/account");
-  if (!response.ok || !response.data) return;
-  const { email, plan } = response.data;
+  if (!response.ok || !response.data) return undefined;
+  const { email, plan, admin } = response.data;
   await store.setAccount(
     email,
     plan ? { name: plan.plan, expiresAt: plan.expiresAt } : undefined,
   );
+  return admin === true;
 }
 
 /** Redeems an invite code for this Mac's account and reads the new plan. */
@@ -1194,6 +1204,11 @@ export interface DesktopRemoteHost {
   signIn(): Promise<{ url: string }>;
   redeemInvite(code: string): Promise<RemoteStateDto>;
   refreshAccount(): Promise<RemoteStateDto>;
+  adminKeys(): Promise<AdminKeyDto[]>;
+  adminCreateKey(input: AdminKeyInput): Promise<{ code: string }>;
+  adminDeleteKey(code: string): Promise<void>;
+  adminAccounts(): Promise<AdminAccountDto[]>;
+  adminSetPlan(input: AdminPlanInput): Promise<void>;
   leaveAccount(): Promise<RemoteStateDto>;
   startOver(): Promise<RemoteStateDto>;
   removePhone(id: string): Promise<RemoteStateDto>;
@@ -1226,6 +1241,8 @@ const ANNOUNCE_AFTER_MS = 30 * 60_000;
 export class RemoteHost implements DesktopRemoteHost {
   #store: RemoteStore | undefined;
   #connector: RemoteConnector | undefined;
+  /** The account is on the relay's admin list, as it last said. */
+  #admin = false;
   #awake: Bun.Subprocess | undefined;
   readonly #audit: RemoteAudit;
   /** When each phone last finished a handshake. */
@@ -1393,6 +1410,7 @@ export class RemoteHost implements DesktopRemoteHost {
       macName: this.macName,
       connectedPhones: this.#connector?.connectedPhones ?? 0,
       signedIn: Boolean(this.#store?.relayToken),
+      ...(this.#admin && this.#store?.relayToken ? { admin: true } : {}),
       phones: (this.#store?.phones ?? []).map(({ id, name, pairedAt }) => ({
         id,
         name,
@@ -1472,12 +1490,52 @@ export class RemoteHost implements DesktopRemoteHost {
 
   /** Reads the account and plan from the relay again. */
   async refreshAccount(): Promise<RemoteStateDto> {
-    if (this.#store)
-      await refreshMacAccount(
+    if (this.#store) {
+      const admin = await refreshMacAccount(
         this.options.context.config.remoteRelay,
         this.#store,
       );
+      if (admin !== undefined) this.#admin = admin;
+    }
     return this.state();
+  }
+
+  /** Settings › Account's admin section, as this Mac's admin account. */
+  async #adminCall<T>(path: string, body: unknown = {}): Promise<T> {
+    if (!this.#store?.relayToken)
+      throw new DaedalusError("CONFLICT", "Sign in first.");
+    const response = await macRelayCall<T>(
+      this.options.context.config.remoteRelay,
+      this.#store,
+      `/v1/macs/admin/${path}`,
+      body,
+    );
+    if (!response.ok)
+      throw new DaedalusError(
+        "VALIDATION",
+        response.error?.message ?? "The relay could not be reached.",
+      );
+    return response.data as T;
+  }
+
+  adminKeys(): Promise<AdminKeyDto[]> {
+    return this.#adminCall("invites");
+  }
+
+  adminCreateKey(input: AdminKeyInput): Promise<{ code: string }> {
+    return this.#adminCall("invites/create", { ...input, plan: "pro" });
+  }
+
+  async adminDeleteKey(code: string): Promise<void> {
+    await this.#adminCall("invites/delete", { code });
+  }
+
+  adminAccounts(): Promise<AdminAccountDto[]> {
+    return this.#adminCall("users");
+  }
+
+  async adminSetPlan(input: AdminPlanInput): Promise<void> {
+    await this.#adminCall("plan", { ...input, plan: "pro" });
   }
 
   async leaveAccount(): Promise<RemoteStateDto> {

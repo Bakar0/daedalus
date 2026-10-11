@@ -864,6 +864,52 @@ try {
     Buffer.from(proShot.data, "base64"),
   );
 
+  // The admin section, for an account on the relay's admin list: make a
+  // key, see it listed, and end an account's plan.
+  await waitFor("the admin section", async () =>
+    (await accountText()).includes("Admin: Pro keys"),
+  );
+  const fill = (selector: string, value: string) =>
+    evaluate(`(() => {
+      const input = document.querySelector(${JSON.stringify(selector)});
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, ${JSON.stringify(value)});
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`);
+  await fill(".admin-key-form label:nth-child(1) input", "3");
+  await fill(".admin-key-form label:nth-child(2) input", "14");
+  await fill(".admin-key-form .admin-key-note input", "For Dana");
+  await clickAt(
+    "[...document.querySelectorAll('.admin-key-form button')].find((one) => one.textContent.trim() === 'Create key')",
+  );
+  await waitFor("the new key", async () =>
+    (await accountText()).includes("New key KEY1A-B2C3D"),
+  );
+  const keyLine = await evaluate<string>(
+    "document.querySelector('.admin-keys li small')?.textContent ?? ''",
+  );
+  if (
+    !keyLine.includes("0 of 3 used") ||
+    !keyLine.includes("Pro for 14 days") ||
+    !keyLine.includes("For Dana")
+  )
+    throw new Error(`Admin: the key line reads ${keyLine}`);
+  const endFriend =
+    "[...document.querySelectorAll('.admin-accounts li')].find((one) => one.textContent.includes('friend@example.com')).querySelector('.accounts-actions button:nth-child(2)')";
+  await clickAt(endFriend);
+  await Bun.sleep(400);
+  await clickAt(endFriend);
+  await waitFor("the friend's plan ended", async () =>
+    (await accountText()).includes("friend@example.comPro · ended"),
+  );
+  const adminShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(
+    join(projectRoot, "artifacts/settings-ui-admin.png"),
+    Buffer.from(adminShot.data, "base64"),
+  );
+
   // With Pro, Remote is the full section. Signing in turned phone access on.
   await openSection("Remote");
   await Bun.sleep(300);
@@ -996,7 +1042,7 @@ try {
   );
   if (left !== 0) throw new Error("Remote: Remove did not forget the phone");
   console.log(
-    "Pro: without it the header says Get Pro and Remote (tagged Pro) only leads to Account; Account signs the Mac in through the browser, shows Free as current, formats an invite code as it is typed (wrong12345 reads WRONG-12345), refuses a wrong one and takes a good one; then the header says Pro and Remote is on with Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account, its Pro plan and recent activity; Remove forgets it",
+    "Pro: without it the header says Get Pro and Remote (tagged Pro) only leads to Account; Account signs the Mac in through the browser, shows Free as current, formats an invite code as it is typed (wrong12345 reads WRONG-12345), refuses a wrong one and takes a good one; then the header says Pro; an admin account makes a Pro key (uses, trial, note), sees it listed, and ends an account's plan; Remote is on with Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account, its Pro plan and recent activity; Remove forgets it",
   );
   // And General, where a switch sits beside a two-line description and the
   // alignment either reads or does not.

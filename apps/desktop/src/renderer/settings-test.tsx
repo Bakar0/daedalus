@@ -385,6 +385,7 @@ const remote = {
   macName: "Settings Mac",
   connectedPhones: 0,
   signedIn: false,
+  admin: false,
   phones: [] as Array<{ id: string; name: string; pairedAt: string }>,
   account: undefined as string | undefined,
   lockedBy: undefined as string | undefined,
@@ -393,6 +394,49 @@ const remote = {
     | { phoneId: string; phoneName: string; code: string; expiresAt: number }
     | undefined,
 };
+// The relay's keys and accounts, as the admin section sees them.
+let adminKeys: Array<{
+  code: string;
+  plan: string;
+  maxUses: number;
+  used: number;
+  expiresAt: string | null;
+  grantDays: number | null;
+  note: string;
+  createdAt: string;
+}> = [];
+let adminAccounts = [
+  {
+    id: "u1",
+    email: "owner@example.com",
+    createdAt: "2026-10-01T12:00:00.000Z",
+    plan: "pro" as string | null,
+    status: "active" as string | null,
+    source: "invite" as string | null,
+    expiresAt: null as string | null,
+    usageBytes: 0,
+  },
+  {
+    id: "u2",
+    email: "friend@example.com",
+    createdAt: "2026-10-05T12:00:00.000Z",
+    plan: "pro",
+    status: "active",
+    source: "invite",
+    expiresAt: "2026-10-19T12:00:00.000Z",
+    usageBytes: 0,
+  },
+  {
+    id: "u3",
+    email: "new@example.com",
+    createdAt: "2026-10-10T12:00:00.000Z",
+    plan: null,
+    status: null,
+    source: null,
+    expiresAt: null,
+    usageBytes: 0,
+  },
+];
 const remoteState = () => ({
   ok: true,
   data: { ...remote, phones: [...remote.phones] },
@@ -445,6 +489,7 @@ Object.assign(client.request, {
   remoteSignIn: async () => {
     remote.enabled = true;
     remote.signedIn = true;
+    remote.admin = true;
     remote.account = "owner@example.com";
     remote.status = "locked";
     remote.lockedBy = "no_plan";
@@ -475,6 +520,45 @@ Object.assign(client.request, {
     return { ok: true, data: { opened: true } };
   },
   remoteRefreshAccount: async () => remoteState(),
+  remoteAdminKeys: async () => ({ ok: true, data: adminKeys }),
+  remoteAdminCreateKey: async (input: {
+    maxUses?: number;
+    grantDays?: number;
+    days?: number;
+    note?: string;
+  }) => {
+    const code = `KEY${adminKeys.length + 1}A-B2C3D`;
+    adminKeys.unshift({
+      code,
+      plan: "pro",
+      maxUses: input.maxUses ?? 1,
+      used: 0,
+      expiresAt: input.days ? "2026-11-10T12:00:00.000Z" : null,
+      grantDays: input.grantDays ?? null,
+      note: input.note ?? "",
+      createdAt: "2026-10-11T12:00:00.000Z",
+    });
+    return { ok: true, data: { code } };
+  },
+  remoteAdminDeleteKey: async ({ code }: { code: string }) => {
+    adminKeys = adminKeys.filter((key) => key.code !== code);
+    return { ok: true, data: null };
+  },
+  remoteAdminAccounts: async () => ({ ok: true, data: adminAccounts }),
+  remoteAdminSetPlan: async ({
+    email,
+    status,
+  }: {
+    email: string;
+    status: string;
+  }) => {
+    adminAccounts = adminAccounts.map((account) =>
+      account.email === email
+        ? { ...account, status, plan: account.plan ?? "pro" }
+        : account,
+    );
+    return { ok: true, data: null };
+  },
   remoteLeaveAccount: async () => remoteState(),
   remoteStartOver: async () => remoteState(),
   remoteActivity: async () => ({
