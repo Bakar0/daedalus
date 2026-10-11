@@ -3,11 +3,14 @@
 //   RELAY_ADMIN_KEY=… bun run relay-admin --relay https://… <command>
 //
 // Commands:
-//   invite [--plan beta] [--uses 1] [--days 14] [--note text]
+//   invite [--plan pro] [--uses 1] [--days 14] [--trial 30] [--note text]
+//                          --days: how long the code works; --trial: how
+//                          long the plan it grants lasts (none: no end)
 //   invites
 //   users
-//   grant <email> [--plan beta]
-//   revoke <email>
+//   grant <email> [--plan pro] [--days 30]   --days 0 clears the end
+//   expire <email>         end the plan now; an invite code renews it
+//   revoke <email>         end the plan and every sign-in; invites can't undo it
 //   budget                 month-to-date units and estimated overage
 //   budget close|reopen    pause or resume the whole relay
 //
@@ -24,6 +27,7 @@ const { values, positionals } = parseArgs({
     plan: { type: "string" },
     uses: { type: "string" },
     days: { type: "string" },
+    trial: { type: "string" },
     note: { type: "string" },
   },
 });
@@ -65,6 +69,7 @@ switch (command) {
       plan: values.plan,
       maxUses: number(values.uses),
       days: number(values.days),
+      grantDays: number(values.trial),
       note: values.note,
     })) as { code: string };
     console.log(data.code);
@@ -84,6 +89,7 @@ switch (command) {
     else console.log(await call("GET", "/admin/budget"));
     break;
   case "grant":
+  case "expire":
   case "revoke":
     if (!argument) {
       console.error(`Usage: ${command} <email>`);
@@ -92,14 +98,22 @@ switch (command) {
     console.log(
       await call("POST", "/admin/entitlements", {
         email: argument,
-        status: command === "grant" ? "active" : "revoked",
+        status:
+          command === "grant"
+            ? "active"
+            : command === "expire"
+              ? "expired"
+              : "revoked",
         plan: values.plan,
+        ...(command === "grant" && values.days !== undefined
+          ? { days: Number(values.days) }
+          : {}),
       }),
     );
     break;
   default:
     console.error(
-      "Commands: invite, invites, users, grant <email>, revoke <email>, budget [close|reopen]",
+      "Commands: invite, invites, users, grant <email>, expire <email>, revoke <email>, budget [close|reopen]",
     );
     process.exit(2);
 }
