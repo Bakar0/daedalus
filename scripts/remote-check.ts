@@ -281,6 +281,9 @@ const vars = {
   ),
   VAPID_SUBJECT: "https://relay.test",
   PUSH_TEST_ENDPOINT: `${pushOrigin}/`,
+  // The check signs in many accounts from one address; the relay's limit
+  // of 30 a minute would refuse some.
+  AUTH_LIMIT_OFF: "1",
   // A room flushes usage after this many frames, so the frame limit is
   // reached within the check rather than at the next 5-minute alarm.
   FRAME_FLUSH_EVERY: "100",
@@ -342,36 +345,17 @@ async function pairAndAnswer(
   allow = true,
 ): Promise<PairedMac> {
   let waited = false;
-  let pairing: Promise<PairedMac>;
-  // The relay allows 30 sign-ins, invite codes and claims a minute from one
-  // address, and this check makes many: a refused claim waits and tries
-  // again, as a person would.
-  for (let attempt = 0; ; attempt++) {
-    let failed: unknown;
-    pairing = pairWithMac(phone, offer, name, token, {
-      onWaiting: () => {
-        waited = true;
-      },
-    });
-    pairing.catch((error: unknown) => {
-      failed = error;
-    });
-    await until(
-      "the Mac asks its user",
-      () => mac.request() !== undefined || failed !== undefined,
-      20_000,
-    );
-    if (mac.request() !== undefined) break;
-    if (
-      failed instanceof RelayError &&
-      failed.code === "RATE_LIMITED" &&
-      attempt < 4
-    ) {
-      await sleep(15_000);
-      continue;
-    }
-    throw failed;
-  }
+  const pairing = pairWithMac(phone, offer, name, token, {
+    onWaiting: () => {
+      waited = true;
+    },
+  });
+  void pairing.catch(() => undefined);
+  await until(
+    "the Mac asks its user",
+    () => mac.request() !== undefined,
+    20_000,
+  );
   await until("the phone hears the Mac is asking", () => waited);
   const asked = mac.request()!;
   if (asked.code !== pairingCode(offer, phone) || asked.phoneName !== name)
@@ -1415,8 +1399,29 @@ try {
   );
   if (daveMac.macName !== "Dave's Mac")
     throw new Error(`Paired with ${daveMac.macName}`);
+  // Alice's tablet signs in as Dave on the same device: it moves to Dave's
+  // account and pairs, and Alice's account no longer has it.
+  const movedToken = await signInPhone("dave@example.com", secondPhone);
+  await pairAndAnswer(
+    secondPhone,
+    decodePairingOffer((await signInHost.pairingCode()).url),
+    "Alice's tablet",
+    movedToken,
+    {
+      request: () => signInHost!.state().pairingRequest,
+      confirm: (allow: boolean) => signInHost!.confirmPairing(allow),
+    },
+  );
+  const aliceDevices = (
+    await new RelayAccount(
+      relayUrl,
+      (await signIn("alice@example.com")).get("token")!,
+    ).me()
+  ).devices;
+  if (aliceDevices.some((item) => item.id === secondPhone.id))
+    throw new Error("The tablet stayed on Alice's account");
   pass(
-    "a phone on another account is told which account the Mac is on; one on the Mac's account pairs",
+    "a phone on another account is told which account the Mac is on; one on the Mac's account pairs; a phone signed in to another account moves to it and pairs there",
   );
 
   // Settings › Account works with phone access off: it still shows the

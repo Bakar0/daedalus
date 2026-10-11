@@ -14,6 +14,12 @@ export interface Env {
   DEV_MODE?: string;
   /** Dev only: so the local check can stand in for Google. */
   GOOGLE_AUTH_URL?: string;
+  /**
+   * "1" turns the per-address limit on sign-ins, invite codes and claims
+   * off. Honoured only with DEV_MODE, for the checks, which sign in many
+   * accounts from one address.
+   */
+  AUTH_LIMIT_OFF?: string;
   GOOGLE_TOKEN_URL?: string;
   /** Comma-separated origins a sign-in may return to. */
   APP_ORIGINS?: string;

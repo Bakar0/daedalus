@@ -70,7 +70,7 @@ export default {
           .catch(() => {}),
       );
       if (url.pathname.startsWith("/auth/")) {
-        if (!(await allowed(env.AUTH_LIMITER, request)))
+        if (!(await authAllowed(env, request)))
           return fail(
             429,
             "RATE_LIMITED",
@@ -100,6 +100,12 @@ export default {
     ctx.waitUntil(housekeeping(env));
   },
 } satisfies ExportedHandler<Env>;
+
+/** The limit on sign-ins, invite codes and claims, per IP. */
+function authAllowed(env: Env, request: Request): Promise<boolean> {
+  if (isDev(env) && env.AUTH_LIMIT_OFF === "1") return Promise.resolve(true);
+  return allowed(env.AUTH_LIMITER, request);
+}
 
 /** Per IP, for requests made before anyone is known. */
 async function allowed(limiter: RateLimit, request: Request): Promise<boolean> {
@@ -292,28 +298,39 @@ async function connect(request: Request, env: Env): Promise<Response> {
     if (!mac || mac.userId !== user.id || mac.revokedAt)
       return refuse(CLOSE.forbidden, "That Mac is not on this account");
     const phone = await device(env.DB, deviceId);
-    if (
-      phone &&
-      (phone.userId !== user.id || phone.revokedAt || phone.kind !== "phone")
-    )
+    if (phone && phone.kind !== "phone")
+      return refuse(CLOSE.forbidden, "Not a phone");
+    if (phone?.userId === user.id && phone.revokedAt)
       return refuse(CLOSE.forbidden, "This phone was removed");
-    if (!phone) {
+    // A phone is on one account at a time. Signed in to another account on
+    // this same phone (the sign-in names it), it moves there: the account
+    // it leaves loses it and its sign-ins on it. A phone removed from an
+    // account still cannot come back to that account.
+    const moving = Boolean(phone && phone.userId !== user.id);
+    if (moving && session.deviceId !== deviceId)
+      return refuse(CLOSE.forbidden, "This phone is on another account");
+    if (!phone || moving) {
       if (
         (await countActiveDevices(env.DB, user.id, "phone")) >=
         entitlement.maxPhones
       )
         return refuse(CLOSE.forbidden, "Phone limit reached");
-      await env.DB.prepare(
-        "INSERT INTO devices (id, user_id, kind, name, created_at, claimed_at) VALUES (?, ?, 'phone', ?, ?, ?)",
-      )
-        .bind(
-          deviceId,
-          user.id,
-          url.searchParams.get("name")?.slice(0, 80) ?? "",
-          nowIso(),
-          nowIso(),
+      const name = url.searchParams.get("name")?.slice(0, 80) ?? "";
+      if (moving)
+        await env.DB.batch([
+          env.DB.prepare(
+            "UPDATE devices SET user_id = ?, name = ?, claimed_at = ?, revoked_at = NULL WHERE id = ?",
+          ).bind(user.id, name, nowIso(), deviceId),
+          env.DB.prepare(
+            "DELETE FROM sessions WHERE device_id = ? AND user_id != ?",
+          ).bind(deviceId, user.id),
+        ]);
+      else
+        await env.DB.prepare(
+          "INSERT INTO devices (id, user_id, kind, name, created_at, claimed_at) VALUES (?, ?, 'phone', ?, ?, ?)",
         )
-        .run();
+          .bind(deviceId, user.id, name, nowIso(), nowIso())
+          .run();
     }
     if (!session.deviceId)
       await bindSession(env.DB, session.tokenHash, deviceId);
@@ -458,7 +475,7 @@ async function macRoutes(
   // An invite code typed on the Mac, for the Mac's account.
   if (route === "POST /v1/macs/invite") {
     if (!mac.userId) return fail(409, "NOT_SIGNED_IN", "Sign in first.");
-    if (!(await allowed(env.AUTH_LIMITER, request)))
+    if (!(await authAllowed(env, request)))
       return fail(429, "RATE_LIMITED", "Too many attempts. Wait a minute.");
     const { code } = await body<{ code: string }>(request);
     if (!code || !(await redeemInvite(env.DB, mac.userId, code)))
@@ -591,7 +608,7 @@ async function account(
   if (
     (route === "POST /v1/invites/redeem" ||
       route === "POST /v1/pairings/claim") &&
-    !(await allowed(env.AUTH_LIMITER, request))
+    !(await authAllowed(env, request))
   )
     return fail(429, "RATE_LIMITED", "Too many attempts. Wait a minute.");
 
