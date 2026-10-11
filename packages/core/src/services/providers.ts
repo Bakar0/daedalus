@@ -2,11 +2,14 @@ import { ensureInbox, inboxHook } from "./session-inbox";
 import {
   ensureDirectory,
   findExecutable,
+  knownLoginShellPath,
+  loginShellPath,
   standardExecutableFallbacks,
 } from "@daedalus/platform";
 import { runCommand } from "@daedalus/platform";
 import { rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join } from "node:path";
 import {
   channelName,
   type AgentDefinition,
@@ -626,11 +629,39 @@ const STANDARD_CODEX_EXECUTABLES = new Set([
   "/usr/local/bin/codex",
 ]);
 
-// The app is launched by Launch Services with no Homebrew on PATH, which is
-// where `claude` lives. Codex has the ChatGPT bundle to fall back on; a bare
-// name for any other provider is looked up in the standard directories too.
+/**
+ * Where a provider named by a bare command may be installed besides `PATH`.
+ * The app is launched by Launch Services with no Homebrew on PATH, so the
+ * standard directories come first. Claude's own install script puts `claude`
+ * in `~/.local/bin`, which no PATH a packaged app has contains; the older
+ * `claude migrate-installer` used `~/.claude/local`. npm under nvm, Volta or a
+ * custom prefix is only on the user's login shell PATH, which is used once it
+ * has been read. It comes last so a provider found earlier keeps its path.
+ * A configured path is used as it is.
+ */
+export function providerExecutableFallbacks(
+  value: string,
+  home = homedir(),
+  shellPath = knownLoginShellPath(),
+): string[] {
+  if (value.includes("/")) return [];
+  return [
+    ...new Set([
+      ...standardExecutableFallbacks(value),
+      join(home, ".local", "bin", value),
+      ...(value === "claude" ? [join(home, ".claude", "local", value)] : []),
+      ...(shellPath ?? "")
+        .split(":")
+        .filter((directory) => isAbsolute(directory))
+        .map((directory) => join(directory, value)),
+    ]),
+  ];
+}
+
+// Codex has the ChatGPT bundle to fall back on; a bare name for any provider
+// is looked up in the places above too.
 const findProviderExecutable = (value: string): string | undefined =>
-  findExecutable(value, standardExecutableFallbacks(value));
+  findExecutable(value, providerExecutableFallbacks(value));
 
 export function resolveAgentExecutable(
   name: string,
@@ -657,6 +688,9 @@ class ConfiguredProvider implements AgentProvider {
   ) {}
 
   async probe(): Promise<{ available: boolean; executable: string }> {
+    // A provider installed only on the login shell's PATH is found once that
+    // PATH is known. The session launched next needs it anyway.
+    await loginShellPath();
     const executable = resolveAgentExecutable(
       this.name,
       this.definition.executable,

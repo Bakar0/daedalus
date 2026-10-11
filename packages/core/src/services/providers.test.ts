@@ -15,6 +15,7 @@ import {
   modelArgument,
   parseClaudeModelCatalog,
   permissionModeArgs,
+  providerExecutableFallbacks,
   resolveAgentExecutable,
   resolveProvider,
 } from "./providers";
@@ -241,6 +242,46 @@ describe("resolveAgentExecutable", () => {
         "darwin",
       ),
     ).toBe("/opt/homebrew/bin/codex");
+  });
+});
+
+describe("providerExecutableFallbacks", () => {
+  test("finds Claude where its own install script puts it", () => {
+    // #105: Claude installed with `curl -fsSL https://claude.ai/install.sh`
+    // lives in ~/.local/bin, which the app's Launch Services PATH lacks.
+    expect(providerExecutableFallbacks("claude", "/Users/someone", "")).toEqual(
+      [
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+        "/usr/bin/claude",
+        "/bin/claude",
+        "/Users/someone/.local/bin/claude",
+        "/Users/someone/.claude/local/claude",
+      ],
+    );
+  });
+
+  test("looks on the login shell's PATH last, once it is known", () => {
+    expect(
+      providerExecutableFallbacks(
+        "codex",
+        "/Users/someone",
+        "/Users/someone/.nvm/versions/node/v22/bin:/usr/bin:relative:",
+      ),
+    ).toEqual([
+      "/opt/homebrew/bin/codex",
+      "/usr/local/bin/codex",
+      "/usr/bin/codex",
+      "/bin/codex",
+      "/Users/someone/.local/bin/codex",
+      "/Users/someone/.nvm/versions/node/v22/bin/codex",
+    ]);
+  });
+
+  test("uses a configured path as it is", () => {
+    expect(
+      providerExecutableFallbacks("/custom/claude", "/Users/someone", "/x"),
+    ).toEqual([]);
   });
 });
 

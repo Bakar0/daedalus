@@ -4,6 +4,7 @@ import {
   deleteKeychainPassword,
   ensureDirectory,
   keychainReadCommand,
+  loginShellPath,
   runCommand,
   writeKeychainPassword,
 } from "@daedalus/platform";
@@ -645,6 +646,9 @@ export class AccountService {
         (!provider || entry.provider === provider) &&
         (!wanted || entry.account === wanted),
     );
+    // So a provider installed only on the login shell's PATH (npm under nvm,
+    // say) reads as installed rather than missing.
+    await loginShellPath();
     return Promise.all(
       accounts.map(async (entry): Promise<AccountStatus> => {
         const executable = providerExecutable(this.config, entry.provider);
