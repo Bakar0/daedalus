@@ -28,6 +28,8 @@ import {
   pairWithMac,
   RELAY_CLOSE,
   RelayAccount,
+  relayConnectUrl,
+  relayProtocols,
   RelayError,
   sodiumReady,
   type WireStats,
@@ -909,6 +911,28 @@ try {
   connection = await PhoneConnection.connect(phone, mac, revokedToken);
   pass(
     "an ended plan locks the Mac (no_plan) and refuses the phone but keeps its sign-in, and an invite code renews it",
+  );
+
+  // The Mac's connection is replaced (as a network change does): the phone
+  // hears it, drops its channel, and connects again with a new handshake.
+  let staleReason = "";
+  connection.onClose((reason) => {
+    staleReason ||= reason;
+  });
+  const rival = new WebSocket(
+    relayConnectUrl(relayUrl, connector.macId, "mac", connector.macId),
+    relayProtocols(store.relayCredential),
+  );
+  await until("the phone hears its Mac reconnect", () => staleReason !== "");
+  rival.close();
+  await until("Mac online again", () => connector!.status === "online", 15_000);
+  await sleep(500);
+  connection = await PhoneConnection.connect(phone, mac, revokedToken);
+  const fresh = (await connection.request("snapshot")) as RpcResult<unknown>;
+  if (staleReason !== "Your Mac reconnected" || !fresh.ok)
+    throw new Error(`After the Mac reconnected: ${staleReason}`);
+  pass(
+    "when the Mac reconnects, the phone drops its old channel and connects again with a new handshake",
   );
 
   let removedReason = "";

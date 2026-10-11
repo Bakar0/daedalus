@@ -19,6 +19,7 @@ import {
   encodeSealed,
   encodeSecureMessage,
   type PlainMessage,
+  type RelayNotice,
   type SecureMessage,
 } from "./frames";
 
@@ -391,7 +392,16 @@ export class PhoneConnection {
       );
       let ready = false;
       this.#socket.addEventListener("message", (event) => {
-        if (typeof event.data === "string") return;
+        if (typeof event.data === "string") {
+          // The Mac went offline or connected again: its end of this channel
+          // is gone. Closing lets the app connect again with a new handshake,
+          // instead of sending on a channel nobody can open.
+          if (ready && this.#macReconnected(event.data)) {
+            this.#socket.close();
+            this.#emitClose("Your Mac reconnected");
+          }
+          return;
+        }
         const frame = new Uint8Array(event.data as ArrayBuffer);
         this.#count("in", frame);
         const decoded = decodePayload(decodeRelayFrame(frame).payload);
@@ -429,6 +439,16 @@ export class PhoneConnection {
       });
       this.#sendPlain(handshake.hello);
     });
+  }
+
+  /** Whether a relay notice says this connection's Mac went or came back. */
+  #macReconnected(text: string): boolean {
+    try {
+      const notice = JSON.parse(text) as RelayNotice;
+      return notice.relay === "peer" && notice.deviceId === this.mac.macId;
+    } catch {
+      return false;
+    }
   }
 
   #count(direction: "in" | "out", frame: Uint8Array): void {
