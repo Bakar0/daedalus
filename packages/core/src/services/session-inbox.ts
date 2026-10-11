@@ -108,7 +108,11 @@ export async function leaveInInbox(
   return postToInbox(config, sessionId, "");
 }
 
-/** Whether a session was launched with the inbox hook. */
+/**
+ * Whether a session was launched with the inbox hook. Older sessions carry
+ * the hook inline in `--settings`; newer ones pass a settings file whose name
+ * carries the marker (see `sessionClaudeSettingsPath`).
+ */
 export const usesInbox = (session: AgentSession): boolean =>
   session.provider === "claude" &&
   session.args.some((argument) => argument.includes(INBOX_HOOK_MARKER));
