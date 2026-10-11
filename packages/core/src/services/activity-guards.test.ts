@@ -88,6 +88,9 @@ async function withSession(
         provider: "claude",
         name: "Claude",
       });
+      // Spawning reads the prompt and records idle; these tests start from
+      // no reading at all.
+      context.activity.forget(session.id);
       await run({
         context,
         sessionId: session.id,
@@ -102,6 +105,43 @@ async function withSession(
     }
   });
 }
+
+describe("startup", () => {
+  test("a session at its prompt reads idle until a hook says otherwise", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { claude: { executable: process.execPath, args: [] } },
+        }),
+      );
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home, CLAUDE_CONFIG_DIR: home },
+        tmux: new FakeTmux(),
+      });
+      try {
+        const workspace = await context.workspaces.create({ name: "Startup" });
+        const session = await context.agents.spawn({
+          workspace: workspace.id,
+          provider: "claude",
+          name: "Claude",
+        });
+        expect(context.activity.get(session.id)).toMatchObject({
+          activity: "idle",
+          source: "pane",
+        });
+        await context.activity.record({
+          sessionId: session.id,
+          activity: "working",
+          source: "hook",
+        });
+        expect(context.activity.get(session.id)?.activity).toBe("working");
+      } finally {
+        context.close();
+      }
+    });
+  });
+});
 
 describe("guarded transitions", () => {
   test("routine work cannot stomp a permission wait, but the tool running can", async () => {

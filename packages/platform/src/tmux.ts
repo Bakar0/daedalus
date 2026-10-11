@@ -49,6 +49,10 @@ export interface TmuxClient {
   probe(): Promise<string | undefined>;
   createSession(launch: TmuxLaunch): Promise<void>;
   hasSession(session: string): Promise<boolean>;
+  /**
+   * The live session names; empty when no server is running. Throws when
+   * tmux did not answer, which is not the same as no sessions.
+   */
   listSessions(): Promise<string[]>;
   attach(session: string): Promise<number>;
   /** `styled` keeps the escape codes, so dim text can be told apart. */
@@ -135,6 +139,7 @@ export const INHERITED_SESSION_VARIABLES: readonly string[] = [
   "CLAUDECODE",
   "AI_AGENT",
   "DAEDALUS_SESSION_ID",
+  "DAEDALUS_SESSION_DIRECTORY",
   "DAEDALUS_TASK_ID",
   "DAEDALUS_TASK_NUMBER",
   "DAEDALUS_WORKSPACE_ID",
@@ -180,6 +185,17 @@ export const tmuxPtyEnvironment = (
  * not wait with it.
  */
 export const TMUX_COMMAND_TIMEOUT_MS = 10_000;
+
+/**
+ * The most a tmux client sends as one command: its arguments, each with a
+ * NUL, in a 16 KB message less its header and argument count. Over this the
+ * client prints "command too long" and starts nothing. Measured on tmux 3.7c.
+ */
+export const TMUX_COMMAND_MAX_BYTES = 16_364;
+
+/** The size tmux counts for a command's arguments. */
+export const tmuxCommandBytes = (args: readonly string[]): number =>
+  args.reduce((total, arg) => total + Buffer.byteLength(arg) + 1, 0);
 
 export class CommandTmuxClient implements TmuxClient {
   /** The version the executable reported, once it has: see `probe`. */
@@ -309,6 +325,14 @@ export class CommandTmuxClient implements TmuxClient {
       "focus-events",
       "on",
     ];
+    // tmux's own message for this, "command too long", names neither the
+    // limit nor what filled it.
+    const bytes = tmuxCommandBytes(args);
+    if (bytes > TMUX_COMMAND_MAX_BYTES)
+      throw new Error(
+        `The launch command is ${bytes} bytes and tmux accepts at most ${TMUX_COMMAND_MAX_BYTES}. ` +
+          `Each attached repository adds an --add-dir argument; detach repositories this workspace does not need.`,
+      );
     // tmux gives a new session's command the PATH of the client that asked
     // for it, not the `-e PATH=` above: measured on tmux 3.7c, a client with
     // PATH=/a and `-e PATH=/b` starts a command that sees /a. So the client
@@ -330,7 +354,19 @@ export class CommandTmuxClient implements TmuxClient {
 
   async listSessions(): Promise<string[]> {
     const result = await this.run(["list-sessions", "-F", "#{session_name}"]);
-    if (result.exitCode !== 0) return [];
+    if (result.exitCode !== 0) {
+      // No server, or a socket left by one that exited: there are no sessions.
+      if (/no server running|error connecting to/i.test(result.stderr))
+        return [];
+      // Anything else, a timeout above all, says nothing about the sessions.
+      // A Mac waking from sleep was seen to get here, and reading it as "no
+      // sessions" marked every session lost while all of them kept running.
+      throw new Error(
+        result.timedOut
+          ? "tmux did not answer list-sessions in time"
+          : result.stderr.trim() || "tmux list-sessions failed",
+      );
+    }
     return result.stdout
       .split(/\r?\n/)
       .map((value) => value.trim())

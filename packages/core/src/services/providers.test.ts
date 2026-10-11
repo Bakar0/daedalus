@@ -15,6 +15,8 @@ import {
   modelArgument,
   parseClaudeModelCatalog,
   permissionModeArgs,
+  providerExecutableFallbacks,
+  removeClaudeSettingsFiles,
   resolveAgentExecutable,
   resolveProvider,
 } from "./providers";
@@ -77,6 +79,68 @@ describe("claudeDaedalusSettingsArgs", () => {
       const first = await claudeDaedalusSettingsArgs(config, ["run"]);
       const second = await claudeDaedalusSettingsArgs(config, first);
       expect(JSON.parse(settingsValue(second)).hooks.Stop).toHaveLength(1);
+    });
+  });
+
+  test("passes a session's settings as a file, not inline JSON", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await loadConfig({ DAEDALUS_HOME: home });
+      const theirs = join(home, "their-settings.json");
+      await writeFile(
+        theirs,
+        JSON.stringify({ statusLine: { type: "command", command: "mine" } }),
+      );
+      const args = await claudeDaedalusSettingsArgs(
+        config,
+        ["run", "--settings", theirs],
+        "s1",
+      );
+      const path = settingsValue(args);
+      // The inline hooks were about 4 KB of a launch tmux caps at 16 KB.
+      expect(path).toBe(
+        join(config.home, "claude-settings", "s1.daedalus-inbox.json"),
+      );
+      expect(args.filter((value) => value === "--settings")).toHaveLength(1);
+      const settings = JSON.parse(await readFile(path, "utf8"));
+      expect(settings.statusLine.command).toBe("mine");
+      expect(Object.keys(settings.hooks)).toContain("Notification");
+      // A relaunch from the written file keeps one copy of each hook.
+      const again = await claudeDaedalusSettingsArgs(config, args, "s1");
+      expect(
+        JSON.parse(await readFile(settingsValue(again), "utf8")).hooks.Stop,
+      ).toHaveLength(1);
+      await removeClaudeSettingsFiles(config, "s1");
+      expect(await Bun.file(path).exists()).toBe(false);
+    });
+  });
+
+  test("starts Claude in the fullscreen renderer unless the user chose one", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const claudeHome = join(home, "claude");
+      const config = await loadConfig({
+        DAEDALUS_HOME: home,
+        CLAUDE_CONFIG_DIR: claudeHome,
+      });
+      const renderer = async (args: string[]) =>
+        JSON.parse(
+          settingsValue(await claudeDaedalusSettingsArgs(config, args)),
+        ).tui;
+      expect(await renderer(["run"])).toBe("fullscreen");
+      // A choice in --settings is kept.
+      expect(
+        await renderer([
+          "run",
+          "--settings",
+          JSON.stringify({ tui: "classic" }),
+        ]),
+      ).toBe("classic");
+      // So is one in the user's own settings, which --settings would override.
+      await mkdir(claudeHome, { recursive: true });
+      await writeFile(
+        join(claudeHome, "settings.json"),
+        JSON.stringify({ tui: "classic" }),
+      );
+      expect(await renderer(["run"])).toBeUndefined();
     });
   });
 
@@ -244,6 +308,46 @@ describe("resolveAgentExecutable", () => {
   });
 });
 
+describe("providerExecutableFallbacks", () => {
+  test("finds Claude where its own install script puts it", () => {
+    // #105: Claude installed with `curl -fsSL https://claude.ai/install.sh`
+    // lives in ~/.local/bin, which the app's Launch Services PATH lacks.
+    expect(providerExecutableFallbacks("claude", "/Users/someone", "")).toEqual(
+      [
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+        "/usr/bin/claude",
+        "/bin/claude",
+        "/Users/someone/.local/bin/claude",
+        "/Users/someone/.claude/local/claude",
+      ],
+    );
+  });
+
+  test("looks on the login shell's PATH last, once it is known", () => {
+    expect(
+      providerExecutableFallbacks(
+        "codex",
+        "/Users/someone",
+        "/Users/someone/.nvm/versions/node/v22/bin:/usr/bin:relative:",
+      ),
+    ).toEqual([
+      "/opt/homebrew/bin/codex",
+      "/usr/local/bin/codex",
+      "/usr/bin/codex",
+      "/bin/codex",
+      "/Users/someone/.local/bin/codex",
+      "/Users/someone/.nvm/versions/node/v22/bin/codex",
+    ]);
+  });
+
+  test("uses a configured path as it is", () => {
+    expect(
+      providerExecutableFallbacks("/custom/claude", "/Users/someone", "/x"),
+    ).toEqual([]);
+  });
+});
+
 describe("permissionModeArgs", () => {
   test("starts each provider in its own relaxed mode by default", () => {
     expect(permissionModeArgs("claude")).toEqual(["--permission-mode", "auto"]);
@@ -341,6 +445,20 @@ describe("buildLaunch permission mode", () => {
       const { args } = await adapter.buildLaunch({});
       expect(args).toContain("--permission-mode");
       expect(args[args.indexOf("--permission-mode") + 1]).toBe("auto");
+    });
+  });
+
+  test("passes each additional directory once, as an argument", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await isolated(home);
+      const { adapter } = resolveProvider(config, { provider: "claude" });
+      const { args, env } = await adapter.buildLaunch({
+        additionalDirectories: ["/repos/a", "/repos/b"],
+      });
+      expect(args.filter((value) => value === "--add-dir")).toHaveLength(2);
+      // The same list in the environment doubled its share of the command
+      // tmux has to accept, and nothing read it.
+      expect(Object.values(env).join()).not.toContain("/repos/a");
     });
   });
 
@@ -451,6 +569,26 @@ describe("ensureCodexHooks and the user's skill settings", () => {
       );
       expect(written).toContain("[[skills.config]]");
       expect(written).toContain("[[hooks.");
+    });
+  });
+
+  test("a Codex with a shared app server runs the session without it", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await loadConfig({
+        DAEDALUS_HOME: home,
+        CODEX_HOME: join(home, "codex"),
+      });
+      // The shared server runs hooks with its own environment, so they could
+      // not tell which Daedalus session they belonged to.
+      const args = await ensureCodexHooks(config, "codex", async (_, argv) => ({
+        exitCode: 0,
+        stdout:
+          argv[0] === "--help"
+            ? "Options:\n      --no-daemon\n          Run without the shared background server\n"
+            : "codex-cli 0.162.0",
+        stderr: "",
+      }));
+      expect(args).toEqual(["-c", "features.hooks=true", "--no-daemon"]);
     });
   });
 

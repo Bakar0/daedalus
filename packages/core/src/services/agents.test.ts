@@ -14,6 +14,12 @@ import {
   DAEDALUS_STATUS_INSTRUCTIONS,
 } from "../index";
 
+/** The settings file a Claude session launches with, inbox hook included. */
+const settingsFile = (id: string) =>
+  expect.stringMatching(
+    new RegExp(`/claude-settings/${id}\\.daedalus-inbox\\.json$`),
+  );
+
 /** What every launch adds so the agent knows how to report its state. */
 const CLAUDE_INSTRUCTIONS = [
   "--append-system-prompt",
@@ -196,6 +202,47 @@ describe("AgentService", () => {
     });
   });
 
+  test("keeps sessions when tmux does not answer, and takes back a lost one that is live", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { codex: { executable: process.execPath, args: [] } },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home, CODEX_HOME: join(home, "codex") },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Wake" });
+      const agent = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      // Right after a wake, tmux timed out instead of listing the sessions.
+      const listSessions = tmux.listSessions.bind(tmux);
+      tmux.listSessions = async () => {
+        throw new Error("tmux did not answer list-sessions in time");
+      };
+      await context.agents.reconcile();
+      expect((await context.agents.get(agent.id)).status).toBe("running");
+      tmux.listSessions = listSessions;
+      // Marked lost by an earlier build's reading of that timeout.
+      context.repositories.updateAgent({
+        ...(await context.agents.get(agent.id)),
+        status: "lost",
+        endedAt: new Date().toISOString(),
+      });
+      await context.agents.reconcile();
+      const back = await context.agents.get(agent.id);
+      expect(back.status).toBe("running");
+      expect(back.endedAt).toBeNull();
+      expect(tmux.launches).toHaveLength(1);
+      context.close();
+    });
+  });
+
   test("clears the startup question when the provider exits before its prompt", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       await Bun.write(
@@ -314,6 +361,8 @@ describe("AgentService", () => {
           "--no-alt-screen",
           "-c",
           "tui.disable_mouse_capture=true",
+          "-c",
+          "check_for_update_on_startup=false",
           // So `daedal` can write its database from inside the sandbox.
           "--add-dir",
           home,
@@ -430,12 +479,15 @@ describe("AgentService", () => {
         "auto",
         ...CLAUDE_INSTRUCTIONS,
         "--settings",
-        expect.stringContaining('"agent","event","Notification"'),
+        settingsFile(session.id),
         "--session-id",
         session.id,
         "--name",
         "Persistent context",
       ]);
+      const launched = tmux.launches[0]!.args;
+      const settingsPath = launched[launched.indexOf("--settings") + 1]!;
+      expect(await Bun.file(settingsPath).text()).toContain('"Notification"');
       const archived = await context.agents.archive(session.id);
       expect(archived.archivedAt).not.toBeNull();
       expect(archived.status).toBe("exited");
@@ -452,7 +504,7 @@ describe("AgentService", () => {
       expect(tmux.launches[1]?.args).toEqual([
         "run",
         "--settings",
-        expect.stringContaining('"agent","event","Notification"'),
+        settingsFile(session.id),
         ...CLAUDE_INSTRUCTIONS,
         "--model",
         "claude-fable-5-1[1m]",
@@ -512,7 +564,7 @@ describe("AgentService", () => {
       expect(tmux.launches[1]?.args).toEqual([
         "run",
         "--settings",
-        expect.stringContaining('"agent","event","Notification"'),
+        settingsFile(session.id),
         ...CLAUDE_INSTRUCTIONS,
         "--model",
         "default",
@@ -561,6 +613,8 @@ describe("AgentService", () => {
         "--no-alt-screen",
         "-c",
         "tui.disable_mouse_capture=true",
+        "-c",
+        "check_for_update_on_startup=false",
         ...CODEX_INSTRUCTIONS,
       ]);
       context.close();
@@ -608,6 +662,8 @@ describe("AgentService", () => {
         "--no-alt-screen",
         "-c",
         "tui.disable_mouse_capture=true",
+        "-c",
+        "check_for_update_on_startup=false",
         ...CODEX_INSTRUCTIONS,
       ]);
       context.close();

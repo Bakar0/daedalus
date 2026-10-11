@@ -198,12 +198,23 @@ export async function readLoginShellPath(
 }
 
 let loginShellPathOnce: Promise<string | undefined> | undefined;
+let loginShellPathAnswer: string | undefined;
 
 /**
  * `readLoginShellPath` for `$SHELL`, asked once per process. A change to the
  * user's shell configuration reaches sessions started after the app restarts.
  */
 export function loginShellPath(): Promise<string | undefined> {
-  loginShellPathOnce ??= readLoginShellPath(process.env.SHELL);
+  loginShellPathOnce ??= readLoginShellPath(process.env.SHELL).then(
+    (path) => (loginShellPathAnswer = path),
+  );
   return loginShellPathOnce;
+}
+
+/**
+ * What `loginShellPath` answered, for code that cannot wait for a shell.
+ * `undefined` until it has been asked and has answered.
+ */
+export function knownLoginShellPath(): string | undefined {
+  return loginShellPathAnswer;
 }

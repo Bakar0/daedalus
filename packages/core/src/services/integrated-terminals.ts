@@ -203,7 +203,13 @@ export class IntegratedTerminalService {
   async reconcile(liveSessions?: ReadonlySet<string>): Promise<void> {
     // See `AgentService.reconcile`: the host passes one shared answer.
     if (liveSessions === undefined && !(await this.tmux.probe())) return;
-    const live = liveSessions ?? new Set(await this.tmux.listSessions());
+    const live =
+      liveSessions ??
+      (await this.tmux.listSessions().then(
+        (sessions) => new Set(sessions),
+        () => undefined,
+      ));
+    if (!live) return;
     const now = new Date().toISOString();
     for (const terminal of this.repositories.listIntegratedTerminals()) {
       if (
@@ -215,10 +221,14 @@ export class IntegratedTerminalService {
           status: "lost",
           endedAt: now,
         });
-      else if (terminal.status === "starting" && live.has(terminal.tmuxSession))
+      else if (
+        (terminal.status === "starting" || terminal.status === "lost") &&
+        live.has(terminal.tmuxSession)
+      )
         this.repositories.updateIntegratedTerminal({
           ...terminal,
           status: "running",
+          endedAt: null,
         });
     }
   }
@@ -237,7 +247,12 @@ export class IntegratedTerminalService {
   ): Promise<IntegratedTerminal[]> {
     if (options.automatic && !this.config.autoRestoreSessionsEnabled) return [];
     if (!(await this.tmux.probe())) return [];
-    const live = new Set(await this.tmux.listSessions());
+    // Unanswered, every terminal would look dead and get a second copy.
+    const live = await this.tmux.listSessions().then(
+      (sessions) => new Set(sessions),
+      () => undefined,
+    );
+    if (!live) return [];
     const shell =
       findExecutable(process.env.SHELL ?? "") ??
       findExecutable("/bin/zsh") ??

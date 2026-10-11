@@ -1,12 +1,15 @@
-import { ensureInbox, inboxHook } from "./session-inbox";
+import { ensureInbox, INBOX_HOOK_MARKER, inboxHook } from "./session-inbox";
 import {
   ensureDirectory,
   findExecutable,
+  knownLoginShellPath,
+  loginShellPath,
   standardExecutableFallbacks,
 } from "@daedalus/platform";
 import { runCommand } from "@daedalus/platform";
-import { rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join } from "node:path";
 import {
   channelName,
   type AgentDefinition,
@@ -14,7 +17,7 @@ import {
   type DaedalusConfig,
 } from "../config";
 import { DaedalusError } from "../errors";
-import { SkillService } from "./skills";
+import { claudeSettingsPath, SkillService } from "./skills";
 import {
   codexSupportsHooks,
   daedalusClaudeSettings,
@@ -59,6 +62,11 @@ export const CODEX_DAEDALUS_TUI_ARGS = [
   "--no-alt-screen",
   "-c",
   "tui.disable_mouse_capture=true",
+  // Codex's startup update offer runs the update and then quits, which ends
+  // the session and leaves its terminal blank. Updating is the user's to do
+  // outside a session.
+  "-c",
+  "check_for_update_on_startup=false",
 ] as const;
 
 /**
@@ -139,15 +147,99 @@ export async function claudeDaedalusSettingsArgs(
     ...new SkillService(config).claudeSkillSettings(),
   };
   const existingValue = settingsArgumentValue(existingArgs);
-  if (existingValue === undefined)
-    return [...existingArgs, "--settings", JSON.stringify(daedalus)];
-  const parsed = await parseClaudeSettingsArgument(existingValue);
-  if (!parsed) return [...existingArgs];
+  const parsed =
+    existingValue === undefined
+      ? undefined
+      : await parseClaudeSettingsArgument(existingValue);
+  if (existingValue !== undefined && !parsed) return [...existingArgs];
+  const merged = parsed ? mergeClaudeSettings(parsed, daedalus) : daedalus;
+  // Settings passed here override the user's own file, so the renderer is
+  // only a default: a user who chose one in either place keeps it.
+  const settings =
+    "tui" in merged || (await userSetsClaudeRenderer(config))
+      ? merged
+      : { ...merged, tui: CLAUDE_DEFAULT_RENDERER };
   return [
     ...withoutSettingsArgument(existingArgs),
     "--settings",
-    JSON.stringify(mergeClaudeSettings(parsed, daedalus)),
+    sessionId
+      ? await writeClaudeSettingsFile(config, sessionId, settings, {
+          inbox: Boolean(inbox),
+        })
+      : JSON.stringify(settings),
   ];
+}
+
+/**
+ * The renderer a Claude session starts with when the user has not picked one.
+ * Fullscreen draws in the alternate screen without flicker and scrolls its own
+ * transcript; the Daedalus terminal's tmux passes it the mouse wheel.
+ */
+export const CLAUDE_DEFAULT_RENDERER = "fullscreen";
+
+/** Whether the user's own Claude settings choose a renderer. */
+async function userSetsClaudeRenderer(
+  config: DaedalusConfig,
+): Promise<boolean> {
+  const settings = await parseClaudeSettingsArgument(
+    claudeSettingsPath(config),
+  );
+  return settings !== undefined && "tui" in settings;
+}
+
+/**
+ * Where a session's Claude settings are written. The name carries the inbox
+ * marker when the inbox hook is inside, so `usesInbox` still finds it in the
+ * launch arguments without reading the file.
+ */
+export const sessionClaudeSettingsPath = (
+  config: DaedalusConfig,
+  sessionId: string,
+  options: { inbox: boolean },
+): string =>
+  join(
+    config.home,
+    "claude-settings",
+    options.inbox
+      ? `${sessionId}.${INBOX_HOOK_MARKER}.json`
+      : `${sessionId}.json`,
+  );
+
+/**
+ * Writes the settings to a file and returns its path, which Claude's
+ * `--settings` takes in place of the JSON. Passed inline, the hooks are about
+ * 4 KB of the launch command, and tmux refuses a command over 16 KB.
+ */
+async function writeClaudeSettingsFile(
+  config: DaedalusConfig,
+  sessionId: string,
+  settings: ClaudeSettings,
+  options: { inbox: boolean },
+): Promise<string> {
+  const path = sessionClaudeSettingsPath(config, sessionId, options);
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  // Written beside and renamed, so a session starting from the old file
+  // never reads half of the new one.
+  const temporary = `${path}.${process.pid}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(settings, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  await rename(temporary, path);
+  return path;
+}
+
+/** Removes a session's settings files, whichever name it was written under. */
+export async function removeClaudeSettingsFiles(
+  config: DaedalusConfig,
+  sessionId: string,
+): Promise<void> {
+  await Promise.all(
+    [true, false].map((inbox) =>
+      rm(sessionClaudeSettingsPath(config, sessionId, { inbox }), {
+        force: true,
+      }),
+    ),
+  );
 }
 
 /**
@@ -346,7 +438,35 @@ export async function ensureCodexHooks(
   // Stable and on by default from 0.154, but not on every build in the
   // supported range, and a per-session flag costs nothing. A build that does
   // not understand hooks gets no flag, only its skill settings.
-  return hooks ? ["-c", "features.hooks=true"] : [];
+  if (!hooks) return [];
+  return [
+    "-c",
+    "features.hooks=true",
+    ...((await codexHasNoDaemonFlag(executable, run)) ? ["--no-daemon"] : []),
+  ];
+}
+
+/**
+ * Whether this Codex can run a session without the shared app server.
+ *
+ * From about 0.160 the TUI hands its turns to one background server that
+ * every Codex on the machine shares, and that server runs the hooks. They
+ * inherit the server's environment, which is whatever process happened to
+ * start it, so `DAEDALUS_SESSION_ID` was missing or named some other session
+ * and no Codex session reported activity. With `--no-daemon` the session runs
+ * its own server and its hooks see the session's environment. `codex queue`
+ * still reaches such a session (checked with 0.162).
+ */
+async function codexHasNoDaemonFlag(
+  executable: string,
+  run: typeof runCommand,
+): Promise<boolean> {
+  try {
+    const help = await run(executable, ["--help"]);
+    return help.exitCode === 0 && /^\s*--no-daemon\b/m.test(help.stdout);
+  } catch {
+    return false;
+  }
 }
 
 interface ClaudeModelInfo {
@@ -598,11 +718,39 @@ const STANDARD_CODEX_EXECUTABLES = new Set([
   "/usr/local/bin/codex",
 ]);
 
-// The app is launched by Launch Services with no Homebrew on PATH, which is
-// where `claude` lives. Codex has the ChatGPT bundle to fall back on; a bare
-// name for any other provider is looked up in the standard directories too.
+/**
+ * Where a provider named by a bare command may be installed besides `PATH`.
+ * The app is launched by Launch Services with no Homebrew on PATH, so the
+ * standard directories come first. Claude's own install script puts `claude`
+ * in `~/.local/bin`, which no PATH a packaged app has contains; the older
+ * `claude migrate-installer` used `~/.claude/local`. npm under nvm, Volta or a
+ * custom prefix is only on the user's login shell PATH, which is used once it
+ * has been read. It comes last so a provider found earlier keeps its path.
+ * A configured path is used as it is.
+ */
+export function providerExecutableFallbacks(
+  value: string,
+  home = homedir(),
+  shellPath = knownLoginShellPath(),
+): string[] {
+  if (value.includes("/")) return [];
+  return [
+    ...new Set([
+      ...standardExecutableFallbacks(value),
+      join(home, ".local", "bin", value),
+      ...(value === "claude" ? [join(home, ".claude", "local", value)] : []),
+      ...(shellPath ?? "")
+        .split(":")
+        .filter((directory) => isAbsolute(directory))
+        .map((directory) => join(directory, value)),
+    ]),
+  ];
+}
+
+// Codex has the ChatGPT bundle to fall back on; a bare name for any provider
+// is looked up in the places above too.
 const findProviderExecutable = (value: string): string | undefined =>
-  findExecutable(value, standardExecutableFallbacks(value));
+  findExecutable(value, providerExecutableFallbacks(value));
 
 export function resolveAgentExecutable(
   name: string,
@@ -629,6 +777,10 @@ class ConfiguredProvider implements AgentProvider {
   ) {}
 
   async probe(): Promise<{ available: boolean; executable: string }> {
+    // A provider installed only on the login shell's PATH is found once that
+    // PATH is known. The session launched next needs it anyway.
+    if (!resolveAgentExecutable(this.name, this.definition.executable))
+      await loginShellPath();
     const executable = resolveAgentExecutable(
       this.name,
       this.definition.executable,
@@ -700,9 +852,6 @@ class ConfiguredProvider implements AgentProvider {
       else env.DAEDALUS_TASK_PROMPT = input.prompt;
     }
     if (input.taskId) env.DAEDALUS_TASK_ID = input.taskId;
-    if (input.additionalDirectories?.length)
-      env.DAEDALUS_ADDITIONAL_DIRECTORIES =
-        input.additionalDirectories.join(":");
     return {
       executable:
         resolveAgentExecutable(this.name, this.definition.executable) ??

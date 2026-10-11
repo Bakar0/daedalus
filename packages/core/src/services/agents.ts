@@ -34,6 +34,7 @@ import {
   handoffSessionName,
   modelArgument,
   type ProviderModelCatalog,
+  removeClaudeSettingsFiles,
   resolveAgentExecutable,
   resolveProvider,
   sessionLaunchModel,
@@ -482,6 +483,14 @@ export class AgentService {
       sessionId: string,
       reason: string,
     ) => unknown = () => undefined,
+    /**
+     * Called when a Claude or Codex session reached its prompt at startup.
+     * Codex fires no hook until the first prompt, and a resumed session none
+     * until it is used, so without this the card has no reading and shows the
+     * lifecycle word "Running" for a session that is sitting idle.
+     */
+    private readonly onStartupReady: (sessionId: string) => unknown = () =>
+      undefined,
   ) {}
 
   private teamLaunchLines: (member: TeamMembership) => string[] = () => [];
@@ -507,6 +516,11 @@ export class AgentService {
   /** Raises the badge for a session that stopped on a question at startup. */
   private askedAtStartup(session: AgentSession): void {
     void this.onStartupQuestion(session.id, startupQuestionReason(session));
+  }
+
+  private async readyAtStartup(session: AgentSession): Promise<void> {
+    if (session.provider === "codex" || session.provider === "claude")
+      await this.onStartupReady(session.id);
   }
 
   /**
@@ -568,6 +582,7 @@ export class AgentService {
       PATH: path,
       DAEDALUS_HOME: this.config.home,
       DAEDALUS_SESSION_ID: session.id,
+      DAEDALUS_SESSION_DIRECTORY: session.workingDirectory,
       DAEDALUS_WORKSPACE_ID: session.workspaceId,
       ...(task
         ? {
@@ -1093,6 +1108,7 @@ export class AgentService {
       if (task && !input.terminal && !input.draftBrief && !input.continueFrom)
         this.markTaskStarted(workspace, task.id);
       if (startup === "question") this.askedAtStartup(running);
+      else if (!input.terminal) await this.readyAtStartup(running);
       await this.sessionRunning(running);
       return running;
     } catch (error) {
@@ -1398,7 +1414,14 @@ export class AgentService {
     // The host asks tmux once per tick and shares the answer with the
     // terminals; anyone else asks here.
     if (liveSessions === undefined && !(await this.tmux.probe())) return;
-    const live = liveSessions ?? new Set(await this.tmux.listSessions());
+    // A tmux that did not answer settles nothing; the next call asks again.
+    const live =
+      liveSessions ??
+      (await this.tmux.listSessions().then(
+        (sessions) => new Set(sessions),
+        () => undefined,
+      ));
+    if (!live) return;
     const now = new Date().toISOString();
     const endedAtStartup: string[] = [];
     this.repositories.transaction(() => {
@@ -1425,6 +1448,20 @@ export class AgentService {
           });
         } else if (agent.status === "starting" && live.has(agent.tmuxSession)) {
           this.repositories.updateAgent({ ...agent, status: "running" });
+        } else if (
+          agent.status === "lost" &&
+          !agent.archivedAt &&
+          live.has(agent.tmuxSession)
+        ) {
+          // Its tmux session is running, so it was never lost, or something
+          // brought it back. The revive sweep adopts such a session the same
+          // way.
+          this.repositories.updateAgent({
+            ...agent,
+            status: "running",
+            endedAt: null,
+            lostReason: null,
+          });
         }
       }
     });
@@ -1585,6 +1622,7 @@ export class AgentService {
         "CONFLICT",
         "Running agent sessions must be stopped before removal",
       );
+    await removeClaudeSettingsFiles(this.config, id).catch(() => undefined);
     this.repositories.deleteAgent(id);
     return agent;
   }
@@ -1610,6 +1648,7 @@ export class AgentService {
       resolve(agent.workingDirectory) !== resolve(workspace.path)
     )
       await forgetSessionFolders(this.config, agent.workingDirectory);
+    await removeClaudeSettingsFiles(this.config, id).catch(() => undefined);
     this.repositories.deleteAgent(id);
     return agent;
   }
@@ -2013,6 +2052,7 @@ export class AgentService {
       }
       this.repositories.updateAgent(restored);
       if (startup === "question") this.askedAtStartup(restored);
+      else if (agent.kind === "agent") await this.readyAtStartup(restored);
       await this.sessionRunning(restored);
       return restored;
     } catch (error) {

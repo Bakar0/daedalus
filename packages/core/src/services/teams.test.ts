@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -112,10 +113,13 @@ async function withTeams(run: (harness: Harness) => Promise<void>) {
   });
 }
 
-/** The settings JSON a Claude launch passes with `--settings`. */
+/** The settings a Claude launch passes with `--settings`, read from its file. */
 function launchSettings(launch: TmuxLaunch): Record<string, unknown> {
   const index = launch.args.lastIndexOf("--settings");
-  return JSON.parse(launch.args[index + 1]!) as Record<string, unknown>;
+  return JSON.parse(readFileSync(launch.args[index + 1]!, "utf8")) as Record<
+    string,
+    unknown
+  >;
 }
 
 const prompt = (launch: TmuxLaunch) => launch.args.at(-1)!;

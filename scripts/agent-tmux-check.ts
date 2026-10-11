@@ -93,6 +93,7 @@ async function checkInheritedEnvironment(): Promise<void> {
     CLAUDE_CODE_ENTRYPOINT: "cli",
     AI_AGENT: "codex",
     DAEDALUS_SESSION_ID: "another-session",
+    DAEDALUS_SESSION_DIRECTORY: "/another/session",
     DAEDALUS_TASK_ID: "another-task",
     DAEDALUS_TASK_NUMBER: "25",
     DAEDALUS_WORKSPACE_ID: "another-workspace",
@@ -147,6 +148,7 @@ async function checkInheritedEnvironment(): Promise<void> {
       "TMUX",
       "TMUX_PANE",
       "DAEDALUS_SESSION_ID",
+      "DAEDALUS_SESSION_DIRECTORY",
       "DAEDALUS_WORKSPACE_ID",
     ]);
     const leaked = [...values.keys()].filter(
@@ -168,6 +170,8 @@ async function checkInheritedEnvironment(): Promise<void> {
       throw new Error(
         `The session reports as ${values.get("DAEDALUS_SESSION_ID")}, not ${agent.id}`,
       );
+    if (values.get("DAEDALUS_SESSION_DIRECTORY") !== agent.workingDirectory)
+      throw new Error("The session inherited another session's folder");
     if (values.get("DAEDALUS_WORKSPACE_ID") !== workspace.id)
       throw new Error("The session inherited another workspace's ID");
     console.log("PASS a session sees none of an agent shell's environment");

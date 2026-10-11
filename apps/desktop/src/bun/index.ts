@@ -729,13 +729,19 @@ setInterval(async () => {
     // seconds per launch. So a tick asks tmux exactly once and shares the
     // answer; the version probe is remembered by the client after its first
     // success. Anything more is a bug, not a cost to absorb.
-    if (await context.tmux.probe()) {
-      const live = new Set(await context.tmux.listSessions());
+    // A tmux that did not answer (seen right after the Mac wakes) settles
+    // nothing this tick rather than reading as no sessions at all.
+    const live = (await context.tmux.probe())
+      ? await context.tmux.listSessions().then(
+          (sessions) => new Set(sessions),
+          () => undefined,
+        )
+      : undefined;
+    if (live)
       await Promise.all([
         context.agents.reconcile(live),
         context.terminals.reconcile(live),
       ]);
-    }
     // Polled detection and staleness decay ride the reconcile tick. Both are
     // cheap — the rollout read is gated on file mtime and decay only touches
     // rows that are already too old to believe — and neither deserves a timer

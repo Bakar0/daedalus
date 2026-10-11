@@ -10,7 +10,9 @@ import {
   isInheritedSessionVariable,
   tmuxPtyArguments,
   tmuxPtyEnvironment,
+  TMUX_COMMAND_MAX_BYTES,
   TMUX_COMMAND_TIMEOUT_MS,
+  tmuxCommandBytes,
 } from "./tmux";
 
 test("terminal captures preserve recent complete UTF-8 within a byte bound", () => {
@@ -180,6 +182,66 @@ describe("CommandTmuxClient", () => {
       ["-L", "isolated", "list-sessions", "-F", "#{session_name}"],
       expect.objectContaining({ timeoutMs: TMUX_COMMAND_TIMEOUT_MS }),
     );
+  });
+
+  test("tells no server apart from a tmux that did not answer", async () => {
+    const answer = (result: {
+      exitCode: number;
+      stderr: string;
+      timedOut?: boolean;
+    }) =>
+      new CommandTmuxClient("isolated", "tmux", async () => ({
+        stdout: "",
+        ...result,
+      }));
+    expect(
+      await answer({
+        exitCode: 1,
+        stderr:
+          "error connecting to /private/tmp/tmux-501/isolated (No such file or directory)",
+      }).listSessions(),
+    ).toEqual([]);
+    expect(
+      await answer({
+        exitCode: 1,
+        stderr: "no server running on /private/tmp/tmux-501/isolated",
+      }).listSessions(),
+    ).toEqual([]);
+    // Seen after the Mac woke: a timeout must not read as "no sessions".
+    await expect(
+      answer({ exitCode: 124, stderr: "", timedOut: true }).listSessions(),
+    ).rejects.toThrow("did not answer");
+  });
+
+  test("refuses a launch tmux would reject as too long, and says why", async () => {
+    const command = vi.fn(async (_executable: string, _args: string[]) => ({
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    }));
+    const tmux = new CommandTmuxClient("isolated", "tmux", command);
+    const launch = (bytes: number) =>
+      tmux.createSession({
+        session: "daedalus_big",
+        cwd: "/tmp",
+        executable: "agent",
+        args: ["x".repeat(bytes)],
+      });
+    await expect(launch(TMUX_COMMAND_MAX_BYTES)).rejects.toThrow(
+      /detach repositories/,
+    );
+    expect(
+      command.mock.calls.some(([, args]) => args.includes("new-session")),
+    ).toBe(false);
+    await launch(10_000);
+    expect(
+      command.mock.calls.some(([, args]) => args.includes("new-session")),
+    ).toBe(true);
+  });
+
+  test("counts a command's size the way tmux does", () => {
+    // Each argument and its NUL, in bytes rather than characters.
+    expect(tmuxCommandBytes(["new-session", "·"])).toBe(12 + 3);
   });
 
   test("starts a session from a client carrying the session's PATH", async () => {

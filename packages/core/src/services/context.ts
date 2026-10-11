@@ -189,6 +189,17 @@ export async function createApplicationContext(
     },
     (sessionId, reason) =>
       activity.raise({ sessionId, reason }).catch(() => undefined),
+    // Read off the screen, so it is a pane reading, and only fills a gap:
+    // anything a hook already said about the session stands.
+    (sessionId) =>
+      activity
+        .record({
+          sessionId,
+          activity: "idle",
+          source: "pane",
+          ifActivity: ["unknown"],
+        })
+        .catch(() => undefined),
   );
   const terminals = new IntegratedTerminalService(
     repositories,
