@@ -280,7 +280,8 @@ try {
     macName: "Studio Mac",
     store,
     handlers: withTeam(
-      createDesktopRequestHandlers(context),
+      // As in the app: a change made from a phone tells the phones.
+      createDesktopRequestHandlers(context, () => connector?.announce()),
       lead.id,
       member.id,
     ),
@@ -666,10 +667,88 @@ try {
     "PASS the app lock seals the key and sign-in under a passkey; a reload asks for it and the passkey opens the app",
   );
 
+  // The board: the Mac's lanes, a task's own screen, and changes made from
+  // the phone landing on the Mac.
+  const setValue = (selector: string, value: string, kind: string) =>
+    evaluate(`(() => {
+      const element = document.querySelector(${JSON.stringify(selector)});
+      Object.getOwnPropertyDescriptor(${kind}.prototype, 'value').set.call(element, ${JSON.stringify(value)});
+      element.dispatchEvent(new Event(${JSON.stringify(kind === "HTMLSelectElement" ? "change" : "input")}, { bubbles: true }));
+    })()`);
+  const taskOnMac = async (id: string) =>
+    (await cli(["task", "get", id])) as {
+      status: string;
+      description: string;
+    };
+  await tap(byText('[role="tab"]', "Board"));
+  await waitFor(
+    "the task in Needs me",
+    `document.querySelector('.lane[data-lane="needs_me"] .task-card')?.textContent.includes('Ship the phone app')`,
+  );
+  await screenshot("board");
+  await tap(byText(".task-card", "Ship the phone app"));
+  await waitFor(
+    "the task screen",
+    byText(".task-head h2", "Ship the phone app"),
+  );
+  await waitFor(
+    "the task's session",
+    "document.querySelector('.task-screen .session-row')",
+  );
+  await setValue(".task-status select", "blocked", "HTMLSelectElement");
+  for (
+    let attempt = 0;
+    attempt < 50 && (await taskOnMac(task.id)).status !== "blocked";
+    attempt++
+  )
+    await sleep(100);
+  if ((await taskOnMac(task.id)).status !== "blocked")
+    throw new Error("The status set on the phone did not reach the Mac");
+  await tap(byText(".task-section-head button", "Edit"));
+  await setValue(
+    ".task-brief-edit",
+    "Written on the phone.",
+    "HTMLTextAreaElement",
+  );
+  await tap(byText(".task-section-head button", "Save"));
+  await waitFor(
+    "the saved brief",
+    byText(".task-brief", "Written on the phone."),
+  );
+  if ((await taskOnMac(task.id)).description !== "Written on the phone.")
+    throw new Error("The brief edited on the phone did not reach the Mac");
+  await screenshot("task");
+  await evaluate("history.back()");
+  await waitFor("back on the board", "document.querySelector('.board')");
+  await tap(byText(".board-tools button", "New task"));
+  await waitFor("the new task form", byText("button", "Create task"));
+  await setValue(
+    ".task-screen .field input",
+    "Made on the phone",
+    "HTMLInputElement",
+  );
+  await tap(byText("button", "Create task"));
+  await waitFor("the new task", byText(".task-head h2", "Made on the phone"));
+  const listed = (await cli([
+    "task",
+    "list",
+    "--workspace",
+    workspace.id,
+  ])) as Array<{
+    title: string;
+  }>;
+  if (!listed.some((item) => item.title === "Made on the phone"))
+    throw new Error("A task created on the phone is not on the Mac");
+  await evaluate("history.back()");
+  await waitFor("the board again", "document.querySelector('.board')");
+  console.log(
+    "PASS the board shows the Mac's lanes; a task opens with its sessions, and its status, brief and a new task made on the phone land on the Mac",
+  );
+
   const blocking = errors.filter((text) => !text.includes("favicon"));
   if (blocking.length) throw new Error(`Page errors: ${blocking.join(" | ")}`);
   console.log(
-    `Screenshots: ${["sign-in", "pair-ask", "pair-code", "home", "session", "account", "locked"].map(shot).join(", ")}`,
+    `Screenshots: ${["sign-in", "pair-ask", "pair-code", "home", "session", "account", "locked", "board", "task"].map(shot).join(", ")}`,
   );
   cdp.close();
 } finally {
