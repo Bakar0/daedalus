@@ -454,7 +454,7 @@ Object.assign(client.request, {
     };
   },
   remoteRedeemInvite: async ({ code }: { code: string }) => {
-    if (code !== "GOOD-CODE")
+    if (code !== "GOODP-RO123")
       return {
         ok: false,
         error: {

@@ -7,7 +7,12 @@
  * signed in to and its plan, as the relay last reported them.
  */
 import { useCallback, useEffect, useState } from "react";
-import type { RemoteStateDto, RpcResult } from "@daedalus/protocol";
+import {
+  formatInviteCode,
+  inviteCodeComplete,
+  type RemoteStateDto,
+  type RpcResult,
+} from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { ConfirmButton } from "./ConfirmButton";
 
@@ -228,11 +233,18 @@ export function AccountPanel({
                 <input
                   aria-label="Invite code"
                   disabled={busy}
-                  onChange={(event) => setCode(event.target.value)}
-                  placeholder="Invite code"
+                  maxLength={11}
+                  onChange={(event) =>
+                    setCode(formatInviteCode(event.target.value))
+                  }
+                  placeholder="XXXXX-XXXXX"
+                  spellCheck={false}
                   value={code}
                 />
-                <button disabled={busy || !code.trim()} type="submit">
+                <button
+                  disabled={busy || !inviteCodeComplete(code)}
+                  type="submit"
+                >
                   Get Pro
                 </button>
               </div>

@@ -828,7 +828,13 @@ try {
     })()`);
   const getPro =
     "[...document.querySelectorAll('.plan-get button')].find((one) => one.textContent.trim() === 'Get Pro')";
-  await typeInvite("WRONG-CODE");
+  // The field formats as you type: upper case, the dash after five.
+  await typeInvite("wrong12345");
+  const typed = await evaluate<string>(
+    "document.querySelector('.plan-get input').value",
+  );
+  if (typed !== "WRONG-12345")
+    throw new Error(`The invite field shows ${typed}, not WRONG-12345`);
   await clickAt(getPro);
   await waitFor("the wrong code refused", async () =>
     (await accountText()).includes("That invite code is not valid"),
@@ -840,7 +846,7 @@ try {
     join(projectRoot, "artifacts/settings-ui-account.png"),
     Buffer.from(noPlanShot.data, "base64"),
   );
-  await typeInvite("GOOD-CODE");
+  await typeInvite("GOODP-RO123");
   await clickAt(getPro);
   await waitFor("Pro on the Account page", async () => {
     const text = await accountText();
@@ -990,7 +996,7 @@ try {
   );
   if (left !== 0) throw new Error("Remote: Remove did not forget the phone");
   console.log(
-    "Pro: without it the header says Get Pro and Remote (tagged Pro) only leads to Account; Account signs the Mac in through the browser, shows Free as current, refuses a wrong invite code and takes a good one; then the header says Pro and Remote is on with Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account, its Pro plan and recent activity; Remove forgets it",
+    "Pro: without it the header says Get Pro and Remote (tagged Pro) only leads to Account; Account signs the Mac in through the browser, shows Free as current, formats an invite code as it is typed (wrong12345 reads WRONG-12345), refuses a wrong one and takes a good one; then the header says Pro and Remote is on with Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account, its Pro plan and recent activity; Remove forgets it",
   );
   // And General, where a switch sits beside a two-line description and the
   // alignment either reads or does not.

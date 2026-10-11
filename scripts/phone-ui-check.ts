@@ -502,14 +502,20 @@ try {
     throw new Error("The Pro screen does not say who is signed in");
   await evaluate(`(() => {
     const input = document.querySelector('.invite input');
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(invite)});
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(invite.replace("-", "").toLowerCase())});
     input.dispatchEvent(new Event('input', { bubbles: true }));
   })()`);
   await sleep(100);
+  // Typed in lower case with no dash, the field shows the code as it is.
+  const typedInvite = await evaluate<string>(
+    "document.querySelector('.invite input').value",
+  );
+  if (typedInvite !== invite)
+    throw new Error(`The invite field shows ${typedInvite}, not ${invite}`);
   await screenshot("pro");
   await tap(byText("button", "Get Pro with this code"));
   console.log(
-    "PASS signed in without a plan, the phone shows who is signed in and what Pro gives, and takes an invite code",
+    "PASS signed in without a plan, the phone shows who is signed in and what Pro gives, and takes an invite code, formatted as it is typed",
   );
   // A link can come from anywhere, so the phone asks before pairing.
   await waitFor("pairing question", byText("h2", "Pair with"), 30_000);

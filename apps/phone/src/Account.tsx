@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { formatInviteCode, inviteCodeComplete } from "@daedalus/protocol";
 import {
   type PairedMac,
   planLabel,
@@ -170,8 +171,10 @@ function InviteField({
         <input
           autoCapitalize="characters"
           autoComplete="off"
-          onChange={(event) => setCode(event.target.value)}
+          maxLength={11}
+          onChange={(event) => setCode(formatInviteCode(event.target.value))}
           placeholder="XXXXX-XXXXX"
+          spellCheck={false}
           value={code}
         />
       </label>
@@ -180,7 +183,11 @@ function InviteField({
           {error}
         </p>
       ) : undefined}
-      <button className="button" disabled={!code.trim()} type="submit">
+      <button
+        className="button"
+        disabled={!inviteCodeComplete(code)}
+        type="submit"
+      >
         Use invite code
       </button>
     </form>

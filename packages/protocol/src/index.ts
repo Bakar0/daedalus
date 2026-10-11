@@ -1570,3 +1570,23 @@ export interface CliSuccess<T> {
 export type CliFailure = RpcFailure;
 
 export type CliEnvelope<T> = CliSuccess<T> | CliFailure;
+
+/**
+ * An invite code as it is typed: letters and digits only, upper case, with
+ * the dash after the fifth, at most ten. The relay stores codes in exactly
+ * this form (`XXXXX-XXXXX`), so a field that formats as the user types
+ * sends what the relay looks up.
+ */
+export function formatInviteCode(text: string): string {
+  const characters = text
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 10);
+  return characters.length > 5
+    ? `${characters.slice(0, 5)}-${characters.slice(5)}`
+    : characters;
+}
+
+/** Whether a formatted invite code has all its characters. */
+export const inviteCodeComplete = (code: string): boolean =>
+  /^[A-Z0-9]{5}-[A-Z0-9]{5}$/.test(code);

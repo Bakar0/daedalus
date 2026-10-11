@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { formatInviteCode, inviteCodeComplete } from "@daedalus/protocol";
 import {
   decodePairingOffer,
   RelayAccount,
@@ -434,8 +435,12 @@ function ProScreen({
             <input
               autoCapitalize="characters"
               autoComplete="off"
-              onChange={(event) => setCode(event.target.value)}
+              maxLength={11}
+              onChange={(event) =>
+                setCode(formatInviteCode(event.target.value))
+              }
               placeholder="XXXXX-XXXXX"
+              spellCheck={false}
               value={code}
             />
           </label>
@@ -446,7 +451,7 @@ function ProScreen({
           ) : undefined}
           <button
             className="button primary"
-            disabled={busy || !code.trim()}
+            disabled={busy || !inviteCodeComplete(code)}
             type="submit"
           >
             Get Pro with this code
