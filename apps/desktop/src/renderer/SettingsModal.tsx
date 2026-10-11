@@ -23,15 +23,19 @@ import type {
 } from "@daedalus/protocol";
 import { AccountsPanel } from "./AccountsPanel";
 import type { DesktopClient } from "./client-types";
+import { AccountPanel } from "./ProPlan";
+import { RemotePanel } from "./RemotePanel";
 import { SkillsPanel } from "./SkillsPanel";
 import { updateMessage } from "./UpdateBanner";
 
 export const SETTINGS_SECTIONS = [
+  { id: "account", label: "Account" },
   { id: "general", label: "General" },
   { id: "agents", label: "Agents" },
   { id: "skills", label: "Skills" },
   { id: "sessions", label: "Sessions" },
   { id: "notifications", label: "Notifications" },
+  { id: "remote", label: "Remote" },
   { id: "about", label: "About" },
 ] as const;
 
@@ -175,6 +179,9 @@ export function SettingsModal({
           <button
             aria-current={entry.id === section ? "page" : undefined}
             className={entry.id === section ? "is-current" : ""}
+            // A Pro feature: the tag is drawn by CSS, so the label stays
+            // the button's text.
+            data-pro={entry.id === "remote" ? "" : undefined}
             key={entry.id}
             onClick={() => onSection(entry.id)}
             type="button"
@@ -192,6 +199,12 @@ export function SettingsModal({
       </nav>
 
       <div className="settings-pane">
+        {section === "account" ? (
+          <section className="settings-section">
+            <AccountPanel busy={busy} client={client} perform={perform} />
+          </section>
+        ) : undefined}
+
         {section === "general" ? (
           <section className="settings-section">
             <h3>Appearance</h3>
@@ -278,6 +291,17 @@ export function SettingsModal({
               description="Stop toasts and desktop notifications. Indicators and attention badges keep updating, and a badge being cleared always goes through."
               onChange={onFocusMode}
               title="Focus mode"
+            />
+          </section>
+        ) : undefined}
+
+        {section === "remote" ? (
+          <section className="settings-section">
+            <RemotePanel
+              busy={busy}
+              client={client}
+              onOpenAccount={() => onSection("account")}
+              perform={perform}
             />
           </section>
         ) : undefined}

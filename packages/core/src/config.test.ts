@@ -2,7 +2,9 @@ import { describe, expect, test } from "vitest";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
   channelHome,
+  DEFAULT_REMOTE_RELAY,
   loadConfig,
+  saveRemoteEnabled,
   saveWorkspaceInstructionFilesEnabled,
 } from "./config";
 
@@ -35,6 +37,21 @@ describe("loadConfig", () => {
         (await loadConfig({ DAEDALUS_HOME: home }))
           .workspaceInstructionFilesEnabled,
       ).toBe(false);
+    });
+  });
+
+  test("keeps phone access off until it is turned on", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await loadConfig({ DAEDALUS_HOME: home });
+      expect(config.remoteEnabled).toBe(false);
+      expect(config.remoteRelay).toBe(DEFAULT_REMOTE_RELAY);
+      await saveRemoteEnabled(config, true);
+      const reloaded = await loadConfig({
+        DAEDALUS_HOME: home,
+        DAEDALUS_REMOTE_RELAY: "ws://127.0.0.1:8787",
+      });
+      expect(reloaded.remoteEnabled).toBe(true);
+      expect(reloaded.remoteRelay).toBe("ws://127.0.0.1:8787");
     });
   });
 });

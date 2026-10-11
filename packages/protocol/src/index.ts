@@ -762,6 +762,134 @@ export interface RoutinesDetailDto {
   runs: RoutineRunDto[];
 }
 
+/**
+ * Phone access through the relay. `status` is the connector's: `off` while
+ * the setting is off, `waiting_for_phone` until a phone claims this Mac,
+ * `locked` while the account has no access or is over its data limit.
+ */
+export type RemoteStatusDto =
+  | "off"
+  | "connecting"
+  | "waiting_for_phone"
+  | "online"
+  | "offline"
+  | "locked"
+  /** The relay refused this Mac: it was removed from its account. */
+  | "removed";
+
+export interface RemoteStateDto {
+  enabled: boolean;
+  /** The Mac is kept from idle sleep while phone access is on. */
+  keepAwake: boolean;
+  status: RemoteStatusDto;
+  relay: string;
+  /** What phones call this Mac. */
+  macName: string;
+  phones: Array<{ id: string; name: string; pairedAt: string }>;
+  /** Phones with an open connection right now. */
+  connectedPhones: number;
+  /** The Mac is signed in to an account on the relay. */
+  signedIn: boolean;
+  /** That account is on the relay's admin list (Settings › Account). */
+  admin?: boolean;
+  /** The account that claimed this Mac, once the relay has said. */
+  account?: string;
+  /** That account's plan (e.g. "pro"), and when it ends (null for never). */
+  plan?: { name: string; expiresAt: string | null };
+  /** Why the relay refused this Mac, while `status` is `locked`. */
+  lockedBy?: "no_plan" | "over_quota" | "paused" | "rate_limited";
+  /** A phone that scanned the code, waiting for the user to allow it. */
+  pairingRequest?: {
+    phoneId: string;
+    phoneName: string;
+    /** Six digits the phone shows too. */
+    code: string;
+    expiresAt: number;
+  };
+}
+
+/** A Pro key (an invite code), as an admin sees it. */
+export interface AdminKeyDto {
+  code: string;
+  plan: string;
+  maxUses: number;
+  used: number;
+  /** When the code stops working; null for never. */
+  expiresAt: string | null;
+  /** How long the plan it grants lasts; null for no end. */
+  grantDays: number | null;
+  /** The key's name: who or what it is for. */
+  note: string;
+  createdAt: string;
+}
+
+export interface AdminKeyInput {
+  maxUses?: number;
+  /** How long the code works. */
+  days?: number;
+  /** How long the plan it grants lasts; none for no end. */
+  grantDays?: number;
+  note?: string;
+}
+
+/** An account on the relay, as an admin sees it. */
+export interface AdminAccountDto {
+  id: string;
+  email: string;
+  createdAt: string;
+  plan: string | null;
+  status: "active" | "expired" | "revoked" | null;
+  source: string | null;
+  expiresAt: string | null;
+  usageBytes: number;
+}
+
+/** One change an admin made, from the relay's admin log. */
+export interface AdminLogEntryDto {
+  at: string;
+  /** The admin's email, or "admin key" for the relay-admin script. */
+  actor: string;
+  action: "invites.create" | "invites.delete" | "invites.rename" | "plan.set";
+  /** The key's code or the account's email. */
+  target: string;
+  detail: {
+    name?: string;
+    maxUses?: number;
+    grantDays?: number | null;
+    status?: "active" | "expired" | "revoked";
+    plan?: string;
+    days?: number;
+  };
+}
+
+export interface AdminPlanInput {
+  email: string;
+  /** Grant Pro, end the plan now, or revoke the account. */
+  status: "active" | "expired" | "revoked";
+  /** For a grant: how long it lasts; 0 or none for no end. */
+  days?: number;
+}
+
+/** One thing a phone did on this Mac, from the audit log. */
+export interface RemoteActivityDto {
+  at: string;
+  phoneId: string;
+  phone: string;
+  /** A request's method, or `terminal.open` / `terminal.close`. */
+  action: string;
+  target?: string;
+  ok: boolean;
+  code?: string;
+  bytesIn?: number;
+  bytesOut?: number;
+}
+
+/** What the QR code says, and until when it can be used. */
+export interface RemotePairingDto {
+  url: string;
+  expiresAt: number;
+}
+
 export interface DesktopSnapshotDto {
   workspaces: WorkspaceDto[];
   tasks: TaskDto[];
@@ -871,6 +999,47 @@ export interface DesktopRpcSchema {
        * to load — so it is fetched over RPC rather than passed in the URL.
        */
       terminalEndpoint: Request<Record<string, never>, { endpoint: string }>;
+      remoteGet: Request<Record<string, never>, RemoteStateDto>;
+      remoteSetEnabled: Request<{ enabled: boolean }, RemoteStateDto>;
+      remoteSetKeepAwake: Request<{ enabled: boolean }, RemoteStateDto>;
+      /** An empty name goes back to the computer's own name. */
+      remoteSetMacName: Request<{ name: string }, RemoteStateDto>;
+      /** A new one-time pairing code; any earlier one stops working. */
+      remotePairingCode: Request<Record<string, never>, RemotePairingDto>;
+      /** Forgets a phone on this Mac, so it can no longer connect to it. */
+      remotePhoneRemove: Request<{ id: string }, RemoteStateDto>;
+      /** Allow or decline the phone waiting to pair. */
+      remoteConfirmPairing: Request<{ allow: boolean }, RemoteStateDto>;
+      /** Where to sign this Mac in with Google, in the browser. */
+      remoteSignIn: Request<Record<string, never>, { url: string }>;
+      /** Redeems an invite code for the Mac's account. */
+      remoteRedeemInvite: Request<{ code: string }, RemoteStateDto>;
+      /**
+       * Admin sudo mode: unlock with a Google sign-in in the browser (the
+       * address to open), ask until when it lasts, and lock it again.
+       */
+      remoteAdminUnlock: Request<Record<string, never>, { url: string }>;
+      remoteAdminStatus: Request<
+        Record<string, never>,
+        { unlockedUntil: string | null }
+      >;
+      remoteAdminLock: Request<Record<string, never>, null>;
+      /** Admin (Settings › Account): Pro keys and accounts. */
+      remoteAdminKeys: Request<Record<string, never>, AdminKeyDto[]>;
+      remoteAdminCreateKey: Request<AdminKeyInput, { code: string }>;
+      remoteAdminDeleteKey: Request<{ code: string }, null>;
+      remoteAdminRenameKey: Request<{ code: string; name: string }, null>;
+      remoteAdminAccounts: Request<Record<string, never>, AdminAccountDto[]>;
+      remoteAdminSetPlan: Request<AdminPlanInput, null>;
+      /** The last 100 changes admins made, newest first. */
+      remoteAdminLog: Request<Record<string, never>, AdminLogEntryDto[]>;
+      /** Reads the Mac's account and plan from the relay again. */
+      remoteRefreshAccount: Request<Record<string, never>, RemoteStateDto>;
+      /** Take this Mac off its relay account and start over. */
+      remoteLeaveAccount: Request<Record<string, never>, RemoteStateDto>;
+      /** After the relay removed this Mac: a new identity, no phones. */
+      remoteStartOver: Request<Record<string, never>, RemoteStateDto>;
+      remoteActivity: Request<Record<string, never>, RemoteActivityDto[]>;
       workspaceCreate: Request<
         {
           name: string;
@@ -1484,3 +1653,23 @@ export interface CliSuccess<T> {
 export type CliFailure = RpcFailure;
 
 export type CliEnvelope<T> = CliSuccess<T> | CliFailure;
+
+/**
+ * An invite code as it is typed: letters and digits only, upper case, with
+ * the dash after the fifth, at most ten. The relay stores codes in exactly
+ * this form (`XXXXX-XXXXX`), so a field that formats as the user types
+ * sends what the relay looks up.
+ */
+export function formatInviteCode(text: string): string {
+  const characters = text
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 10);
+  return characters.length > 5
+    ? `${characters.slice(0, 5)}-${characters.slice(5)}`
+    : characters;
+}
+
+/** Whether a formatted invite code has all its characters. */
+export const inviteCodeComplete = (code: string): boolean =>
+  /^[A-Z0-9]{5}-[A-Z0-9]{5}$/.test(code);

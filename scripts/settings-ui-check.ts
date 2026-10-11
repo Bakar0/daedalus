@@ -37,6 +37,10 @@ const agentsScreenshotPath = join(
   projectRoot,
   "artifacts/settings-ui-agents.png",
 );
+const remoteScreenshotPath = join(
+  projectRoot,
+  "artifacts/settings-ui-remote.png",
+);
 const generalScreenshotPath = join(
   projectRoot,
   "artifacts/settings-ui-general.png",
@@ -265,11 +269,13 @@ try {
   // what makes the sidebar feel like one surface rather than five dialogs.
   const heights: Record<string, number> = {};
   for (const label of [
+    "Account",
     "General",
     "Agents",
     "Skills",
     "Sessions",
     "Notifications",
+    "Remote",
     "About",
   ]) {
     const opened = await evaluate<string>(`(() => {
@@ -512,7 +518,7 @@ try {
     "The pane scrolls and the dialog does not, so the categories and the title stay put",
   );
   console.log(
-    `All six categories open at a steady ${[...distinct][0]}px: ${Object.keys(heights).join(", ")}`,
+    `All ${Object.keys(heights).length} categories open at a steady ${[...distinct][0]}px: ${Object.keys(heights).join(", ")}`,
   );
   console.log(
     `Found skills: ${grouped.length} groups (${labels.join(", ")}), ${totalRows} rows each with a ${shape.width}x${shape.height} switch that moves, collapse works, fuzzy filter narrows to ${filteredRows}, viewer opens`,
@@ -616,6 +622,7 @@ try {
     const point = await evaluate<{ x: number; y: number } | null>(`(() => {
       const element = ${expression};
       if (!element) return null;
+      element.scrollIntoView({ block: "center" });
       const rect = element.getBoundingClientRect();
       return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
     })()`);
@@ -737,6 +744,396 @@ try {
   console.log(
     `Agents: ${agents.rows.length} accounts (signed in with email, signed out with a one-click Sign in, Add and sign in with SSO sending both requests, a sign-in running under its row and turning it signed in, an API-key account with Set key, Codex not installed with ${agents.install.length} install commands), none past the pane`,
   );
+  // Pro first. Without it the header offers Get Pro, and Remote says phone
+  // access is a Pro feature and leads to Settings › Account. There the Mac
+  // signs in (the browser's part is instant here) and takes an invite code.
+  // Then Remote is the full section: a pairing code as a QR code, a phone
+  // finishing pairing hides the code and lists the phone, and Remove (two
+  // clicks, in place) forgets it.
+  const headerBadge = () =>
+    evaluate<string>(
+      "document.querySelector('.topbar .pro-badge')?.textContent.trim() ?? ''",
+    );
+  if ((await headerBadge()) !== "Get Pro")
+    throw new Error(`Header without Pro: "${await headerBadge()}"`);
+  const openSection = (label: string) =>
+    evaluate(`(() => {
+      [...document.querySelectorAll('.settings-nav button')]
+        .find((one) => one.textContent.trim() === ${JSON.stringify(label)}).click();
+    })()`);
+  const currentSection = () =>
+    evaluate<string>(
+      "document.querySelector('.settings-nav button[aria-current=\"page\"]').textContent.trim()",
+    );
+  const panelText = () =>
+    evaluate<string>(
+      "document.querySelector('.remote-panel')?.textContent ?? ''",
+    );
+  const accountText = () =>
+    evaluate<string>(
+      "document.querySelector('.account-panel')?.textContent ?? ''",
+    );
+  const waitFor = async (label: string, check: () => Promise<boolean>) => {
+    for (let attempt = 0; attempt < 80; attempt++) {
+      if (await check()) return;
+      await Bun.sleep(100);
+    }
+    throw new Error(`Timed out waiting for ${label}`);
+  };
+  await openSection("Remote");
+  await Bun.sleep(150);
+  const gated = await panelText();
+  if (
+    !gated.includes("Phone access is a Pro feature") ||
+    gated.includes("Allow phone access") ||
+    gated.includes("Show pairing code") ||
+    !(await evaluate<boolean>(
+      "getComputedStyle([...document.querySelectorAll('.settings-nav button')].find((one) => one.textContent.trim() === 'Remote'), '::after').content.includes('Pro')",
+    ))
+  )
+    throw new Error(`Remote without Pro: ${gated.slice(0, 400)}`);
+  await clickAt(
+    "[...document.querySelectorAll('.remote-panel button')].find((one) => one.textContent.trim() === 'Sign in and get Pro')",
+  );
+  await Bun.sleep(150);
+  if ((await currentSection()) !== "Account")
+    throw new Error("Remote's Get Pro did not open Account");
+  const beforeSignIn = await accountText();
+  if (
+    !beforeSignIn.includes("Sign in with Google") ||
+    !beforeSignIn.includes("FreeCurrent") ||
+    !beforeSignIn.includes("Sign in above to get Pro")
+  )
+    throw new Error(`Account before sign-in: ${beforeSignIn.slice(0, 400)}`);
+  await clickAt(
+    "[...document.querySelectorAll('.account-panel button')].find((one) => one.textContent.trim() === 'Sign in with Google')",
+  );
+  // The page learns it is signed in on its next poll, as it would once the
+  // browser finishes.
+  await waitFor("signed in without a plan", async () =>
+    (await accountText()).includes("Free. This account has no Pro plan."),
+  );
+  const opened = await evaluate<string[]>("window.opened ?? []");
+  if (
+    !opened[0]?.includes("/auth/google/start") ||
+    !(await accountText()).includes("owner@example.com")
+  )
+    throw new Error(`Account after sign-in: ${JSON.stringify(opened)}`);
+  const typeInvite = (code: string) =>
+    evaluate(`(() => {
+      const input = document.querySelector('.plan-get input');
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, ${JSON.stringify(code)});
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`);
+  const getPro =
+    "[...document.querySelectorAll('.plan-get button')].find((one) => one.textContent.trim() === 'Get Pro')";
+  // The field formats as you type: upper case, the dash after five.
+  await typeInvite("wrong12345");
+  const typed = await evaluate<string>(
+    "document.querySelector('.plan-get input').value",
+  );
+  if (typed !== "WRONG-12345")
+    throw new Error(`The invite field shows ${typed}, not WRONG-12345`);
+  await clickAt(getPro);
+  await waitFor("the wrong code refused", async () =>
+    (await accountText()).includes("That invite code is not valid"),
+  );
+  const noPlanShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(
+    join(projectRoot, "artifacts/settings-ui-account.png"),
+    Buffer.from(noPlanShot.data, "base64"),
+  );
+  await typeInvite("GOODP-RO123");
+  await clickAt(getPro);
+  await waitFor("Pro on the Account page", async () => {
+    const text = await accountText();
+    return text.includes("Pro plan until") && !text.includes("Get Pro");
+  });
+  await waitFor(
+    "the Pro badge in the header",
+    async () => (await headerBadge()) === "Pro",
+  );
+  const proShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(
+    join(projectRoot, "artifacts/settings-ui-account-pro.png"),
+    Buffer.from(proShot.data, "base64"),
+  );
+
+  // The admin section, for an account on the relay's admin list: make a
+  // key, see it listed, and end an account's plan.
+  // Sudo mode: locked until a Google sign-in in the browser.
+  await waitFor("the locked admin section", async () =>
+    (await accountText()).includes("Admin is locked"),
+  );
+  if ((await accountText()).includes("Pro keys"))
+    throw new Error("Admin shows keys while locked");
+  await clickAt(
+    "[...document.querySelectorAll('.admin-locked button')].find((one) => one.textContent.trim() === 'Unlock with Google')",
+  );
+  await waitFor("the admin section", async () =>
+    (await accountText()).includes("Pro keys"),
+  );
+  if (
+    !(await evaluate<string[]>("window.opened ?? []")).some((url) =>
+      url.includes("unlock="),
+    ) ||
+    !(await accountText()).includes("Unlocked until")
+  )
+    throw new Error("Unlocking admin did not open the browser");
+  const fill = (selector: string, value: string) =>
+    evaluate(`(() => {
+      const input = document.querySelector(${JSON.stringify(selector)});
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, ${JSON.stringify(value)});
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`);
+  const buttonIn = (scope: string, text: string) =>
+    `[...document.querySelectorAll(${JSON.stringify(`${scope} button`)})].find((one) => one.textContent.trim() === ${JSON.stringify(text)})`;
+  await clickAt(buttonIn(".admin-heading", "New key"));
+  await waitFor("the key form", async () =>
+    evaluate<boolean>("Boolean(document.querySelector('.admin-key-form'))"),
+  );
+  await fill(".admin-key-form .admin-uses", "3");
+  await fill(".admin-key-form .admin-trial", "14");
+  await fill(".admin-key-form input[aria-label='Name']", "For Dana");
+  await clickAt(buttonIn(".admin-key-form", "Create"));
+  await waitFor("the new key", async () =>
+    (
+      await evaluate<string>(
+        "document.querySelector('.admin-made')?.textContent ?? ''",
+      )
+    ).includes("KEY1A-B2C3D"),
+  );
+  const keyLine = await evaluate<string>(
+    "document.querySelector('.admin-keys li small')?.textContent ?? ''",
+  );
+  const keyName = await evaluate<string>(
+    "document.querySelector('.admin-keys li .admin-key-name')?.textContent ?? ''",
+  );
+  if (
+    keyLine !== "0/3 used · 14-day Pro · until Nov 10" ||
+    keyName !== "For DanaKEY1A-B2C3D"
+  )
+    throw new Error(`Admin: the key reads ${keyName} | ${keyLine}`);
+  // Rename it from its menu, in place.
+  await clickAt("document.querySelector('.admin-keys li summary')");
+  await Bun.sleep(150);
+  await clickAt(
+    "[...document.querySelectorAll('.admin-keys li [role=menuitem]')].find((one) => one.textContent.trim() === 'Rename…')",
+  );
+  await waitFor("the rename field", async () =>
+    evaluate<boolean>("Boolean(document.querySelector('.admin-rename input'))"),
+  );
+  await fill(".admin-rename input", "Dana's trial");
+  await clickAt(buttonIn(".admin-rename", "Save"));
+  await waitFor("the new name", async () =>
+    (
+      await evaluate<string>(
+        "document.querySelector('.admin-keys li .admin-key-name strong')?.textContent ?? ''",
+      )
+    ).includes("Dana's trial"),
+  );
+  // The fuzzy filter narrows both lists, best match first.
+  await fill(".admin-filter", "frnd");
+  await waitFor("the filtered lists", async () => {
+    const shown = await evaluate<{
+      keys: string;
+      accounts: string[];
+    }>(`(() => ({
+      keys: document.querySelector('.admin-section .remote-empty')?.textContent ?? '',
+      accounts: [...document.querySelectorAll('.admin-accounts li strong')].map((one) => one.textContent),
+    }))()`);
+    return (
+      shown.keys === "No keys match." &&
+      shown.accounts.join() === "friend@example.com"
+    );
+  });
+  await fill(".admin-filter", "dana");
+  await waitFor("the key found by name", async () =>
+    evaluate<boolean>(
+      "document.querySelectorAll('.admin-keys li').length === 1 && document.querySelectorAll('.admin-accounts li').length === 0",
+    ),
+  );
+  await fill(".admin-filter", "");
+  // End a plan from the account's menu.
+  await clickAt(
+    "[...document.querySelectorAll('.admin-accounts li')].find((one) => one.textContent.includes('friend@example.com')).querySelector('summary')",
+  );
+  await Bun.sleep(150);
+  await clickAt(
+    "[...document.querySelectorAll('.admin-accounts li')].find((one) => one.textContent.includes('friend@example.com')).querySelector('[role=menuitem]:nth-of-type(4)')",
+  );
+  await waitFor("the friend's plan ended", async () =>
+    (await accountText()).includes("friend@example.comPro · ended"),
+  );
+  // Activity: every change, newest first.
+  await clickAt("document.querySelector('.admin-activity summary')");
+  await waitFor("the admin log", async () => {
+    const lines = await evaluate<string[]>(
+      "[...document.querySelectorAll('.admin-activity li span')].map((one) => one.textContent)",
+    );
+    return (
+      lines[0] === "Ended friend@example.com's plan" &&
+      lines.includes("Renamed KEY1A-B2C3D to Dana's trial") &&
+      lines.includes("Created For Dana (3 uses, 14-day Pro)")
+    );
+  });
+  const rows = await evaluate<{
+    actions: number[];
+    overflow: boolean;
+  }>(`(() => ({
+    actions: [...document.querySelectorAll('.admin-list .admin-row-menu')].map((one) => Math.round(one.getBoundingClientRect().right)),
+    overflow: document.querySelector('.settings-pane').scrollWidth > document.querySelector('.settings-pane').clientWidth + 1,
+  }))()`);
+  if (rows.overflow || new Set(rows.actions).size !== 1)
+    throw new Error(`Admin rows: ${JSON.stringify(rows)}`);
+  const adminShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(
+    join(projectRoot, "artifacts/settings-ui-admin.png"),
+    Buffer.from(adminShot.data, "base64"),
+  );
+
+  // With Pro, Remote is the full section. Signing in turned phone access on.
+  await openSection("Remote");
+  await Bun.sleep(300);
+  const remoteSwitch =
+    "document.querySelector('.remote-panel .settings-row input')";
+  if (!(await evaluate<boolean>(`${remoteSwitch}.checked`)))
+    throw new Error("Remote: signing in did not turn phone access on");
+  const waiting = await evaluate<string>(
+    "document.querySelector('.remote-status')?.dataset.look ?? ''",
+  );
+  if (waiting !== "ready")
+    throw new Error(`Remote: with Pro, the status is ${waiting}`);
+  const withPro = await panelText();
+  if (
+    !withPro.includes("Signed in as owner@example.com") ||
+    withPro.includes("Pro feature")
+  )
+    throw new Error(`Remote with Pro: ${withPro.slice(0, 400)}`);
+  const nameField = await evaluate<string>(
+    "document.querySelector('.remote-name input')?.value ?? ''",
+  );
+  if (nameField !== "Settings Mac")
+    throw new Error(`Remote: the phone name field shows ${nameField}`);
+  const awake = await evaluate<{
+    title: string;
+    checked: boolean;
+  } | null>(`(() => {
+    const row = [...document.querySelectorAll('.remote-panel .settings-row')][1];
+    return row ? { title: row.querySelector('strong').textContent, checked: row.querySelector('input').checked } : null;
+  })()`);
+  if (awake?.title !== "Keep the Mac awake while away" || awake.checked)
+    throw new Error(
+      `Remote: keep-awake row is wrong: ${JSON.stringify(awake)}`,
+    );
+
+  await clickAt(
+    "[...document.querySelectorAll('.remote-panel button')].find((one) => one.textContent.trim() === 'Show pairing code')",
+  );
+  await Bun.sleep(200);
+  const qr = await evaluate<{
+    modules: number;
+    text: string;
+    width: number;
+  }>(`(() => {
+    const svg = document.querySelector('.remote-qr');
+    return {
+      modules: svg?.querySelector('path')?.getAttribute('d')?.split('M').length ?? 0,
+      text: document.querySelector('.remote-pairing p')?.textContent ?? '',
+      width: svg?.getBoundingClientRect().width ?? 0,
+    };
+  })()`);
+  if (qr.modules < 200 || qr.width < 190 || !/expires in \d:\d\d/.test(qr.text))
+    throw new Error(`Remote: the pairing code is wrong: ${JSON.stringify(qr)}`);
+  const remoteShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(remoteScreenshotPath, Buffer.from(remoteShot.data, "base64"));
+  await evaluate("window.remotePair()");
+  for (
+    let attempt = 0;
+    attempt < 40 &&
+    !(await evaluate<boolean>(
+      "Boolean(document.querySelector('.remote-request'))",
+    ));
+    attempt += 1
+  )
+    await Bun.sleep(100);
+  const asked = await evaluate<string>(
+    "document.querySelector('.remote-request')?.textContent ?? ''",
+  );
+  if (!asked.includes("Pixel 9") || !asked.includes("650 182"))
+    throw new Error(`Remote: the pairing question is wrong: ${asked}`);
+  const askShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(
+    remoteScreenshotPath.replace(".png", "-ask.png"),
+    Buffer.from(askShot.data, "base64"),
+  );
+  await clickAt(
+    "[...document.querySelectorAll('.remote-request button')].find((one) => one.textContent.trim() === 'Allow')",
+  );
+  // The panel reads the host every two seconds.
+  await Bun.sleep(2_500);
+  for (
+    let attempt = 0;
+    attempt < 40 &&
+    (await evaluate<boolean>("Boolean(document.querySelector('.remote-qr'))"));
+    attempt += 1
+  )
+    await Bun.sleep(100);
+  const paired = await evaluate<{
+    qr: boolean;
+    phones: string[];
+    status: string;
+  }>(`(() => ({
+    qr: Boolean(document.querySelector('.remote-qr')),
+    phones: [...document.querySelectorAll('.remote-phones li strong')].map((one) => one.textContent),
+    status: document.querySelector('.remote-status')?.dataset.look ?? '',
+  }))()`);
+  const afterPairing = await evaluate<string>(
+    "document.querySelector('.remote-panel')?.textContent ?? ''",
+  );
+  if (
+    paired.qr ||
+    paired.phones.join() !== "Pixel 9" ||
+    paired.status !== "ready" ||
+    !afterPairing.includes("owner@example.com") ||
+    !afterPairing.includes("Pro plan until") ||
+    !afterPairing.includes("Pixel 9: Sent a message")
+  )
+    throw new Error(
+      `Remote: pairing did not show: ${JSON.stringify(paired)} ${afterPairing.slice(0, 600)} ${(await evaluate<string>("document.body.innerText")).slice(0, 400)}`,
+    );
+  const pairedShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(
+    remoteScreenshotPath.replace(".png", "-paired.png"),
+    Buffer.from(pairedShot.data, "base64"),
+  );
+  const removeButton =
+    "document.querySelector('.remote-phones li .accounts-actions button')";
+  await clickAt(removeButton);
+  await Bun.sleep(400);
+  await clickAt(removeButton);
+  await Bun.sleep(300);
+  const left = await evaluate<number>(
+    "document.querySelectorAll('.remote-phones li').length",
+  );
+  if (left !== 0) throw new Error("Remote: Remove did not forget the phone");
+  console.log(
+    "Pro: without it the header says Get Pro and Remote (tagged Pro) only leads to Account; Account signs the Mac in through the browser, shows Free as current, formats an invite code as it is typed (wrong12345 reads WRONG-12345), refuses a wrong one and takes a good one; then the header says Pro; an admin account unlocks admin with Google (locked before), makes a named Pro key (uses, trial, name), sees it as one short line, renames it in place, filters keys and accounts with the fuzzy matcher, shows each change under Activity, and ends an account's plan from its menu, every row's menu on one edge and nothing past the pane; Remote is on with Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account, its Pro plan and recent activity; Remove forgets it",
+  );
   // And General, where a switch sits beside a two-line description and the
   // alignment either reads or does not.
   await evaluate(`(() => {
@@ -812,6 +1209,111 @@ try {
   if (!closed.banner.includes("Daedalus 0.8.3 is available"))
     throw new Error(`The banner did not return: ${closed.banner}`);
   if (!closed.corner) throw new Error("No Settings button to show the dot on");
+  // The Workspaces heading holds phone access and global secrets beside New
+  // workspace; the All workspaces card no longer has its own key.
+  const heading = await evaluate<{
+    actions: string[];
+    cardKey: boolean;
+    box: { x: number; y: number; width: number; height: number } | null;
+  }>(`(() => {
+    const actions = document.querySelector('.workspace-column-heading .panel-heading-actions');
+    const box = document.querySelector('.workspace-column-heading')?.getBoundingClientRect();
+    return {
+      actions: [...(actions?.querySelectorAll(':scope > details > summary, :scope > button') ?? [])].map((one) => one.getAttribute('aria-label') ?? ''),
+      cardKey: Boolean(document.querySelector('.all-workspaces-card [aria-label="Global secrets"]')),
+      box: box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null,
+    };
+  })()`);
+  if (
+    !heading.actions[0]?.startsWith("Phone access") ||
+    heading.actions[1] !== "Global secrets" ||
+    heading.actions[2] !== "Create workspace" ||
+    heading.cardKey
+  )
+    throw new Error(`Workspaces heading is wrong: ${JSON.stringify(heading)}`);
+  if (heading.box) {
+    const headingShot = await send<{ data: string }>("Page.captureScreenshot", {
+      format: "png",
+      clip: { ...heading.box, scale: 2 },
+    });
+    await Bun.write(
+      join(projectRoot, "artifacts/settings-ui-heading.png"),
+      Buffer.from(headingShot.data, "base64"),
+    );
+  }
+  await evaluate(
+    "document.querySelector('.workspace-column-heading .remote-menu summary').click()",
+  );
+  await Bun.sleep(300);
+  const menu = await evaluate<{
+    items: string[];
+    status: string;
+    box: { x: number; y: number; width: number; height: number } | null;
+  }>(`(() => {
+    const popover = document.querySelector('.remote-menu .menu-popover');
+    const box = popover?.getBoundingClientRect();
+    return {
+      items: [...(popover?.querySelectorAll('[role^="menuitem"]') ?? [])].map((one) => one.textContent.trim()),
+      status: popover?.querySelector('.remote-menu-status')?.textContent ?? '',
+      box: box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null,
+    };
+  })()`);
+  if (
+    menu.items.join(" | ") !== "Allow phone access | Pair a phone…" ||
+    menu.status !== "On. No phone is connected right now."
+  )
+    throw new Error(`Phone access menu is wrong: ${JSON.stringify(menu)}`);
+  if (menu.box) {
+    const menuShot = await send<{ data: string }>("Page.captureScreenshot", {
+      format: "png",
+      clip: {
+        x: Math.max(0, menu.box.x - 12),
+        y: Math.max(0, menu.box.y - 40),
+        width: menu.box.width + 24,
+        height: menu.box.height + 52,
+        scale: 2,
+      },
+    });
+    await Bun.write(
+      join(projectRoot, "artifacts/settings-ui-phone-menu.png"),
+      Buffer.from(menuShot.data, "base64"),
+    );
+  }
+  await send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key: "Escape",
+    code: "Escape",
+  });
+  console.log(
+    "Workspaces heading: phone access (menu: status, Allow phone access, Pair a phone…), global secrets, new workspace; no key on All workspaces",
+  );
+  // The Pro badge by the logo, now that the Mac has Pro.
+  const brand = await evaluate<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    badge: string;
+  }>(`(() => {
+    const box = document.querySelector('.topbar .brand').getBoundingClientRect();
+    return { x: box.x, y: box.y, width: box.width, height: box.height, badge: document.querySelector('.topbar .pro-badge')?.textContent.trim() ?? '' };
+  })()`);
+  if (brand.badge !== "Pro")
+    throw new Error(`The header badge says "${brand.badge}"`);
+  const brandShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+    clip: {
+      x: brand.x,
+      y: brand.y,
+      width: brand.width + 8,
+      height: brand.height,
+      scale: 2,
+    },
+  });
+  await Bun.write(
+    join(projectRoot, "artifacts/settings-ui-pro-badge.png"),
+    Buffer.from(brandShot.data, "base64"),
+  );
   const cornerShot = await send<{ data: string }>("Page.captureScreenshot", {
     format: "png",
     clip: {
@@ -827,7 +1329,7 @@ try {
     "Closed, the offer returns to the banner and the dot stays on Settings",
   );
   console.log(
-    `Screenshots: ${screenshotPath}, ${groupsScreenshotPath}, ${agentsScreenshotPath}, ${generalScreenshotPath}, ${aboutScreenshotPath}, ${cornerScreenshotPath}`,
+    `Screenshots: ${screenshotPath}, ${groupsScreenshotPath}, ${agentsScreenshotPath}, ${remoteScreenshotPath}, ${generalScreenshotPath}, ${aboutScreenshotPath}, ${cornerScreenshotPath}`,
   );
   socket.close();
 } finally {

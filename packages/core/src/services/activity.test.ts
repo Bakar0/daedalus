@@ -325,6 +325,112 @@ describe("ActivityService", () => {
     });
   });
 
+  describe("away from the Mac, a blocking alert goes to the phone", () => {
+    /** The app is running in the background, and the user idle `seconds`. */
+    const idleFor = (context: ApplicationContext, seconds: number) =>
+      Bun.write(
+        join(context.config.home, "presence.json"),
+        JSON.stringify({
+          appForeground: false,
+          workspaceId: null,
+          sessionId: null,
+          userIdleSeconds: seconds,
+          observedAt: new Date().toISOString(),
+          pid: process.pid,
+        }),
+      );
+
+    test("instead of macOS, when a phone takes it", async () => {
+      await withSession(async (context, sessionId, desktop) => {
+        await idleFor(context, 600);
+        const asked: string[] = [];
+        // The alert as a hook raises it: a CLI has no phone, so it hands the
+        // alert to the running app.
+        await context.activity.raise({ sessionId, reason: "Pick a database" });
+        expect(desktop).toHaveLength(0);
+        // The app delivers the queue with its phone in place.
+        context.notifications.setPhone(async (alert) => {
+          asked.push(alert.body);
+          return true;
+        });
+        const reports: unknown[] = [];
+        await context.notifications.flushDesktop(
+          5,
+          60_000,
+          Date.now(),
+          (_n, r) => reports.push(r),
+        );
+        expect(asked).toEqual(["Pick a database"]);
+        expect(reports).toEqual(["phone"]);
+        expect(desktop).toHaveLength(0);
+      });
+    });
+
+    test("an alert raised in the app itself goes the same way", async () => {
+      await withSession(async (context, sessionId, desktop) => {
+        await idleFor(context, 600);
+        context.notifications.setPhone(async () => true);
+        const outcome = await context.notifications.notify({
+          sessionId,
+          level: "info",
+          title: "Claude",
+          body: "Needs permission",
+          blocking: true,
+        });
+        expect(outcome.delivered).toEqual(["badge", "phone"]);
+        expect(desktop).toHaveLength(0);
+      });
+    });
+
+    test("at the Mac the phone is never asked, whatever app is in front", async () => {
+      await withSession(async (context, sessionId) => {
+        await idleFor(context, 20);
+        let asked = 0;
+        context.notifications.setPhone(async () => {
+          asked += 1;
+          return true;
+        });
+        const outcome = await context.notifications.notify({
+          sessionId,
+          level: "info",
+          title: "Claude",
+          body: "Needs permission",
+          blocking: true,
+        });
+        expect(asked).toBe(0);
+        expect(outcome.delivered).not.toContain("phone");
+      });
+    });
+
+    test("macOS still notifies when no phone could be reached", async () => {
+      await withSession(async (context, sessionId, desktop) => {
+        await idleFor(context, 600);
+        context.notifications.setPhone(async () => false);
+        await context.activity.raise({ sessionId, reason: "Pick a port" });
+        await context.notifications.flushDesktop(5, 60_000);
+        expect(desktop.map((item) => item.body)).toEqual(["Pick a port"]);
+      });
+    });
+
+    test("an alert that does not block never goes to the phone", async () => {
+      await withSession(async (context, sessionId) => {
+        await idleFor(context, 600);
+        let asked = 0;
+        context.notifications.setPhone(async () => {
+          asked += 1;
+          return true;
+        });
+        await context.notifications.notify({
+          sessionId,
+          level: "success",
+          title: "Claude",
+          body: "Done",
+        });
+        expect(asked).toBe(0);
+      });
+    });
+  });
+
   test("drops a handed-over alert that went stale while the app was down", async () => {
     await withSession(async (context, sessionId, desktop) => {
       await context.presence.publish({

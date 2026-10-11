@@ -247,6 +247,17 @@ export function Menu({
   );
 }
 
+/** Three dots: a row's "more actions" menu. */
+export function MenuDots() {
+  return (
+    <svg aria-hidden="true" fill="currentColor" viewBox="0 0 24 24">
+      <circle cx="5.5" cy="12" r="1.7" />
+      <circle cx="12" cy="12" r="1.7" />
+      <circle cx="18.5" cy="12" r="1.7" />
+    </svg>
+  );
+}
+
 export function MenuCheck() {
   return (
     <svg

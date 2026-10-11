@@ -449,7 +449,8 @@ export interface ShippedPullRequest {
 }
 
 export type NotificationLevel = "info" | "success" | "error";
-export type NotificationChannel = "badge" | "toast" | "desktop";
+/** `phone`: pushed to a paired phone because nobody was at the Mac. */
+export type NotificationChannel = "badge" | "toast" | "desktop" | "phone";
 
 export interface PendingNotification {
   id: UUID;

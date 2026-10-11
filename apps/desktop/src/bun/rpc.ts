@@ -61,6 +61,8 @@ import type {
   SecretDto,
 } from "@daedalus/protocol";
 
+import type { DesktopRemoteHost } from "./remote";
+
 /**
  * The host's side of the quit dialog. It lives in `index.ts` because only the
  * host can end the process; the RPC layer just carries the two answers back.
@@ -438,6 +440,77 @@ export interface DesktopWindowHost {
   focusSession(sessionId: string): void;
 }
 
+/** Where no host runs a connector, as in tests: phone access is off. */
+const NO_REMOTE: DesktopRemoteHost = {
+  state: () => ({
+    enabled: false,
+    keepAwake: false,
+    status: "off",
+    relay: "",
+    macName: "",
+    phones: [],
+    connectedPhones: 0,
+    signedIn: false,
+  }),
+  setEnabled: async () => {
+    throw new DaedalusError(
+      "DEPENDENCY",
+      "Phone access is not available here.",
+    );
+  },
+  pairingCode: async () => {
+    throw new DaedalusError(
+      "DEPENDENCY",
+      "Phone access is not available here.",
+    );
+  },
+  setKeepAwake: async () => {
+    throw new DaedalusError(
+      "DEPENDENCY",
+      "Phone access is not available here.",
+    );
+  },
+  setMacName: async () => {
+    throw new DaedalusError(
+      "DEPENDENCY",
+      "Phone access is not available here.",
+    );
+  },
+  removePhone: async () => NO_REMOTE.state(),
+  confirmPairing: async () => NO_REMOTE.state(),
+  signIn: async () => {
+    throw new DaedalusError(
+      "DEPENDENCY",
+      "Phone access is not available here.",
+    );
+  },
+  redeemInvite: async () => NO_REMOTE.state(),
+  refreshAccount: async () => NO_REMOTE.state(),
+  adminUnlock: async () => {
+    throw new DaedalusError(
+      "DEPENDENCY",
+      "Phone access is not available here.",
+    );
+  },
+  adminStatus: async () => ({ unlockedUntil: null }),
+  adminLock: async () => undefined,
+  adminKeys: async () => [],
+  adminCreateKey: async () => {
+    throw new DaedalusError(
+      "DEPENDENCY",
+      "Phone access is not available here.",
+    );
+  },
+  adminDeleteKey: async () => undefined,
+  adminRenameKey: async () => undefined,
+  adminAccounts: async () => [],
+  adminLog: async () => [],
+  adminSetPlan: async () => undefined,
+  leaveAccount: async () => NO_REMOTE.state(),
+  startOver: async () => NO_REMOTE.state(),
+  activity: async () => [],
+};
+
 const MAIN_WINDOW_ONLY: DesktopWindowHost = {
   role: "main",
   openWorld: () => {},
@@ -456,6 +529,7 @@ export function createDesktopRequestHandlers(
   updates: DesktopUpdateHost = NO_UPDATES,
   windows: DesktopWindowHost = MAIN_WINDOW_ONLY,
   clipboardWrite: (text: string) => boolean = () => false,
+  remote: DesktopRemoteHost = NO_REMOTE,
 ): DesktopRequestHandlers {
   const mutate = async <T>(operation: () => T | Promise<T>) => {
     const response = await result(operation);
@@ -712,6 +786,47 @@ export function createDesktopRequestHandlers(
         await context.workspaceContent.setInstructionFilesEnabled(enabled);
         return { enabled };
       }),
+    remoteGet: () => result(() => remote.state()),
+    remoteSetEnabled: ({ enabled }) => mutate(() => remote.setEnabled(enabled)),
+    remoteSetKeepAwake: ({ enabled }) =>
+      mutate(() => remote.setKeepAwake(enabled)),
+    remoteSetMacName: ({ name }) => mutate(() => remote.setMacName(name)),
+    remotePairingCode: () => result(() => remote.pairingCode()),
+    remotePhoneRemove: ({ id }) => mutate(() => remote.removePhone(id)),
+    remoteConfirmPairing: ({ allow }) =>
+      mutate(() => remote.confirmPairing(allow)),
+    remoteSignIn: () => result(() => remote.signIn()),
+    remoteRedeemInvite: ({ code }) => mutate(() => remote.redeemInvite(code)),
+    remoteRefreshAccount: () => mutate(() => remote.refreshAccount()),
+    remoteAdminUnlock: () => result(() => remote.adminUnlock()),
+    remoteAdminStatus: () => result(() => remote.adminStatus()),
+    remoteAdminLock: () =>
+      result(async () => {
+        await remote.adminLock();
+        return null;
+      }),
+    remoteAdminKeys: () => result(() => remote.adminKeys()),
+    remoteAdminCreateKey: (input) => result(() => remote.adminCreateKey(input)),
+    remoteAdminDeleteKey: ({ code }) =>
+      result(async () => {
+        await remote.adminDeleteKey(code);
+        return null;
+      }),
+    remoteAdminRenameKey: ({ code, name }) =>
+      result(async () => {
+        await remote.adminRenameKey(code, name);
+        return null;
+      }),
+    remoteAdminAccounts: () => result(() => remote.adminAccounts()),
+    remoteAdminLog: () => result(() => remote.adminLog()),
+    remoteAdminSetPlan: (input) =>
+      result(async () => {
+        await remote.adminSetPlan(input);
+        return null;
+      }),
+    remoteLeaveAccount: () => mutate(() => remote.leaveAccount()),
+    remoteStartOver: () => mutate(() => remote.startOver()),
+    remoteActivity: () => result(() => remote.activity()),
     autoRestoreSessionsSet: ({ enabled }) =>
       mutate(async () => {
         await saveAutoRestoreSessionsEnabled(context.config, enabled);

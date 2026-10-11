@@ -375,6 +375,283 @@ const client = {
   subscribeWorkspaceFiles: () => () => undefined,
 } as unknown as DesktopClient;
 
+// Settings → Remote's host side. The check calls `remotePair()` to stand in
+// for a phone asking to pair; Allow in the panel finishes it.
+const remote = {
+  enabled: false,
+  keepAwake: false,
+  status: "off" as string,
+  relay: "wss://relay.example.dev",
+  macName: "Settings Mac",
+  connectedPhones: 0,
+  signedIn: false,
+  admin: false,
+  phones: [] as Array<{ id: string; name: string; pairedAt: string }>,
+  account: undefined as string | undefined,
+  lockedBy: undefined as string | undefined,
+  plan: undefined as { name: string; expiresAt: string | null } | undefined,
+  pairingRequest: undefined as
+    | { phoneId: string; phoneName: string; code: string; expiresAt: number }
+    | undefined,
+};
+let adminUnlocked = false;
+// The relay's keys, accounts and admin log, as the admin section sees them.
+const adminLog: Array<{
+  at: string;
+  actor: string;
+  action: string;
+  target: string;
+  detail: Record<string, unknown>;
+}> = [];
+const logged = (
+  action: string,
+  target: string,
+  detail: Record<string, unknown>,
+) =>
+  adminLog.unshift({
+    at: "2026-10-11T12:30:00.000Z",
+    actor: "owner@example.com",
+    action,
+    target,
+    detail,
+  });
+let adminKeys: Array<{
+  code: string;
+  plan: string;
+  maxUses: number;
+  used: number;
+  expiresAt: string | null;
+  grantDays: number | null;
+  note: string;
+  createdAt: string;
+}> = [];
+let adminAccounts = [
+  {
+    id: "u1",
+    email: "owner@example.com",
+    createdAt: "2026-10-01T12:00:00.000Z",
+    plan: "pro" as string | null,
+    status: "active" as string | null,
+    source: "invite" as string | null,
+    expiresAt: null as string | null,
+    usageBytes: 0,
+  },
+  {
+    id: "u2",
+    email: "friend@example.com",
+    createdAt: "2026-10-05T12:00:00.000Z",
+    plan: "pro",
+    status: "active",
+    source: "invite",
+    expiresAt: "2026-10-19T12:00:00.000Z",
+    usageBytes: 0,
+  },
+  {
+    id: "u3",
+    email: "new@example.com",
+    createdAt: "2026-10-10T12:00:00.000Z",
+    plan: null,
+    status: null,
+    source: null,
+    expiresAt: null,
+    usageBytes: 0,
+  },
+];
+const remoteState = () => ({
+  ok: true,
+  data: { ...remote, phones: [...remote.phones] },
+});
+Object.assign(client.request, {
+  remoteGet: async () => remoteState(),
+  remoteSetEnabled: async ({ enabled }: { enabled: boolean }) => {
+    remote.enabled = enabled;
+    remote.status = enabled
+      ? remote.phones.length
+        ? "online"
+        : "waiting_for_phone"
+      : "off";
+    return remoteState();
+  },
+  remotePairingCode: async () => ({
+    ok: true,
+    data: {
+      url: `https://relay.example.dev/pair#daedalus-pair:${"eyJ2IjoxLCJyZWxheSI6IndzczovL3JlbGF5LmV4YW1wbGUuZGV2In0".repeat(5)}`,
+      expiresAt: Date.now() + 5 * 60_000,
+    },
+  }),
+  remoteSetMacName: async ({ name }: { name: string }) => {
+    remote.macName = name || "Settings Mac";
+    return remoteState();
+  },
+  remoteSetKeepAwake: async ({ enabled }: { enabled: boolean }) => {
+    remote.keepAwake = enabled;
+    return remoteState();
+  },
+  remotePhoneRemove: async ({ id }: { id: string }) => {
+    remote.phones = remote.phones.filter((phone) => phone.id !== id);
+    return remoteState();
+  },
+  remoteConfirmPairing: async ({ allow }: { allow: boolean }) => {
+    const request = remote.pairingRequest;
+    remote.pairingRequest = undefined;
+    if (allow && request) {
+      remote.phones.push({
+        id: request.phoneId,
+        name: request.phoneName,
+        pairedAt: "2026-10-10T09:00:00.000Z",
+      });
+      remote.status = "online";
+    }
+    return remoteState();
+  },
+  // The browser's part is instant here: the Mac comes back signed in, with
+  // no plan yet.
+  remoteSignIn: async () => {
+    remote.enabled = true;
+    remote.signedIn = true;
+    remote.admin = true;
+    remote.account = "owner@example.com";
+    remote.status = "locked";
+    remote.lockedBy = "no_plan";
+    return {
+      ok: true,
+      data: { url: "https://relay.example.dev/auth/google/start?mac=m" },
+    };
+  },
+  remoteRedeemInvite: async ({ code }: { code: string }) => {
+    if (code !== "GOODP-RO123")
+      return {
+        ok: false,
+        error: {
+          code: "VALIDATION",
+          message: "That invite code is not valid.",
+        },
+      };
+    remote.plan = { name: "pro", expiresAt: "2026-11-01T12:00:00.000Z" };
+    remote.lockedBy = undefined;
+    remote.status = "online";
+    return remoteState();
+  },
+  openExternal: async ({ url }: { url: string }) => {
+    (window as unknown as { opened: string[] }).opened = [
+      ...((window as unknown as { opened?: string[] }).opened ?? []),
+      url,
+    ];
+    return { ok: true, data: { opened: true } };
+  },
+  remoteRefreshAccount: async () => remoteState(),
+  // Sudo mode: the browser's approval is instant here.
+  remoteAdminStatus: async () => ({
+    ok: true,
+    data: { unlockedUntil: adminUnlocked ? "2026-10-11T12:45:00.000Z" : null },
+  }),
+  remoteAdminUnlock: async () => {
+    adminUnlocked = true;
+    return {
+      ok: true,
+      data: { url: "https://relay.example.dev/auth/google/start?unlock=u" },
+    };
+  },
+  remoteAdminLock: async () => {
+    adminUnlocked = false;
+    return { ok: true, data: null };
+  },
+  remoteAdminKeys: async () => ({ ok: true, data: adminKeys }),
+  remoteAdminCreateKey: async (input: {
+    maxUses?: number;
+    grantDays?: number;
+    days?: number;
+    note?: string;
+  }) => {
+    const code = `KEY${adminKeys.length + 1}A-B2C3D`;
+    adminKeys.unshift({
+      code,
+      plan: "pro",
+      maxUses: input.maxUses ?? 1,
+      used: 0,
+      expiresAt: input.days ? "2026-11-10T12:00:00.000Z" : null,
+      grantDays: input.grantDays ?? null,
+      note: input.note ?? "",
+      createdAt: "2026-10-11T12:00:00.000Z",
+    });
+    logged("invites.create", code, {
+      maxUses: input.maxUses ?? 1,
+      grantDays: input.grantDays ?? null,
+      name: input.note ?? "",
+    });
+    return { ok: true, data: { code } };
+  },
+  remoteAdminDeleteKey: async ({ code }: { code: string }) => {
+    adminKeys = adminKeys.filter((key) => key.code !== code);
+    return { ok: true, data: null };
+  },
+  remoteAdminRenameKey: async ({
+    code,
+    name,
+  }: {
+    code: string;
+    name: string;
+  }) => {
+    adminKeys = adminKeys.map((key) =>
+      key.code === code ? { ...key, note: name } : key,
+    );
+    logged("invites.rename", code, { name });
+    return { ok: true, data: null };
+  },
+  remoteAdminAccounts: async () => ({ ok: true, data: adminAccounts }),
+  remoteAdminLog: async () => ({ ok: true, data: adminLog }),
+  remoteAdminSetPlan: async ({
+    email,
+    status,
+  }: {
+    email: string;
+    status: string;
+  }) => {
+    adminAccounts = adminAccounts.map((account) =>
+      account.email === email
+        ? { ...account, status, plan: account.plan ?? "pro" }
+        : account,
+    );
+    logged("plan.set", email, { status });
+    return { ok: true, data: null };
+  },
+  remoteLeaveAccount: async () => remoteState(),
+  remoteStartOver: async () => remoteState(),
+  remoteActivity: async () => ({
+    ok: true,
+    data: remote.phones.length
+      ? [
+          {
+            at: "2026-10-10T09:05:00.000Z",
+            phoneId: "phone-0001",
+            phone: "Pixel 9",
+            action: "terminal.close",
+            target: "session-1",
+            ok: true,
+            bytesIn: 42,
+            bytesOut: 9000,
+          },
+          {
+            at: "2026-10-10T09:02:00.000Z",
+            phoneId: "phone-0001",
+            phone: "Pixel 9",
+            action: "agentSend",
+            target: "session-1",
+            ok: true,
+          },
+        ]
+      : [],
+  }),
+});
+(window as unknown as { remotePair: () => void }).remotePair = () => {
+  remote.pairingRequest = {
+    phoneId: "phone-0001",
+    phoneName: "Pixel 9",
+    code: "650182",
+    expiresAt: Date.now() + 2 * 60_000,
+  };
+};
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <App

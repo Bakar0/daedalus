@@ -14,15 +14,25 @@
 import { dirname, resolve } from "node:path";
 
 const projectRoot = resolve(import.meta.dir, "..");
-const tsc = Bun.spawn(
-  [process.execPath, "x", "tsc", "--noEmit", "--pretty", "false"],
-  { cwd: projectRoot, stdout: "pipe", stderr: "pipe" },
-);
-const [stdout, stderr, exitCode] = await Promise.all([
-  new Response(tsc.stdout).text(),
-  new Response(tsc.stderr).text(),
-  tsc.exited,
-]);
+
+// The relay runs on Cloudflare's runtime, whose globals clash with Bun's, so
+// it is its own project and the root one excludes it.
+async function check(project: string[]) {
+  const tsc = Bun.spawn(
+    [process.execPath, "x", "tsc", "--noEmit", "--pretty", "false", ...project],
+    { cwd: projectRoot, stdout: "pipe", stderr: "pipe" },
+  );
+  const [out, err, code] = await Promise.all([
+    new Response(tsc.stdout).text(),
+    new Response(tsc.stderr).text(),
+    tsc.exited,
+  ]);
+  return { out: `${out}${err}`, code };
+}
+const runs = await Promise.all([check([]), check(["-p", "apps/relay"])]);
+const stdout = runs.map((run) => run.out).join("\n");
+const stderr = "";
+const exitCode = runs.find((run) => run.code !== 0)?.code ?? 0;
 
 const DIAGNOSTIC = /^(?<file>\S.*?)\(\d+,\d+\): (?:error|warning) TS/;
 

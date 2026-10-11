@@ -578,24 +578,6 @@ button:not(
   flex: 1;
   min-width: 0;
 }
-.all-workspaces-card > .workspace-card-actions {
-  flex: none;
-  padding-right: 4px;
-}
-.all-workspaces-card .workspace-secrets-action {
-  align-items: center;
-  border-radius: 5px !important;
-  display: flex;
-  height: 20px;
-  justify-content: center;
-  min-height: 0;
-  padding: 0 !important;
-  width: 20px;
-}
-.all-workspaces-card .workspace-secrets-action svg {
-  height: 13px;
-  width: 13px;
-}
 .all-workspaces-card.selected .all-workspaces-icon,
 .all-workspaces-card.selected .workspace-card-name {
   color: inherit;
@@ -701,6 +683,67 @@ button:not(
 .workspace-heading-create {
   font-size: 17px !important;
   line-height: 1;
+}
+/* Phone access and global secrets, beside New workspace. */
+.workspace-column-heading .panel-heading-actions {
+  align-items: center;
+  display: flex;
+  gap: 2px;
+}
+.workspace-heading-action {
+  align-items: center;
+  color: var(--secondary);
+  cursor: pointer;
+  display: flex;
+  height: 24px;
+  justify-content: center;
+  list-style: none;
+  padding: 0 !important;
+  position: relative;
+  width: 24px;
+}
+.workspace-heading-action::-webkit-details-marker {
+  display: none;
+}
+.workspace-heading-action svg {
+  height: 15px;
+  width: 15px;
+}
+.remote-menu-dot {
+  border: 1.5px solid var(--panel);
+  border-radius: 50%;
+  bottom: 2px;
+  height: 7px;
+  position: absolute;
+  right: 2px;
+  width: 7px;
+}
+.remote-menu-dot[data-look="off"] {
+  display: none;
+}
+/* Ready: on, nobody connected. A ring, not a dot. */
+.remote-menu-dot[data-look="ready"] {
+  background: var(--panel);
+  box-shadow: inset 0 0 0 1.5px var(--success);
+}
+.remote-menu-dot[data-look="live"] {
+  background: var(--success);
+}
+.remote-menu-dot[data-look="connecting"] {
+  background: var(--muted);
+}
+.remote-menu-dot[data-look="trouble"] {
+  background: var(--danger);
+}
+.workspace-heading-action:has(.remote-menu-dot[data-look="off"]) {
+  opacity: 0.6;
+}
+.remote-menu-status {
+  color: var(--secondary);
+  font-size: 12px;
+  margin: 0;
+  max-width: 260px;
+  padding: 2px 10px 6px;
 }
 
 /* The row under All workspaces; its icon box is as wide as a card's arrow,
@@ -7277,4 +7320,546 @@ dd {
   flex: none;
   height: 12px;
   width: 12px;
+}
+
+/* Settings → Remote */
+.remote-panel {
+  display: grid;
+  gap: 14px;
+}
+.remote-panel h3:not(:first-child) {
+  margin-top: 8px;
+}
+.remote-e2e {
+  background: color-mix(in srgb, var(--success) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success) 28%, transparent);
+  border-radius: 10px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 24px minmax(0, 1fr);
+  padding: 12px 14px;
+}
+.remote-e2e-icon {
+  color: var(--success);
+  height: 24px;
+  width: 24px;
+}
+.remote-e2e strong {
+  display: block;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.remote-e2e p {
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+.remote-e2e p + p {
+  margin-top: 6px;
+}
+.remote-pro {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+}
+.remote-pro > strong {
+  font-size: 13px;
+}
+.remote-pro p {
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+.remote-request {
+  background: var(--raised);
+  border: 1px solid var(--accent);
+  border-radius: 9px;
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+}
+.remote-request p {
+  font-size: 12px;
+  margin: 0;
+}
+.remote-request small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.remote-request-code {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 26px !important;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.remote-activity {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.remote-activity li {
+  display: grid;
+  font-size: 12px;
+  gap: 10px;
+  grid-template-columns: 120px minmax(0, 1fr);
+}
+.remote-activity time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.remote-status {
+  align-items: center;
+  color: var(--secondary);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 8px;
+  margin: 0;
+}
+.remote-status code {
+  color: var(--muted);
+  font-size: 11px;
+}
+.remote-status-dot {
+  background: var(--muted);
+  border-radius: 50%;
+  flex: none;
+  height: 8px;
+  width: 8px;
+}
+.remote-status[data-look="ready"] .remote-status-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--success);
+}
+.remote-status[data-look="live"] .remote-status-dot {
+  background: var(--success);
+}
+.remote-status[data-look="trouble"] .remote-status-dot {
+  background: var(--danger);
+}
+.remote-name > span:first-child {
+  display: grid;
+  gap: 2px;
+}
+.remote-name small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.remote-name-edit {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+.remote-name-edit input {
+  font-size: 12px;
+  min-height: 28px;
+  padding: 4px 8px;
+  width: 180px;
+}
+.remote-pairing {
+  align-items: center;
+  background: var(--raised);
+  border-radius: 9px;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 196px minmax(0, 1fr);
+  padding: 12px;
+}
+.remote-pairing p {
+  color: var(--secondary);
+  font-size: 12px;
+  margin: 0 0 10px;
+}
+.remote-qr {
+  border-radius: 6px;
+  display: block;
+  height: 196px;
+  width: 196px;
+}
+.remote-pairing-actions {
+  display: flex;
+  gap: 6px;
+}
+.remote-pairing-start {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+.remote-pairing-start small,
+.remote-empty {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+}
+.remote-phone-icon {
+  border: 1.5px solid var(--secondary);
+  border-radius: 3px;
+  height: 16px;
+  width: 10px;
+}
+
+/* Daedalus Pro: the badge by the logo, the tag on Pro features, and
+   Settings › Account. */
+.pro-tag {
+  background: linear-gradient(135deg, #5b8cff, #9a6bff);
+  border-radius: 4px;
+  color: #fff;
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  margin-left: 6px;
+  padding: 3px 5px;
+  text-transform: uppercase;
+  vertical-align: 2px;
+}
+.quiet.pro-badge,
+.quiet.pro-badge:hover {
+  background: linear-gradient(135deg, #5b8cff, #9a6bff);
+  border: 0;
+  border-radius: 999px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  padding: 5px 9px;
+  text-transform: uppercase;
+}
+.quiet.pro-badge.get-pro {
+  background: transparent;
+  border: 1px solid color-mix(in srgb, #7b7cff 60%, transparent);
+  color: var(--secondary);
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+.quiet.pro-badge.get-pro:hover {
+  background: var(--raised-hover);
+  color: var(--text);
+}
+.brand .pro-badge {
+  margin-left: 2px;
+}
+.account-panel {
+  display: grid;
+  gap: 12px;
+}
+.account-panel h3:not(:first-child) {
+  margin-top: 8px;
+}
+.account-who > span:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.account-who small,
+.account-signin small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.account-signin {
+  display: grid;
+  gap: 10px;
+}
+.account-signin p {
+  color: var(--secondary);
+  font-size: 12px;
+  margin: 0;
+}
+.account-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+.account-actions input {
+  flex: 1;
+  min-width: 0;
+  text-transform: uppercase;
+}
+.plan-cards {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.plan-card {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+.plan-card.pro {
+  border-color: color-mix(in srgb, #7b7cff 55%, var(--line));
+}
+.plan-card header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+.plan-card ul {
+  color: var(--secondary);
+  display: grid;
+  font-size: 12px;
+  gap: 6px;
+  margin: 0;
+  padding-left: 16px;
+}
+.plan-current {
+  color: var(--muted);
+  font-size: 11px;
+}
+.plan-note {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 0;
+}
+.plan-get {
+  display: grid;
+  gap: 8px;
+  margin-top: auto;
+}
+.plan-get-row {
+  display: grid;
+  gap: 6px;
+}
+.plan-get-row input {
+  min-width: 0;
+  text-transform: uppercase;
+  width: 100%;
+}
+.remote-account-line {
+  color: var(--secondary);
+  font-size: 12px;
+  margin: 0;
+}
+.remote-account-line .quiet.link {
+  background: none;
+  border: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+}
+.settings-nav button[data-pro]::after {
+  background: linear-gradient(135deg, #5b8cff, #9a6bff);
+  border-radius: 4px;
+  color: #fff;
+  content: "Pro";
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  margin-left: 6px;
+  padding: 2px 4px;
+  text-transform: uppercase;
+  vertical-align: 1px;
+}
+
+/* Settings › Account's admin section: Pro keys and accounts. Each row is
+   one line: what it is, a short description that gives way first, and a
+   menu pinned to the right edge. */
+.admin-title {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+.admin-only {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.admin-section {
+  display: grid;
+  gap: 8px;
+}
+.admin-heading {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  min-height: 26px;
+}
+.admin-heading h3 {
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  margin: 0;
+  text-transform: none;
+}
+.admin-key-form {
+  align-items: center;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: 56px 96px minmax(0, 1fr) auto auto;
+}
+.admin-key-form input {
+  font-size: 12px;
+  min-width: 0;
+  padding: 6px 8px;
+  width: 100%;
+}
+.admin-key-form small {
+  color: var(--muted);
+  font-size: 11px;
+  grid-column: 1 / -1;
+}
+.admin-made {
+  align-items: center;
+  color: var(--secondary);
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
+  margin: 0;
+}
+.admin-list {
+  display: grid;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.admin-list li {
+  align-items: center;
+  border-radius: 7px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr) 28px;
+  min-height: 32px;
+  padding: 0 4px 0 10px;
+}
+.admin-list li:hover {
+  background: var(--raised);
+}
+.admin-accounts li {
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 28px;
+}
+.admin-list code,
+.admin-made code {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+.admin-list strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.admin-list strong,
+.admin-list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-list small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.admin-filter {
+  font-size: 12px;
+  padding: 6px 8px;
+  width: 100%;
+}
+.admin-key-name {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+.admin-key-name strong {
+  max-width: 180px;
+}
+.admin-key-name strong + code {
+  color: var(--muted);
+}
+.admin-list li.is-renaming {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 2px 4px;
+}
+.admin-rename {
+  align-items: center;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+.admin-rename input {
+  font-size: 12px;
+  min-width: 0;
+  padding: 5px 8px;
+}
+.admin-row-menu {
+  align-items: center;
+  display: flex;
+  height: 26px;
+  justify-content: center;
+  padding: 0;
+  width: 26px;
+}
+.admin-row-menu svg {
+  height: 15px;
+  width: 15px;
+}
+.admin-activity summary {
+  color: var(--secondary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+.admin-activity ul {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0 0 0 10px;
+}
+.admin-activity li {
+  color: var(--secondary);
+  display: grid;
+  font-size: 11px;
+  gap: 10px;
+  grid-template-columns: 110px minmax(0, 1fr);
+}
+.admin-activity li span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-activity time {
+  color: var(--muted);
+}
+.admin-locked {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+}
+.admin-locked p {
+  color: var(--secondary);
+  font-size: 12px;
+  margin: 0;
+}
+.admin-locked small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.admin-unlocked {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 11px;
+  gap: 6px;
+  margin: 0;
 }

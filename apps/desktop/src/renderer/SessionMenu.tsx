@@ -3,7 +3,7 @@
  * has the first three; abilities are offered on Claude and Codex agents.
  */
 import type { SessionColorDto } from "@daedalus/protocol";
-import { Menu } from "./Menu";
+import { Menu, MenuDots } from "./Menu";
 
 export const SESSION_COLORS: readonly SessionColorDto[] = [
   "red",
@@ -52,16 +52,6 @@ export function ColorSwatches({
         />
       ))}
     </span>
-  );
-}
-
-function MenuDots() {
-  return (
-    <svg aria-hidden="true" fill="currentColor" viewBox="0 0 24 24">
-      <circle cx="5.5" cy="12" r="1.7" />
-      <circle cx="12" cy="12" r="1.7" />
-      <circle cx="18.5" cy="12" r="1.7" />
-    </svg>
   );
 }
 

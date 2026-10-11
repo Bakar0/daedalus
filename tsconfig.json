@@ -17,6 +17,7 @@
       "@daedalus/core": ["./packages/core/src/index.ts"],
       "@daedalus/platform": ["./packages/platform/src/index.ts"],
       "@daedalus/protocol": ["./packages/protocol/src/index.ts"],
+      "@daedalus/remote-protocol": ["./packages/remote-protocol/src/index.ts"],
       "@daedalus/test-utils": ["./packages/test-utils/src/index.ts"]
     },
     "resolveJsonModule": true,
@@ -26,5 +27,11 @@
     "types": ["bun", "vite/client"]
   },
   "include": ["apps/**/*.ts", "apps/**/*.tsx", "packages/**/*.ts", "*.ts"],
-  "exclude": ["node_modules", "dist", ".hutch", "apps/desktop/dist"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    ".hutch",
+    "apps/desktop/dist",
+    "apps/relay"
+  ]
 }

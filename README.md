@@ -78,3 +78,9 @@ The same workspace, task and session appear in the app as they are created. Run 
 ## Developing
 
 Building from source, running the tests and cutting a release are covered in [DEVELOPING.md](DEVELOPING.md).
+
+## License
+
+[FSL-1.1-MIT](LICENSE.md). You may use, change and self-host Daedalus, including at work, but not to offer a product or service that competes with it. Two years after each release, that release is also available under the MIT license.
+
+Phone access goes through the hosted relay, which needs a Pro plan.
