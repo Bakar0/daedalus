@@ -10,6 +10,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   type AdminAccountDto,
   type AdminKeyDto,
+  type AdminLogEntryDto,
   formatInviteCode,
   inviteCodeComplete,
   type RemoteStateDto,
@@ -301,6 +302,25 @@ function keyLine(key: AdminKeyDto): string {
   ].join(" · ");
 }
 
+/** "Created Dana's trial (3 uses, 14-day Pro)", "Ended friend@…'s plan". */
+function logLine(entry: AdminLogEntryDto): string {
+  const key = entry.detail.name || entry.target;
+  switch (entry.action) {
+    case "invites.create":
+      return `Created ${key} (${entry.detail.maxUses ?? 1} ${entry.detail.maxUses === 1 ? "use" : "uses"}, ${entry.detail.grantDays ? `${entry.detail.grantDays}-day Pro` : "Pro"})`;
+    case "invites.delete":
+      return `Deleted ${key}`;
+    case "invites.rename":
+      return `Renamed ${entry.target} to ${entry.detail.name || "no name"}`;
+    case "plan.set":
+      return entry.detail.status === "revoked"
+        ? `Revoked ${entry.target}`
+        : entry.detail.status === "expired"
+          ? `Ended ${entry.target}'s plan`
+          : `Gave ${entry.target} ${entry.detail.days ? `${entry.detail.days} days of Pro` : "Pro"}`;
+  }
+}
+
 /** "Pro until Oct 19", "Admin", "Pro · ended" or "No plan". */
 function accountLine(account: AdminAccountDto): string {
   if (!account.plan) return "No plan";
@@ -330,6 +350,7 @@ function AdminSection({
 }) {
   const [keys, setKeys] = useState<AdminKeyDto[]>();
   const [accounts, setAccounts] = useState<AdminAccountDto[]>();
+  const [activity, setActivity] = useState<AdminLogEntryDto[]>();
   const [error, setError] = useState<string>();
   const [made, setMade] = useState<string>();
   const [copied, setCopied] = useState<string>();
@@ -371,10 +392,12 @@ function AdminSection({
   );
 
   const load = useCallback(async () => {
-    const [keyList, accountList] = await Promise.all([
+    const [keyList, accountList, log] = await Promise.all([
       client.request.remoteAdminKeys({}),
       client.request.remoteAdminAccounts({}),
+      client.request.remoteAdminLog({}),
     ]);
+    if (log.ok) setActivity(log.data);
     if (keyList.ok) setKeys(keyList.data);
     else setError(keyList.error.message);
     if (accountList.ok) setAccounts(accountList.data);
@@ -683,6 +706,26 @@ function AdminSection({
           ))}
         </ul>
       )}
+      {activity?.length ? (
+        <details className="admin-activity">
+          <summary>Activity</summary>
+          <ul>
+            {activity.slice(0, 30).map((entry) => (
+              <li key={`${entry.at}-${entry.action}-${entry.target}`}>
+                <time dateTime={entry.at}>
+                  {new Date(entry.at).toLocaleString(undefined, {
+                    month: "short",
+                    day: "numeric",
+                    hour: "numeric",
+                    minute: "2-digit",
+                  })}
+                </time>
+                <span title={entry.actor}>{logLine(entry)}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : undefined}
       {error ? (
         <p className="accounts-error" role="alert">
           {error}

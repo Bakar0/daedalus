@@ -844,6 +844,24 @@ export interface AdminAccountDto {
   usageBytes: number;
 }
 
+/** One change an admin made, from the relay's admin log. */
+export interface AdminLogEntryDto {
+  at: string;
+  /** The admin's email, or "admin key" for the relay-admin script. */
+  actor: string;
+  action: "invites.create" | "invites.delete" | "invites.rename" | "plan.set";
+  /** The key's code or the account's email. */
+  target: string;
+  detail: {
+    name?: string;
+    maxUses?: number;
+    grantDays?: number | null;
+    status?: "active" | "expired" | "revoked";
+    plan?: string;
+    days?: number;
+  };
+}
+
 export interface AdminPlanInput {
   email: string;
   /** Grant Pro, end the plan now, or revoke the account. */
@@ -1003,6 +1021,8 @@ export interface DesktopRpcSchema {
       remoteAdminRenameKey: Request<{ code: string; name: string }, null>;
       remoteAdminAccounts: Request<Record<string, never>, AdminAccountDto[]>;
       remoteAdminSetPlan: Request<AdminPlanInput, null>;
+      /** The last 100 changes admins made, newest first. */
+      remoteAdminLog: Request<Record<string, never>, AdminLogEntryDto[]>;
       /** Reads the Mac's account and plan from the relay again. */
       remoteRefreshAccount: Request<Record<string, never>, RemoteStateDto>;
       /** Take this Mac off its relay account and start over. */

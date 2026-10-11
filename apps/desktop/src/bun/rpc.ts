@@ -496,6 +496,7 @@ const NO_REMOTE: DesktopRemoteHost = {
   adminDeleteKey: async () => undefined,
   adminRenameKey: async () => undefined,
   adminAccounts: async () => [],
+  adminLog: async () => [],
   adminSetPlan: async () => undefined,
   leaveAccount: async () => NO_REMOTE.state(),
   startOver: async () => NO_REMOTE.state(),
@@ -802,6 +803,7 @@ export function createDesktopRequestHandlers(
         return null;
       }),
     remoteAdminAccounts: () => result(() => remote.adminAccounts()),
+    remoteAdminLog: () => result(() => remote.adminLog()),
     remoteAdminSetPlan: (input) =>
       result(async () => {
         await remote.adminSetPlan(input);

@@ -7,7 +7,9 @@
 //                          --days: how long the code works; --trial: how
 //                          long the plan it grants lasts (none: no end)
 //   invites
-//   users
+//   users                  accounts, with the Google account id that
+//                          ADMIN_ACCOUNTS takes (email=id)
+//   log                    the last 100 changes admins made
 //   grant <email> [--plan pro] [--days 30]   --days 0 clears the end
 //   expire <email>         end the plan now; an invite code renews it
 //   revoke <email>         end the plan and every sign-in; invites can't undo it
@@ -81,6 +83,19 @@ switch (command) {
   case "users":
     console.table(await call("GET", "/admin/users"));
     break;
+  case "log":
+    console.table(
+      (
+        (await call("GET", "/admin/log")) as Array<{
+          at: string;
+          actor: string;
+          action: string;
+          target: string;
+          detail: unknown;
+        }>
+      ).map((row) => ({ ...row, detail: JSON.stringify(row.detail) })),
+    );
+    break;
   case "budget":
     if (argument === "close" || argument === "reopen")
       console.log(
@@ -113,7 +128,7 @@ switch (command) {
     break;
   default:
     console.error(
-      "Commands: invite, invites, users, grant <email>, expire <email>, revoke <email>, budget [close|reopen]",
+      "Commands: invite, invites, users, log, grant <email>, expire <email>, revoke <email>, budget [close|reopen]",
     );
     process.exit(2);
 }

@@ -955,6 +955,18 @@ try {
   await waitFor("the friend's plan ended", async () =>
     (await accountText()).includes("friend@example.comPro · ended"),
   );
+  // Activity: every change, newest first.
+  await clickAt("document.querySelector('.admin-activity summary')");
+  await waitFor("the admin log", async () => {
+    const lines = await evaluate<string[]>(
+      "[...document.querySelectorAll('.admin-activity li span')].map((one) => one.textContent)",
+    );
+    return (
+      lines[0] === "Ended friend@example.com's plan" &&
+      lines.includes("Renamed KEY1A-B2C3D to Dana's trial") &&
+      lines.includes("Created For Dana (3 uses, 14-day Pro)")
+    );
+  });
   const rows = await evaluate<{
     actions: number[];
     overflow: boolean;
@@ -1104,7 +1116,7 @@ try {
   );
   if (left !== 0) throw new Error("Remote: Remove did not forget the phone");
   console.log(
-    "Pro: without it the header says Get Pro and Remote (tagged Pro) only leads to Account; Account signs the Mac in through the browser, shows Free as current, formats an invite code as it is typed (wrong12345 reads WRONG-12345), refuses a wrong one and takes a good one; then the header says Pro; an admin account makes a named Pro key (uses, trial, name), sees it as one short line, renames it in place, filters keys and accounts with the fuzzy matcher, and ends an account's plan from its menu, every row's menu on one edge and nothing past the pane; Remote is on with Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account, its Pro plan and recent activity; Remove forgets it",
+    "Pro: without it the header says Get Pro and Remote (tagged Pro) only leads to Account; Account signs the Mac in through the browser, shows Free as current, formats an invite code as it is typed (wrong12345 reads WRONG-12345), refuses a wrong one and takes a good one; then the header says Pro; an admin account makes a named Pro key (uses, trial, name), sees it as one short line, renames it in place, filters keys and accounts with the fuzzy matcher, shows each change under Activity, and ends an account's plan from its menu, every row's menu on one edge and nothing past the pane; Remote is on with Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account, its Pro plan and recent activity; Remove forgets it",
   );
   // And General, where a switch sits beside a two-line description and the
   // alignment either reads or does not.

@@ -12,6 +12,7 @@ import type {
   AdminAccountDto,
   AdminKeyDto,
   AdminKeyInput,
+  AdminLogEntryDto,
   AdminPlanInput,
   RemoteActivityDto,
   RemotePairingDto,
@@ -1209,6 +1210,7 @@ export interface DesktopRemoteHost {
   adminDeleteKey(code: string): Promise<void>;
   adminRenameKey(code: string, name: string): Promise<void>;
   adminAccounts(): Promise<AdminAccountDto[]>;
+  adminLog(): Promise<AdminLogEntryDto[]>;
   adminSetPlan(input: AdminPlanInput): Promise<void>;
   leaveAccount(): Promise<RemoteStateDto>;
   startOver(): Promise<RemoteStateDto>;
@@ -1538,6 +1540,10 @@ export class RemoteHost implements DesktopRemoteHost {
 
   adminAccounts(): Promise<AdminAccountDto[]> {
     return this.#adminCall("users");
+  }
+
+  adminLog(): Promise<AdminLogEntryDto[]> {
+    return this.#adminCall("log");
   }
 
   async adminSetPlan(input: AdminPlanInput): Promise<void> {

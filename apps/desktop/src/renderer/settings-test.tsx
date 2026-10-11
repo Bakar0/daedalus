@@ -394,7 +394,26 @@ const remote = {
     | { phoneId: string; phoneName: string; code: string; expiresAt: number }
     | undefined,
 };
-// The relay's keys and accounts, as the admin section sees them.
+// The relay's keys, accounts and admin log, as the admin section sees them.
+const adminLog: Array<{
+  at: string;
+  actor: string;
+  action: string;
+  target: string;
+  detail: Record<string, unknown>;
+}> = [];
+const logged = (
+  action: string,
+  target: string,
+  detail: Record<string, unknown>,
+) =>
+  adminLog.unshift({
+    at: "2026-10-11T12:30:00.000Z",
+    actor: "owner@example.com",
+    action,
+    target,
+    detail,
+  });
 let adminKeys: Array<{
   code: string;
   plan: string;
@@ -538,6 +557,11 @@ Object.assign(client.request, {
       note: input.note ?? "",
       createdAt: "2026-10-11T12:00:00.000Z",
     });
+    logged("invites.create", code, {
+      maxUses: input.maxUses ?? 1,
+      grantDays: input.grantDays ?? null,
+      name: input.note ?? "",
+    });
     return { ok: true, data: { code } };
   },
   remoteAdminDeleteKey: async ({ code }: { code: string }) => {
@@ -554,9 +578,11 @@ Object.assign(client.request, {
     adminKeys = adminKeys.map((key) =>
       key.code === code ? { ...key, note: name } : key,
     );
+    logged("invites.rename", code, { name });
     return { ok: true, data: null };
   },
   remoteAdminAccounts: async () => ({ ok: true, data: adminAccounts }),
+  remoteAdminLog: async () => ({ ok: true, data: adminLog }),
   remoteAdminSetPlan: async ({
     email,
     status,
@@ -569,6 +595,7 @@ Object.assign(client.request, {
         ? { ...account, status, plan: account.plan ?? "pro" }
         : account,
     );
+    logged("plan.set", email, { status });
     return { ok: true, data: null };
   },
   remoteLeaveAccount: async () => remoteState(),

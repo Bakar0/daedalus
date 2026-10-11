@@ -39,6 +39,7 @@ import {
   RemoteAudit,
   RemoteConnector,
   RemoteHost,
+  macRelayCall,
   type RemoteStatus,
   RemoteStore,
 } from "../apps/desktop/src/bun/remote";
@@ -284,8 +285,11 @@ const vars = {
   // The check signs in many accounts from one address; the relay's limit
   // of 30 a minute would refuse some.
   AUTH_LIMIT_OFF: "1",
-  // Dave's Mac manages keys and plans from Settings › Account.
-  ADMIN_EMAILS: "Dave@example.com, owner@example.org",
+  // Dave's Mac manages keys and plans from Settings › Account. Alice is
+  // listed with someone else's Google id, so she is not an admin: the id
+  // decides, the email only names the entry.
+  ADMIN_ACCOUNTS:
+    "dave@example.com=sub-dave@example.com, alice@example.com=sub-not-alice",
   // A room flushes usage after this many frames, so the frame limit is
   // reached within the check rather than at the next 5-minute alarm.
   FRAME_FLUSH_EVERY: "100",
@@ -1491,14 +1495,79 @@ try {
   await signInHost.adminDeleteKey(madeKey.code);
   if ((await signInHost.adminKeys()).some((key) => key.code === madeKey.code))
     throw new Error("A deleted key is still listed");
+  // A: the Mac's door makes and grants Pro only, within caps, whatever
+  // it is sent. Called as the Mac itself, past the app.
+  const daveStore = await RemoteStore.open(thirdHome, null);
+  const forced = await macRelayCall<{ code: string }>(
+    relayUrl,
+    daveStore,
+    "/v1/macs/admin/invites/create",
+    { plan: "admin", maxUses: 5_000, grantDays: 9_999, days: 9_999 },
+  );
+  const forcedKey = (await signInHost.adminKeys()).find(
+    (key) => key.code === forced.data?.code,
+  );
+  const forcedDays =
+    (Date.parse(forcedKey?.expiresAt ?? "") - Date.now()) / 86_400_000;
+  const forcedGrant = await macRelayCall<{ plan: string }>(
+    relayUrl,
+    daveStore,
+    "/v1/macs/admin/plan",
+    { email: "carol@example.com", status: "active", plan: "admin" },
+  );
+  if (
+    forcedKey?.plan !== "pro" ||
+    forcedKey.maxUses !== 100 ||
+    forcedKey.grantDays !== 365 ||
+    !(forcedDays > 364 && forcedDays <= 365) ||
+    forcedGrant.data?.plan !== "pro"
+  )
+    throw new Error(
+      `The Mac's door went past its caps: ${JSON.stringify({ forcedKey, forcedGrant })}`,
+    );
+  // B: every change is in the log, with who made it.
+  const log = await signInHost.adminLog();
+  const adminLogged = log
+    .filter((entry) => entry.actor === "dave@example.com")
+    .map((entry) => entry.action);
+  for (const action of [
+    "invites.create",
+    "invites.rename",
+    "invites.delete",
+    "plan.set",
+  ] as const)
+    if (!adminLogged.includes(action))
+      throw new Error(`The admin log has no ${action}: ${adminLogged.join()}`);
+  // D: Alice is listed by email, but with another Google id.
   const notAdmin = await host!.adminKeys().then(
     () => "listed",
     (error: Error) => error.message,
   );
   if (!notAdmin.includes("not an admin"))
     throw new Error(`Alice's Mac read the keys: ${notAdmin}`);
+  // C: at most 60 changes an hour through the Mac's door.
+  let limited = 0;
+  for (let attempt = 0; attempt < 70 && !limited; attempt++) {
+    const renamed = await macRelayCall(
+      relayUrl,
+      daveStore,
+      "/v1/macs/admin/invites/rename",
+      { code: forced.data?.code, note: `try ${attempt}` },
+    );
+    if (!renamed.ok) limited = attempt;
+  }
+  const changes = (await signInHost.adminLog()).filter(
+    (entry) => entry.actor === "dave@example.com",
+  ).length;
+  if (!limited || changes !== 60)
+    throw new Error(
+      `Admin rate limit: refused at ${limited}, ${changes} logged`,
+    );
   pass(
-    "an account on ADMIN_EMAILS manages Pro keys (create with uses, trial and expiry, list, rename, delete; a used-up key leaves the list) and plans (end, grant for days) from its Mac, and sees accounts without devices; another account's Mac is refused",
+    "the Mac's admin door makes and grants Pro only, capped at 100 uses and 365 days whatever it is sent; every change is logged with who made it; 60 changes an hour at most; an email on the list with another Google id is not an admin",
+  );
+  pass(
+    "an account on ADMIN_ACCOUNTS manages Pro keys (create with uses, trial and expiry, list, rename, delete; a used-up key leaves the list) and plans (end, grant for days) from its Mac, and sees accounts without devices; another account's Mac is refused",
   );
 
   // Settings › Account works with phone access off: it still shows the

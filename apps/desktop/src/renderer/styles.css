@@ -7810,3 +7810,31 @@ dd {
   height: 15px;
   width: 15px;
 }
+.admin-activity summary {
+  color: var(--secondary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+.admin-activity ul {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0 0 0 10px;
+}
+.admin-activity li {
+  color: var(--secondary);
+  display: grid;
+  font-size: 11px;
+  gap: 10px;
+  grid-template-columns: 110px minmax(0, 1fr);
+}
+.admin-activity li span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-activity time {
+  color: var(--muted);
+}

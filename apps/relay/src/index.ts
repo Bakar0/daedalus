@@ -15,7 +15,7 @@ import {
   userDevices,
   userForSession,
 } from "./accounts";
-import { type AdminAction, adminAction, isAdmin } from "./admin";
+import { type AdminAction, adminAction, adminFor, KEY_ACTOR } from "./admin";
 import { googleCallback, googleStart } from "./google";
 import { budget, budgetUsd, overageUsd } from "./budget";
 import { allowedEndpoint, sendPush } from "./push";
@@ -464,18 +464,18 @@ async function macRoutes(
   // over HTTP because without a plan the relay refuses its connection.
   if (route === "POST /v1/macs/account") {
     if (!mac.userId) return json({ ok: true, data: null });
-    const email = await emailOf(env.DB, mac.userId);
     return json({
       ok: true,
       data: {
-        email,
+        email: await emailOf(env.DB, mac.userId),
         plan: (await activeEntitlement(env.DB, mac.userId)) ?? null,
-        admin: isAdmin(env, email),
+        admin: Boolean(await adminFor(env, mac.userId)),
       },
     });
   }
 
-  // Settings › Account's admin section, for an account on ADMIN_EMAILS.
+  // Settings › Account's admin section, for an account on ADMIN_ACCOUNTS.
+  // The narrower door (see admin.ts): Pro only, capped, rate-limited.
   const macAdmin: Record<string, AdminAction> = {
     "POST /v1/macs/admin/invites": "invites.list",
     "POST /v1/macs/admin/invites/create": "invites.create",
@@ -483,15 +483,17 @@ async function macRoutes(
     "POST /v1/macs/admin/invites/rename": "invites.rename",
     "POST /v1/macs/admin/users": "users.list",
     "POST /v1/macs/admin/plan": "plan.set",
+    "POST /v1/macs/admin/log": "log.list",
   };
   const action = macAdmin[route];
   if (action) {
-    if (!mac.userId || !isAdmin(env, await emailOf(env.DB, mac.userId)))
-      return fail(403, "FORBIDDEN", "This account is not an admin.");
+    const actor = mac.userId ? await adminFor(env, mac.userId) : undefined;
+    if (!actor) return fail(403, "FORBIDDEN", "This account is not an admin.");
     return adminAction(
       env,
       action,
       await body<Record<string, unknown>>(request),
+      { actor, restricted: true },
     );
   }
 
@@ -739,6 +741,7 @@ async function admin(
     "POST /admin/invites/rename": "invites.rename",
     "GET /admin/users": "users.list",
     "POST /admin/entitlements": "plan.set",
+    "GET /admin/log": "log.list",
   };
   const action = actions[route];
   if (action)
@@ -748,7 +751,7 @@ async function admin(
       route.startsWith("GET ")
         ? {}
         : await body<Record<string, unknown>>(request),
-      { devices: true },
+      { actor: KEY_ACTOR, devices: true },
     );
 
   if (route === "GET /admin/budget")

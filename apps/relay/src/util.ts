@@ -6,10 +6,12 @@ export interface Env {
   /** Shared secret for the admin routes. Unset means no admin access. */
   ADMIN_KEY?: string;
   /**
-   * Comma-separated emails of accounts that may manage keys and plans from
-   * Settings › Account. A secret, so the list stays out of the repository.
+   * The accounts that may manage keys and plans from Settings › Account:
+   * comma-separated `email=googleAccountId` entries. The id decides; the
+   * email only names the entry. A secret, so it stays out of the
+   * repository.
    */
-  ADMIN_EMAILS?: string;
+  ADMIN_ACCOUNTS?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   /**
