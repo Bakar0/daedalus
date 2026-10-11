@@ -664,8 +664,13 @@ try {
     throw new Error(
       `Snapshot failed: ${JSON.stringify(snapshot).slice(0, 300)}`,
     );
+  // A real Mac's snapshot passed 1 MB; a 2 MB message gets through.
+  const large = (await phoneConnection.request("snapshot", {
+    pad: "x".repeat(2_000_000),
+  })) as RpcResult<DesktopSnapshotDto>;
+  if (!large.ok) throw new Error("A 2 MB message did not get through");
   pass(
-    `snapshot over the channel (${JSON.stringify(snapshot).length} bytes of JSON)`,
+    `snapshot over the channel (${JSON.stringify(snapshot).length} bytes of JSON), and a 2 MB message gets through`,
   );
 
   const forbidden = (await phoneConnection.request("workspaceDelete", {
