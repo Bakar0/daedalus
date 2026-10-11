@@ -394,6 +394,7 @@ const remote = {
     | { phoneId: string; phoneName: string; code: string; expiresAt: number }
     | undefined,
 };
+let adminUnlocked = false;
 // The relay's keys, accounts and admin log, as the admin section sees them.
 const adminLog: Array<{
   at: string;
@@ -539,6 +540,22 @@ Object.assign(client.request, {
     return { ok: true, data: { opened: true } };
   },
   remoteRefreshAccount: async () => remoteState(),
+  // Sudo mode: the browser's approval is instant here.
+  remoteAdminStatus: async () => ({
+    ok: true,
+    data: { unlockedUntil: adminUnlocked ? "2026-10-11T12:45:00.000Z" : null },
+  }),
+  remoteAdminUnlock: async () => {
+    adminUnlocked = true;
+    return {
+      ok: true,
+      data: { url: "https://relay.example.dev/auth/google/start?unlock=u" },
+    };
+  },
+  remoteAdminLock: async () => {
+    adminUnlocked = false;
+    return { ok: true, data: null };
+  },
   remoteAdminKeys: async () => ({ ok: true, data: adminKeys }),
   remoteAdminCreateKey: async (input: {
     maxUses?: number;

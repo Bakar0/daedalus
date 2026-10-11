@@ -269,7 +269,7 @@ export function AccountPanel({
           <h3 className="admin-title">
             Admin <span className="admin-only">only you see this</span>
           </h3>
-          <AdminSection busy={busy} client={client} />
+          <AdminGate busy={busy} client={client} />
         </>
       ) : undefined}
     </div>
@@ -337,6 +337,90 @@ function accountLine(account: AdminAccountDto): string {
 }
 
 /**
+ * Sudo mode: the admin section opens only after a Google sign-in in the
+ * browser, and locks again 15 minutes after the last change (an hour at
+ * most), or on Lock. Until then the Mac's own sign-in is not enough.
+ */
+function AdminGate({ busy, client }: { busy: boolean; client: DesktopClient }) {
+  const [until, setUntil] = useState<string | null>();
+  const [waiting, setWaiting] = useState(false);
+  const [error, setError] = useState<string>();
+  const check = useCallback(async () => {
+    const result = await client.request.remoteAdminStatus({});
+    if (result.ok) {
+      setUntil(result.data.unlockedUntil);
+      if (result.data.unlockedUntil) setWaiting(false);
+    }
+  }, [client]);
+  useEffect(() => {
+    void check();
+    const timer = window.setInterval(() => void check(), 3_000);
+    return () => window.clearInterval(timer);
+  }, [check]);
+
+  if (until === undefined) return null;
+  if (!until)
+    return (
+      <div className="admin-locked">
+        <p>
+          Admin is locked. Unlock it by signing in with Google as this Mac's
+          account.
+        </p>
+        <div className="account-actions">
+          <button
+            disabled={busy || waiting}
+            onClick={async () => {
+              setError(undefined);
+              const started = await client.request.remoteAdminUnlock({});
+              if (!started.ok) {
+                setError(started.error.message);
+                return;
+              }
+              setWaiting(true);
+              await client.request.openExternal({ url: started.data.url });
+            }}
+            type="button"
+          >
+            Unlock with Google
+          </button>
+          <small>
+            {waiting
+              ? "Finish in your browser, then come back here."
+              : "Stays unlocked for 15 minutes after your last change, an hour at most."}
+          </small>
+        </div>
+        {error ? (
+          <p className="accounts-error" role="alert">
+            {error}
+          </p>
+        ) : undefined}
+      </div>
+    );
+  return (
+    <>
+      <p className="admin-unlocked">
+        Unlocked until{" "}
+        {new Date(until).toLocaleTimeString(undefined, {
+          hour: "numeric",
+          minute: "2-digit",
+        })}
+        <button
+          className="quiet"
+          onClick={async () => {
+            await client.request.remoteAdminLock({});
+            setUntil(null);
+          }}
+          type="button"
+        >
+          Lock
+        </button>
+      </p>
+      <AdminSection busy={busy} client={client} onChange={check} />
+    </>
+  );
+}
+
+/**
  * For accounts on the relay's admin list: make and remove Pro keys (invite
  * codes), and grant, end or revoke an account's plan. Each row is one line
  * with its actions in a menu, so long lines never push them around.
@@ -344,9 +428,12 @@ function accountLine(account: AdminAccountDto): string {
 function AdminSection({
   busy,
   client,
+  onChange,
 }: {
   busy: boolean;
   client: DesktopClient;
+  /** A change moves the unlock's end on; the gate reads it again. */
+  onChange: () => void;
 }) {
   const [keys, setKeys] = useState<AdminKeyDto[]>();
   const [accounts, setAccounts] = useState<AdminAccountDto[]>();
@@ -412,9 +499,11 @@ function AdminSection({
     const result = await operation;
     if (!result.ok) {
       setError(result.error.message);
+      onChange();
       return undefined;
     }
     await load();
+    onChange();
     return result.data;
   };
   const copy = async (code: string) => {

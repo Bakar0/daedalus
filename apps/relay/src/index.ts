@@ -15,7 +15,15 @@ import {
   userDevices,
   userForSession,
 } from "./accounts";
-import { type AdminAction, adminAction, adminFor, KEY_ACTOR } from "./admin";
+import {
+  type AdminAction,
+  adminAction,
+  adminFor,
+  createUnlock,
+  KEY_ACTOR,
+  lockAdmin,
+  unlockedUntil,
+} from "./admin";
 import { googleCallback, googleStart } from "./google";
 import { budget, budgetUsd, overageUsd } from "./budget";
 import { allowedEndpoint, sendPush } from "./push";
@@ -121,6 +129,9 @@ async function housekeeping(env: Env): Promise<void> {
       nowIso(),
     ),
     env.DB.prepare("DELETE FROM sessions WHERE expires_at < ?").bind(nowIso()),
+    env.DB.prepare("DELETE FROM admin_unlocks WHERE expires_at < ?").bind(
+      nowIso(),
+    ),
     // Keys that cannot be used any more; their accounts show their plans.
     env.DB.prepare(
       "DELETE FROM invites WHERE used >= max_uses OR expires_at < ?",
@@ -486,9 +497,46 @@ async function macRoutes(
     "POST /v1/macs/admin/log": "log.list",
   };
   const action = macAdmin[route];
-  if (action) {
+  const unlockRoute =
+    route === "POST /v1/macs/admin/unlock" ||
+    route === "POST /v1/macs/admin/session" ||
+    route === "POST /v1/macs/admin/lock";
+  if (action || unlockRoute) {
     const actor = mac.userId ? await adminFor(env, mac.userId) : undefined;
-    if (!actor) return fail(403, "FORBIDDEN", "This account is not an admin.");
+    if (!actor || !mac.userId)
+      return fail(403, "FORBIDDEN", "This account is not an admin.");
+    const secret = request.headers.get("X-Daedalus-Admin");
+
+    // Sudo mode (admin.ts): the Mac starts an unlock with the hash of a
+    // secret it keeps in memory, and the browser approves it.
+    if (route === "POST /v1/macs/admin/unlock") {
+      const { secretHash } = await body<{ secretHash: string }>(request);
+      if (!secretHash || secretHash.length < 32)
+        return fail(400, "BAD_REQUEST", "Missing the unlock.");
+      await createUnlock(env, mac.id, mac.userId, secretHash);
+      const url = new URL("/auth/google/start", request.url);
+      url.searchParams.set("unlock", secretHash);
+      return json({ ok: true, data: { url: url.toString() } });
+    }
+    if (route === "POST /v1/macs/admin/session")
+      return json({
+        ok: true,
+        data: {
+          unlockedUntil:
+            (await unlockedUntil(env, mac.id, mac.userId, secret)) ?? null,
+        },
+      });
+    if (route === "POST /v1/macs/admin/lock") {
+      await lockAdmin(env, mac.id);
+      return json({ ok: true, data: null });
+    }
+    if (!action) return fail(404, "NOT_FOUND", "Not found");
+    if (!(await unlockedUntil(env, mac.id, mac.userId, secret, true)))
+      return fail(
+        403,
+        "ADMIN_LOCKED",
+        "Admin is locked. Unlock it with Google in Settings › Account.",
+      );
     return adminAction(
       env,
       action,

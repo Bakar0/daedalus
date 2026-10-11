@@ -1014,6 +1014,16 @@ export interface DesktopRpcSchema {
       remoteSignIn: Request<Record<string, never>, { url: string }>;
       /** Redeems an invite code for the Mac's account. */
       remoteRedeemInvite: Request<{ code: string }, RemoteStateDto>;
+      /**
+       * Admin sudo mode: unlock with a Google sign-in in the browser (the
+       * address to open), ask until when it lasts, and lock it again.
+       */
+      remoteAdminUnlock: Request<Record<string, never>, { url: string }>;
+      remoteAdminStatus: Request<
+        Record<string, never>,
+        { unlockedUntil: string | null }
+      >;
+      remoteAdminLock: Request<Record<string, never>, null>;
       /** Admin (Settings › Account): Pro keys and accounts. */
       remoteAdminKeys: Request<Record<string, never>, AdminKeyDto[]>;
       remoteAdminCreateKey: Request<AdminKeyInput, { code: string }>;

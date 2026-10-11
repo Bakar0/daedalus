@@ -4,7 +4,7 @@
 // small server stands in for Google's sign-in endpoints. Covers the access
 // lock (invites, entitlements, device revocation) and prints what crossed the
 // relay per minute, so the cost per user is measured rather than guessed.
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1430,9 +1430,54 @@ try {
     "a phone on another account is told which account the Mac is on; one on the Mac's account pairs; a phone signed in to another account moves to it and pairs there",
   );
 
-  // Settings › Account's admin section, for an account on ADMIN_EMAILS.
+  // Settings › Account's admin section, for an account on ADMIN_ACCOUNTS.
   if (!(await signInHost.refreshAccount()).admin)
-    throw new Error("Dave is on ADMIN_EMAILS but not an admin");
+    throw new Error("Dave is on ADMIN_ACCOUNTS but not an admin");
+  // E: sudo mode. Admin is locked until a Google sign-in in the browser,
+  // as the Mac's own account, approves an unlock.
+  const lockedOut = await signInHost.adminKeys().then(
+    () => "listed",
+    (error: Error) => error.message,
+  );
+  if (
+    !lockedOut.includes("Admin is locked") ||
+    (await signInHost.adminStatus()).unlockedUntil !== null
+  )
+    throw new Error(`Admin before unlocking: ${lockedOut}`);
+  const { url: unlockUrl } = await signInHost.adminUnlock();
+  const wrongApprover = await browserSignIn(unlockUrl, "alice@example.com");
+  if (
+    wrongApprover.status !== 403 ||
+    !wrongApprover.page.includes("Not the admin account") ||
+    (await signInHost.adminStatus()).unlockedUntil !== null
+  )
+    throw new Error(
+      `Another account approved the unlock: ${wrongApprover.status}`,
+    );
+  const approved = await browserSignIn(unlockUrl, "dave@example.com");
+  const unlockedFor =
+    (Date.parse((await signInHost.adminStatus()).unlockedUntil ?? "") -
+      Date.now()) /
+    60_000;
+  if (
+    approved.status !== 200 ||
+    !approved.page.includes("Admin unlocked") ||
+    !(unlockedFor > 14 && unlockedFor <= 15)
+  )
+    throw new Error(`Unlocking: ${approved.status} ${unlockedFor}`);
+  // The device token alone, without the unlock's secret, is what an agent
+  // that read the Keychain would hold. It is refused.
+  const daveStore = await RemoteStore.open(thirdHome, null);
+  const tokenOnly = await macRelayCall(
+    relayUrl,
+    daveStore,
+    "/v1/macs/admin/invites",
+  );
+  if (tokenOnly.error?.code !== "ADMIN_LOCKED")
+    throw new Error(`The device token alone: ${JSON.stringify(tokenOnly)}`);
+  pass(
+    "sudo mode: admin is locked until a Google sign-in in the browser approves an unlock (15 minutes); another account cannot approve it; the device token without the unlock's in-memory secret is refused",
+  );
   const madeKey = await signInHost.adminCreateKey({
     maxUses: 2,
     grantDays: 7,
@@ -1495,36 +1540,6 @@ try {
   await signInHost.adminDeleteKey(madeKey.code);
   if ((await signInHost.adminKeys()).some((key) => key.code === madeKey.code))
     throw new Error("A deleted key is still listed");
-  // A: the Mac's door makes and grants Pro only, within caps, whatever
-  // it is sent. Called as the Mac itself, past the app.
-  const daveStore = await RemoteStore.open(thirdHome, null);
-  const forced = await macRelayCall<{ code: string }>(
-    relayUrl,
-    daveStore,
-    "/v1/macs/admin/invites/create",
-    { plan: "admin", maxUses: 5_000, grantDays: 9_999, days: 9_999 },
-  );
-  const forcedKey = (await signInHost.adminKeys()).find(
-    (key) => key.code === forced.data?.code,
-  );
-  const forcedDays =
-    (Date.parse(forcedKey?.expiresAt ?? "") - Date.now()) / 86_400_000;
-  const forcedGrant = await macRelayCall<{ plan: string }>(
-    relayUrl,
-    daveStore,
-    "/v1/macs/admin/plan",
-    { email: "carol@example.com", status: "active", plan: "admin" },
-  );
-  if (
-    forcedKey?.plan !== "pro" ||
-    forcedKey.maxUses !== 100 ||
-    forcedKey.grantDays !== 365 ||
-    !(forcedDays > 364 && forcedDays <= 365) ||
-    forcedGrant.data?.plan !== "pro"
-  )
-    throw new Error(
-      `The Mac's door went past its caps: ${JSON.stringify({ forcedKey, forcedGrant })}`,
-    );
   // B: every change is in the log, with who made it.
   const log = await signInHost.adminLog();
   const adminLogged = log
@@ -1538,6 +1553,55 @@ try {
   ] as const)
     if (!adminLogged.includes(action))
       throw new Error(`The admin log has no ${action}: ${adminLogged.join()}`);
+  // A: the Mac's door makes and grants Pro only, within caps, whatever
+  // it is sent. Called as the Mac itself, past the app, with an unlock of
+  // its own (which replaces the app's: one per Mac).
+  const secret = randomBytes(32).toString("base64url");
+  const unlockAs = { "X-Daedalus-Admin": secret };
+  const ownUnlock = await macRelayCall<{ url: string }>(
+    relayUrl,
+    daveStore,
+    "/v1/macs/admin/unlock",
+    { secretHash: createHash("sha256").update(secret).digest("base64url") },
+  );
+  await browserSignIn(ownUnlock.data!.url, "dave@example.com");
+  const forced = await macRelayCall<{ code: string }>(
+    relayUrl,
+    daveStore,
+    "/v1/macs/admin/invites/create",
+    { plan: "admin", maxUses: 5_000, grantDays: 9_999, days: 9_999 },
+    unlockAs,
+  );
+  const forcedKey = (
+    await macRelayCall<
+      Array<{
+        code: string;
+        plan: string;
+        maxUses: number;
+        grantDays: number;
+        expiresAt: string;
+      }>
+    >(relayUrl, daveStore, "/v1/macs/admin/invites", {}, unlockAs)
+  ).data?.find((key) => key.code === forced.data?.code);
+  const forcedDays =
+    (Date.parse(forcedKey?.expiresAt ?? "") - Date.now()) / 86_400_000;
+  const forcedGrant = await macRelayCall<{ plan: string }>(
+    relayUrl,
+    daveStore,
+    "/v1/macs/admin/plan",
+    { email: "carol@example.com", status: "active", plan: "admin" },
+    unlockAs,
+  );
+  if (
+    forcedKey?.plan !== "pro" ||
+    forcedKey.maxUses !== 100 ||
+    forcedKey.grantDays !== 365 ||
+    !(forcedDays > 364 && forcedDays <= 365) ||
+    forcedGrant.data?.plan !== "pro"
+  )
+    throw new Error(
+      `The Mac's door went past its caps: ${JSON.stringify({ forcedKey, forcedGrant })}`,
+    );
   // D: Alice is listed by email, but with another Google id.
   const notAdmin = await host!.adminKeys().then(
     () => "listed",
@@ -1553,18 +1617,38 @@ try {
       daveStore,
       "/v1/macs/admin/invites/rename",
       { code: forced.data?.code, note: `try ${attempt}` },
+      unlockAs,
     );
     if (!renamed.ok) limited = attempt;
   }
-  const changes = (await signInHost.adminLog()).filter(
-    (entry) => entry.actor === "dave@example.com",
-  ).length;
+  const changes = (
+    (
+      await macRelayCall<Array<{ actor: string }>>(
+        relayUrl,
+        daveStore,
+        "/v1/macs/admin/log",
+        {},
+        unlockAs,
+      )
+    ).data ?? []
+  ).filter((entry) => entry.actor === "dave@example.com").length;
   if (!limited || changes !== 60)
     throw new Error(
       `Admin rate limit: refused at ${limited}, ${changes} logged`,
     );
+  // Lock ends the unlock at once.
+  await macRelayCall(relayUrl, daveStore, "/v1/macs/admin/lock", {}, unlockAs);
+  const afterLock = await macRelayCall(
+    relayUrl,
+    daveStore,
+    "/v1/macs/admin/invites",
+    {},
+    unlockAs,
+  );
+  if (afterLock.error?.code !== "ADMIN_LOCKED")
+    throw new Error(`Admin after Lock: ${JSON.stringify(afterLock)}`);
   pass(
-    "the Mac's admin door makes and grants Pro only, capped at 100 uses and 365 days whatever it is sent; every change is logged with who made it; 60 changes an hour at most; an email on the list with another Google id is not an admin",
+    "Lock ends the unlock; the Mac's admin door makes and grants Pro only, capped at 100 uses and 365 days whatever it is sent; every change is logged with who made it; 60 changes an hour at most; an email on the list with another Google id is not an admin",
   );
   pass(
     "an account on ADMIN_ACCOUNTS manages Pro keys (create with uses, trial and expiry, list, rename, delete; a used-up key leaves the list) and plans (end, grant for days) from its Mac, and sees accounts without devices; another account's Mac is refused",

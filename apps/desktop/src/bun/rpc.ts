@@ -486,6 +486,14 @@ const NO_REMOTE: DesktopRemoteHost = {
   },
   redeemInvite: async () => NO_REMOTE.state(),
   refreshAccount: async () => NO_REMOTE.state(),
+  adminUnlock: async () => {
+    throw new DaedalusError(
+      "DEPENDENCY",
+      "Phone access is not available here.",
+    );
+  },
+  adminStatus: async () => ({ unlockedUntil: null }),
+  adminLock: async () => undefined,
   adminKeys: async () => [],
   adminCreateKey: async () => {
     throw new DaedalusError(
@@ -790,6 +798,13 @@ export function createDesktopRequestHandlers(
     remoteSignIn: () => result(() => remote.signIn()),
     remoteRedeemInvite: ({ code }) => mutate(() => remote.redeemInvite(code)),
     remoteRefreshAccount: () => mutate(() => remote.refreshAccount()),
+    remoteAdminUnlock: () => result(() => remote.adminUnlock()),
+    remoteAdminStatus: () => result(() => remote.adminStatus()),
+    remoteAdminLock: () =>
+      result(async () => {
+        await remote.adminLock();
+        return null;
+      }),
     remoteAdminKeys: () => result(() => remote.adminKeys()),
     remoteAdminCreateKey: (input) => result(() => remote.adminCreateKey(input)),
     remoteAdminDeleteKey: ({ code }) =>

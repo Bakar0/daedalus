@@ -866,9 +866,25 @@ try {
 
   // The admin section, for an account on the relay's admin list: make a
   // key, see it listed, and end an account's plan.
+  // Sudo mode: locked until a Google sign-in in the browser.
+  await waitFor("the locked admin section", async () =>
+    (await accountText()).includes("Admin is locked"),
+  );
+  if ((await accountText()).includes("Pro keys"))
+    throw new Error("Admin shows keys while locked");
+  await clickAt(
+    "[...document.querySelectorAll('.admin-locked button')].find((one) => one.textContent.trim() === 'Unlock with Google')",
+  );
   await waitFor("the admin section", async () =>
     (await accountText()).includes("Pro keys"),
   );
+  if (
+    !(await evaluate<string[]>("window.opened ?? []")).some((url) =>
+      url.includes("unlock="),
+    ) ||
+    !(await accountText()).includes("Unlocked until")
+  )
+    throw new Error("Unlocking admin did not open the browser");
   const fill = (selector: string, value: string) =>
     evaluate(`(() => {
       const input = document.querySelector(${JSON.stringify(selector)});
@@ -1116,7 +1132,7 @@ try {
   );
   if (left !== 0) throw new Error("Remote: Remove did not forget the phone");
   console.log(
-    "Pro: without it the header says Get Pro and Remote (tagged Pro) only leads to Account; Account signs the Mac in through the browser, shows Free as current, formats an invite code as it is typed (wrong12345 reads WRONG-12345), refuses a wrong one and takes a good one; then the header says Pro; an admin account makes a named Pro key (uses, trial, name), sees it as one short line, renames it in place, filters keys and accounts with the fuzzy matcher, shows each change under Activity, and ends an account's plan from its menu, every row's menu on one edge and nothing past the pane; Remote is on with Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account, its Pro plan and recent activity; Remove forgets it",
+    "Pro: without it the header says Get Pro and Remote (tagged Pro) only leads to Account; Account signs the Mac in through the browser, shows Free as current, formats an invite code as it is typed (wrong12345 reads WRONG-12345), refuses a wrong one and takes a good one; then the header says Pro; an admin account unlocks admin with Google (locked before), makes a named Pro key (uses, trial, name), sees it as one short line, renames it in place, filters keys and accounts with the fuzzy matcher, shows each change under Activity, and ends an account's plan from its menu, every row's menu on one edge and nothing past the pane; Remote is on with Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account, its Pro plan and recent activity; Remove forgets it",
   );
   // And General, where a switch sits beside a two-line description and the
   // alignment either reads or does not.

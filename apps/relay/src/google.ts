@@ -1,3 +1,4 @@
+import { approveUnlock, unlockPending } from "./admin";
 import {
   activeEntitlement,
   claimKeyValid,
@@ -95,6 +96,14 @@ export async function googleStart(
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET)
     return fail(503, "NOT_CONFIGURED", "Google sign-in is not set up.");
   const url = new URL(request.url);
+  // Sudo mode: this sign-in approves an admin unlock (see admin.ts).
+  const unlockHash = url.searchParams.get("unlock") ?? "";
+  if (unlockHash && !(await unlockPending(env, unlockHash)))
+    return macPage(
+      "Unlock expired",
+      "Go back to Daedalus on your Mac and click Unlock again.",
+      400,
+    );
   const macId = url.searchParams.get("mac") ?? "";
   let macClaimHash: string | null = null;
   if (macId) {
@@ -114,8 +123,9 @@ export async function googleStart(
       );
     macClaimHash = mac.claimHash;
   }
-  const returnTo = macId ? "" : (url.searchParams.get("return") ?? "");
-  if (!macId && !allowedReturn(env, returnTo))
+  const fromMac = Boolean(macId || unlockHash);
+  const returnTo = fromMac ? "" : (url.searchParams.get("return") ?? "");
+  if (!fromMac && !allowedReturn(env, returnTo))
     return fail(400, "BAD_RETURN", "That return address is not allowed.");
   const invite = url.searchParams.get("invite")?.trim() || null;
   const device = url.searchParams.get("device") ?? "";
@@ -129,7 +139,7 @@ export async function googleStart(
     ),
   );
   await env.DB.prepare(
-    "INSERT INTO oauth_states (state, verifier, return_to, invite, expires_at, browser_hash, device_id, mac_id, mac_claim_hash, mac_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO oauth_states (state, verifier, return_to, invite, expires_at, browser_hash, device_id, mac_id, mac_claim_hash, mac_name, unlock_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
   )
     .bind(
       state,
@@ -142,6 +152,7 @@ export async function googleStart(
       macId || null,
       macClaimHash,
       macId ? (url.searchParams.get("name") ?? "").slice(0, 80) : null,
+      unlockHash || null,
     )
     .run();
   // Old abandoned sign-ins are swept as new ones start.
@@ -158,7 +169,9 @@ export async function googleStart(
     state,
     code_challenge: challenge,
     code_challenge_method: "S256",
-    prompt: "select_account",
+    // An unlock always shows the chooser and the consent screen, so it
+    // cannot finish without someone clicking through it.
+    prompt: unlockHash ? "select_account consent" : "select_account",
   }).toString();
   return redirect(
     google.toString(),
@@ -195,7 +208,8 @@ export async function googleCallback(
   const pending = await env.DB.prepare(
     `DELETE FROM oauth_states WHERE state = ? AND expires_at > ? AND browser_hash = ?
      RETURNING verifier, return_to AS returnTo, invite, device_id AS deviceId,
-       mac_id AS macId, mac_claim_hash AS macClaimHash, mac_name AS macName`,
+       mac_id AS macId, mac_claim_hash AS macClaimHash, mac_name AS macName,
+       unlock_hash AS unlockHash`,
   )
     .bind(state, nowIso(), await sha256(nonce))
     .first<Pending>();
@@ -241,6 +255,11 @@ export async function googleCallback(
   let user = await env.DB.prepare("SELECT id FROM users WHERE google_sub = ?")
     .bind(identity.sub)
     .first<{ id: string }>();
+  // An unlock changes no account: it only approves, or not.
+  if (pending.unlockHash) {
+    const result = await approveUnlock(env, pending.unlockHash, user?.id);
+    return macPage(result.title, result.body, result.ok ? 200 : 403);
+  }
   if (!user) {
     const id = crypto.randomUUID();
     await env.DB.prepare(
@@ -271,14 +290,16 @@ interface Pending {
   macId: string | null;
   macClaimHash: string | null;
   macName: string | null;
+  unlockHash: string | null;
 }
 
 /** Ends a sign-in that failed: back to the phone page, or a page for a Mac. */
 function finish(pending: Pending, fragment: { error: string }): Response {
-  if (!pending.macId) return back(pending.returnTo, fragment);
+  if (!pending.macId && !pending.unlockHash)
+    return back(pending.returnTo, fragment);
   return macPage(
     fragment.error === "cancelled" ? "Sign-in cancelled" : "Sign-in failed",
-    "Go back to Daedalus on your Mac and click Sign in again.",
+    `Go back to Daedalus on your Mac and click ${pending.unlockHash ? "Unlock" : "Sign in"} again.`,
     400,
   );
 }

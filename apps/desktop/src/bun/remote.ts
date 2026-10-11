@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   type ApplicationContext,
   DaedalusError,
@@ -191,7 +191,12 @@ export async function macRelayCall<T = unknown>(
   store: RemoteStore,
   path: string,
   body: unknown = {},
-): Promise<{ ok: boolean; data?: T; error?: { message: string } }> {
+  headers: Record<string, string> = {},
+): Promise<{
+  ok: boolean;
+  data?: T;
+  error?: { code?: string; message: string };
+}> {
   try {
     const response = await fetch(`${relayHttpUrl(relay)}${path}`, {
       method: "POST",
@@ -199,13 +204,14 @@ export async function macRelayCall<T = unknown>(
         Authorization: `Bearer ${store.relayCredential}`,
         "X-Daedalus-Device": store.identity.id,
         "Content-Type": "application/json",
+        ...headers,
       },
       body: JSON.stringify(body),
     });
     return (await response.json()) as {
       ok: boolean;
       data?: T;
-      error?: { message: string };
+      error?: { code?: string; message: string };
     };
   } catch {
     return { ok: false };
@@ -1205,6 +1211,9 @@ export interface DesktopRemoteHost {
   signIn(): Promise<{ url: string }>;
   redeemInvite(code: string): Promise<RemoteStateDto>;
   refreshAccount(): Promise<RemoteStateDto>;
+  adminUnlock(): Promise<{ url: string }>;
+  adminStatus(): Promise<{ unlockedUntil: string | null }>;
+  adminLock(): Promise<void>;
   adminKeys(): Promise<AdminKeyDto[]>;
   adminCreateKey(input: AdminKeyInput): Promise<{ code: string }>;
   adminDeleteKey(code: string): Promise<void>;
@@ -1246,6 +1255,11 @@ export class RemoteHost implements DesktopRemoteHost {
   #connector: RemoteConnector | undefined;
   /** The account is on the relay's admin list, as it last said. */
   #admin = false;
+  /**
+   * The admin unlock's secret (sudo mode). In memory only: never written
+   * to disk or the Keychain, so the device token alone is not enough.
+   */
+  #adminSecret: string | undefined;
   #awake: Bun.Subprocess | undefined;
   readonly #audit: RemoteAudit;
   /** When each phone last finished a handshake. */
@@ -1512,6 +1526,7 @@ export class RemoteHost implements DesktopRemoteHost {
       this.#store,
       `/v1/macs/admin/${path}`,
       body,
+      this.#adminSecret ? { "X-Daedalus-Admin": this.#adminSecret } : {},
     );
     if (!response.ok)
       throw new DaedalusError(
@@ -1519,6 +1534,30 @@ export class RemoteHost implements DesktopRemoteHost {
         response.error?.message ?? "The relay could not be reached.",
       );
     return response.data as T;
+  }
+
+  /**
+   * Starts an admin unlock: a new secret in memory, its hash to the relay,
+   * and the address where the admin approves it by signing in with Google.
+   */
+  async adminUnlock(): Promise<{ url: string }> {
+    const secret = randomBytes(32).toString("base64url");
+    const started = await this.#adminCall<{ url: string }>("unlock", {
+      secretHash: createHash("sha256").update(secret).digest("base64url"),
+    });
+    this.#adminSecret = secret;
+    return started;
+  }
+
+  /** Until when admin is unlocked, or null when it is locked. */
+  async adminStatus(): Promise<{ unlockedUntil: string | null }> {
+    if (!this.#adminSecret) return { unlockedUntil: null };
+    return this.#adminCall("session");
+  }
+
+  async adminLock(): Promise<void> {
+    this.#adminSecret = undefined;
+    await this.#adminCall("lock");
   }
 
   adminKeys(): Promise<AdminKeyDto[]> {
@@ -1551,6 +1590,8 @@ export class RemoteHost implements DesktopRemoteHost {
   }
 
   async leaveAccount(): Promise<RemoteStateDto> {
+    this.#adminSecret = undefined;
+    this.#admin = false;
     if (this.#connector) await this.#connector.leaveAccount();
     else if (this.#store?.relayToken) {
       await macRelayCall(

@@ -14,6 +14,7 @@ import {
   json,
   nowIso,
   room,
+  sha256,
 } from "./util";
 
 /**
@@ -334,4 +335,139 @@ export async function adminAction(
     ok: true,
     data: (await activeEntitlement(env.DB, user.id)) ?? null,
   });
+}
+
+/**
+ * Sudo mode. A Mac's admin calls need, besides its device token, the secret
+ * of an unlock that the admin approved by signing in with Google in the
+ * browser. The Mac keeps the secret in memory only, so the device token in
+ * the Keychain, which agents on the Mac could read, is not enough alone.
+ */
+export const UNLOCK = {
+  /** How long a pending unlock waits for its Google sign-in. */
+  pendingMs: 10 * 60_000,
+  /** How long an approved unlock lasts after the last admin call. */
+  idleMs: 15 * 60_000,
+  /** How long it lasts at most after approval. */
+  maxMs: 60 * 60_000,
+};
+
+/** A pending unlock for this Mac's admin account. */
+export async function createUnlock(
+  env: Env,
+  macId: string,
+  userId: string,
+  secretHash: string,
+): Promise<void> {
+  await env.DB.batch([
+    // One unlock per Mac: a new one replaces the last.
+    env.DB.prepare("DELETE FROM admin_unlocks WHERE mac_id = ?").bind(macId),
+    env.DB.prepare(
+      "INSERT INTO admin_unlocks (secret_hash, mac_id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+    ).bind(
+      secretHash,
+      macId,
+      userId,
+      nowIso(),
+      new Date(Date.now() + UNLOCK.pendingMs).toISOString(),
+    ),
+  ]);
+}
+
+/** Whether `secretHash` names an unlock still waiting for its sign-in. */
+export async function unlockPending(
+  env: Env,
+  secretHash: string,
+): Promise<boolean> {
+  return Boolean(
+    await env.DB.prepare(
+      "SELECT 1 FROM admin_unlocks WHERE secret_hash = ? AND approved_at IS NULL AND expires_at > ?",
+    )
+      .bind(secretHash, nowIso())
+      .first(),
+  );
+}
+
+/**
+ * Approves a pending unlock if the Google account that just signed in is
+ * the Mac's account and an admin. Returns what the browser page says.
+ */
+export async function approveUnlock(
+  env: Env,
+  secretHash: string,
+  userId: string | undefined,
+): Promise<{ ok: boolean; title: string; body: string }> {
+  const unlock = await env.DB.prepare(
+    "SELECT user_id AS userId FROM admin_unlocks WHERE secret_hash = ? AND approved_at IS NULL AND expires_at > ?",
+  )
+    .bind(secretHash, nowIso())
+    .first<{ userId: string }>();
+  if (!unlock)
+    return {
+      ok: false,
+      title: "Unlock expired",
+      body: "Go back to Daedalus on your Mac and click Unlock again.",
+    };
+  if (!userId || userId !== unlock.userId || !(await adminFor(env, userId)))
+    return {
+      ok: false,
+      title: "Not the admin account",
+      body: "Sign in with the Google account your Mac is signed in with. Admin stays locked.",
+    };
+  await env.DB.prepare(
+    "UPDATE admin_unlocks SET approved_at = ?, expires_at = ? WHERE secret_hash = ?",
+  )
+    .bind(
+      nowIso(),
+      new Date(Date.now() + UNLOCK.idleMs).toISOString(),
+      secretHash,
+    )
+    .run();
+  return {
+    ok: true,
+    title: "Admin unlocked",
+    body: "Go back to Daedalus on your Mac. Admin stays unlocked for 15 minutes after your last change, an hour at most. You can close this tab.",
+  };
+}
+
+/**
+ * Until when this Mac's unlock works, given its secret, or undefined when
+ * it is locked. With `use`, moves the end on: 15 more minutes, never past
+ * an hour after approval.
+ */
+export async function unlockedUntil(
+  env: Env,
+  macId: string,
+  userId: string,
+  secret: string | null,
+  use = false,
+): Promise<string | undefined> {
+  if (!secret) return undefined;
+  const unlock = await env.DB.prepare(
+    `SELECT secret_hash AS secretHash, approved_at AS approvedAt, expires_at AS expiresAt
+     FROM admin_unlocks
+     WHERE secret_hash = ? AND mac_id = ? AND user_id = ?
+       AND approved_at IS NOT NULL AND expires_at > ?`,
+  )
+    .bind(await sha256(secret), macId, userId, nowIso())
+    .first<{ secretHash: string; approvedAt: string; expiresAt: string }>();
+  if (!unlock) return undefined;
+  const cap = Date.parse(unlock.approvedAt) + UNLOCK.maxMs;
+  if (Date.now() >= cap) return undefined;
+  if (!use) return unlock.expiresAt;
+  const until = new Date(
+    Math.min(Date.now() + UNLOCK.idleMs, cap),
+  ).toISOString();
+  await env.DB.prepare(
+    "UPDATE admin_unlocks SET expires_at = ? WHERE secret_hash = ?",
+  )
+    .bind(until, unlock.secretHash)
+    .run();
+  return until;
+}
+
+export async function lockAdmin(env: Env, macId: string): Promise<void> {
+  await env.DB.prepare("DELETE FROM admin_unlocks WHERE mac_id = ?")
+    .bind(macId)
+    .run();
 }
