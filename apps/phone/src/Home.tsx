@@ -6,7 +6,7 @@ import {
   SessionRowView,
   workspaceInsight,
 } from "./sessions";
-import { Board, NewTaskScreen, TaskScreen } from "./Board";
+import { MacBoard, NewTaskScreen, TaskScreen } from "./Board";
 import { PushControl } from "./PushControl";
 import { Shell } from "./Shell";
 import { useMac } from "./useMac";
@@ -36,26 +36,9 @@ const BLOCKED = {
 
 type Screen =
   | { kind: "session"; id: string }
+  | { kind: "board"; workspaceId: string }
   | { kind: "task"; id: string }
-  | { kind: "new" };
-
-const TAB_KEY = "daedalus.phone.home-tab";
-
-function rememberedTab(): "sessions" | "board" {
-  try {
-    return localStorage.getItem(TAB_KEY) === "board" ? "board" : "sessions";
-  } catch {
-    return "sessions";
-  }
-}
-
-function rememberTab(tab: "sessions" | "board"): void {
-  try {
-    localStorage.setItem(TAB_KEY, tab);
-  } catch {
-    // A convenience only.
-  }
-}
+  | { kind: "new"; workspaceId: string };
 
 export function Home({
   mac,
@@ -75,7 +58,6 @@ export function Home({
   onSignOut: () => void;
 }) {
   const { state, snapshot, macName } = useMac(mac, token);
-  const [tab, setTab] = useState<"sessions" | "board">(rememberedTab);
   // Screens opened over the list, newest last: a task, then a session it
   // started, and so on. Each one is a history entry, so the phone's back
   // gesture closes the top one rather than leaving the app.
@@ -131,10 +113,32 @@ export function Home({
             history.replaceState({ screen: { kind: "task", id } }, "");
             setScreens((list) => [...list.slice(0, -1), { kind: "task", id }]);
           }}
-          snapshot={snapshot}
+          workspaceId={top.workspaceId}
         />
       </Shell>
     );
+  if (top?.kind === "board" && snapshot) {
+    const workspace = snapshot.workspaces.find(
+      (item) => item.id === top.workspaceId,
+    );
+    return (
+      <Shell
+        onBack={() => history.back()}
+        subtitle="Board"
+        title={workspace?.name ?? "Board"}
+      >
+        <MacBoard
+          connection={connection}
+          onNewTask={() => push({ kind: "new", workspaceId: top.workspaceId })}
+          onOpenSession={openSession}
+          onOpenTask={(id) => push({ kind: "task", id })}
+          snapshot={snapshot}
+          workspaceId={top.workspaceId}
+        />
+      </Shell>
+    );
+  }
+
   if (open && state.kind === "online" && current)
     return (
       <Suspense fallback={<div className="spinner centered" />}>
@@ -193,58 +197,39 @@ export function Home({
       ) : rows && snapshot ? (
         <>
           <PushControl compact token={token} />
-          <div className="mac-picker view-tabs" role="tablist">
-            {(["sessions", "board"] as const).map((item) => (
-              <button
-                aria-selected={tab === item}
-                key={item}
-                onClick={() => {
-                  setTab(item);
-                  rememberTab(item);
-                }}
-                role="tab"
-              >
-                {item === "sessions" ? "Sessions" : "Board"}
-              </button>
-            ))}
-          </div>
-          {tab === "board" ? (
-            <Board
-              connection={connection}
-              onNewTask={() => push({ kind: "new" })}
-              onOpenTask={(id) => push({ kind: "task", id })}
-              snapshot={snapshot}
-            />
-          ) : null}
-          {tab === "sessions"
-            ? rows.groups.map((group) => (
-                <section className="workspace-group" key={group.workspace.id}>
-                  <header className="workspace-head">
-                    <span className="workspace-folder-icon">
-                      <FolderIcon />
-                    </span>
-                    <strong>{group.workspace.name}</strong>
-                    <small
-                      className={
-                        group.needsYou > 0 ? "needs-attention" : undefined
-                      }
-                    >
-                      {workspaceInsight(group)}
-                    </small>
-                  </header>
-                  <ul className="session-rows workspace-sessions">
-                    {group.rows.map((row) => (
-                      <SessionRowView
-                        key={row.session.id}
-                        onOpen={openSession}
-                        row={row}
-                      />
-                    ))}
-                  </ul>
-                </section>
-              ))
-            : null}
-          {tab === "sessions" && all.length === 0 ? (
+          {rows.groups.map((group) => (
+            <section className="workspace-group" key={group.workspace.id}>
+              <header className="workspace-head">
+                <span className="workspace-folder-icon">
+                  <FolderIcon />
+                </span>
+                <strong>{group.workspace.name}</strong>
+                <button
+                  className="workspace-board-button"
+                  onClick={() =>
+                    push({ kind: "board", workspaceId: group.workspace.id })
+                  }
+                >
+                  Board
+                </button>
+                <small
+                  className={group.needsYou > 0 ? "needs-attention" : undefined}
+                >
+                  {workspaceInsight(group)}
+                </small>
+              </header>
+              <ul className="session-rows workspace-sessions">
+                {group.rows.map((row) => (
+                  <SessionRowView
+                    key={row.session.id}
+                    onOpen={openSession}
+                    row={row}
+                  />
+                ))}
+              </ul>
+            </section>
+          ))}
+          {all.length === 0 ? (
             <p className="quiet-line">No sessions on this Mac.</p>
           ) : undefined}
         </>

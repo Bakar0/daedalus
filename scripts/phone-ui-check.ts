@@ -680,13 +680,32 @@ try {
       status: string;
       description: string;
     };
-  await tap(byText('[role="tab"]', "Board"));
-  await waitFor(
-    "the task in Needs me",
-    `document.querySelector('.lane[data-lane="needs_me"] .task-card')?.textContent.includes('Ship the phone app')`,
+  await tap(
+    `document.querySelector('.workspace-group .workspace-board-button')`,
   );
+  await waitFor(
+    "the Mac's board, with the task in Needs me",
+    `document.querySelector('.mac-board .board-lane.lane-needs_me .board-card')?.textContent.includes('Ship the phone app')`,
+  );
+  const board = await evaluate<{
+    lanes: string[];
+    sessionLine: string;
+    edge: string;
+  }>(`(() => ({
+    lanes: [...document.querySelectorAll('.mac-board .board-lane-header')].map((one) => one.textContent),
+    sessionLine: document.querySelector('.mac-board .board-session-row')?.textContent ?? '',
+    edge: getComputedStyle(document.querySelector('.mac-board .board-card'), '::before').backgroundColor,
+  }))()`);
+  if (
+    !board.lanes.some((lane) => lane.includes("Needs me")) ||
+    !board.sessionLine.includes("needs input") ||
+    board.edge === "rgba(0, 0, 0, 0)"
+  )
+    throw new Error(`The board is not the Mac's: ${JSON.stringify(board)}`);
   await screenshot("board");
-  await tap(byText(".task-card", "Ship the phone app"));
+  await tap(
+    `document.querySelector('.mac-board .board-lane.lane-needs_me .board-card-title')`,
+  );
   await waitFor(
     "the task screen",
     byText(".task-head h2", "Ship the phone app"),
@@ -719,30 +738,50 @@ try {
     throw new Error("The brief edited on the phone did not reach the Mac");
   await screenshot("task");
   await evaluate("history.back()");
-  await waitFor("back on the board", "document.querySelector('.board')");
-  await tap(byText(".board-tools button", "New task"));
+  await waitFor("back on the board", "document.querySelector('.mac-board')");
+  // Capture, as on the Mac: a title and Enter.
+  await setValue(".board-capture", "Captured on the phone", "HTMLInputElement");
+  await tap(`document.querySelector('.board-capture')`);
+  await send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key: "Enter",
+    code: "Enter",
+    windowsVirtualKeyCode: 13,
+  });
+  await send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key: "Enter",
+    code: "Enter",
+    windowsVirtualKeyCode: 13,
+  });
+  await waitFor(
+    "the captured task in Queued",
+    `document.querySelector('.mac-board .board-lane.lane-queued')?.textContent.includes('Captured on the phone')`,
+  );
+  await tap(`document.querySelector('.mac-board .create-button')`);
   await waitFor("the new task form", byText("button", "Create task"));
   await setValue(
     ".task-screen .field input",
     "Made on the phone",
     "HTMLInputElement",
   );
-  await tap(byText("button", "Create task"));
+  await tap(byText(".task-screen button", "Create task"));
   await waitFor("the new task", byText(".task-head h2", "Made on the phone"));
   const listed = (await cli([
     "task",
     "list",
     "--workspace",
     workspace.id,
-  ])) as Array<{
-    title: string;
-  }>;
-  if (!listed.some((item) => item.title === "Made on the phone"))
-    throw new Error("A task created on the phone is not on the Mac");
+  ])) as Array<{ title: string }>;
+  if (
+    !listed.some((item) => item.title === "Made on the phone") ||
+    !listed.some((item) => item.title === "Captured on the phone")
+  )
+    throw new Error("Tasks made on the phone are not on the Mac");
   await evaluate("history.back()");
-  await waitFor("the board again", "document.querySelector('.board')");
+  await waitFor("the board again", "document.querySelector('.mac-board')");
   console.log(
-    "PASS the board shows the Mac's lanes; a task opens with its sessions, and its status, brief and a new task made on the phone land on the Mac",
+    "PASS a workspace's Board is the Mac's board (lanes, card edges, session lines); a task opens with its sessions; its status, brief, a captured task and a new task made on the phone land on the Mac",
   );
 
   const blocking = errors.filter((text) => !text.includes("favicon"));

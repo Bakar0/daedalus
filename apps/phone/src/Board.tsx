@@ -1,8 +1,9 @@
 /**
- * The board on the phone: the Mac's lanes, from the Mac's own rules
- * (`board-lanes.ts`, imported from the desktop renderer, so a task cannot sit
- * in one lane on the Mac and another here), stacked top to bottom. A task
- * opens on its brief, status, sessions and timeline.
+ * A workspace's board on the phone is the Mac's own board: `BoardView` from
+ * the desktop renderer, with the Mac's board styles (mac-board.css, copied
+ * by scripts/phone-board-css.ts), so the lanes, cards and buttons look and
+ * behave as they do on the Mac. Its clicks become requests over the
+ * encrypted channel. A task opens on its own screen (`TaskScreen`).
  */
 import { useEffect, useMemo, useState } from "react";
 import type {
@@ -15,13 +16,18 @@ import type {
 } from "@daedalus/protocol";
 import type { PhoneConnection } from "@daedalus/remote-protocol";
 import {
-  type BoardLane,
   boardLanes,
   LANE_LABEL,
-  type LaneInputs,
   unfinishedDependencies,
 } from "../../desktop/src/renderer/board-lanes";
+import {
+  type BoardLaunch,
+  type BoardProvider,
+  BoardView,
+} from "../../desktop/src/renderer/BoardView";
+import { DialogHost } from "../../desktop/src/renderer/dialogs";
 import { type SessionRow, SessionRowView } from "./sessions";
+import "./mac-board.css";
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
   todo: "To do",
@@ -31,53 +37,24 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   cancelled: "Cancelled",
 };
 
-const FILTER_KEY = "daedalus.phone.board-workspace";
+const byId = <T extends { sessionId: string }>(items: readonly T[]) =>
+  new Map(items.map((item) => [item.sessionId, item]));
 
-function remembered(): string {
-  try {
-    return localStorage.getItem(FILTER_KEY) ?? "all";
-  } catch {
-    return "all";
-  }
-}
-
-function remember(value: string): void {
-  try {
-    localStorage.setItem(FILTER_KEY, value);
-  } catch {
-    // A convenience only.
-  }
-}
-
-function laneInputs(snapshot: DesktopSnapshotDto): LaneInputs {
-  return {
-    sessions: snapshot.agents,
-    activity: new Map(
-      snapshot.sessionActivity.map((item) => [item.sessionId, item]),
-    ),
-    attention: new Map(
-      snapshot.attention.map((item) => [item.sessionId, item]),
-    ),
-    worktrees: snapshot.worktrees,
-  };
-}
-
-/** Lanes for one workspace, or every active one, in the Mac's order. */
-export function phoneBoard(snapshot: DesktopSnapshotDto, workspaceId: string) {
-  const active = new Set(
-    snapshot.workspaces
-      .filter((workspace) => !workspace.archivedAt)
-      .map((workspace) => workspace.id),
+function laneOf(snapshot: DesktopSnapshotDto, task: TaskDto) {
+  const tasks = snapshot.tasks.filter(
+    (item) => item.workspaceId === task.workspaceId,
   );
-  const tasks = snapshot.tasks.filter((task) =>
-    workspaceId === "all"
-      ? active.has(task.workspaceId)
-      : task.workspaceId === workspaceId,
-  );
-  const byId = new Map(snapshot.tasks.map((task) => [task.id, task]));
-  return boardLanes(tasks, laneInputs(snapshot), {
-    isWaiting: (task) => unfinishedDependencies(task, byId).length > 0,
-  });
+  const tasksById = new Map(tasks.map((item) => [item.id, item]));
+  return boardLanes(
+    tasks,
+    {
+      sessions: snapshot.agents,
+      activity: byId(snapshot.sessionActivity),
+      attention: byId(snapshot.attention),
+      worktrees: snapshot.worktrees,
+    },
+    { isWaiting: (item) => unfinishedDependencies(item, tasksById).length > 0 },
+  ).find((group) => group.tasks.some((item) => item.id === task.id))?.lane;
 }
 
 async function call<T>(
@@ -90,134 +67,148 @@ async function call<T>(
   return result.data;
 }
 
-export function Board({
+/** One workspace's board, as the Mac draws it. */
+export function MacBoard({
+  workspaceId,
   snapshot,
   connection,
   onOpenTask,
+  onOpenSession,
   onNewTask,
 }: {
+  workspaceId: string;
   snapshot: DesktopSnapshotDto;
   connection: PhoneConnection | undefined;
   onOpenTask: (id: string) => void;
+  onOpenSession: (id: string) => void;
   onNewTask: () => void;
 }) {
-  const workspaces = snapshot.workspaces
-    .filter((workspace) => !workspace.archivedAt)
-    .sort((left, right) => left.position - right.position);
-  const [filter, setFilter] = useState(remembered);
-  const scope = workspaces.some((workspace) => workspace.id === filter)
-    ? filter
-    : "all";
-  const lanes = useMemo(() => phoneBoard(snapshot, scope), [snapshot, scope]);
-  const [doneOpen, setDoneOpen] = useState(false);
-  const names = new Map(workspaces.map((item) => [item.id, item.name]));
-  const total = lanes.reduce((sum, lane) => sum + lane.tasks.length, 0);
+  const [now, setNow] = useState(() => Date.now());
+  const [launches, setLaunches] = useState<BoardLaunch[]>([]);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
+  const workspace = snapshot.workspaces.find((item) => item.id === workspaceId);
+  const sessions = useMemo(
+    () => snapshot.agents.filter((item) => item.workspaceId === workspaceId),
+    [snapshot, workspaceId],
+  );
+  if (!workspace) return <p className="quiet-line">No such workspace.</p>;
+  const sessionIds = new Set(sessions.map((item) => item.id));
+  const providers = (["claude", "codex"] as const).filter((name) =>
+    snapshot.settings.providers.some(
+      (provider) => provider.name === name && provider.available,
+    ),
+  ) as BoardProvider[];
+
+  const act = async (
+    work: (connection: PhoneConnection) => Promise<unknown>,
+  ) => {
+    if (!connection) return false;
+    setBusy(true);
+    try {
+      await work(connection);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const setStatus = (task: TaskDto, status: TaskStatus) =>
+    void act((open) => call(open, "taskSetStatus", { id: task.id, status }));
+  /** As the Mac's Start: the workspace's provider, a launch row meanwhile. */
+  const start = async (
+    task: TaskDto,
+    options: { provider?: BoardProvider; draftBrief?: boolean } = {},
+  ) => {
+    const provider =
+      options.provider ?? workspace.defaultProvider ?? providers[0];
+    if (!connection || !provider) return;
+    const key = crypto.randomUUID();
+    setLaunches((current) => [
+      { key, taskId: task.id, tool: provider, status: "starting" },
+      ...current,
+    ]);
+    try {
+      await call<AgentSessionDto>(connection, "agentSpawn", {
+        workspace: workspace.id,
+        taskId: task.id,
+        provider,
+        ...(options.draftBrief ? { draftBrief: true } : {}),
+      });
+      setLaunches((current) => current.filter((item) => item.key !== key));
+    } catch (failure) {
+      setLaunches((current) =>
+        current.map((item) =>
+          item.key === key
+            ? {
+                ...item,
+                status: "error",
+                error:
+                  failure instanceof Error ? failure.message : String(failure),
+              }
+            : item,
+        ),
+      );
+    }
+  };
 
   return (
-    <div className="board">
-      <div className="board-tools">
-        <select
-          aria-label="Workspace"
-          onChange={(event) => {
-            setFilter(event.target.value);
-            remember(event.target.value);
-          }}
-          value={scope}
-        >
-          <option value="all">All workspaces</option>
-          {workspaces.map((workspace) => (
-            <option key={workspace.id} value={workspace.id}>
-              {workspace.name}
-            </option>
-          ))}
-        </select>
-        <button
-          className="button small"
-          disabled={!connection || workspaces.length === 0}
-          onClick={onNewTask}
-        >
-          New task
-        </button>
-      </div>
-      {total === 0 ? <p className="quiet-line">No tasks here yet.</p> : null}
-      {lanes.map(({ lane, tasks }) => {
-        if (tasks.length === 0) return null;
-        const folded = lane === "done" && !doneOpen;
-        return (
-          <section className="lane" data-lane={lane} key={lane}>
-            <header className="lane-head">
-              <h2>{LANE_LABEL[lane]}</h2>
-              <span className="lane-count">{tasks.length}</span>
-              {lane === "done" ? (
-                <button className="link" onClick={() => setDoneOpen(!doneOpen)}>
-                  {doneOpen ? "Hide" : "Show"}
-                </button>
-              ) : null}
-            </header>
-            {folded ? null : (
-              <ul className="task-cards">
-                {tasks.map((task) => (
-                  <li key={task.id}>
-                    <TaskCard
-                      lane={lane}
-                      onOpen={() => onOpenTask(task.id)}
-                      snapshot={snapshot}
-                      task={task}
-                      workspace={
-                        scope === "all"
-                          ? names.get(task.workspaceId)
-                          : undefined
-                      }
-                    />
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-        );
-      })}
+    <div className="mac-board">
+      <BoardView
+        activity={byId(snapshot.sessionActivity)}
+        attention={byId(snapshot.attention)}
+        availableProviders={providers}
+        busy={busy || !connection}
+        launches={launches}
+        modelCatalogs={{}}
+        now={now}
+        onAnswer={(session, text) =>
+          act((open) => call(open, "agentSend", { id: session.id, text }))
+        }
+        onCreateTask={onNewTask}
+        onDismissLaunch={(key) =>
+          setLaunches((current) => current.filter((item) => item.key !== key))
+        }
+        onDraftBrief={(task) => void start(task, { draftBrief: true })}
+        onMarkDone={(task) => setStatus(task, "done")}
+        onNeedModels={() => {}}
+        onOpenLink={(url) => window.open(url, "_blank", "noopener")}
+        onOpenSession={(session) => onOpenSession(session.id)}
+        // A worktree is a folder on the Mac; the phone opens the session
+        // that made it instead.
+        onOpenWorktree={(worktree) => onOpenSession(worktree.sessionId)}
+        onPark={(task) => setStatus(task, "blocked")}
+        onQuickCapture={(title) =>
+          act((open) =>
+            call(open, "taskCreate", { workspace: workspace.id, title }),
+          )
+        }
+        onSecondOpinion={(task, provider) => void start(task, { provider })}
+        onSelectTask={(task) => onOpenTask(task.id)}
+        onSetInProgress={(task) => setStatus(task, "in_progress")}
+        onStart={(task) => void start(task)}
+        onStartNext={(task) => void start(task)}
+        onStartWith={(task) => void start(task)}
+        // Board settings change the workspace, which stays on the Mac.
+        onUpdateSettings={() => {}}
+        sessions={sessions}
+        tasks={snapshot.tasks.filter(
+          (task) => task.workspaceId === workspaceId,
+        )}
+        telemetry={byId(snapshot.sessionTelemetry)}
+        tmuxAvailable={snapshot.settings.tmuxAvailable}
+        workspace={workspace}
+        workspaces={snapshot.workspaces.filter((item) => !item.archivedAt)}
+        worktrees={snapshot.worktrees.filter((item) =>
+          sessionIds.has(item.sessionId),
+        )}
+      />
+      <DialogHost />
     </div>
-  );
-}
-
-function TaskCard({
-  task,
-  lane,
-  workspace,
-  snapshot,
-  onOpen,
-}: {
-  task: TaskDto;
-  lane: BoardLane;
-  workspace: string | undefined;
-  snapshot: DesktopSnapshotDto;
-  onOpen: () => void;
-}) {
-  const sessions = snapshot.agents.filter(
-    (session) => session.taskId === task.id && !session.archivedAt,
-  );
-  const live = sessions.filter(
-    (session) => session.status === "running" || session.status === "starting",
-  ).length;
-  const details = [
-    workspace,
-    task.priority === "high" ? "High priority" : undefined,
-    sessions.length
-      ? `${sessions.length} session${sessions.length === 1 ? "" : "s"}${live ? `, ${live} live` : ""}`
-      : undefined,
-  ].filter(Boolean);
-  return (
-    <button
-      className="task-card"
-      data-lane={lane}
-      data-task-id={task.id}
-      onClick={onOpen}
-    >
-      <strong>
-        <span className="task-number">#{task.number}</span> {task.title}
-      </strong>
-      {details.length ? <small>{details.join(" · ")}</small> : null}
-    </button>
   );
 }
 
@@ -244,13 +235,7 @@ export function TaskScreen({
   const workspace = snapshot.workspaces.find(
     (item) => item.id === task.workspaceId,
   );
-  const lane = useMemo(
-    () =>
-      phoneBoard(snapshot, task.workspaceId).find((group) =>
-        group.tasks.some((item) => item.id === task.id),
-      )?.lane,
-    [snapshot, task],
-  );
+  const lane = useMemo(() => laneOf(snapshot, task), [snapshot, task]);
 
   useEffect(() => {
     if (!connection) return;
@@ -453,25 +438,16 @@ function when(at: string | null): string {
   });
 }
 
-/** A new task: which workspace, a title, and a brief. */
+/** A new task in one workspace: a title and a brief. */
 export function NewTaskScreen({
-  snapshot,
+  workspaceId,
   connection,
   onCreated,
 }: {
-  snapshot: DesktopSnapshotDto;
+  workspaceId: string;
   connection: PhoneConnection | undefined;
   onCreated: (id: string) => void;
 }) {
-  const workspaces = snapshot.workspaces
-    .filter((workspace) => !workspace.archivedAt)
-    .sort((left, right) => left.position - right.position);
-  const initial = remembered();
-  const [workspace, setWorkspace] = useState(
-    workspaces.some((item) => item.id === initial)
-      ? initial
-      : (workspaces[0]?.id ?? ""),
-  );
   const [title, setTitle] = useState("");
   const [brief, setBrief] = useState("");
   const [error, setError] = useState<string>();
@@ -486,7 +462,7 @@ export function NewTaskScreen({
         setError(undefined);
         try {
           const task = await call<TaskDto>(connection, "taskCreate", {
-            workspace,
+            workspace: workspaceId,
             title: title.trim(),
             description: brief,
           });
@@ -500,19 +476,6 @@ export function NewTaskScreen({
         }
       }}
     >
-      <label className="field">
-        <span>Workspace</span>
-        <select
-          onChange={(event) => setWorkspace(event.target.value)}
-          value={workspace}
-        >
-          {workspaces.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.name}
-            </option>
-          ))}
-        </select>
-      </label>
       <label className="field">
         <span>Title</span>
         <input

@@ -24,6 +24,15 @@
   --success: #16815b;
   --warning: #b26b00;
   --danger: #d61133;
+  /* The Mac's other tokens, for its board (mac-board.css). */
+  --panel: rgb(243 246 252 / 0.9);
+  --raised-hover: rgb(255 255 255 / 0.9);
+  --elevated: #f9fbfe;
+  --overlay: #fcfdff;
+  --line-strong: rgb(80 99 130 / 0.3);
+  --accent-hover: #085dc7;
+  --accent-wash: rgb(12 117 230 / 0.1);
+  --session-gold: #b4740b;
   --radius: 12px;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
@@ -41,6 +50,14 @@
     --success: #58c79a;
     --warning: #f0b45a;
     --danger: #ff8987;
+    --panel: rgb(14 19 33 / 0.88);
+    --raised-hover: rgb(255 255 255 / 0.075);
+    --elevated: #151b2b;
+    --overlay: #1b2130;
+    --line-strong: rgb(151 164 190 / 0.3);
+    --accent-hover: #1c77f1;
+    --accent-wash: rgb(69 150 254 / 0.13);
+    --session-gold: #f0b44c;
   }
 }
 
@@ -879,113 +896,45 @@ li:has(> .session-row[data-team-member="true"]) {
   margin: 8px 0;
 }
 
-/* Board */
-.view-tabs {
-  margin-bottom: 2px;
+/* A workspace's board: the Mac's own (mac-board.css), with a phone's
+   spacing. Its settings change the workspace, which stays on the Mac. */
+.workspace-head {
+  grid-template-columns: 18px minmax(0, 1fr) auto;
 }
-.board {
-  display: grid;
-  gap: 14px;
-}
-.board-tools {
-  align-items: center;
-  display: flex;
-  gap: 8px;
-}
-.board-tools select,
-.task-screen select,
-.task-screen input,
-.task-screen textarea {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  letter-spacing: normal;
-  min-height: 40px;
-  padding: 0 10px;
-  text-transform: none;
-}
-.board-tools select {
-  flex: 1;
-  min-width: 0;
-}
-.button.small {
-  min-height: 40px;
-  padding: 0 14px;
-}
-.lane {
-  display: grid;
-  gap: 6px;
-}
-.lane-head {
-  align-items: center;
-  display: flex;
-  gap: 8px;
-}
-.lane-head h2 {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  margin: 0;
-  text-transform: uppercase;
-}
-.lane[data-lane="needs_me"] .lane-head h2 {
-  color: var(--danger);
-}
-.lane-count {
-  background: var(--raised);
-  border-radius: 999px;
-  color: var(--secondary);
-  font-size: 12px;
-  padding: 0 7px;
-}
-.lane-head .link {
-  font-size: 13px;
-  margin-left: auto;
-  padding: 0;
-}
-.task-cards {
-  display: grid;
-  gap: 5px;
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.task-card {
+.workspace-board-button {
   background: var(--raised);
   border: 1px solid var(--line);
-  border-radius: 10px;
-  display: grid;
-  gap: 2px;
-  padding: 10px 12px;
-  text-align: left;
-  width: 100%;
-}
-.task-card:active {
-  background: rgb(69 150 254 / 0.13);
-}
-.task-card[data-lane="needs_me"] {
-  box-shadow: inset 3px 0 0 var(--danger);
-}
-.task-card[data-lane="running"] {
-  box-shadow: inset 3px 0 0 var(--success);
-}
-.task-card[data-lane="review"] {
-  box-shadow: inset 3px 0 0 var(--accent);
-}
-.task-card[data-lane="done"] strong {
-  color: var(--secondary);
-}
-.task-card strong {
-  font-weight: 600;
-}
-.task-card small {
-  color: var(--muted);
+  border-radius: 8px;
+  color: var(--accent);
   font-size: 13px;
+  font-weight: 600;
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  padding: 6px 12px;
 }
-.task-number {
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
+.mac-board .board-settings {
+  display: none;
+}
+.mac-board .board-toolbar {
+  min-height: 44px;
+}
+.mac-board .board-lanes {
+  overflow: visible;
+  padding-bottom: 0;
+}
+/* 16px keeps iOS from zooming into a field on focus. */
+.mac-board .board-capture {
+  font-size: 16px;
+  min-height: 44px;
+}
+.mac-board .board-answer > input {
+  font-size: 16px;
+}
+.mac-board .quiet,
+.mac-board .board-card-actions > button,
+.mac-board .board-start-group > button {
+  font-size: 13px;
+  min-height: 34px;
 }
 
 /* One task */
