@@ -231,11 +231,36 @@ export function TaskScreen({
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(task.title);
-  const [brief, setBrief] = useState(task.description);
+  // The snapshot carries only the start of a long brief; the whole task
+  // comes from the Mac when this screen opens. Editing waits for it, so a
+  // save never writes back the shortened start.
+  const [full, setFull] = useState<TaskDto | undefined>(
+    task.descriptionShortened ? undefined : task,
+  );
+  const description = full?.description ?? task.description;
+  const [brief, setBrief] = useState(description);
   const workspace = snapshot.workspaces.find(
     (item) => item.id === task.workspaceId,
   );
   const lane = useMemo(() => laneOf(snapshot, task), [snapshot, task]);
+
+  useEffect(() => {
+    if (!task.descriptionShortened) {
+      setFull(task);
+      return;
+    }
+    if (!connection) return;
+    let current = true;
+    call<TaskDto>(connection, "taskGet", { id: task.id }).then(
+      (data) => {
+        if (current) setFull(data);
+      },
+      () => undefined,
+    );
+    return () => {
+      current = false;
+    };
+  }, [connection, task]);
 
   useEffect(() => {
     if (!connection) return;
@@ -341,7 +366,7 @@ export function TaskScreen({
                 onClick={() => {
                   setEditing(false);
                   setTitle(task.title);
-                  setBrief(task.description);
+                  setBrief(description);
                 }}
               >
                 Cancel
@@ -366,10 +391,10 @@ export function TaskScreen({
           ) : (
             <button
               className="link"
-              disabled={!connection}
+              disabled={!connection || !full}
               onClick={() => {
                 setTitle(task.title);
-                setBrief(task.description);
+                setBrief(description);
                 setEditing(true);
               }}
             >
@@ -387,7 +412,8 @@ export function TaskScreen({
           />
         ) : (
           <div className="task-brief">
-            {task.description.trim() || "No brief yet."}
+            {description.trim() || "No brief yet."}
+            {full ? null : "…"}
           </div>
         )}
       </section>
