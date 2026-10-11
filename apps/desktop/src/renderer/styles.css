@@ -7666,53 +7666,119 @@ dd {
   vertical-align: 1px;
 }
 
-/* Settings › Account's admin section: Pro keys and accounts. */
-.admin-section {
-  display: grid;
-  gap: 10px;
-}
-.admin-section h3 {
-  margin-top: 8px;
-}
-.admin-key-form {
-  align-items: end;
-  display: grid;
+/* Settings › Account's admin section: Pro keys and accounts. Each row is
+   one line: what it is, a short description that gives way first, and a
+   menu pinned to the right edge. */
+.admin-title {
+  align-items: baseline;
+  display: flex;
   gap: 8px;
-  grid-template-columns: 90px minmax(0, 1fr) minmax(0, 1fr);
+  margin-top: 14px;
 }
-.admin-key-form .admin-key-note {
-  grid-column: 1 / 3;
-}
-.admin-key-form label,
-.admin-grant-days {
-  display: grid;
-  gap: 4px;
-}
-.admin-key-form span,
-.admin-grant-days span {
+.admin-only {
   color: var(--muted);
   font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
 }
-.admin-key-form input,
-.admin-grant-days input {
+.admin-section {
+  display: grid;
+  gap: 8px;
+}
+.admin-heading {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  min-height: 26px;
+}
+.admin-heading h3 {
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  margin: 0;
+  text-transform: none;
+}
+.admin-key-form {
+  align-items: center;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: 56px 96px minmax(0, 1fr) auto auto;
+}
+.admin-key-form input {
   font-size: 12px;
   min-width: 0;
   padding: 6px 8px;
   width: 100%;
 }
-.admin-grant-days {
-  max-width: 160px;
+.admin-key-form small {
+  color: var(--muted);
+  font-size: 11px;
+  grid-column: 1 / -1;
 }
 .admin-made {
   align-items: center;
   color: var(--secondary);
   display: flex;
   font-size: 12px;
-  gap: 8px;
+  gap: 6px;
   margin: 0;
 }
-.admin-made code,
-.admin-keys code {
+.admin-list {
+  display: grid;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.admin-list li {
+  align-items: center;
+  border-radius: 7px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr) 28px;
+  min-height: 32px;
+  padding: 0 4px 0 10px;
+}
+.admin-list li:hover {
+  background: var(--raised);
+}
+.admin-accounts li {
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 28px;
+}
+.admin-list code,
+.admin-made code {
   font-size: 12px;
   letter-spacing: 0.04em;
+}
+.admin-list strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.admin-list strong,
+.admin-list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-list small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.admin-list li.is-spent code,
+.admin-list li.is-spent small {
+  opacity: 0.5;
+}
+.admin-row-menu {
+  align-items: center;
+  display: flex;
+  height: 26px;
+  justify-content: center;
+  padding: 0;
+  width: 26px;
+}
+.admin-row-menu svg {
+  height: 15px;
+  width: 15px;
 }

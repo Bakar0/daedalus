@@ -17,6 +17,7 @@ import {
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { ConfirmButton } from "./ConfirmButton";
+import { Menu, MenuDots } from "./Menu";
 
 /** Whether the Mac's account has a plan that lets phones in right now. */
 export const hasPlan = (state: RemoteStateDto | undefined): boolean =>
@@ -261,13 +262,23 @@ export function AccountPanel({
           {error}
         </p>
       ) : undefined}
-      {state?.admin ? <AdminSection busy={busy} client={client} /> : undefined}
+      {state?.admin ? (
+        <>
+          <h3 className="admin-title">
+            Admin <span className="admin-only">only you see this</span>
+          </h3>
+          <AdminSection busy={busy} client={client} />
+        </>
+      ) : undefined}
     </div>
   );
 }
 
 const shortDate = (iso: string) =>
-  new Date(iso).toLocaleDateString(undefined, { dateStyle: "medium" });
+  new Date(iso).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
 
 /** A whole number from a field, or undefined when it is empty or not one. */
 const wholeNumber = (text: string): number | undefined => {
@@ -277,9 +288,44 @@ const wholeNumber = (text: string): number | undefined => {
     : undefined;
 };
 
+/** "1/3 used · 7-day Pro · until Oct 17 · For Dana". */
+function keyLine(key: AdminKeyDto): { text: string; spent: boolean } {
+  const usedUp = key.used >= key.maxUses;
+  const expired = Boolean(
+    key.expiresAt && Date.parse(key.expiresAt) < Date.now(),
+  );
+  const parts = [
+    usedUp ? "Used" : `${key.used}/${key.maxUses} used`,
+    key.grantDays ? `${key.grantDays}-day Pro` : "Pro",
+    ...(expired
+      ? ["expired"]
+      : key.expiresAt && !usedUp
+        ? [`until ${shortDate(key.expiresAt)}`]
+        : []),
+    ...(key.note ? [key.note] : []),
+  ];
+  return { text: parts.join(" · "), spent: usedUp || expired };
+}
+
+/** "Pro until Oct 19", "Admin", "Pro · ended" or "No plan". */
+function accountLine(account: AdminAccountDto): string {
+  if (!account.plan) return "No plan";
+  const name = `${account.plan.slice(0, 1).toUpperCase()}${account.plan.slice(1)}`;
+  if (account.status === "revoked") return `${name} · revoked`;
+  if (
+    account.status !== "active" ||
+    (account.expiresAt && Date.parse(account.expiresAt) <= Date.now())
+  )
+    return `${name} · ended`;
+  return account.expiresAt
+    ? `${name} until ${shortDate(account.expiresAt)}`
+    : name;
+}
+
 /**
  * For accounts on the relay's admin list: make and remove Pro keys (invite
- * codes), and grant, end or revoke an account's plan.
+ * codes), and grant, end or revoke an account's plan. Each row is one line
+ * with its actions in a menu, so long lines never push them around.
  */
 function AdminSection({
   busy,
@@ -293,13 +339,8 @@ function AdminSection({
   const [error, setError] = useState<string>();
   const [made, setMade] = useState<string>();
   const [copied, setCopied] = useState<string>();
-  const [form, setForm] = useState({
-    uses: "1",
-    trial: "",
-    valid: "30",
-    note: "",
-  });
-  const [grantDays, setGrantDays] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [form, setForm] = useState({ uses: "1", trial: "", note: "" });
 
   const load = useCallback(async () => {
     const [keyList, accountList] = await Promise.all([
@@ -329,76 +370,100 @@ function AdminSection({
     const result = await client.request.clipboardWrite({ text: code });
     if (result.ok) setCopied(code);
   };
+  const setPlan = (
+    email: string,
+    status: "active" | "expired" | "revoked",
+    days = 0,
+  ) =>
+    void run(
+      client.request.remoteAdminSetPlan({
+        email,
+        status,
+        ...(status === "active" ? { days } : {}),
+      }),
+    );
 
   return (
     <div className="admin-section">
-      <h3>Admin: Pro keys</h3>
-      <form
-        className="admin-key-form"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          const trial = wholeNumber(form.trial);
-          const valid = wholeNumber(form.valid);
-          const created = await run(
-            client.request.remoteAdminCreateKey({
-              maxUses: wholeNumber(form.uses) ?? 1,
-              ...(trial ? { grantDays: trial } : {}),
-              ...(valid ? { days: valid } : {}),
-              note: form.note.trim(),
-            }),
-          );
-          if (created) {
-            setMade(created.code);
-            setCopied(undefined);
-            setForm((current) => ({ ...current, note: "" }));
-          }
-        }}
-      >
-        <label>
-          <span>Uses</span>
+      <div className="admin-heading">
+        <h3>Pro keys</h3>
+        {creating ? undefined : (
+          <button
+            className="quiet"
+            disabled={busy}
+            onClick={() => setCreating(true)}
+            type="button"
+          >
+            New key
+          </button>
+        )}
+      </div>
+      {creating ? (
+        <form
+          className="admin-key-form"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            const trial = wholeNumber(form.trial);
+            const created = await run(
+              client.request.remoteAdminCreateKey({
+                maxUses: wholeNumber(form.uses) ?? 1,
+                ...(trial ? { grantDays: trial } : {}),
+                days: 30,
+                note: form.note.trim(),
+              }),
+            );
+            if (created) {
+              setMade(created.code);
+              setCopied(undefined);
+              setCreating(false);
+              setForm({ uses: "1", trial: "", note: "" });
+            }
+          }}
+        >
           <input
+            aria-label="Uses"
+            className="admin-uses"
             inputMode="numeric"
             onChange={(event) => setForm({ ...form, uses: event.target.value })}
+            title="How many accounts can use it"
             value={form.uses}
           />
-        </label>
-        <label>
-          <span>Pro for (days)</span>
           <input
+            aria-label="Pro for how many days"
+            className="admin-trial"
             inputMode="numeric"
             onChange={(event) =>
               setForm({ ...form, trial: event.target.value })
             }
-            placeholder="No end"
+            placeholder="Days of Pro"
+            title="How long the Pro it gives lasts; empty for no end"
             value={form.trial}
           />
-        </label>
-        <label>
-          <span>Key works for (days)</span>
           <input
-            inputMode="numeric"
-            onChange={(event) =>
-              setForm({ ...form, valid: event.target.value })
-            }
-            placeholder="No limit"
-            value={form.valid}
-          />
-        </label>
-        <label className="admin-key-note">
-          <span>Note</span>
-          <input
+            aria-label="Note"
             onChange={(event) => setForm({ ...form, note: event.target.value })}
-            placeholder="Who it is for"
+            placeholder="Note"
             value={form.note}
           />
-        </label>
-        <button disabled={busy} type="submit">
-          Create key
-        </button>
-      </form>
+          <button disabled={busy} type="submit">
+            Create
+          </button>
+          <button
+            className="quiet"
+            onClick={() => setCreating(false)}
+            type="button"
+          >
+            Cancel
+          </button>
+          <small>
+            Uses, days of Pro (empty for no end), a note. A key works for 30
+            days.
+          </small>
+        </form>
+      ) : undefined}
       {made ? (
         <p className="admin-made">
-          New key <code>{made}</code>
+          Created <code>{made}</code>
           <button
             className="quiet"
             onClick={() => void copy(made)}
@@ -411,136 +476,108 @@ function AdminSection({
       {keys === undefined ? undefined : keys.length === 0 ? (
         <p className="remote-empty">No keys yet.</p>
       ) : (
-        <ul className="accounts-list admin-keys">
-          {keys.map((key) => (
-            <li key={key.code}>
-              <span className="accounts-who">
-                <strong>
-                  <code>{key.code}</code>
-                </strong>
-                <small>
-                  {key.used} of {key.maxUses} used ·{" "}
-                  {key.grantDays
-                    ? `Pro for ${key.grantDays} days`
-                    : "Pro, no end"}
-                  {" · "}
-                  {key.expiresAt
-                    ? `${Date.parse(key.expiresAt) < Date.now() ? "expired" : "works until"} ${shortDate(key.expiresAt)}`
-                    : "works until used up"}
-                  {key.note ? ` · ${key.note}` : ""}
-                </small>
-              </span>
-              <span className="accounts-actions">
-                <button
-                  className="quiet"
-                  onClick={() => void copy(key.code)}
-                  type="button"
-                >
-                  {copied === key.code ? "Copied" : "Copy"}
-                </button>
-                <ConfirmButton
-                  armedLabel="Delete"
-                  armedTitle={`Delete ${key.code}; plans it already gave stay`}
-                  className="quiet"
-                  disabled={busy}
-                  onConfirm={() =>
-                    void run(
-                      client.request.remoteAdminDeleteKey({ code: key.code }),
-                    )
-                  }
-                  type="button"
-                >
-                  Delete
-                </ConfirmButton>
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <h3>Admin: accounts</h3>
-      <label className="admin-grant-days">
-        <span>Grant Pro for (days)</span>
-        <input
-          inputMode="numeric"
-          onChange={(event) => setGrantDays(event.target.value)}
-          placeholder="No end"
-          value={grantDays}
-        />
-      </label>
-      {accounts === undefined ? undefined : (
-        <ul className="accounts-list admin-accounts">
-          {accounts.map((account) => {
-            const active =
-              account.status === "active" &&
-              (!account.expiresAt ||
-                Date.parse(account.expiresAt) > Date.now());
-            const setPlan = (status: "active" | "expired" | "revoked") =>
-              void run(
-                client.request.remoteAdminSetPlan({
-                  email: account.email,
-                  status,
-                  ...(status === "active"
-                    ? { days: wholeNumber(grantDays) ?? 0 }
-                    : {}),
-                }),
-              );
+        <ul className="admin-list admin-keys">
+          {keys.map((key) => {
+            const line = keyLine(key);
             return (
-              <li key={account.id}>
-                <span className="accounts-who">
-                  <strong>{account.email}</strong>
-                  <small>
-                    {account.plan
-                      ? `${account.plan.slice(0, 1).toUpperCase()}${account.plan.slice(1)}`
-                      : "No plan"}
-                    {account.plan && !active
-                      ? account.status === "revoked"
-                        ? " · revoked"
-                        : " · ended"
-                      : account.expiresAt
-                        ? ` until ${shortDate(account.expiresAt)}`
-                        : ""}
-                    {account.source ? ` · by ${account.source}` : ""}
-                    {` · joined ${shortDate(account.createdAt)}`}
-                  </small>
-                </span>
-                <span className="accounts-actions">
+              <li className={line.spent ? "is-spent" : ""} key={key.code}>
+                <code>{key.code}</code>
+                <small title={line.text}>{line.text}</small>
+                <Menu
+                  align="end"
+                  label={`Actions for ${key.code}`}
+                  menuLabel={`Actions for ${key.code}`}
+                  summary={<MenuDots />}
+                  summaryClassName="quiet admin-row-menu"
+                >
                   <button
-                    className="quiet"
-                    disabled={busy}
-                    onClick={() => setPlan("active")}
+                    className="quiet menu-item"
+                    onClick={() => void copy(key.code)}
+                    role="menuitem"
                     type="button"
                   >
-                    {active ? "Set Pro" : "Grant Pro"}
+                    <span className="menu-item-label">Copy</span>
                   </button>
-                  {active ? (
-                    <ConfirmButton
-                      armedLabel="End plan"
-                      armedTitle={`End ${account.email}'s plan now; an invite code renews it`}
-                      className="quiet"
-                      disabled={busy}
-                      onConfirm={() => setPlan("expired")}
-                      type="button"
-                    >
-                      End plan
-                    </ConfirmButton>
-                  ) : undefined}
-                  {account.status === "revoked" ? undefined : (
-                    <ConfirmButton
-                      armedLabel="Revoke"
-                      armedTitle={`Revoke ${account.email}: ends its plan and sign-ins, and invite codes stop working for it`}
-                      className="quiet danger-link"
-                      disabled={busy}
-                      onConfirm={() => setPlan("revoked")}
-                      type="button"
-                    >
-                      Revoke
-                    </ConfirmButton>
-                  )}
-                </span>
+                  <button
+                    className="quiet menu-item menu-item-danger"
+                    onClick={() =>
+                      void run(
+                        client.request.remoteAdminDeleteKey({ code: key.code }),
+                      )
+                    }
+                    role="menuitem"
+                    type="button"
+                  >
+                    <span className="menu-item-label">Delete</span>
+                  </button>
+                </Menu>
               </li>
             );
           })}
+        </ul>
+      )}
+
+      <div className="admin-heading">
+        <h3>Accounts</h3>
+      </div>
+      {accounts === undefined ? undefined : (
+        <ul className="admin-list admin-accounts">
+          {accounts.map((account) => (
+            <li key={account.id}>
+              <strong title={account.email}>{account.email}</strong>
+              <small>{accountLine(account)}</small>
+              <Menu
+                align="end"
+                label={`Plan for ${account.email}`}
+                menuLabel={`Plan for ${account.email}`}
+                summary={<MenuDots />}
+                summaryClassName="quiet admin-row-menu"
+              >
+                <button
+                  className="quiet menu-item"
+                  onClick={() => setPlan(account.email, "active")}
+                  role="menuitem"
+                  type="button"
+                >
+                  <span className="menu-item-label">Pro, no end</span>
+                </button>
+                <button
+                  className="quiet menu-item"
+                  onClick={() => setPlan(account.email, "active", 30)}
+                  role="menuitem"
+                  type="button"
+                >
+                  <span className="menu-item-label">Pro for 30 days</span>
+                </button>
+                <button
+                  className="quiet menu-item"
+                  onClick={() => setPlan(account.email, "active", 7)}
+                  role="menuitem"
+                  type="button"
+                >
+                  <span className="menu-item-label">Pro for 7 days</span>
+                </button>
+                <hr className="menu-separator" />
+                <button
+                  className="quiet menu-item"
+                  onClick={() => setPlan(account.email, "expired")}
+                  role="menuitem"
+                  type="button"
+                >
+                  <span className="menu-item-label">End plan</span>
+                </button>
+                <button
+                  className="quiet menu-item menu-item-danger"
+                  onClick={() => setPlan(account.email, "revoked")}
+                  role="menuitem"
+                  title="Ends the plan and every sign-in; invite codes stop working for it"
+                  type="button"
+                >
+                  <span className="menu-item-label">Revoke</span>
+                </button>
+              </Menu>
+            </li>
+          ))}
         </ul>
       )}
       {error ? (
