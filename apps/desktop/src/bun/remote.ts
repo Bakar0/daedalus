@@ -9,6 +9,7 @@ import {
 } from "@daedalus/core";
 import { runCommand, TmuxPtyBridge } from "@daedalus/platform";
 import type {
+  DesktopSnapshotDto,
   AdminAccountDto,
   AdminKeyDto,
   AdminKeyInput,
@@ -109,6 +110,49 @@ export type OpenRemoteTerminal = (
   socket: TerminalSocket,
   size: { cols: number; rows: number } | undefined,
 ) => Promise<RemoteTerminal>;
+
+/** How much of a brief a phone's snapshot carries; the task screen asks for the rest. */
+export const PHONE_BRIEF_CHARACTERS = 200;
+
+/** Just the model a session was launched with, from its arguments. */
+function modelArguments(args: readonly string[]): string[] {
+  for (let index = args.length - 1; index >= 0; index -= 1) {
+    const argument = args[index]!;
+    if (argument.startsWith("--model=")) return [argument];
+    if (argument === "--model" && args[index + 1] !== undefined)
+      return [argument, args[index + 1]!];
+  }
+  return [];
+}
+
+/**
+ * The snapshot as a phone gets it. A real one passed 1.2 MB, mostly each
+ * session's launch arguments (long prompts) and each task's brief, and the
+ * phone takes it again after every change. A session keeps only its
+ * `--model` (all the phone reads from them); a long brief keeps its start,
+ * which the board needs to know there is one, and the task screen fetches
+ * the whole task.
+ */
+export function phoneSnapshot(
+  snapshot: DesktopSnapshotDto,
+): DesktopSnapshotDto {
+  return {
+    ...snapshot,
+    agents: snapshot.agents.map((session) => ({
+      ...session,
+      args: modelArguments(session.args),
+    })),
+    tasks: snapshot.tasks.map((task) =>
+      task.description.length > PHONE_BRIEF_CHARACTERS
+        ? {
+            ...task,
+            description: task.description.slice(0, PHONE_BRIEF_CHARACTERS),
+            descriptionShortened: true,
+          }
+        : task,
+    ),
+  };
+}
 
 /** Any of the desktop request handlers; the allowlist picks which. */
 type RequestHandler = (params: never) => unknown;
@@ -888,7 +932,10 @@ export class RemoteConnector {
         },
       };
     try {
-      return (await handler(params as never)) as RpcResult<unknown>;
+      const result = (await handler(params as never)) as RpcResult<unknown>;
+      return method === "snapshot" && result.ok
+        ? { ok: true, data: phoneSnapshot(result.data as DesktopSnapshotDto) }
+        : result;
     } catch (error) {
       return {
         ok: false,

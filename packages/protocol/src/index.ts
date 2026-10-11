@@ -48,6 +48,11 @@ export interface TaskDto {
   number: number;
   title: string;
   description: string;
+  /**
+   * Set in a phone's snapshot when `description` is only the brief's
+   * start; `taskGet` has all of it.
+   */
+  descriptionShortened?: boolean;
   status: TaskStatus;
   priority: TaskPriority;
   createdAt: string;

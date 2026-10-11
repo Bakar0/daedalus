@@ -229,6 +229,9 @@ try {
   const workspace = (await cli(["workspace", "create", "Phone check"])) as {
     id: string;
   };
+  // A brief longer than the phone's snapshot carries, so the task screen
+  // has to fetch the rest.
+  const longBrief = `${"Make the phone app ready to ship. ".repeat(12)}BRIEF_END`;
   const task = (await cli([
     "task",
     "create",
@@ -236,6 +239,8 @@ try {
     workspace.id,
     "--title",
     "Ship the phone app",
+    "--description",
+    longBrief,
   ])) as { id: string };
   const waiting = (await cli([
     "agent",
@@ -808,10 +813,18 @@ try {
     await sleep(100);
   if ((await taskOnMac(task.id)).status !== "blocked")
     throw new Error("The status set on the phone did not reach the Mac");
+  // The snapshot carried the brief's start; the screen shows all of it,
+  // and an edit starts from all of it.
+  await waitFor("the whole brief", byText(".task-brief", "BRIEF_END"));
   await tap(byText(".task-section-head button", "Edit"));
+  const editing = await evaluate<string>(
+    "document.querySelector('.task-brief-edit').value",
+  );
+  if (editing !== longBrief)
+    throw new Error(`The brief to edit is not all of it: ${editing.length}`);
   await setValue(
     ".task-brief-edit",
-    "Written on the phone.",
+    `${longBrief} Written on the phone.`,
     "HTMLTextAreaElement",
   );
   await tap(byText(".task-section-head button", "Save"));
@@ -819,7 +832,10 @@ try {
     "the saved brief",
     byText(".task-brief", "Written on the phone."),
   );
-  if ((await taskOnMac(task.id)).description !== "Written on the phone.")
+  if (
+    (await taskOnMac(task.id)).description !==
+    `${longBrief} Written on the phone.`
+  )
     throw new Error("The brief edited on the phone did not reach the Mac");
   await screenshot("task");
   await evaluate("history.back()");
@@ -866,7 +882,7 @@ try {
   await evaluate("history.back()");
   await waitFor("the board again", "document.querySelector('.mac-board')");
   console.log(
-    "PASS a workspace's Board is the Mac's board (lanes, card edges, session lines); a task opens with its sessions; its status, brief, a captured task and a new task made on the phone land on the Mac",
+    "PASS a long brief comes to the phone shortened and the task screen fetches all of it before editing; a workspace's Board is the Mac's board (lanes, card edges, session lines); a task opens with its sessions; its status, brief, a captured task and a new task made on the phone land on the Mac",
   );
 
   // The plan ends, as a trial does: the phone says Pro is needed, and an
