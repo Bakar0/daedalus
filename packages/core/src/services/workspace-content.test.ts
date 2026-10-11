@@ -1093,6 +1093,16 @@ Before working in this workspace:
         expect(
           await resolveLink(join(workspacePath, "notes", "a.md"), []),
         ).toEqual({ workspaceId, path: "notes/a.md" });
+        // From a folder deeper in the workspace, a path relative to the
+        // workspace root still resolves, after the folder itself.
+        await mkdir(join(workspacePath, "worktrees", "task", "session"), {
+          recursive: true,
+        });
+        expect(
+          await resolveLink("notes/a.md", [
+            join(workspacePath, "worktrees", "task", "session"),
+          ]),
+        ).toEqual({ workspaceId, path: "notes/a.md" });
         // A folder, a missing file and a file outside every workspace are not links.
         expect(await resolveLink("notes", [workspacePath])).toBeNull();
         expect(await resolveLink("missing.md", [workspacePath])).toBeNull();

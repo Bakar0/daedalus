@@ -3507,7 +3507,9 @@ export class WorkspaceContentService {
   /**
    * Where a path printed in a terminal points. A relative path is tried
    * against each base directory in turn (the session's folder, then its
-   * worktrees); the first existing file wins. Only files inside an active
+   * worktrees), then against the root of the workspace each one is in, since
+   * agents also name workspace files like `artifacts/notes.md` from a
+   * worktree; the first existing file wins. Only files inside an active
    * workspace are links: the editor shows workspace files, and anything else
    * would be a link that opens nothing.
    */
@@ -3519,11 +3521,6 @@ export class WorkspaceContentService {
     const expanded = input.path.startsWith("~/")
       ? join(home, input.path.slice(2))
       : input.path;
-    const candidates = isAbsolute(expanded)
-      ? [expanded]
-      : input.baseDirectories
-          .filter((directory) => isAbsolute(directory))
-          .map((directory) => resolve(directory, expanded));
     const workspaces = await this.workspaces.list();
     const roots = await Promise.all(
       workspaces.map(async (workspace) => ({
@@ -3531,6 +3528,33 @@ export class WorkspaceContentService {
         canonical: await canonicalPath(workspace.path).catch(() => null),
       })),
     );
+    const bases = input.baseDirectories.filter((directory) =>
+      isAbsolute(directory),
+    );
+    const baseRoots = await Promise.all(
+      bases.map(async (directory) => {
+        const real = await canonicalPath(directory).catch(() => null);
+        return (
+          (real &&
+            roots.find(
+              (root) =>
+                root.canonical &&
+                (root.canonical === real || isPathInside(root.canonical, real)),
+            )?.canonical) ??
+          null
+        );
+      }),
+    );
+    const candidates = isAbsolute(expanded)
+      ? [expanded]
+      : [
+          ...new Set(
+            [
+              ...bases,
+              ...baseRoots.filter((root): root is string => root !== null),
+            ].map((directory) => resolve(directory, expanded)),
+          ),
+        ];
     for (const candidate of candidates) {
       if (!(await pathExists(candidate))) continue;
       if (!(await lstat(candidate)).isFile()) continue;
