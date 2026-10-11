@@ -314,6 +314,8 @@ describe("AgentService", () => {
           "--no-alt-screen",
           "-c",
           "tui.disable_mouse_capture=true",
+          "-c",
+          "check_for_update_on_startup=false",
           // So `daedal` can write its database from inside the sandbox.
           "--add-dir",
           home,
@@ -561,6 +563,8 @@ describe("AgentService", () => {
         "--no-alt-screen",
         "-c",
         "tui.disable_mouse_capture=true",
+        "-c",
+        "check_for_update_on_startup=false",
         ...CODEX_INSTRUCTIONS,
       ]);
       context.close();
@@ -608,6 +612,8 @@ describe("AgentService", () => {
         "--no-alt-screen",
         "-c",
         "tui.disable_mouse_capture=true",
+        "-c",
+        "check_for_update_on_startup=false",
         ...CODEX_INSTRUCTIONS,
       ]);
       context.close();

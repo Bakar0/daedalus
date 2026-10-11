@@ -62,6 +62,11 @@ export const CODEX_DAEDALUS_TUI_ARGS = [
   "--no-alt-screen",
   "-c",
   "tui.disable_mouse_capture=true",
+  // Codex's startup update offer runs the update and then quits, which ends
+  // the session and leaves its terminal blank. Updating is the user's to do
+  // outside a session.
+  "-c",
+  "check_for_update_on_startup=false",
 ] as const;
 
 /**
@@ -690,7 +695,8 @@ class ConfiguredProvider implements AgentProvider {
   async probe(): Promise<{ available: boolean; executable: string }> {
     // A provider installed only on the login shell's PATH is found once that
     // PATH is known. The session launched next needs it anyway.
-    await loginShellPath();
+    if (!resolveAgentExecutable(this.name, this.definition.executable))
+      await loginShellPath();
     const executable = resolveAgentExecutable(
       this.name,
       this.definition.executable,

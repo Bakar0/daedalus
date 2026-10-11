@@ -647,8 +647,12 @@ export class AccountService {
         (!wanted || entry.account === wanted),
     );
     // So a provider installed only on the login shell's PATH (npm under nvm,
-    // say) reads as installed rather than missing.
-    await loginShellPath();
+    // say) reads as installed rather than missing. Asked only then, because
+    // an interactive shell takes a second or more to answer.
+    if (
+      accounts.some((entry) => !providerExecutable(this.config, entry.provider))
+    )
+      await loginShellPath();
     return Promise.all(
       accounts.map(async (entry): Promise<AccountStatus> => {
         const executable = providerExecutable(this.config, entry.provider);
