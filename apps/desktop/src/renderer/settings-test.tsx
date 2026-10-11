@@ -386,6 +386,7 @@ const remote = {
   connectedPhones: 0,
   phones: [] as Array<{ id: string; name: string; pairedAt: string }>,
   account: undefined as string | undefined,
+  plan: undefined as { name: string; expiresAt: string | null } | undefined,
   pairingRequest: undefined as
     | { phoneId: string; phoneName: string; code: string; expiresAt: number }
     | undefined,
@@ -435,6 +436,7 @@ Object.assign(client.request, {
       });
       remote.status = "online";
       remote.account = "owner@example.com";
+      remote.plan = { name: "pro", expiresAt: "2026-11-01T12:00:00.000Z" };
     }
     return remoteState();
   },

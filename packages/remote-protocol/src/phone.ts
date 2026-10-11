@@ -173,6 +173,8 @@ export class RelayAccount {
     user: { id: string; email: string };
     entitlement: {
       plan: string;
+      /** When the plan ends; null for never. */
+      expiresAt: string | null;
       maxMacs: number;
       maxPhones: number;
       monthlyMb: number;

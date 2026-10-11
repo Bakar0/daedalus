@@ -110,6 +110,20 @@ describe("RemoteStore", () => {
       before,
     );
   });
+
+  test("keeps the account's plan across a reopen and forgets it on starting over", async () => {
+    const home = await newHome();
+    const store = await RemoteStore.open(home, null);
+    const plan = { name: "pro", expiresAt: "2026-11-01T00:00:00.000Z" };
+    await store.setAccount("alice@example.com", plan);
+    const again = await RemoteStore.open(home, null);
+    expect(again.account).toBe("alice@example.com");
+    expect(again.plan).toEqual(plan);
+    await again.setAccount("alice@example.com", { ...plan, expiresAt: null });
+    expect(again.plan?.expiresAt).toBeNull();
+    await again.reset();
+    expect(again.plan).toBeUndefined();
+  });
 });
 
 describe("RemoteAudit", () => {

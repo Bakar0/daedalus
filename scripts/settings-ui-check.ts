@@ -851,6 +851,7 @@ try {
     paired.phones.join() !== "Pixel 9" ||
     paired.status !== "ready" ||
     !afterPairing.includes("owner@example.com") ||
+    !afterPairing.includes("Pro plan until") ||
     !afterPairing.includes("Pixel 9: Sent a message")
   )
     throw new Error(
@@ -874,7 +875,7 @@ try {
   );
   if (left !== 0) throw new Error("Remote: Remove did not forget the phone");
   console.log(
-    "Remote: off by default; on, it waits for a phone and offers Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account and its recent activity; Remove forgets it",
+    "Remote: off by default; on, it waits for a phone and offers Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account, its Pro plan and recent activity; Remove forgets it",
   );
   // And General, where a switch sits beside a two-line description and the
   // alignment either reads or does not.

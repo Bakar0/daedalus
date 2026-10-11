@@ -3,6 +3,7 @@ import { chmod, mkdir, open, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { runCommand } from "@daedalus/platform";
 import {
+  type AccountPlan,
   createIdentity,
   type DeviceIdentity,
   sodiumReady,
@@ -102,6 +103,8 @@ interface RemoteFile {
   relayToken?: string;
   /** The account that claimed this Mac, as the relay reports it. */
   account?: string;
+  /** That account's plan, as the relay last reported it. */
+  plan?: AccountPlan;
 }
 
 /**
@@ -244,9 +247,19 @@ export class RemoteStore {
     return this.save();
   }
 
-  async setAccount(email: string): Promise<void> {
-    if (this.data.account === email) return;
+  get plan(): AccountPlan | undefined {
+    return this.data.plan;
+  }
+
+  async setAccount(email: string, plan?: AccountPlan): Promise<void> {
+    if (
+      this.data.account === email &&
+      this.data.plan?.name === plan?.name &&
+      this.data.plan?.expiresAt === plan?.expiresAt
+    )
+      return;
     this.data.account = email;
+    this.data.plan = plan;
     await this.save();
   }
 

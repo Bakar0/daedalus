@@ -136,6 +136,9 @@ export interface RemoteConnectorOptions {
  *   removed from its account sees. It stops and waits for the user to start
  *   over rather than erasing its keys on the relay's word.
  */
+/** Why the relay refused this Mac while it is `locked`. */
+export type RemoteLock = "no_plan" | "over_quota" | "paused" | "rate_limited";
+
 export type RemoteStatus =
   | "connecting"
   | "waiting_for_phone"
@@ -199,6 +202,7 @@ export class RemoteConnector {
       })
     | undefined;
   #status: RemoteStatus = "connecting";
+  #lockedBy: RemoteLock | undefined;
   #statusListeners = new Set<(status: RemoteStatus) => void>();
   #overQuota = false;
   #phones = new Map<string, PhoneState>();
@@ -223,6 +227,10 @@ export class RemoteConnector {
   onStatus(listener: (status: RemoteStatus) => void): () => void {
     this.#statusListeners.add(listener);
     return () => this.#statusListeners.delete(listener);
+  }
+
+  get lockedBy(): RemoteLock | undefined {
+    return this.#status === "locked" ? this.#lockedBy : undefined;
   }
 
   #setStatus(status: RemoteStatus): void {
@@ -515,6 +523,14 @@ export class RemoteConnector {
       code === RELAY_CLOSE.budgetExhausted ||
       code === RELAY_CLOSE.rateLimited
     ) {
+      this.#lockedBy =
+        code === RELAY_CLOSE.noEntitlement
+          ? "no_plan"
+          : code === RELAY_CLOSE.overQuota
+            ? "over_quota"
+            : code === RELAY_CLOSE.budgetExhausted
+              ? "paused"
+              : "rate_limited";
       this.#setStatus("locked");
       setTimeout(
         () => this.#connect(),
@@ -544,7 +560,7 @@ export class RemoteConnector {
     else if (notice.relay === "claimed")
       void this.options.store.setRelayToken(notice.token);
     else if (notice.relay === "account")
-      void this.options.store.setAccount(notice.email);
+      void this.options.store.setAccount(notice.email, notice.plan);
     else if (notice.relay === "quota") {
       // Over the month's data: stop the heavy part, keep requests going.
       this.#overQuota = true;
@@ -1276,6 +1292,12 @@ export class RemoteHost implements DesktopRemoteHost {
       })),
       ...(this.#store?.relayToken && this.#store.account
         ? { account: this.#store.account }
+        : {}),
+      ...(this.#store?.relayToken && this.#store.plan
+        ? { plan: this.#store.plan }
+        : {}),
+      ...(this.#connector?.lockedBy
+        ? { lockedBy: this.#connector.lockedBy }
         : {}),
       ...(this.#connector?.pairingRequest
         ? { pairingRequest: this.#connector.pairingRequest }

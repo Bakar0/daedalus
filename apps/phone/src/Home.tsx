@@ -22,7 +22,7 @@ const BLOCKED = {
   signed_out: { title: "Signed out", body: "Sign in again to reach your Mac." },
   no_access: {
     title: "No active access",
-    body: "Your account has no active access right now, or it used this month's allowance.",
+    body: "Phone access needs a Pro plan. Your account has none, the plan ended, or it used this month's data allowance. See Account.",
   },
   removed: {
     title: "This phone was removed",

@@ -12,8 +12,14 @@ export interface Plan {
   monthlyFrames: number;
 }
 
-/** What each plan allows. An invite or a grant names one of these. */
+/**
+ * What each plan allows. An invite or a grant names one of these. Pro is
+ * the plan people pay for; there is no free plan, so an account without an
+ * active entitlement cannot connect. `beta` is kept for the accounts that
+ * joined before Pro.
+ */
 export const PLANS: Record<string, Plan> = {
+  pro: { maxMacs: 3, maxPhones: 3, monthlyMb: 4096, monthlyFrames: 3_000_000 },
   beta: { maxMacs: 2, maxPhones: 3, monthlyMb: 2048, monthlyFrames: 3_000_000 },
   admin: {
     maxMacs: 10,
@@ -163,26 +169,36 @@ export async function activeEntitlement(
   return row ?? undefined;
 }
 
+/** A time `days` from now, or null (no end) for none. */
+export const daysFromNow = (days: number | null | undefined): string | null =>
+  days && days > 0
+    ? new Date(Date.now() + days * 86_400_000).toISOString()
+    : null;
+
 export async function setEntitlement(
   db: D1Database,
   userId: string,
   planName: string,
   source: "invite" | "admin",
-  status: "active" | "revoked" = "active",
-  /** Overrides for one account, from the admin routes. */
-  limits: Partial<Plan> = {},
+  options: {
+    status?: "active" | "expired" | "revoked";
+    /** Overrides for one account, from the admin routes. */
+    limits?: Partial<Plan>;
+    /** When the plan ends; null for never. */
+    expiresAt?: string | null;
+  } = {},
 ): Promise<void> {
   const base = PLANS[planName];
   if (!base) throw new Error(`Unknown plan ${planName}`);
-  const plan = { ...base, ...limits };
+  const plan = { ...base, ...options.limits };
   await db
     .prepare(
       `INSERT INTO entitlements
          (user_id, plan, source, status, expires_at, max_macs, max_phones, monthly_mb, monthly_frames, updated_at)
-       VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (user_id) DO UPDATE SET
          plan = excluded.plan, source = excluded.source, status = excluded.status,
-         expires_at = NULL, max_macs = excluded.max_macs,
+         expires_at = excluded.expires_at, max_macs = excluded.max_macs,
          max_phones = excluded.max_phones, monthly_mb = excluded.monthly_mb,
          monthly_frames = excluded.monthly_frames,
          updated_at = excluded.updated_at`,
@@ -191,7 +207,8 @@ export async function setEntitlement(
       userId,
       planName,
       source,
-      status,
+      options.status ?? "active",
+      options.expiresAt ?? null,
       plan.maxMacs,
       plan.maxPhones,
       plan.monthlyMb,
@@ -202,8 +219,9 @@ export async function setEntitlement(
 }
 
 /**
- * Uses one place on an invite and grants its plan. The single UPDATE is
- * what keeps two sign-ups from taking the last place together.
+ * Uses one place on an invite and grants its plan, for the invite's
+ * `grant_days` if it has them (a trial), else with no end. The single
+ * UPDATE is what keeps two sign-ups from taking the last place together.
  *
  * An account that already has access, or that an admin revoked, cannot
  * redeem: otherwise any unused invite would undo the revoke.
@@ -224,38 +242,46 @@ export async function redeemInvite(
       `UPDATE invites SET used = used + 1
        WHERE code = ? AND used < max_uses
          AND (expires_at IS NULL OR expires_at > ?)
-       RETURNING plan`,
+       RETURNING plan, grant_days AS grantDays`,
     )
     .bind(code.trim().toUpperCase(), nowIso())
-    .first<{ plan: string }>();
+    .first<{ plan: string; grantDays: number | null }>();
   if (!invite) return false;
-  await setEntitlement(db, userId, invite.plan, "invite");
+  await setEntitlement(db, userId, invite.plan, "invite", {
+    expiresAt: daysFromNow(invite.grantDays),
+  });
   return true;
 }
 
 export async function createInvite(
   db: D1Database,
-  options: { plan?: string; maxUses?: number; days?: number; note?: string },
+  options: {
+    plan?: string;
+    maxUses?: number;
+    /** How long the code itself can be used. */
+    days?: number;
+    /** How long the plan it grants lasts; none means no end. */
+    grantDays?: number;
+    note?: string;
+  },
 ): Promise<string> {
-  const plan = options.plan ?? "beta";
+  const plan = options.plan ?? "pro";
   if (!PLANS[plan]) throw new Error(`Unknown plan ${plan}`);
   // Readable on a phone keyboard: no 0/O or 1/I.
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const bytes = crypto.getRandomValues(new Uint8Array(10));
   const code = [...bytes].map((byte) => alphabet[byte % 32]).join("");
   const formatted = `${code.slice(0, 5)}-${code.slice(5)}`;
-  const expires = options.days
-    ? new Date(Date.now() + options.days * 86_400_000).toISOString()
-    : null;
   await db
     .prepare(
-      "INSERT INTO invites (code, plan, max_uses, used, expires_at, note, created_at) VALUES (?, ?, ?, 0, ?, ?, ?)",
+      "INSERT INTO invites (code, plan, max_uses, used, expires_at, grant_days, note, created_at) VALUES (?, ?, ?, 0, ?, ?, ?, ?)",
     )
     .bind(
       formatted,
       plan,
       options.maxUses ?? 1,
-      expires,
+      daysFromNow(options.days),
+      options.grantDays && options.grantDays > 0 ? options.grantDays : null,
       options.note ?? "",
       nowIso(),
     )

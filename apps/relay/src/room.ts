@@ -59,6 +59,8 @@ export class Room extends DurableObject<Env> {
     const deviceId = request.headers.get("X-Daedalus-Device") ?? "";
     const userId = request.headers.get("X-Daedalus-User") || null;
     const email = request.headers.get("X-Daedalus-Email") ?? "";
+    const plan = request.headers.get("X-Daedalus-Plan") ?? "";
+    const planEnds = request.headers.get("X-Daedalus-Plan-Expires") || null;
 
     if (
       role === "phone" &&
@@ -77,9 +79,16 @@ export class Room extends DurableObject<Env> {
     const server = pair[1];
     this.ctx.acceptWebSocket(server, [role, `${role}:${deviceId}`]);
     server.serializeAttachment({ role, deviceId, userId } satisfies Attachment);
-    // A claimed Mac learns which account it is on, to show its user.
+    // A claimed Mac learns which account it is on and its plan, to show
+    // its user (RelayNotice in packages/remote-protocol/src/frames.ts).
     if (role === "mac" && userId)
-      server.send(JSON.stringify({ relay: "account", email }));
+      server.send(
+        JSON.stringify({
+          relay: "account",
+          email,
+          plan: { name: plan, expiresAt: planEnds },
+        }),
+      );
     this.#notice(role, deviceId, true);
     await this.#ensureAlarm(IDLE_CHECK_MS);
     return new Response(null, {

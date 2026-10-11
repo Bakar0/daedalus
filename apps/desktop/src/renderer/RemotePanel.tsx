@@ -49,7 +49,16 @@ export function remoteStatusText(state: RemoteStateDto | undefined): string {
     case "offline":
       return "Can't reach the relay. Retrying.";
     case "locked":
-      return "The relay refused this Mac: the account has no active access or used its allowance for the month, or the relay is paused until the 1st.";
+      switch (state.lockedBy) {
+        case "no_plan":
+          return "The relay refused this Mac: its account has no Pro plan, or the plan ended. Phone access needs Pro.";
+        case "over_quota":
+          return "The relay refused this Mac: the account used its data allowance for the month.";
+        case "paused":
+          return "The relay refused this Mac: remote access is paused until the 1st.";
+        default:
+          return "The relay refused this Mac: too many attempts. Retrying in a few minutes.";
+      }
     case "removed":
       return "The relay no longer accepts this Mac: it was removed from its account. Start over to pair it again.";
     case "waiting_for_phone":
@@ -59,6 +68,14 @@ export function remoteStatusText(state: RemoteStateDto | undefined): string {
         ? "On. No phone is connected right now."
         : `On. ${state.connectedPhones === 1 ? "A phone is" : `${state.connectedPhones} phones are`} connected now.`;
   }
+}
+
+/** "Pro plan" or "Pro plan until 30 Oct 2026". */
+export function planText(plan: { name: string; expiresAt: string | null }) {
+  const name = `${plan.name.slice(0, 1).toUpperCase()}${plan.name.slice(1)} plan`;
+  return plan.expiresAt
+    ? `${name} until ${new Date(plan.expiresAt).toLocaleDateString(undefined, { dateStyle: "medium" })}`
+    : name;
 }
 
 /**
@@ -393,7 +410,8 @@ export function RemotePanel({
           <span>
             <strong>Account</strong>
             <small>
-              This Mac is on {state.account}'s account on the relay. Only phones
+              This Mac is on {state.account}'s account on the relay
+              {state.plan ? ` (${planText(state.plan)})` : ""}. Only phones
               signed in to it can reach this Mac.
             </small>
           </span>

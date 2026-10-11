@@ -790,6 +790,10 @@ export interface RemoteStateDto {
   connectedPhones: number;
   /** The account that claimed this Mac, once the relay has said. */
   account?: string;
+  /** That account's plan (e.g. "pro"), and when it ends (null for never). */
+  plan?: { name: string; expiresAt: string | null };
+  /** Why the relay refused this Mac, while `status` is `locked`. */
+  lockedBy?: "no_plan" | "over_quota" | "paused" | "rate_limited";
   /** A phone that scanned the code, waiting for the user to allow it. */
   pairingRequest?: {
     phoneId: string;

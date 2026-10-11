@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
-import { type PairedMac, RelayAccount } from "@daedalus/remote-protocol";
+import {
+  type PairedMac,
+  planLabel,
+  RelayAccount,
+} from "@daedalus/remote-protocol";
 import { lockAvailable, turnOnLock } from "./lock";
 import { PushControl } from "./PushControl";
 import { Shell } from "./Shell";
@@ -46,9 +50,12 @@ export function Account({
               <strong>{me.user.email}</strong>
               <small>
                 {me.entitlement
-                  ? `${me.entitlement.plan} plan · ${usedMb.toFixed(1)} of ${me.entitlement.monthlyMb} MB this month`
-                  : "No active access"}
+                  ? `${planLabel(me.entitlement.plan)} plan${me.entitlement.expiresAt ? ` until ${new Date(me.entitlement.expiresAt).toLocaleDateString()}` : ""} · ${usedMb.toFixed(1)} of ${me.entitlement.monthlyMb} MB this month`
+                  : "No Pro plan. Phone access needs Pro."}
               </small>
+              {me.entitlement ? undefined : (
+                <InviteField account={account} onRedeemed={reload} />
+              )}
             </div>
           </section>
           <PushControl token={token} />
@@ -129,6 +136,54 @@ export function Account({
         <div className="spinner centered" />
       )}
     </Shell>
+  );
+}
+
+/** Turns an invite code into a plan, for an account whose plan ended. */
+function InviteField({
+  account,
+  onRedeemed,
+}: {
+  account: RelayAccount;
+  onRedeemed: () => void;
+}) {
+  const [code, setCode] = useState("");
+  const [error, setError] = useState<string>();
+  return (
+    <form
+      className="invite"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        setError(undefined);
+        try {
+          await account.redeemInvite(code);
+          onRedeemed();
+        } catch (failure) {
+          setError(
+            failure instanceof Error ? failure.message : String(failure),
+          );
+        }
+      }}
+    >
+      <label className="field">
+        <span>Invite code</span>
+        <input
+          autoCapitalize="characters"
+          autoComplete="off"
+          onChange={(event) => setCode(event.target.value)}
+          placeholder="XXXXX-XXXXX"
+          value={code}
+        />
+      </label>
+      {error ? (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      ) : undefined}
+      <button className="button" disabled={!code.trim()} type="submit">
+        Use invite code
+      </button>
+    </form>
   );
 }
 

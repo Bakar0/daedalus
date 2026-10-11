@@ -202,18 +202,22 @@ try {
     if (attempt > 240) throw new Error("The local relay did not start");
     await sleep(250);
   }
-  const invite = (
-    (await (
-      await fetch(`${origin}/admin/invites`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${ADMIN_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: "{}",
-      })
-    ).json()) as { data: { code: string } }
-  ).data.code;
+  const admin = async <T>(path: string, body: unknown): Promise<T> =>
+    (
+      (await (
+        await fetch(`${origin}${path}`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${ADMIN_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+        })
+      ).json()) as { data: T }
+    ).data;
+  const newInvite = async () =>
+    (await admin<{ code: string }>("/admin/invites", {})).code;
+  const invite = await newInvite();
 
   // The Mac: a workspace, a task, two shell sessions, one asking for the user.
   await Bun.write(
@@ -623,6 +627,7 @@ try {
   await waitFor("home again", byText(".bar h1", "Studio Mac"));
   await tap(`document.querySelector('button[aria-label="Account"]')`);
   await waitFor("account", byText(".card strong", "phone@example.com"));
+  await waitFor("the plan", byText(".card small", "Pro plan ·"));
   const devices = await evaluate<string[]>(
     "[...document.querySelectorAll('.rows .row strong')].map((one) => one.textContent)",
   );
@@ -782,6 +787,24 @@ try {
   await waitFor("the board again", "document.querySelector('.mac-board')");
   console.log(
     "PASS a workspace's Board is the Mac's board (lanes, card edges, session lines); a task opens with its sessions; its status, brief, a captured task and a new task made on the phone land on the Mac",
+  );
+
+  // The plan ends, as a trial does: the phone says Pro is needed, and an
+  // invite code on the Account page renews it.
+  await admin("/admin/entitlements", {
+    email: "phone@example.com",
+    status: "expired",
+  });
+  await evaluate("history.back()");
+  await waitFor("blocked home", byText("h2", "No active access"));
+  await tap(`document.querySelector('button[aria-label="Account"]')`);
+  await waitFor("no plan", byText(".card small", "No Pro plan"));
+  await setValue(".invite input", await newInvite(), "HTMLInputElement");
+  await screenshot("account-no-plan");
+  await tap(byText("button", "Use invite code"));
+  await waitFor("renewed plan", byText(".card small", "Pro plan ·"));
+  console.log(
+    "PASS when the plan ends, the phone says phone access needs Pro, and an invite code on Account renews it",
   );
 
   const blocking = errors.filter((text) => !text.includes("favicon"));

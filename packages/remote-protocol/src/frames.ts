@@ -36,14 +36,27 @@ export function decodeRelayFrame(frame: Uint8Array): {
   };
 }
 
+/** An account's plan on the relay, and when it ends (null for never). */
+export interface AccountPlan {
+  name: string;
+  expiresAt: string | null;
+}
+
+/** How a plan's name reads to people: "pro" is "Pro". */
+export const planLabel = (name: string): string =>
+  name.slice(0, 1).toUpperCase() + name.slice(1);
+
 /** What the relay itself says, as text frames. */
 export type RelayNotice =
   | { relay: "peer"; deviceId: string; online: boolean }
   | { relay: "replaced" }
   /** A phone claimed this Mac; the token lets it rejoin as that account's. */
   | { relay: "claimed"; token: string }
-  /** Sent to a claimed Mac as it joins: which account it belongs to. */
-  | { relay: "account"; email: string }
+  /**
+   * Sent to a claimed Mac as it joins: which account it belongs to and that
+   * account's plan. A relay from before plans sends no `plan`.
+   */
+  | { relay: "account"; email: string; plan?: AccountPlan }
   | { relay: "quota"; limitMb: number };
 
 /** Sent before a secure channel exists. Nothing secret travels this way. */

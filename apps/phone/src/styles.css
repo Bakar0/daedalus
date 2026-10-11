@@ -354,6 +354,11 @@ main {
 .card small {
   color: var(--secondary);
 }
+.invite {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
 .mac-picker {
   background: var(--raised);
   border-radius: 10px;

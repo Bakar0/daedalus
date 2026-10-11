@@ -373,8 +373,8 @@ try {
   if (!aliceToken) throw new Error("Alice could not sign up with an invite");
   const alice = new RelayAccount(relayUrl, aliceToken);
   const me = await alice.me();
-  if (me.entitlement?.plan !== "beta")
-    throw new Error("No entitlement after invite");
+  if (me.entitlement?.plan !== "pro" || me.entitlement.expiresAt !== null)
+    throw new Error(`Not Pro with no end after invite: ${JSON.stringify(me)}`);
   if (
     (await signIn("bob@example.com", invite)).get("error") !== "invite_invalid"
   )
@@ -387,7 +387,52 @@ try {
   if (!returning)
     throw new Error("An existing account could not sign in again");
   pass(
-    "Google sign-in with an invite grants the beta plan; invites are one-use",
+    "Google sign-in with an invite grants the Pro plan with no end; invites are one-use",
+  );
+
+  // A trial: the invite grants Pro for a number of days.
+  const trial = (
+    (await adminCall("POST", "/admin/invites", { grantDays: 14 })).data as {
+      code: string;
+    }
+  ).code;
+  const carolToken = (await signIn("carol@example.com", trial)).get("token");
+  if (!carolToken) throw new Error("Carol could not sign up with a trial");
+  const trialEnds = (await new RelayAccount(relayUrl, carolToken).me())
+    .entitlement?.expiresAt;
+  const days = (Date.parse(trialEnds ?? "") - Date.now()) / 86_400_000;
+  if (!(days > 13.9 && days <= 14))
+    throw new Error(`Trial ends in ${days} days, not 14`);
+  const granted = (
+    await adminCall("POST", "/admin/entitlements", {
+      email: "carol@example.com",
+      days: 30,
+    })
+  ).data as { plan: string; expiresAt: string | null };
+  const kept = (
+    await adminCall("POST", "/admin/entitlements", {
+      email: "carol@example.com",
+      monthlyFrames: 5_000_000,
+    })
+  ).data as { expiresAt: string | null; monthlyFrames: number };
+  const forever = (
+    await adminCall("POST", "/admin/entitlements", {
+      email: "carol@example.com",
+      days: 0,
+    })
+  ).data as { expiresAt: string | null };
+  if (
+    granted.plan !== "pro" ||
+    !granted.expiresAt ||
+    kept.expiresAt !== granted.expiresAt ||
+    kept.monthlyFrames !== 5_000_000 ||
+    forever.expiresAt !== null
+  )
+    throw new Error(
+      `Admin grants: ${JSON.stringify({ granted, kept, forever })}`,
+    );
+  pass(
+    "a trial invite grants Pro for its days; an admin grant sets the end, keeps it when only limits change, and clears it with 0",
   );
   const elsewhere = await signIn("alice@example.com", undefined, {
     withoutCookie: true,
@@ -513,8 +558,11 @@ try {
     throw new Error(`Mac not claimed: ${connector.status}`);
   if (mac.macName !== "Check Mac") throw new Error("Mac name not passed on");
   await until("account notice", () => store.account === "alice@example.com");
+  await until("plan notice", () => store.plan?.name === "pro");
+  if (store.plan?.expiresAt !== null)
+    throw new Error(`Plan end: ${JSON.stringify(store.plan)}`);
   pass(
-    `paired by code (${code.length} characters for the QR) after the Mac's user allowed it, with the same six digits on both screens; the Mac rejoined as Alice's and knows the account`,
+    `paired by code (${code.length} characters for the QR) after the Mac's user allowed it, with the same six digits on both screens; the Mac rejoined as Alice's and knows the account and its Pro plan`,
   );
 
   await expectRefusal(
@@ -744,6 +792,8 @@ try {
   });
   await until("revoked phone closed", () => phoneClosed !== "");
   await until("Mac locked", () => connector!.status === "locked");
+  if (connector!.lockedBy !== "no_plan")
+    throw new Error(`Locked by ${connector!.lockedBy}, not no_plan`);
   await expectRefusal(
     "a phone on a revoked account",
     PhoneConnection.connect(phone, mac, aliceToken),
@@ -774,6 +824,38 @@ try {
   await until("Mac back online", () => connector!.status === "online", 15_000);
   connection = await PhoneConnection.connect(phone, mac, revokedToken);
   pass("granting access again brings the Mac and phone back");
+
+  // A plan that ends, as a trial does: the Mac locks, the phone's sign-in
+  // stays, and an invite code from the Account page renews it.
+  let endedReason = "";
+  connection.onClose((reason) => {
+    endedReason = reason;
+  });
+  await adminCall("POST", "/admin/entitlements", {
+    email: "alice@example.com",
+    status: "expired",
+  });
+  await until("ended plan closes the phone", () => endedReason !== "");
+  await until(
+    "Mac locked for no plan",
+    () => connector!.status === "locked" && connector!.lockedBy === "no_plan",
+  );
+  await expectRefusal(
+    "a phone whose plan ended",
+    PhoneConnection.connect(phone, mac, revokedToken),
+    RELAY_CLOSE.noEntitlement,
+  );
+  const renewing = new RelayAccount(relayUrl, revokedToken);
+  if ((await renewing.me()).entitlement !== null)
+    throw new Error("An ended plan still shows as active");
+  await renewing.redeemInvite(await newInvite());
+  if ((await renewing.me()).entitlement?.plan !== "pro")
+    throw new Error("An invite did not renew an ended plan");
+  await until("Mac back online", () => connector!.status === "online", 15_000);
+  connection = await PhoneConnection.connect(phone, mac, revokedToken);
+  pass(
+    "an ended plan locks the Mac (no_plan) and refuses the phone but keeps its sign-in, and an invite code renews it",
+  );
 
   let removedReason = "";
   connection.onClose((reason) => {

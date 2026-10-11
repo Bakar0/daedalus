@@ -3,7 +3,9 @@ import {
   bindSession,
   countActiveDevices,
   createInvite,
+  daysFromNow,
   type Device,
+  type Entitlement,
   deleteSession,
   device,
   PLANS,
@@ -236,6 +238,7 @@ async function connect(request: Request, env: Env): Promise<Response> {
 
   let userId: string | null = null;
   let email = "";
+  let plan: Entitlement | undefined;
   const mac = await device(env.DB, macId);
   if (role === "mac") {
     if (mac && mac.kind !== "mac") return refuse(CLOSE.forbidden, "Not a Mac");
@@ -243,8 +246,8 @@ async function connect(request: Request, env: Env): Promise<Response> {
     if (mac?.userId) {
       if (!token || (await sha256(token)) !== mac.tokenHash)
         return refuse(CLOSE.unauthorized, "Device token required");
-      if (!(await activeEntitlement(env.DB, mac.userId)))
-        return refuse(CLOSE.noEntitlement, "No active access");
+      plan = await activeEntitlement(env.DB, mac.userId);
+      if (!plan) return refuse(CLOSE.noEntitlement, "No active access");
       userId = mac.userId;
       email =
         (
@@ -324,6 +327,9 @@ async function connect(request: Request, env: Env): Promise<Response> {
   headers.set("X-Daedalus-Device", deviceId);
   headers.set("X-Daedalus-User", userId ?? "");
   headers.set("X-Daedalus-Email", email);
+  // A claimed Mac shows its account's plan, and when it ends.
+  headers.set("X-Daedalus-Plan", plan?.plan ?? "");
+  headers.set("X-Daedalus-Plan-Expires", plan?.expiresAt ?? "");
   return room(env, macId).fetch(new Request(request, { headers }));
 }
 
@@ -675,6 +681,7 @@ async function admin(
       plan: string;
       maxUses: number;
       days: number;
+      grantDays: number;
       note: string;
     }>(request);
     if (options.plan && !PLANS[options.plan])
@@ -687,7 +694,7 @@ async function admin(
 
   if (route === "GET /admin/invites") {
     const { results } = await env.DB.prepare(
-      "SELECT code, plan, max_uses AS maxUses, used, expires_at AS expiresAt, note, created_at AS createdAt FROM invites ORDER BY created_at DESC",
+      "SELECT code, plan, max_uses AS maxUses, used, expires_at AS expiresAt, grant_days AS grantDays, note, created_at AS createdAt FROM invites ORDER BY created_at DESC",
     ).all();
     return json({ ok: true, data: results });
   }
@@ -696,6 +703,7 @@ async function admin(
     const { results } = await env.DB.prepare(
       `SELECT users.id, users.email, users.created_at AS createdAt,
               entitlements.plan, entitlements.status, entitlements.source,
+              entitlements.expires_at AS expiresAt,
               (SELECT COUNT(*) FROM devices WHERE devices.user_id = users.id AND kind = 'mac' AND revoked_at IS NULL) AS macs,
               (SELECT COUNT(*) FROM devices WHERE devices.user_id = users.id AND kind = 'phone' AND revoked_at IS NULL) AS phones,
               COALESCE((SELECT bytes FROM usage WHERE usage.user_id = users.id AND month = ?), 0) AS usageBytes
@@ -718,11 +726,18 @@ async function admin(
   }
 
   if (route === "POST /admin/entitlements") {
-    const { email, status, plan, monthlyFrames } = await body<{
+    const { email, status, plan, monthlyFrames, days } = await body<{
       email: string;
-      status: "active" | "revoked";
+      /**
+       * `expired` ends the plan now; the account keeps its sign-ins and can
+       * redeem an invite. `revoked` also ends its sign-ins, and invites no
+       * longer work for it.
+       */
+      status: "active" | "expired" | "revoked";
       plan: string;
       monthlyFrames: number;
+      /** How long the plan lasts from now; 0 for no end. */
+      days: number;
     }>(request);
     const user = await env.DB.prepare("SELECT id FROM users WHERE email = ?")
       .bind(email ?? "")
@@ -731,24 +746,37 @@ async function admin(
     if (plan && !PLANS[plan])
       return fail(400, "BAD_PLAN", `Plans: ${Object.keys(PLANS).join(", ")}`);
     const current = await env.DB.prepare(
-      "SELECT plan FROM entitlements WHERE user_id = ?",
+      "SELECT plan, expires_at AS expiresAt FROM entitlements WHERE user_id = ?",
     )
       .bind(user.id)
-      .first<{ plan: string }>();
+      .first<{ plan: string; expiresAt: string | null }>();
     await setEntitlement(
       env.DB,
       user.id,
-      plan ?? current?.plan ?? "beta",
+      plan ?? current?.plan ?? "pro",
       "admin",
-      status === "revoked" ? "revoked" : "active",
-      typeof monthlyFrames === "number" && monthlyFrames > 0
-        ? { monthlyFrames }
-        : {},
+      {
+        status:
+          status === "revoked" || status === "expired" ? status : "active",
+        limits:
+          typeof monthlyFrames === "number" && monthlyFrames > 0
+            ? { monthlyFrames }
+            : {},
+        // Without `days`, a plan that has not ended keeps its end; one that
+        // has is granted again with none.
+        expiresAt:
+          typeof days === "number"
+            ? daysFromNow(days)
+            : current?.expiresAt && current.expiresAt > nowIso()
+              ? current.expiresAt
+              : null,
+      },
     );
-    if (status === "revoked") {
-      await env.DB.prepare("DELETE FROM sessions WHERE user_id = ?")
-        .bind(user.id)
-        .run();
+    if (status === "revoked" || status === "expired") {
+      if (status === "revoked")
+        await env.DB.prepare("DELETE FROM sessions WHERE user_id = ?")
+          .bind(user.id)
+          .run();
       const macs = (await userDevices(env.DB, user.id)).filter(
         (item) => item.kind === "mac",
       );
