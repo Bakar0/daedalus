@@ -884,7 +884,7 @@ try {
   );
   await fill(".admin-key-form .admin-uses", "3");
   await fill(".admin-key-form .admin-trial", "14");
-  await fill(".admin-key-form input[aria-label='Note']", "For Dana");
+  await fill(".admin-key-form input[aria-label='Name']", "For Dana");
   await clickAt(buttonIn(".admin-key-form", "Create"));
   await waitFor("the new key", async () =>
     (
@@ -896,8 +896,54 @@ try {
   const keyLine = await evaluate<string>(
     "document.querySelector('.admin-keys li small')?.textContent ?? ''",
   );
-  if (keyLine !== "0/3 used · 14-day Pro · until Nov 10 · For Dana")
-    throw new Error(`Admin: the key line reads ${keyLine}`);
+  const keyName = await evaluate<string>(
+    "document.querySelector('.admin-keys li .admin-key-name')?.textContent ?? ''",
+  );
+  if (
+    keyLine !== "0/3 used · 14-day Pro · until Nov 10" ||
+    keyName !== "For DanaKEY1A-B2C3D"
+  )
+    throw new Error(`Admin: the key reads ${keyName} | ${keyLine}`);
+  // Rename it from its menu, in place.
+  await clickAt("document.querySelector('.admin-keys li summary')");
+  await Bun.sleep(150);
+  await clickAt(
+    "[...document.querySelectorAll('.admin-keys li [role=menuitem]')].find((one) => one.textContent.trim() === 'Rename…')",
+  );
+  await waitFor("the rename field", async () =>
+    evaluate<boolean>("Boolean(document.querySelector('.admin-rename input'))"),
+  );
+  await fill(".admin-rename input", "Dana's trial");
+  await clickAt(buttonIn(".admin-rename", "Save"));
+  await waitFor("the new name", async () =>
+    (
+      await evaluate<string>(
+        "document.querySelector('.admin-keys li .admin-key-name strong')?.textContent ?? ''",
+      )
+    ).includes("Dana's trial"),
+  );
+  // The fuzzy filter narrows both lists, best match first.
+  await fill(".admin-filter", "frnd");
+  await waitFor("the filtered lists", async () => {
+    const shown = await evaluate<{
+      keys: string;
+      accounts: string[];
+    }>(`(() => ({
+      keys: document.querySelector('.admin-section .remote-empty')?.textContent ?? '',
+      accounts: [...document.querySelectorAll('.admin-accounts li strong')].map((one) => one.textContent),
+    }))()`);
+    return (
+      shown.keys === "No keys match." &&
+      shown.accounts.join() === "friend@example.com"
+    );
+  });
+  await fill(".admin-filter", "dana");
+  await waitFor("the key found by name", async () =>
+    evaluate<boolean>(
+      "document.querySelectorAll('.admin-keys li').length === 1 && document.querySelectorAll('.admin-accounts li').length === 0",
+    ),
+  );
+  await fill(".admin-filter", "");
   // End a plan from the account's menu.
   await clickAt(
     "[...document.querySelectorAll('.admin-accounts li')].find((one) => one.textContent.includes('friend@example.com')).querySelector('summary')",
@@ -1058,7 +1104,7 @@ try {
   );
   if (left !== 0) throw new Error("Remote: Remove did not forget the phone");
   console.log(
-    "Pro: without it the header says Get Pro and Remote (tagged Pro) only leads to Account; Account signs the Mac in through the browser, shows Free as current, formats an invite code as it is typed (wrong12345 reads WRONG-12345), refuses a wrong one and takes a good one; then the header says Pro; an admin account makes a Pro key (uses, trial, note), sees it as one short line, and ends an account's plan from its menu, every row's menu on one edge and nothing past the pane; Remote is on with Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account, its Pro plan and recent activity; Remove forgets it",
+    "Pro: without it the header says Get Pro and Remote (tagged Pro) only leads to Account; Account signs the Mac in through the browser, shows Free as current, formats an invite code as it is typed (wrong12345 reads WRONG-12345), refuses a wrong one and takes a good one; then the header says Pro; an admin account makes a named Pro key (uses, trial, name), sees it as one short line, renames it in place, filters keys and accounts with the fuzzy matcher, and ends an account's plan from its menu, every row's menu on one edge and nothing past the pane; Remote is on with Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account, its Pro plan and recent activity; Remove forgets it",
   );
   // And General, where a switch sits beside a two-line description and the
   // alignment either reads or does not.

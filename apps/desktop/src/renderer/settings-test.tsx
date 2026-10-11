@@ -544,6 +544,18 @@ Object.assign(client.request, {
     adminKeys = adminKeys.filter((key) => key.code !== code);
     return { ok: true, data: null };
   },
+  remoteAdminRenameKey: async ({
+    code,
+    name,
+  }: {
+    code: string;
+    name: string;
+  }) => {
+    adminKeys = adminKeys.map((key) =>
+      key.code === code ? { ...key, note: name } : key,
+    );
+    return { ok: true, data: null };
+  },
   remoteAdminAccounts: async () => ({ ok: true, data: adminAccounts }),
   remoteAdminSetPlan: async ({
     email,

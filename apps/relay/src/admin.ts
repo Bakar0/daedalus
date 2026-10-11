@@ -25,6 +25,7 @@ export type AdminAction =
   | "invites.list"
   | "invites.create"
   | "invites.delete"
+  | "invites.rename"
   | "users.list"
   | "plan.set";
 
@@ -82,6 +83,19 @@ export async function adminAction(
       .bind(code)
       .run();
     if (!deleted.meta.changes) return fail(404, "NOT_FOUND", "No such key.");
+    return json({ ok: true, data: null });
+  }
+
+  // A key's name is its note: who or what it is for.
+  if (action === "invites.rename") {
+    const code = typeof input.code === "string" ? input.code : "";
+    const name = typeof input.note === "string" ? input.note.slice(0, 200) : "";
+    const renamed = await env.DB.prepare(
+      "UPDATE invites SET note = ? WHERE code = ?",
+    )
+      .bind(name.trim(), code)
+      .run();
+    if (!renamed.meta.changes) return fail(404, "NOT_FOUND", "No such key.");
     return json({ ok: true, data: null });
   }
 

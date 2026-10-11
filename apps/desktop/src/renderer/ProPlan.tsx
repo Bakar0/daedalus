@@ -18,6 +18,7 @@ import {
 import type { DesktopClient } from "./client-types";
 import { ConfirmButton } from "./ConfirmButton";
 import { Menu, MenuDots } from "./Menu";
+import { repositoryFuzzyScore } from "./repository-search";
 
 /** Whether the Mac's account has a plan that lets phones in right now. */
 export const hasPlan = (state: RemoteStateDto | undefined): boolean =>
@@ -288,7 +289,7 @@ const wholeNumber = (text: string): number | undefined => {
     : undefined;
 };
 
-/** "1/3 used · 7-day Pro · until Oct 17 · For Dana". */
+/** "1/3 used · 7-day Pro · until Oct 17". */
 function keyLine(key: AdminKeyDto): { text: string; spent: boolean } {
   const usedUp = key.used >= key.maxUses;
   const expired = Boolean(
@@ -302,7 +303,6 @@ function keyLine(key: AdminKeyDto): { text: string; spent: boolean } {
       : key.expiresAt && !usedUp
         ? [`until ${shortDate(key.expiresAt)}`]
         : []),
-    ...(key.note ? [key.note] : []),
   ];
   return { text: parts.join(" · "), spent: usedUp || expired };
 }
@@ -341,6 +341,40 @@ function AdminSection({
   const [copied, setCopied] = useState<string>();
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState({ uses: "1", trial: "", note: "" });
+  const [renaming, setRenaming] = useState<{ code: string; name: string }>();
+  const [filter, setFilter] = useState("");
+
+  // The repository picker's fuzzy matcher, as in Settings › Skills: the
+  // name (a key's name or code, an account's email) ranks ahead of the
+  // rest of the line.
+  const ranked = <T,>(
+    items: T[],
+    name: (item: T) => string,
+    details: (item: T) => string,
+  ) =>
+    filter.trim()
+      ? items
+          .map((item) => ({
+            item,
+            score: repositoryFuzzyScore(filter, name(item), details(item)),
+          }))
+          .filter(
+            (entry): entry is { item: T; score: number } =>
+              entry.score !== undefined,
+          )
+          .sort((left, right) => right.score - left.score)
+          .map((entry) => entry.item)
+      : items;
+  const shownKeys = ranked(
+    keys ?? [],
+    (key) => key.note || key.code,
+    (key) => `${key.code} ${keyLine(key).text}`,
+  );
+  const shownAccounts = ranked(
+    accounts ?? [],
+    (account) => account.email,
+    accountLine,
+  );
 
   const load = useCallback(async () => {
     const [keyList, accountList] = await Promise.all([
@@ -385,6 +419,14 @@ function AdminSection({
 
   return (
     <div className="admin-section">
+      <input
+        aria-label="Filter keys and accounts"
+        className="admin-filter"
+        onChange={(event) => setFilter(event.target.value)}
+        placeholder="Filter keys and accounts"
+        type="search"
+        value={filter}
+      />
       <div className="admin-heading">
         <h3>Pro keys</h3>
         {creating ? undefined : (
@@ -440,9 +482,9 @@ function AdminSection({
             value={form.trial}
           />
           <input
-            aria-label="Note"
+            aria-label="Name"
             onChange={(event) => setForm({ ...form, note: event.target.value })}
-            placeholder="Note"
+            placeholder="Name, e.g. Dana's trial"
             value={form.note}
           />
           <button disabled={busy} type="submit">
@@ -456,7 +498,7 @@ function AdminSection({
             Cancel
           </button>
           <small>
-            Uses, days of Pro (empty for no end), a note. A key works for 30
+            Uses, days of Pro (empty for no end), a name. A key works for 30
             days.
           </small>
         </form>
@@ -473,15 +515,70 @@ function AdminSection({
           </button>
         </p>
       ) : undefined}
-      {keys === undefined ? undefined : keys.length === 0 ? (
-        <p className="remote-empty">No keys yet.</p>
+      {keys === undefined ? undefined : shownKeys.length === 0 ? (
+        <p className="remote-empty">
+          {keys.length === 0 ? "No keys yet." : "No keys match."}
+        </p>
       ) : (
         <ul className="admin-list admin-keys">
-          {keys.map((key) => {
+          {shownKeys.map((key) => {
             const line = keyLine(key);
+            if (renaming?.code === key.code)
+              return (
+                <li className="is-renaming" key={key.code}>
+                  <form
+                    className="admin-rename"
+                    onSubmit={async (event) => {
+                      event.preventDefault();
+                      await run(
+                        client.request.remoteAdminRenameKey({
+                          code: key.code,
+                          name: renaming.name.trim(),
+                        }),
+                      );
+                      setRenaming(undefined);
+                    }}
+                  >
+                    <input
+                      aria-label={`Name for ${key.code}`}
+                      autoFocus
+                      onChange={(event) =>
+                        setRenaming({
+                          code: key.code,
+                          name: event.target.value,
+                        })
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setRenaming(undefined);
+                        }
+                      }}
+                      placeholder={key.code}
+                      value={renaming.name}
+                    />
+                    <button disabled={busy} type="submit">
+                      Save
+                    </button>
+                    <button
+                      className="quiet"
+                      onClick={() => setRenaming(undefined)}
+                      type="button"
+                    >
+                      Cancel
+                    </button>
+                  </form>
+                </li>
+              );
             return (
               <li className={line.spent ? "is-spent" : ""} key={key.code}>
-                <code>{key.code}</code>
+                <span className="admin-key-name">
+                  {key.note ? (
+                    <strong title={key.note}>{key.note}</strong>
+                  ) : undefined}
+                  <code>{key.code}</code>
+                </span>
                 <small title={line.text}>{line.text}</small>
                 <Menu
                   align="end"
@@ -497,6 +594,16 @@ function AdminSection({
                     type="button"
                   >
                     <span className="menu-item-label">Copy</span>
+                  </button>
+                  <button
+                    className="quiet menu-item"
+                    onClick={() =>
+                      setRenaming({ code: key.code, name: key.note })
+                    }
+                    role="menuitem"
+                    type="button"
+                  >
+                    <span className="menu-item-label">Rename…</span>
                   </button>
                   <button
                     className="quiet menu-item menu-item-danger"
@@ -520,9 +627,11 @@ function AdminSection({
       <div className="admin-heading">
         <h3>Accounts</h3>
       </div>
-      {accounts === undefined ? undefined : (
+      {accounts === undefined ? undefined : shownAccounts.length === 0 ? (
+        <p className="remote-empty">No accounts match.</p>
+      ) : (
         <ul className="admin-list admin-accounts">
-          {accounts.map((account) => (
+          {shownAccounts.map((account) => (
             <li key={account.id}>
               <strong title={account.email}>{account.email}</strong>
               <small>{accountLine(account)}</small>

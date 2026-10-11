@@ -1470,6 +1470,12 @@ try {
     86_400_000;
   if (carolEnded !== null || !(carolDays > 9.9 && carolDays <= 10))
     throw new Error(`Admin plan: ${JSON.stringify(carolEnded)} ${carolDays}`);
+  await signInHost.adminRenameKey(madeKey.code, "Dave's friends");
+  if (
+    (await signInHost.adminKeys()).find((key) => key.code === madeKey.code)
+      ?.note !== "Dave's friends"
+  )
+    throw new Error("Renaming a key did not stick");
   await signInHost.adminDeleteKey(madeKey.code);
   if ((await signInHost.adminKeys()).some((key) => key.code === madeKey.code))
     throw new Error("A deleted key is still listed");
@@ -1480,7 +1486,7 @@ try {
   if (!notAdmin.includes("not an admin"))
     throw new Error(`Alice's Mac read the keys: ${notAdmin}`);
   pass(
-    "an account on ADMIN_EMAILS manages Pro keys (create with uses, trial and expiry, list, delete) and plans (end, grant for days) from its Mac, and sees accounts without devices; another account's Mac is refused",
+    "an account on ADMIN_EMAILS manages Pro keys (create with uses, trial and expiry, list, rename, delete) and plans (end, grant for days) from its Mac, and sees accounts without devices; another account's Mac is refused",
   );
 
   // Settings › Account works with phone access off: it still shows the

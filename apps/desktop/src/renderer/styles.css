@@ -7766,6 +7766,38 @@ dd {
   color: var(--muted);
   font-size: 11px;
 }
+.admin-filter {
+  font-size: 12px;
+  padding: 6px 8px;
+  width: 100%;
+}
+.admin-key-name {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+.admin-key-name strong {
+  max-width: 180px;
+}
+.admin-key-name strong + code {
+  color: var(--muted);
+}
+.admin-list li.is-renaming {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 2px 4px;
+}
+.admin-rename {
+  align-items: center;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+.admin-rename input {
+  font-size: 12px;
+  min-width: 0;
+  padding: 5px 8px;
+}
 .admin-list li.is-spent code,
 .admin-list li.is-spent small {
   opacity: 0.5;

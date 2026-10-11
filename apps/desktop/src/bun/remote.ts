@@ -1207,6 +1207,7 @@ export interface DesktopRemoteHost {
   adminKeys(): Promise<AdminKeyDto[]>;
   adminCreateKey(input: AdminKeyInput): Promise<{ code: string }>;
   adminDeleteKey(code: string): Promise<void>;
+  adminRenameKey(code: string, name: string): Promise<void>;
   adminAccounts(): Promise<AdminAccountDto[]>;
   adminSetPlan(input: AdminPlanInput): Promise<void>;
   leaveAccount(): Promise<RemoteStateDto>;
@@ -1528,6 +1529,11 @@ export class RemoteHost implements DesktopRemoteHost {
 
   async adminDeleteKey(code: string): Promise<void> {
     await this.#adminCall("invites/delete", { code });
+  }
+
+  /** A key's name is its note. */
+  async adminRenameKey(code: string, name: string): Promise<void> {
+    await this.#adminCall("invites/rename", { code, note: name });
   }
 
   adminAccounts(): Promise<AdminAccountDto[]> {

@@ -476,6 +476,7 @@ async function macRoutes(
     "POST /v1/macs/admin/invites": "invites.list",
     "POST /v1/macs/admin/invites/create": "invites.create",
     "POST /v1/macs/admin/invites/delete": "invites.delete",
+    "POST /v1/macs/admin/invites/rename": "invites.rename",
     "POST /v1/macs/admin/users": "users.list",
     "POST /v1/macs/admin/plan": "plan.set",
   };
@@ -731,6 +732,7 @@ async function admin(
   const actions: Record<string, AdminAction> = {
     "GET /admin/invites": "invites.list",
     "POST /admin/invites": "invites.create",
+    "POST /admin/invites/rename": "invites.rename",
     "GET /admin/users": "users.list",
     "POST /admin/entitlements": "plan.set",
   };

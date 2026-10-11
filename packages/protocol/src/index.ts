@@ -818,6 +818,7 @@ export interface AdminKeyDto {
   expiresAt: string | null;
   /** How long the plan it grants lasts; null for no end. */
   grantDays: number | null;
+  /** The key's name: who or what it is for. */
   note: string;
   createdAt: string;
 }
@@ -999,6 +1000,7 @@ export interface DesktopRpcSchema {
       remoteAdminKeys: Request<Record<string, never>, AdminKeyDto[]>;
       remoteAdminCreateKey: Request<AdminKeyInput, { code: string }>;
       remoteAdminDeleteKey: Request<{ code: string }, null>;
+      remoteAdminRenameKey: Request<{ code: string; name: string }, null>;
       remoteAdminAccounts: Request<Record<string, never>, AdminAccountDto[]>;
       remoteAdminSetPlan: Request<AdminPlanInput, null>;
       /** Reads the Mac's account and plan from the relay again. */
