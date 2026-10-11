@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { RemoteStateDto, RpcResult } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { Menu, MenuCheck } from "./Menu";
+import { hasPlan, ProTag } from "./ProPlan";
 import { remoteLook, remoteStatusText } from "./RemotePanel";
 
 const POLL_MS = 3_000;
@@ -33,10 +34,13 @@ export function RemoteMenu({
   client,
   perform,
   onPair,
+  onGetPro,
 }: {
   client: DesktopClient;
   perform: <T>(operation: Promise<RpcResult<T>>) => Promise<T | undefined>;
   onPair: () => void;
+  /** Settings › Account, for a Mac without Pro. */
+  onGetPro: () => void;
 }) {
   const [state, setState] = useState<RemoteStateDto>();
   const refresh = useCallback(async () => {
@@ -70,33 +74,41 @@ export function RemoteMenu({
       summaryClassName="quiet workspace-heading-action"
       title={`Phone access: ${remoteStatusText(state)}`}
     >
-      <span className="menu-heading">Phone access</span>
+      <span className="menu-heading">
+        Phone access <ProTag />
+      </span>
       <p className="remote-menu-status" data-look={look}>
-        {remoteStatusText(state)}
+        {hasPlan(state)
+          ? remoteStatusText(state)
+          : "Phone access is part of Daedalus Pro."}
       </p>
+      {hasPlan(state) || state?.enabled ? (
+        <button
+          aria-checked={state?.enabled ?? false}
+          className="quiet menu-item"
+          disabled={!state}
+          onClick={async () => {
+            const next = await perform(
+              client.request.remoteSetEnabled({ enabled: !state?.enabled }),
+            );
+            if (next) setState(next);
+          }}
+          role="menuitemcheckbox"
+          type="button"
+        >
+          <span className="menu-item-label">Allow phone access</span>
+          {state?.enabled ? <MenuCheck /> : undefined}
+        </button>
+      ) : undefined}
       <button
-        aria-checked={state?.enabled ?? false}
         className="quiet menu-item"
-        disabled={!state}
-        onClick={async () => {
-          const next = await perform(
-            client.request.remoteSetEnabled({ enabled: !state?.enabled }),
-          );
-          if (next) setState(next);
-        }}
-        role="menuitemcheckbox"
-        type="button"
-      >
-        <span className="menu-item-label">Allow phone access</span>
-        {state?.enabled ? <MenuCheck /> : undefined}
-      </button>
-      <button
-        className="quiet menu-item"
-        onClick={onPair}
+        onClick={hasPlan(state) ? onPair : onGetPro}
         role="menuitem"
         type="button"
       >
-        <span className="menu-item-label">Pair a phone…</span>
+        <span className="menu-item-label">
+          {hasPlan(state) ? "Pair a phone…" : "Get Pro…"}
+        </span>
       </button>
     </Menu>
   );

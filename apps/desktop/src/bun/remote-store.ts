@@ -151,6 +151,11 @@ export class RemoteStore {
     private readonly vault: SecretVault | null,
   ) {}
 
+  /** Whether this Mac has a device file, i.e. phone access was ever on. */
+  static exists(home: string): Promise<boolean> {
+    return Bun.file(join(home, "remote", "device.json")).exists();
+  }
+
   static async open(
     home: string,
     /** `null` keeps the secrets in the file (tests). */

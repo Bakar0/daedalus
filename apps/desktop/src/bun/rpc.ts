@@ -485,6 +485,7 @@ const NO_REMOTE: DesktopRemoteHost = {
     );
   },
   redeemInvite: async () => NO_REMOTE.state(),
+  refreshAccount: async () => NO_REMOTE.state(),
   leaveAccount: async () => NO_REMOTE.state(),
   startOver: async () => NO_REMOTE.state(),
   activity: async () => [],
@@ -776,6 +777,7 @@ export function createDesktopRequestHandlers(
       mutate(() => remote.confirmPairing(allow)),
     remoteSignIn: () => result(() => remote.signIn()),
     remoteRedeemInvite: ({ code }) => mutate(() => remote.redeemInvite(code)),
+    remoteRefreshAccount: () => mutate(() => remote.refreshAccount()),
     remoteLeaveAccount: () => mutate(() => remote.leaveAccount()),
     remoteStartOver: () => mutate(() => remote.startOver()),
     remoteActivity: () => result(() => remote.activity()),

@@ -443,6 +443,7 @@ Object.assign(client.request, {
   // The browser's part is instant here: the Mac comes back signed in, with
   // no plan yet.
   remoteSignIn: async () => {
+    remote.enabled = true;
     remote.signedIn = true;
     remote.account = "owner@example.com";
     remote.status = "locked";
@@ -473,6 +474,7 @@ Object.assign(client.request, {
     ];
     return { ok: true, data: { opened: true } };
   },
+  remoteRefreshAccount: async () => remoteState(),
   remoteLeaveAccount: async () => remoteState(),
   remoteStartOver: async () => remoteState(),
   remoteActivity: async () => ({

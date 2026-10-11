@@ -269,6 +269,7 @@ try {
   // what makes the sidebar feel like one surface rather than five dialogs.
   const heights: Record<string, number> = {};
   for (const label of [
+    "Account",
     "General",
     "Agents",
     "Skills",
@@ -743,25 +744,138 @@ try {
   console.log(
     `Agents: ${agents.rows.length} accounts (signed in with email, signed out with a one-click Sign in, Add and sign in with SSO sending both requests, a sign-in running under its row and turning it signed in, an API-key account with Set key, Codex not installed with ${agents.install.length} install commands), none past the pane`,
   );
-  // Remote: off, then on and waiting; a pairing code as a QR code; a phone
-  // finishing pairing hides the code and lists the phone; Remove (two
+  // Pro first. Without it the header offers Get Pro, and Remote says phone
+  // access is a Pro feature and leads to Settings › Account. There the Mac
+  // signs in (the browser's part is instant here) and takes an invite code.
+  // Then Remote is the full section: a pairing code as a QR code, a phone
+  // finishing pairing hides the code and lists the phone, and Remove (two
   // clicks, in place) forgets it.
-  await evaluate(`(() => {
-    [...document.querySelectorAll('.settings-nav button')]
-      .find((one) => one.textContent.trim() === 'Remote').click();
-  })()`);
+  const headerBadge = () =>
+    evaluate<string>(
+      "document.querySelector('.topbar .pro-badge')?.textContent.trim() ?? ''",
+    );
+  if ((await headerBadge()) !== "Get Pro")
+    throw new Error(`Header without Pro: "${await headerBadge()}"`);
+  const openSection = (label: string) =>
+    evaluate(`(() => {
+      [...document.querySelectorAll('.settings-nav button')]
+        .find((one) => one.textContent.trim() === ${JSON.stringify(label)}).click();
+    })()`);
+  const currentSection = () =>
+    evaluate<string>(
+      "document.querySelector('.settings-nav button[aria-current=\"page\"]').textContent.trim()",
+    );
+  const panelText = () =>
+    evaluate<string>(
+      "document.querySelector('.remote-panel')?.textContent ?? ''",
+    );
+  const accountText = () =>
+    evaluate<string>(
+      "document.querySelector('.account-panel')?.textContent ?? ''",
+    );
+  const waitFor = async (label: string, check: () => Promise<boolean>) => {
+    for (let attempt = 0; attempt < 80; attempt++) {
+      if (await check()) return;
+      await Bun.sleep(100);
+    }
+    throw new Error(`Timed out waiting for ${label}`);
+  };
+  await openSection("Remote");
   await Bun.sleep(150);
+  const gated = await panelText();
+  if (
+    !gated.includes("Phone access is a Pro feature") ||
+    gated.includes("Allow phone access") ||
+    gated.includes("Show pairing code") ||
+    !(await evaluate<boolean>(
+      "getComputedStyle([...document.querySelectorAll('.settings-nav button')].find((one) => one.textContent.trim() === 'Remote'), '::after').content.includes('Pro')",
+    ))
+  )
+    throw new Error(`Remote without Pro: ${gated.slice(0, 400)}`);
+  await clickAt(
+    "[...document.querySelectorAll('.remote-panel button')].find((one) => one.textContent.trim() === 'Sign in and get Pro')",
+  );
+  await Bun.sleep(150);
+  if ((await currentSection()) !== "Account")
+    throw new Error("Remote's Get Pro did not open Account");
+  const beforeSignIn = await accountText();
+  if (
+    !beforeSignIn.includes("Sign in with Google") ||
+    !beforeSignIn.includes("FreeCurrent") ||
+    !beforeSignIn.includes("Sign in above to get Pro")
+  )
+    throw new Error(`Account before sign-in: ${beforeSignIn.slice(0, 400)}`);
+  await clickAt(
+    "[...document.querySelectorAll('.account-panel button')].find((one) => one.textContent.trim() === 'Sign in with Google')",
+  );
+  // The page learns it is signed in on its next poll, as it would once the
+  // browser finishes.
+  await waitFor("signed in without a plan", async () =>
+    (await accountText()).includes("Free. This account has no Pro plan."),
+  );
+  const opened = await evaluate<string[]>("window.opened ?? []");
+  if (
+    !opened[0]?.includes("/auth/google/start") ||
+    !(await accountText()).includes("owner@example.com")
+  )
+    throw new Error(`Account after sign-in: ${JSON.stringify(opened)}`);
+  const typeInvite = (code: string) =>
+    evaluate(`(() => {
+      const input = document.querySelector('.plan-get input');
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, ${JSON.stringify(code)});
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`);
+  const getPro =
+    "[...document.querySelectorAll('.plan-get button')].find((one) => one.textContent.trim() === 'Get Pro')";
+  await typeInvite("WRONG-CODE");
+  await clickAt(getPro);
+  await waitFor("the wrong code refused", async () =>
+    (await accountText()).includes("That invite code is not valid"),
+  );
+  const noPlanShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(
+    join(projectRoot, "artifacts/settings-ui-account.png"),
+    Buffer.from(noPlanShot.data, "base64"),
+  );
+  await typeInvite("GOOD-CODE");
+  await clickAt(getPro);
+  await waitFor("Pro on the Account page", async () => {
+    const text = await accountText();
+    return text.includes("Pro plan until") && !text.includes("Get Pro");
+  });
+  await waitFor(
+    "the Pro badge in the header",
+    async () => (await headerBadge()) === "Pro",
+  );
+  const proShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+  });
+  await Bun.write(
+    join(projectRoot, "artifacts/settings-ui-account-pro.png"),
+    Buffer.from(proShot.data, "base64"),
+  );
+
+  // With Pro, Remote is the full section. Signing in turned phone access on.
+  await openSection("Remote");
+  await Bun.sleep(300);
   const remoteSwitch =
     "document.querySelector('.remote-panel .settings-row input')";
-  if (await evaluate<boolean>(`${remoteSwitch}.checked`))
-    throw new Error("Remote: phone access starts on");
-  await clickAt(remoteSwitch);
-  await Bun.sleep(300);
+  if (!(await evaluate<boolean>(`${remoteSwitch}.checked`)))
+    throw new Error("Remote: signing in did not turn phone access on");
   const waiting = await evaluate<string>(
     "document.querySelector('.remote-status')?.dataset.look ?? ''",
   );
   if (waiting !== "ready")
-    throw new Error(`Remote: turned on, the status is ${waiting}`);
+    throw new Error(`Remote: with Pro, the status is ${waiting}`);
+  const withPro = await panelText();
+  if (
+    !withPro.includes("Signed in as owner@example.com") ||
+    withPro.includes("Pro feature")
+  )
+    throw new Error(`Remote with Pro: ${withPro.slice(0, 400)}`);
   const nameField = await evaluate<string>(
     "document.querySelector('.remote-name input')?.value ?? ''",
   );
@@ -778,73 +892,6 @@ try {
     throw new Error(
       `Remote: keep-awake row is wrong: ${JSON.stringify(awake)}`,
     );
-  // Signing in comes first: no pairing code until the Mac is signed in to
-  // an account with Pro.
-  const panelText = () =>
-    evaluate<string>(
-      "document.querySelector('.remote-panel')?.textContent ?? ''",
-    );
-  const beforeSignIn = await panelText();
-  if (
-    !beforeSignIn.includes("Sign in to use phone access") ||
-    !beforeSignIn.includes("Daedalus Pro") ||
-    beforeSignIn.includes("Show pairing code")
-  )
-    throw new Error(`Remote: before sign-in: ${beforeSignIn.slice(0, 400)}`);
-  await clickAt(
-    "[...document.querySelectorAll('.remote-panel button')].find((one) => one.textContent.trim() === 'Sign in with Google')",
-  );
-  // The panel learns it is signed in on its next poll, as it would once the
-  // browser finishes.
-  for (
-    let attempt = 0;
-    attempt < 40 && !(await panelText()).includes("No Pro plan");
-    attempt++
-  )
-    await Bun.sleep(100);
-  const opened = await evaluate<string[]>("window.opened ?? []");
-  const noPlan = await panelText();
-  if (
-    !opened[0]?.includes("/auth/google/start") ||
-    !noPlan.includes("owner@example.com") ||
-    !noPlan.includes("No Pro plan") ||
-    !(await evaluate<boolean>(
-      "[...document.querySelectorAll('.remote-panel button')].find((one) => one.textContent.trim() === 'Show pairing code')?.disabled ?? false",
-    ))
-  )
-    throw new Error(
-      `Remote: after sign-in: ${JSON.stringify(opened)} ${noPlan.slice(0, 400)}`,
-    );
-  const typeInvite = (code: string) =>
-    evaluate(`(() => {
-      const input = document.querySelector('.remote-invite input');
-      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-      setter.call(input, ${JSON.stringify(code)});
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    })()`);
-  const useInvite =
-    "[...document.querySelectorAll('.remote-invite button')].find((one) => one.textContent.trim() === 'Use invite code')";
-  await typeInvite("WRONG-CODE");
-  await clickAt(useInvite);
-  await Bun.sleep(200);
-  if (!(await panelText()).includes("That invite code is not valid"))
-    throw new Error("Remote: a wrong invite code said nothing");
-  const signedInShot = await send<{ data: string }>("Page.captureScreenshot", {
-    format: "png",
-  });
-  await Bun.write(
-    remoteScreenshotPath.replace(".png", "-no-plan.png"),
-    Buffer.from(signedInShot.data, "base64"),
-  );
-  await typeInvite("GOOD-CODE");
-  await clickAt(useInvite);
-  await Bun.sleep(300);
-  const withPro = await panelText();
-  if (
-    !withPro.includes("Pro plan until") ||
-    withPro.includes("Use invite code")
-  )
-    throw new Error(`Remote: after the invite: ${withPro.slice(0, 400)}`);
 
   await clickAt(
     "[...document.querySelectorAll('.remote-panel button')].find((one) => one.textContent.trim() === 'Show pairing code')",
@@ -943,7 +990,7 @@ try {
   );
   if (left !== 0) throw new Error("Remote: Remove did not forget the phone");
   console.log(
-    "Remote: off by default; on, it asks to sign in first (Pro) with no pairing code; Sign in with Google opens the browser; signed in with no plan it says so and takes an invite code (a wrong one says it is not valid); with Pro it offers Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account, its Pro plan and recent activity; Remove forgets it",
+    "Pro: without it the header says Get Pro and Remote (tagged Pro) only leads to Account; Account signs the Mac in through the browser, shows Free as current, refuses a wrong invite code and takes a good one; then the header says Pro and Remote is on with Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account, its Pro plan and recent activity; Remove forgets it",
   );
   // And General, where a switch sits beside a two-line description and the
   // alignment either reads or does not.
@@ -1097,6 +1144,33 @@ try {
   });
   console.log(
     "Workspaces heading: phone access (menu: status, Allow phone access, Pair a phone…), global secrets, new workspace; no key on All workspaces",
+  );
+  // The Pro badge by the logo, now that the Mac has Pro.
+  const brand = await evaluate<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    badge: string;
+  }>(`(() => {
+    const box = document.querySelector('.topbar .brand').getBoundingClientRect();
+    return { x: box.x, y: box.y, width: box.width, height: box.height, badge: document.querySelector('.topbar .pro-badge')?.textContent.trim() ?? '' };
+  })()`);
+  if (brand.badge !== "Pro")
+    throw new Error(`The header badge says "${brand.badge}"`);
+  const brandShot = await send<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+    clip: {
+      x: brand.x,
+      y: brand.y,
+      width: brand.width + 8,
+      height: brand.height,
+      scale: 2,
+    },
+  });
+  await Bun.write(
+    join(projectRoot, "artifacts/settings-ui-pro-badge.png"),
+    Buffer.from(brandShot.data, "base64"),
   );
   const cornerShot = await send<{ data: string }>("Page.captureScreenshot", {
     format: "png",

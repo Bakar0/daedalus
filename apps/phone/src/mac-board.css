@@ -732,6 +732,39 @@
 .report-verdict-label {
   color: var(--muted);
 }
+.quiet.pro-badge,
+.quiet.pro-badge:hover {
+  background: linear-gradient(135deg, #5b8cff, #9a6bff);
+  border: 0;
+  border-radius: 999px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  padding: 5px 9px;
+  text-transform: uppercase;
+}
+.quiet.pro-badge.get-pro {
+  background: transparent;
+  border: 1px solid color-mix(in srgb, #7b7cff 60%, transparent);
+  color: var(--secondary);
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+.quiet.pro-badge.get-pro:hover {
+  background: var(--raised-hover);
+  color: var(--text);
+}
+.remote-account-line .quiet.link {
+  background: none;
+  border: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+}
 @media (prefers-color-scheme: light) {
   :where(.mac-board) input, :where(.mac-board) textarea, :where(.mac-board) select {
   background: rgb(255 255 255 / 0.72);

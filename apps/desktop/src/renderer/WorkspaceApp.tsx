@@ -79,6 +79,7 @@ import { ColorSwatches, SessionMenu } from "./SessionMenu";
 import { RoutineBar } from "./routines/RoutineBar";
 import { TeamBar, TeamPanel } from "./teams/TeamPanel";
 import { RoutinesPanel } from "./routines/RoutinesPanel";
+import { ProBadge } from "./ProPlan";
 import { RemoteMenu } from "./RemoteMenu";
 import { SecretsPanel } from "./SecretsPanel";
 import {
@@ -5383,6 +5384,13 @@ export function WorkspaceApp({
             <strong>Daedalus</strong>
             <small>Agent workspace</small>
           </span>
+          <ProBadge
+            client={client}
+            onOpen={() => {
+              setSettingsSection("account");
+              setModal("settings");
+            }}
+          />
         </div>
         <nav className="app-mode-switcher" aria-label="Workspace mode">
           <button
@@ -5458,6 +5466,10 @@ export function WorkspaceApp({
             <div className="panel-heading-actions">
               <RemoteMenu
                 client={client}
+                onGetPro={() => {
+                  setSettingsSection("account");
+                  setModal("settings");
+                }}
                 onPair={() => {
                   setSettingsSection("remote");
                   setModal("settings");

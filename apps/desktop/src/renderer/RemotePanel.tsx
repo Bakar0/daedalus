@@ -16,6 +16,7 @@ import type {
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { ConfirmButton } from "./ConfirmButton";
+import { hasPlan, planText, ProTag } from "./ProPlan";
 import { SettingRow } from "./SettingsModal";
 
 const POLL_MS = 2_000;
@@ -68,14 +69,6 @@ export function remoteStatusText(state: RemoteStateDto | undefined): string {
         ? "On. No phone is connected right now."
         : `On. ${state.connectedPhones === 1 ? "A phone is" : `${state.connectedPhones} phones are`} connected now.`;
   }
-}
-
-/** "Pro plan" or "Pro plan until 30 Oct 2026". */
-export function planText(plan: { name: string; expiresAt: string | null }) {
-  const name = `${plan.name.slice(0, 1).toUpperCase()}${plan.name.slice(1)} plan`;
-  return plan.expiresAt
-    ? `${name} until ${new Date(plan.expiresAt).toLocaleDateString(undefined, { dateStyle: "medium" })}`
-    : name;
 }
 
 /**
@@ -142,99 +135,6 @@ function EncryptionNotice() {
         </p>
       </div>
     </aside>
-  );
-}
-
-/** Whether the Mac's account has a plan that lets phones in right now. */
-export const hasPlan = (state: RemoteStateDto) =>
-  state.signedIn && Boolean(state.plan) && state.lockedBy !== "no_plan";
-
-/**
- * Who this Mac is signed in as and the plan: a Sign in button before, and
- * an invite code field while the account has no Pro plan.
- */
-function AccountCard({
-  state,
-  busy,
-  onSignIn,
-  onRedeem,
-  onSignOut,
-}: {
-  state: RemoteStateDto;
-  busy: boolean;
-  onSignIn: () => void;
-  onRedeem: (code: string) => Promise<boolean>;
-  onSignOut: () => void;
-}) {
-  const [code, setCode] = useState("");
-  if (!state.signedIn)
-    return (
-      <div className="remote-pro">
-        <strong>Sign in to use phone access</strong>
-        <p>
-          Phone access is part of Daedalus Pro. Sign in with Google here, then
-          sign in on your phone with the same account.
-        </p>
-        <div className="remote-pairing-start">
-          <button
-            disabled={busy || state.status !== "waiting_for_phone"}
-            onClick={onSignIn}
-            type="button"
-          >
-            Sign in with Google
-          </button>
-          <small>
-            {state.status === "waiting_for_phone"
-              ? "Opens your browser. Come back here when it says your Mac is signed in."
-              : "Signing in needs this Mac connected to the relay."}
-          </small>
-        </div>
-      </div>
-    );
-  const pro = hasPlan(state);
-  return (
-    <div className="remote-pro">
-      <div className="remote-pro-who">
-        <span>
-          <strong>{state.account ?? "Signed in"}</strong>
-          <small>
-            {pro && state.plan
-              ? planText(state.plan)
-              : "No Pro plan. Phone access needs Daedalus Pro."}
-          </small>
-        </span>
-        <ConfirmButton
-          armedLabel="Sign out"
-          armedTitle="Sign this Mac out and forget every paired phone"
-          className="quiet"
-          disabled={busy}
-          onConfirm={onSignOut}
-          type="button"
-        >
-          Sign out
-        </ConfirmButton>
-      </div>
-      {pro ? undefined : (
-        <form
-          className="remote-invite"
-          onSubmit={async (event) => {
-            event.preventDefault();
-            if (await onRedeem(code)) setCode("");
-          }}
-        >
-          <input
-            aria-label="Invite code"
-            disabled={busy}
-            onChange={(event) => setCode(event.target.value)}
-            placeholder="Invite code"
-            value={code}
-          />
-          <button disabled={busy || !code.trim()} type="submit">
-            Use invite code
-          </button>
-        </form>
-      )}
-    </div>
   );
 }
 
@@ -399,9 +299,12 @@ export function RemotePanel({
   busy,
   client,
   perform,
+  onOpenAccount,
 }: {
   busy: boolean;
   client: DesktopClient;
+  /** Settings › Account, where the Mac signs in and gets Pro. */
+  onOpenAccount: () => void;
   perform: <T>(operation: Promise<RpcResult<T>>) => Promise<T | undefined>;
 }) {
   const [state, setState] = useState<RemoteStateDto>();
@@ -454,24 +357,54 @@ export function RemotePanel({
   const connected =
     state?.status === "waiting_for_phone" || state?.status === "online";
   const relayHost = state?.relay ? new URL(state.relay).host : "";
+  const pro = hasPlan(state);
 
   return (
     <div className="remote-panel">
-      <h3>Phone access</h3>
-      <SettingRow
-        checked={state?.enabled ?? false}
-        disabled={busy || !state}
-        description="Operate this Mac's sessions from your phone, from anywhere, while Daedalus is open."
-        onChange={async (enabled) => {
-          setPairing(undefined);
-          const next = await perform(
-            client.request.remoteSetEnabled({ enabled }),
-          );
-          if (next) setState(next);
-        }}
-        title="Allow phone access"
-      />
-      <EncryptionNotice />
+      <h3>
+        Phone access <ProTag />
+      </h3>
+      {state && !pro && state.status !== "removed" ? (
+        <div className="remote-pro">
+          <strong>
+            Phone access is a Pro feature <ProTag />
+          </strong>
+          <p>
+            {state.signedIn
+              ? `${state.account ?? "This account"} has no Pro plan. Get Pro in Settings › Account, then pair your phone here.`
+              : "Sign in and get Pro in Settings › Account, then pair your phone here."}
+          </p>
+          <div className="remote-pairing-start">
+            <button onClick={onOpenAccount} type="button">
+              {state.signedIn ? "Get Pro" : "Sign in and get Pro"}
+            </button>
+          </div>
+        </div>
+      ) : state?.signedIn ? (
+        <p className="remote-account-line">
+          Signed in as <strong>{state.account ?? "this account"}</strong>
+          {state.plan ? ` · ${planText(state.plan)}` : ""}.{" "}
+          <button className="quiet link" onClick={onOpenAccount} type="button">
+            Account
+          </button>
+        </p>
+      ) : undefined}
+      {pro || state?.enabled ? (
+        <SettingRow
+          checked={state?.enabled ?? false}
+          disabled={busy || !state}
+          description="Operate this Mac's sessions from your phone, from anywhere, while Daedalus is open."
+          onChange={async (enabled) => {
+            setPairing(undefined);
+            const next = await perform(
+              client.request.remoteSetEnabled({ enabled }),
+            );
+            if (next) setState(next);
+          }}
+          title="Allow phone access"
+        />
+      ) : undefined}
+      {pro ? <EncryptionNotice /> : undefined}
       {state?.enabled ? (
         <p className="remote-status" data-look={remoteLook(state)}>
           <span aria-hidden="true" className="remote-status-dot" />
@@ -497,42 +430,12 @@ export function RemotePanel({
           </small>
         </div>
       ) : undefined}
-      {state?.enabled && state.status !== "removed" ? (
-        <AccountCard
-          busy={busy}
-          onRedeem={async (code) => {
-            setError(undefined);
-            const next = await client.request.remoteRedeemInvite({ code });
-            if (!next.ok) {
-              setError(next.error.message);
-              return false;
-            }
-            setState(next.data);
-            return true;
-          }}
-          onSignIn={async () => {
-            setError(undefined);
-            const started = await client.request.remoteSignIn({});
-            if (!started.ok) {
-              setError(started.error.message);
-              return;
-            }
-            await client.request.openExternal({ url: started.data.url });
-          }}
-          onSignOut={async () => {
-            setPairing(undefined);
-            const next = await perform(client.request.remoteLeaveAccount({}));
-            if (next) setState(next);
-          }}
-          state={state}
-        />
-      ) : undefined}
       {error ? (
         <p className="accounts-error" role="alert">
           {error}
         </p>
       ) : undefined}
-      {state?.enabled ? (
+      {state?.enabled && pro ? (
         <MacNameField
           busy={busy}
           name={state.macName}
@@ -544,7 +447,7 @@ export function RemotePanel({
           }}
         />
       ) : undefined}
-      {state?.enabled ? (
+      {state?.enabled && pro ? (
         <SettingRow
           checked={state.keepAwake}
           disabled={busy}
@@ -559,7 +462,7 @@ export function RemotePanel({
         />
       ) : undefined}
 
-      {state?.enabled && state.signedIn ? (
+      {state?.enabled && pro ? (
         <>
           <h3>Pair a phone</h3>
           {request ? (

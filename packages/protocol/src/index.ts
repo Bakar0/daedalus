@@ -950,6 +950,8 @@ export interface DesktopRpcSchema {
       remoteSignIn: Request<Record<string, never>, { url: string }>;
       /** Redeems an invite code for the Mac's account. */
       remoteRedeemInvite: Request<{ code: string }, RemoteStateDto>;
+      /** Reads the Mac's account and plan from the relay again. */
+      remoteRefreshAccount: Request<Record<string, never>, RemoteStateDto>;
       /** Take this Mac off its relay account and start over. */
       remoteLeaveAccount: Request<Record<string, never>, RemoteStateDto>;
       /** After the relay removed this Mac: a new identity, no phones. */

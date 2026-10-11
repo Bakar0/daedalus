@@ -342,17 +342,36 @@ async function pairAndAnswer(
   allow = true,
 ): Promise<PairedMac> {
   let waited = false;
-  const pairing = pairWithMac(phone, offer, name, token, {
-    onWaiting: () => {
-      waited = true;
-    },
-  });
-  void pairing.catch(() => undefined);
-  await until(
-    "the Mac asks its user",
-    () => mac.request() !== undefined,
-    20_000,
-  );
+  let pairing: Promise<PairedMac>;
+  // The relay allows 30 sign-ins, invite codes and claims a minute from one
+  // address, and this check makes many: a refused claim waits and tries
+  // again, as a person would.
+  for (let attempt = 0; ; attempt++) {
+    let failed: unknown;
+    pairing = pairWithMac(phone, offer, name, token, {
+      onWaiting: () => {
+        waited = true;
+      },
+    });
+    pairing.catch((error: unknown) => {
+      failed = error;
+    });
+    await until(
+      "the Mac asks its user",
+      () => mac.request() !== undefined || failed !== undefined,
+      20_000,
+    );
+    if (mac.request() !== undefined) break;
+    if (
+      failed instanceof RelayError &&
+      failed.code === "RATE_LIMITED" &&
+      attempt < 4
+    ) {
+      await sleep(15_000);
+      continue;
+    }
+    throw failed;
+  }
   await until("the phone hears the Mac is asking", () => waited);
   const asked = mac.request()!;
   if (asked.code !== pairingCode(offer, phone) || asked.phoneName !== name)
@@ -1396,12 +1415,28 @@ try {
   );
   if (daveMac.macName !== "Dave's Mac")
     throw new Error(`Paired with ${daveMac.macName}`);
+  pass(
+    "a phone on another account is told which account the Mac is on; one on the Mac's account pairs",
+  );
+
+  // Settings › Account works with phone access off: it still shows the
+  // account and plan, reads them from the relay, and signs out.
+  await signInHost.setEnabled(false);
+  const offState = await signInHost.refreshAccount();
+  if (
+    offState.status !== "off" ||
+    !offState.signedIn ||
+    offState.account !== "dave@example.com" ||
+    offState.plan?.name !== "pro"
+  )
+    throw new Error(
+      `Account with phone access off: ${JSON.stringify(offState)}`,
+    );
   await signInHost.leaveAccount();
   if (signInHost.state().signedIn || signInHost.state().phones.length)
     throw new Error("Signing out kept the account or phones");
-  await signInHost.setEnabled(false);
   pass(
-    "a phone on another account is told which account the Mac is on; one on the Mac's account pairs; signing the Mac out forgets the account and its phones",
+    "with phone access off the Mac still shows and refreshes its account and plan, and signing out forgets the account and its phones",
   );
 
   // 3. Hourly housekeeping drops unclaimed Macs older than a day.

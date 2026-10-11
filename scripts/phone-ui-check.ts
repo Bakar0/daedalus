@@ -543,6 +543,10 @@ try {
   );
   await waitFor("paired home", byText(".bar h1", "Studio Mac"), 30_000);
   await waitFor(
+    "the Pro badge in the top bar",
+    byText(".bar h1 .pro-badge", "Pro"),
+  );
+  await waitFor(
     "waiting session row",
     byText(".session-row", "Approve the database migration"),
   );
@@ -569,7 +573,7 @@ try {
     const base = group.querySelector('.session-rows').getBoundingClientRect().left;
     return {
       needs: [...document.querySelectorAll('.group .session-row strong')].map((one) => one.textContent),
-      title: document.querySelector('.bar-title h1')?.textContent ?? '',
+      title: document.querySelector('.bar-title h1')?.firstChild?.textContent ?? '',
       subtitle: document.querySelector('.bar-title small')?.textContent ?? '',
       workspace: {
         name: group.querySelector('.workspace-head strong').textContent,

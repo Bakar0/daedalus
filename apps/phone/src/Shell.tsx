@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { usePro } from "./plan";
 
 /** The top bar and the page under it. */
 export function Shell({
@@ -15,6 +16,7 @@ export function Shell({
   onBack?: () => void;
   children: ReactNode;
 }) {
+  const pro = usePro();
   return (
     <div className="shell">
       <header className="bar">
@@ -26,7 +28,10 @@ export function Shell({
           <img alt="" className="bar-logo" src="/icon-192.png" />
         )}
         <div className="bar-title">
-          <h1>{title}</h1>
+          <h1>
+            {title}
+            {pro ? <span className="pro-badge">Pro</span> : undefined}
+          </h1>
           {subtitle ? <small>{subtitle}</small> : undefined}
         </div>
         {onAccount ? (

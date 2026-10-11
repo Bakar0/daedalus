@@ -177,6 +177,72 @@ interface PhoneState {
 }
 
 /**
+ * A request to the relay as this Mac, over HTTP: its id, and its device
+ * token (signed in) or its own secret as the bearer. Works with phone
+ * access off, so Settings › Account can show and change the account.
+ */
+export async function macRelayCall<T = unknown>(
+  relay: string,
+  store: RemoteStore,
+  path: string,
+  body: unknown = {},
+): Promise<{ ok: boolean; data?: T; error?: { message: string } }> {
+  try {
+    const response = await fetch(`${relayHttpUrl(relay)}${path}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${store.relayCredential}`,
+        "X-Daedalus-Device": store.identity.id,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    return (await response.json()) as {
+      ok: boolean;
+      data?: T;
+      error?: { message: string };
+    };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** Asks the relay which account this Mac is on and its plan, and keeps it. */
+export async function refreshMacAccount(
+  relay: string,
+  store: RemoteStore,
+): Promise<void> {
+  if (!store.relayToken) return;
+  const response = await macRelayCall<{
+    email: string;
+    plan: { plan: string; expiresAt: string | null } | null;
+  } | null>(relay, store, "/v1/macs/account");
+  if (!response.ok || !response.data) return;
+  const { email, plan } = response.data;
+  await store.setAccount(
+    email,
+    plan ? { name: plan.plan, expiresAt: plan.expiresAt } : undefined,
+  );
+}
+
+/** Redeems an invite code for this Mac's account and reads the new plan. */
+export async function redeemMacInvite(
+  relay: string,
+  store: RemoteStore,
+  code: string,
+): Promise<void> {
+  const response = await macRelayCall(relay, store, "/v1/macs/invite", {
+    code,
+  });
+  if (!response.ok)
+    throw new DaedalusError(
+      "VALIDATION",
+      response.error?.message ?? "The relay could not be reached.",
+    );
+  await refreshMacAccount(relay, store);
+}
+
+/**
  * The Mac's side of remote access. One outbound WebSocket to the relay
  * carries every paired phone; nothing listens on the Mac.
  */
@@ -307,28 +373,12 @@ export class RemoteConnector {
    * notice arrives.
    */
   async refreshAccount(): Promise<void> {
-    if (!this.options.store.relayToken) return;
-    const response = await this.#macCall<{
-      email: string;
-      plan: { plan: string; expiresAt: string | null } | null;
-    } | null>("/v1/macs/account");
-    if (!response.ok || !response.data) return;
-    const { email, plan } = response.data;
-    await this.options.store.setAccount(
-      email,
-      plan ? { name: plan.plan, expiresAt: plan.expiresAt } : undefined,
-    );
+    await refreshMacAccount(this.options.relay, this.options.store);
   }
 
   /** Redeems an invite code for this Mac's account, then connects again. */
   async redeemInvite(code: string): Promise<void> {
-    const response = await this.#macCall("/v1/macs/invite", { code });
-    if (!response.ok)
-      throw new DaedalusError(
-        "VALIDATION",
-        response.error?.message ?? "The relay could not be reached.",
-      );
-    await this.refreshAccount();
+    await redeemMacInvite(this.options.relay, this.options.store, code);
     if (this.#status === "locked") {
       clearTimeout(this.#lockedRetry);
       this.#setStatus("connecting");
@@ -337,31 +387,8 @@ export class RemoteConnector {
   }
 
   /** A request to the relay as this Mac. */
-  async #macCall<T = unknown>(
-    path: string,
-    body: unknown = {},
-  ): Promise<{ ok: boolean; data?: T; error?: { message: string } }> {
-    try {
-      const response = await fetch(
-        `${relayHttpUrl(this.options.relay)}${path}`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${this.options.store.relayCredential}`,
-            "X-Daedalus-Device": this.macId,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(body),
-        },
-      );
-      return (await response.json()) as {
-        ok: boolean;
-        data?: T;
-        error?: { message: string };
-      };
-    } catch {
-      return { ok: false };
-    }
+  #macCall<T = unknown>(path: string, body: unknown = {}) {
+    return macRelayCall<T>(this.options.relay, this.options.store, path, body);
   }
 
   /** The phone waiting for the user to allow it, if any. */
@@ -1166,6 +1193,7 @@ export interface DesktopRemoteHost {
   confirmPairing(allow: boolean): Promise<RemoteStateDto>;
   signIn(): Promise<{ url: string }>;
   redeemInvite(code: string): Promise<RemoteStateDto>;
+  refreshAccount(): Promise<RemoteStateDto>;
   leaveAccount(): Promise<RemoteStateDto>;
   startOver(): Promise<RemoteStateDto>;
   removePhone(id: string): Promise<RemoteStateDto>;
@@ -1207,10 +1235,29 @@ export class RemoteHost implements DesktopRemoteHost {
     this.#audit = new RemoteAudit(options.context.config.home);
   }
 
-  /** Starts the connector if the setting is on. Call once at launch. */
+  /**
+   * Starts the connector if the setting is on. Call once at launch. With it
+   * off, a Mac that has signed in before still opens its store, so
+   * Settings › Account shows the account and plan.
+   */
   async start(): Promise<void> {
     if (this.options.context.config.remoteEnabled) await this.#run();
+    else if (await RemoteStore.exists(this.options.context.config.home))
+      await this.#openStore();
     this.#keepAwake();
+  }
+
+  async #openStore(): Promise<RemoteStore> {
+    if (!this.#store) {
+      const { home } = this.options.context.config;
+      this.#store = await RemoteStore.open(
+        home,
+        this.options.vault,
+        this.options.log,
+      );
+      excludeFromBackups(home);
+    }
+    return this.#store;
   }
 
   /**
@@ -1264,19 +1311,11 @@ export class RemoteHost implements DesktopRemoteHost {
 
   async #run(): Promise<void> {
     if (this.#connector) return;
-    const { home } = this.options.context.config;
-    if (!this.#store) {
-      this.#store = await RemoteStore.open(
-        home,
-        this.options.vault,
-        this.options.log,
-      );
-      excludeFromBackups(home);
-    }
+    const store = await this.#openStore();
     this.#connector = new RemoteConnector({
       relay: this.options.context.config.remoteRelay,
       macName: this.macName,
-      store: this.#store,
+      store,
       handlers: this.options.handlers(),
       openTerminal: this.options.openTerminal,
       ...(this.options.log ? { log: this.options.log } : {}),
@@ -1402,19 +1441,55 @@ export class RemoteHost implements DesktopRemoteHost {
     return this.state();
   }
 
+  /**
+   * Where to sign this Mac in. The relay knows a Mac once it has connected,
+   * so signing in turns phone access on if it was off.
+   */
   async signIn(): Promise<{ url: string }> {
+    if (!this.options.context.config.remoteEnabled) await this.setEnabled(true);
+    const deadline = Date.now() + 15_000;
+    while (
+      this.#connector?.status !== "waiting_for_phone" &&
+      !this.#store?.relayToken &&
+      Date.now() < deadline
+    )
+      await new Promise((resolve) => setTimeout(resolve, 100));
     if (!this.#connector)
-      throw new DaedalusError("CONFLICT", "Turn on phone access first.");
+      throw new DaedalusError("CONFLICT", "Phone access did not start.");
     return { url: await this.#connector.signInUrl() };
   }
 
   async redeemInvite(code: string): Promise<RemoteStateDto> {
-    await this.#connector?.redeemInvite(code.trim());
+    if (this.#connector) await this.#connector.redeemInvite(code.trim());
+    else if (this.#store)
+      await redeemMacInvite(
+        this.options.context.config.remoteRelay,
+        this.#store,
+        code.trim(),
+      );
+    return this.state();
+  }
+
+  /** Reads the account and plan from the relay again. */
+  async refreshAccount(): Promise<RemoteStateDto> {
+    if (this.#store)
+      await refreshMacAccount(
+        this.options.context.config.remoteRelay,
+        this.#store,
+      );
     return this.state();
   }
 
   async leaveAccount(): Promise<RemoteStateDto> {
-    await this.#connector?.leaveAccount();
+    if (this.#connector) await this.#connector.leaveAccount();
+    else if (this.#store?.relayToken) {
+      await macRelayCall(
+        this.options.context.config.remoteRelay,
+        this.#store,
+        "/v1/macs/leave",
+      );
+      await this.#store.reset();
+    }
     return this.state();
   }
 

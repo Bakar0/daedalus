@@ -11,6 +11,7 @@ import {
 import { Account } from "./Account";
 import { RELOCK_AFTER_MS, unlockApp } from "./lock";
 import { Home } from "./Home";
+import { setPro } from "./plan";
 import { Shell } from "./Shell";
 import {
   addMac,
@@ -164,6 +165,10 @@ export function App() {
     startGoogleSignIn();
   };
   const me = useMe(locked ? undefined : token, signOut);
+  useEffect(() => {
+    if (me.state === "ready") setPro(Boolean(me.plan));
+    if (!token) setPro(false);
+  }, [me, token]);
 
   if (locked)
     return (
@@ -392,7 +397,9 @@ function ProScreen({
     <Shell title="Daedalus Pro">
       <section className="empty pro">
         {who}
-        <h2>Phone access needs Daedalus Pro</h2>
+        <h2>
+          Phone access needs Daedalus <span className="pro-badge">Pro</span>
+        </h2>
         <ul className="pro-list">
           <li>Watch and steer your Mac's sessions from anywhere</li>
           <li>Open a live terminal and answer an agent that needs you</li>

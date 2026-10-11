@@ -7375,34 +7375,6 @@ dd {
   line-height: 1.5;
   margin: 0;
 }
-.remote-pro-who {
-  align-items: center;
-  display: flex;
-  gap: 10px;
-  justify-content: space-between;
-}
-.remote-pro-who > span {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-.remote-pro-who strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.remote-pro-who small {
-  color: var(--muted);
-  font-size: 11px;
-}
-.remote-invite {
-  display: flex;
-  gap: 6px;
-}
-.remote-invite input {
-  flex: 1;
-  min-width: 0;
-  text-transform: uppercase;
-}
 .remote-request {
   background: var(--raised);
   border: 1px solid var(--accent);
@@ -7532,4 +7504,164 @@ dd {
   border-radius: 3px;
   height: 16px;
   width: 10px;
+}
+
+/* Daedalus Pro: the badge by the logo, the tag on Pro features, and
+   Settings › Account. */
+.pro-tag {
+  background: linear-gradient(135deg, #5b8cff, #9a6bff);
+  border-radius: 4px;
+  color: #fff;
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  margin-left: 6px;
+  padding: 3px 5px;
+  text-transform: uppercase;
+  vertical-align: 2px;
+}
+.quiet.pro-badge,
+.quiet.pro-badge:hover {
+  background: linear-gradient(135deg, #5b8cff, #9a6bff);
+  border: 0;
+  border-radius: 999px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  padding: 5px 9px;
+  text-transform: uppercase;
+}
+.quiet.pro-badge.get-pro {
+  background: transparent;
+  border: 1px solid color-mix(in srgb, #7b7cff 60%, transparent);
+  color: var(--secondary);
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+.quiet.pro-badge.get-pro:hover {
+  background: var(--raised-hover);
+  color: var(--text);
+}
+.brand .pro-badge {
+  margin-left: 2px;
+}
+.account-panel {
+  display: grid;
+  gap: 12px;
+}
+.account-panel h3:not(:first-child) {
+  margin-top: 8px;
+}
+.account-who > span:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.account-who small,
+.account-signin small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.account-signin {
+  display: grid;
+  gap: 10px;
+}
+.account-signin p {
+  color: var(--secondary);
+  font-size: 12px;
+  margin: 0;
+}
+.account-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+.account-actions input {
+  flex: 1;
+  min-width: 0;
+  text-transform: uppercase;
+}
+.plan-cards {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.plan-card {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+.plan-card.pro {
+  border-color: color-mix(in srgb, #7b7cff 55%, var(--line));
+}
+.plan-card header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+.plan-card ul {
+  color: var(--secondary);
+  display: grid;
+  font-size: 12px;
+  gap: 6px;
+  margin: 0;
+  padding-left: 16px;
+}
+.plan-current {
+  color: var(--muted);
+  font-size: 11px;
+}
+.plan-note {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 0;
+}
+.plan-get {
+  display: grid;
+  gap: 8px;
+  margin-top: auto;
+}
+.plan-get-row {
+  display: grid;
+  gap: 6px;
+}
+.plan-get-row input {
+  min-width: 0;
+  text-transform: uppercase;
+  width: 100%;
+}
+.remote-account-line {
+  color: var(--secondary);
+  font-size: 12px;
+  margin: 0;
+}
+.remote-account-line .quiet.link {
+  background: none;
+  border: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+}
+.settings-nav button[data-pro]::after {
+  background: linear-gradient(135deg, #5b8cff, #9a6bff);
+  border-radius: 4px;
+  color: #fff;
+  content: "Pro";
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  margin-left: 6px;
+  padding: 2px 4px;
+  text-transform: uppercase;
+  vertical-align: 1px;
 }
