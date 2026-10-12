@@ -291,7 +291,7 @@ export async function spawnTeamMember(
         "VALIDATION",
         `--${option} cannot be used with --team`,
       );
-  for (const flag of ["draft-brief", "pin"])
+  for (const flag of ["refine", "pin"])
     if (input.flags.has(flag))
       throw new DaedalusError(
         "VALIDATION",

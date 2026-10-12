@@ -343,8 +343,8 @@ try {
     "#27's Start does not warn",
   );
   check(
-    (await evaluate<string>(`${card(29)}.innerText`)).includes("Draft brief"),
-    "#29 has an empty brief and no Draft brief",
+    (await evaluate<string>(`${card(29)}.innerText`)).includes("Refine"),
+    "#29 has an empty brief and no Refine",
   );
 
   step = "geometry";
@@ -728,7 +728,7 @@ try {
 
   step = "drawer controls";
   // #32: status and priority are pills on the line under the title, above
-  // the brief, and Draft brief and Delete sit in the heading's overflow menu
+  // the brief, and Refine and Delete sit in the heading's overflow menu
   // rather than in bordered rows under the timeline.
   const pressKey = async (key: string, code: string, keyCode: number) => {
     await send("Input.dispatchKeyEvent", {
@@ -949,7 +949,7 @@ try {
   );
   step = "drawer action bar";
   // #34: the row under the pills does what the card does. #30 is queued with
-  // an empty brief and no dependencies, so it offers Start and Draft brief.
+  // an empty brief and no dependencies, so it offers Start and Refine.
   // It is its own fixture because the session dialog step starts #29;
   // Start spawns with the workspace default, the drawer stays on the task,
   // and the bar turns into the running agent's actions.
@@ -983,7 +983,7 @@ try {
   check(queuedBar.aboveBrief, "the action bar is not above the brief");
   const queuedButtons = await barButtons();
   check(
-    queuedButtons.join(",") === "Start,▾,Draft brief,Edit,Delete",
+    queuedButtons.join(",") === "Start,▾,Refine,Edit,Delete",
     `the queued task's bar lists ${queuedButtons.join(", ")}`,
   );
   const queuedBarShot = await screenshot("drawer-action-bar-queued");
@@ -1015,7 +1015,7 @@ try {
   const runningButtons = await barButtons();
   check(
     runningButtons.join(",") ===
-      "Open terminal,Second opinion,Draft brief,Edit,Delete",
+      "Open terminal,Second opinion,Refine,Edit,Delete",
     `the running task's bar lists ${runningButtons.join(", ")}`,
   );
   const startedLane = await laneOf(30);
@@ -1038,8 +1038,7 @@ try {
   );
   const doneButtons = await barButtons();
   check(
-    doneButtons.join(",") ===
-      "Open worktree,Open PR #20,Draft brief,Edit,Delete",
+    doneButtons.join(",") === "Open worktree,Open PR #20,Refine,Edit,Delete",
     `the done task's bar lists ${doneButtons.join(", ")}`,
   );
   const outputBefore = (await calls("sessionWorktreeOpen")).length;

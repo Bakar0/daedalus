@@ -10,11 +10,13 @@ Design notes and the research behind the choices are in
 
 ## What Daedalus ships
 
-| Capability         | Default      | What it is                                                               |
-| ------------------ | ------------ | ------------------------------------------------------------------------ |
-| `daedalus-control` | on           | Drives Daedalus through the `daedal` CLI                                 |
-| `daedalus-handoff` | on           | `/daedalus-handoff`: note, then `daedal agent continue` in a fresh agent |
-| `unslop`           | on, `always` | Writing rules that cut AI tells, from `cursor/plugins` `pstack`          |
+| Capability            | Default      | What it is                                                               |
+| --------------------- | ------------ | ------------------------------------------------------------------------ |
+| `daedalus-control`    | on           | Drives Daedalus through the `daedal` CLI                                 |
+| `daedalus-rebirth`    | on           | `/daedalus-rebirth`: note, then `daedal agent continue` in a fresh agent |
+| `daedalus-handoff`    | on           | `/daedalus-handoff <what>`: a new task and session for a side matter     |
+| `daedalus-refinement` | on           | `/daedalus-refinement`: questions in rounds, then the task brief         |
+| `unslop`              | on, `always` | Writing rules that cut AI tells, from `cursor/plugins` `pstack`          |
 
 All three are on out of the box, all are listed in Settings and in
 `daedal skill list` with the exact paths they write, and any can be turned
@@ -28,22 +30,41 @@ Everything it writes is on the row in the panel, and
 whatever is already in its `config.json`, so this default only reaches a
 machine that has never set it.
 
-### The daedalus-handoff skill
+### The daedalus-rebirth skill
 
-`/daedalus-handoff` in Claude Code, or `$daedalus-handoff` in a Codex message, makes the agent
-finish the edit it is in, write `HANDOFF.md` in its working directory in a
-fixed order (goal, done, in progress, next, decisions, unverified, and the
-user's own words), and run `daedal agent continue --handoff-file` as its last
+`/daedalus-rebirth` in Claude Code, or `$daedalus-rebirth` in a Codex message, makes the agent
+finish the edit it is in, write `REBIRTH.md` in its working directory in a
+fixed order (where it stopped, goal, done, in progress, next, decisions,
+unverified, and the user's own words), and run `daedal agent continue --note-file` as its last
 action, calling this home's `bin/daedal` by the full path written into the
 skill at install (`{{daedal}}` in the skill's source). Words after the command reach the skill as `$ARGUMENTS` in Claude and
 as the rest of the message in Codex; the skill puts them in the note and
 passes them with `--message`, so the next agent sees them in its launch
-prompt too. A dev build installs it as `/daedalus-handoff-dev`.
+prompt too. A dev build installs it as `/daedalus-rebirth-dev`.
 
-The same words are what `daedal agent handoff` and the automatic threshold
-(`workspace update --auto-handoff`) send into a running session, so a handoff
+The same words are what `daedal agent rebirth` and the automatic threshold
+(`workspace update --auto-rebirth`) send into a running session, so a rebirth
 looks the same whether the user typed it, the app asked for it, or the agent
 decided on its own.
+
+The note starts with where the session stopped: waiting for the user, with the
+question or plan copied word for word, or working, with its next action. The
+successor's launch prompt tells it to resume in that state, so a session that
+was waiting asks the same thing again, raises `daedal attention`, and waits.
+Words the user typed after the command come first.
+
+### The daedalus-handoff skill
+
+`/daedalus-handoff <what>` is for something that came up in a session and
+belongs in its own. The agent writes a brief for that one matter from its
+context, creates a task with `daedal task create --description-file -`, starts
+a session on it with `daedal agent spawn --task`, tells the user the task
+number, and goes back to where it was. Both commands default `--workspace` to
+the calling session's. The new session gets its own worktree and does not
+report back. With nothing after the command, the agent hands off what it and
+the user were just discussing. There is no button for it. In the World, the
+new agent appears beside the one that started it, catches a scroll, and walks
+off to its own work.
 
 ## Layout on disk
 
@@ -192,9 +213,27 @@ URL into, because installing a skill is a thing you do once and a control you
 then read past every time you open Settings. A skill installed from the CLI
 appears in the panel like any other, with a Remove button.
 
+### The daedalus-refinement skill
+
+Refine starts its session with this skill: the launch prompt is
+`/daedalus-refinement` (or `$daedalus-refinement` in Codex) followed by the
+draft instruction, which the skill reads as its arguments. The agent reads the
+task, `BRIEF.md`, the journal and the repositories, then questions the user in
+numbered rounds, each question with a recommended answer. It asks only what
+the files cannot tell it, raises `daedal attention` while it waits, and writes
+the brief with `daedal task update --description-file -` once the user
+confirms the summary. It writes nothing else: decisions, pinned-down terms,
+scope and checks all go into the brief.
+
+When the skill is turned off, or the provider is not Claude or Codex, Refine
+launches with the plain instruction and the agent drafts the brief
+without asking. The skill is adapted from Matt Pocock's `grilling` and
+`domain-modeling` skills (MIT). A dev build installs it as
+`/daedalus-refinement-dev`.
+
 ## Authoring
 
-`skills/daedalus-control/`, `skills/daedalus-handoff/` and `skills/unslop/` are the
+`skills/daedalus-control/`, `skills/daedalus-rebirth/` and `skills/unslop/` are the
 canonical authoring packages, in the Agent Skills `SKILL.md` format, with `styles/Unslop.md` beside
 them. They are compiled into the binary as text, so a Daedalus upgrade ships new
 skill text without the user reinstalling anything.

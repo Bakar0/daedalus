@@ -15,7 +15,7 @@ const HOLD_LABEL: Record<
 > = {
   paused: "paused",
   stopped: "session not running",
-  handoff: "handoff pending",
+  rebirth: "rebirth pending",
   typing: "you typed",
   busy: "session busy",
   "waiting-on-user": "session waiting for an answer",

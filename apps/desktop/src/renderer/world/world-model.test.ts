@@ -43,7 +43,7 @@ const workspace = (id: string): WorkspaceDto => ({
   available: true,
   position: 0,
   startSetsInProgress: true,
-  autoHandoffPercent: null,
+  autoRebirthPercent: null,
   defaultProvider: null,
   defaultModel: null,
   defaultClaudeAccount: null,
@@ -72,10 +72,11 @@ const session = (
   account: null,
   teamId: null,
   teamHandle: null,
+  spawnedBy: null,
   archivedAt: null,
   resumeCount: 0,
   lostReason: null,
-  handoffRequestedAt: null,
+  rebirthRequestedAt: null,
   position: 0,
   pinnedAt: null,
   color: null,
@@ -501,14 +502,14 @@ describe("labyrinth", () => {
     expect(path.at(-1)!.ride).toBeUndefined();
   });
 
-  test("a bot handing off rides up into one of the Rebuilder's three bays", () => {
+  test("a bot being reborn rides up into one of the Rebirth machine's three bays", () => {
     const arrangement = labyrinthTheme.arrange(zones(3));
     const shared = labyrinthTheme.shared!;
-    const { bays } = labyrinthTheme.handoff!;
+    const { bays } = labyrinthTheme.rebirth!;
     expect(bays).toHaveLength(3);
     // The first three stand in the intake bays; a fourth queues outside.
     const spots = Array.from({ length: 5 }, (_, slot) =>
-      shared.spot("handoff", slot),
+      shared.spot("rebirth", slot),
     );
     expect(spots.slice(0, 3)).toEqual(bays.map((bay) => bay.from));
     for (const point of spots.slice(3)) {
@@ -538,7 +539,7 @@ describe("labyrinth", () => {
   test("web work is shared: every zone's bots go to the one Observatory", () => {
     const arrangement = labyrinthTheme.arrange(zones(3));
     const shared = labyrinthTheme.shared!;
-    expect(shared.places).toEqual(["web", "handoff"]);
+    expect(shared.places).toEqual(["web", "rebirth"]);
     const first = shared.spot("web", 0);
     // On the top floor, left of the shaft, above or level with every room.
     expect(first.x).toBeLessThan(0);
@@ -900,15 +901,15 @@ describe("milestones", () => {
   });
 });
 
-describe("handoff", () => {
-  test("a session asked to hand off goes to the machine; its successor names it", () => {
+describe("rebirth", () => {
+  test("a session asked for a rebirth goes to the machine; its successor names it", () => {
     const requested = "2026-09-23T11:00:00.000Z";
     const model = buildWorldModel(
       input({
         sessions: [
           session("old", {
             workingDirectory: "/w/tree",
-            handoffRequestedAt: requested,
+            rebirthRequestedAt: requested,
           }),
           session("new", {
             workingDirectory: "/w/tree",
@@ -925,10 +926,29 @@ describe("handoff", () => {
       }),
     );
     const byId = new Map(model.actors.map((actor) => [actor.sessionId, actor]));
-    expect(byId.get("old")!.place).toBe("handoff");
+    expect(byId.get("old")!.place).toBe("rebirth");
     expect(byId.get("new")!.continuesFrom).toBe("old");
     expect(byId.get("earlier")!.continuesFrom).toBeNull();
     expect(byId.get("elsewhere")!.continuesFrom).toBeNull();
+  });
+
+  test("a handed-off session names the agent that started it, and stays at its own work", () => {
+    const model = buildWorldModel(
+      input({
+        sessions: [
+          session("giver"),
+          session("taker", {
+            workingDirectory: "/w/other",
+            spawnedBy: "giver",
+          }),
+        ],
+      }),
+    );
+    const byId = new Map(model.actors.map((actor) => [actor.sessionId, actor]));
+    expect(byId.get("taker")!.spawnedBy).toBe("giver");
+    expect(byId.get("taker")!.continuesFrom).toBeNull();
+    expect(byId.get("giver")!.spawnedBy).toBeNull();
+    expect(byId.get("taker")!.place).not.toBe("rebirth");
   });
 
   test("the successor still names an archived predecessor", () => {
@@ -937,7 +957,7 @@ describe("handoff", () => {
         sessions: [
           session("old", {
             workingDirectory: "/w/tree",
-            handoffRequestedAt: "2026-09-23T11:00:00.000Z",
+            rebirthRequestedAt: "2026-09-23T11:00:00.000Z",
             status: "exited",
             archivedAt: "2026-09-23T11:02:00.000Z",
           }),

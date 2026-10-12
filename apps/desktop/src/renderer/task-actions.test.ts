@@ -50,10 +50,11 @@ const session = (
   account: null,
   teamId: null,
   teamHandle: null,
+  spawnedBy: null,
   archivedAt: null,
   resumeCount: 0,
   lostReason: null,
-  handoffRequestedAt: null,
+  rebirthRequestedAt: null,
   position: 0,
   pinnedAt: null,
   color: null,
@@ -123,7 +124,7 @@ describe("taskActions", () => {
     expect(actions.liveSession).toBeUndefined();
   });
 
-  test("an empty brief on a startable task offers Draft brief", () => {
+  test("an empty brief on a startable task offers Refine", () => {
     expect(
       actionsFor(task(1, { description: "  " }), inputs({})).canDraftBrief,
     ).toBe(true);

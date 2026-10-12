@@ -211,7 +211,7 @@ export class TeamService {
       if (free(`${base}-${suffix}`)) return `${base}-${suffix}`;
   }
 
-  /** What a member is told at launch, and again after a handoff. */
+  /** What a member is told at launch, and again after a rebirth. */
   memberLaunchLines(member: TeamMembership): string[] {
     const ability = this.repositories.abilities
       .list("orchestration")
@@ -631,7 +631,7 @@ export class TeamService {
     return {
       id: ability.id,
       lead,
-      // The lead's handoff counter is not part of the team's name.
+      // The lead's rebirth counter is not part of the team's name.
       name: sessionBaseName(lead.name),
       goal: ability.config.goal ?? null,
       ability,

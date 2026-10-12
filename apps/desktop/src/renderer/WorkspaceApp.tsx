@@ -399,12 +399,12 @@ const elapsedLabel = (
   return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
 };
 
-/** A baton passing forward: the work continues with someone new. */
-function HandoffIcon() {
+/** A loop back to the start with a plus: the same work, a fresh agent. */
+function RebirthIcon() {
   return (
     <svg
       aria-hidden="true"
-      className="handoff-icon"
+      className="rebirth-icon"
       fill="none"
       stroke="currentColor"
       strokeLinecap="round"
@@ -412,9 +412,10 @@ function HandoffIcon() {
       strokeWidth="1.8"
       viewBox="0 0 24 24"
     >
-      <path d="M3 12h9" />
-      <path d="M9 8l4 4-4 4" />
-      <rect height="14" rx="2.5" width="6" x="15" y="5" />
+      <path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3" />
+      <path d="M19.5 4v4h-4" />
+      <path d="M12 9.5v5" />
+      <path d="M9.5 12h5" />
     </svg>
   );
 }
@@ -2839,25 +2840,25 @@ export function WorkspaceApp({
   const activeSession = openingLaunch
     ? undefined
     : sessions.find((item) => item.id === activeSessionId);
-  // A session that was asked to hand off, by a click or by the automatic
+  // A session that was asked for a rebirth, by a click or by the automatic
   // sweep, is followed to its successor: the fresh session in the same
   // working directory that started after the request. Looked up across the
   // archived sessions too, because the successor arrives and the
   // predecessor is archived within the same second.
-  const viewedHandoff = workspaceSessions.find(
-    (item) => item.id === activeSessionId && item.handoffRequestedAt,
+  const viewedRebirth = workspaceSessions.find(
+    (item) => item.id === activeSessionId && item.rebirthRequestedAt,
   );
-  const handoffSuccessor = viewedHandoff
+  const rebirthSuccessor = viewedRebirth
     ? sessions.find(
         (item) =>
-          item.id !== viewedHandoff.id &&
-          item.workingDirectory === viewedHandoff.workingDirectory &&
-          item.startedAt >= viewedHandoff.handoffRequestedAt!,
+          item.id !== viewedRebirth.id &&
+          item.workingDirectory === viewedRebirth.workingDirectory &&
+          item.startedAt >= viewedRebirth.rebirthRequestedAt!,
       )
     : undefined;
   useEffect(() => {
-    if (handoffSuccessor) openSession(handoffSuccessor.id);
-  }, [handoffSuccessor, openSession]);
+    if (rebirthSuccessor) openSession(rebirthSuccessor.id);
+  }, [rebirthSuccessor, openSession]);
   const activeSessionTelemetry = snapshot?.sessionTelemetry.find(
     (item) => item.sessionId === activeSession?.id,
   );
@@ -3762,14 +3763,14 @@ export function WorkspaceApp({
     if (!archived && wasActive) setActiveSessionId(session.id);
   }
 
-  // The button runs the same thing as `/daedalus-handoff`: a running agent
+  // The button runs the same thing as `/daedalus-rebirth`: a running agent
   // is asked to write its note and continue itself; a session that cannot
   // answer gets its successor straight away, working from brief and git.
   async function continueInNewAgent(session: AgentSessionDto) {
     if (session.status === "running") {
       await performForSession(
         session.id,
-        client.request.agentRequestHandoff({ id: session.id }),
+        client.request.agentRequestRebirth({ id: session.id }),
       );
       return;
     }
@@ -4758,23 +4759,23 @@ export function WorkspaceApp({
           {session.kind === "agent" &&
             (session.provider === "claude" || session.provider === "codex") && (
               <button
-                aria-label={`Continue ${sessionName(session)} in a new agent`}
-                className="session-card-action session-card-hover-action session-handoff-action"
-                data-handoff-requested={
-                  session.handoffRequestedAt ? "true" : undefined
+                aria-label={`Rebirth ${sessionName(session)}`}
+                className="session-card-action session-card-hover-action session-rebirth-action"
+                data-rebirth-requested={
+                  session.rebirthRequestedAt ? "true" : undefined
                 }
                 disabled={pendingSessionIds.has(session.id)}
                 onClick={() => void continueInNewAgent(session)}
                 title={
-                  session.handoffRequestedAt
-                    ? "Handoff requested; the agent is writing its note. Click to ask again."
+                  session.rebirthRequestedAt
+                    ? "Rebirth requested; the agent is writing its note. Click to ask again."
                     : session.status === "running"
-                      ? "Continue in a new agent: this one writes a handoff note, then a fresh agent with an empty context takes over in the same working directory"
-                      : "Continue in a new agent: a fresh agent takes over in the same working directory, working from the brief, the journal and git"
+                      ? "Rebirth: this agent writes a note, then a fresh agent with an empty context takes over in the same working directory and state, waiting on you if this one was"
+                      : "Rebirth: a fresh agent takes over in the same working directory, working from the brief, the journal and git"
                 }
                 type="button"
               >
-                <HandoffIcon />
+                <RebirthIcon />
               </button>
             )}
           <ConfirmButton
@@ -4794,7 +4795,7 @@ export function WorkspaceApp({
           >
             <ArchiveIcon />
           </ConfirmButton>
-          {/* Last, so hand off and archive open to its left on hover. */}
+          {/* Last, so rebirth and archive open to its left on hover. */}
           <SessionMenu
             color={session.color}
             name={sessionName(session)}

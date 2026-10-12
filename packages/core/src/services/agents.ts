@@ -29,9 +29,10 @@ import {
   ensureCodexHooks,
   CODEX_DAEDALUS_TUI_ARGS,
   discoverProviderModels,
-  HANDOFF_FILE,
-  HANDOFF_SKILL,
-  handoffSessionName,
+  REBIRTH_FILE,
+  REBIRTH_SKILL,
+  REFINEMENT_SKILL,
+  rebirthSessionName,
   modelArgument,
   type ProviderModelCatalog,
   removeClaudeSettingsFiles,
@@ -878,12 +879,14 @@ export class AgentService {
      * count as starting the work and leaves the status alone.
      */
     draftBrief?: boolean;
+    /** The session that started this one from inside itself, as a handoff does. */
+    spawnedBy?: string;
     /**
      * Internal to `continueSession`: run in this session's working directory,
      * take over its worktrees, and launch with the continuation prompt.
      */
     continueFrom?: AgentSession;
-    handoff?: boolean;
+    note?: boolean;
     /** Abilities the session holds from the start, such as `routines`. */
     abilities?: string[];
     color?: SessionColor;
@@ -998,6 +1001,10 @@ export class AgentService {
         : input.team;
     const launchPrompt = buildAgentPrompt({
       taskNumber: task?.number,
+      refinement:
+        input.draftBrief && !input.continueFrom
+          ? await this.refinementInvocation(provider?.name)
+          : undefined,
       message: [
         ...this.abilities.launchLines(abilities),
         ...(team ? this.teamLaunchLines(team) : []),
@@ -1010,7 +1017,7 @@ export class AgentService {
         : input.draftBrief
           ? "draft-brief"
           : "execute",
-      handoff: input.handoff,
+      note: input.note,
     });
     const launch = input.terminal
       ? { executable: shell!, args: ["-l"], env: {} }
@@ -1046,7 +1053,7 @@ export class AgentService {
       archivedAt: null,
       resumeCount: 0,
       lostReason: null,
-      handoffRequestedAt: null,
+      rebirthRequestedAt: null,
       resumeOnStart: false,
       // Top of its workspace's list, leaving any manual order below it intact.
       position: this.repositories.nextAgentPosition(workspace.id),
@@ -1057,6 +1064,7 @@ export class AgentService {
       account,
       teamId: team?.teamId ?? null,
       teamHandle: team?.handle ?? null,
+      spawnedBy: input.spawnedBy ?? null,
     };
     this.repositories.transaction(() => {
       this.repositories.createAgent(session);
@@ -1136,24 +1144,24 @@ export class AgentService {
   }
 
   /**
-   * The one-click half of a handoff: asks a running agent to write a note for
+   * The one-click half of a rebirth: asks a running agent to write a note for
    * its successor and then run `daedal agent continue` itself.
    */
-  async requestHandoff(id: string): Promise<AgentSession> {
+  async requestRebirth(id: string): Promise<AgentSession> {
     const agent = await this.requireContinuable(id);
     if (usesInbox(agent)) {
       // Left in the mailbox, so it arrives even mid-turn, and never shows
       // as something the user typed.
-      const skill = await this.requireSkill(agent, HANDOFF_SKILL);
+      const skill = await this.requireSkill(agent, REBIRTH_SKILL);
       await leaveInInbox(
         this.config,
         agent.id,
-        `Daedalus: hand off your work to a fresh session now. Run the ${skill} skill.`,
+        `Daedalus: continue your work in a fresh session now. Run the ${skill} skill.`,
       );
-    } else await this.invokeSkill(agent.id, HANDOFF_SKILL);
+    } else await this.invokeSkill(agent.id, REBIRTH_SKILL);
     const requested = {
       ...agent,
-      handoffRequestedAt: new Date().toISOString(),
+      rebirthRequestedAt: new Date().toISOString(),
     };
     this.repositories.updateAgent(requested);
     return requested;
@@ -1181,6 +1189,33 @@ export class AgentService {
     return true;
   }
 
+  /**
+   * How a Refine session starts the refinement skill, or nothing when
+   * the provider has no skills or the user turned the skill off; the session
+   * then drafts the brief without interviewing.
+   */
+  private async refinementInvocation(
+    provider: string | undefined,
+  ): Promise<string | undefined> {
+    if (provider !== "claude" && provider !== "codex") return undefined;
+    const skillName = await this.installedSkill(provider, REFINEMENT_SKILL);
+    return skillName ? buildSkillInvocation(provider, skillName) : undefined;
+  }
+
+  /** The skill's installed name for the provider, if it is installed. */
+  private async installedSkill(
+    provider: SkillProvider,
+    skillId: string,
+  ): Promise<string | undefined> {
+    const skillName = channelArtifactName(this.config, skillId);
+    const installed = skillLinkPaths(this.config, skillName).find((link) =>
+      link.providers.includes(provider),
+    );
+    return installed && (await pathExists(join(installed.path, "SKILL.md")))
+      ? skillName
+      : undefined;
+  }
+
   /** The skill's installed name, or `CONFLICT` when it is not installed. */
   private async requireSkill(
     agent: AgentSession,
@@ -1191,11 +1226,11 @@ export class AgentService {
         "CONFLICT",
         "Only Claude and Codex sessions can run Daedalus skills",
       );
-    const skillName = channelArtifactName(this.config, skillId);
-    const installed = skillLinkPaths(this.config, skillName).find((link) =>
-      link.providers.includes(agent.provider as SkillProvider),
+    const skillName = await this.installedSkill(
+      agent.provider as SkillProvider,
+      skillId,
     );
-    if (!installed || !(await pathExists(join(installed.path, "SKILL.md"))))
+    if (!skillName)
       throw new DaedalusError(
         "CONFLICT",
         `The ${skillId} skill is not installed for ${agent.provider}. Turn it on in Settings, Skills, or with 'daedal skill enable ${skillId}'.`,
@@ -1235,11 +1270,11 @@ export class AgentService {
 
   /**
    * Asks every running session whose context has passed its workspace's
-   * threshold to hand off. Once per session: a request already made stands
+   * threshold to be reborn. Once per session: a request already made stands
    * until the successor archives it, so the agent is not nagged every tick
    * while it writes the note.
    */
-  async sweepAutoHandoffs(
+  async sweepAutoRebirths(
     telemetry: ReadonlyArray<{
       sessionId: string;
       context?: { usedPercent?: number };
@@ -1248,8 +1283,8 @@ export class AgentService {
     const thresholds = new Map(
       this.repositories
         .listWorkspaces()
-        .filter((workspace) => workspace.autoHandoffPercent !== null)
-        .map((workspace) => [workspace.id, workspace.autoHandoffPercent!]),
+        .filter((workspace) => workspace.autoRebirthPercent !== null)
+        .map((workspace) => [workspace.id, workspace.autoRebirthPercent!]),
     );
     if (thresholds.size === 0) return [];
     const usage = new Map(
@@ -1266,15 +1301,15 @@ export class AgentService {
         agent.kind !== "agent" ||
         agent.status !== "running" ||
         agent.archivedAt ||
-        agent.handoffRequestedAt ||
+        agent.rebirthRequestedAt ||
         (agent.provider !== "claude" && agent.provider !== "codex") ||
-        // A session running routines drains its runs first, and hands off
+        // A session running routines drains its runs first, and is reborn
         // under the delivery rule; the routine clock decides.
         this.abilities.held(agent.id, "routines")?.paused === false
       )
         continue;
       try {
-        requested.push(await this.requestHandoff(agent.id));
+        requested.push(await this.requestRebirth(agent.id));
       } catch {
         // A session that vanished between the list and the send is the
         // reconcile pass's business, not this one's.
@@ -1285,8 +1320,8 @@ export class AgentService {
 
   /**
    * Moves a session's work to a fresh one with an empty context: same task,
-   * same working directory, same worktrees. The handoff note, when there is
-   * one, is written to `HANDOFF.md` there and the successor is told to read
+   * same working directory, same worktrees. The rebirth note, when there is
+   * one, is written to `REBIRTH.md` there and the successor is told to read
    * it. The predecessor is archived, which keeps its conversation restorable.
    *
    * `archive: "later"` leaves that to the caller. An agent that runs this on
@@ -1295,7 +1330,7 @@ export class AgentService {
    */
   async continueSession(input: {
     id: string;
-    handoff?: string;
+    note?: string;
     provider?: "codex" | "claude";
     model?: string;
     /** Another account for the successor; its predecessor's by default. */
@@ -1320,16 +1355,16 @@ export class AgentService {
       );
     // Marked whether the request came from Daedalus or the agent decided on
     // its own, so the app can follow this session to its successor either way.
-    if (!predecessor.handoffRequestedAt)
+    if (!predecessor.rebirthRequestedAt)
       this.repositories.updateAgent({
         ...predecessor,
-        handoffRequestedAt: new Date().toISOString(),
+        rebirthRequestedAt: new Date().toISOString(),
       });
-    const handoff = input.handoff?.trim();
-    if (handoff)
+    const note = input.note?.trim();
+    if (note)
       await writeFile(
-        join(predecessor.workingDirectory, HANDOFF_FILE),
-        `${handoff}\n`,
+        join(predecessor.workingDirectory, REBIRTH_FILE),
+        `${note}\n`,
         "utf8",
       );
     // A session holding routines keeps its name: it is one agent over time,
@@ -1343,7 +1378,7 @@ export class AgentService {
       taskId: predecessor.taskId ?? undefined,
       name: holdsRoutines
         ? predecessor.name
-        : handoffSessionName(predecessor.name),
+        : rebirthSessionName(predecessor.name),
       provider,
       // A different provider would not understand the old one's model name.
       model:
@@ -1354,7 +1389,7 @@ export class AgentService {
       ...(input.account !== undefined ? { account: input.account } : {}),
       message: input.message,
       continueFrom: predecessor,
-      handoff: Boolean(handoff),
+      note: Boolean(note),
     });
     // Abilities move with the work, so the routine clock follows the
     // successor, and archiving the predecessor below does not pause them. A
@@ -1392,7 +1427,7 @@ export class AgentService {
     if (agent.archivedAt)
       throw new DaedalusError(
         "CONFLICT",
-        "An archived session cannot hand off its work; restore it first",
+        "An archived session cannot be reborn; restore it first",
       );
     if (!(await pathExists(agent.workingDirectory)))
       throw new DaedalusError(
@@ -1444,7 +1479,7 @@ export class AgentService {
             lostReason: atStartup
               ? `${providerLabel(agent.provider)} exited before reaching its prompt. Restore the session to start it again.`
               : null,
-            handoffRequestedAt: null,
+            rebirthRequestedAt: null,
           });
         } else if (agent.status === "starting" && live.has(agent.tmuxSession)) {
           this.repositories.updateAgent({ ...agent, status: "running" });
@@ -1998,7 +2033,7 @@ export class AgentService {
       endedAt: null,
       exitCode: null,
       lostReason: null,
-      handoffRequestedAt: null,
+      rebirthRequestedAt: null,
     };
     // Last thing before the launch, because the window between the sweep's own
     // check and this one is where a racing CLI would put a second runtime on
@@ -2127,7 +2162,7 @@ export class AgentService {
               status: "running",
               endedAt: null,
               lostReason: null,
-              handoffRequestedAt: null,
+              rebirthRequestedAt: null,
             });
             continue;
           }

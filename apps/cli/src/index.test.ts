@@ -616,7 +616,7 @@ describe("daedal CLI contract", () => {
       const env = { CODEX_HOME: join(home, "codex") };
       const workspace = await cli(
         home,
-        ["workspace", "create", "Handoff", "--json"],
+        ["workspace", "create", "Rebirth", "--json"],
         env,
       );
       const workspaceId = JSON.parse(workspace.stdout).data.id as string;
@@ -647,12 +647,12 @@ describe("daedal CLI contract", () => {
         workingDirectory: string;
       };
 
-      // As the handoff skill runs it: from the session's own directory, with
+      // As the rebirth skill runs it: from the session's own directory, with
       // an environment that names some other session, the way a Claude
       // session moved into the background sees it.
       const continued = await cli(
         home,
-        ["agent", "continue", "--handoff-file", "-", "--json"],
+        ["agent", "continue", "--note-file", "-", "--json"],
         { ...env, DAEDALUS_SESSION_ID: crypto.randomUUID() },
         "Next: finish step 2.",
         first.workingDirectory,
@@ -667,7 +667,7 @@ describe("daedal CLI contract", () => {
       // Still live when the command answered: it cannot archive itself.
       expect(result.predecessor.archivedAt).toBeNull();
       expect(
-        await Bun.file(join(first.workingDirectory, "HANDOFF.md")).text(),
+        await Bun.file(join(first.workingDirectory, "REBIRTH.md")).text(),
       ).toBe("Next: finish step 2.\n");
 
       let archivedAt: string | null = null;
@@ -1046,6 +1046,88 @@ describe("daedal team", () => {
 
         const help = await cli(home, ["team", "--help"], env);
         expect(help.stdout).toContain("daedal team say");
+      } finally {
+        await cli(home, ["shutdown", "--json"], env);
+      }
+    });
+  }, 60_000);
+});
+
+describe("the calling session's workspace", () => {
+  test("task create and agent spawn default --workspace to it", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const fakeCodex = join(home, "fake-codex");
+      await Bun.write(
+        fakeCodex,
+        "#!/bin/sh\necho 'Ask Codex to do anything'\nexec cat\n",
+      );
+      await runCommand("chmod", ["+x", fakeCodex]);
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { codex: { executable: fakeCodex, args: [] } },
+        }),
+      );
+      const env = {
+        CODEX_HOME: join(home, "codex"),
+        DAEDALUS_SESSION_ID: "",
+      };
+      const json = async (args: string[], cwd?: string) => {
+        const result = await cli(
+          home,
+          [...args, "--json"],
+          env,
+          undefined,
+          cwd,
+        );
+        expect(result.stderr).toBe("");
+        expect(result.exitCode).toBe(0);
+        return JSON.parse(result.stdout).data;
+      };
+      try {
+        const workspace = await json(["workspace", "create", "Side"]);
+        const first = await json([
+          "agent",
+          "spawn",
+          "--workspace",
+          workspace.id,
+          "--provider",
+          "codex",
+        ]);
+        // From inside the session's folder, as a handoff runs them.
+        const task = await json(
+          ["task", "create", "--title", "Came up"],
+          first.workingDirectory,
+        );
+        expect(task.workspaceId).toBe(workspace.id);
+        const second = await json(
+          [
+            "agent",
+            "spawn",
+            "--task",
+            String(task.number),
+            "--provider",
+            "codex",
+          ],
+          first.workingDirectory,
+        );
+        expect(second).toMatchObject({
+          workspaceId: workspace.id,
+          taskId: task.id,
+          // The World draws the first handing the second its brief.
+          spawnedBy: first.id,
+        });
+        expect(first.spawnedBy).toBeNull();
+        // Outside any session it still has to be named.
+        const outside = await cli(
+          home,
+          ["task", "create", "--title", "Nowhere", "--json"],
+          env,
+        );
+        expect(outside.exitCode).not.toBe(0);
+        expect(outside.stdout + outside.stderr).toContain(
+          "--workspace is required outside a Daedalus session",
+        );
       } finally {
         await cli(home, ["shutdown", "--json"], env);
       }

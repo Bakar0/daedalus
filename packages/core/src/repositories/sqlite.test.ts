@@ -24,7 +24,7 @@ describe("SqliteRepositories", () => {
         archivedAt: null,
         position: 1,
         startSetsInProgress: true,
-        autoHandoffPercent: null,
+        autoRebirthPercent: null,
         defaultProvider: null,
         defaultModel: null,
         defaultClaudeAccount: null,
@@ -62,7 +62,7 @@ describe("SqliteRepositories", () => {
         archivedAt: null,
         resumeCount: 0,
         lostReason: null,
-        handoffRequestedAt: null,
+        rebirthRequestedAt: null,
         resumeOnStart: false,
         position: 1,
         pinnedAt: null,
@@ -70,6 +70,7 @@ describe("SqliteRepositories", () => {
         account: null,
         teamId: null,
         teamHandle: null,
+        spawnedBy: null,
       });
       repositories.createIntegratedTerminal({
         id: "terminal-id",

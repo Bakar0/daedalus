@@ -29,7 +29,7 @@ whenever something changes:
   agreed on, written exactly;
 - every decision, with the date and who made it.
 
-A handoff successor reads it first, so write it for someone who knows
+A rebirth successor reads it first, so write it for someone who knows
 nothing about the conversation. Members can read it too.
 
 Set the goal in Daedalus as well, so new members are told it at launch:

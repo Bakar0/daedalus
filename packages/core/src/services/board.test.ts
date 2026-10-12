@@ -62,7 +62,15 @@ async function withBoardContext(
     );
     const tmux = new FakeTmux();
     const context = await createApplicationContext({
-      env: { DAEDALUS_HOME: home, CODEX_HOME: join(home, "codex") },
+      // Provider homes inside the temporary home, so whether the refinement
+      // skill is installed depends on the test, not on the real ~/.agents.
+      env: {
+        DAEDALUS_HOME: home,
+        CODEX_HOME: join(home, "codex"),
+        CLAUDE_CONFIG_DIR: join(home, "claude"),
+        DAEDALUS_AGENTS_HOME: join(home, "agents"),
+        DAEDALUS_CURSOR_HOME: join(home, "cursor"),
+      },
       tmux,
       // A raised badge alerts, and with no app running that would reach the
       // real notifier: a notification on screen per raise, and on a CI runner
@@ -135,7 +143,7 @@ describe("starting a task", () => {
     });
   });
 
-  test("a draft-brief session is linked to the task without starting it", async () => {
+  test("a Refine session is linked to the task without starting it", async () => {
     await withBoardContext(async (context, tmux) => {
       const workspace = await context.workspaces.create({ name: "Drafts" });
       const task = await context.tasks.create({
@@ -164,6 +172,61 @@ describe("starting a task", () => {
         }),
       ).rejects.toMatchObject({ code: "VALIDATION" });
     });
+  });
+
+  test("a Refine session starts with the refinement skill when it is installed", async () => {
+    await withBoardContext(async (context, tmux) => {
+      await context.skills.sync();
+      const workspace = await context.workspaces.create({ name: "Refine" });
+      const task = await context.tasks.create({
+        workspace: workspace.id,
+        title: "Fuzzy idea",
+      });
+      await context.agents.spawn({
+        workspace: workspace.id,
+        taskId: task.id,
+        provider: "codex",
+        draftBrief: true,
+      });
+      expect(tmux.launches[0]!.args.at(-1)!).toBe(
+        `$daedalus-refinement Draft the brief for task #${task.number}. Read the workspace, then write the brief back with \`daedal task update ${task.number} --description-file -\`. Do not start the task itself.`,
+      );
+      // Turned off, Refine writes the brief without the interview.
+      await context.skills.setEnabled("daedalus-refinement", false);
+      await context.agents.spawn({
+        workspace: workspace.id,
+        taskId: task.id,
+        provider: "codex",
+        draftBrief: true,
+      });
+      expect(tmux.launches[1]!.args.at(-1)!).toMatch(/^Draft the brief/);
+      // A task started for real never runs it.
+      await context.skills.setEnabled("daedalus-refinement", true);
+      await context.agents.spawn({
+        workspace: workspace.id,
+        taskId: task.id,
+        provider: "codex",
+      });
+      expect(tmux.launches[2]!.args.at(-1)!).not.toContain(
+        "daedalus-refinement",
+      );
+    });
+  });
+
+  test("the refinement skill leads the draft prompt", () => {
+    expect(
+      buildAgentPrompt({
+        taskNumber: 7,
+        mode: "draft-brief",
+        refinement: "/daedalus-refinement",
+      }),
+    ).toMatch(/^\/daedalus-refinement Draft the brief for task #7\./);
+    expect(
+      buildAgentPrompt({
+        taskNumber: 7,
+        refinement: "/daedalus-refinement",
+      }),
+    ).toMatch(/^Execute task #7\./);
   });
 
   test("the draft prompt stays one instruction", () => {
@@ -418,7 +481,7 @@ describe("task timeline", () => {
     archivedAt: null,
     resumeCount: 0,
     lostReason: null,
-    handoffRequestedAt: null,
+    rebirthRequestedAt: null,
     resumeOnStart: false,
     position: 0,
     pinnedAt: null,
@@ -426,6 +489,7 @@ describe("task timeline", () => {
     account: null,
     teamId: null,
     teamHandle: null,
+    spawnedBy: null,
   };
 
   test("orders a join over sessions, worktrees, attention and the journal", () => {
@@ -697,7 +761,7 @@ describe("task cost", () => {
       archivedAt: null,
       resumeCount: 0,
       lostReason: null,
-      handoffRequestedAt: null,
+      rebirthRequestedAt: null,
       resumeOnStart: false,
       position: 0,
       pinnedAt: null,
@@ -705,6 +769,7 @@ describe("task cost", () => {
       account: null,
       teamId: null,
       teamHandle: null,
+      spawnedBy: null,
     };
     const stopped = {
       ...base,

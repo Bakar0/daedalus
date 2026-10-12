@@ -89,6 +89,7 @@ interface AgentRow {
   account: string | null;
   team_id: string | null;
   team_handle: string | null;
+  spawned_by: string | null;
 }
 
 interface IntegratedTerminalRow {
@@ -149,7 +150,7 @@ const workspaceFromRow = (row: WorkspaceRow): Workspace => ({
   archivedAt: row.archived_at,
   position: row.position,
   startSetsInProgress: row.start_sets_in_progress !== 0,
-  autoHandoffPercent: row.auto_handoff_percent,
+  autoRebirthPercent: row.auto_handoff_percent,
   defaultProvider: row.default_provider,
   defaultModel: row.default_model,
   defaultClaudeAccount: row.default_claude_account,
@@ -190,13 +191,14 @@ const agentFromRow = (row: AgentRow): AgentSession => ({
   resumeCount: row.resume_count,
   lostReason: row.lost_reason,
   resumeOnStart: row.resume_on_start === 1,
-  handoffRequestedAt: row.handoff_requested_at,
+  rebirthRequestedAt: row.handoff_requested_at,
   position: row.position,
   pinnedAt: row.pinned_at,
   color: row.color,
   account: row.account,
   teamId: row.team_id,
   teamHandle: row.team_handle,
+  spawnedBy: row.spawned_by,
 });
 
 const integratedTerminalFromRow = (
@@ -408,7 +410,7 @@ export class SqliteRepositories {
         workspace.startSetsInProgress ? 1 : 0,
         workspace.defaultProvider,
         workspace.defaultModel,
-        workspace.autoHandoffPercent,
+        workspace.autoRebirthPercent,
         workspace.defaultClaudeAccount,
         workspace.defaultCodexAccount,
       );
@@ -476,7 +478,7 @@ export class SqliteRepositories {
         workspace.startSetsInProgress ? 1 : 0,
         workspace.defaultProvider,
         workspace.defaultModel,
-        workspace.autoHandoffPercent,
+        workspace.autoRebirthPercent,
         workspace.defaultClaudeAccount,
         workspace.defaultCodexAccount,
         workspace.id,
@@ -669,7 +671,7 @@ export class SqliteRepositories {
       .run(sessionId, repositoryId);
   }
 
-  /** Hands every worktree one session holds to another, for a handoff. */
+  /** Hands every worktree one session holds to another, for a rebirth. */
   reassignSessionWorktrees(fromSessionId: string, toSessionId: string): void {
     this.database
       .query("UPDATE session_worktrees SET session_id = ? WHERE session_id = ?")
@@ -816,8 +818,8 @@ export class SqliteRepositories {
           working_directory, status, exit_code, started_at, ended_at,
           provider_session_id, archived_at, resume_count, lost_reason,
           resume_on_start, handoff_requested_at, position, pinned_at, color,
-          account, team_id, team_handle)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          account, team_id, team_handle, spawned_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         agent.id,
@@ -839,13 +841,14 @@ export class SqliteRepositories {
         agent.resumeCount,
         agent.lostReason,
         agent.resumeOnStart ? 1 : 0,
-        agent.handoffRequestedAt,
+        agent.rebirthRequestedAt,
         agent.position,
         agent.pinnedAt,
         agent.color,
         agent.account,
         agent.teamId,
         agent.teamHandle,
+        agent.spawnedBy,
       );
   }
 
@@ -975,7 +978,7 @@ export class SqliteRepositories {
         agent.resumeCount,
         agent.lostReason,
         agent.resumeOnStart ? 1 : 0,
-        agent.handoffRequestedAt,
+        agent.rebirthRequestedAt,
         agent.id,
       );
   }

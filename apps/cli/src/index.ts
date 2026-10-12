@@ -377,7 +377,7 @@ const commandHelp: Record<string, string> = {
   daedal workspace get <workspace>
   daedal workspace update <workspace> [--name <name>] [--slug <slug>]
       [--start-sets-in-progress on|off] [--default-provider claude|codex|none]
-      [--default-model <model>|none] [--auto-handoff <percent>|off]
+      [--default-model <model>|none] [--auto-rebirth <percent>|off]
       [--default-claude-account <account>|default]
       [--default-codex-account <account>|default]
   daedal workspace archive <workspace>
@@ -396,11 +396,11 @@ longer offers makes those spawns fail, naming the fix, rather than start a
 session that cannot answer.
 --default-claude-account and --default-codex-account name the account each
 provider's sessions start on when nothing chooses one; see 'daedal account'.
---auto-handoff (off by default) asks a session to hand its work to a fresh
+--auto-rebirth (off by default) asks a session to hand its work to a fresh
 agent once its context passes that percent of the window; see 'agent
 continue'. The desktop app runs the check about once a second.`,
   task: `Task commands:
-  daedal task create --workspace <workspace> --title <title> [--description <text> | --description-file <path|->] [--priority <priority>]
+  daedal task create [--workspace <workspace>] --title <title> [--description <text> | --description-file <path|->] [--priority <priority>]
   daedal task list [--workspace <workspace>] [--status <status>]
   daedal task get <task-ref> [--workspace <workspace>]
   daedal task current
@@ -432,7 +432,7 @@ it was cleared, journal entries whose heading names the task, and done.`,
   daedal repo worktree remove --session <agent-id> --repository <name-or-id> [--force]`,
   agent: `Agent commands:
   daedal agent models <codex|claude> [--account <account>]
-  daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--draft-brief]
+  daedal agent spawn [--workspace <workspace>] (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine]
   daedal agent spawn ... [--ability <ability>[,<ability>]] [--color <color>] [--pin]
   daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>] [--user]
   daedal agent list [--workspace <workspace>] [--running|--archived]
@@ -442,8 +442,8 @@ it was cleared, journal entries whose heading names the task, and done.`,
   daedal agent attach <agent-id>
   daedal agent send <agent-id> <text>
   daedal agent archive <agent-id> [--force]
-  daedal agent handoff <agent-id>
-  daedal agent continue [<agent-id>] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--account <account>] [--message <text>]
+  daedal agent rebirth <agent-id>
+  daedal agent continue [<agent-id>] [--note-file <path|->] [--provider <codex|claude>] [--model <model>] [--account <account>] [--message <text>]
   daedal agent restore <agent-id>
   daedal agent revive <agent-id> | --all | --workspace <workspace>
   daedal agent stop <agent-id> [--force]
@@ -463,9 +463,9 @@ own. The app runs the same sweep at startup unless it is turned off.
 
 'agent spawn --task' moves a todo or blocked task to in_progress when the
 workspace's --start-sets-in-progress setting is on, which is the default.
---draft-brief links the session to the task but asks it to write the brief
-back with 'task update --description-file -' instead of doing the task, and
-leaves the status alone.
+--refine links the session to the task but asks it to question the user about
+the task and write the brief back with 'task update --description-file -'
+instead of doing the task, and leaves the status alone.
 
 'agent spawn --ability routines' starts a session that holds the routines
 ability: the user asks it for routines and Daedalus types their runs into
@@ -484,11 +484,11 @@ its own configuration.
 
 'agent continue' moves a session's work to a fresh one with an empty context:
 same task, same working directory, same worktrees. The note from
---handoff-file is written to HANDOFF.md there and the new session is told to
+--note-file is written to REBIRTH.md there and the new session is told to
 read it first. The old session is archived, so its conversation can still be
 restored. Run inside a session with no id, it continues that session; the
 archive then happens just after the command exits, because archiving stops the
-very agent that is running it. 'agent handoff' is the one-click version: it
+very agent that is running it. 'agent rebirth' is the one-click version: it
 asks a running agent to write the note and run 'agent continue' itself.
 
 'agent wait' blocks until a session reaches a state and then exits 0, so the
@@ -788,24 +788,24 @@ async function workspaceCommand(
       "start-sets-in-progress",
       "default-provider",
       "default-model",
-      "auto-handoff",
+      "auto-rebirth",
       "default-claude-account",
       "default-codex-account",
     ]);
     expectPositionals(
       parsed.positionals,
       1,
-      "daedal workspace update <workspace> [--name <name>] [--slug <slug>] [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--default-model <model>|none] [--auto-handoff <percent>|off]",
+      "daedal workspace update <workspace> [--name <name>] [--slug <slug>] [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--default-model <model>|none] [--auto-rebirth <percent>|off]",
     );
-    const autoHandoff = parsed.values["auto-handoff"];
+    const autoRebirth = parsed.values["auto-rebirth"];
     if (
-      autoHandoff !== undefined &&
-      autoHandoff !== "off" &&
-      !/^\d+$/.test(autoHandoff)
+      autoRebirth !== undefined &&
+      autoRebirth !== "off" &&
+      !/^\d+$/.test(autoRebirth)
     )
       throw new DaedalusError(
         "VALIDATION",
-        "--auto-handoff must be a percent from 10 to 100, or 'off'",
+        "--auto-rebirth must be a percent from 10 to 100, or 'off'",
       );
     const startSetting = parsed.values["start-sets-in-progress"];
     if (
@@ -823,12 +823,12 @@ async function workspaceCommand(
       slug: parsed.values.slug,
       startSetsInProgress:
         startSetting === undefined ? undefined : startSetting === "on",
-      autoHandoffPercent:
-        autoHandoff === undefined
+      autoRebirthPercent:
+        autoRebirth === undefined
           ? undefined
-          : autoHandoff === "off"
+          : autoRebirth === "off"
             ? null
-            : Number(autoHandoff),
+            : Number(autoRebirth),
       defaultProvider: parsed.values["default-provider"],
       defaultModel:
         defaultModel === undefined
@@ -932,6 +932,25 @@ async function currentSessionTask(context: ApplicationContext) {
   );
 }
 
+/**
+ * `--workspace`, or the calling session's workspace when it is left out, so
+ * an agent can create a task or start a session in its own workspace without
+ * naming it.
+ */
+async function workspaceOrCaller(
+  context: ApplicationContext,
+  workspace: string | undefined,
+): Promise<string> {
+  if (workspace) return workspace;
+  const caller = await callerSession(context);
+  if (!caller)
+    throw new DaedalusError(
+      "VALIDATION",
+      "--workspace is required outside a Daedalus session",
+    );
+  return caller.workspaceId;
+}
+
 async function resolveTaskReference(
   context: ApplicationContext,
   reference: string,
@@ -981,10 +1000,10 @@ async function taskCommand(
     expectPositionals(
       parsed.positionals,
       0,
-      "daedal task create --workspace <workspace> --title <title>",
+      "daedal task create [--workspace <workspace>] --title <title>",
     );
     const result = await context.tasks.create({
-      workspace: required(parsed.values.workspace, "--workspace"),
+      workspace: await workspaceOrCaller(context, parsed.values.workspace),
       title: required(parsed.values.title, "--title"),
       description: await descriptionOption(parsed.values),
       priority: parsed.values.priority,
@@ -1197,12 +1216,12 @@ async function agentCommand(
         "ability",
         "color",
       ],
-      ["draft-brief", "pin", "user"],
+      ["refine", "pin", "user"],
     );
     expectPositionals(
       parsed.positionals,
       0,
-      "daedal agent spawn --workspace <workspace> (--provider <provider> | --command <name>)",
+      "daedal agent spawn [--workspace <workspace>] (--provider <provider> | --command <name>)",
     );
     if (team)
       return spawnTeamMember(
@@ -1219,7 +1238,7 @@ async function agentCommand(
       );
     if (parsed.flags.has("user"))
       throw new DaedalusError("VALIDATION", "--user goes with --team");
-    const workspace = required(parsed.values.workspace, "--workspace");
+    const workspace = await workspaceOrCaller(context, parsed.values.workspace);
     const task = parsed.values.task
       ? await resolveTaskReference(context, parsed.values.task, workspace)
       : undefined;
@@ -1234,7 +1253,9 @@ async function agentCommand(
         ? { account: parsed.values.account }
         : {}),
       message: parsed.values.message,
-      draftBrief: parsed.flags.has("draft-brief") || undefined,
+      draftBrief: parsed.flags.has("refine") || undefined,
+      // An agent starting a session from inside its own, as a handoff does.
+      spawnedBy: (await callerSession(context).catch(() => undefined))?.id,
       ...(parsed.values.ability
         ? {
             abilities: parsed.values.ability
@@ -1401,11 +1422,11 @@ async function agentCommand(
     printResult(result, json, () => console.log(`Archived agent ${result.id}`));
     return 0;
   }
-  if (action === "handoff") {
-    expectPositionals(parsed.positionals, 1, "daedal agent handoff <agent-id>");
-    const result = await context.agents.requestHandoff(parsed.positionals[0]!);
+  if (action === "rebirth") {
+    expectPositionals(parsed.positionals, 1, "daedal agent rebirth <agent-id>");
+    const result = await context.agents.requestRebirth(parsed.positionals[0]!);
     printResult(result, json, () =>
-      console.log(`Asked agent ${result.id} to hand off its work`),
+      console.log(`Asked agent ${result.id} to start a rebirth`),
     );
     return 0;
   }
@@ -1455,18 +1476,18 @@ async function agentContinueCommand(
 ): Promise<number> {
   const parsed = parseArguments(
     args,
-    ["handoff-file", "provider", "model", "account", "message"],
+    ["note-file", "provider", "model", "account", "message"],
     ["self"],
   );
   const usage =
-    "daedal agent continue [<agent-id> | --self] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--account <account>] [--message <text>]";
+    "daedal agent continue [<agent-id> | --self] [--note-file <path|->] [--provider <codex|claude>] [--model <model>] [--account <account>] [--message <text>]";
   if (
     parsed.positionals.length > 1 ||
     (parsed.flags.has("self") && parsed.positionals.length)
   )
     throw new DaedalusError("VALIDATION", `Usage: ${usage}`);
   // `--self` is what the bare form already means; it stays accepted for
-  // handoff skills installed before it became the default.
+  // rebirth skills installed before it became the default.
   const named = parsed.positionals[0];
   const caller = named
     ? await callerSession(context).catch(() => undefined)
@@ -1483,23 +1504,20 @@ async function agentContinueCommand(
       "VALIDATION",
       "Provider must be 'codex' or 'claude'",
     );
-  const file = parsed.values["handoff-file"];
-  let handoff: string | undefined;
-  if (file === "-") handoff = await Bun.stdin.text();
+  const file = parsed.values["note-file"];
+  let note: string | undefined;
+  if (file === "-") note = await Bun.stdin.text();
   else if (file !== undefined) {
     const source = Bun.file(resolve(file));
     if (!(await source.exists()))
-      throw new DaedalusError(
-        "NOT_FOUND",
-        `Handoff file '${file}' was not found`,
-      );
-    handoff = await source.text();
+      throw new DaedalusError("NOT_FOUND", `Note file '${file}' was not found`);
+    note = await source.text();
   }
   const predecessor = await context.agents.get(id);
   const self = predecessor.id === caller?.id;
   const result = await context.agents.continueSession({
     id: predecessor.id,
-    handoff,
+    note,
     provider,
     model: parsed.values.model,
     ...(parsed.values.account !== undefined
@@ -1543,7 +1561,7 @@ async function archiveAfterExit(
   const entrypoint = Bun.argv[1];
   if (!entrypoint) return;
   await context.tmux.createSession({
-    session: `daedalus-handoff-${id.replaceAll("-", "")}`,
+    session: `daedalus-rebirth-${id.replaceAll("-", "")}`,
     cwd: context.config.home,
     executable: process.execPath,
     args: [

@@ -1100,8 +1100,8 @@ export function createDesktopRequestHandlers(
       mutate(async () => agentDto(await context.agents.restore(id))),
     agentRevive: ({ id }) =>
       mutate(async () => agentDto(await context.agents.reviveLost(id))),
-    agentRequestHandoff: ({ id }) =>
-      mutate(async () => agentDto(await context.agents.requestHandoff(id))),
+    agentRequestRebirth: ({ id }) =>
+      mutate(async () => agentDto(await context.agents.requestRebirth(id))),
     agentContinue: ({ id }) =>
       mutate(async () =>
         agentDto((await context.agents.continueSession({ id })).session),

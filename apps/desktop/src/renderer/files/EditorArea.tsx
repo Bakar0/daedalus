@@ -1066,7 +1066,7 @@ function MarkdownPanel({
                   | "progress"
                   | "blocker"
                   | "question"
-                  | "handoff"
+                  | "rebirth"
                   | "completed",
                 summary: journal.summary,
               })
@@ -1097,7 +1097,7 @@ function MarkdownPanel({
               "progress",
               "blocker",
               "question",
-              "handoff",
+              "rebirth",
               "completed",
             ].map((kind) => (
               <option key={kind} value={kind}>

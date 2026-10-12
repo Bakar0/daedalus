@@ -1,68 +1,63 @@
 ---
 name: daedalus-handoff
-description: Move this session's work to a fresh agent with an empty context, in the same working directory and worktrees. Use when the user says to hand off, when Daedalus asks for a handoff, or when your own context is nearly full. Writes a handoff note, then runs daedal agent continue.
-argument-hint: "[instructions for the next agent]"
+description: Hand something that came up in this session to another session, as a new board task with its own brief and agent, then go back to what this session was doing. Use when the user says to hand something off, give it to another session or agent, or spin it out as its own task.
+argument-hint: "<what to hand off>"
 ---
 
 # Handoff
 
-Your work is moving to a fresh session that runs in this same working
-directory with the same worktrees. Only you know what is in your context, so
-you write the note and you start the successor. Nothing else is expected of
-you after that.
+Something came up in this session that should not be done here. You hand it to
+a new session on its own task, then carry on with your own work as if you had
+not been interrupted. The new session works on its own and does not report
+back.
 
-Extra instructions from the user for the next agent, if any:
+What to hand off:
 
 $ARGUMENTS
 
-## Resolve the CLI once
+If that is empty, it is the matter you and the user were just discussing. If
+you cannot tell which matter that is, ask the user in one line and wait.
 
-Use `"{{daedal}}"` for every command below, exactly that path. It is this
-Daedalus build's CLI, and it works out which session you are from your
-working directory, so no command here needs a session id.
+Use `"{{daedal}}"` for every command below, exactly that path.
 
-## 1. Stop
+## 1. Write the brief
 
-Finish the edit you are in the middle of, or revert it, so the worktree is in a
-state you can describe. Do not start anything new. Do not run the test suite or
-a build only to report on it; say what was last verified and when.
+The new session has none of your context. Write a brief for this one matter
+with only what it needs from this conversation:
 
-## 2. Write the note
+- **Goal.** What to change and why, in two or three sentences.
+- **Context.** What you and the user found or decided about it, with the files,
+  commands, branches and errors named exactly.
+- **Scope.** What is in, and what is out, especially anything this session is
+  already changing, so the two do not edit the same thing.
+- **Done when.** Checks a reviewer can run or see.
 
-Write `HANDOFF.md` in your working directory (the directory you started in,
-`$PWD` unless you changed it). Be concise: every line should be something the
-next agent needs to act on, and nothing it can read from the brief, the code or
-git. Name files, commands, branches and commits exactly; the next agent has
-none of your context and will act on what you write.
+Leave out everything about your own task that the new session does not need.
 
-Cover, in this order:
-
-1. **Goal.** The task, by number and title, and what "done" means for it.
-2. **Done.** Commits made (hash and subject), files changed, what each change
-   does. What was verified, how, and when.
-3. **In progress.** What is half-done, where it stands in the files, and what
-   is broken because of it.
-4. **Next.** The remaining steps in order. Each one concrete enough to start
-   without asking.
-5. **Decisions.** Choices made and why, especially ones that are not obvious
-   from the code. Anything the user said that changes the plan.
-6. **Unverified and failed.** Anything you did not check, and anything that
-   failed with what the failure said.
-7. **From the user.** The extra instructions above, verbatim, if there were any.
-
-Do not restate the task brief; the next agent reads it. Do not paste output.
-
-## 3. Continue
-
-Run, as your last action, from your working directory:
+## 2. Create the task and start its session
 
 ```sh
-"{{daedal}}" agent continue --handoff-file "$PWD/HANDOFF.md"
+"{{daedal}}" task create --title "<short title>" --description-file - <<'BRIEF'
+...
+BRIEF
 ```
 
-Pass the user's extra instructions with `--message "<text>"` as well, so they
-reach the next agent in its launch prompt, not only in the note.
+Both commands use this session's workspace. The first prints the new task's
+number. Start a session on it with your own
+provider (`claude` or `codex`):
 
-The command starts the new session on your task and archives this one as soon
-as the command exits, so do nothing after it. If it fails, report the error and
-stop; do not try to work around it by starting a session another way.
+```sh
+"{{daedal}}" agent spawn --task <number> --provider <claude|codex>
+```
+
+It gets its own worktree when it changes a repository, so it does not touch
+your files. If either command fails, tell the user what it said and go back to
+your work; do not start the session another way.
+
+## 3. Carry on
+
+Tell the user in one line: the task number and title, and that a session
+started on it. Then return to exactly where you were before the handoff. If you
+were waiting for the user's answer, ask it again in a line and wait. If you were
+working, continue from your next step. Do not work on the handed-off matter
+here.

@@ -86,7 +86,7 @@ function addSession(
     archivedAt: null,
     resumeCount: 0,
     lostReason: null,
-    handoffRequestedAt: null,
+    rebirthRequestedAt: null,
     resumeOnStart: false,
     position: context.repositories.nextAgentPosition(input.workspaceId),
     pinnedAt: null,
@@ -94,6 +94,7 @@ function addSession(
     account: null,
     teamId: null,
     teamHandle: null,
+    spawnedBy: null,
   };
   context.repositories.createAgent(session);
   tmux.sessions.add(session.tmuxSession);

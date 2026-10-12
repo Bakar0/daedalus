@@ -80,14 +80,17 @@ list`, `repo list`, or `agent list`.
   session moves a `todo` or `blocked` task to `in_progress` on its own when the
   workspace's `--start-sets-in-progress` setting is on, which is the default.
   Everything else about status is the user's call.
-- To have an agent write a task's brief rather than do the task, spawn with
-  `--draft-brief`. Hand long briefs over with `task update <ref>
+- To have an agent question the user and write a task's brief rather than do
+  the task, spawn with `--refine`. Hand long briefs over with `task update <ref>
 --description-file <path>`, or `-` for stdin, rather than quoting them into
   `--description`.
-- When your context is nearly full, or you are asked to hand off, use the
-  handoff skill (`/daedalus-handoff`). It writes the note and runs `daedal agent
+- When your context is nearly full, or you are asked for a rebirth, use the
+  rebirth skill (`/daedalus-rebirth`). It writes the note and runs `daedal agent
 continue`, which starts a fresh session on the same task, working directory
   and worktrees and archives yours once the command exits.
+- When something comes up that belongs in its own task, or the user asks you to
+  hand it off, use the handoff skill (`/daedalus-handoff`). It creates the task
+  and starts a session on it, and you carry on with your own work.
 - Use `agent send` for literal follow-up text. `agent attach` is interactive and
   is unsuitable for machine-readable automation.
 - Prefer `agent archive` over `stop` plus `remove` when preserving the provider

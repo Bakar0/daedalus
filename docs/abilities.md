@@ -18,7 +18,7 @@ daedal session color <session> <red|orange|gold|green|teal|blue|purple|pink|none
 `<session>` is a session id, or a session's name when exactly one live
 session has it. Pinned sessions sit at the top of their workspace's list, in
 the order they were pinned. The color marks the session's card on its left
-edge, and the chip on tasks its routines file. A handoff successor keeps the
+edge, and the chip on tasks its routines file. A rebirth successor keeps the
 pin and the color, and a session that holds routines also keeps its exact
 name rather than gaining a ` · 2`, because its routines' tasks are signed
 with it. A team's lead is numbered like any other session; the team's name
@@ -31,7 +31,7 @@ leaves the counter out, so it stays the same.
 
 An ability is a definition in Daedalus's code. A session holds one through a
 row in `session_abilities`. The ability's data, such as routines, hangs off
-that row's id, so a handoff moves everything with one update.
+that row's id, so a rebirth moves everything with one update.
 
 ```
 daedal agent spawn --workspace <w> --provider claude --name Argus --ability routines
@@ -135,7 +135,7 @@ hold:
    (typed runs only).
    Scrolling and selecting are not keystrokes. The host keeps this in memory,
    so after an app restart nothing holds.
-5. No handoff is pending.
+5. No rebirth is pending.
 6. The same routine has no run in flight.
 7. Fewer runs are in flight than the provider takes: 3 for Claude, whose
    session hands each run to a background subagent, and 1 for Codex, which
@@ -158,7 +158,7 @@ the line typed: `$daedalus-routine <run-id>` for Codex, followed by a second
 Enter that Codex's skill popup needs, and `/daedalus-routine <run-id>` for
 Claude. A dev build's skills carry its channel suffix.
 
-The grant and revoke notes and the handoff request below go to a Claude
+The grant and revoke notes and the rebirth request below go to a Claude
 session's inbox too, but to the mailbox file beside the pipe
 (`<session>.fifo.mail`), because they must arrive whatever the session is
 doing. Daedalus appends the note and pokes the pipe. A waiter that is
@@ -178,7 +178,7 @@ from the run id.
 
 The routine bar above the session's terminal shows what waits and
 why: "2 waiting · you typed 0:40 ago · resumes in 1:20", or busy, the input
-box has text, the runs in flight, a handoff, or paused. Run now
+box has text, the runs in flight, a rebirth, or paused. Run now
 (`routineRunNow` over RPC) skips only the 2-minute wait for the next line.
 
 ### Reports and tasks
@@ -199,13 +199,13 @@ and an urgent flag. Only the session calls `daedal routine report`.
   from raising anything until the verdict is removed. A task the user moves
   to done counts as useful.
 
-### Handoff, failures and missed runs
+### Rebirth, failures and missed runs
 
-- A session holding routines hands off once its context passes the
-  workspace's auto-handoff percent, or 60% when the workspace sets none. The
-  generic handoff sweep leaves it alone. Delivery stops, runs in flight get up
-  to 10 minutes to finish, and the handoff request goes in under the delivery
-  rule. A handoff not completed in 15 minutes is finished by Daedalus without
+- A session holding routines is reborn once its context passes the
+  workspace's auto-rebirth percent, or 60% when the workspace sets none. The
+  generic rebirth sweep leaves it alone. Delivery stops, runs in flight get up
+  to 10 minutes to finish, and the rebirth request goes in under the delivery
+  rule. A rebirth not completed in 15 minutes is finished by Daedalus without
   a note; the routines live outside the conversation.
 - Nothing fires while the app is closed. On open, each overdue routine fires
   once, with `{{missed}}` set.
@@ -218,7 +218,7 @@ and an urgent flag. Only the session calls `daedal routine report`.
 A session holding the orchestration ability leads a team: sessions working
 toward one goal. The lead plans the work, adds members, and sends each one
 the decisions that affect it. Members are ordinary sessions the user can open,
-answer and hand off. The user is above the lead and can add a member too.
+answer and be reborn. The user is above the lead and can add a member too.
 
 In the app:
 
@@ -252,10 +252,10 @@ daedal team goal "<text>"
 ```
 
 The team is the lead's `session_abilities` row: its id is the team id, and its
-`goal` config is the shared goal. A handoff moves the ability to the successor,
+`goal` config is the shared goal. A rebirth moves the ability to the successor,
 so the team follows the lead with no other change. A member records its team
 in `agent_sessions.team_id` and its handle in `team_handle`; a member's
-handoff successor takes both, and the predecessor leaves the team.
+rebirth successor takes both, and the predecessor leaves the team.
 
 - **Members** start in the lead's workspace on the lead's provider; a team
   never mixes Claude and Codex. A task is optional. The handle comes from
@@ -270,7 +270,7 @@ handoff successor takes both, and the predecessor leaves the team.
   user is notified about it, and when it stops or is archived, Daedalus
   posts a note in the chat as `daedalus`, tagging only the lead: "@lead
   @server needs the user: …" or "@lead @server stopped running.". A lead
-  needing the user posts nothing, and neither does a handoff.
+  needing the user posts nothing, and neither does a rebirth.
 - **Pausing and ending a team.** Archiving the lead, by hand or by quitting
   the app with "Quit and stop sessions", pauses the team: members keep their
   handle and color, messages to the lead wait for it, no member can be added,
@@ -328,4 +328,4 @@ session directly.
 
 The lead keeps the plan, the members, the contracts between them and every
 decision in `TEAM.md` in its working directory (the `daedalus-orchestration`
-skill). A handoff successor reads it first.
+skill). A rebirth successor reads it first.

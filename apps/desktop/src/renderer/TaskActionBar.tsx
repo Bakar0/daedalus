@@ -1,7 +1,7 @@
 /**
  * The task drawer's action bar (#34): the row under the status and priority
  * pills that does to the task what its board card does. Start with the
- * workspace default or a chosen provider, Draft brief, Set in progress, Mark
+ * workspace default or a chosen provider, Refine, Set in progress, Mark
  * done, the worktree and PR, the running agent's terminal, and a second
  * opinion, each shown only while it applies. The drawer covers the workspace
  * column, not the board, so the card is still visible beside it; this bar is
@@ -12,7 +12,7 @@
  * so the two cannot disagree. Starts in flight and failed ones are listed
  * under the buttons, as the card lists them.
  *
- * Draft brief is always there, at the end of the lane's actions: on a card
+ * Refine is always there, at the end of the lane's actions: on a card
  * it shows only while the brief is empty, but a person reading a brief in
  * the drawer is exactly the one who might want an agent to redo it. The
  * right end holds Edit and Delete, the latter in the danger colour and
@@ -224,13 +224,13 @@ export function TaskActionBar(props: TaskActionBarProps) {
       onClick={props.onDraftBrief}
       title={
         task.description.trim()
-          ? "Start a session that reads the workspace and rewrites this brief. It does not start the task."
-          : "Start a session that reads the workspace and writes this brief. It does not start the task."
+          ? "Start a session that questions you about this task, then rewrites its brief. It does not start the task."
+          : "Start a session that questions you about this task, then writes its brief. It does not start the task."
       }
       type="button"
     >
       <TaskActionIcon name="draft" />
-      Draft brief
+      Refine
     </button>,
   );
   return (

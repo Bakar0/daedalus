@@ -61,7 +61,7 @@ const localTime = (iso: string): string => {
 /**
  * The routines a session holds and the runs they make. Everything lives in
  * SQLite under the ability's id, so the routines follow the ability through
- * every handoff and nothing is written into the session's folder.
+ * every rebirth and nothing is written into the session's folder.
  */
 export class RoutineService {
   constructor(

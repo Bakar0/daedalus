@@ -68,7 +68,7 @@ describe("the routine bar's text", () => {
     expect(held("busy")).toBe("2 waiting · session busy");
     expect(held("input-text")).toBe("2 waiting · input box has text");
     expect(held("in-flight-limit")).toBe("2 waiting · 3 runs in flight");
-    expect(held("handoff")).toBe("2 waiting · handoff pending");
+    expect(held("rebirth")).toBe("2 waiting · rebirth pending");
     expect(held("paused")).toBe("2 waiting · paused");
     expect(held("skill-missing")).toBe("2 waiting · host text");
     expect(routineBarText(status({ waiting }), now)).toBe(

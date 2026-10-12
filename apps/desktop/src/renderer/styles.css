@@ -932,15 +932,15 @@ button:not(
 .workspace-sessions .session-card-status[data-clearable] {
   padding-left: 50px;
 }
-/* Hand off and archive come in on hover, over the end of the name. A
-   requested handoff stays visible until the successor takes over. */
+/* Rebirth and archive come in on hover, over the end of the name. A
+   requested rebirth stays visible until the successor takes over. */
 .workspace-sessions .session-card-hover-action {
   display: none !important;
 }
 .workspace-sessions
   .session-card:is(:hover, :focus-within)
   .session-card-hover-action,
-.workspace-sessions .session-handoff-action[data-handoff-requested] {
+.workspace-sessions .session-rebirth-action[data-rebirth-requested] {
   display: flex !important;
 }
 .workspace-sessions
@@ -991,12 +991,12 @@ button:not(
 .workspace-terminal-action:focus-visible {
   opacity: 1;
 }
-/* A requested handoff stays visible on the button until the successor takes
+/* A requested rebirth stays visible on the button until the successor takes
    over and this card is archived. */
-.session-handoff-action[data-handoff-requested] {
+.session-rebirth-action[data-rebirth-requested] {
   color: var(--accent) !important;
 }
-.session-handoff-action svg,
+.session-rebirth-action svg,
 .workspace-terminal-action svg {
   display: block;
   height: 16px;

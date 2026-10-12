@@ -27,10 +27,10 @@ export interface Workspace {
    */
   startSetsInProgress: boolean;
   /**
-   * Context share, in percent, at which a session is asked to hand off to a
+   * Context share, in percent, at which a session is asked for a rebirth to a
    * fresh one. Null is off.
    */
-  autoHandoffPercent: number | null;
+  autoRebirthPercent: number | null;
   /** What Start and Start next launch when the user does not choose. */
   defaultProvider: "claude" | "codex" | null;
   /**
@@ -100,7 +100,7 @@ export interface AgentSession {
    */
   resumeOnStart: boolean;
   /** When this session was last asked to hand its work to a fresh one. */
-  handoffRequestedAt: string | null;
+  rebirthRequestedAt: string | null;
   /** Where the user put this session within its workspace. See `Workspace`. */
   position: number;
   /** When the user pinned it to the top of its workspace's list, or null. */
@@ -115,12 +115,17 @@ export interface AgentSession {
   account: string | null;
   /**
    * The team this session is a member of: the lead's orchestration ability
-   * id, which a handoff of the lead carries to its successor. Null outside a
+   * id, which a rebirth of the lead carries to its successor. Null outside a
    * team, and for the lead itself.
    */
   teamId: UUID | null;
   /** Its name in the team chat (`@client-worker`), unique among members. */
   teamHandle: string | null;
+  /**
+   * The session that started this one from inside itself with `agent
+   * spawn`, as a handoff does, or null when the user or the app did.
+   */
+  spawnedBy: UUID | null;
 }
 
 export interface IntegratedTerminal {

@@ -18,7 +18,7 @@ import type { AgentSession } from "../domain";
  *
  * A line on the pipe only reaches a session whose waiter is reading, which
  * suits routine runs: they go in only when the session is at its prompt.
- * Notes that must arrive whatever the session is doing, such as a handoff
+ * Notes that must arrive whatever the session is doing, such as a rebirth
  * request, go to the mailbox file beside the pipe instead. A waiter reads
  * the mailbox when it starts, so a note left during a turn arrives when the
  * turn ends, and after every line, so a poke on the pipe delivers it now.

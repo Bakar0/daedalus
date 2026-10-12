@@ -126,8 +126,8 @@ type Bubble =
 function bubbleFor(actor: WorldActor): Bubble | null {
   switch (actor.mood) {
     case "working":
-      // Handing off, it is writing its note: the clipboard.
-      return actor.place === "handoff"
+      // Being reborn, it is writing its note: the clipboard.
+      return actor.place === "rebirth"
         ? { kind: "tool", station: "plan" }
         : actor.place === "lounge" || actor.place === "door"
           ? { kind: "tool", station: "think" }

@@ -31,7 +31,7 @@ means that executable.
 ## Where things live
 
 Routines, their runs, their reports and the purpose live in Daedalus, not in
-this folder, so they move with you through every handoff. Never write routine
+this folder, so they move with you through every rebirth. Never write routine
 files or notes into the working directory: it may be a repository worktree.
 
 - `daedal routine purpose "<text>"` sets what these routines are for. Every

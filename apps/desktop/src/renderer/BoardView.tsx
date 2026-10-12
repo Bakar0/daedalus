@@ -117,7 +117,7 @@ export interface BoardViewProps {
   ) => void;
   onUpdateSettings: (changes: {
     startSetsInProgress?: boolean;
-    autoHandoffPercent?: number | null;
+    autoRebirthPercent?: number | null;
     defaultProvider?: BoardProvider | null;
     defaultModel?: string | null;
     defaultClaudeAccount?: string | null;
@@ -432,7 +432,7 @@ function AnswerBox({
 /** Where the checkbox lands when first ticked. Late enough to get real work
  * out of a session, early enough that the note is written before the window
  * fills. */
-const DEFAULT_AUTO_HANDOFF_PERCENT = 85;
+const DEFAULT_AUTO_REBIRTH_PERCENT = 85;
 
 function BoardSettings({
   accounts,
@@ -600,31 +600,31 @@ function BoardSettings({
         </label>
         <label className="board-settings-toggle">
           <input
-            checked={workspace.autoHandoffPercent !== null}
+            checked={workspace.autoRebirthPercent !== null}
             onChange={(event) =>
               onUpdate({
-                autoHandoffPercent: event.target.checked
-                  ? DEFAULT_AUTO_HANDOFF_PERCENT
+                autoRebirthPercent: event.target.checked
+                  ? DEFAULT_AUTO_REBIRTH_PERCENT
                   : null,
               })
             }
             type="checkbox"
           />
-          Hand off to a new agent at
+          Rebirth as a new agent at
           <input
-            aria-label="Context percent that triggers a handoff"
+            aria-label="Context percent that triggers a rebirth"
             className="board-settings-percent"
-            disabled={workspace.autoHandoffPercent === null}
+            disabled={workspace.autoRebirthPercent === null}
             max={100}
             min={10}
             onChange={(event) => {
               const value = Number(event.target.value);
               if (Number.isInteger(value) && value >= 10 && value <= 100)
-                onUpdate({ autoHandoffPercent: value });
+                onUpdate({ autoRebirthPercent: value });
             }}
             step={5}
             type="number"
-            value={workspace.autoHandoffPercent ?? DEFAULT_AUTO_HANDOFF_PERCENT}
+            value={workspace.autoRebirthPercent ?? DEFAULT_AUTO_REBIRTH_PERCENT}
           />
           % context
         </label>
@@ -991,10 +991,10 @@ export function BoardView(props: BoardViewProps) {
                   event.stopPropagation();
                   props.onDraftBrief(task);
                 }}
-                title="Start a session that reads the workspace and writes this brief"
+                title="Start a session that questions you about this task, then writes its brief"
                 type="button"
               >
-                Draft brief
+                Refine
               </button>
             )}
             {startable && (
