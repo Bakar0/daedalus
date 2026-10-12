@@ -964,9 +964,18 @@ export function buildSkillInvocation(
   return args.trim() ? `${invocation} ${args.trim()}` : invocation;
 }
 
+/** The skill a Draft brief session starts with, when it is installed. */
+export const REFINEMENT_SKILL = "daedalus-refinement";
+
 export function buildAgentPrompt(input: {
   taskNumber?: number;
   message?: string;
+  /**
+   * How a `draft-brief` session invokes the refinement skill, such as
+   * `/daedalus-refinement`. It leads the prompt so the instruction becomes the
+   * skill's arguments; without it the session writes the brief unprompted.
+   */
+  refinement?: string;
   /**
    * `draft-brief` asks for the brief to be written back, not the work done.
    * `continue` starts a session that picks up where an earlier one stopped,
@@ -990,7 +999,12 @@ export function buildAgentPrompt(input: {
   const taskInstruction = !input.taskNumber
     ? undefined
     : input.mode === "draft-brief"
-      ? `Draft the brief for task #${input.taskNumber}. Read the workspace, then write the brief back with \`daedal task update ${input.taskNumber} --description-file -\`. Do not start the task itself.`
+      ? [
+          input.refinement,
+          `Draft the brief for task #${input.taskNumber}. Read the workspace, then write the brief back with \`daedal task update ${input.taskNumber} --description-file -\`. Do not start the task itself.`,
+        ]
+          .filter(Boolean)
+          .join(" ")
       : `Execute task #${input.taskNumber}. Do not merely summarize or restate it; complete the task.`;
   const message = input.message?.trim() || undefined;
   return [taskInstruction, message].filter(Boolean).join("\n\n") || undefined;

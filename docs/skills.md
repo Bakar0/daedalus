@@ -10,11 +10,12 @@ Design notes and the research behind the choices are in
 
 ## What Daedalus ships
 
-| Capability         | Default      | What it is                                                               |
-| ------------------ | ------------ | ------------------------------------------------------------------------ |
-| `daedalus-control` | on           | Drives Daedalus through the `daedal` CLI                                 |
-| `daedalus-handoff` | on           | `/daedalus-handoff`: note, then `daedal agent continue` in a fresh agent |
-| `unslop`           | on, `always` | Writing rules that cut AI tells, from `cursor/plugins` `pstack`          |
+| Capability            | Default      | What it is                                                               |
+| --------------------- | ------------ | ------------------------------------------------------------------------ |
+| `daedalus-control`    | on           | Drives Daedalus through the `daedal` CLI                                 |
+| `daedalus-handoff`    | on           | `/daedalus-handoff`: note, then `daedal agent continue` in a fresh agent |
+| `daedalus-refinement` | on           | `/daedalus-refinement`: questions in rounds, then the task brief         |
+| `unslop`              | on, `always` | Writing rules that cut AI tells, from `cursor/plugins` `pstack`          |
 
 All three are on out of the box, all are listed in Settings and in
 `daedal skill list` with the exact paths they write, and any can be turned
@@ -191,6 +192,24 @@ switches it on and off; it does not offer a box to type a path or a repository
 URL into, because installing a skill is a thing you do once and a control you
 then read past every time you open Settings. A skill installed from the CLI
 appears in the panel like any other, with a Remove button.
+
+### The daedalus-refinement skill
+
+Draft brief starts its session with this skill: the launch prompt is
+`/daedalus-refinement` (or `$daedalus-refinement` in Codex) followed by the
+draft instruction, which the skill reads as its arguments. The agent reads the
+task, `BRIEF.md`, the journal and the repositories, then questions the user in
+numbered rounds, each question with a recommended answer. It asks only what
+the files cannot tell it, raises `daedal attention` while it waits, and writes
+the brief with `daedal task update --description-file -` once the user
+confirms the summary. It writes nothing else: decisions, pinned-down terms,
+scope and checks all go into the brief.
+
+When the skill is turned off, or the provider is not Claude or Codex, Draft
+brief launches with the plain instruction and the agent drafts the brief
+without asking. The skill is adapted from Matt Pocock's `grilling` and
+`domain-modeling` skills (MIT). A dev build installs it as
+`/daedalus-refinement-dev`.
 
 ## Authoring
 

@@ -31,6 +31,7 @@ import {
   discoverProviderModels,
   HANDOFF_FILE,
   HANDOFF_SKILL,
+  REFINEMENT_SKILL,
   handoffSessionName,
   modelArgument,
   type ProviderModelCatalog,
@@ -998,6 +999,10 @@ export class AgentService {
         : input.team;
     const launchPrompt = buildAgentPrompt({
       taskNumber: task?.number,
+      refinement:
+        input.draftBrief && !input.continueFrom
+          ? await this.refinementInvocation(provider?.name)
+          : undefined,
       message: [
         ...this.abilities.launchLines(abilities),
         ...(team ? this.teamLaunchLines(team) : []),
@@ -1181,6 +1186,33 @@ export class AgentService {
     return true;
   }
 
+  /**
+   * How a Draft brief session starts the refinement skill, or nothing when
+   * the provider has no skills or the user turned the skill off; the session
+   * then drafts the brief without interviewing.
+   */
+  private async refinementInvocation(
+    provider: string | undefined,
+  ): Promise<string | undefined> {
+    if (provider !== "claude" && provider !== "codex") return undefined;
+    const skillName = await this.installedSkill(provider, REFINEMENT_SKILL);
+    return skillName ? buildSkillInvocation(provider, skillName) : undefined;
+  }
+
+  /** The skill's installed name for the provider, if it is installed. */
+  private async installedSkill(
+    provider: SkillProvider,
+    skillId: string,
+  ): Promise<string | undefined> {
+    const skillName = channelArtifactName(this.config, skillId);
+    const installed = skillLinkPaths(this.config, skillName).find((link) =>
+      link.providers.includes(provider),
+    );
+    return installed && (await pathExists(join(installed.path, "SKILL.md")))
+      ? skillName
+      : undefined;
+  }
+
   /** The skill's installed name, or `CONFLICT` when it is not installed. */
   private async requireSkill(
     agent: AgentSession,
@@ -1191,11 +1223,11 @@ export class AgentService {
         "CONFLICT",
         "Only Claude and Codex sessions can run Daedalus skills",
       );
-    const skillName = channelArtifactName(this.config, skillId);
-    const installed = skillLinkPaths(this.config, skillName).find((link) =>
-      link.providers.includes(agent.provider as SkillProvider),
+    const skillName = await this.installedSkill(
+      agent.provider as SkillProvider,
+      skillId,
     );
-    if (!installed || !(await pathExists(join(installed.path, "SKILL.md"))))
+    if (!skillName)
       throw new DaedalusError(
         "CONFLICT",
         `The ${skillId} skill is not installed for ${agent.provider}. Turn it on in Settings, Skills, or with 'daedal skill enable ${skillId}'.`,

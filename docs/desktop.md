@@ -37,7 +37,7 @@ Worktrees ride on the snapshot for every workspace, measured in the background f
 
 ### Capture, dependencies and actions
 
-The capture line above the lanes creates a `todo` with the typed title on Enter. **Draft brief** (on a card with an empty brief, and in the inspector) starts a session whose one instruction is to read the workspace and write the brief back; it does not move the status.
+The capture line above the lanes creates a `todo` with the typed title on Enter. **Draft brief** (on a card with an empty brief, and in the inspector) starts a session whose one instruction is to read the workspace and write the brief back. With the `daedalus-refinement` skill on (the default), the session first questions the user in rounds and writes the brief once they confirm. It does not move the status.
 
 Chips come from `#N` references in the brief, resolved in the core (see `docs/cli.md`). A chip carries the referenced task's lane glyph and says `after #23` when a hard dependency is done, `waiting on #25` when it is not, and `#21` for a plain reference; clicking one selects that task. A queued task that waits on something sinks below the ready ones and its Start reads **Start ⚠**. Clicking it asks for confirmation naming what is not done. It is a warning, never a lock.
 

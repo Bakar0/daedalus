@@ -62,6 +62,8 @@ import daedalusControlOpenAiMetadata from "../../../../skills/daedalus-control/a
 import unslopSkillTemplate from "../../../../skills/unslop/SKILL.md" with { type: "text" };
 import handoffSkillTemplate from "../../../../skills/daedalus-handoff/SKILL.md" with { type: "text" };
 import handoffOpenAiMetadata from "../../../../skills/daedalus-handoff/agents/openai.yaml" with { type: "text" };
+import refinementSkillTemplate from "../../../../skills/daedalus-refinement/SKILL.md" with { type: "text" };
+import refinementOpenAiMetadata from "../../../../skills/daedalus-refinement/agents/openai.yaml" with { type: "text" };
 import unslopStyleTemplate from "../../../../styles/Unslop.md" with { type: "text" };
 import routinesSkillTemplate from "../../../../skills/daedalus-routines/SKILL.md" with { type: "text" };
 import routineRunSkillTemplate from "../../../../skills/daedalus-routine/SKILL.md" with { type: "text" };
@@ -144,6 +146,19 @@ export const MANAGED_SKILLS: readonly ManagedSkillDefinition[] = [
     skillFiles: [
       { path: "SKILL.md", contents: handoffSkillTemplate },
       { path: "agents/openai.yaml", contents: handoffOpenAiMetadata },
+    ],
+  },
+  {
+    id: "daedalus-refinement",
+    title: "Refinement",
+    summary:
+      "Adds /daedalus-refinement, which Draft brief starts with: the agent questions the user about the task in rounds until every decision is settled, then writes the brief back. Turned off, Draft brief writes the brief from the workspace without asking.",
+    supportsAlways: false,
+    defaultEnabled: true,
+    defaultMode: "on-demand",
+    skillFiles: [
+      { path: "SKILL.md", contents: refinementSkillTemplate },
+      { path: "agents/openai.yaml", contents: refinementOpenAiMetadata },
     ],
   },
   {

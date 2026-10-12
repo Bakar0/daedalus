@@ -1,0 +1,4 @@
+interface:
+  display_name: "Refinement"
+  short_description: "Interview the user about a task, then write its brief"
+  default_prompt: "Use $daedalus-refinement to question me about this task until it is clear, then write its brief."
