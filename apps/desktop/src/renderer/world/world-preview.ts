@@ -43,6 +43,11 @@ export interface WorldPreview {
    * once its successor has started. Null for none.
    */
   rebirthStep?: 0 | 1 | null;
+  /**
+   * A pretend handoff: the first agent starts a new one and hands it a
+   * scroll, which then works for a while. False or unset for none.
+   */
+  handoff?: boolean;
   /** Every agent wears a session color, one each in turn. */
   colors?: boolean;
 }
@@ -60,6 +65,9 @@ const PREVIEW_COLORS: readonly SessionColorDto[] = [
   "purple",
   "pink",
 ];
+
+/** Seconds the pretend handoff's new agent stays, long enough to watch. */
+export const HANDOFF_SECONDS = 12;
 
 /** Seconds each pretend rebirth step lasts, long enough to watch. */
 export const REBIRTH_STEPS = [15, 10];
@@ -79,6 +87,7 @@ export function previewModel(
     preview.context === "off" &&
     preview.crateStep === null &&
     rebirthStep === null &&
+    !preview.handoff &&
     !preview.colors
   )
     return model;
@@ -117,6 +126,26 @@ export function previewModel(
         label: "working",
       },
       ...actors.slice(1),
+    ];
+  // The first agent hands something off: a new agent on a new task.
+  const giver = actors[0];
+  if (giver && preview.handoff)
+    actors = [
+      ...actors,
+      {
+        ...giver,
+        sessionId: `${giver.sessionId}:handoff`,
+        name: "Handed off",
+        taskLabel: "#998 Something that came up",
+        taskDone: false,
+        continuesFrom: null,
+        spawnedBy: giver.sessionId,
+        place: "think",
+        detail: null,
+        contextPercent: 3,
+        mood: "working",
+        label: "working",
+      },
     ];
   const stage =
     crateStep === null ? undefined : (CRATE_STAGES[crateStep] ?? undefined);

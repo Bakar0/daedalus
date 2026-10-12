@@ -5,6 +5,7 @@ import { milestonesBetween } from "./world-milestones";
 import {
   CONTEXT_PREVIEWS,
   CRATE_STAGES,
+  HANDOFF_SECONDS,
   REBIRTH_STEPS,
   NO_PREVIEW,
   previewModel,
@@ -219,6 +220,15 @@ export default function WorldView(props: WorldViewProps) {
     );
     return () => clearTimeout(timer);
   }, [preview.crateStep]);
+  // The pretend handoff: the new agent stays a while, then goes.
+  useEffect(() => {
+    if (!preview.handoff) return;
+    const timer = setTimeout(
+      () => setPreview((current) => ({ ...current, handoff: false })),
+      HANDOFF_SECONDS * 1000,
+    );
+    return () => clearTimeout(timer);
+  }, [preview.handoff]);
   // The pretend rebirth: writing, then replaced, then back to real.
   useEffect(() => {
     const step = preview.rebirthStep;
@@ -456,10 +466,20 @@ export default function WorldView(props: WorldViewProps) {
                 onClick={() =>
                   setPreview((current) => ({ ...current, rebirthStep: 0 }))
                 }
-                title="The first agent is reborn through the Rebuilder"
+                title="The first agent is reborn through the Rebirth machine"
                 type="button"
               >
                 Rebirth
+              </button>
+              <button
+                disabled={preview.handoff || !props.model.actors.length}
+                onClick={() =>
+                  setPreview((current) => ({ ...current, handoff: true }))
+                }
+                title="The first agent hands something off: a new agent appears beside it and catches a scroll"
+                type="button"
+              >
+                Handoff
               </button>
             </div>
           )}

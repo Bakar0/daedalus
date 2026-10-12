@@ -89,6 +89,7 @@ interface AgentRow {
   account: string | null;
   team_id: string | null;
   team_handle: string | null;
+  spawned_by: string | null;
 }
 
 interface IntegratedTerminalRow {
@@ -197,6 +198,7 @@ const agentFromRow = (row: AgentRow): AgentSession => ({
   account: row.account,
   teamId: row.team_id,
   teamHandle: row.team_handle,
+  spawnedBy: row.spawned_by,
 });
 
 const integratedTerminalFromRow = (
@@ -816,8 +818,8 @@ export class SqliteRepositories {
           working_directory, status, exit_code, started_at, ended_at,
           provider_session_id, archived_at, resume_count, lost_reason,
           resume_on_start, handoff_requested_at, position, pinned_at, color,
-          account, team_id, team_handle)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          account, team_id, team_handle, spawned_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         agent.id,
@@ -846,6 +848,7 @@ export class SqliteRepositories {
         agent.account,
         agent.teamId,
         agent.teamHandle,
+        agent.spawnedBy,
       );
   }
 

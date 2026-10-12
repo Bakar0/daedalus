@@ -1254,6 +1254,8 @@ async function agentCommand(
         : {}),
       message: parsed.values.message,
       draftBrief: parsed.flags.has("refine") || undefined,
+      // An agent starting a session from inside its own, as a handoff does.
+      spawnedBy: (await callerSession(context).catch(() => undefined))?.id,
       ...(parsed.values.ability
         ? {
             abilities: parsed.values.ability

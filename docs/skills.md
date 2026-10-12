@@ -62,7 +62,9 @@ a session on it with `daedal agent spawn --task`, tells the user the task
 number, and goes back to where it was. Both commands default `--workspace` to
 the calling session's. The new session gets its own worktree and does not
 report back. With nothing after the command, the agent hands off what it and
-the user were just discussing. There is no button for it.
+the user were just discussing. There is no button for it. In the World, the
+new agent appears beside the one that started it, catches a scroll, and walks
+off to its own work.
 
 ## Layout on disk
 

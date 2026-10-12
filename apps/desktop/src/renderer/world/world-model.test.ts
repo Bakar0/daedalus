@@ -72,6 +72,7 @@ const session = (
   account: null,
   teamId: null,
   teamHandle: null,
+  spawnedBy: null,
   archivedAt: null,
   resumeCount: 0,
   lostReason: null,
@@ -501,7 +502,7 @@ describe("labyrinth", () => {
     expect(path.at(-1)!.ride).toBeUndefined();
   });
 
-  test("a bot being reborn rides up into one of the Rebuilder's three bays", () => {
+  test("a bot being reborn rides up into one of the Rebirth machine's three bays", () => {
     const arrangement = labyrinthTheme.arrange(zones(3));
     const shared = labyrinthTheme.shared!;
     const { bays } = labyrinthTheme.rebirth!;
@@ -929,6 +930,25 @@ describe("rebirth", () => {
     expect(byId.get("new")!.continuesFrom).toBe("old");
     expect(byId.get("earlier")!.continuesFrom).toBeNull();
     expect(byId.get("elsewhere")!.continuesFrom).toBeNull();
+  });
+
+  test("a handed-off session names the agent that started it, and stays at its own work", () => {
+    const model = buildWorldModel(
+      input({
+        sessions: [
+          session("giver"),
+          session("taker", {
+            workingDirectory: "/w/other",
+            spawnedBy: "giver",
+          }),
+        ],
+      }),
+    );
+    const byId = new Map(model.actors.map((actor) => [actor.sessionId, actor]));
+    expect(byId.get("taker")!.spawnedBy).toBe("giver");
+    expect(byId.get("taker")!.continuesFrom).toBeNull();
+    expect(byId.get("giver")!.spawnedBy).toBeNull();
+    expect(byId.get("taker")!.place).not.toBe("rebirth");
   });
 
   test("the successor still names an archived predecessor", () => {

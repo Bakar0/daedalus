@@ -50,6 +50,7 @@ const agent = (
   account: null,
   teamId: null,
   teamHandle: null,
+  spawnedBy: null,
   archivedAt: null,
   resumeCount: 0,
   lostReason: null,
@@ -180,6 +181,7 @@ let current: DesktopSnapshotDto = {
     agent("api-worker", "API worker", "claude", 0, {
       teamId: "team-1",
       teamHandle: "api",
+      spawnedBy: null,
     }),
   ],
   terminals: [],

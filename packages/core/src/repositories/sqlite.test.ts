@@ -70,6 +70,7 @@ describe("SqliteRepositories", () => {
         account: null,
         teamId: null,
         teamHandle: null,
+        spawnedBy: null,
       });
       repositories.createIntegratedTerminal({
         id: "terminal-id",

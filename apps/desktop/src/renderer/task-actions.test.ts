@@ -50,6 +50,7 @@ const session = (
   account: null,
   teamId: null,
   teamHandle: null,
+  spawnedBy: null,
   archivedAt: null,
   resumeCount: 0,
   lostReason: null,

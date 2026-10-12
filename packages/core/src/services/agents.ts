@@ -879,6 +879,8 @@ export class AgentService {
      * count as starting the work and leaves the status alone.
      */
     draftBrief?: boolean;
+    /** The session that started this one from inside itself, as a handoff does. */
+    spawnedBy?: string;
     /**
      * Internal to `continueSession`: run in this session's working directory,
      * take over its worktrees, and launch with the continuation prompt.
@@ -1062,6 +1064,7 @@ export class AgentService {
       account,
       teamId: team?.teamId ?? null,
       teamHandle: team?.handle ?? null,
+      spawnedBy: input.spawnedBy ?? null,
     };
     this.repositories.transaction(() => {
       this.repositories.createAgent(session);

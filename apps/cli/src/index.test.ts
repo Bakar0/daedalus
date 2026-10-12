@@ -1114,7 +1114,10 @@ describe("the calling session's workspace", () => {
         expect(second).toMatchObject({
           workspaceId: workspace.id,
           taskId: task.id,
+          // The World draws the first handing the second its brief.
+          spawnedBy: first.id,
         });
+        expect(first.spawnedBy).toBeNull();
         // Outside any session it still has to be named.
         const outside = await cli(
           home,

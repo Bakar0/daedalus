@@ -83,6 +83,24 @@ const ASSEMBLE_START = 1.9;
 const RELEASE = 3.1;
 const PIECES = 42;
 
+/**
+ * A handoff's timing, in seconds from the moment the new agent shows up
+ * beside the one that started it: it fades in, a scroll arcs from the
+ * first to the second, and the new agent walks off to its own spot.
+ */
+const PASS_APPEAR = 0.5;
+const PASS_THROW_START = 0.5;
+const PASS_THROW = 0.8;
+const PASS_RELEASE = 1.7;
+
+/** A handoff in progress: `from` hands `to` its brief as a scroll. */
+interface Pass {
+  from: string;
+  to: string;
+  age: number;
+  view: Graphics;
+}
+
 interface Transfer {
   from: string;
   to: string;
@@ -150,6 +168,7 @@ export class WorldEngine {
   private readonly figures = new Container();
   private readonly machine = new Container();
   private readonly transfers: Transfer[] = [];
+  private readonly passes: Pass[] = [];
   /** Scan beams and bay lamps, redrawn every frame. */
   private readonly scanners = new Graphics();
   private readonly zones = new Map<string, ZoneEntry>();
@@ -578,7 +597,12 @@ export class WorldEngine {
         existing.leaving = false;
         existing.figure.view.alpha = 1;
         existing.figure.update(actor);
-        if (snap) {
+        if (existing.held) {
+          // Held by the rebirth machine or a handoff, which walks it out
+          // from where it is once done; a redraw must not move it.
+          existing.target = target;
+          existing.path = [];
+        } else if (snap) {
           existing.position = { ...target };
           existing.target = target;
           existing.path = [];
@@ -599,9 +623,33 @@ export class WorldEngine {
         machine && actor.continuesFrom
           ? successors.get(actor.continuesFrom) === actor.sessionId
           : false;
-      const entry = this.enter(actor, target, !arrive || through);
+      // Started by an agent on screen, as a handoff does: it appears beside
+      // that agent, which tosses it a scroll before it walks off.
+      const handedBy =
+        !snap && !through && actor.spawnedBy
+          ? this.actors.get(actor.spawnedBy)
+          : undefined;
+      const passed = handedBy && !handedBy.leaving ? handedBy : undefined;
+      const entry = this.enter(actor, target, !arrive || through || !!passed);
       entry.effective = place;
-      if (through && machine) {
+      if (passed) {
+        const scale = this.theme.actorScale ?? 1;
+        entry.position = {
+          x: passed.position.x + 52 * scale,
+          y: passed.position.y,
+        };
+        entry.path = [];
+        entry.held = true;
+        entry.figure.view.alpha = 0;
+        const view = new Graphics();
+        this.machine.addChild(view);
+        this.passes.push({
+          from: passed.actor.sessionId,
+          to: actor.sessionId,
+          age: 0,
+          view,
+        });
+      } else if (through && machine) {
         // Waits unseen in its output bay until it is put together.
         const old = this.actors.get(actor.continuesFrom!)!;
         entry.position = { ...machine.bays[this.bayFor(old)]!.to };
@@ -771,6 +819,81 @@ export class WorldEngine {
       if (age >= RELEASE + 0.5) {
         view.destroy();
         this.transfers.splice(index, 1);
+      }
+    }
+  }
+
+  /**
+   * Handoffs at work: the new agent fades in beside the one that started
+   * it, a scroll arcs from the first agent's hands to the second's, and the
+   * new agent walks off to its spot. Positions are read each frame, so the
+   * scroll follows an agent that is still moving.
+   */
+  private runPasses(seconds: number) {
+    const scale = this.theme.actorScale ?? 1;
+    for (let index = this.passes.length - 1; index >= 0; index -= 1) {
+      const pass = this.passes[index]!;
+      pass.age += seconds;
+      const { age, view } = pass;
+      const giver = this.actors.get(pass.from);
+      const taker = this.actors.get(pass.to);
+      view.clear();
+      if (!taker) {
+        view.destroy();
+        this.passes.splice(index, 1);
+        continue;
+      }
+      const shown = Math.min(1, age / PASS_APPEAR);
+      taker.figure.view.visible = true;
+      taker.figure.view.alpha = shown;
+      taker.figure.view.scale.set(scale * (0.6 + 0.4 * shown));
+      // Held figures are not posed by the walk loop, so pose it here,
+      // turned towards the agent that is handing it the scroll.
+      taker.figure.animate({
+        time: this.elapsed,
+        walking: false,
+        facing: giver && giver.position.x < taker.position.x ? -1 : 1,
+      });
+      const t = (age - PASS_THROW_START) / PASS_THROW;
+      if (giver && t >= 0 && t <= 1) {
+        const hand = 30 * scale;
+        const from = { x: giver.position.x, y: giver.position.y - hand };
+        const to = { x: taker.position.x, y: taker.position.y - hand };
+        const x = from.x + (to.x - from.x) * t;
+        const y =
+          from.y + (to.y - from.y) * t - Math.sin(Math.PI * t) * 34 * scale;
+        // A rolled scroll turning over in flight: parchment and two rods.
+        const angle = t * Math.PI * 2;
+        const half = 7 * scale;
+        const cos = Math.cos(angle) * half;
+        const sin = Math.sin(angle) * half;
+        view
+          .moveTo(x - cos, y - sin)
+          .lineTo(x + cos, y + sin)
+          .stroke({ width: 6 * scale, color: 0xf3e3b5 });
+        view
+          .circle(x - cos, y - sin, 2.4 * scale)
+          .fill(0x8a5a2b)
+          .circle(x + cos, y + sin, 2.4 * scale)
+          .fill(0x8a5a2b);
+      }
+      // A spark where it is caught.
+      const caught = (age - PASS_THROW_START - PASS_THROW) / 0.4;
+      if (caught >= 0 && caught <= 1)
+        view
+          .circle(
+            taker.position.x,
+            taker.position.y - 30 * scale,
+            4 + 14 * caught,
+          )
+          .stroke({ width: 2, color: 0xffe7a3, alpha: 1 - caught });
+      if (age >= PASS_RELEASE) {
+        taker.held = false;
+        taker.figure.view.alpha = 1;
+        taker.figure.view.scale.set(scale);
+        taker.path = this.route(taker.position, taker.target);
+        view.destroy();
+        this.passes.splice(index, 1);
       }
     }
   }
@@ -948,6 +1071,7 @@ export class WorldEngine {
       if (entry.held) {
         const waiting =
           this.transfers.some((item) => item.to === id) ||
+          this.passes.some((item) => item.to === id) ||
           this.actors.get(entry.actor.continuesFrom ?? "")?.rebirthTo === id;
         if (waiting) continue;
         entry.held = false;
@@ -1006,6 +1130,7 @@ export class WorldEngine {
       this.showPops(entry, seconds);
     }
     this.runTransfers(seconds);
+    this.runPasses(seconds);
     this.drawScanners();
     this.place();
   }

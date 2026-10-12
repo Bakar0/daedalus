@@ -399,7 +399,7 @@ const elapsedLabel = (
   return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
 };
 
-/** A baton passing forward: the work continues with someone new. */
+/** A loop back to the start with a plus: the same work, a fresh agent. */
 function RebirthIcon() {
   return (
     <svg
@@ -412,9 +412,10 @@ function RebirthIcon() {
       strokeWidth="1.8"
       viewBox="0 0 24 24"
     >
-      <path d="M3 12h9" />
-      <path d="M9 8l4 4-4 4" />
-      <rect height="14" rx="2.5" width="6" x="15" y="5" />
+      <path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3" />
+      <path d="M19.5 4v4h-4" />
+      <path d="M12 9.5v5" />
+      <path d="M9.5 12h5" />
     </svg>
   );
 }

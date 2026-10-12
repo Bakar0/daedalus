@@ -111,6 +111,8 @@ export interface AgentSessionDto {
   teamId: string | null;
   /** Its handle in the team chat, such as `server`. */
   teamHandle: string | null;
+  /** The session that started this one with `agent spawn`, as a handoff does. */
+  spawnedBy: string | null;
 }
 
 export type SessionColorDto =

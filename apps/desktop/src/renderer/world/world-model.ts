@@ -62,6 +62,12 @@ export interface WorldActor {
    * session that started fresh.
    */
   continuesFrom: string | null;
+  /**
+   * The session that started this one from inside itself, as a handoff
+   * does: the World shows it handing the new agent a scroll. Null when the
+   * user or the app started it.
+   */
+  spawnedBy: string | null;
   /** The board's tone, so the World and the board never disagree. */
   mood: SessionTone;
   /** Short state word: "working", "needs permission", "idle". */
@@ -407,6 +413,7 @@ export function buildWorldModel(input: WorldModelInput): WorldModel {
             item.workingDirectory === session.workingDirectory &&
             session.startedAt >= item.rebirthRequestedAt!,
         )?.id ?? null,
+      spawnedBy: session.spawnedBy,
       mood: view.tone,
       label: view.label,
       // Asked for a rebirth: it goes to wait at the rebirth machine while it

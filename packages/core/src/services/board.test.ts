@@ -489,6 +489,7 @@ describe("task timeline", () => {
     account: null,
     teamId: null,
     teamHandle: null,
+    spawnedBy: null,
   };
 
   test("orders a join over sessions, worktrees, attention and the journal", () => {
@@ -768,6 +769,7 @@ describe("task cost", () => {
       account: null,
       teamId: null,
       teamHandle: null,
+      spawnedBy: null,
     };
     const stopped = {
       ...base,

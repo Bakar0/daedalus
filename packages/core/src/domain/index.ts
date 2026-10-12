@@ -121,6 +121,11 @@ export interface AgentSession {
   teamId: UUID | null;
   /** Its name in the team chat (`@client-worker`), unique among members. */
   teamHandle: string | null;
+  /**
+   * The session that started this one from inside itself with `agent
+   * spawn`, as a handoff does, or null when the user or the app did.
+   */
+  spawnedBy: UUID | null;
 }
 
 export interface IntegratedTerminal {
