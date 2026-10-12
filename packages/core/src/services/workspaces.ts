@@ -71,15 +71,15 @@ function boardProvider(value: string | null): "claude" | "codex" | null {
 }
 
 /**
- * Below 10 a session would hand off before it had read the brief; the check
+ * Below 10 a session would be reborn before it had read the brief; the check
  * constraint on the column says the same thing.
  */
-export function autoHandoffPercent(value: number | null): number | null {
+export function autoRebirthPercent(value: number | null): number | null {
   if (value === null) return null;
   if (!Number.isInteger(value) || value < 10 || value > 100)
     throw new DaedalusError(
       "VALIDATION",
-      "Automatic handoff percent must be a whole number from 10 to 100, or off",
+      "Automatic rebirth percent must be a whole number from 10 to 100, or off",
     );
   return value;
 }
@@ -160,7 +160,7 @@ export class WorkspaceService {
       // for, and a manual order the user has set is never disturbed to do it.
       position: this.repositories.nextWorkspacePosition(),
       startSetsInProgress: true,
-      autoHandoffPercent: null,
+      autoRebirthPercent: null,
       defaultProvider: null,
       defaultModel: null,
       defaultClaudeAccount,
@@ -269,8 +269,8 @@ export class WorkspaceService {
       name?: string;
       slug?: string;
       startSetsInProgress?: boolean;
-      /** 10 to 100; `null` turns automatic handoff off. */
-      autoHandoffPercent?: number | null;
+      /** 10 to 100; `null` turns automatic rebirth off. */
+      autoRebirthPercent?: number | null;
       /** `null` clears it back to "no preference". */
       defaultProvider?: string | null;
       defaultModel?: string | null;
@@ -309,10 +309,10 @@ export class WorkspaceService {
       slug,
       startSetsInProgress:
         changes.startSetsInProgress ?? workspace.startSetsInProgress,
-      autoHandoffPercent:
-        changes.autoHandoffPercent === undefined
-          ? workspace.autoHandoffPercent
-          : autoHandoffPercent(changes.autoHandoffPercent),
+      autoRebirthPercent:
+        changes.autoRebirthPercent === undefined
+          ? workspace.autoRebirthPercent
+          : autoRebirthPercent(changes.autoRebirthPercent),
       defaultProvider,
       // A model belongs to a provider. Changing the provider without naming a
       // model drops the old one rather than launching Codex with a Claude id.

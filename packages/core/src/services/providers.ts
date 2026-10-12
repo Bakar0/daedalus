@@ -918,36 +918,36 @@ export function sessionLaunchModel(
   return undefined;
 }
 
-/** Where a handoff note lives: the working directory both sessions share. */
-export const HANDOFF_FILE = "HANDOFF.md";
+/** Where a rebirth note lives: the working directory both sessions share. */
+export const REBIRTH_FILE = "REBIRTH.md";
 
 /**
- * The name a handoff's successor takes: the same name with a generation
- * counter, so the two cards are told apart and a third handoff reads `· 3`
+ * The name a rebirth's successor takes: the same name with a generation
+ * counter, so the two cards are told apart and a third rebirth reads `· 3`
  * rather than growing a second suffix.
  */
-export function handoffSessionName(name: string): string {
+export function rebirthSessionName(name: string): string {
   const match = /^(.*) · (\d+)$/.exec(name);
   return match ? `${match[1]} · ${Number(match[2]) + 1}` : `${name} · 2`;
 }
 
-/** A name without its handoff counter: `API · 3` is `API`. */
+/** A name without its rebirth counter: `API · 3` is `API`. */
 export function sessionBaseName(name: string): string {
   return /^(.*) · \d+$/.exec(name)?.[1] ?? name;
 }
 
-/** The skill every handoff runs, whoever asks for it. */
-export const HANDOFF_SKILL = "daedalus-handoff";
+/** The skill every rebirth runs, whoever asks for it. */
+export const REBIRTH_SKILL = "daedalus-rebirth";
 
 /**
- * What a running agent is sent to start a handoff: its provider's way of
- * invoking the handoff skill, and nothing else. The instructions live in the
+ * What a running agent is sent to start a rebirth: its provider's way of
+ * invoking the rebirth skill, and nothing else. The instructions live in the
  * skill alone, so the button, the automatic threshold and a typed
- * `/daedalus-handoff` all do the same thing.
+ * `/daedalus-rebirth` all do the same thing.
  *
  * `skillName` carries the channel suffix a dev build installs it under.
  */
-export function buildHandoffRequest(
+export function buildRebirthRequest(
   provider: "claude" | "codex",
   skillName: string,
 ): string {
@@ -979,18 +979,19 @@ export function buildAgentPrompt(input: {
   /**
    * `draft-brief` asks for the brief to be written back, not the work done.
    * `continue` starts a session that picks up where an earlier one stopped,
-   * in the same working directory; `daedalus-handoff` says whether it left a note.
+   * in the same working directory and in the same state: waiting on the user
+   * if it was, working if it was. `note` says whether it left one.
    */
   mode?: "execute" | "draft-brief" | "continue";
-  handoff?: boolean;
+  note?: boolean;
 }): string | undefined {
   if (input.mode === "continue") {
     const work = input.taskNumber ? `task #${input.taskNumber}` : "the work";
-    const source = input.handoff
-      ? `It left a handoff note in ${HANDOFF_FILE} in your working directory. Read that first, then check the worktree's actual state with git before relying on it.`
-      : "It left no handoff note, so rebuild the picture from the task brief, JOURNAL.md and the worktree's git state and history.";
+    const source = input.note
+      ? `It left a note in ${REBIRTH_FILE} in your working directory. Read that first, then check the worktree's actual state with git before relying on it.`
+      : "It left no note, so rebuild the picture from the task brief, JOURNAL.md and the worktree's git state and history.";
     return [
-      `Continue ${work}. An earlier session worked on it in this same working directory and stopped because its context was full. ${source} Do not redo finished work; carry on to completion.`,
+      `Continue ${work}. An earlier session worked on it in this same working directory and was reborn as you because its context was full. ${source} Pick up in the state it stopped in. If it was waiting for the user, show the user the same question or plan again, run \`daedal attention\` with it, and wait for their answer. If it was in the middle of work, carry on from its next step. Instructions from the user in the note come first. Do not redo finished work.`,
       input.message?.trim() || undefined,
     ]
       .filter(Boolean)

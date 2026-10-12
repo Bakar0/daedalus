@@ -31,8 +31,8 @@ export interface WorkspaceDto {
   position: number;
   /** Start on a board card moves a `todo` or `blocked` task to `in_progress`. */
   startSetsInProgress: boolean;
-  /** Context percent that triggers an automatic handoff; null is off. */
-  autoHandoffPercent: number | null;
+  /** Context percent that triggers an automatic rebirth; null is off. */
+  autoRebirthPercent: number | null;
   /** What Start and Start next launch with; null leaves it to the app. */
   defaultProvider: "claude" | "codex" | null;
   /** A provider model id, or null for that provider's default. */
@@ -98,8 +98,8 @@ export interface AgentSessionDto {
    * come back have to say what is wrong rather than look like the rest.
    */
   lostReason: string | null;
-  /** Set once a handoff was requested, by the user or the automatic sweep. */
-  handoffRequestedAt: string | null;
+  /** Set once a rebirth was requested, by the user or the automatic sweep. */
+  rebirthRequestedAt: string | null;
   /** Manual list order within the workspace, ascending. */
   position: number;
   /** When it was pinned to the top of its workspace's list, or null. */
@@ -634,7 +634,7 @@ export interface SessionAbilityDto {
 export type DeliveryHoldReasonDto =
   | "paused"
   | "stopped"
-  | "handoff"
+  | "rebirth"
   | "typing"
   | "busy"
   | "waiting-on-user"
@@ -1063,8 +1063,8 @@ export interface DesktopRpcSchema {
           name?: string;
           slug?: string;
           startSetsInProgress?: boolean;
-          /** 10 to 100, or null to turn automatic handoff off. */
-          autoHandoffPercent?: number | null;
+          /** 10 to 100, or null to turn automatic rebirth off. */
+          autoRebirthPercent?: number | null;
           defaultProvider?: "claude" | "codex" | null;
           defaultModel?: string | null;
           /** A profile id, or null for the default account. */
@@ -1363,7 +1363,7 @@ export interface DesktopRpcSchema {
             | "progress"
             | "blocker"
             | "question"
-            | "handoff"
+            | "rebirth"
             | "completed";
           summary: string;
         },
@@ -1522,13 +1522,13 @@ export interface DesktopRpcSchema {
        */
       agentRevive: Request<{ id: string }, AgentSessionDto>;
       /**
-       * Asks a running agent to write a handoff note and continue its work
+       * Asks a running agent to write a rebirth note and continue its work
        * in a fresh session. The agent does the rest, so the new session
        * appears once it has written the note.
        */
-      agentRequestHandoff: Request<{ id: string }, AgentSessionDto>;
+      agentRequestRebirth: Request<{ id: string }, AgentSessionDto>;
       /**
-       * Continues a session's work in a fresh one without a handoff note, for
+       * Continues a session's work in a fresh one without a rebirth note, for
        * an agent too far gone to write one. Returns the new session.
        */
       agentContinue: Request<{ id: string }, AgentSessionDto>;

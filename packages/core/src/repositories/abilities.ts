@@ -257,7 +257,7 @@ export class AbilityRepository {
   }
 
   /**
-   * Hands a session's abilities to its successor. A handoff is started by
+   * Hands a session's abilities to its successor. A rebirth is started by
    * the agent itself, so this is the one place that learns about it.
    */
   moveToSession(fromSessionId: string, toSessionId: string): void {

@@ -40,7 +40,7 @@ account's settings.json gets an apiKeyHelper that reads it from there, so no
 file holds the key. 'account logout' on such an account removes the key.
 
 A session runs on the account it was spawned on for its whole life, through
-restore, revive and handoff. 'agent spawn --account' picks one; without it a
+restore, revive and rebirth. 'agent spawn --account' picks one; without it a
 session uses the workspace's default for that provider
 ('workspace update --default-claude-account', '--default-codex-account'),
 else the Default account. Spawning on an account its provider reports as

@@ -149,7 +149,7 @@ const workspaceFromRow = (row: WorkspaceRow): Workspace => ({
   archivedAt: row.archived_at,
   position: row.position,
   startSetsInProgress: row.start_sets_in_progress !== 0,
-  autoHandoffPercent: row.auto_handoff_percent,
+  autoRebirthPercent: row.auto_handoff_percent,
   defaultProvider: row.default_provider,
   defaultModel: row.default_model,
   defaultClaudeAccount: row.default_claude_account,
@@ -190,7 +190,7 @@ const agentFromRow = (row: AgentRow): AgentSession => ({
   resumeCount: row.resume_count,
   lostReason: row.lost_reason,
   resumeOnStart: row.resume_on_start === 1,
-  handoffRequestedAt: row.handoff_requested_at,
+  rebirthRequestedAt: row.handoff_requested_at,
   position: row.position,
   pinnedAt: row.pinned_at,
   color: row.color,
@@ -408,7 +408,7 @@ export class SqliteRepositories {
         workspace.startSetsInProgress ? 1 : 0,
         workspace.defaultProvider,
         workspace.defaultModel,
-        workspace.autoHandoffPercent,
+        workspace.autoRebirthPercent,
         workspace.defaultClaudeAccount,
         workspace.defaultCodexAccount,
       );
@@ -476,7 +476,7 @@ export class SqliteRepositories {
         workspace.startSetsInProgress ? 1 : 0,
         workspace.defaultProvider,
         workspace.defaultModel,
-        workspace.autoHandoffPercent,
+        workspace.autoRebirthPercent,
         workspace.defaultClaudeAccount,
         workspace.defaultCodexAccount,
         workspace.id,
@@ -669,7 +669,7 @@ export class SqliteRepositories {
       .run(sessionId, repositoryId);
   }
 
-  /** Hands every worktree one session holds to another, for a handoff. */
+  /** Hands every worktree one session holds to another, for a rebirth. */
   reassignSessionWorktrees(fromSessionId: string, toSessionId: string): void {
     this.database
       .query("UPDATE session_worktrees SET session_id = ? WHERE session_id = ?")
@@ -839,7 +839,7 @@ export class SqliteRepositories {
         agent.resumeCount,
         agent.lostReason,
         agent.resumeOnStart ? 1 : 0,
-        agent.handoffRequestedAt,
+        agent.rebirthRequestedAt,
         agent.position,
         agent.pinnedAt,
         agent.color,
@@ -975,7 +975,7 @@ export class SqliteRepositories {
         agent.resumeCount,
         agent.lostReason,
         agent.resumeOnStart ? 1 : 0,
-        agent.handoffRequestedAt,
+        agent.rebirthRequestedAt,
         agent.id,
       );
   }

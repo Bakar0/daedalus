@@ -22,12 +22,12 @@ export const MAX_RUNS_IN_FLIGHT: Readonly<Record<string, number>> = {
   claude: 3,
   codex: 1,
 };
-/** The context share a routines session hands off at, when its workspace sets none. */
-export const ROUTINES_HANDOFF_PERCENT = 60;
-/** A drain waits this long for runs in flight before handing off anyway. */
+/** The context share a routines session is reborn at, when its workspace sets none. */
+export const ROUTINES_REBIRTH_PERCENT = 60;
+/** A drain waits this long for runs in flight before being reborn anyway. */
 export const DRAIN_LIMIT_MS = 10 * 60_000;
-/** A handoff the session never completed is finished by Daedalus after this. */
-const HANDOFF_LIMIT_MS = 15 * 60_000;
+/** A rebirth the session never completed is finished by Daedalus after this. */
+const REBIRTH_LIMIT_MS = 15 * 60_000;
 /** Between two lines typed into one session, at least this long. */
 const DELIVERY_GAP_MS = 15_000;
 /**
@@ -71,12 +71,12 @@ export interface RoutinesStatus {
  * The clock for the routines ability, on the desktop host's tick. It queues
  * due runs and types them into their sessions through the delivery gate, the
  * same rule that types grant and revoke notes, and it drains a session whose
- * context is full before asking it to hand off.
+ * context is full before asking it to be reborn.
  */
 export class RoutineDelivery {
   /** The last tick's reason for holding delivery, per ability. */
   private readonly holds = new Map<string, DeliveryHold | null>();
-  /** Abilities draining for a handoff: which session, and since when. */
+  /** Abilities draining for a rebirth: which session, and since when. */
   private readonly draining = new Map<
     string,
     { sessionId: string; since: number }
@@ -233,14 +233,14 @@ export class RoutineDelivery {
 
     let drain = this.draining.get(ability.id);
     if (drain && drain.sessionId !== session.id) {
-      // The handoff happened: the ability moved to the successor.
+      // The rebirth happened: the ability moved to the successor.
       this.draining.delete(ability.id);
       drain = undefined;
     }
     if (!drain) {
       const workspace = this.repositories.findWorkspace(session.workspaceId);
       const threshold =
-        workspace?.autoHandoffPercent ?? ROUTINES_HANDOFF_PERCENT;
+        workspace?.autoRebirthPercent ?? ROUTINES_REBIRTH_PERCENT;
       const percent = input.contextPercent(session.id);
       if (percent !== undefined && percent >= threshold) {
         drain = { sessionId: session.id, since: now };
@@ -250,10 +250,10 @@ export class RoutineDelivery {
     }
     if (drain) return this.drain(ability, session, drain, delivered, input);
 
-    if (session.handoffRequestedAt)
+    if (session.rebirthRequestedAt)
       return this.hold(ability, {
-        reason: "handoff",
-        text: "the session is handing off",
+        reason: "rebirth",
+        text: "the session is being reborn",
       });
     const limit = MAX_RUNS_IN_FLIGHT[session.provider] ?? 1;
     if (delivered.length >= limit)
@@ -312,8 +312,8 @@ export class RoutineDelivery {
 
   /**
    * A full context: no new runs go in. Once the runs in flight finish, or
-   * after `DRAIN_LIMIT_MS`, the handoff is typed under the delivery rule
-   * like any other line. A handoff the session never completes is finished
+   * after `DRAIN_LIMIT_MS`, the rebirth is typed under the delivery rule
+   * like any other line. A rebirth the session never completes is finished
    * by Daedalus, without a note: the routines live outside the conversation.
    */
   private async drain(
@@ -325,14 +325,14 @@ export class RoutineDelivery {
   ): Promise<void> {
     const now = this.now().getTime();
     this.hold(ability, {
-      reason: "handoff",
+      reason: "rebirth",
       text:
         delivered.length && now - drain.since < DRAIN_LIMIT_MS
-          ? "waiting for runs in flight before a handoff"
-          : "the session is handing off",
+          ? "waiting for runs in flight before a rebirth"
+          : "the session is being reborn",
     });
-    if (session.handoffRequestedAt) {
-      if (now - Date.parse(session.handoffRequestedAt) >= HANDOFF_LIMIT_MS)
+    if (session.rebirthRequestedAt) {
+      if (now - Date.parse(session.rebirthRequestedAt) >= REBIRTH_LIMIT_MS)
         await this.agents.continueSession({ id: session.id });
       return;
     }
@@ -351,7 +351,7 @@ export class RoutineDelivery {
       })
     )
       return;
-    await this.agents.requestHandoff(session.id);
+    await this.agents.requestRebirth(session.id);
     this.typed(session.id);
   }
 

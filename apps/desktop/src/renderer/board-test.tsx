@@ -82,7 +82,7 @@ const session = (
   archivedAt: null,
   resumeCount: 0,
   lostReason: null,
-  handoffRequestedAt: null,
+  rebirthRequestedAt: null,
   position: sequence++,
   pinnedAt: null,
   color: null,
@@ -112,7 +112,7 @@ const snapshot: DesktopSnapshotDto = {
       available: true,
       position: 1,
       startSetsInProgress: true,
-      autoHandoffPercent: null,
+      autoRebirthPercent: null,
       defaultProvider: "claude",
       defaultModel: null,
       defaultClaudeAccount: null,
@@ -129,7 +129,7 @@ const snapshot: DesktopSnapshotDto = {
       available: true,
       position: 2,
       startSetsInProgress: true,
-      autoHandoffPercent: null,
+      autoRebirthPercent: null,
       // Codex by default, so a Start from the all-workspaces board proves
       // the task's own workspace chose the provider, not the selected one.
       defaultProvider: "codex",

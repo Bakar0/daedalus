@@ -8,7 +8,7 @@ Add `--json` anywhere on a non-interactive command for a compact result envelope
 daedal workspace create <name> [--slug <slug>] [--path <path>]
 daedal workspace list [--archived]
 daedal workspace get <workspace>
-daedal workspace update <workspace> [--name <name>] [--slug <slug>] [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--default-model <model>|none] [--default-claude-account <account>|default] [--default-codex-account <account>|default] [--auto-handoff <percent>|off]
+daedal workspace update <workspace> [--name <name>] [--slug <slug>] [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--default-model <model>|none] [--default-claude-account <account>|default] [--default-codex-account <account>|default] [--auto-rebirth <percent>|off]
 daedal workspace archive <workspace>
 daedal workspace restore <workspace>
 daedal workspace remove <workspace> [--delete-files] --force
@@ -17,7 +17,7 @@ daedal workspace remove <workspace> [--delete-files] --force
 ## Tasks and board status
 
 ```text
-daedal task create --workspace <workspace> --title <title> [--description <text> | --description-file <path|->] [--priority <priority>]
+daedal task create [--workspace <workspace>] --title <title> [--description <text> | --description-file <path|->] [--priority <priority>]
 daedal task list [--workspace <workspace>] [--status <status>]
 daedal task get <task-ref> [--workspace <workspace>]
 daedal task current
@@ -57,15 +57,15 @@ library ID.
 
 ```text
 daedal agent models <codex|claude> [--account <account>]
-daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <configured-name>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine] [--ability routines|orchestration] [--color <color>] [--pin]
+daedal agent spawn [--workspace <workspace>] (--provider <codex|claude> | --command <configured-name>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine] [--ability routines|orchestration] [--color <color>] [--pin]
 daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>]
 daedal agent list [--workspace <workspace>] [--running|--archived]
 daedal agent get <agent-id>
 daedal agent attach <agent-id>
 daedal agent send <agent-id> <text>
 daedal agent archive <agent-id> [--force]
-daedal agent handoff <agent-id>
-daedal agent continue [<agent-id>] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--account <account>] [--message <text>]
+daedal agent rebirth <agent-id>
+daedal agent continue [<agent-id>] [--note-file <path|->] [--provider <codex|claude>] [--model <model>] [--account <account>] [--message <text>]
 daedal agent restore <agent-id>
 daedal agent stop <agent-id> [--force]
 daedal agent remove <agent-id>
@@ -86,9 +86,12 @@ routines on a schedule while the app is open; the `daedalus-routines` skill
 and `daedal routine --help` describe them. A session that holds
 `orchestration` leads a team: it adds members with `agent spawn --team` and
 talks to them with `daedal team`; the `daedalus-orchestration` and
-`daedalus-team` skills and `daedal team --help` describe it. A handoff moves a
+`daedalus-team` skills and `daedal team --help` describe it. A rebirth moves a
 session's abilities, pin and color to the successor. A session with routines
 keeps its exact name; any other, a team's lead included, gets ` · 2`.
+
+Inside a session, `task create` and `agent spawn` default `--workspace` to
+your own workspace.
 
 `agent spawn --task` moves a `todo` or `blocked` task to `in_progress` when the
 workspace's `--start-sets-in-progress` setting is on (the default); do not set
@@ -97,12 +100,12 @@ question the user and write the brief rather than do the work, and leaves the st
 
 `agent continue` moves a session's work to a fresh one with an empty context:
 the same task, working directory and worktrees, and the same provider and model
-unless you pass others. The note from `--handoff-file` is written to
-`HANDOFF.md` in that directory and the new session reads it first. With no id
+unless you pass others. The note from `--note-file` is written to
+`REBIRTH.md` in that directory and the new session reads it first. With no id
 it continues the session it runs in, and archives that session just after the
-command exits. `agent handoff` asks a running agent to write the note and run
-`agent continue` itself; it is what the app's "Continue in new agent" sends.
-With `workspace update --auto-handoff <percent>`, the app sends the same
+command exits. `agent rebirth` asks a running agent to write the note and run
+`agent continue` itself; it is what the app's Rebirth button sends.
+With `workspace update --auto-rebirth <percent>`, the app sends the same
 request on its own once a session's context passes that share of its window.
 
 `agent models` does not require a workspace. With `--json`, pass an exact

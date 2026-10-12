@@ -309,7 +309,7 @@ describe("abilities", () => {
     });
   });
 
-  test("a grant note and a handoff request go to a Claude session's inbox", async () => {
+  test("a grant note and a rebirth request go to a Claude session's inbox", async () => {
     await withAbilities(async (harness) => {
       const { context, tmux } = harness;
       await context.workspaces.create({ name: "Ops", slug: "ops" });
@@ -330,12 +330,12 @@ describe("abilities", () => {
       expect(
         context.abilities.held(session.id, "orchestration")?.pendingNote,
       ).toBeNull();
-      // The handoff request too, which works mid-turn.
-      const requested = await context.agents.requestHandoff(session.id);
-      expect(requested.handoffRequestedAt).not.toBeNull();
+      // The rebirth request too, which works mid-turn.
+      const requested = await context.agents.requestRebirth(session.id);
+      expect(requested.rebirthRequestedAt).not.toBeNull();
       expect(tmux.sent).toEqual([]);
       expect((await mailbox.text()).split("\n")[1]).toMatch(
-        /^Daedalus: hand off your work to a fresh session now\. Run the daedalus-handoff(-\w+)? skill\.$/,
+        /^Daedalus: continue your work in a fresh session now\. Run the daedalus-rebirth(-\w+)? skill\.$/,
       );
     });
   });
@@ -451,7 +451,7 @@ describe("abilities", () => {
     });
   });
 
-  test("a handoff moves the abilities, name, pin and color to the successor", async () => {
+  test("a rebirth moves the abilities, name, pin and color to the successor", async () => {
     await withAbilities(async (harness) => {
       const { context, tmux } = harness;
       const { session, ability } = await argus(harness);
@@ -460,7 +460,7 @@ describe("abilities", () => {
       const { session: successor, predecessor } =
         await context.agents.continueSession({
           id: session.id,
-          handoff: "Nothing in flight.",
+          note: "Nothing in flight.",
         });
       expect(successor).toMatchObject({ name: "Argus", color: "gold" });
       expect(successor.pinnedAt).not.toBeNull();
@@ -837,51 +837,51 @@ describe("routine delivery", () => {
     });
   });
 
-  test("drains before a handoff and hands the routines to the successor", async () => {
+  test("drains before a rebirth and hands the routines to the successor", async () => {
     await withAbilities(async (harness) => {
       const { context, tmux } = harness;
       const { session: launched, ability } = await argus(harness);
-      // Typed in, so the handoff request is held by a keystroke below.
+      // Typed in, so the rebirth request is held by a keystroke below.
       const session = withoutInbox(harness, launched);
       context.routines.add(ability, { text: routineText("ci-health") });
       await tick(harness);
       expect(context.routines.deliveredRuns(ability)).toHaveLength(1);
       context.routines.add(ability, { text: routineText("merges") });
       // The generic sweep leaves a routines session to the routine clock.
-      await context.workspaces.update("ops", { autoHandoffPercent: 50 });
+      await context.workspaces.update("ops", { autoRebirthPercent: 50 });
       expect(
-        await context.agents.sweepAutoHandoffs([
+        await context.agents.sweepAutoRebirths([
           { sessionId: session.id, context: { usedPercent: 90 } },
         ]),
       ).toEqual([]);
-      // Context passes the threshold: nothing more goes in, no handoff yet.
+      // Context passes the threshold: nothing more goes in, no rebirth yet.
       const full = idle(harness, { contextPercent: () => 72 });
       await tick(harness, full);
       await tick(harness, full);
       expect(routineLines(harness)).toHaveLength(1);
       expect(context.routineDelivery.status(ability).hold).toMatchObject({
-        reason: "handoff",
-        text: "waiting for runs in flight before a handoff",
+        reason: "rebirth",
+        text: "waiting for runs in flight before a rebirth",
       });
       expect(
-        tmux.sent.some((item) => item.text.includes("daedalus-handoff")),
+        tmux.sent.some((item) => item.text.includes("daedalus-rebirth")),
       ).toBe(false);
-      // The run in flight ends: now the handoff, under the delivery rule.
+      // The run in flight ends: now the rebirth, under the delivery rule.
       const [inFlight] = context.routines.deliveredRuns(ability);
       context.routines.start(ability, inFlight!.id);
       await context.routines.done(ability, inFlight!.id, "quiet", "ok");
       context.deliveryGate.noteKeystroke(session.id);
       await tick(harness, full);
       expect(
-        tmux.sent.some((item) => item.text.includes("daedalus-handoff")),
+        tmux.sent.some((item) => item.text.includes("daedalus-rebirth")),
       ).toBe(false);
       harness.advance(QUIET_AFTER_TYPING_MS);
       await tick(harness, full);
-      expect(tmux.sent.at(-1)!.text).toContain("daedalus-handoff");
+      expect(tmux.sent.at(-1)!.text).toContain("daedalus-rebirth");
       // The session runs `daedal agent continue` itself.
       const { session: successor } = await context.agents.continueSession({
         id: session.id,
-        handoff: "Nothing in flight.",
+        note: "Nothing in flight.",
       });
       // The waiting run goes to the successor.
       await tick(harness);
@@ -1416,7 +1416,7 @@ describe("input box", () => {
       provider: "claude",
       status: "running",
       archivedAt: null,
-      handoffRequestedAt: null,
+      rebirthRequestedAt: null,
     } as unknown as AgentSession;
     const asking = (source: AgentActivityState["source"]) =>
       ({

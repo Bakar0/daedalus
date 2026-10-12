@@ -5,7 +5,7 @@ import { milestonesBetween } from "./world-milestones";
 import {
   CONTEXT_PREVIEWS,
   CRATE_STAGES,
-  HANDOFF_STEPS,
+  REBIRTH_STEPS,
   NO_PREVIEW,
   previewModel,
   type ContextPreview,
@@ -219,20 +219,20 @@ export default function WorldView(props: WorldViewProps) {
     );
     return () => clearTimeout(timer);
   }, [preview.crateStep]);
-  // The pretend handoff: writing, then replaced, then back to real.
+  // The pretend rebirth: writing, then replaced, then back to real.
   useEffect(() => {
-    const step = preview.handoffStep;
+    const step = preview.rebirthStep;
     if (step === null || step === undefined) return;
     const timer = setTimeout(
       () =>
         setPreview((current) => ({
           ...current,
-          handoffStep: current.handoffStep === 0 ? 1 : null,
+          rebirthStep: current.rebirthStep === 0 ? 1 : null,
         })),
-      HANDOFF_STEPS[step]! * 1000,
+      REBIRTH_STEPS[step]! * 1000,
     );
     return () => clearTimeout(timer);
-  }, [preview.handoffStep]);
+  }, [preview.rebirthStep]);
   const host = useRef<HTMLDivElement>(null);
   const engine = useRef<WorldEngine | null>(null);
   const [themeId, setThemeId] = useState(
@@ -450,16 +450,16 @@ export default function WorldView(props: WorldViewProps) {
               </button>
               <button
                 disabled={
-                  (preview.handoffStep ?? null) !== null ||
+                  (preview.rebirthStep ?? null) !== null ||
                   !props.model.actors.length
                 }
                 onClick={() =>
-                  setPreview((current) => ({ ...current, handoffStep: 0 }))
+                  setPreview((current) => ({ ...current, rebirthStep: 0 }))
                 }
-                title="The first agent hands off through the Rebuilder"
+                title="The first agent is reborn through the Rebuilder"
                 type="button"
               >
-                Hand off
+                Rebirth
               </button>
             </div>
           )}

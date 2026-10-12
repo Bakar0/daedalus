@@ -56,7 +56,7 @@ const session = (
   archivedAt: null,
   resumeCount: 0,
   lostReason: null,
-  handoffRequestedAt: null,
+  rebirthRequestedAt: null,
   position: 0,
   pinnedAt: null,
   color: null,

@@ -29,9 +29,9 @@ export type WorldStation =
 
 /**
  * Everywhere an actor can stand. Every theme must place all of them.
- * "handoff" is where an agent waits while it writes its handoff note.
+ * "rebirth" is where an agent waits while it writes its rebirth note.
  */
-export type WorldPlace = WorldStation | "lounge" | "door" | "handoff";
+export type WorldPlace = WorldStation | "lounge" | "door" | "rebirth";
 
 export const WORLD_PLACES: readonly WorldPlace[] = [
   "read",
@@ -44,7 +44,7 @@ export const WORLD_PLACES: readonly WorldPlace[] = [
   "think",
   "lounge",
   "door",
-  "handoff",
+  "rebirth",
 ];
 
 export interface WorldActor {
@@ -57,7 +57,7 @@ export interface WorldActor {
   /** Its task is marked done. */
   taskDone: boolean;
   /**
-   * The session this one took over from in a handoff: the one asked to hand
+   * The session this one took over from in a rebirth: the one asked to hand
    * off in the same working directory, started before this one. Null for a
    * session that started fresh.
    */
@@ -374,12 +374,12 @@ export function buildWorldModel(input: WorldModelInput): WorldModel {
     if (!zoneId || !crate) continue;
     crates.set(zoneId, [...(crates.get(zoneId) ?? []), crate]);
   }
-  // Sessions that were asked to hand off, newest request first, archived
+  // Sessions that were asked for a rebirth, newest request first, archived
   // ones too: the predecessor is archived the moment its successor starts.
   const handedOff = input.sessions
-    .filter((item) => item.handoffRequestedAt)
+    .filter((item) => item.rebirthRequestedAt)
     .sort((left, right) =>
-      right.handoffRequestedAt!.localeCompare(left.handoffRequestedAt!),
+      right.rebirthRequestedAt!.localeCompare(left.rebirthRequestedAt!),
     );
   for (const session of input.sessions) {
     if (session.kind !== "agent" || session.archivedAt) continue;
@@ -405,15 +405,15 @@ export function buildWorldModel(input: WorldModelInput): WorldModel {
           (item) =>
             item.id !== session.id &&
             item.workingDirectory === session.workingDirectory &&
-            session.startedAt >= item.handoffRequestedAt!,
+            session.startedAt >= item.rebirthRequestedAt!,
         )?.id ?? null,
       mood: view.tone,
       label: view.label,
-      // Asked to hand off: it goes to wait at the handoff machine while it
+      // Asked for a rebirth: it goes to wait at the rebirth machine while it
       // writes its note, whatever it is doing meanwhile.
       place:
-        session.handoffRequestedAt && view.tone !== "lost"
-          ? "handoff"
+        session.rebirthRequestedAt && view.tone !== "lost"
+          ? "rebirth"
           : placeFor(view.tone, activity),
       detail: view.detail,
       since: view.since,

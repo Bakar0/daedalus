@@ -72,9 +72,9 @@ const PIPE_OUTER = ROOM_X + (ROOM_W * SCALE) / 2 + 40;
 /**
  * The Rebuilder on the surface, right of the workshop: an industrial
  * teleporter with three intake bays and three output bays under one steel
- * conduit. A bot handing off steps into an intake bay and is scanned while
+ * conduit. A bot being reborn steps into an intake bay and is scanned while
  * it writes its note; when its successor starts, it comes apart and is put
- * back together in the matching output bay. Three can hand off at once; a
+ * back together in the matching output bay. Three can be reborn at once; a
  * fourth waits outside.
  */
 const GROUND = -6;
@@ -199,7 +199,7 @@ function roomCenter(index: number): WorldPoint {
 const OBSERVATORY = slotCenter(0);
 
 /**
- * Where bots handing off go: into the three intake bays, then a queue on
+ * Where bots being reborn go: into the three intake bays, then a queue on
  * the grass before the machine.
  */
 function rebuilderSpot(slot: number): WorldPoint {
@@ -211,7 +211,7 @@ function rebuilderSpot(slot: number): WorldPoint {
 }
 
 function sharedSpot(place: WorldPlace, slot: number): WorldPoint {
-  return place === "handoff"
+  return place === "rebirth"
     ? rebuilderSpot(slot)
     : observatorySpot(place, slot);
 }
@@ -899,11 +899,11 @@ export const labyrinthTheme: WorldTheme = {
   fit: "width",
   createVehicle,
   shared: {
-    places: ["web", "handoff"],
+    places: ["web", "rebirth"],
     dwell: OBSERVATORY_DWELL,
     spot: sharedSpot,
   },
-  handoff: {
+  rebirth: {
     bays: INTAKE.map((x, index) => ({
       from: { x, y: BAY_FLOOR },
       to: { x: OUTPUT[index]!, y: BAY_FLOOR },

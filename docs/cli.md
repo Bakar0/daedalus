@@ -38,7 +38,7 @@ daedal workspace create <name> [--slug <slug>] [--path <path>]
 daedal workspace list [--json]
 daedal workspace get <workspace> [--json]
 daedal workspace update <workspace> [--name <name>] [--slug <slug>]
-    [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--auto-handoff <percent>|off]
+    [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--auto-rebirth <percent>|off]
     [--default-model <model>|none]
     [--default-claude-account <account>|default] [--default-codex-account <account>|default]
 daedal workspace reorder <workspace> [<workspace>...]
@@ -56,7 +56,7 @@ The three board settings are per workspace. `--start-sets-in-progress` (on by de
 
 `--default-claude-account` and `--default-codex-account` name the account each provider's sessions start on when nothing chooses one (see Account below); `default` is the provider's own account. Removing an account resets every workspace default that named it.
 
-`--auto-handoff <percent>` (off by default) asks a running Claude or Codex session to hand its work to a fresh agent once its context reaches that share of the window; `off` turns it back off, and the value must be a whole number from 10 to 100. The check runs on the desktop app's one-second tick against the same context telemetry the usage footer shows, so it does nothing while the app is closed. Each session is asked once; the request is recorded as `handoffRequestedAt` on the session and stands until the successor archives it. What the agent is asked to do is exactly what `agent handoff` sends.
+`--auto-rebirth <percent>` (off by default) asks a running Claude or Codex session to hand its work to a fresh agent once its context reaches that share of the window; `off` turns it back off, and the value must be a whole number from 10 to 100. The check runs on the desktop app's one-second tick against the same context telemetry the usage footer shows, so it does nothing while the app is closed. Each session is asked once; the request is recorded as `rebirthRequestedAt` on the session and stands until the successor archives it. What the agent is asked to do is exactly what `agent rebirth` sends.
 
 Removal requires `--force`. Without `--delete-files`, it unregisters the workspace and preserves every file. With `--delete-files`, it only removes a canonical, non-root, non-symlink directory carrying the exact registered workspace ID marker. Live agents block removal.
 
@@ -65,7 +65,7 @@ Both workspaces and sessions carry a manual `position`, which is the order `list
 ## Task
 
 ```text
-daedal task create --workspace <workspace> --title <title> [--description <text> | --description-file <path|->] [--priority <priority>]
+daedal task create [--workspace <workspace>] --title <title> [--description <text> | --description-file <path|->] [--priority <priority>]
 daedal task list [--workspace <workspace>] [--status <status>]
 daedal task get <task-ref> [--workspace <workspace>]
 daedal task current
@@ -100,8 +100,8 @@ daedal agent wait [--session <agent-id>] [--workspace <workspace>] [--for attent
 daedal agent attach <agent-id>
 daedal agent send <agent-id> <text>
 daedal agent archive <agent-id> [--force]
-daedal agent handoff <agent-id>
-daedal agent continue [<agent-id> | --self] [--handoff-file <path|->] [--provider <codex|claude>] [--model <model>] [--account <account>] [--message <text>]
+daedal agent rebirth <agent-id>
+daedal agent continue [<agent-id> | --self] [--note-file <path|->] [--provider <codex|claude>] [--model <model>] [--account <account>] [--message <text>]
 daedal agent restore <agent-id>
 daedal agent revive <agent-id> | --all | --workspace <workspace>
 daedal agent stop <agent-id> [--force]
@@ -109,17 +109,19 @@ daedal agent delete <agent-id> --force
 daedal agent remove <agent-id>
 ```
 
-`delete` is for an archived session you no longer want, and is the trash button in the app's archived sessions list. It removes the session's worktrees together with their branches, unpushed commits included, deletes its folder under `worktrees/` unless another session runs in the same folder (a session continued by handoff shares its predecessor's), and then deletes the session. It refuses a session that is not archived. `remove` deletes only the record and leaves every file in place.
+`delete` is for an archived session you no longer want, and is the trash button in the app's archived sessions list. It removes the session's worktrees together with their branches, unpushed commits included, deletes its folder under `worktrees/` unless another session runs in the same folder (a session continued by rebirth shares its predecessor's), and then deletes the session. It refuses a session that is not archived. `remove` deletes only the record and leaves every file in place.
 
 Built-in provider definitions come from `config.json`. Named custom definitions use `--command`. Executables and arguments are always passed as arrays. A task-backed launch receives only `Execute task #<number>` plus optional `--message` guidance; the installed skill supplies the workflow, so task content and CLI instructions are not duplicated in the prompt. Claude and Codex receive the prompt through their native initial-prompt argument, while custom launches receive it in `DAEDALUS_TASK_PROMPT`. Daedalus never types the initial prompt into the terminal. Agent processes receive their current session, workspace, internal task ID, and task number through `DAEDALUS_SESSION_ID`, `DAEDALUS_WORKSPACE_ID`, `DAEDALUS_TASK_ID`, and `DAEDALUS_TASK_NUMBER`, and their working folder through `DAEDALUS_SESSION_DIRECTORY`. These variables are restored when a session resumes.
 
+Inside a Daedalus session, `task create` and `agent spawn` default `--workspace` to the calling session's workspace (see "The calling session" below).
+
 `--refine` links the session to the task but asks it to write the brief instead of doing the work. Its instruction starts with the `daedalus-refinement` skill, so the agent questions the user about the task in rounds, then sends the brief back with `task update <number> --description-file -`. With the skill turned off, the agent reads the workspace and writes the brief without asking. It leaves the task's status alone.
 
-`agent continue` hands a session's work to a fresh session with an empty context. The new session gets the same task and runs in the old one's working directory, and the old session's worktree rows move to it before the provider starts, so it never tries to create them again. It keeps the provider and the `--model` the old session launched with unless `--provider` or `--model` say otherwise. `--handoff-file` (or `-` for stdin) is written to `HANDOFF.md` in that directory, and the launch prompt tells the new agent to read it and check git before relying on it. Without a note the prompt points it at the brief, `JOURNAL.md` and git instead. The old session is then archived, so its conversation stays restorable, and it leaves the task's status alone.
+`agent continue` hands a session's work to a fresh session with an empty context. The new session gets the same task and runs in the old one's working directory, and the old session's worktree rows move to it before the provider starts, so it never tries to create them again. It keeps the provider and the `--model` the old session launched with unless `--provider` or `--model` say otherwise. `--note-file` (or `-` for stdin) is written to `REBIRTH.md` in that directory, and the launch prompt tells the new agent to read it and check git before relying on it. Without a note the prompt points it at the brief, `JOURNAL.md` and git instead. The old session is then archived, so its conversation stays restorable, and it leaves the task's status alone.
 
-With no id, `agent continue` means the calling session (see "The calling session" below). `--self` means the same and is kept for handoff skills installed before that. An agent cannot archive itself from inside its own tmux session: `stop` sends Ctrl-C, which interrupts the very command doing the archiving. So in that case the command starts a detached `agent archive <id>` that waits for the command to exit before it runs, and the JSON result reports the old session as not yet archived.
+With no id, `agent continue` means the calling session (see "The calling session" below). `--self` means the same and is kept for rebirth skills installed before that. An agent cannot archive itself from inside its own tmux session: `stop` sends Ctrl-C, which interrupts the very command doing the archiving. So in that case the command starts a detached `agent archive <id>` that waits for the command to exit before it runs, and the JSON result reports the old session as not yet archived.
 
-`agent handoff <agent-id>` is the one-click path. It sends a running agent a request to write the note to `HANDOFF.md` in its working directory and then run `agent continue --handoff-file` on itself. The desktop app's "Continue in new agent" button in the terminal heading sends it and switches the terminal to the new session once it appears. The same dialog's "Start fresh" continues without a note, for an agent that can no longer answer or a session that is not running.
+`agent rebirth <agent-id>` is the one-click path. It sends a running agent a request to write the note to `REBIRTH.md` in its working directory and then run `agent continue --note-file` on itself. The desktop app's Rebirth button on the session card sends it and switches the terminal to the new session once it appears. The same dialog's "Start fresh" continues without a note, for an agent that can no longer answer or a session that is not running.
 
 Each launch gets a durable `daedalus_<uuid>` tmux session on a Daedalus server isolated by `DAEDALUS_HOME`. `attach` hands the terminal to tmux and therefore rejects `--json`; every non-interactive command supports the JSON envelope. `send` sends literal text followed by Enter. `stop` first sends Ctrl-C unless `--force` is used, then closes the session. A running session must be stopped before its history row can be removed.
 
@@ -157,7 +159,7 @@ An account added with `--api-key` uses an Anthropic API key instead of a login. 
 
 `status` asks each provider now: `claude auth status --json`, and `codex login status` plus the Codex app server's `account/read` for the email and plan. The state is `signed-in`, `signed-out`, `missing` (the provider is not installed; the human output prints the install commands) or `unknown` (the provider gave no usable answer, such as a build too old to have the command).
 
-A session runs on the account it was spawned on for its whole life: restore, revive, handoff and archive all point the provider at the same folder, because that is where its conversation is. `agent spawn --account` chooses; without it the workspace's default for that provider applies, else the default account. `agent continue` keeps the predecessor's account unless `--account` says otherwise. Every launch first asks the provider whether the account is signed in and refuses with exit code 5 when it says it is not, instead of starting a terminal whose first turn fails; an `unknown` answer does not block. Model catalogs, Codex hooks and instructions, session lookup, context telemetry and rate-limit windows are all read from the session's account, and the usage footer shows a profile's windows under its own name.
+A session runs on the account it was spawned on for its whole life: restore, revive, rebirth and archive all point the provider at the same folder, because that is where its conversation is. `agent spawn --account` chooses; without it the workspace's default for that provider applies, else the default account. `agent continue` keeps the predecessor's account unless `--account` says otherwise. Every launch first asks the provider whether the account is signed in and refuses with exit code 5 when it says it is not, instead of starting a terminal whose first turn fails; an `unknown` answer does not block. Model catalogs, Codex hooks and instructions, session lookup, context telemetry and rate-limit windows are all read from the session's account, and the usage footer shows a profile's windows under its own name.
 
 `remove` requires `--force`, signs the account out (which also removes Claude's Keychain entry), clears workspace defaults that named it and deletes its folder. It is refused while a session is running on it, unless `--archive-sessions` archives those sessions first, which is what Remove in Settings → Agents does. An archived session on a removed account cannot be restored, and says so.
 

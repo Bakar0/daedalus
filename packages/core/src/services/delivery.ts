@@ -147,7 +147,7 @@ export function activityAtPrompt(
 export type DeliveryHoldReason =
   | "paused"
   | "stopped"
-  | "handoff"
+  | "rebirth"
   | "typing"
   | "busy"
   | "waiting-on-user"
@@ -221,8 +221,8 @@ export class DeliveryGate {
     const { session, activity, screen } = input;
     if (session.status !== "running" || session.archivedAt)
       return { reason: "stopped", text: "the session is not running" };
-    if (session.handoffRequestedAt)
-      return { reason: "handoff", text: "the session is handing off" };
+    if (session.rebirthRequestedAt)
+      return { reason: "rebirth", text: "the session is being reborn" };
     const until = input.untyped ? undefined : this.quietUntil(session.id);
     if (until)
       return {

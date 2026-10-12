@@ -31,7 +31,7 @@ import { tipOf } from "./world-theme";
  */
 const shown = new Set<string>();
 /**
- * Sessions that went through the handoff machine: their figure stays gone
+ * Sessions that went through the rebirth machine: their figure stays gone
  * while their successor is there, even if a snapshot still lists them for
  * a moment.
  */
@@ -72,7 +72,7 @@ const MAX_SCALE = 2.6;
 /** Pointer travel, in screen pixels, past which a press is a drag. */
 const DRAG_THRESHOLD = 5;
 /**
- * The handoff machine's timing, in seconds from the moment the old figure
+ * The rebirth machine's timing, in seconds from the moment the old figure
  * is inside the first chamber: it comes apart, its pieces stream to the
  * second chamber, and the successor is put together there and walks out.
  */
@@ -132,11 +132,11 @@ interface ActorEntry {
   /** Progress pops still to show, one at a time, and the one showing. */
   pops: string[];
   pop?: { view: Container; age: number };
-  /** Its successor, when it is on its way into the handoff machine. */
-  handoffTo?: string;
+  /** Its successor, when it is on its way into the rebirth machine. */
+  rebirthTo?: string;
   /** Which of the machine's bays it uses. */
-  handoffBay?: number;
-  /** A successor waiting to be put together in the handoff machine. */
+  rebirthBay?: number;
+  /** A successor waiting to be put together in the rebirth machine. */
   held?: boolean;
 }
 
@@ -534,9 +534,9 @@ export class WorldEngine {
     const slots = new Map<string, number>();
     const present = new Set<string>();
     let arrivals = 0;
-    const machine = this.theme.handoff;
+    const machine = this.theme.rebirth;
     // A successor whose predecessor is on screen takes over through the
-    // handoff machine, when the theme has one and this is not a redraw.
+    // rebirth machine, when the theme has one and this is not a redraw.
     const successors = new Map<string, string>();
     if (machine && !snap)
       for (const actor of this.model.actors)
@@ -557,9 +557,9 @@ export class WorldEngine {
       present.add(actor.sessionId);
       const existing = this.actors.get(actor.sessionId);
       const successor = successors.get(actor.sessionId);
-      if (existing && machine && (successor || existing.handoffTo)) {
+      if (existing && machine && (successor || existing.rebirthTo)) {
         // Into the first chamber, even while a snapshot still lists it.
-        this.intoMachine(existing, successor ?? existing.handoffTo!);
+        this.intoMachine(existing, successor ?? existing.rebirthTo!);
         continue;
       }
       const place = existing ? this.settle(existing, actor.place) : actor.place;
@@ -614,14 +614,14 @@ export class WorldEngine {
     for (const [id, entry] of this.actors) {
       if (present.has(id)) continue;
       // Already on its way home when its successor showed up: redirected.
-      if (entry.leaving && !(successors.has(id) && !entry.handoffTo)) continue;
+      if (entry.leaving && !(successors.has(id) && !entry.rebirthTo)) continue;
       if (snap || entry.held) {
         this.remove(id);
         continue;
       }
-      // Gone from the snapshot, which is how a handoff usually ends: the
+      // Gone from the snapshot, which is how a rebirth usually ends: the
       // predecessor is archived as its successor starts.
-      const successor = entry.handoffTo ?? successors.get(id);
+      const successor = entry.rebirthTo ?? successors.get(id);
       if (successor && machine) {
         this.intoMachine(entry, successor);
         continue;
@@ -638,8 +638,8 @@ export class WorldEngine {
    * the nearest. Kept once chosen, so the successor lands opposite it.
    */
   private bayFor(entry: ActorEntry): number {
-    if (entry.handoffBay !== undefined) return entry.handoffBay;
-    const bays = this.theme.handoff!.bays;
+    if (entry.rebirthBay !== undefined) return entry.rebirthBay;
+    const bays = this.theme.rebirth!.bays;
     const distance = (index: number) =>
       Math.hypot(
         bays[index]!.from.x - entry.target.x,
@@ -648,15 +648,15 @@ export class WorldEngine {
     let best = 0;
     for (let index = 1; index < bays.length; index += 1)
       if (distance(index) < distance(best)) best = index;
-    entry.handoffBay = best;
+    entry.rebirthBay = best;
     return best;
   }
 
   /** Sends an agent into its intake bay, if it is not there already. */
   private intoMachine(entry: ActorEntry, successor: string) {
-    if (entry.handoffTo) return;
-    const from = this.theme.handoff!.bays[this.bayFor(entry)]!.from;
-    entry.handoffTo = successor;
+    if (entry.rebirthTo) return;
+    const from = this.theme.rebirth!.bays[this.bayFor(entry)]!.from;
+    entry.rebirthTo = successor;
     entry.leaving = true;
     entry.pending = undefined;
     entry.target = { ...from };
@@ -666,7 +666,7 @@ export class WorldEngine {
   /** Starts taking an agent that reached the first chamber apart. */
   private startTransfer(entry: ActorEntry) {
     const bay = this.bayFor(entry);
-    const machine = this.theme.handoff!.bays[bay]!;
+    const machine = this.theme.rebirth!.bays[bay]!;
     const scale = this.theme.actorScale ?? 1;
     const body = (point: WorldPoint) => ({
       x: point.x + (Math.random() - 0.5) * 36 * scale,
@@ -677,7 +677,7 @@ export class WorldEngine {
     this.machine.addChild(view);
     this.transfers.push({
       from: entry.actor.sessionId,
-      to: entry.handoffTo!,
+      to: entry.rebirthTo!,
       bay,
       age: 0,
       view,
@@ -692,14 +692,14 @@ export class WorldEngine {
   }
 
   /**
-   * The handoff machine at work: the old figure fades and shrinks as its
+   * The rebirth machine at work: the old figure fades and shrinks as its
    * pieces lift off, they stream along the theme's arc, and the successor
    * fades in where they land, then walks out.
    */
   private runTransfers(seconds: number) {
     for (let index = this.transfers.length - 1; index >= 0; index -= 1) {
       const transfer = this.transfers[index]!;
-      const machine = this.theme.handoff?.bays[transfer.bay];
+      const machine = this.theme.rebirth?.bays[transfer.bay];
       transfer.age += seconds;
       const { age, view } = transfer;
       const old = this.actors.get(transfer.from);
@@ -943,12 +943,12 @@ export class WorldEngine {
       this.relayout(false);
     for (const zone of this.zones.values()) zone.animate?.(this.elapsed);
     for (const [id, entry] of this.actors) {
-      // Its visibility belongs to the handoff machine until it walks out,
+      // Its visibility belongs to the rebirth machine until it walks out,
       // unless there is nothing left to take apart: then it just appears.
       if (entry.held) {
         const waiting =
           this.transfers.some((item) => item.to === id) ||
-          this.actors.get(entry.actor.continuesFrom ?? "")?.handoffTo === id;
+          this.actors.get(entry.actor.continuesFrom ?? "")?.rebirthTo === id;
         if (waiting) continue;
         entry.held = false;
         entry.figure.view.visible = true;
@@ -982,7 +982,7 @@ export class WorldEngine {
       this.carry(entry, walking && entry.path[0]!.ride === true);
       if (!walking) {
         entry.facing = 0;
-        if (entry.handoffTo) {
+        if (entry.rebirthTo) {
           // Inside the first chamber: the machine takes it from here.
           if (!this.transfers.some((item) => item.from === id))
             this.startTransfer(entry);
@@ -991,7 +991,7 @@ export class WorldEngine {
           continue;
         }
       }
-      if (entry.leaving && !entry.handoffTo) {
+      if (entry.leaving && !entry.rebirthTo) {
         const left = Math.hypot(
           entry.target.x - entry.position.x,
           entry.target.y - entry.position.y,
@@ -1018,7 +1018,7 @@ export class WorldEngine {
    */
   private drawScanners() {
     const g = this.scanners.clear();
-    const machine = this.theme.handoff;
+    const machine = this.theme.rebirth;
     if (!machine) return;
     const scale = this.theme.actorScale ?? 1;
     const t = this.elapsed;
@@ -1028,8 +1028,8 @@ export class WorldEngine {
       g.circle(point.x, point.y, 4.5).fill({ color, alpha });
     };
     for (const entry of this.actors.values()) {
-      if (entry.handoffTo || entry.path.length || entry.held) continue;
-      if (entry.effective !== "handoff") continue;
+      if (entry.rebirthTo || entry.path.length || entry.held) continue;
+      if (entry.effective !== "rebirth") continue;
       const bay = machine.bays.find(
         (item) =>
           Math.hypot(

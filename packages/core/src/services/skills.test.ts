@@ -114,17 +114,27 @@ describe("SkillService", () => {
     await withSkillHomes(
       async ({ context, home, claudeHome, agentsHome, codexHome }) => {
         await context.skills.sync();
-        // The handoff skill is a slash command with an argument slot, and it
-        // is what the automatic handoff and `agent handoff` refer to.
+        // The rebirth skill is a slash command with an argument slot, and it
+        // is what the automatic rebirth and `agent rebirth` refer to.
+        const rebirth = await readFile(
+          join(claudeHome, "skills", "daedalus-rebirth", "SKILL.md"),
+          "utf8",
+        );
+        expect(rebirth).toContain("name: daedalus-rebirth");
+        expect(rebirth).toContain("$ARGUMENTS");
+        expect(rebirth).toContain(
+          `"${join(home, "bin", "daedal")}" agent continue --note-file`,
+        );
+        // Handoff spins a side matter out into its own task and session.
         const handoff = await readFile(
           join(claudeHome, "skills", "daedalus-handoff", "SKILL.md"),
           "utf8",
         );
         expect(handoff).toContain("name: daedalus-handoff");
-        expect(handoff).toContain("$ARGUMENTS");
         expect(handoff).toContain(
-          `"${join(home, "bin", "daedal")}" agent continue --handoff-file`,
+          `"${join(home, "bin", "daedal")}" task create --title`,
         );
+        expect(handoff).toContain("agent spawn --task");
         // The routine skills name this home's CLI by its full path.
         const routine = await readFile(
           join(claudeHome, "skills", "daedalus-routine", "SKILL.md"),
@@ -133,8 +143,8 @@ describe("SkillService", () => {
         expect(routine).toContain(`"${join(home, "bin", "daedal")}"`);
         expect(routine).not.toContain("{{daedal}}");
         expect(
-          await readlink(join(agentsHome, "skills", "daedalus-handoff")),
-        ).toBe(join(home, "skills", "daedalus-handoff"));
+          await readlink(join(agentsHome, "skills", "daedalus-rebirth")),
+        ).toBe(join(home, "skills", "daedalus-rebirth"));
         expect(
           await readFile(
             join(claudeHome, "skills", "daedalus-control", "SKILL.md"),

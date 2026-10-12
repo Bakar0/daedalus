@@ -39,10 +39,10 @@ export interface WorldPreview {
   /** How far the pretend crate has got, or null for none. */
   crateStep: number | null;
   /**
-   * A pretend handoff by the first agent: 0 while it writes its note, 1
+   * A pretend rebirth by the first agent: 0 while it writes its note, 1
    * once its successor has started. Null for none.
    */
-  handoffStep?: 0 | 1 | null;
+  rebirthStep?: 0 | 1 | null;
   /** Every agent wears a session color, one each in turn. */
   colors?: boolean;
 }
@@ -61,8 +61,8 @@ const PREVIEW_COLORS: readonly SessionColorDto[] = [
   "pink",
 ];
 
-/** Seconds each pretend handoff step lasts, long enough to watch. */
-export const HANDOFF_STEPS = [15, 10];
+/** Seconds each pretend rebirth step lasts, long enough to watch. */
+export const REBIRTH_STEPS = [15, 10];
 
 /**
  * The model with the preview applied. The pretend crate belongs to the
@@ -74,11 +74,11 @@ export function previewModel(
   model: WorldModel,
   preview: WorldPreview,
 ): WorldModel {
-  const handoffStep = preview.handoffStep ?? null;
+  const rebirthStep = preview.rebirthStep ?? null;
   if (
     preview.context === "off" &&
     preview.crateStep === null &&
-    handoffStep === null &&
+    rebirthStep === null &&
     !preview.colors
   )
     return model;
@@ -97,15 +97,15 @@ export function previewModel(
       color: PREVIEW_COLORS[index % PREVIEW_COLORS.length]!,
     }));
   const owner = model.actors[0];
-  // The first agent hands off: nearly out of context, it waits at the
+  // The first agent is reborn: nearly out of context, it waits at the
   // machine writing, then a fresh successor takes its place.
   const leaving = actors[0];
-  if (leaving && handoffStep === 0)
+  if (leaving && rebirthStep === 0)
     actors = [
-      { ...leaving, place: "handoff", contextPercent: 92 },
+      { ...leaving, place: "rebirth", contextPercent: 92 },
       ...actors.slice(1),
     ];
-  if (leaving && handoffStep === 1)
+  if (leaving && rebirthStep === 1)
     actors = [
       {
         ...leaving,

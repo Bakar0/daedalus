@@ -33,7 +33,7 @@ const snapshot = {
       available: true,
       position: 1,
       startSetsInProgress: true,
-      autoHandoffPercent: null,
+      autoRebirthPercent: null,
       defaultProvider: null,
       defaultModel: null,
       defaultClaudeAccount: null,

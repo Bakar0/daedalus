@@ -81,13 +81,13 @@ export interface WorldTheme {
     look: WorldLook,
   ): ((time: number, zones: readonly WorldZone[]) => void) | void;
   /**
-   * The handoff machine, as bays: an agent handing off stands in a bay's
-   * `from` (the shared place "handoff" puts it there) while it writes its
+   * The rebirth machine, as bays: an agent being reborn stands in a bay's
+   * `from` (the shared place "rebirth" puts it there) while it writes its
    * note and is scanned; when its successor starts, it comes apart,
    * streams to the same bay's `to`, and is put back together there as its
    * successor, which walks on. Without it a successor arrives from home.
    */
-  handoff?: {
+  rebirth?: {
     bays: ReadonlyArray<{
       from: WorldPoint;
       to: WorldPoint;

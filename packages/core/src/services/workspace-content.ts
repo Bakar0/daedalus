@@ -2727,7 +2727,7 @@ export class WorkspaceContentService {
   // Called only when an archived session is deleted for good. Its worktrees
   // go with their branches, whatever they hold. Its folder goes too, but only
   // a folder Daedalus made under `worktrees/` that no other session runs in:
-  // a session continued by handoff shares its predecessor's folder.
+  // a session continued by rebirth shares its predecessor's folder.
   async discardSessionFiles(session: AgentSession): Promise<void> {
     for (const worktree of this.repositories.listSessionWorktrees({
       sessionId: session.id,
@@ -4165,7 +4165,7 @@ export class WorkspaceContentService {
       | "progress"
       | "blocker"
       | "question"
-      | "handoff"
+      | "rebirth"
       | "completed";
     summary: string;
   }): Promise<void> {

@@ -415,8 +415,8 @@ export function layoutFor(id: string): RoomLayout {
 /** Standing spots for a place in this room, before mirroring and scaling. */
 export function roomSpots(layout: RoomLayout, place: WorldPlace): WorldPoint[] {
   if (place === "door") return [{ x: DOOR_X - 8, y: FLOOR }];
-  // Heading out to hand off: by the door, on its way to the lift.
-  if (place === "handoff")
+  // Heading out to be reborn: by the door, on its way to the lift.
+  if (place === "rebirth")
     return [
       { x: DOOR_X - 30, y: FLOOR },
       { x: DOOR_X - 70, y: FLOOR },

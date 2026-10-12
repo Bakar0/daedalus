@@ -22,11 +22,11 @@ export type AbilityId = "routines" | "orchestration";
 
 /**
  * An ability a session holds. Its data hangs off `id`, which stays the same
- * when a handoff moves the ability to the successor session.
+ * when a rebirth moves the ability to the successor session.
  */
 export interface SessionAbility {
   id: UUID;
-  /** The current session; a handoff moves it to the successor. */
+  /** The current session; a rebirth moves it to the successor. */
   sessionId: UUID;
   ability: AbilityId;
   /** False after a revoke. The row and its data stay for a later grant. */

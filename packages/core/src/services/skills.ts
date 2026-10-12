@@ -60,6 +60,8 @@ import daedalusControlSkillTemplate from "../../../../skills/daedalus-control/SK
 import daedalusControlCliReference from "../../../../skills/daedalus-control/references/cli.md" with { type: "text" };
 import daedalusControlOpenAiMetadata from "../../../../skills/daedalus-control/agents/openai.yaml" with { type: "text" };
 import unslopSkillTemplate from "../../../../skills/unslop/SKILL.md" with { type: "text" };
+import rebirthSkillTemplate from "../../../../skills/daedalus-rebirth/SKILL.md" with { type: "text" };
+import rebirthOpenAiMetadata from "../../../../skills/daedalus-rebirth/agents/openai.yaml" with { type: "text" };
 import handoffSkillTemplate from "../../../../skills/daedalus-handoff/SKILL.md" with { type: "text" };
 import handoffOpenAiMetadata from "../../../../skills/daedalus-handoff/agents/openai.yaml" with { type: "text" };
 import refinementSkillTemplate from "../../../../skills/daedalus-refinement/SKILL.md" with { type: "text" };
@@ -136,10 +138,23 @@ export const MANAGED_SKILLS: readonly ManagedSkillDefinition[] = [
     ],
   },
   {
+    id: "daedalus-rebirth",
+    title: "Rebirth",
+    summary:
+      "Adds /daedalus-rebirth: the agent writes a note and continues as a fresh session with an empty context, in the same working directory and the same state: still waiting on you if it was, still working if it was. Extra words after the command say how to continue.",
+    supportsAlways: false,
+    defaultEnabled: true,
+    defaultMode: "on-demand",
+    skillFiles: [
+      { path: "SKILL.md", contents: rebirthSkillTemplate },
+      { path: "agents/openai.yaml", contents: rebirthOpenAiMetadata },
+    ],
+  },
+  {
     id: "daedalus-handoff",
     title: "Handoff",
     summary:
-      "Adds /daedalus-handoff: the agent writes a handoff note and continues its work in a fresh session with an empty context, in the same working directory. Extra words after the command go to the next agent.",
+      "Adds /daedalus-handoff <what>: the agent writes a brief for something that came up, creates a task for it, starts a session on that task, and goes back to what it was doing.",
     supportsAlways: false,
     defaultEnabled: true,
     defaultMode: "on-demand",

@@ -35,7 +35,7 @@ Every workspace has this visible structure:
 `BRIEF.md` is concise, current, provider-neutral context: objective, scope,
 decisions, active work, blockers, and next steps. `JOURNAL.md` is chronological
 history. Journal entries use the kinds `decision`, `progress`, `blocker`,
-`question`, `handoff`, and `completed`; these kinds can later drive developer
+`question`, `rebirth`, and `completed`; these kinds can later drive developer
 attention indicators. Daedalus-owned journal appends must be serialized and
 must never use an unsafe read-modify-write sequence.
 

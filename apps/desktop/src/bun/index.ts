@@ -753,12 +753,12 @@ setInterval(async () => {
       tmux: context.tmux,
     }).catch(() => undefined);
     await context.activity.decay().catch(() => undefined);
-    // Automatic handoff rides the same tick. Telemetry is cached for five
+    // Automatic rebirth rides the same tick. Telemetry is cached for five
     // seconds, so this is a map lookup on most ticks.
     await context.telemetry
       .read()
       .then((telemetry) =>
-        context.agents.sweepAutoHandoffs(telemetry.sessionTelemetry),
+        context.agents.sweepAutoRebirths(telemetry.sessionTelemetry),
       )
       .catch(() => undefined);
     // Routines ride the tick too: the clock lives in the app, so nothing
