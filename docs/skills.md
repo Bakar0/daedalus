@@ -195,7 +195,7 @@ appears in the panel like any other, with a Remove button.
 
 ### The daedalus-refinement skill
 
-Draft brief starts its session with this skill: the launch prompt is
+Refine starts its session with this skill: the launch prompt is
 `/daedalus-refinement` (or `$daedalus-refinement` in Codex) followed by the
 draft instruction, which the skill reads as its arguments. The agent reads the
 task, `BRIEF.md`, the journal and the repositories, then questions the user in
@@ -205,8 +205,8 @@ the brief with `daedal task update --description-file -` once the user
 confirms the summary. It writes nothing else: decisions, pinned-down terms,
 scope and checks all go into the brief.
 
-When the skill is turned off, or the provider is not Claude or Codex, Draft
-brief launches with the plain instruction and the agent drafts the brief
+When the skill is turned off, or the provider is not Claude or Codex, Refine
+launches with the plain instruction and the agent drafts the brief
 without asking. The skill is adapted from Matt Pocock's `grilling` and
 `domain-modeling` skills (MIT). A dev build installs it as
 `/daedalus-refinement-dev`.

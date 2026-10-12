@@ -152,7 +152,7 @@ export const MANAGED_SKILLS: readonly ManagedSkillDefinition[] = [
     id: "daedalus-refinement",
     title: "Refinement",
     summary:
-      "Adds /daedalus-refinement, which Draft brief starts with: the agent questions the user about the task in rounds until every decision is settled, then writes the brief back. Turned off, Draft brief writes the brief from the workspace without asking.",
+      "Adds /daedalus-refinement, which Refine starts with: the agent questions the user about the task in rounds until every decision is settled, then writes the brief back. Turned off, Refine writes the brief from the workspace without asking.",
     supportsAlways: false,
     defaultEnabled: true,
     defaultMode: "on-demand",

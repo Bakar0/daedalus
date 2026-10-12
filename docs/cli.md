@@ -90,7 +90,7 @@ daedal agent models <codex|claude> [--account <account>]
 daedal agent spawn --workspace <workspace> --provider codex [--task <task-ref>] [--model <model>] [--account <account>] [--message <text>]
 daedal agent spawn --workspace <workspace> --provider claude [--task <task-ref>] [--model <model>] [--account <account>] [--message <text>]
 daedal agent spawn --workspace <workspace> --command <configured-name> [--task <task-ref>] [--message <text>]
-daedal agent spawn --workspace <workspace> --provider <codex|claude> --task <task-ref> --draft-brief
+daedal agent spawn --workspace <workspace> --provider <codex|claude> --task <task-ref> --refine
 daedal agent spawn ... [--ability routines|orchestration] [--color <color>] [--pin]
 daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>] [--model <model>] [--account <account>] [--user]
 daedal agent list [--workspace <workspace>] [--running]
@@ -113,7 +113,7 @@ daedal agent remove <agent-id>
 
 Built-in provider definitions come from `config.json`. Named custom definitions use `--command`. Executables and arguments are always passed as arrays. A task-backed launch receives only `Execute task #<number>` plus optional `--message` guidance; the installed skill supplies the workflow, so task content and CLI instructions are not duplicated in the prompt. Claude and Codex receive the prompt through their native initial-prompt argument, while custom launches receive it in `DAEDALUS_TASK_PROMPT`. Daedalus never types the initial prompt into the terminal. Agent processes receive their current session, workspace, internal task ID, and task number through `DAEDALUS_SESSION_ID`, `DAEDALUS_WORKSPACE_ID`, `DAEDALUS_TASK_ID`, and `DAEDALUS_TASK_NUMBER`, and their working folder through `DAEDALUS_SESSION_DIRECTORY`. These variables are restored when a session resumes.
 
-`--draft-brief` links the session to the task but asks it to write the brief instead of doing the work: its one instruction is to read the workspace and send the brief back with `task update <number> --description-file -`. When the `daedalus-refinement` skill is installed, the instruction starts with it, so the agent questions the user about the task before it writes the brief. It leaves the task's status alone.
+`--refine` links the session to the task but asks it to write the brief instead of doing the work. Its instruction starts with the `daedalus-refinement` skill, so the agent questions the user about the task in rounds, then sends the brief back with `task update <number> --description-file -`. With the skill turned off, the agent reads the workspace and writes the brief without asking. It leaves the task's status alone.
 
 `agent continue` hands a session's work to a fresh session with an empty context. The new session gets the same task and runs in the old one's working directory, and the old session's worktree rows move to it before the provider starts, so it never tries to create them again. It keeps the provider and the `--model` the old session launched with unless `--provider` or `--model` say otherwise. `--handoff-file` (or `-` for stdin) is written to `HANDOFF.md` in that directory, and the launch prompt tells the new agent to read it and check git before relying on it. Without a note the prompt points it at the brief, `JOURNAL.md` and git instead. The old session is then archived, so its conversation stays restorable, and it leaves the task's status alone.
 

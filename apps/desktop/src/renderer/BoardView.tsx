@@ -991,10 +991,10 @@ export function BoardView(props: BoardViewProps) {
                   event.stopPropagation();
                   props.onDraftBrief(task);
                 }}
-                title="Start a session that reads the workspace and writes this brief"
+                title="Start a session that questions you about this task, then writes its brief"
                 type="button"
               >
-                Draft brief
+                Refine
               </button>
             )}
             {startable && (

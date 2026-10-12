@@ -1187,7 +1187,7 @@ export class AgentService {
   }
 
   /**
-   * How a Draft brief session starts the refinement skill, or nothing when
+   * How a Refine session starts the refinement skill, or nothing when
    * the provider has no skills or the user turned the skill off; the session
    * then drafts the brief without interviewing.
    */

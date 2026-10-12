@@ -80,8 +80,8 @@ list`, `repo list`, or `agent list`.
   session moves a `todo` or `blocked` task to `in_progress` on its own when the
   workspace's `--start-sets-in-progress` setting is on, which is the default.
   Everything else about status is the user's call.
-- To have an agent write a task's brief rather than do the task, spawn with
-  `--draft-brief`. Hand long briefs over with `task update <ref>
+- To have an agent question the user and write a task's brief rather than do
+  the task, spawn with `--refine`. Hand long briefs over with `task update <ref>
 --description-file <path>`, or `-` for stdin, rather than quoting them into
   `--description`.
 - When your context is nearly full, or you are asked to hand off, use the

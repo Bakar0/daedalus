@@ -964,7 +964,7 @@ export function buildSkillInvocation(
   return args.trim() ? `${invocation} ${args.trim()}` : invocation;
 }
 
-/** The skill a Draft brief session starts with, when it is installed. */
+/** The skill a Refine session starts with, when it is installed. */
 export const REFINEMENT_SKILL = "daedalus-refinement";
 
 export function buildAgentPrompt(input: {

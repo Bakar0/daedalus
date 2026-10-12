@@ -123,7 +123,7 @@ describe("taskActions", () => {
     expect(actions.liveSession).toBeUndefined();
   });
 
-  test("an empty brief on a startable task offers Draft brief", () => {
+  test("an empty brief on a startable task offers Refine", () => {
     expect(
       actionsFor(task(1, { description: "  " }), inputs({})).canDraftBrief,
     ).toBe(true);

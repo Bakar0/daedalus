@@ -1,6 +1,6 @@
 ---
 name: daedalus-refinement
-description: Refine a task with the user before its brief is written. Interview them in rounds about the idea, find the gaps, unknowns and fuzzy terms, settle each decision, then write the brief back to the task. Use when Daedalus starts a Draft brief session, when the user wants an idea stress-tested or refined, or says "grill me" or "refine this".
+description: Refine a task with the user before its brief is written. Interview them in rounds about the idea, find the gaps, unknowns and fuzzy terms, settle each decision, then write the brief back to the task. Use when Daedalus starts a Refine session, when the user wants an idea stress-tested or refined, or says "grill me" or "refine this".
 argument-hint: "[task number or what to refine]"
 ---
 

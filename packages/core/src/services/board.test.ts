@@ -143,7 +143,7 @@ describe("starting a task", () => {
     });
   });
 
-  test("a draft-brief session is linked to the task without starting it", async () => {
+  test("a Refine session is linked to the task without starting it", async () => {
     await withBoardContext(async (context, tmux) => {
       const workspace = await context.workspaces.create({ name: "Drafts" });
       const task = await context.tasks.create({
@@ -174,7 +174,7 @@ describe("starting a task", () => {
     });
   });
 
-  test("a draft-brief session starts with the refinement skill when it is installed", async () => {
+  test("a Refine session starts with the refinement skill when it is installed", async () => {
     await withBoardContext(async (context, tmux) => {
       await context.skills.sync();
       const workspace = await context.workspaces.create({ name: "Refine" });
@@ -191,7 +191,7 @@ describe("starting a task", () => {
       expect(tmux.launches[0]!.args.at(-1)!).toBe(
         `$daedalus-refinement Draft the brief for task #${task.number}. Read the workspace, then write the brief back with \`daedal task update ${task.number} --description-file -\`. Do not start the task itself.`,
       );
-      // Turned off, Draft brief writes the brief without the interview.
+      // Turned off, Refine writes the brief without the interview.
       await context.skills.setEnabled("daedalus-refinement", false);
       await context.agents.spawn({
         workspace: workspace.id,

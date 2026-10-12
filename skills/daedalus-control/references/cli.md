@@ -57,7 +57,7 @@ library ID.
 
 ```text
 daedal agent models <codex|claude> [--account <account>]
-daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <configured-name>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--draft-brief] [--ability routines|orchestration] [--color <color>] [--pin]
+daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <configured-name>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine] [--ability routines|orchestration] [--color <color>] [--pin]
 daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>]
 daedal agent list [--workspace <workspace>] [--running|--archived]
 daedal agent get <agent-id>
@@ -92,8 +92,8 @@ keeps its exact name; any other, a team's lead included, gets ` · 2`.
 
 `agent spawn --task` moves a `todo` or `blocked` task to `in_progress` when the
 workspace's `--start-sets-in-progress` setting is on (the default); do not set
-it again yourself. `--draft-brief` links the session to the task but asks it to
-write the brief rather than do the work, and leaves the status alone.
+it again yourself. `--refine` links the session to the task but asks it to
+question the user and write the brief rather than do the work, and leaves the status alone.
 
 `agent continue` moves a session's work to a fresh one with an empty context:
 the same task, working directory and worktrees, and the same provider and model

@@ -432,7 +432,7 @@ it was cleared, journal entries whose heading names the task, and done.`,
   daedal repo worktree remove --session <agent-id> --repository <name-or-id> [--force]`,
   agent: `Agent commands:
   daedal agent models <codex|claude> [--account <account>]
-  daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--draft-brief]
+  daedal agent spawn --workspace <workspace> (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine]
   daedal agent spawn ... [--ability <ability>[,<ability>]] [--color <color>] [--pin]
   daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>] [--user]
   daedal agent list [--workspace <workspace>] [--running|--archived]
@@ -463,9 +463,9 @@ own. The app runs the same sweep at startup unless it is turned off.
 
 'agent spawn --task' moves a todo or blocked task to in_progress when the
 workspace's --start-sets-in-progress setting is on, which is the default.
---draft-brief links the session to the task but asks it to write the brief
-back with 'task update --description-file -' instead of doing the task, and
-leaves the status alone.
+--refine links the session to the task but asks it to question the user about
+the task and write the brief back with 'task update --description-file -'
+instead of doing the task, and leaves the status alone.
 
 'agent spawn --ability routines' starts a session that holds the routines
 ability: the user asks it for routines and Daedalus types their runs into
@@ -1197,7 +1197,7 @@ async function agentCommand(
         "ability",
         "color",
       ],
-      ["draft-brief", "pin", "user"],
+      ["refine", "pin", "user"],
     );
     expectPositionals(
       parsed.positionals,
@@ -1234,7 +1234,7 @@ async function agentCommand(
         ? { account: parsed.values.account }
         : {}),
       message: parsed.values.message,
-      draftBrief: parsed.flags.has("draft-brief") || undefined,
+      draftBrief: parsed.flags.has("refine") || undefined,
       ...(parsed.values.ability
         ? {
             abilities: parsed.values.ability

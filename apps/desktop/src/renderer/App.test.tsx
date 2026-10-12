@@ -1309,7 +1309,7 @@ describe("desktop application shell", () => {
     const drawerHtml = html.slice(html.indexOf('class="task-drawer"'));
     expect(drawerHtml).toContain('aria-label="Task status"');
     expect(drawerHtml).not.toContain("<select");
-    // Edit, Draft brief and Delete live in the action bar under the pills
+    // Edit, Refine and Delete live in the action bar under the pills
     // (#34), not in the heading and not in bordered rows under the timeline.
     // The heading keeps only Close.
     const headingHtml = drawerHtml.slice(
@@ -1425,12 +1425,12 @@ describe("desktop application shell", () => {
     expect(html).toContain("Depends on / Unblocks");
     expect(html).toContain("<dt>Unblocks</dt>");
     expect(html).toContain("<dt>Mentioned by</dt>");
-    // Draft brief is a bar button for every task and the card's only while
+    // Refine is a bar button for every task and the card's only while
     // the brief is empty; the overflow menu holds Delete alone.
-    expect(html).not.toContain("Draft brief with agent");
-    expect(html).toContain(">Draft brief</button>");
+    expect(html).not.toContain("Refine with agent");
+    expect(html).toContain(">Refine</button>");
     expect(html.slice(html.indexOf('class="task-drawer"'))).toContain(
-      "Draft brief</button>",
+      "Refine</button>",
     );
     // The waiting task sinks below the ready ones in Queued.
     expect(html.indexOf('data-task-number="12"')).toBeLessThan(
