@@ -167,6 +167,7 @@ let current: DesktopSnapshotDto = {
       defaultModel: null,
       defaultClaudeAccount: null,
       defaultCodexAccount: null,
+      accountModels: {},
     },
   ],
   tasks: [],

@@ -1860,6 +1860,12 @@ button:not(
   color: #dce5f2;
   font-weight: 620;
 }
+/* An estimate, so it sits quietly before the context reading. */
+.agent-session-cost {
+  color: #8290a9;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .agent-session-status-model {
   color: #8290a9;
   font-size: 11px;
@@ -7150,6 +7156,10 @@ dd {
 /* An account with no reading yet: present, but saying nothing. */
 .provider-usage-none {
   color: var(--faint);
+}
+/* A usage-billed account's estimated spend today, in place of plan windows. */
+.provider-usage-cost {
+  font-variant-numeric: tabular-nums;
 }
 /* A session on a non-default account names it on its card. */
 .session-account-chip {

@@ -75,16 +75,43 @@ export interface AccountProfile {
   /**
    * How it authenticates. `login` (the default) signs in through the
    * provider's own login; `api-key` is a Claude account whose key Daedalus
-   * keeps in the login Keychain and Claude reads through `apiKeyHelper`.
+   * keeps in the login Keychain and Claude reads through `apiKeyHelper`;
+   * `bedrock` is a Claude account that calls Amazon Bedrock with an AWS
+   * profile's credentials, usually an IAM Identity Center (SSO) login.
    */
-  kind?: "login" | "api-key";
+  kind?: AccountKind;
   /**
    * Which of Claude's logins Sign in runs for a `login` account: its
    * subscription (the default), SSO, or the Anthropic Console. Chosen when
    * the account is added, so signing in again is one click.
    */
   login?: ClaudeLogin;
+  /** A `bedrock` account's AWS profile and the region Bedrock is called in. */
+  aws?: AwsTarget;
 }
+
+export type AccountKind = "login" | "api-key" | "bedrock";
+
+/**
+ * Where a Bedrock account sends its requests. Both values end up in a
+ * command Claude runs through a shell (`awsAuthRefresh`), so they are kept to
+ * the characters AWS itself allows in them.
+ */
+export interface AwsTarget {
+  profile: string;
+  region: string;
+}
+
+const AWS_PROFILE = /^[A-Za-z0-9][A-Za-z0-9._+@-]{0,63}$/;
+const AWS_REGION = /^[a-z]{2}(-[a-z]+)+-\d{1,2}$/;
+
+export const isAwsTarget = (value: unknown): value is AwsTarget =>
+  typeof value === "object" &&
+  value !== null &&
+  typeof (value as AwsTarget).profile === "string" &&
+  AWS_PROFILE.test((value as AwsTarget).profile) &&
+  typeof (value as AwsTarget).region === "string" &&
+  AWS_REGION.test((value as AwsTarget).region);
 
 /** Claude's three logins. */
 export type ClaudeLogin = "subscription" | "sso" | "console";
@@ -177,6 +204,11 @@ export interface DaedalusConfig {
   accounts: AccountProfile[];
   /** Which login Sign in runs for each provider's default account. */
   defaultLogins: { claude?: ClaudeLogin };
+  /**
+   * The AWS CLI Bedrock accounts check and sign in with. Found on `PATH`
+   * when not set.
+   */
+  awsExecutable?: string;
 }
 
 type StoredConfig = Partial<
@@ -200,6 +232,7 @@ type StoredConfig = Partial<
   claudeOutputStyleWritten?: string;
   accounts?: AccountProfile[];
   defaultLogins?: { claude?: unknown };
+  awsExecutable?: unknown;
 };
 
 /** The Daedalus relay phones reach this Mac through (see `apps/relay`). */
@@ -329,6 +362,9 @@ export async function loadConfig(
       CLAUDE_LOGINS.includes(stored.defaultLogins.claude)
         ? { claude: stored.defaultLogins.claude as ClaudeLogin }
         : {},
+    ...(typeof stored.awsExecutable === "string" && stored.awsExecutable
+      ? { awsExecutable: stored.awsExecutable }
+      : {}),
   };
 }
 
@@ -352,7 +388,10 @@ function storedAccounts(value: unknown): AccountProfile[] {
       typeof entry.createdAt === "string" &&
       (entry.kind === undefined ||
         entry.kind === "login" ||
-        (entry.kind === "api-key" && entry.provider === "claude")) &&
+        (entry.kind === "api-key" && entry.provider === "claude") ||
+        (entry.kind === "bedrock" &&
+          entry.provider === "claude" &&
+          isAwsTarget(entry.aws))) &&
       (entry.login === undefined ||
         (entry.provider === "claude" && CLAUDE_LOGINS.includes(entry.login))),
   );

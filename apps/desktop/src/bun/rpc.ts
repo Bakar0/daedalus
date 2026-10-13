@@ -134,9 +134,10 @@ const accountDto = (
   directory: accountDirectory(context.config, profile),
   createdAt: profile.createdAt,
   kind: profile.kind ?? "login",
-  ...(profile.provider === "claude" && profile.kind !== "api-key"
+  ...(profile.provider === "claude" && (profile.kind ?? "login") === "login"
     ? { login: profile.login ?? "subscription" }
     : {}),
+  ...(profile.aws ? { aws: { ...profile.aws } } : {}),
 });
 const integratedTerminalDto = (
   terminal: IntegratedTerminal,
@@ -998,11 +999,18 @@ export function createDesktopRequestHandlers(
             : {}),
         })),
       ),
-    accountAdd: ({ provider, name, kind, login }) =>
+    accountAdd: ({ provider, name, kind, login, aws }) =>
       mutate(async () =>
         accountDto(
           context,
-          await context.accounts.add(provider, name, kind, login),
+          await context.accounts.add(provider, name, kind, login, aws),
+        ),
+      ),
+    accountSetAws: ({ provider, account, aws }) =>
+      mutate(async () =>
+        accountDto(
+          context,
+          await context.accounts.setAws(provider, account, aws),
         ),
       ),
     accountSetLogin: ({ provider, account, login }) =>

@@ -13,7 +13,9 @@ export const accountHelp = `Account commands:
   daedal account list
   daedal account status [<claude|codex> [<account>]]
   daedal account add <claude|codex> <name> [--api-key | --sso | --console]
+  daedal account add claude <name> --bedrock --aws-profile <profile> --aws-region <region>
   daedal account method claude <account> <subscription|sso|console>
+  daedal account aws claude <account> --aws-profile <profile> --aws-region <region>
   daedal account key claude <account>          (reads the key from stdin)
   daedal account rename <claude|codex> <account> <name>
   daedal account remove <claude|codex> <account> --force [--archive-sessions]
@@ -38,6 +40,16 @@ API key instead of a login. 'account key' reads the key from standard input,
 never from an argument, and stores it in the macOS login Keychain; the
 account's settings.json gets an apiKeyHelper that reads it from there, so no
 file holds the key. 'account logout' on such an account removes the key.
+
+'account add claude <name> --bedrock' makes an account that runs Claude on
+Amazon Bedrock with an AWS profile's credentials, usually an IAM Identity
+Center (SSO) login set up with 'aws configure sso'. Its settings.json sets
+CLAUDE_CODE_USE_BEDROCK, AWS_PROFILE and AWS_REGION, and an awsAuthRefresh
+that runs 'aws sso login' when the token expires. 'account login' runs
+'aws sso login --profile <profile>'; 'account status' asks AWS whether the
+profile's credentials work. 'account logout' is refused, because
+'aws sso logout' ends every SSO session on the Mac. 'account aws' changes the
+profile or region.
 
 A session runs on the account it was spawned on for its whole life, through
 restore, revive and rebirth. 'agent spawn --account' picks one; without it a
@@ -75,6 +87,21 @@ function printStatuses(statuses: AccountStatus[]): void {
       for (const install of INSTALL_COMMANDS[status.provider])
         console.log(`  install (${install.label}): ${install.command}`);
   }
+}
+
+/** `--aws-profile` and `--aws-region`, both required. */
+function awsTarget(values: Record<string, string>): {
+  profile: string;
+  region: string;
+} {
+  const profile = values["aws-profile"];
+  const region = values["aws-region"];
+  if (!profile || !region)
+    throw new DaedalusError(
+      "VALIDATION",
+      "A Bedrock account needs --aws-profile and --aws-region",
+    );
+  return { profile, region };
 }
 
 export async function accountCommand(
@@ -115,36 +142,69 @@ export async function accountCommand(
     return 0;
   }
   if (action === "add") {
-    const parsed = parseArguments(args, [], ["api-key", "sso", "console"]);
+    const parsed = parseArguments(
+      args,
+      ["aws-profile", "aws-region"],
+      ["api-key", "bedrock", "sso", "console"],
+    );
     expectPositionals(
       parsed.positionals,
       2,
-      "daedal account add <claude|codex> <name> [--api-key | --sso | --console]",
+      "daedal account add <claude|codex> <name> [--api-key | --bedrock | --sso | --console]",
     );
     if (
       [...parsed.flags].filter((flag) =>
-        ["api-key", "sso", "console"].includes(flag),
+        ["api-key", "bedrock", "sso", "console"].includes(flag),
       ).length > 1
     )
       throw new DaedalusError(
         "VALIDATION",
-        "Choose one of --api-key, --sso and --console",
+        "Choose one of --api-key, --bedrock, --sso and --console",
+      );
+    const bedrock = parsed.flags.has("bedrock");
+    if (
+      !bedrock &&
+      (parsed.values["aws-profile"] || parsed.values["aws-region"])
+    )
+      throw new DaedalusError(
+        "VALIDATION",
+        "--aws-profile and --aws-region go with --bedrock",
       );
     const result = await context.accounts.add(
       parsed.positionals[0]!,
       parsed.positionals[1]!,
-      parsed.flags.has("api-key") ? "api-key" : "login",
+      parsed.flags.has("api-key") ? "api-key" : bedrock ? "bedrock" : "login",
       parsed.flags.has("sso")
         ? "sso"
         : parsed.flags.has("console")
           ? "console"
           : undefined,
+      bedrock ? awsTarget(parsed.values) : undefined,
     );
     printResult(result, json, () =>
       console.log(
         result.kind === "api-key"
           ? `Added ${result.provider} account ${result.name} (${result.id}). Give it its key with: daedal account key ${result.provider} ${JSON.stringify(result.name)}`
           : `Added ${result.provider} account ${result.name} (${result.id}). Sign it in with: daedal account login ${result.provider} ${JSON.stringify(result.name)}`,
+      ),
+    );
+    return 0;
+  }
+  if (action === "aws") {
+    const parsed = parseArguments(args, ["aws-profile", "aws-region"]);
+    expectPositionals(
+      parsed.positionals,
+      2,
+      "daedal account aws claude <account> --aws-profile <profile> --aws-region <region>",
+    );
+    const result = await context.accounts.setAws(
+      parsed.positionals[0]!,
+      parsed.positionals[1]!,
+      awsTarget(parsed.values),
+    );
+    printResult(result, json, () =>
+      console.log(
+        `${result.name} now uses the AWS profile ${result.aws?.profile} in ${result.aws?.region}`,
       ),
     );
     return 0;

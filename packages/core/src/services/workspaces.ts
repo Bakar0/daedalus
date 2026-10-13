@@ -11,7 +11,12 @@ import {
   removeDirectory,
   writeTextFile,
 } from "@daedalus/platform";
-import type { Workspace } from "../domain";
+import {
+  accountModelKey,
+  derivedDefaultModel,
+  workspaceDefaultAccount,
+  type Workspace,
+} from "../domain";
 import { DaedalusError } from "../errors";
 import { isValidModelName } from "./providers";
 import type { SqliteRepositories } from "../repositories";
@@ -163,6 +168,7 @@ export class WorkspaceService {
       autoRebirthPercent: null,
       defaultProvider: null,
       defaultModel: null,
+      accountModels: {},
       defaultClaudeAccount,
       defaultCodexAccount,
     };
@@ -273,10 +279,23 @@ export class WorkspaceService {
       autoRebirthPercent?: number | null;
       /** `null` clears it back to "no preference". */
       defaultProvider?: string | null;
+      /**
+       * The model of the default provider on its default account (after
+       * this change's provider and accounts apply); `null` clears it.
+       */
       defaultModel?: string | null;
       /** A profile id or name; `null` or `default` is the default account. */
       defaultClaudeAccount?: string | null;
       defaultCodexAccount?: string | null;
+      /**
+       * The model one provider account starts with; `null` clears it, so the
+       * account starts on the provider's own default.
+       */
+      accountModel?: {
+        provider: string;
+        account: string | null;
+        model: string | null;
+      };
     },
   ): Promise<Workspace> {
     const workspace = await this.get(reference);
@@ -289,12 +308,12 @@ export class WorkspaceService {
       changes.defaultProvider === undefined
         ? workspace.defaultProvider
         : boardProvider(changes.defaultProvider);
-    const defaultModel =
-      changes.defaultModel === undefined
-        ? workspace.defaultModel
-        : changes.defaultModel?.trim() || null;
-    if (defaultModel !== null && !isValidModelName(defaultModel))
-      throw new DaedalusError("VALIDATION", "Default model name is invalid");
+    const model = (value: string | null | undefined): string | null => {
+      const trimmed = value?.trim() || null;
+      if (trimmed !== null && !isValidModelName(trimmed))
+        throw new DaedalusError("VALIDATION", "Default model name is invalid");
+      return trimmed;
+    };
     const slug =
       changes.slug === undefined ? workspace.slug : workspaceSlug(changes.slug);
     const collision = this.repositories.findWorkspace(slug);
@@ -314,14 +333,7 @@ export class WorkspaceService {
           ? workspace.autoRebirthPercent
           : autoRebirthPercent(changes.autoRebirthPercent),
       defaultProvider,
-      // A model belongs to a provider. Changing the provider without naming a
-      // model drops the old one rather than launching Codex with a Claude id.
-      defaultModel:
-        changes.defaultProvider !== undefined &&
-        changes.defaultModel === undefined &&
-        defaultProvider !== workspace.defaultProvider
-          ? null
-          : defaultModel,
+      accountModels: { ...workspace.accountModels },
       defaultClaudeAccount:
         changes.defaultClaudeAccount === undefined
           ? workspace.defaultClaudeAccount
@@ -332,14 +344,47 @@ export class WorkspaceService {
           : this.resolveAccount("codex", changes.defaultCodexAccount),
       updatedAt: new Date().toISOString(),
     };
-    // The same rule from the other side: a model with no provider to belong
-    // to would apply to whichever provider happened to be installed first,
-    // which is the drift this setting exists to stop.
-    if (updated.defaultModel && !updated.defaultProvider)
-      throw new DaedalusError(
-        "VALIDATION",
-        "A default model belongs to a provider; set the default provider as well",
+    // A model belongs to one provider account, so each is kept under its
+    // own key. Changing the provider or account changes which one applies;
+    // it never carries a Claude id over to Codex, or a subscription's id to
+    // a Bedrock account.
+    const setModel = (key: string, value: string | null) => {
+      if (value === null) delete updated.accountModels[key];
+      else updated.accountModels[key] = value;
+    };
+    if (changes.defaultModel !== undefined) {
+      // A model with no provider to belong to would apply to whichever
+      // provider happened to be installed first.
+      if (!defaultProvider)
+        throw new DaedalusError(
+          "VALIDATION",
+          "A default model belongs to a provider; set the default provider as well",
+        );
+      setModel(
+        accountModelKey(
+          defaultProvider,
+          workspaceDefaultAccount(updated, defaultProvider),
+        ),
+        model(changes.defaultModel),
       );
+    }
+    if (changes.accountModel) {
+      const provider = boardProvider(changes.accountModel.provider);
+      if (!provider)
+        throw new DaedalusError(
+          "VALIDATION",
+          "A remembered model needs its provider",
+        );
+      const account = this.resolveAccount(
+        provider,
+        changes.accountModel.account,
+      );
+      setModel(
+        accountModelKey(provider, account),
+        model(changes.accountModel.model),
+      );
+    }
+    updated.defaultModel = derivedDefaultModel(updated);
     try {
       this.repositories.updateWorkspace(updated);
     } catch (error) {

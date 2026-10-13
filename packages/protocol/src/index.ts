@@ -35,8 +35,16 @@ export interface WorkspaceDto {
   autoRebirthPercent: number | null;
   /** What Start and Start next launch with; null leaves it to the app. */
   defaultProvider: "claude" | "codex" | null;
-  /** A provider model id, or null for that provider's default. */
+  /**
+   * The default provider's model on its default account, or null for that
+   * provider's default. One entry of `accountModels`.
+   */
   defaultModel: string | null;
+  /**
+   * The model each provider account starts with, keyed `<provider>:<account>`
+   * (`default` or a profile id).
+   */
+  accountModels: Record<string, string>;
   /** The account each provider's sessions start on; null is the default. */
   defaultClaudeAccount: string | null;
   defaultCodexAccount: string | null;
@@ -328,10 +336,22 @@ export interface AccountDto {
   /** The configuration folder the provider reads for it. */
   directory: string;
   createdAt: string | null;
-  /** `api-key`: a Claude key kept in the Keychain; `login` otherwise. */
-  kind: "login" | "api-key";
+  /**
+   * `api-key`: a Claude key kept in the Keychain; `bedrock`: Claude on
+   * Amazon Bedrock with an AWS profile; `login` otherwise.
+   */
+  kind: AccountKindDto;
   /** Claude login accounts: which login Sign in runs. */
   login?: ClaudeLoginDto;
+  /** Bedrock accounts: the AWS profile and the region Bedrock is called in. */
+  aws?: AwsTargetDto;
+}
+
+export type AccountKindDto = "login" | "api-key" | "bedrock";
+
+export interface AwsTargetDto {
+  profile: string;
+  region: string;
 }
 
 export type ClaudeLoginDto = "subscription" | "sso" | "console";
@@ -489,6 +509,9 @@ export interface UsageWindowDto {
   label: string;
   usedPercent: number;
   resetsAt?: string;
+  /** A spend limit's dollars, when Claude sent them. */
+  usedUsd?: number;
+  limitUsd?: number;
 }
 
 export interface ProviderUsageDto {
@@ -497,6 +520,13 @@ export interface ProviderUsageDto {
   observedAt: string;
   /** The account profile, absent for the provider's default account. */
   account?: string;
+  /**
+   * `usage`: billed per token (Bedrock, API key, Console); `credits`: a
+   * Claude Enterprise seat spending usage credits against a monthly cap.
+   */
+  billing?: "usage" | "credits";
+  /** A usage-billed account's estimated spend, from sessions Daedalus ran. */
+  cost?: { todayUsd: number; monthUsd: number };
 }
 
 /**
@@ -574,6 +604,8 @@ export interface SessionTelemetryDto {
     totalTokens?: number;
     usedPercent?: number;
   };
+  /** Claude Code's cost estimate for this process; usage-billed accounts. */
+  costUsd?: number;
   observedAt: string;
 }
 
@@ -1072,6 +1104,12 @@ export interface DesktopRpcSchema {
           /** A profile id, or null for the default account. */
           defaultClaudeAccount?: string | null;
           defaultCodexAccount?: string | null;
+          /** The model one provider account starts with; null clears it. */
+          accountModel?: {
+            provider: "claude" | "codex";
+            account: string | null;
+            model: string | null;
+          };
         },
         WorkspaceDto
       >;
@@ -1439,10 +1477,17 @@ export interface DesktopRpcSchema {
         {
           provider: "claude" | "codex";
           name: string;
-          kind?: "login" | "api-key";
+          kind?: AccountKindDto;
           /** Claude login accounts: which login Sign in will run. */
           login?: ClaudeLoginDto;
+          /** Bedrock accounts: required. */
+          aws?: AwsTargetDto;
         },
+        AccountDto
+      >;
+      /** Points a Bedrock account at another AWS profile or region. */
+      accountSetAws: Request<
+        { provider: "claude"; account: string; aws: AwsTargetDto },
         AccountDto
       >;
       /** Sets which login an account's Sign in runs (Claude). */

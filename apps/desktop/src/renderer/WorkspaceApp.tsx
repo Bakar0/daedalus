@@ -60,6 +60,14 @@ import { BoardView, TaskRelationsBlock, type BoardProvider } from "./BoardView";
 import { laneFor } from "./board-lanes";
 import { taskActions } from "./task-actions";
 import { TaskCostLine, TaskTimeline } from "./TaskTimeline";
+import { accountModelKey } from "./account-models";
+import {
+  accountCostLabel,
+  accountCostTitle,
+  COST_ESTIMATE_NOTE,
+  spendOfLimit,
+  usdLabel,
+} from "./cost-format";
 import { TaskActionBar } from "./TaskActionBar";
 import { ConfirmButton } from "./ConfirmButton";
 import { askConfirm, askText, DialogHost } from "./dialogs";
@@ -1574,15 +1582,25 @@ function TerminalSurface({
             <span>{elapsedLabel(session.startedAt, session.endedAt, now)}</span>
             {connectionIssue && <small>{connectionIssue}</small>}
           </div>
-          {telemetry?.context && (
+          {(telemetry?.context || telemetry?.costUsd !== undefined) && (
             <div className="agent-session-context">
-              <span>
-                Context {compactTokenLabel(telemetry.context.usedTokens)}
-                {telemetry.context.totalTokens
-                  ? `/${compactTokenLabel(telemetry.context.totalTokens)}`
-                  : ""}
-              </span>
-              {telemetry.context.usedPercent !== undefined && (
+              {telemetry.costUsd !== undefined && (
+                <span
+                  className="agent-session-cost"
+                  title={`This session so far. ${COST_ESTIMATE_NOTE}`}
+                >
+                  {usdLabel(telemetry.costUsd)}
+                </span>
+              )}
+              {telemetry.context && (
+                <span>
+                  Context {compactTokenLabel(telemetry.context.usedTokens)}
+                  {telemetry.context.totalTokens
+                    ? `/${compactTokenLabel(telemetry.context.totalTokens)}`
+                    : ""}
+                </span>
+              )}
+              {telemetry.context?.usedPercent !== undefined && (
                 <>
                   <span
                     className="agent-session-context-track"
@@ -1813,8 +1831,9 @@ export function WorkspaceApp({
   // "" is the workspace's default account for the chosen provider.
   const [sessionAccount, setSessionAccount] = useState("");
   const [rememberSessionModel, setRememberSessionModel] = useState(false);
+  // By `accountModelKey`: each account offers its own models.
   const [modelCatalogs, setModelCatalogs] = useState<
-    Partial<Record<"codex" | "claude", ProviderModelCatalogDto>>
+    Partial<Record<string, ProviderModelCatalogDto>>
   >({});
   const [modelCatalogLoading, setModelCatalogLoading] = useState(false);
   const [modelCatalogError, setModelCatalogError] = useState<string>();
@@ -2576,36 +2595,6 @@ export function WorkspaceApp({
       setSessionType(available?.name ?? "terminal");
     }
   }, [sessionType, snapshot]);
-  useEffect(() => {
-    if (
-      (sessionType !== "codex" && sessionType !== "claude") ||
-      modelCatalogs[sessionType]
-    )
-      return;
-    let cancelled = false;
-    setModelCatalogLoading(true);
-    setModelCatalogError(undefined);
-    void client.request
-      .agentModels({ provider: sessionType })
-      .then((response) => {
-        if (cancelled) return;
-        if (response.ok)
-          setModelCatalogs((current) => ({
-            ...current,
-            [sessionType]: response.data,
-          }));
-        else setModelCatalogError(response.error.message);
-      })
-      .catch((cause) => {
-        if (!cancelled) setModelCatalogError(errorMessage(cause));
-      })
-      .finally(() => {
-        if (!cancelled) setModelCatalogLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, modelCatalogs, sessionType]);
 
   /**
    * Answers the quit dialog. Not routed through `perform`: archiving a board
@@ -2910,22 +2899,6 @@ export function WorkspaceApp({
     : undefined;
   const activeSessionModel =
     activeSessionTelemetry?.model ?? sessionConfiguredModel(activeSession);
-  const sessionModelCatalog =
-    sessionType === "codex" || sessionType === "claude"
-      ? modelCatalogs[sessionType]
-      : undefined;
-  const sessionDefaultModel = sessionModelCatalog?.models.find(
-    (model) =>
-      model.id === sessionModelCatalog.defaultModel ||
-      model.resolvedModel === sessionModelCatalog.defaultModel,
-  );
-  const selectedSessionModel = sessionModelCatalog?.models.find(
-    (model) => model.id === sessionModel,
-  );
-  // The workspace default applies to this dialog's provider only when it is
-  // the provider the default was set for; a Claude default says nothing
-  // about a Codex session. Leaving the picker on its first option starts
-  // with it, because the core applies the same rule to every spawn.
   // The session dialog's workspace. A dialog opened from a task belongs to
   // that task's workspace, and one opened from a workspace card's + to that
   // workspace; with every workspace showing, neither need be the selected one.
@@ -2942,21 +2915,6 @@ export function WorkspaceApp({
   const memberTeam = sessionForm.teamId
     ? teamsById.get(sessionForm.teamId)
     : undefined;
-  const workspaceDefaultModel =
-    sessionWorkspace && sessionWorkspace.defaultProvider === sessionType
-      ? sessionWorkspace.defaultModel
-      : null;
-  const workspaceDefaultModelEntry = workspaceDefaultModel
-    ? sessionModelCatalog?.models.find(
-        (model) =>
-          model.id === workspaceDefaultModel ||
-          model.resolvedModel === workspaceDefaultModel,
-      )
-    : undefined;
-  // Only a loaded catalog can call a default stale.
-  const workspaceDefaultModelStale = Boolean(
-    workspaceDefaultModel && sessionModelCatalog && !workspaceDefaultModelEntry,
-  );
   // The provider's accounts, offered only once there is more than one.
   const sessionAccounts = (snapshot?.settings.accounts ?? []).filter(
     (item) => item.provider === sessionType,
@@ -2968,6 +2926,80 @@ export function WorkspaceApp({
         ? sessionWorkspace?.defaultCodexAccount
         : null) ?? "default";
   const chosenSessionAccount = sessionAccount || workspaceDefaultAccount;
+  const sessionCatalogKey = accountModelKey(sessionType, chosenSessionAccount);
+  const sessionModelCatalog =
+    sessionType === "codex" || sessionType === "claude"
+      ? modelCatalogs[sessionCatalogKey]
+      : undefined;
+  const sessionDefaultModel = sessionModelCatalog?.models.find(
+    (model) =>
+      model.id === sessionModelCatalog.defaultModel ||
+      model.resolvedModel === sessionModelCatalog.defaultModel,
+  );
+  const selectedSessionModel = sessionModelCatalog?.models.find(
+    (model) => model.id === sessionModel,
+  );
+  // The workspace remembers a model per provider account, and the one for the
+  // account this session would start on is what the first option means.
+  // Leaving the picker there starts with it, because the core applies the
+  // same rule to every spawn.
+  const workspaceDefaultModel =
+    sessionWorkspace?.accountModels[sessionCatalogKey] ?? null;
+  const workspaceDefaultModelEntry = workspaceDefaultModel
+    ? sessionModelCatalog?.models.find(
+        (model) =>
+          model.id === workspaceDefaultModel ||
+          model.resolvedModel === workspaceDefaultModel,
+      )
+    : undefined;
+  // Only a loaded catalog can call a default stale.
+  const workspaceDefaultModelStale = Boolean(
+    workspaceDefaultModel && sessionModelCatalog && !workspaceDefaultModelEntry,
+  );
+  // Loaded for the account the session would start on, and again when the
+  // account changes: a Bedrock account offers other ids than a subscription.
+  useEffect(() => {
+    if (
+      (sessionType !== "codex" && sessionType !== "claude") ||
+      modelCatalogs[sessionCatalogKey]
+    )
+      return;
+    let cancelled = false;
+    setModelCatalogLoading(true);
+    setModelCatalogError(undefined);
+    const key = sessionCatalogKey;
+    void client.request
+      .agentModels({
+        provider: sessionType,
+        ...(chosenSessionAccount !== "default"
+          ? { account: chosenSessionAccount }
+          : {}),
+      })
+      .then((response) => {
+        if (cancelled) return;
+        if (response.ok)
+          setModelCatalogs((current) => ({
+            ...current,
+            [key]: response.data,
+          }));
+        else setModelCatalogError(response.error.message);
+      })
+      .catch((cause) => {
+        if (!cancelled) setModelCatalogError(errorMessage(cause));
+      })
+      .finally(() => {
+        if (!cancelled) setModelCatalogLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    chosenSessionAccount,
+    client,
+    modelCatalogs,
+    sessionCatalogKey,
+    sessionType,
+  ]);
   /**
    * What a tool card says under its name once its provider has more than one
    * account: the account a session would start on, the one chosen for the
@@ -2990,7 +3022,7 @@ export function WorkspaceApp({
   const sessionChoiceIsWorkspaceDefault = Boolean(
     sessionWorkspace &&
     sessionWorkspace.defaultProvider === sessionType &&
-    (sessionModel === "" || sessionModel === sessionWorkspace.defaultModel) &&
+    (sessionModel === "" || sessionModel === workspaceDefaultModel) &&
     chosenSessionAccount === workspaceDefaultAccount,
   );
   const sessionModelCatalogPending =
@@ -3202,17 +3234,21 @@ export function WorkspaceApp({
     }
   }
 
-  /** Loads a provider's model list once, for the board's settings. */
+  /** Loads an account's model list once, for the board's settings. */
   const ensureModelCatalog = useCallback(
-    (provider: BoardProvider) => {
-      if (modelCatalogs[provider]) return;
+    (provider: BoardProvider, account: string) => {
+      const key = accountModelKey(provider, account);
+      if (modelCatalogs[key]) return;
       void client.request
-        .agentModels({ provider })
+        .agentModels({
+          provider,
+          ...(account !== "default" ? { account } : {}),
+        })
         .then((response) => {
           if (response.ok)
             setModelCatalogs((current) => ({
               ...current,
-              [provider]: response.data,
+              [key]: response.data,
             }));
         })
         .catch(() => {
@@ -3458,7 +3494,20 @@ export function WorkspaceApp({
           client.request.workspaceUpdate({
             reference: sessionWorkspace.id,
             defaultProvider: sessionType as BoardProvider,
-            defaultModel: sessionModel || null,
+            // Remembered for this account only. The first option is the
+            // model already remembered for it, so it changes nothing.
+            ...(sessionModel
+              ? {
+                  accountModel: {
+                    provider: sessionType as BoardProvider,
+                    account:
+                      chosenSessionAccount === "default"
+                        ? null
+                        : chosenSessionAccount,
+                    model: sessionModel,
+                  },
+                }
+              : {}),
             ...(sessionAccount
               ? {
                   [sessionType === "claude"
@@ -6317,7 +6366,19 @@ export function WorkspaceApp({
                       ? ` · ${accountName(usage.provider, usage.account)}`
                       : ""}
                   </strong>
-                  {usage.windows.length === 0 && (
+                  {usage.billing && usage.windows.length === 0 && (
+                    <span
+                      className={
+                        usage.cost
+                          ? "provider-usage-cost"
+                          : "provider-usage-none"
+                      }
+                      title={accountCostTitle(usage.billing, usage.cost)}
+                    >
+                      {accountCostLabel(usage.billing, usage.cost)}
+                    </span>
+                  )}
+                  {!usage.billing && usage.windows.length === 0 && (
                     <span
                       className="provider-usage-none"
                       title={
@@ -6330,11 +6391,21 @@ export function WorkspaceApp({
                     </span>
                   )}
                   {usage.windows.map((window, index) => (
-                    <span key={window.label}>
+                    <span
+                      key={window.label}
+                      title={
+                        window.resetsAt
+                          ? `Resets ${new Date(window.resetsAt).toLocaleString()}`
+                          : undefined
+                      }
+                    >
                       {index > 0 && (
                         <span className="provider-usage-dot">·</span>
                       )}
                       {window.label} {Math.round(window.usedPercent)}%
+                      {window.usedUsd !== undefined &&
+                        window.limitUsd !== undefined &&
+                        ` · ${spendOfLimit(window.usedUsd, window.limitUsd)}`}
                     </span>
                   ))}
                 </span>
@@ -6849,7 +6920,12 @@ export function WorkspaceApp({
                 {providerLabel(sessionType)} account
                 <select
                   aria-label={`${providerLabel(sessionType)} account`}
-                  onChange={(event) => setSessionAccount(event.target.value)}
+                  onChange={(event) => {
+                    setSessionAccount(event.target.value);
+                    // Another account offers other models; its own
+                    // remembered one is what the first option now means.
+                    setSessionModel("");
+                  }}
                   value={chosenSessionAccount}
                 >
                   {sessionAccounts.map((item) => (

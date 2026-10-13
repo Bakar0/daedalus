@@ -6,7 +6,8 @@
  * again, not carried in every snapshot: each answer is a provider subprocess.
  * Signing in opens the provider's own command in an integrated terminal,
  * because it opens a browser and may ask something; Daedalus never sees a
- * credential. An API key goes to the macOS Keychain.
+ * credential. An API key goes to the macOS Keychain. A Bedrock account signs
+ * in through `aws sso login` for its AWS profile.
  *
  * Each Claude account remembers how it signs in, chosen when it is added, so
  * Sign in is one click. There is no menu here: this panel lives in a modal
@@ -16,6 +17,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import type {
   AccountDto,
   AccountStatusDto,
+  AwsTargetDto,
   ClaudeLoginDto,
   DesktopSettingsDto,
   IntegratedTerminalDto,
@@ -25,7 +27,7 @@ import type { DesktopClient } from "./client-types";
 import { ConfirmButton } from "./ConfirmButton";
 
 /** How a Claude account signs in. */
-type ClaudeMethod = ClaudeLoginDto | "api-key";
+type ClaudeMethod = ClaudeLoginDto | "api-key" | "bedrock";
 
 const CLAUDE_METHODS: ReadonlyArray<{
   id: ClaudeMethod;
@@ -44,7 +46,15 @@ const CLAUDE_METHODS: ReadonlyArray<{
     hint: "Anthropic Console, billed per use",
   },
   { id: "api-key", label: "API key", hint: "Kept in your macOS Keychain" },
+  {
+    id: "bedrock",
+    label: "Bedrock",
+    hint: "Amazon Bedrock through an AWS profile, such as an AWS SSO login",
+  },
 ];
+
+/** What the AWS fields start as: no profile, the most common region. */
+const NO_AWS: AwsTargetDto = { profile: "", region: "us-east-1" };
 
 const LOGIN_LABEL: Record<ClaudeLoginDto, string> = {
   subscription: "Claude subscription",
@@ -66,13 +76,24 @@ export function accountStateLine(status: AccountStatusDto | undefined): string {
   if (status.state === "signed-out")
     return status.kind === "api-key"
       ? "No key set"
-      : status.login && status.login !== "subscription"
-        ? `Signed out · signs in with ${LOGIN_LABEL[status.login]}`
-        : "Signed out";
+      : status.kind === "bedrock"
+        ? `Signed out · signs in with AWS SSO (${status.aws?.profile ?? "its profile"})`
+        : status.login && status.login !== "subscription"
+          ? `Signed out · signs in with ${LOGIN_LABEL[status.login]}`
+          : "Signed out";
   if (status.state === "unknown")
     return status.detail
       ? `Status unknown: ${status.detail}`
       : "Status unknown";
+  if (status.kind === "bedrock")
+    return [
+      "Signed in",
+      status.email,
+      "Amazon Bedrock",
+      status.aws && `${status.aws.profile} · ${status.aws.region}`,
+    ]
+      .filter(Boolean)
+      .join(" · ");
   return (
     ["Signed in", status.email, status.method, status.plan]
       .filter(Boolean)
@@ -126,11 +147,13 @@ function MethodChoice({
  */
 function AccountForm({
   apiKey,
+  aws,
   busy,
   method,
   methods,
   name,
   onApiKey,
+  onAws,
   onCancel,
   onMethod,
   onName,
@@ -139,6 +162,7 @@ function AccountForm({
   title,
 }: {
   apiKey: string;
+  aws: AwsTargetDto;
   busy: boolean;
   method: ClaudeMethod;
   /** The ways it can sign in, or none for a provider with one login. */
@@ -146,6 +170,7 @@ function AccountForm({
   /** Absent for the default account, whose name is fixed. */
   name?: string;
   onApiKey: (key: string) => void;
+  onAws: (aws: AwsTargetDto) => void;
   onCancel: () => void;
   onMethod: (method: ClaudeMethod) => void;
   onName: (name: string) => void;
@@ -159,6 +184,8 @@ function AccountForm({
     onCancel();
   };
   const needsKey = Boolean(methods) && method === "api-key";
+  // Editing a Bedrock account shows its AWS fields and no choice of method.
+  const needsAws = method === "bedrock";
   return (
     <form className="accounts-add-form" onSubmit={onSubmit}>
       <strong className="accounts-form-title">{title}</strong>
@@ -203,6 +230,41 @@ function AccountForm({
           />
         </label>
       ) : undefined}
+      {needsAws ? (
+        <>
+          <label>
+            <span>AWS profile</span>
+            <input
+              aria-label="AWS profile"
+              autoComplete="off"
+              onChange={(event) =>
+                onAws({ ...aws, profile: event.target.value })
+              }
+              onKeyDown={escapeCancels}
+              placeholder="my-sso-profile"
+              spellCheck={false}
+              value={aws.profile}
+            />
+          </label>
+          <label>
+            <span>AWS region</span>
+            <input
+              aria-label="AWS region"
+              autoComplete="off"
+              onChange={(event) =>
+                onAws({ ...aws, region: event.target.value })
+              }
+              onKeyDown={escapeCancels}
+              placeholder="us-east-1"
+              spellCheck={false}
+              value={aws.region}
+            />
+          </label>
+          <small>
+            A profile from ~/.aws/config. Set one up with aws configure sso.
+          </small>
+        </>
+      ) : undefined}
       <span className="accounts-form-actions">
         <button className="quiet" onClick={onCancel} type="button">
           Cancel
@@ -211,7 +273,8 @@ function AccountForm({
           disabled={
             busy ||
             (name !== undefined && !name.trim()) ||
-            (needsKey && !apiKey.trim())
+            (needsKey && !apiKey.trim()) ||
+            (needsAws && (!aws.profile.trim() || !aws.region.trim()))
           }
           type="submit"
         >
@@ -249,6 +312,7 @@ export function AccountsPanel({
   const [name, setName] = useState("");
   const [method, setMethod] = useState<ClaudeMethod>("subscription");
   const [apiKey, setApiKey] = useState("");
+  const [aws, setAws] = useState<AwsTargetDto>(NO_AWS);
   /**
    * The sign-in running under an account's row: its terminal, and whether
    * the provider has since said the account is signed in.
@@ -292,7 +356,10 @@ export function AccountsPanel({
   // Asked again whenever the list of accounts changes, so an added account
   // shows its state without a click.
   const accountKeys = settings.accounts
-    .map((item) => `${item.provider}:${item.account}:${item.login ?? ""}`)
+    .map(
+      (item) =>
+        `${item.provider}:${item.account}:${item.login ?? ""}:${item.aws?.profile ?? ""}:${item.aws?.region ?? ""}`,
+    )
     .join(",");
   useEffect(() => {
     void check();
@@ -310,6 +377,7 @@ export function AccountsPanel({
     setKeying(undefined);
     setName("");
     setApiKey("");
+    setAws(NO_AWS);
   };
 
   async function signIn(provider: Provider, account: string) {
@@ -390,6 +458,7 @@ export function AccountsPanel({
         createdAt: status.createdAt,
         kind: status.kind,
         ...(status.login ? { login: status.login } : {}),
+        ...(status.aws ? { aws: status.aws } : {}),
         executable: status.executable,
         checkedAt: new Date().toISOString(),
         state: "signed-out",
@@ -400,7 +469,8 @@ export function AccountsPanel({
 
   /**
    * Adds the account and goes straight on to what makes it usable: the
-   * sign-in for a login, the key for an API-key account. One click.
+   * sign-in for a login, the key for an API-key account, and for Bedrock the
+   * AWS sign-in unless the profile is signed in already. One click.
    */
   async function add(event: React.FormEvent, provider: Provider) {
     event.preventDefault();
@@ -410,15 +480,27 @@ export function AccountsPanel({
       client.request.accountAdd({
         provider,
         name,
-        kind: choice === "api-key" ? "api-key" : "login",
-        ...(provider === "claude" && choice !== "api-key"
+        kind: choice === "api-key" || choice === "bedrock" ? choice : "login",
+        ...(provider === "claude" &&
+        choice !== "api-key" &&
+        choice !== "bedrock"
           ? { login: choice }
           : {}),
+        ...(choice === "bedrock" ? { aws } : {}),
       }),
     );
     if (!added) return;
     const key = apiKey;
     closeForms();
+    if (choice === "bedrock") {
+      const response = await client.request
+        .accountStatus({ provider, account: added.account })
+        .catch(() => undefined);
+      if (response?.ok && response.data[0]?.state === "signed-in")
+        await check();
+      else await signIn(provider, added.account);
+      return;
+    }
     if (choice === "api-key") {
       const saved = await perform(
         client.request.accountSetApiKey({
@@ -447,9 +529,24 @@ export function AccountsPanel({
       if (!renamed) return;
     }
     if (
+      account.kind === "bedrock" &&
+      (aws.profile.trim() !== account.aws?.profile ||
+        aws.region.trim() !== account.aws?.region)
+    ) {
+      const changed = await perform(
+        client.request.accountSetAws({
+          provider: "claude",
+          account: account.account,
+          aws,
+        }),
+      );
+      if (!changed) return;
+    }
+    if (
       account.provider === "claude" &&
       account.kind === "login" &&
       method !== "api-key" &&
+      method !== "bedrock" &&
       method !== (account.login ?? "subscription")
     ) {
       const changed = await perform(
@@ -662,16 +759,20 @@ export function AccountsPanel({
                             </>
                           ) : status && status.state !== "missing" ? (
                             status.state === "signed-in" ? (
-                              <ConfirmButton
-                                armedLabel="Sign out"
-                                armedTitle={`Sign ${account.name} out of ${provider.label}`}
-                                className="quiet"
-                                disabled={busy}
-                                onConfirm={() => void signOut(account)}
-                                type="button"
-                              >
-                                Sign out
-                              </ConfirmButton>
+                              // AWS SSO is the whole Mac's session; this
+                              // account does not end it.
+                              account.kind === "bedrock" ? undefined : (
+                                <ConfirmButton
+                                  armedLabel="Sign out"
+                                  armedTitle={`Sign ${account.name} out of ${provider.label}`}
+                                  className="quiet"
+                                  disabled={busy}
+                                  onConfirm={() => void signOut(account)}
+                                  type="button"
+                                >
+                                  Sign out
+                                </ConfirmButton>
+                              )
                             ) : (
                               <button
                                 disabled={busy}
@@ -679,9 +780,11 @@ export function AccountsPanel({
                                   void signIn(provider.id, account.account)
                                 }
                                 title={
-                                  account.login
-                                    ? `Sign in with ${LOGIN_LABEL[account.login]}`
-                                    : undefined
+                                  account.kind === "bedrock"
+                                    ? `Sign in to AWS with aws sso login --profile ${account.aws?.profile ?? ""}`
+                                    : account.login
+                                      ? `Sign in with ${LOGIN_LABEL[account.login]}`
+                                      : undefined
                                 }
                                 type="button"
                               >
@@ -697,7 +800,12 @@ export function AccountsPanel({
                                 closeForms();
                                 setEditing(key);
                                 setName(account.name);
-                                setMethod(account.login ?? "subscription");
+                                setMethod(
+                                  account.kind === "bedrock"
+                                    ? "bedrock"
+                                    : (account.login ?? "subscription"),
+                                );
+                                setAws(account.aws ?? NO_AWS);
                               }}
                               type="button"
                             >
@@ -731,18 +839,22 @@ export function AccountsPanel({
                       <li className="accounts-form-row">
                         <AccountForm
                           apiKey={apiKey}
+                          aws={aws}
                           busy={busy}
                           method={method}
                           methods={
                             account.provider === "claude" &&
                             account.kind === "login"
                               ? CLAUDE_METHODS.filter(
-                                  (item) => item.id !== "api-key",
+                                  (item) =>
+                                    item.id !== "api-key" &&
+                                    item.id !== "bedrock",
                                 )
                               : undefined
                           }
                           name={isDefault ? undefined : name}
                           onApiKey={setApiKey}
+                          onAws={setAws}
                           onCancel={closeForms}
                           onMethod={setMethod}
                           onName={setName}
@@ -768,8 +880,11 @@ export function AccountsPanel({
                           ) : (
                             <span>
                               Signing {account.name} in. Finish in the browser
-                              that opened; anything {provider.label} asks shows
-                              here.
+                              that opened; anything{" "}
+                              {account.kind === "bedrock"
+                                ? "AWS"
+                                : provider.label}{" "}
+                              asks shows here.
                             </span>
                           )}
                           <button
@@ -794,11 +909,13 @@ export function AccountsPanel({
             {adding === provider.id ? (
               <AccountForm
                 apiKey={apiKey}
+                aws={aws}
                 busy={busy}
                 method={method}
                 methods={provider.id === "claude" ? CLAUDE_METHODS : undefined}
                 name={name}
                 onApiKey={setApiKey}
+                onAws={setAws}
                 onCancel={closeForms}
                 onMethod={setMethod}
                 onName={setName}

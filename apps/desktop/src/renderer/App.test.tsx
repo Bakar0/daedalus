@@ -499,6 +499,7 @@ describe("desktop application shell", () => {
       defaultModel: null,
       defaultClaudeAccount: null,
       defaultCodexAccount: null,
+      accountModels: {},
     });
     const task = (id: string, workspaceId: string, number: number) => ({
       id,
@@ -797,6 +798,7 @@ describe("desktop application shell", () => {
               defaultModel: null,
               defaultClaudeAccount: null,
               defaultCodexAccount: null,
+              accountModels: {},
             },
           ],
           settings: {
@@ -839,6 +841,7 @@ describe("desktop application shell", () => {
                 defaultModel: "sonnet",
                 defaultClaudeAccount: null,
                 defaultCodexAccount: null,
+                accountModels: {},
               },
             ],
             settings: {
@@ -886,6 +889,7 @@ describe("desktop application shell", () => {
               defaultModel: null,
               defaultClaudeAccount: null,
               defaultCodexAccount: null,
+              accountModels: {},
             },
           ],
           repositories: [
@@ -941,6 +945,7 @@ describe("desktop application shell", () => {
           defaultModel: null,
           defaultClaudeAccount: null,
           defaultCodexAccount: null,
+          accountModels: {},
         },
       ],
     };
@@ -996,6 +1001,7 @@ describe("desktop application shell", () => {
         defaultModel: null,
         defaultClaudeAccount: null,
         defaultCodexAccount: null,
+        accountModels: {},
       },
     ],
   };
@@ -1188,6 +1194,7 @@ describe("desktop application shell", () => {
           defaultModel: null,
           defaultClaudeAccount: null,
           defaultCodexAccount: null,
+          accountModels: {},
         },
       ],
       tasks: [
@@ -1373,6 +1380,7 @@ describe("desktop application shell", () => {
       defaultModel: null,
       defaultClaudeAccount: null,
       defaultCodexAccount: null,
+      accountModels: {},
     };
     const task = (
       id: string,
@@ -1459,6 +1467,7 @@ describe("desktop application shell", () => {
       defaultModel: null,
       defaultClaudeAccount: null,
       defaultCodexAccount: null,
+      accountModels: {},
     };
     const task = (
       id: string,
@@ -1631,6 +1640,7 @@ describe("desktop application shell", () => {
           defaultModel: null,
           defaultClaudeAccount: null,
           defaultCodexAccount: null,
+          accountModels: {},
         },
       ],
     };
@@ -1689,6 +1699,7 @@ describe("desktop application shell", () => {
           defaultModel: null,
           defaultClaudeAccount: null,
           defaultCodexAccount: null,
+          accountModels: {},
         },
       ],
       tasks: [
@@ -1763,6 +1774,7 @@ describe("desktop application shell", () => {
           defaultModel: null,
           defaultClaudeAccount: null,
           defaultCodexAccount: null,
+          accountModels: {},
         },
       ],
       agents: [
@@ -1842,6 +1854,7 @@ describe("desktop application shell", () => {
           defaultModel: null,
           defaultClaudeAccount: null,
           defaultCodexAccount: null,
+          accountModels: {},
         },
       ],
       agents: [
@@ -1910,6 +1923,7 @@ describe("desktop application shell", () => {
       defaultModel: null,
       defaultClaudeAccount: null,
       defaultCodexAccount: null,
+      accountModels: {},
     });
     // Deliberately not alphabetical, not by creation, and not by position
     // value either: the array order is what the service already applied, and
@@ -1952,6 +1966,7 @@ describe("desktop application shell", () => {
           defaultModel: null,
           defaultClaudeAccount: null,
           defaultCodexAccount: null,
+          accountModels: {},
         },
         {
           id: "w2",
@@ -1969,6 +1984,7 @@ describe("desktop application shell", () => {
           defaultModel: null,
           defaultClaudeAccount: null,
           defaultCodexAccount: null,
+          accountModels: {},
         },
       ],
       agents: [
@@ -2045,6 +2061,7 @@ describe("desktop application shell", () => {
           defaultModel: null,
           defaultClaudeAccount: null,
           defaultCodexAccount: null,
+          accountModels: {},
         },
       ],
       terminals: [
@@ -2103,6 +2120,7 @@ describe("desktop application shell", () => {
       defaultModel: null,
       defaultClaudeAccount: null,
       defaultCodexAccount: null,
+      accountModels: {},
     };
     const html = renderToStaticMarkup(
       <App
@@ -2342,6 +2360,7 @@ describe("session status indicators", () => {
       defaultModel: null,
       defaultClaudeAccount: null,
       defaultCodexAccount: null,
+      accountModels: {},
     };
     const blocked: AgentSessionDto = {
       ...liveSession,

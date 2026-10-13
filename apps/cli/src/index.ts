@@ -15,6 +15,7 @@ import {
   sessionColor,
   sweepProviderActivity,
   readActivityRecord,
+  recordSessionCost,
   writeActivityRecord,
   type ActivityObservation,
   type AgentActivityState,
@@ -79,7 +80,9 @@ async function captureClaudeTelemetry(session?: string): Promise<number> {
       model?: unknown;
       context_window?: unknown;
       rate_limits?: unknown;
+      cost?: { total_cost_usd?: unknown };
     };
+    const costUsd = payload.cost?.total_cost_usd;
     const directory = join(home, "telemetry");
     await mkdir(directory, { recursive: true });
     const destination = join(directory, `${sessionId}.json`);
@@ -95,6 +98,9 @@ async function captureClaudeTelemetry(session?: string): Promise<number> {
           model: payload.model,
           context_window: payload.context_window,
           rate_limits: payload.rate_limits,
+          ...(typeof costUsd === "number"
+            ? { cost: { total_cost_usd: costUsd } }
+            : {}),
         }),
         { flag: "wx", mode: 0o600 },
       );
@@ -102,6 +108,9 @@ async function captureClaudeTelemetry(session?: string): Promise<number> {
     } finally {
       await rm(temporary, { force: true });
     }
+    // Booked by day as it happens, so the spend outlives the session.
+    if (typeof costUsd === "number")
+      await recordSessionCost(home, sessionId, costUsd);
   } catch {
     // A status-line hook must never interfere with the provider session.
   }
@@ -388,12 +397,15 @@ const commandHelp: Record<string, string> = {
 The board settings are per workspace. --start-sets-in-progress (on by default)
 moves a todo or blocked task to in_progress when a session is started on it,
 from the board or from 'agent spawn --task'. --default-provider is what the
-board's Start and Start next launch. --default-model is what every session of
-that provider starts with when nothing names a model: Start, the session
-dialog, and 'agent spawn' without --model. It belongs to the provider, so it
-needs --default-provider and is cleared with it. A default the provider no
-longer offers makes those spawns fail, naming the fix, rather than start a
-session that cannot answer.
+board's Start and Start next launch. A workspace remembers a model per
+provider account, because accounts take different ids (a Bedrock account's
+us.anthropic.… is not a subscription's claude-…). --default-model sets the
+one for the default provider on its default account; the session dialog's
+"Remember for this workspace" sets the one for the account it starts on.
+Start and 'agent spawn' without --model use the model remembered for the
+account the session starts on. --default-model needs --default-provider. A
+remembered model the account no longer offers makes those spawns fail,
+naming the fix, rather than start a session that cannot answer.
 --default-claude-account and --default-codex-account name the account each
 provider's sessions start on when nothing chooses one; see 'daedal account'.
 --auto-rebirth (off by default) asks a session to hand its work to a fresh

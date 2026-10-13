@@ -27,6 +27,7 @@ describe("SqliteRepositories", () => {
         autoRebirthPercent: null,
         defaultProvider: null,
         defaultModel: null,
+        accountModels: {},
         defaultClaudeAccount: null,
         defaultCodexAccount: null,
       });

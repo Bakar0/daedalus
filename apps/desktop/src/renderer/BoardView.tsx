@@ -7,6 +7,7 @@
  * `board-lanes.ts`; this file only draws them and forwards clicks.
  */
 import { useEffect, useState, type ReactNode } from "react";
+import { accountModelKey } from "./account-models";
 import { askConfirm } from "./dialogs";
 import {
   ReportDetails,
@@ -82,8 +83,9 @@ export interface BoardViewProps {
   availableProviders: BoardProvider[];
   /** Every account; the settings offer a choice once a provider has two. */
   accounts?: AccountDto[];
-  modelCatalogs: Partial<Record<BoardProvider, ProviderModelCatalogDto>>;
-  onNeedModels: (provider: BoardProvider) => void;
+  /** Model lists by `accountModelKey`: each account offers its own. */
+  modelCatalogs: Partial<Record<string, ProviderModelCatalogDto>>;
+  onNeedModels: (provider: BoardProvider, account: string) => void;
   onSelectTask: (task: TaskDto) => void;
   onOpenSession: (session: AgentSessionDto) => void;
   onStart: (task: TaskDto) => void;
@@ -452,19 +454,32 @@ function BoardSettings({
   const [open, setOpen] = useState(false);
   const provider = workspace.defaultProvider;
   const effective = provider ?? availableProviders[0];
-  useEffect(() => {
-    if (open && effective && !modelCatalogs[effective]) onNeedModels(effective);
-  }, [effective, modelCatalogs, onNeedModels, open]);
-  const catalog = effective ? modelCatalogs[effective] : undefined;
-  const providerAccounts = accounts.filter(
-    (item) => item.provider === effective,
-  );
   const accountKey =
     effective === "codex" ? "defaultCodexAccount" : "defaultClaudeAccount";
   const defaultAccount =
     (effective === "codex"
       ? workspace.defaultCodexAccount
       : workspace.defaultClaudeAccount) ?? "default";
+  // The default model is the default account's, so its list is the one
+  // offered: a Bedrock account lists Bedrock ids.
+  const catalogKey = effective
+    ? accountModelKey(effective, defaultAccount)
+    : undefined;
+  useEffect(() => {
+    if (open && effective && catalogKey && !modelCatalogs[catalogKey])
+      onNeedModels(effective, defaultAccount);
+  }, [
+    catalogKey,
+    defaultAccount,
+    effective,
+    modelCatalogs,
+    onNeedModels,
+    open,
+  ]);
+  const catalog = catalogKey ? modelCatalogs[catalogKey] : undefined;
+  const providerAccounts = accounts.filter(
+    (item) => item.provider === effective,
+  );
   const defaultAccountName = providerAccounts.find(
     (item) => item.account === defaultAccount,
   )?.name;

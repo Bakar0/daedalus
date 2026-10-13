@@ -82,6 +82,40 @@ describe("parseClaudeStatus", () => {
     ]);
   });
 
+  test("reads a gateway spend limit, with its dollars when Claude sent them", () => {
+    const resets = 1_793_491_200;
+    const read = (spend_limit: Record<string, unknown>) =>
+      parseClaudeStatus("session-1", {
+        rate_limits: { spend_limit },
+      }).usage?.windows;
+    expect(
+      read({
+        used_percentage: 11.7,
+        resets_at: resets,
+        used_usd: 385.17,
+        limit_usd: 3300,
+        period: "monthly",
+      }),
+    ).toEqual([
+      {
+        label: "month",
+        usedPercent: 11.7,
+        resetsAt: new Date(resets * 1_000).toISOString(),
+        usedUsd: 385.17,
+        limitUsd: 3300,
+      },
+    ]);
+    // The dollars come minutes after the percentage, and may never come; a
+    // limit already exceeded reads past 100.
+    expect(read({ used_percentage: 104, resets_at: resets })).toEqual([
+      {
+        label: "spend",
+        usedPercent: 104,
+        resetsAt: new Date(resets * 1_000).toISOString(),
+      },
+    ]);
+  });
+
   test("omits rate limits when an account does not report them", () => {
     expect(
       parseClaudeStatus("session-1", {

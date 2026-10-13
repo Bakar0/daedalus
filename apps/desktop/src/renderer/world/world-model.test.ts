@@ -48,6 +48,7 @@ const workspace = (id: string): WorkspaceDto => ({
   defaultModel: null,
   defaultClaudeAccount: null,
   defaultCodexAccount: null,
+  accountModels: {},
 });
 
 const session = (

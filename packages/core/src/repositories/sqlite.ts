@@ -23,6 +23,7 @@ import type {
   WorkspaceRepository,
   WorkspaceRepositoryAccess,
 } from "../domain";
+import { accountModelKey, derivedDefaultModel } from "../domain";
 import { AbilityRepository, RoutineRepository } from "./abilities";
 import { SecretRepository } from "./secrets";
 import { TeamRepository } from "./teams";
@@ -40,6 +41,7 @@ interface WorkspaceRow {
   auto_handoff_percent: number | null;
   default_provider: "claude" | "codex" | null;
   default_model: string | null;
+  account_models: string;
   default_claude_account: string | null;
   default_codex_account: string | null;
 }
@@ -140,22 +142,40 @@ interface SessionWorktreeRow {
   created_at: string;
 }
 
-const workspaceFromRow = (row: WorkspaceRow): Workspace => ({
-  id: row.id,
-  slug: row.slug,
-  name: row.name,
-  path: row.path,
-  createdAt: row.created_at,
-  updatedAt: row.updated_at,
-  archivedAt: row.archived_at,
-  position: row.position,
-  startSetsInProgress: row.start_sets_in_progress !== 0,
-  autoRebirthPercent: row.auto_handoff_percent,
-  defaultProvider: row.default_provider,
-  defaultModel: row.default_model,
-  defaultClaudeAccount: row.default_claude_account,
-  defaultCodexAccount: row.default_codex_account,
-});
+/** The stored map, keeping only string entries; anything else reads empty. */
+function accountModels(text: string): Record<string, string> {
+  try {
+    const value = JSON.parse(text) as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(
+      Object.entries(value).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
+const workspaceFromRow = (row: WorkspaceRow): Workspace => {
+  const workspace = {
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    path: row.path,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    archivedAt: row.archived_at,
+    position: row.position,
+    startSetsInProgress: row.start_sets_in_progress !== 0,
+    autoRebirthPercent: row.auto_handoff_percent,
+    defaultProvider: row.default_provider,
+    accountModels: accountModels(row.account_models),
+    defaultClaudeAccount: row.default_claude_account,
+    defaultCodexAccount: row.default_codex_account,
+  };
+  return { ...workspace, defaultModel: derivedDefaultModel(workspace) };
+};
 
 const taskFromRow = (row: TaskRow): Task => ({
   id: row.id,
@@ -394,8 +414,8 @@ export class SqliteRepositories {
          (id, slug, name, path, created_at, updated_at, archived_at,
           task_id_prefix, position, start_sets_in_progress, default_provider,
           default_model, auto_handoff_percent, default_claude_account,
-          default_codex_account)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          default_codex_account, account_models)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         workspace.id,
@@ -413,6 +433,7 @@ export class SqliteRepositories {
         workspace.autoRebirthPercent,
         workspace.defaultClaudeAccount,
         workspace.defaultCodexAccount,
+        JSON.stringify(workspace.accountModels),
       );
   }
 
@@ -467,7 +488,8 @@ export class SqliteRepositories {
         `UPDATE workspaces SET slug = ?, name = ?, path = ?, updated_at = ?,
          archived_at = ?, start_sets_in_progress = ?, default_provider = ?,
          default_model = ?, auto_handoff_percent = ?,
-         default_claude_account = ?, default_codex_account = ? WHERE id = ?`,
+         default_claude_account = ?, default_codex_account = ?,
+         account_models = ? WHERE id = ?`,
       )
       .run(
         workspace.slug,
@@ -481,6 +503,7 @@ export class SqliteRepositories {
         workspace.autoRebirthPercent,
         workspace.defaultClaudeAccount,
         workspace.defaultCodexAccount,
+        JSON.stringify(workspace.accountModels),
         workspace.id,
       );
   }
@@ -497,6 +520,12 @@ export class SqliteRepositories {
     this.database
       .query(`UPDATE workspaces SET ${column} = NULL WHERE ${column} = ?`)
       .run(account);
+    // The removed account's remembered model goes with it.
+    this.database
+      .query(
+        "UPDATE workspaces SET account_models = json_remove(account_models, ?)",
+      )
+      .run(`$."${accountModelKey(provider, account)}"`);
   }
 
   deleteWorkspace(id: string): void {

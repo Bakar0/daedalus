@@ -11,6 +11,7 @@ import {
 } from "@daedalus/platform";
 import type { DaedalusConfig } from "../config";
 import {
+  accountModelKey,
   SESSION_COLORS,
   type AgentSession,
   type SessionColor,
@@ -738,9 +739,11 @@ export class AgentService {
   /**
    * The `--model` a new session starts with.
    *
-   * An explicit choice wins. Otherwise the workspace's default model applies
-   * when this is the provider it was set for, and nothing is passed for any
-   * other provider, which then uses its own default. The workspace default
+   * An explicit choice wins. Otherwise the model the workspace remembers for
+   * this provider account applies, and with none the provider uses its own
+   * default. It is per account because accounts take different ids: a
+   * Bedrock account's `us.anthropic.…` is refused by a Claude subscription,
+   * and the reverse. The workspace default
    * exists because a provider's own default drifts: Claude writes the last
    * `/model` choice from any session into the user's settings, so "default"
    * there means "whatever the previous session ended on".
@@ -759,18 +762,17 @@ export class AgentService {
   ): Promise<string | undefined> {
     const explicit = requested?.trim();
     if (explicit) return explicit;
-    const defaultModel = workspace.defaultModel;
-    if (
-      defaultModel &&
-      provider !== "custom" &&
-      workspace.defaultProvider === provider
-    ) {
+    const defaultModel =
+      provider === "custom"
+        ? undefined
+        : workspace.accountModels[accountModelKey(provider, account)];
+    if (defaultModel && provider !== "custom") {
       const catalog = await this.knownModels(provider, account);
       if (catalog && !catalogOffersModel(catalog, defaultModel))
         throw new DaedalusError(
           "VALIDATION",
-          `Workspace default model '${defaultModel}' is not offered by ${provider === "claude" ? "Claude" : "Codex"} any more. Choose another with 'daedal workspace update ${workspace.slug} --default-model <model>|none' or pass --model.`,
-          { workspaceId: workspace.id, provider, defaultModel },
+          `Workspace default model '${defaultModel}' is not offered by ${provider === "claude" ? "Claude" : "Codex"} any more on ${account ? "this" : "the default"} account. Pick another in Create session with "Remember for this workspace" on, use 'daedal workspace update ${workspace.slug} --default-model <model>|none' for the default account, or pass --model.`,
+          { workspaceId: workspace.id, provider, account, defaultModel },
         );
       return defaultModel;
     }

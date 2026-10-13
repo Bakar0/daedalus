@@ -1520,6 +1520,73 @@ describe("workspace default model", () => {
     });
   });
 
+  test("remembers a model per account, so one account's id never reaches another", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const claude = await claudeCatalog(home, [
+        { id: "sonnet", resolvedModel: "claude-sonnet-5" },
+        {
+          id: "us.anthropic.claude-sonnet-5",
+          resolvedModel: "us.anthropic.claude-sonnet-5",
+        },
+      ]);
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { claude: { executable: claude.path, args: [] } },
+        }),
+      );
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux: new FakeTmux(),
+      });
+      const bedrock = await context.accounts.add("claude", "Bedrock");
+      const workspace = await context.workspaces.create({ name: "Two" });
+      await context.workspaces.update(workspace.id, {
+        defaultProvider: "claude",
+        defaultModel: "sonnet",
+      });
+      const updated = await context.workspaces.update(workspace.id, {
+        accountModel: {
+          provider: "claude",
+          account: "Bedrock",
+          model: "us.anthropic.claude-sonnet-5",
+        },
+      });
+      expect(updated.accountModels).toEqual({
+        "claude:default": "sonnet",
+        [`claude:${bedrock.id}`]: "us.anthropic.claude-sonnet-5",
+      });
+      // The default account's model is still what --default-model shows.
+      expect(updated.defaultModel).toBe("sonnet");
+      const model = async (account?: string) =>
+        (
+          await context.agents.spawn({
+            workspace: workspace.id,
+            provider: "claude",
+            ...(account ? { account } : {}),
+          })
+        ).args.slice(0, 2);
+      expect(await model()).toEqual(["--model", "sonnet"]);
+      expect(await model(bedrock.id)).toEqual([
+        "--model",
+        "us.anthropic.claude-sonnet-5",
+      ]);
+      // Making Bedrock the workspace default makes its model the default one.
+      const switched = await context.workspaces.update(workspace.id, {
+        defaultClaudeAccount: bedrock.id,
+      });
+      expect(switched.defaultModel).toBe("us.anthropic.claude-sonnet-5");
+      // A removed account's model goes with it.
+      await context.accounts.remove("claude", bedrock.id, {
+        archiveSessions: true,
+      });
+      const after = await context.workspaces.get(workspace.id);
+      expect(after.accountModels).toEqual({ "claude:default": "sonnet" });
+      expect(after.defaultModel).toBe("sonnet");
+      context.close();
+    });
+  });
+
   test("asks Claude for its recommended model by name when nothing else names one", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       await Bun.write(
