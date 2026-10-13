@@ -85,7 +85,7 @@ import { ProBadge } from "./ProPlan";
 import { RemoteMenu } from "./RemoteMenu";
 import { SecretsPanel } from "./SecretsPanel";
 import { FlowMapBar, FlowMapPanel } from "./flow-map/FlowMapPanel";
-import type { StageSession } from "./flow-map/model";
+import { stageSessionsFrom } from "./flow-map/model";
 import {
   sessionStatusLine,
   AgentStatusDot,
@@ -2694,22 +2694,7 @@ export function WorkspaceApp({
     (snapshot?.sessionTelemetry ?? []).map((item) => [item.sessionId, item]),
   );
   // What a flow map's stage shows of the session working on it.
-  const flowStageSessions = new Map<string, StageSession>(
-    (snapshot?.agents ?? []).map((session) => [
-      session.id,
-      {
-        id: session.id,
-        workspaceId: session.workspaceId,
-        name: session.name,
-        provider: session.provider,
-        live:
-          !session.archivedAt &&
-          (session.status === "running" || session.status === "starting"),
-        activity: activityById.get(session.id)?.activity ?? null,
-        question: attentionById.get(session.id)?.reasons.at(-1)?.text ?? null,
-      },
-    ]),
-  );
+  const flowStageSessions = stageSessionsFrom(snapshot);
   const tasksById = new Map(
     (snapshot?.tasks ?? []).map((task) => [task.id, task]),
   );
@@ -6313,6 +6298,14 @@ export function WorkspaceApp({
                       maps={activeSessionMaps.maps}
                       onClose={() => setMapPanel(undefined)}
                       onError={setError}
+                      onPopOut={() => {
+                        void perform(
+                          client.request.flowMapWindowOpen({
+                            mapId: mapPanel.mapId,
+                          }),
+                        );
+                        setMapPanel(undefined);
+                      }}
                       onOpenSession={(session) =>
                         showSession(session.id, session.workspaceId)
                       }

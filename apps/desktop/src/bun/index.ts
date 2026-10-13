@@ -333,6 +333,8 @@ function announce(source: "desktop" | "external"): void {
   revision += 1;
   if (windowOpen) rpc.send.dataChanged({ revision, source });
   if (worldOpen) worldRpc.send.dataChanged({ revision, source });
+  for (const { rpc: mapRpc } of mapWindows.values())
+    mapRpc.send.dataChanged({ revision, source });
   announceRemote();
 }
 
@@ -422,7 +424,7 @@ void remote.start().catch((error) =>
   }),
 );
 
-const createRpc = (role: DesktopWindowRole = "main") =>
+const createRpc = (role: DesktopWindowRole = "main", mapId?: string) =>
   BrowserView.defineRPC<DesktopRpcSchema>({
     // Initial repository clones and fetches can legitimately take several
     // minutes for large histories or slower remotes.
@@ -445,8 +447,11 @@ const createRpc = (role: DesktopWindowRole = "main") =>
         },
         {
           role,
+          ...(mapId ? { mapId } : {}),
           openWorld: openWorldWindow,
+          openMap: openMapWindow,
           focusSession: focusMainSession,
+          focusTask: focusMainTask,
         },
         (text) => {
           Utils.clipboardWriteText(text);
@@ -469,8 +474,19 @@ let windowOpen = false;
 let worldRpc!: ReturnType<typeof createRpc>;
 let worldWindow!: BrowserWindow<ReturnType<typeof createRpc>>;
 let worldOpen = false;
+// Flow maps in windows of their own (#65), one per map, opened from a map's
+// panel. Each loads the same page and asks its role and map.
+const mapWindows = new Map<
+  string,
+  {
+    rpc: ReturnType<typeof createRpc>;
+    window: BrowserWindow<ReturnType<typeof createRpc>>;
+  }
+>();
 /** A session to select once a main window reopened for it can hear. */
 let pendingFocus: string | undefined;
+/** A task to open once a main window reopened for it can hear. */
+let pendingTaskFocus: string | undefined;
 
 /**
  * Filesystem changes go straight to the window rather than through
@@ -604,6 +620,45 @@ function openWorldWindow(): void {
     void context.logger.write("info", "world_window_closed", {});
   });
   void context.logger.write("info", "world_window_opened", {});
+}
+
+/** Opens a flow map's window, or brings it forward when it is open. */
+function openMapWindow(mapId: string): void {
+  const open = mapWindows.get(mapId);
+  if (open) {
+    open.window.show();
+    open.window.focus();
+    return;
+  }
+  const map = context.flow.getMap(mapId);
+  const mapRpc = createRpc("map", mapId);
+  const window = new BrowserWindow({
+    title: `Daedalus Map · ${map.name}`,
+    url: rendererUrl,
+    rpc: mapRpc,
+    frame: { width: 1320, height: 840, x: 180, y: 110 },
+  });
+  mapWindows.set(mapId, { rpc: mapRpc, window });
+  window.on("close", () => {
+    mapWindows.delete(mapId);
+    void context.logger.write("info", "map_window_closed", { mapId });
+  });
+  void context.logger.write("info", "map_window_opened", { mapId });
+}
+
+/**
+ * A click on a task chip in a map window: the main window comes forward on
+ * the task's drawer, reopened first if it was closed.
+ */
+function focusMainTask(taskId: string): void {
+  if (!windowOpen) {
+    pendingTaskFocus = taskId;
+    openMainWindow();
+    return;
+  }
+  mainWindow.show();
+  mainWindow.focus();
+  rpc.send.focusTask({ taskId });
 }
 
 /**
@@ -804,6 +859,10 @@ setInterval(async () => {
     if (pendingFocus && windowOpen) {
       rpc.send.focusSession({ sessionId: pendingFocus });
       pendingFocus = undefined;
+    }
+    if (pendingTaskFocus && windowOpen) {
+      rpc.send.focusTask({ taskId: pendingTaskFocus });
+      pendingTaskFocus = undefined;
     }
     // Alerts a CLI handed over are delivered as Daedalus, not Script Editor.
     // Only fresh ones: an alert parked while the app was down is already late,

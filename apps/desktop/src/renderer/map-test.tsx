@@ -372,6 +372,7 @@ function Page() {
             mapId={summary.id}
             maps={[summary]}
             onClose={() => setOpen(false)}
+            onPopOut={() => opened.push("pop-out")}
             onError={(message: string) => {
               throw new Error(message);
             }}

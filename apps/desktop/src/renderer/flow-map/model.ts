@@ -1,5 +1,6 @@
 import type {
   AgentActivity,
+  DesktopSnapshotDto,
   FlowComponentDto,
   FlowMapDetailDto,
   FlowRelationDto,
@@ -256,3 +257,31 @@ export const STAGE_MODE_WORDS = {
   rollup: "Worked out from the components inside",
   after: "Starts when the components inside finish",
 } as const;
+
+/** What a stage shows of each session, read off the snapshot. */
+export function stageSessionsFrom(
+  snapshot: DesktopSnapshotDto | null | undefined,
+): Map<string, StageSession> {
+  const activity = new Map(
+    (snapshot?.sessionActivity ?? []).map((item) => [item.sessionId, item]),
+  );
+  const attention = new Map(
+    (snapshot?.attention ?? []).map((item) => [item.sessionId, item]),
+  );
+  return new Map(
+    (snapshot?.agents ?? []).map((session) => [
+      session.id,
+      {
+        id: session.id,
+        workspaceId: session.workspaceId,
+        name: session.name,
+        provider: session.provider,
+        live:
+          !session.archivedAt &&
+          (session.status === "running" || session.status === "starting"),
+        activity: activity.get(session.id)?.activity ?? null,
+        question: attention.get(session.id)?.reasons.at(-1)?.text ?? null,
+      },
+    ]),
+  );
+}

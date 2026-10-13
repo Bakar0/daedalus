@@ -104,15 +104,19 @@ export function FlowCanvas(props: FlowCanvasProps) {
       className="flow-canvas"
       onMouseLeave={() => setHover(null)}
       onMouseOver={(event) => {
+        // Only a component's own box focuses its relations. The root frame
+        // is the whole canvas, so pointing at empty space, or at the root's
+        // head, leaves every line lit.
         const box = (event.target as HTMLElement).closest<HTMLElement>(
           "[data-component]",
         );
-        setHover(box?.dataset.component ?? null);
+        const id = box?.dataset.component ?? null;
+        setHover(id === root?.id ? null : id);
       }}
       ref={canvas}
     >
       <div
-        className={`flow-frame ${hover === root.id ? "flow-hover" : ""}`}
+        className="flow-frame"
         data-component={root.id}
         ref={register(root.id)}
       >

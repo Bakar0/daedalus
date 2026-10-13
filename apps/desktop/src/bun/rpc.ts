@@ -520,8 +520,12 @@ function routinesDetail(
  */
 export interface DesktopWindowHost {
   role: DesktopWindowRole;
+  /** The map a `map` window shows. */
+  mapId?: string;
   openWorld(): void;
+  openMap(mapId: string): void;
   focusSession(sessionId: string): void;
+  focusTask(taskId: string): void;
 }
 
 /** Where no host runs a connector, as in tests: phone access is off. */
@@ -598,7 +602,9 @@ const NO_REMOTE: DesktopRemoteHost = {
 const MAIN_WINDOW_ONLY: DesktopWindowHost = {
   role: "main",
   openWorld: () => {},
+  openMap: () => {},
   focusSession: () => {},
+  focusTask: () => {},
 };
 
 /** A terminal copy past this is a runaway program, not a selection. */
@@ -715,7 +721,22 @@ export function createDesktopRequestHandlers(
           throw new DaedalusError("NOT_FOUND", `Report '${id}' was not found`);
         return { ...context.routineReports.verdict(ability, id, verdict) };
       }),
-    windowRole: () => result(() => ({ role: windows.role })),
+    windowRole: () =>
+      result(() => ({
+        role: windows.role,
+        ...(windows.mapId ? { mapId: windows.mapId } : {}),
+      })),
+    flowMapWindowOpen: ({ mapId }) =>
+      result(() => {
+        context.flow.getMap(mapId);
+        windows.openMap(mapId);
+        return { opened: true };
+      }),
+    taskFocus: ({ taskId }) =>
+      result(() => {
+        windows.focusTask(taskId);
+        return { focused: true };
+      }),
     worldWindowOpen: () =>
       result(() => {
         windows.openWorld();

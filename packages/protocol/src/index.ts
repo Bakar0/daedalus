@@ -1044,7 +1044,8 @@ type Request<Params, Response> = {
 };
 
 /** The app's own window, or the World opened in a window of its own. */
-export type DesktopWindowRole = "main" | "world";
+/** `map` is a flow map in a window of its own, one window per map. */
+export type DesktopWindowRole = "main" | "world" | "map";
 
 /** Stable contract shared by Electrobun's Bun and renderer runtimes. */
 export interface DesktopRpcSchema {
@@ -1656,7 +1657,14 @@ export interface DesktopRpcSchema {
        * load the same page, and a `views://` URL carries no parameters, so a
        * page learns what to draw by asking.
        */
-      windowRole: Request<Record<string, never>, { role: DesktopWindowRole }>;
+      windowRole: Request<
+        Record<string, never>,
+        { role: DesktopWindowRole; mapId?: string }
+      >;
+      /** Opens a flow map in a window of its own, or brings it forward. */
+      flowMapWindowOpen: Request<{ mapId: string }, { opened: boolean }>;
+      /** Brings the main window forward on a task's drawer. */
+      taskFocus: Request<{ taskId: string }, { focused: boolean }>;
       /** Opens the World in a window of its own, or brings it forward. */
       worldWindowOpen: Request<Record<string, never>, { opened: boolean }>;
       /**

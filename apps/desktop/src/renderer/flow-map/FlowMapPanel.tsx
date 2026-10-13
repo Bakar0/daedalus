@@ -74,6 +74,8 @@ export function FlowMapPanel({
   onOpenTask,
   onError,
   onClose,
+  onPopOut,
+  windowed = false,
 }: {
   client: DesktopClient;
   /** The maps this session owns or works on. */
@@ -86,7 +88,12 @@ export function FlowMapPanel({
   onOpenSession: (session: StageSession) => void;
   onOpenTask: (task: TaskDto) => void;
   onError: (message: string) => void;
-  onClose: () => void;
+  /** Absent in a map window, which the system closes. */
+  onClose?: () => void;
+  /** Opens the map in a window of its own, as the World does. */
+  onPopOut?: () => void;
+  /** Fills a window of its own rather than sitting over a terminal. */
+  windowed?: boolean;
 }) {
   const [detail, setDetail] = useState<FlowMapDetailDto | null>(null);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
@@ -130,9 +137,9 @@ export function FlowMapPanel({
   return (
     <aside
       aria-label={`Flow map ${current?.name ?? ""}`}
-      className="flow-map-panel flow-map-view"
+      className={`flow-map-panel flow-map-view ${windowed ? "flow-map-windowed" : ""}`}
       onKeyDown={(event) => {
-        if (event.key !== "Escape") return;
+        if (event.key !== "Escape" || !onClose) return;
         event.preventDefault();
         onClose();
       }}
@@ -193,9 +200,21 @@ export function FlowMapPanel({
           >
             History
           </button>
-          <button className="quiet flow-tool" onClick={onClose} type="button">
-            Close
-          </button>
+          {onPopOut ? (
+            <button
+              className="quiet flow-tool"
+              onClick={onPopOut}
+              title="Open the map in a window of its own"
+              type="button"
+            >
+              Pop out
+            </button>
+          ) : null}
+          {onClose ? (
+            <button className="quiet flow-tool" onClick={onClose} type="button">
+              Close
+            </button>
+          ) : null}
         </div>
         {legendOpen ? (
           <div className="flow-legend" aria-label="Relation types">

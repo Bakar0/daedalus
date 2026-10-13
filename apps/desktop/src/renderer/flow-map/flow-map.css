@@ -649,3 +649,23 @@
 .flow-map-panel:focus-visible {
   outline: none;
 }
+
+/* A map in a window of its own fills the window instead of sitting over a
+   terminal. */
+.app.flow-map-window {
+  display: block;
+  height: 100vh;
+  position: relative;
+}
+.flow-map-panel.flow-map-windowed {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  inset: 0;
+}
+.flow-map-window-error {
+  bottom: 12px;
+  color: var(--danger);
+  left: 16px;
+  position: absolute;
+}

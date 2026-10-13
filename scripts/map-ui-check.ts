@@ -364,7 +364,45 @@ try {
     `Lit relations on hover: ${JSON.stringify(lit)}`,
   );
   const hoverShot = await screenshot("hover");
+
+  // Empty space on the canvas, or the root's own head, is not a component:
+  // every line stays lit there.
+  for (const target of ["empty space", "the root's head"]) {
+    const point = await evaluate<{ x: number; y: number }>(
+      target === "empty space"
+        ? `(() => {
+            const frame = document.querySelector('.flow-frame').getBoundingClientRect();
+            const columns = document.querySelector('.flow-columns').getBoundingClientRect();
+            return { x: frame.left + 20, y: Math.min(frame.bottom - 6, columns.bottom + 4) };
+          })()`
+        : `(() => {
+            const rect = document.querySelector('.flow-frame > .flow-head .flow-name').getBoundingClientRect();
+            return { x: rect.left + 8, y: rect.top + 6 };
+          })()`,
+    );
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: point.x,
+      y: point.y,
+    });
+    await Bun.sleep(80);
+    check(
+      !(await evaluate<boolean>(
+        "Boolean(document.querySelector('.flow-edges-faded'))",
+      )),
+      `Hovering ${target} faded the relation lines`,
+    );
+  }
   await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 2, y: 2 });
+
+  // Pop out asks for the map's own window.
+  await evaluate(
+    "[...document.querySelectorAll('.flow-tool')].find((n) => n.textContent === 'Pop out').click()",
+  );
+  check(
+    (await evaluate<string[]>("window.mapTest.opened")).includes("pop-out"),
+    "Pop out did nothing",
+  );
 
   // Collapsing a column lifts its relations onto it and merges duplicates.
   await evaluate(
