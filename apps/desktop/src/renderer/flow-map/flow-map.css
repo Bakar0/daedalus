@@ -70,14 +70,14 @@
   display: flex;
   gap: 6px;
 }
-.flow-history-toggle {
+.flow-map-view .flow-history-toggle {
   background: var(--raised);
   border: 1px solid var(--line);
   border-radius: 7px;
   margin-left: auto;
   padding: 5px 12px;
 }
-.flow-history-toggle.active {
+.flow-map-view .flow-history-toggle.active {
   background: var(--accent-wash);
   border-color: var(--accent);
 }
@@ -162,7 +162,10 @@
 /* ------------------------------------------------------------ canvas */
 
 .flow-canvas {
-  min-width: 900px;
+  /* Wide enough for every column at its minimum, with room on the right
+     for the loops of links inside the last column; the tab scrolls. */
+  min-width: min-content;
+  padding-right: 72px;
   position: relative;
 }
 .flow-frame {
@@ -171,23 +174,21 @@
   padding: 14px;
 }
 .flow-columns {
-  align-items: flex-start;
-  display: flex;
+  align-items: start;
+  display: grid;
   gap: 90px;
+  grid-auto-columns: minmax(300px, 1fr);
+  grid-auto-flow: column;
   margin-top: 14px;
 }
 .flow-column {
   background: var(--raised);
   border: 1px solid var(--line);
   border-radius: 12px;
-  flex: 1;
   min-width: 0;
   padding: 10px;
   position: relative;
   z-index: 3;
-}
-.flow-column.flow-dropped {
-  flex: 0.6;
 }
 .flow-inside {
   display: grid;
@@ -241,13 +242,15 @@
   color: var(--muted);
   font-size: 11px;
 }
-.flow-caret {
+.flow-map-view .flow-caret {
   background: none;
   border: 0;
   color: var(--muted);
-  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 3px;
 }
-.flow-task-chip {
+.flow-map-view .flow-task-chip {
   background: var(--accent-wash);
   border: 1px solid transparent;
   border-radius: 999px;
@@ -256,7 +259,7 @@
   margin-left: auto;
   padding: 1px 7px;
 }
-.flow-task-chip:hover {
+.flow-map-view .flow-task-chip:hover {
   border-color: var(--accent);
 }
 .flow-deliverable {
@@ -277,7 +280,7 @@
   margin: 4px 0 0;
   padding: 1px 0 1px 9px;
 }
-.flow-link {
+.flow-map-view .flow-link {
   background: none;
   border: 0;
   color: var(--accent);
@@ -290,9 +293,11 @@
 .flow-line {
   align-items: center;
   display: flex;
-  flex-wrap: nowrap;
+  /* A long flow in a narrow box wraps rather than overlapping. */
+  flex-wrap: wrap;
   min-width: 0;
   padding: 3px 0;
+  row-gap: 5px;
 }
 .flow-line-empty {
   color: var(--muted);
@@ -327,11 +332,11 @@
     transparent 4px 7px
   );
 }
-.flow-station-wrap {
+.flow-map-view .flow-station-wrap {
   flex: none;
   position: relative;
 }
-.flow-station {
+.flow-map-view .flow-station {
   align-items: center;
   background: var(--raised);
   border: 1.5px solid var(--line-strong);
@@ -344,44 +349,44 @@
   padding: 0 7px;
   white-space: nowrap;
 }
-.flow-station:disabled {
+.flow-map-view .flow-station:disabled {
   cursor: default;
   opacity: 1;
 }
-.flow-station-mode {
+.flow-map-view .flow-station-mode {
   font-size: 10px;
   opacity: 0.8;
 }
-.flow-station-done {
+.flow-map-view .flow-station-done {
   background: var(--flow-done);
   border-color: var(--flow-done);
   color: var(--flow-done-ink);
   font-weight: 600;
 }
-.flow-station-skipped {
+.flow-map-view .flow-station-skipped {
   border-style: dashed;
   opacity: 0.5;
   text-decoration: line-through;
 }
-.flow-station-running {
+.flow-map-view .flow-station-running {
   background: color-mix(in srgb, var(--flow-done) 18%, transparent);
   border-color: var(--flow-done);
   color: var(--text);
   font-weight: 600;
 }
-.flow-station-blocked {
+.flow-map-view .flow-station-blocked {
   background: color-mix(in srgb, var(--flow-blocked) 16%, transparent);
   border-color: var(--flow-blocked);
   color: var(--text);
 }
-.flow-station-waiting {
+.flow-map-view .flow-station-waiting {
   border-style: dashed;
 }
-.flow-station-dropped {
+.flow-map-view .flow-station-dropped {
   opacity: 0.4;
   text-decoration: line-through;
 }
-.flow-station-stalled {
+.flow-map-view .flow-station-stalled {
   color: var(--flow-attention);
   font-size: 9.5px;
   font-weight: 600;
@@ -391,17 +396,17 @@
 /* The stage at work beats like a heart: a double pulse. Amber and faster
    when its agent needs the user; still, and marked stalled, when its
    session ended. */
-.flow-beat-working {
+.flow-map-view .flow-beat-working {
   --beat: var(--flow-done);
   animation: flow-heartbeat 1.3s ease-in-out infinite;
 }
-.flow-beat-attention {
+.flow-map-view .flow-beat-attention {
   --beat: var(--flow-attention);
   animation: flow-heartbeat 0.75s ease-in-out infinite;
   background: color-mix(in srgb, var(--flow-attention) 20%, transparent);
   border-color: var(--flow-attention);
 }
-.flow-beat-stalled {
+.flow-map-view .flow-beat-stalled {
   border-color: var(--flow-attention);
   border-style: dashed;
 }
@@ -461,7 +466,7 @@
 .flow-stage-card-question {
   color: var(--flow-attention);
 }
-.flow-stage-card button {
+.flow-map-view .flow-stage-card button {
   background: var(--accent);
   border: 0;
   border-radius: 6px;
@@ -609,4 +614,19 @@
 .flow-column:hover,
 .flow-box:hover {
   z-index: 5;
+}
+
+/* A station keeps its colour under the pointer; the quiet button hover
+   would turn it grey. */
+.flow-map-view .flow-station:hover {
+  background: var(--raised-hover);
+}
+.flow-map-view .flow-station-done:hover {
+  background: var(--flow-done);
+}
+.flow-map-view .flow-station-running:hover {
+  background: color-mix(in srgb, var(--flow-done) 26%, transparent);
+}
+.flow-map-view .flow-beat-attention:hover {
+  background: color-mix(in srgb, var(--flow-attention) 28%, transparent);
 }

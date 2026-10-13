@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   FlowMapDetailDto,
   FlowMapSummaryDto,
@@ -67,6 +67,9 @@ export function FlowMapView({
   const [showDropped, setShowDropped] = useState(false);
   const [showRelations, setShowRelations] = useState(true);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Kept in a ref so a caller's new function each render does not refetch.
+  const reportError = useRef(onError);
+  reportError.current = onError;
 
   useEffect(() => {
     setMaps(null);
@@ -80,13 +83,13 @@ export function FlowMapView({
       .flowMaps({ workspaceId: workspace.id })
       .then((response) => {
         if (cancelled) return;
-        if (!response.ok) return onError(response.error.message);
+        if (!response.ok) return reportError.current(response.error.message);
         setMaps(response.data);
       });
     return () => {
       cancelled = true;
     };
-  }, [client, dataRevision, workspace.id, onError]);
+  }, [client, dataRevision, workspace.id]);
 
   // The stored choice, or the newest map when that one is gone.
   const mapId =
@@ -100,13 +103,13 @@ export function FlowMapView({
     let cancelled = false;
     void client.request.flowMap({ mapId }).then((response) => {
       if (cancelled) return;
-      if (!response.ok) return onError(response.error.message);
+      if (!response.ok) return reportError.current(response.error.message);
       setDetail(response.data);
     });
     return () => {
       cancelled = true;
     };
-  }, [client, dataRevision, mapId, onError]);
+  }, [client, dataRevision, mapId]);
 
   const dropped = useMemo(
     () =>
@@ -172,7 +175,7 @@ export function FlowMapView({
         </label>
         <button
           aria-pressed={historyOpen}
-          className={`flow-history-toggle ${historyOpen ? "active" : ""}`}
+          className={`quiet flow-history-toggle ${historyOpen ? "active" : ""}`}
           onClick={() => setHistoryOpen((open) => !open)}
           type="button"
         >

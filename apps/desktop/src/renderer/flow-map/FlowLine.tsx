@@ -61,6 +61,7 @@ export function FlowLine({
               <button
                 aria-label={`${name}: ${STAGE_STATE_WORDS[stage.shown]}`}
                 className={[
+                  "quiet",
                   "flow-station",
                   `flow-station-${stage.shown}`,
                   `flow-station-mode-${stage.mode}`,

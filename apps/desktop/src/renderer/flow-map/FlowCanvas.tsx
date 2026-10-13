@@ -265,7 +265,7 @@ function ComponentHead(
           <button
             aria-expanded={!collapsed.has(component.id)}
             aria-label={`${collapsed.has(component.id) ? "Expand" : "Collapse"} ${component.name}`}
-            className="flow-caret"
+            className="quiet flow-caret"
             onClick={() => props.onToggleCollapse(component.id)}
             type="button"
           >
@@ -276,7 +276,7 @@ function ComponentHead(
         <span className="flow-number">#{component.number}</span>
         {task ? (
           <button
-            className="flow-task-chip"
+            className="quiet flow-task-chip"
             onClick={() => props.onOpenTask(task)}
             title={task.title}
             type="button"
@@ -307,7 +307,7 @@ function ComponentHead(
           {decisions.length > shown.length ? (
             <li>
               <button
-                className="flow-link"
+                className="quiet flow-link"
                 onClick={() => setAllDecisions(true)}
                 type="button"
               >
