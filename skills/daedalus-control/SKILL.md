@@ -58,7 +58,7 @@ list`, `repo list`, or `agent list`.
   under `repos/`; it does not create a writable implementation checkout.
 - Treat workspace `repos/` checkouts as read-only planning references.
 - Before editing, create only the needed writable worktree with
-  `daedal repo worktree create --session <session-id> --repository <name-or-id>`
+  `daedal repo worktree create --session <session-id> --repository <name-or-id> [--branch <name>]`
   and continue in the returned path.
 
 ## Sessions

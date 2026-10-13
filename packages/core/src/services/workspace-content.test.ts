@@ -2433,6 +2433,52 @@ Before working in this workspace:
       });
     });
 
+    test("uses the branch name the agent asks for, and refuses an invalid or taken one", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const source = join(home, "source", "product");
+        await createRepository(source);
+        const context = await contextWithStubbedAgent(home);
+        const workspace = await context.workspaces.create({ name: "Chosen" });
+        const attached = await context.workspaceContent.addAndAttachRepository({
+          workspace: workspace.id,
+          remoteUrl: source,
+        });
+        const spawn = () =>
+          context.agents.spawn({ workspace: workspace.id, provider: "claude" });
+
+        const first = await spawn();
+        const worktree = await context.workspaceContent.createSessionWorktree({
+          session: first.id,
+          repository: "product",
+          branch: "feat/ABC-123-status",
+        });
+        expect(worktree.branchName).toBe("feat/ABC-123-status");
+        expect(
+          await git(["-C", worktree.path, "branch", "--show-current"]),
+        ).toBe("feat/ABC-123-status");
+        expect(
+          await branchExists(attached.canonicalPath, "feat/ABC-123-status"),
+        ).toBe(true);
+
+        const second = await spawn();
+        await expect(
+          context.workspaceContent.createSessionWorktree({
+            session: second.id,
+            repository: "product",
+            branch: "feat/ABC-123-status",
+          }),
+        ).rejects.toThrow("already exists");
+        await expect(
+          context.workspaceContent.createSessionWorktree({
+            session: second.id,
+            repository: "product",
+            branch: "bad..name",
+          }),
+        ).rejects.toThrow("not a valid branch name");
+        context.close();
+      });
+    });
+
     test("a squash merge counts as landed only when the merged pull request holds the tree's HEAD", async () => {
       await withTemporaryDaedalusHome(async (home) => {
         const source = join(home, "source", "product");
