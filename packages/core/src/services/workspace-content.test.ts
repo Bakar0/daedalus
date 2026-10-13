@@ -662,6 +662,7 @@ Before working in this workspace:
       const worktree = await context.workspaceContent.createSessionWorktree({
         session: session.id,
         repository: "app",
+        branch: `work-${session.id.slice(0, 8)}`,
       });
       expect(worktree.path).toBe(join(session.workingDirectory, "app"));
       expect(await readFile(join(worktree.path, "README.md"), "utf8")).toBe(
@@ -738,6 +739,7 @@ Before working in this workspace:
       const worktree = await context.workspaceContent.createSessionWorktree({
         session: session.id,
         repository: "app",
+        branch: `work-${session.id.slice(0, 8)}`,
       });
 
       // The session starts from what is on the base branch now, so the later
@@ -1533,6 +1535,7 @@ Before working in this workspace:
         const worktree = await context.workspaceContent.createSessionWorktree({
           session: session.id,
           repository: "product",
+          branch: `work-${session.id.slice(0, 8)}`,
         });
         expect(
           (
@@ -1567,6 +1570,7 @@ Before working in this workspace:
       const worktree = await context.workspaceContent.createSessionWorktree({
         session: session.id,
         repository: "product",
+        branch: `work-${session.id.slice(0, 8)}`,
       });
       const content = context.workspaceContent;
       const status = async () =>
@@ -1737,6 +1741,7 @@ Before working in this workspace:
         const worktree = await context.workspaceContent.createSessionWorktree({
           session: session.id,
           repository: "product",
+          branch: `work-${session.id.slice(0, 8)}`,
         });
 
         // The listing deliberately does not wait for git, so the measurement
@@ -1831,6 +1836,7 @@ Before working in this workspace:
         const worktree = await context.workspaceContent.createSessionWorktree({
           session: session.id,
           repository: "product",
+          branch: `work-${session.id.slice(0, 8)}`,
         });
         await Bun.write(join(worktree.path, "LANDED.md"), "# Landed\n");
         expect(
@@ -2033,6 +2039,7 @@ Before working in this workspace:
       const worktree = await context.workspaceContent.createSessionWorktree({
         session: session.id,
         repository: "product",
+        branch: `work-${session.id.slice(0, 8)}`,
       });
       return { context, workspace, repository, session, worktree };
     };
@@ -2252,6 +2259,7 @@ Before working in this workspace:
         const kept = await context.workspaceContent.createSessionWorktree({
           session: keeper.id,
           repository: "product",
+          branch: `work-${keeper.id.slice(0, 8)}`,
         });
         await commitIn(kept.path, "UNPUSHED.md");
 
@@ -2376,7 +2384,7 @@ Before working in this workspace:
       });
     });
 
-    test("names a task's branch after the task, and follows a branch the agent switched to", async () => {
+    test("follows a branch the agent switched to", async () => {
       await withTemporaryDaedalusHome(async (home) => {
         const source = join(home, "source", "product");
         await createRepository(source);
@@ -2398,10 +2406,9 @@ Before working in this workspace:
         const worktree = await context.workspaceContent.createSessionWorktree({
           session: session.id,
           repository: "product",
+          branch: `work-${session.id.slice(0, 8)}`,
         });
-        expect(worktree.branchName).toBe(
-          `agent-status-in-the-app-${session.id.slice(0, 8)}`,
-        );
+        expect(worktree.branchName).toBe(`work-${session.id.slice(0, 8)}`);
 
         // The agent moves its work to a branch of its own.
         await git(["-C", worktree.path, "checkout", "-q", "-b", "topic"]);
@@ -2433,7 +2440,7 @@ Before working in this workspace:
       });
     });
 
-    test("uses the branch name the agent asks for, and refuses an invalid or taken one", async () => {
+    test("requires a branch name, and refuses an invalid or taken one", async () => {
       await withTemporaryDaedalusHome(async (home) => {
         const source = join(home, "source", "product");
         await createRepository(source);
@@ -2475,6 +2482,12 @@ Before working in this workspace:
             branch: "bad..name",
           }),
         ).rejects.toThrow("not a valid branch name");
+        await expect(
+          context.workspaceContent.createSessionWorktree({
+            session: second.id,
+            repository: "product",
+          }),
+        ).rejects.toThrow("--branch <name> is required");
         context.close();
       });
     });
@@ -2496,6 +2509,7 @@ Before working in this workspace:
         const worktree = await context.workspaceContent.createSessionWorktree({
           session: session.id,
           repository: "product",
+          branch: `work-${session.id.slice(0, 8)}`,
         });
         await commitIn(worktree.path, "ONE.md");
         await commitIn(worktree.path, "TWO.md");
@@ -2650,6 +2664,7 @@ Before working in this workspace:
         const worktree = await context.workspaceContent.createSessionWorktree({
           session: session.id,
           repository: "product",
+          branch: `work-${session.id.slice(0, 8)}`,
         });
         await commitIn(worktree.path, "WORK.md");
         const status = async () => {

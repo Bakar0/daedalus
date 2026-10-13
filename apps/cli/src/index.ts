@@ -425,7 +425,7 @@ it was cleared, journal entries whose heading names the task, and done.`,
   daedal repo fetch <attachment-id>
   daedal repo pull <attachment-id>
   daedal repo detach <attachment-id>
-  daedal repo worktree create --session <agent-id> --repository <name-or-id> [--branch <name>]
+  daedal repo worktree create --session <agent-id> --repository <name-or-id> --branch <name>
   daedal repo worktree list [--workspace <workspace>] [--session <agent-id>]
   daedal repo worktree open --session <agent-id> --repository <name-or-id>
   daedal repo worktree push --session <agent-id> --repository <name-or-id>
@@ -2232,7 +2232,7 @@ async function repositoryCommand(
     expectPositionals(
       parsed.positionals,
       0,
-      "daedal repo worktree create --session <agent-id> --repository <name-or-id> [--branch <name>]",
+      "daedal repo worktree create --session <agent-id> --repository <name-or-id> --branch <name>",
     );
     const result = await context.workspaceContent.createSessionWorktree({
       session: required(parsed.values.session, "--session"),
