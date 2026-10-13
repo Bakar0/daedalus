@@ -18,10 +18,12 @@ import {
 } from "@daedalus/core";
 import { callerSession } from "./caller";
 import { parseArguments, printResult, required } from "./arguments";
+import { resolveSession } from "./routines";
 
 export const flowHelp = `Flow map commands:
   daedal flow maps [--workspace <workspace>]
   daedal flow new <name> --deliverable <text> [--done-when <text>]
+      [--session <owner>]
   daedal flow show [--map <map>] [--dropped]
   daedal flow history [--map <map>] [--limit <n>]
   daedal flow add <name> --in <component> --deliverable <text>
@@ -41,14 +43,17 @@ export const flowHelp = `Flow map commands:
   daedal flow types
 
 Every command also takes --workspace <workspace> and --map <map>. Inside a
-session they default to the session's workspace and to the workspace's only
-map. A map is named by its number (1, #1) or its name. A component is named
+session they default to the session's workspace and to its own map, else
+the map it holds a stage on, else the workspace's only map. A map is named by its number (1, #1) or its name. A component is named
 by its number (7, #7), a path of names from the root ("API server/Orders
 API"), or a name only one component has. A relation is r<n>, as 'flow show'
 prints it.
 
-A map belongs to the workspace. It starts as one root component, the idea
-or task, and holds components inside components. Each component states its
+A map belongs to the session that makes it, through its flow ability, the
+way a team belongs to its lead; a rebirth hands it to the successor. The
+user making one from a terminal names its owner with --session. A map
+starts as one root component, the idea or task, and holds components inside
+components. Each component states its
 deliverable: something meaningful on its own, not a step. Relations link any
 two components with one of these types:
 ${FLOW_RELATION_TYPES.map((type) => `  ${type.padEnd(13)} ${FLOW_RELATION_MEANINGS[type]}`).join("\n")}
@@ -71,9 +76,11 @@ components inside reach it.
 use it for something considered and decided against. 'delete' removes it
 with no trace: use it for noise such as a typo or a duplicate.
 
-Inside a session, changing a map needs the flow ability ('daedal session
-grant <session> flow'); reading does not. Outside a session the change is
-the user's.`;
+Only the owner, while it holds the flow ability ('daedal session grant
+<session> flow'), or the user from a terminal changes a map's shape. Any
+session in the workspace may start, finish, block or skip a stage, so the
+agents the owner hands work to need no ability; resetting one is the
+owner's. Reading is open to everyone.`;
 
 const STAGE_ACTIONS: readonly FlowStageAction[] = [
   "start",
@@ -231,6 +238,7 @@ export async function flowCommand(
       "drop",
       "task",
       "limit",
+      "session",
     ],
     ["dropped", "with-contents", "delete", "none", "force"],
   );
@@ -262,10 +270,15 @@ export async function flowCommand(
     return 0;
   }
 
+  const owner =
+    values.session !== undefined
+      ? await resolveSession(context, values.session)
+      : undefined;
   const workspaceId = await (async () => {
     if (values.workspace)
       return (await context.workspaces.get(values.workspace)).id;
     if (caller) return caller.workspaceId;
+    if (owner) return owner.workspaceId;
     throw new DaedalusError(
       "VALIDATION",
       "--workspace is required outside a Daedalus session",
@@ -273,7 +286,8 @@ export async function flowCommand(
   })();
   const sessionName = (id: string) => context.repositories.findAgent(id)?.name;
   const taskNumber = (id: string) => context.repositories.findTask(id)?.number;
-  const map = (): FlowMap => context.flow.resolveMap(workspaceId, values.map);
+  const map = (): FlowMap =>
+    context.flow.resolveMap(workspaceId, values.map, caller);
   const component = (reference: string | undefined, usage: string) =>
     context.flow.resolveComponent(map().id, required(reference, usage));
   const printMap = (detail: FlowMapDetail) =>
@@ -309,7 +323,13 @@ export async function flowCommand(
     case "new": {
       const name = positionals.join(" ");
       if (!name.trim()) usage("new <name> --deliverable <text>");
-      const detail = context.flow.createMap(actor, workspaceId, {
+      if (owner && caller)
+        throw new DaedalusError(
+          "VALIDATION",
+          "Inside a session the map is the session's own; leave out --session",
+        );
+      const detail = context.flow.createMap(actor, {
+        ...(owner ? { ownerSessionId: owner.id } : {}),
         name,
         deliverable: required(values.deliverable, "--deliverable"),
         ...(values["done-when"] !== undefined
@@ -537,6 +557,7 @@ export function spawnStageClaim(
   context: ApplicationContext,
   workspaceId: string,
   values: Record<string, string>,
+  caller?: AgentSession,
 ): SpawnStageClaim | undefined {
   const value = values["flow-stage"];
   if (value === undefined) {
@@ -553,7 +574,7 @@ export function spawnStageClaim(
       "VALIDATION",
       "--flow-stage takes <component>:<stage>, such as 'Orders API:implement'",
     );
-  const map = context.flow.resolveMap(workspaceId, values["flow-map"]);
+  const map = context.flow.resolveMap(workspaceId, values["flow-map"], caller);
   const component = context.flow.resolveComponent(
     map.id,
     value.slice(0, split),

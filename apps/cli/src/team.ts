@@ -342,7 +342,12 @@ export async function spawnTeamMember(
   const taskId = input.values.task
     ? await input.resolveTask(input.values.task, team.lead.workspaceId)
     : undefined;
-  const claim = spawnStageClaim(context, team.lead.workspaceId, input.values);
+  const claim = spawnStageClaim(
+    context,
+    team.lead.workspaceId,
+    input.values,
+    caller,
+  );
   const message = [instructions?.trim(), claim?.line]
     .filter(Boolean)
     .join("\n\n");
@@ -350,7 +355,6 @@ export async function spawnTeamMember(
     team: team.id,
     addedBy: callerRole ? "lead" : "user",
     ...(message ? { instructions: message } : {}),
-    ...(claim ? { abilities: ["flow" as const] } : {}),
     ...(input.values.name ? { name: input.values.name } : {}),
     ...(taskId ? { taskId } : {}),
     ...(input.values.provider ? { provider: input.values.provider } : {}),

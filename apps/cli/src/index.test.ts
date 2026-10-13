@@ -1083,12 +1083,25 @@ describe("daedal flow", () => {
         expect(outside.exitCode).toBe(2);
         expect(outside.stderr).toContain("--workspace is required");
 
+        // A map belongs to a session with the ability; the user names it.
+        await json([
+          "agent",
+          "spawn",
+          "--workspace",
+          "shop",
+          "--provider",
+          "codex",
+          "--name",
+          "Mapper",
+          "--ability",
+          "flow",
+        ]);
         const map = await json([
           "flow",
           "new",
           "Checkout",
-          "--workspace",
-          "shop",
+          "--session",
+          "Mapper",
           "--deliverable",
           "A customer pays for an order",
         ]);

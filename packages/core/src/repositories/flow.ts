@@ -15,6 +15,7 @@ import type {
 interface MapRow {
   id: string;
   workspace_id: string;
+  ability_id: string;
   number: number;
   name: string;
   created_at: string;
@@ -88,6 +89,7 @@ interface HistoryRow {
 const mapFromRow = (row: MapRow): FlowMap => ({
   id: row.id,
   workspaceId: row.workspace_id,
+  abilityId: row.ability_id,
   number: row.number,
   name: row.name,
   createdAt: row.created_at,
@@ -176,6 +178,47 @@ export class FlowRepository {
       .map(mapFromRow);
   }
 
+  /** The maps a flow ability row owns. */
+  listOwnedMaps(abilityId: string): FlowMap[] {
+    return this.database
+      .query<MapRow, [string]>(
+        "SELECT * FROM flow_maps WHERE ability_id = ? ORDER BY number",
+      )
+      .all(abilityId)
+      .map(mapFromRow);
+  }
+
+  /** Every map, with its owner's session and the sessions holding stages. */
+  listMapOverview(): Array<
+    FlowMap & { ownerSessionId: string | null; stageSessionIds: string[] }
+  > {
+    const holders = this.database
+      .query<{ map_id: string; session_id: string }, []>(
+        `SELECT DISTINCT flow_components.map_id, flow_stages.session_id
+         FROM flow_stages
+         JOIN flow_components ON flow_components.id = flow_stages.component_id
+         WHERE flow_stages.session_id IS NOT NULL
+           AND flow_stages.state IN ('running', 'blocked')
+           AND flow_stages.dropped_at IS NULL`,
+      )
+      .all();
+    return this.database
+      .query<MapRow & { owner_session_id: string | null }, []>(
+        `SELECT flow_maps.*, session_abilities.session_id AS owner_session_id
+         FROM flow_maps
+         LEFT JOIN session_abilities ON session_abilities.id = flow_maps.ability_id
+         ORDER BY flow_maps.workspace_id, flow_maps.number`,
+      )
+      .all()
+      .map((row) => ({
+        ...mapFromRow(row),
+        ownerSessionId: row.owner_session_id,
+        stageSessionIds: holders
+          .filter((holder) => holder.map_id === row.id)
+          .map((holder) => holder.session_id),
+      }));
+  }
+
   findMap(id: string): FlowMap | undefined {
     const row = this.database
       .query<MapRow, [string]>("SELECT * FROM flow_maps WHERE id = ?")
@@ -195,12 +238,13 @@ export class FlowRepository {
   createMap(map: FlowMap): void {
     this.database
       .query(
-        `INSERT INTO flow_maps (id, workspace_id, number, name, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO flow_maps (id, workspace_id, ability_id, number, name, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         map.id,
         map.workspaceId,
+        map.abilityId,
         map.number,
         map.name,
         map.createdAt,

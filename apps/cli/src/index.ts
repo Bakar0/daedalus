@@ -486,8 +486,8 @@ lead running it; with a lead, that lead's team, and the lead is told in the
 team chat. See 'daedal team --help'.
 
 'agent spawn --flow-stage <component>:<stage>' starts a session that holds
-the flow ability and has that stage of the workspace's flow map claimed for
-it; its first message says which stage it owns. It works with --team too.
+that stage of a flow map claimed for it; its first message says which
+stage it owns. It needs no ability to work the stage. It works with --team too.
 See 'daedal flow --help'.
 
 'agent spawn' without --model starts with the workspace's default model when
@@ -1258,18 +1258,17 @@ async function agentCommand(
     const task = parsed.values.task
       ? await resolveTaskReference(context, parsed.values.task, workspace)
       : undefined;
+    const spawner = await callerSession(context).catch(() => undefined);
     const claim = spawnStageClaim(
       context,
       (await context.workspaces.get(workspace)).id,
       parsed.values,
+      spawner,
     );
-    const abilities = [
-      ...(parsed.values.ability ?? "")
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean),
-      ...(claim ? ["flow"] : []),
-    ];
+    const abilities = (parsed.values.ability ?? "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
     const message = [parsed.values.message?.trim(), claim?.line]
       .filter(Boolean)
       .join("\n\n");
@@ -1286,8 +1285,8 @@ async function agentCommand(
       message: message || undefined,
       draftBrief: parsed.flags.has("refine") || undefined,
       // An agent starting a session from inside its own, as a handoff does.
-      spawnedBy: (await callerSession(context).catch(() => undefined))?.id,
-      ...(abilities.length ? { abilities: [...new Set(abilities)] } : {}),
+      spawnedBy: spawner?.id,
+      ...(abilities.length ? { abilities } : {}),
       ...(parsed.values.color
         ? { color: sessionColor(parsed.values.color) }
         : {}),

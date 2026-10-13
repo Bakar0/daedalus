@@ -210,13 +210,46 @@ export class FlowService {
       });
   }
 
+  /** The maps a session owns through its flow ability, held or revoked. */
+  mapsOwnedBy(sessionId: string): FlowMap[] {
+    const ability = this.repositories.abilities.findForSession(
+      sessionId,
+      "flow",
+    );
+    return ability ? this.repositories.flow.listOwnedMaps(ability.id) : [];
+  }
+
   /**
    * A map in a workspace by number (`2`, `#2`), name, or id. With no
-   * reference, the workspace's only map.
+   * reference: the caller's only map, else the only map it holds a stage
+   * on, else the workspace's only map.
    */
-  resolveMap(workspaceId: string, reference?: string): FlowMap {
+  resolveMap(
+    workspaceId: string,
+    reference?: string,
+    caller?: AgentSession,
+  ): FlowMap {
     const maps = this.repositories.flow.listMaps(workspaceId);
     if (reference === undefined) {
+      if (caller) {
+        const owned = this.mapsOwnedBy(caller.id).filter(
+          (map) => map.workspaceId === workspaceId,
+        );
+        if (owned.length === 1) return owned[0]!;
+        const working = new Set(
+          this.repositories.flow
+            .heldStages(caller.id)
+            .flatMap(
+              (stage) =>
+                this.repositories.flow.findComponent(stage.componentId)
+                  ?.mapId ?? [],
+            ),
+        );
+        if (owned.length === 0 && working.size === 1) {
+          const map = maps.find((candidate) => working.has(candidate.id));
+          if (map) return map;
+        }
+      }
       if (maps.length === 1) return maps[0]!;
       throw new DaedalusError(
         maps.length ? "VALIDATION" : "NOT_FOUND",
@@ -329,12 +362,32 @@ export class FlowService {
 
   // ---------------------------------------------------------------- maps
 
+  /**
+   * Starts a map owned by a session that holds the flow ability: the calling
+   * session, or for the user the one named as `ownerSessionId`. The map is
+   * in the owner's workspace.
+   */
   createMap(
     actor: FlowActor,
-    workspaceId: string,
-    input: { name: string; deliverable: string; doneWhen?: string },
+    input: {
+      name: string;
+      deliverable: string;
+      doneWhen?: string;
+      ownerSessionId?: string;
+    },
   ): FlowMapDetail {
-    this.authorize(actor);
+    const ownerId =
+      actor.kind === "session" ? actor.session.id : input.ownerSessionId;
+    if (!ownerId)
+      throw new DaedalusError(
+        "VALIDATION",
+        "A map belongs to a session that holds the flow ability; pass --session <session>",
+      );
+    const ability = this.abilities.require(ownerId, "flow");
+    const owner = this.repositories.findAgent(ownerId);
+    if (!owner)
+      throw new DaedalusError("NOT_FOUND", `Session ${ownerId} not found`);
+    const workspaceId = owner.workspaceId;
     const workspace = this.repositories.findWorkspace(workspaceId);
     if (!workspace)
       throw new DaedalusError(
@@ -370,6 +423,7 @@ export class FlowService {
       const map: FlowMap = {
         id: crypto.randomUUID(),
         workspaceId,
+        abilityId: ability.id,
         number: this.repositories.flow.nextMapNumber(workspaceId),
         name,
         createdAt: at,
@@ -392,7 +446,7 @@ export class FlowService {
   }
 
   deleteMap(actor: FlowActor, mapId: string): FlowMap {
-    this.authorize(actor);
+    this.authorize(actor, mapId);
     const map = this.getMap(mapId);
     this.repositories.flow.deleteMap(map.id);
     return map;
@@ -411,7 +465,7 @@ export class FlowService {
       stages?: FlowStageSpec[];
     },
   ): FlowComponent {
-    this.authorize(actor);
+    this.authorize(actor, mapId);
     const name = componentName(input.name);
     const deliverable = text(
       input.deliverable,
@@ -457,7 +511,7 @@ export class FlowService {
       position?: number;
     },
   ): FlowComponent {
-    this.authorize(actor);
+    this.authorize(actor, this.component(componentId).mapId);
     return this.repositories.immediateTransaction(() => {
       const component = this.component(componentId);
       const next: FlowComponent = { ...component, updatedAt: this.at() };
@@ -552,7 +606,7 @@ export class FlowService {
     componentId: string,
     reason: string,
   ): FlowComponent {
-    this.authorize(actor);
+    this.authorize(actor, this.component(componentId).mapId);
     const why = text(reason, "The reason", LIMITS.reason, { required: true });
     return this.repositories.immediateTransaction(() => {
       const component = this.component(componentId);
@@ -577,7 +631,7 @@ export class FlowService {
   }
 
   restoreComponent(actor: FlowActor, componentId: string): FlowComponent {
-    this.authorize(actor);
+    this.authorize(actor, this.component(componentId).mapId);
     return this.repositories.immediateTransaction(() => {
       const component = this.component(componentId);
       if (component.droppedReason === null)
@@ -615,7 +669,7 @@ export class FlowService {
     componentId: string,
     options: { withContents?: boolean } = {},
   ): FlowComponent {
-    this.authorize(actor);
+    this.authorize(actor, this.component(componentId).mapId);
     return this.repositories.immediateTransaction(() => {
       const component = this.component(componentId);
       if (component.parentId === null)
@@ -642,7 +696,7 @@ export class FlowService {
     componentId: string,
     taskId: string | null,
   ): FlowComponent {
-    this.authorize(actor);
+    this.authorize(actor, this.component(componentId).mapId);
     return this.repositories.immediateTransaction(() => {
       const component = this.component(componentId);
       const map = this.getMap(component.mapId);
@@ -683,7 +737,7 @@ export class FlowService {
       note?: string;
     },
   ): FlowRelation {
-    this.authorize(actor);
+    this.authorize(actor, mapId);
     const note = text(input.note, "A relation's note", LIMITS.note) || null;
     return this.repositories.immediateTransaction(() => {
       const from = this.componentOn(mapId, input.fromId);
@@ -737,7 +791,7 @@ export class FlowService {
     relationId: string,
     reason: string,
   ): FlowRelation {
-    this.authorize(actor);
+    this.authorize(actor, this.relation(relationId).mapId);
     const why = text(reason, "The reason", LIMITS.reason, { required: true });
     return this.repositories.immediateTransaction(() => {
       const relation = this.relation(relationId);
@@ -756,7 +810,7 @@ export class FlowService {
   }
 
   restoreRelation(actor: FlowActor, relationId: string): FlowRelation {
-    this.authorize(actor);
+    this.authorize(actor, this.relation(relationId).mapId);
     return this.repositories.immediateTransaction(() => {
       const relation = this.relation(relationId);
       if (relation.droppedReason === null)
@@ -779,7 +833,7 @@ export class FlowService {
   }
 
   deleteRelation(actor: FlowActor, relationId: string): FlowRelation {
-    this.authorize(actor);
+    this.authorize(actor, this.relation(relationId).mapId);
     return this.repositories.immediateTransaction(() => {
       const relation = this.relation(relationId);
       this.repositories.flow.deleteRelation(relation.id);
@@ -802,7 +856,7 @@ export class FlowService {
     specs: FlowStageSpec[],
     removal?: FlowStageRemoval,
   ): FlowShownStage[] {
-    this.authorize(actor);
+    this.authorize(actor, this.component(componentId).mapId);
     if (removal?.kind === "drop")
       text(removal.reason, "The reason", LIMITS.reason, { required: true });
     const component = this.repositories.immediateTransaction(() => {
@@ -834,7 +888,7 @@ export class FlowService {
     action: FlowStageAction,
     note?: string,
   ): FlowShownStage {
-    this.authorize(actor);
+    this.authorizeStage(actor, this.component(componentId).mapId, action);
     const reason = text(note, "The reason", LIMITS.reason, {
       required: action === "block",
     });
@@ -938,7 +992,7 @@ export class FlowService {
   // ----------------------------------------------------------- decisions
 
   decide(actor: FlowActor, componentId: string, decision: string) {
-    this.authorize(actor);
+    this.authorize(actor, this.component(componentId).mapId);
     const body = text(decision, "A decision", LIMITS.decision, {
       required: true,
     });
@@ -965,10 +1019,46 @@ export class FlowService {
 
   // ------------------------------------------------------------- helpers
 
-  /** A session changing a map must hold the flow ability; the user may. */
-  private authorize(actor: FlowActor): void {
-    if (actor.kind === "session")
-      this.abilities.require(actor.session.id, "flow");
+  /**
+   * Only the session that owns a map, while it holds the flow ability, or
+   * the user changes the map's shape.
+   */
+  private authorize(actor: FlowActor, mapId: string): void {
+    if (actor.kind === "user") return;
+    const map = this.getMap(mapId);
+    const ability = this.abilities.require(actor.session.id, "flow");
+    if (ability.id === map.abilityId) return;
+    const owner = this.ownerOf(map);
+    throw new DaedalusError(
+      "CONFLICT",
+      `The map '${map.name}' belongs to ${owner ? `'${owner.name}' (${owner.id})` : "another session"}; only it or the user changes its shape. You can start and finish its stages.`,
+    );
+  }
+
+  /**
+   * Any session in the map's workspace may move a stage, so agents the owner
+   * hands work to need no ability. Resetting one is the owner's or the
+   * user's call.
+   */
+  private authorizeStage(
+    actor: FlowActor,
+    mapId: string,
+    action: FlowStageAction,
+  ): void {
+    if (actor.kind === "user") return;
+    if (action === "reset") return this.authorize(actor, mapId);
+    const map = this.getMap(mapId);
+    if (actor.session.workspaceId !== map.workspaceId)
+      throw new DaedalusError(
+        "CONFLICT",
+        `The map '${map.name}' is in another workspace`,
+      );
+  }
+
+  /** The session that owns a map now. */
+  ownerOf(map: FlowMap): AgentSession | undefined {
+    const ability = this.repositories.abilities.find(map.abilityId);
+    return ability ? this.repositories.findAgent(ability.sessionId) : undefined;
   }
 
   private author(actor: FlowActor): string {

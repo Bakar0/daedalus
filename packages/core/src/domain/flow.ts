@@ -80,6 +80,11 @@ export const FLOW_STAGE_MODES: readonly FlowStageMode[] = [
 export interface FlowMap {
   id: UUID;
   workspaceId: UUID;
+  /**
+   * The flow ability row of the session that owns the map. A rebirth moves
+   * the row, so the map follows the work.
+   */
+  abilityId: UUID;
   /** Readable number within the workspace. */
   number: number;
   /** The root component's name. */

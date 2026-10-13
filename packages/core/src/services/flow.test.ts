@@ -100,9 +100,14 @@ async function agent(context: ApplicationContext, name: string, flow = true) {
   });
 }
 
-/** Checkout, with an API server holding Orders, and a web client. */
-function checkout(context: ApplicationContext, workspaceId: string) {
-  const detail = context.flow.createMap(user, workspaceId, {
+/**
+ * Checkout, owned by a session called Mapper, with an API server holding
+ * Orders and Payments, and a web client. The user builds it.
+ */
+async function checkout(context: ApplicationContext, _workspaceId: string) {
+  const owner = await agent(context, "Mapper");
+  const detail = context.flow.createMap(user, {
+    ownerSessionId: owner.id,
     name: "Checkout",
     deliverable: "A customer pays for an order",
   });
@@ -122,7 +127,7 @@ function checkout(context: ApplicationContext, workspaceId: string) {
   const orders = add(api.id, "Orders API", "plan,implement,validate");
   const payments = add(api.id, "Payments", "plan,implement,validate");
   const web = add(root.id, "Web client", "implement");
-  return { map: detail.map, root, api, orders, payments, web };
+  return { map: detail.map, owner, root, api, orders, payments, web };
 }
 
 const shownOf = (
@@ -144,12 +149,15 @@ describe("flow maps", () => {
       expect(tmux.launches.at(-1)!.args.at(-1)).toContain("flow ability");
       const plain = await agent(context, "Plain", false);
       expect(() =>
-        context.flow.createMap(as(plain), workspaceId, {
+        context.flow.createMap(as(plain), {
           name: "Checkout",
           deliverable: "Pay",
         }),
       ).toThrow("does not hold the flow map ability");
-      const detail = context.flow.createMap(as(mapper), workspaceId, {
+      expect(() =>
+        context.flow.createMap(user, { name: "Checkout", deliverable: "Pay" }),
+      ).toThrow("pass --session");
+      const detail = context.flow.createMap(as(mapper), {
         name: "Checkout",
         deliverable: "Pay",
       });
@@ -166,7 +174,7 @@ describe("flow maps", () => {
 
   test("components nest in one parent and are found by number, path or name", async () => {
     await withFlow(async ({ context, workspaceId }) => {
-      const { map, api, orders } = checkout(context, workspaceId);
+      const { map, api, orders } = await checkout(context, workspaceId);
       expect(
         context.flow.resolveComponent(map.id, `#${orders.number}`).id,
       ).toBe(orders.id);
@@ -202,7 +210,7 @@ describe("flow maps", () => {
 
   test("a dropped component stays with its reason; a deleted one leaves no trace", async () => {
     await withFlow(async ({ context, workspaceId }) => {
-      const { map, root, api, web } = checkout(context, workspaceId);
+      const { map, root, api, web } = await checkout(context, workspaceId);
       const fraud = context.flow.addComponent(user, map.id, {
         parentId: root.id,
         name: "Fraud service",
@@ -253,7 +261,7 @@ describe("flow maps", () => {
 
   test("relations are typed, within one map, never to themselves or twice", async () => {
     await withFlow(async ({ context, workspaceId }) => {
-      const { map, web, orders } = checkout(context, workspaceId);
+      const { map, web, orders } = await checkout(context, workspaceId);
       const relation = context.flow.relate(user, map.id, {
         fromId: web.id,
         toId: orders.id,
@@ -279,7 +287,8 @@ describe("flow maps", () => {
           type: "depends on",
         }),
       ).toThrow("two different components");
-      const other = context.flow.createMap(user, workspaceId, {
+      const other = context.flow.createMap(user, {
+        ownerSessionId: (await agent(context, "Biller")).id,
         name: "Billing",
         deliverable: "Invoices",
       });
@@ -303,7 +312,10 @@ describe("flow maps", () => {
 
   test("a container's stages follow its components and its own wait for them", async () => {
     await withFlow(async ({ context, workspaceId }) => {
-      const { map, api, orders, payments } = checkout(context, workspaceId);
+      const { map, api, orders, payments } = await checkout(
+        context,
+        workspaceId,
+      );
       expect(shownOf(context, map.id, api.id)).toEqual([
         "implement:todo",
         "integration:waiting",
@@ -337,7 +349,7 @@ describe("flow maps", () => {
 
   test("a stage is claimed by one live session at a time", async () => {
     await withFlow(async ({ context, workspaceId }) => {
-      const { map, orders } = checkout(context, workspaceId);
+      const { map, orders } = await checkout(context, workspaceId);
       const first = await agent(context, "First");
       const second = await agent(context, "Second");
       const started = context.flow.moveStage(
@@ -375,9 +387,61 @@ describe("flow maps", () => {
     });
   });
 
+  test("only the owner changes a map's shape; any session works its stages", async () => {
+    await withFlow(async ({ context, workspaceId }) => {
+      const { map, owner, root, orders } = await checkout(context, workspaceId);
+      const rival = await agent(context, "Rival");
+      const worker = await agent(context, "Worker", false);
+      expect(() =>
+        context.flow.addComponent(as(rival), map.id, {
+          parentId: root.id,
+          name: "Docs",
+          deliverable: "A guide",
+        }),
+      ).toThrow("belongs to 'Mapper'");
+      expect(() =>
+        context.flow.addComponent(as(worker), map.id, {
+          parentId: root.id,
+          name: "Docs",
+          deliverable: "A guide",
+        }),
+      ).toThrow("does not hold the flow map ability");
+      context.flow.addComponent(as(owner), map.id, {
+        parentId: root.id,
+        name: "Docs",
+        deliverable: "A guide",
+      });
+      // A session without the ability claims and finishes a stage.
+      expect(
+        context.flow.moveStage(as(worker), orders.id, "plan", "start"),
+      ).toMatchObject({ shown: "running", sessionId: worker.id });
+      expect(() =>
+        context.flow.moveStage(as(worker), orders.id, "plan", "reset"),
+      ).toThrow("does not hold the flow map ability");
+      context.flow.moveStage(as(worker), orders.id, "plan", "finish");
+      // A revoke freezes the map; a grant brings the owner back.
+      context.abilities.revoke(owner.id, "flow");
+      expect(() => context.flow.decide(as(owner), orders.id, "x")).toThrow(
+        "does not hold",
+      );
+      context.abilities.grant(owner.id, "flow", { live: true });
+      context.flow.decide(as(owner), orders.id, "Keep it small.");
+      expect(context.flow.mapsOwnedBy(owner.id).map((m) => m.id)).toEqual([
+        map.id,
+      ]);
+      // The map follows the ability row, as a team follows its lead.
+      context.repositories.abilities.moveToSession(owner.id, worker.id);
+      expect(() => context.flow.decide(as(owner), orders.id, "x")).toThrow();
+      expect(context.flow.ownerOf(context.flow.getMap(map.id))?.id).toBe(
+        worker.id,
+      );
+      context.flow.decide(as(worker), orders.id, "The successor decides.");
+    });
+  });
+
   test("a rebirth hands unfinished stages to the successor", async () => {
     await withFlow(async ({ context, workspaceId }) => {
-      const { map, orders } = checkout(context, workspaceId);
+      const { map, orders } = await checkout(context, workspaceId);
       const first = await agent(context, "First");
       const second = await agent(context, "Second");
       context.flow.moveStage(as(first), orders.id, "plan", "start");
@@ -400,7 +464,7 @@ describe("flow maps", () => {
 
   test("changing a flow keeps state; started stages leave only when dropped or deleted", async () => {
     await withFlow(async ({ context, workspaceId }) => {
-      const { map, orders } = checkout(context, workspaceId);
+      const { map, orders } = await checkout(context, workspaceId);
       context.flow.moveStage(user, orders.id, "plan", "finish");
       expect(() =>
         context.flow.setStages(
@@ -452,7 +516,7 @@ describe("flow maps", () => {
 
   test("decisions and task links sit on their component", async () => {
     await withFlow(async ({ context, workspaceId }) => {
-      const { map, orders } = checkout(context, workspaceId);
+      const { map, orders } = await checkout(context, workspaceId);
       const task = await context.tasks.create({
         workspace: "shop",
         title: "Orders API",
@@ -475,7 +539,7 @@ describe("flow maps", () => {
 
   test("every change moves the map's updated time, which the app watches", async () => {
     await withFlow(async ({ context, workspaceId }) => {
-      const { map, orders } = checkout(context, workspaceId);
+      const { map, orders } = await checkout(context, workspaceId);
       const before = context.repositories.flow.fingerprint();
       await Bun.sleep(5);
       context.flow.decide(user, orders.id, "Something");

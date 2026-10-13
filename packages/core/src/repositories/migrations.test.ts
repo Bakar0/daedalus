@@ -449,4 +449,40 @@ describe("runMigrations", () => {
     ).toEqual({ count: 0 });
     migrated.close();
   });
+  test("maps made before owners belong to their workspace's flow session", async () => {
+    const home = await mkdtemp(join(tmpdir(), "daedalus-flow-owner-"));
+    cleanup.push(home);
+    const migrations = join(home, "migrations");
+    const source = join(import.meta.dir, "../../../../migrations");
+    await mkdir(migrations);
+    for (const file of (await readdir(source))
+      .filter((file) => file.endsWith(".sql") && file < "024_")
+      .sort())
+      await Bun.write(join(migrations, file), Bun.file(join(source, file)));
+    const databasePath = join(home, "state.db");
+    await runMigrations(databasePath, migrations);
+    const database = new Database(databasePath);
+    database.exec(`
+      INSERT INTO workspaces (id, slug, name, path, created_at, updated_at, task_id_prefix)
+      VALUES ('w1', 'one', 'One', '/tmp/one', 'now', 'now', 'one'),
+             ('w2', 'two', 'Two', '/tmp/two', 'now', 'now', 'two');
+      INSERT INTO agent_sessions (id, workspace_id, task_id, name, provider, kind, tmux_session, command, args, working_directory, status, started_at)
+      VALUES ('s1', 'w1', NULL, 'Mapper', 'claude', 'agent', 'tmux-s1', 'claude', '[]', '/tmp/one', 'running', 'now');
+      INSERT INTO session_abilities (id, session_id, ability, granted_at)
+      VALUES ('ab1', 's1', 'flow', 'now');
+      INSERT INTO flow_maps (id, workspace_id, number, name, created_at, updated_at)
+      VALUES ('m1', 'w1', 1, 'Kept', 'now', 'now'), ('m2', 'w2', 1, 'Orphan', 'now', 'now');
+    `);
+    database.close();
+    await Bun.write(
+      join(migrations, "024_flow_map_owner.sql"),
+      Bun.file(join(source, "024_flow_map_owner.sql")),
+    );
+    await runMigrations(databasePath, migrations);
+    const migrated = new Database(databasePath);
+    expect(
+      migrated.query("SELECT id, ability_id FROM flow_maps").all(),
+    ).toEqual([{ id: "m1", ability_id: "ab1" }]);
+    migrated.close();
+  });
 });
