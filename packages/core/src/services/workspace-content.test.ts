@@ -20,8 +20,10 @@ import {
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { createApplicationContext, parseGitHubRepositoryPages } from "../index";
 import {
+  ensureSessionInstructionFiles,
   pullRequestAnswerHoldsHead,
   sessionDirectoryName,
+  sessionInstructionsTemplate,
   sessionTaskDirectoryName,
 } from "./workspace-content";
 
@@ -662,6 +664,7 @@ Before working in this workspace:
       const worktree = await context.workspaceContent.createSessionWorktree({
         session: session.id,
         repository: "app",
+        branch: `work-${session.id.slice(0, 8)}`,
       });
       expect(worktree.path).toBe(join(session.workingDirectory, "app"));
       expect(await readFile(join(worktree.path, "README.md"), "utf8")).toBe(
@@ -738,6 +741,7 @@ Before working in this workspace:
       const worktree = await context.workspaceContent.createSessionWorktree({
         session: session.id,
         repository: "app",
+        branch: `work-${session.id.slice(0, 8)}`,
       });
 
       // The session starts from what is on the base branch now, so the later
@@ -1533,6 +1537,7 @@ Before working in this workspace:
         const worktree = await context.workspaceContent.createSessionWorktree({
           session: session.id,
           repository: "product",
+          branch: `work-${session.id.slice(0, 8)}`,
         });
         expect(
           (
@@ -1567,6 +1572,7 @@ Before working in this workspace:
       const worktree = await context.workspaceContent.createSessionWorktree({
         session: session.id,
         repository: "product",
+        branch: `work-${session.id.slice(0, 8)}`,
       });
       const content = context.workspaceContent;
       const status = async () =>
@@ -1737,6 +1743,7 @@ Before working in this workspace:
         const worktree = await context.workspaceContent.createSessionWorktree({
           session: session.id,
           repository: "product",
+          branch: `work-${session.id.slice(0, 8)}`,
         });
 
         // The listing deliberately does not wait for git, so the measurement
@@ -1831,6 +1838,7 @@ Before working in this workspace:
         const worktree = await context.workspaceContent.createSessionWorktree({
           session: session.id,
           repository: "product",
+          branch: `work-${session.id.slice(0, 8)}`,
         });
         await Bun.write(join(worktree.path, "LANDED.md"), "# Landed\n");
         expect(
@@ -2033,6 +2041,7 @@ Before working in this workspace:
       const worktree = await context.workspaceContent.createSessionWorktree({
         session: session.id,
         repository: "product",
+        branch: `work-${session.id.slice(0, 8)}`,
       });
       return { context, workspace, repository, session, worktree };
     };
@@ -2252,6 +2261,7 @@ Before working in this workspace:
         const kept = await context.workspaceContent.createSessionWorktree({
           session: keeper.id,
           repository: "product",
+          branch: `work-${keeper.id.slice(0, 8)}`,
         });
         await commitIn(kept.path, "UNPUSHED.md");
 
@@ -2376,7 +2386,7 @@ Before working in this workspace:
       });
     });
 
-    test("names a task's branch after the task, and follows a branch the agent switched to", async () => {
+    test("follows a branch the agent switched to", async () => {
       await withTemporaryDaedalusHome(async (home) => {
         const source = join(home, "source", "product");
         await createRepository(source);
@@ -2398,10 +2408,9 @@ Before working in this workspace:
         const worktree = await context.workspaceContent.createSessionWorktree({
           session: session.id,
           repository: "product",
+          branch: `work-${session.id.slice(0, 8)}`,
         });
-        expect(worktree.branchName).toBe(
-          `daedalus/agent-status-in-the-app-${session.id.slice(0, 8)}`,
-        );
+        expect(worktree.branchName).toBe(`work-${session.id.slice(0, 8)}`);
 
         // The agent moves its work to a branch of its own.
         await git(["-C", worktree.path, "checkout", "-q", "-b", "topic"]);
@@ -2433,6 +2442,90 @@ Before working in this workspace:
       });
     });
 
+    test("requires a branch name, and refuses an invalid or taken one, here or on origin", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const source = join(home, "source", "product");
+        await createRepository(source);
+        const context = await contextWithStubbedAgent(home);
+        const workspace = await context.workspaces.create({ name: "Chosen" });
+        const attached = await context.workspaceContent.addAndAttachRepository({
+          workspace: workspace.id,
+          remoteUrl: source,
+        });
+        const spawn = () =>
+          context.agents.spawn({ workspace: workspace.id, provider: "claude" });
+
+        const first = await spawn();
+        const worktree = await context.workspaceContent.createSessionWorktree({
+          session: first.id,
+          repository: "product",
+          branch: "feat/ABC-123-status",
+        });
+        expect(worktree.branchName).toBe("feat/ABC-123-status");
+        expect(
+          await git(["-C", worktree.path, "branch", "--show-current"]),
+        ).toBe("feat/ABC-123-status");
+        expect(
+          await branchExists(attached.canonicalPath, "feat/ABC-123-status"),
+        ).toBe(true);
+
+        const second = await spawn();
+        await expect(
+          context.workspaceContent.createSessionWorktree({
+            session: second.id,
+            repository: "product",
+            branch: "feat/ABC-123-status",
+          }),
+        ).rejects.toThrow("already exists");
+        await expect(
+          context.workspaceContent.createSessionWorktree({
+            session: second.id,
+            repository: "product",
+            branch: "bad..name",
+          }),
+        ).rejects.toThrow("not a valid branch name");
+        await expect(
+          context.workspaceContent.createSessionWorktree({
+            session: second.id,
+            repository: "product",
+          }),
+        ).rejects.toThrow("--branch <name> is required");
+        await expect(
+          context.workspaceContent.createSessionWorktree({
+            session: second.id,
+            repository: "product",
+            branch: "@{-1}",
+          }),
+        ).rejects.toThrow("not a valid branch name");
+
+        // A teammate's branch on origin is taken too.
+        await git(["-C", source, "branch", "fix/teammate"]);
+        await expect(
+          context.workspaceContent.createSessionWorktree({
+            session: second.id,
+            repository: "product",
+            branch: "fix/teammate",
+          }),
+        ).rejects.toThrow("already exists on origin");
+
+        // A repeat call returns the worktree, but not under another name.
+        expect(
+          await context.workspaceContent.createSessionWorktree({
+            session: first.id,
+            repository: "product",
+          }),
+        ).toEqual(worktree);
+        await expect(
+          context.workspaceContent.createSessionWorktree({
+            session: first.id,
+            repository: "product",
+            branch: "feat/other",
+          }),
+        ).rejects.toThrow("already has a worktree");
+        context.close();
+      });
+    });
+
     test("a squash merge counts as landed only when the merged pull request holds the tree's HEAD", async () => {
       await withTemporaryDaedalusHome(async (home) => {
         const source = join(home, "source", "product");
@@ -2450,6 +2543,7 @@ Before working in this workspace:
         const worktree = await context.workspaceContent.createSessionWorktree({
           session: session.id,
           repository: "product",
+          branch: `work-${session.id.slice(0, 8)}`,
         });
         await commitIn(worktree.path, "ONE.md");
         await commitIn(worktree.path, "TWO.md");
@@ -2604,6 +2698,7 @@ Before working in this workspace:
         const worktree = await context.workspaceContent.createSessionWorktree({
           session: session.id,
           repository: "product",
+          branch: `work-${session.id.slice(0, 8)}`,
         });
         await commitIn(worktree.path, "WORK.md");
         const status = async () => {
@@ -2827,5 +2922,33 @@ Before working in this workspace:
         second.close();
       });
     });
+  });
+});
+
+test("a session's instructions from before --branch was required are upgraded, and removed when turned off", async () => {
+  await withTemporaryDaedalusHome(async (home) => {
+    const workspacePath = join(home, "workspace");
+    const sessionPath = join(home, "session");
+    await mkdir(sessionPath, { recursive: true });
+    const agentsPath = join(sessionPath, "AGENTS.md");
+    const current = sessionInstructionsTemplate(workspacePath);
+    const previous = current.replace(
+      / --branch <branch-name>`, then work in the returned path\..*$/m,
+      "`, then work in the returned path.",
+    );
+    expect(previous).not.toContain("--branch");
+
+    await Bun.write(agentsPath, previous);
+    await ensureSessionInstructionFiles(sessionPath, workspacePath, home, true);
+    expect(await readFile(agentsPath, "utf8")).toBe(current);
+
+    await Bun.write(agentsPath, previous);
+    await ensureSessionInstructionFiles(
+      sessionPath,
+      workspacePath,
+      home,
+      false,
+    );
+    expect(await pathExists(agentsPath)).toBe(false);
   });
 });

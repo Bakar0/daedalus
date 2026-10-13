@@ -535,7 +535,7 @@ daedal repo sync <attachment-id>
 daedal repo fetch <attachment-id>
 daedal repo pull <attachment-id>
 daedal repo detach <attachment-id>
-daedal repo worktree create --session <agent-id> --repository <name-or-id>
+daedal repo worktree create --session <agent-id> --repository <name-or-id> --branch <name>
 daedal repo worktree open --session <agent-id> --repository <name-or-id>
 ```
 
@@ -551,7 +551,7 @@ local changes; `repo fetch` only downloads and moves nothing. `sync` does the sa
 why when it cannot. `detach` refuses while session worktrees depend on the
 attachment.
 
-Agent sessions receive `DAEDALUS_SESSION_ID`, `DAEDALUS_HOME`, and a PATH that starts with Daedalus's bundled CLI followed by the PATH of the user's login shell (`$SHELL -i -l`, read once per app run), so Homebrew and anything the shell configuration adds are available. If the shell does not answer within 10 seconds, the app's own PATH is used instead. They start in an isolated session folder without eagerly creating a worktree for every attached repository. The worktree command fetches, creates the selected repository's writable worktree from the newest commit on its base branch on a branch named `daedalus/<task-slug>-<session-id-prefix>`, and prints its path; repeating it returns the existing worktree.
+Agent sessions receive `DAEDALUS_SESSION_ID`, `DAEDALUS_HOME`, and a PATH that starts with Daedalus's bundled CLI followed by the PATH of the user's login shell (`$SHELL -i -l`, read once per app run), so Homebrew and anything the shell configuration adds are available. If the shell does not answer within 10 seconds, the app's own PATH is used instead. They start in an isolated session folder without eagerly creating a worktree for every attached repository. The worktree command fetches, creates the selected repository's writable worktree from the newest commit on its base branch on the branch named by `--branch`, and prints its path. The agent names the branch for the change and follows the repository's naming convention. The name must be a valid git branch name that does not exist yet, and the command fails rather than change it. Repeating the command returns the existing worktree, and then `--branch` is optional and ignored.
 
 ## Skills
 

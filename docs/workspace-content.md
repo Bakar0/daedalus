@@ -130,15 +130,16 @@ attached read-only checkout, and the bundled CLI lets the agent materialize only
 the repository it needs:
 
 ```sh
-daedal repo worktree create --session "$DAEDALUS_SESSION_ID" --repository <name>
+daedal repo worktree create --session "$DAEDALUS_SESSION_ID" --repository <name> --branch <name>
 ```
 
 The command prints the writable path and is idempotent. The task number and
 session ID are immutable, while the task slug is a creation-time hint; renaming a task
 never moves an existing session folder. A requested repository is created below
-the session folder on a branch named `daedalus/<task-slug>-<session-id-prefix>`
-(`daedalus/session-<session-id-prefix>` without a task), which is readable on
-a pull request and unique per session. Consequently:
+the session folder on the branch the agent names with `--branch`. The agent
+names it for the change and follows the repository's naming convention, since
+this is the name a pull request carries. The name must not exist yet, so each
+session's branch is its own. Consequently:
 
 - different tasks can modify the same repository concurrently;
 - multiple sessions or models can attempt the same task independently;

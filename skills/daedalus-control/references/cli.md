@@ -42,7 +42,7 @@ daedal repo list --workspace <workspace>
 daedal repo attach --workspace <workspace> --repository <library-id>
 daedal repo sync <attachment-id>
 daedal repo detach <attachment-id>
-daedal repo worktree create --session <session-id> --repository <name-or-id>
+daedal repo worktree create --session <session-id> --repository <name-or-id> --branch <name>
 ```
 
 `repo detach` refuses when session worktrees depend on the attachment. Library
