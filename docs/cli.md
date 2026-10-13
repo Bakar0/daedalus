@@ -192,7 +192,7 @@ daedal session abilities <session>
 daedal session grant|revoke <session> <ability>
 ```
 
-Names, pins, colors and abilities, for any session. `<session>` is an id, or a name that only one live session has. The `routines` and `orchestration` abilities and the `daedal routine` and `daedal team` commands are in [abilities.md](abilities.md).
+Names, pins, colors and abilities, for any session. `<session>` is an id, or a name that only one live session has. The `routines`, `orchestration` and `flow` abilities and the `daedal routine`, `daedal team` and `daedal flow` commands are in [abilities.md](abilities.md).
 
 ## Team
 
@@ -205,6 +205,30 @@ daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--t
 ```
 
 A team is a session holding the orchestration ability, its lead, and the members it or the user adds. Inside the lead or a member, `--team` defaults to its own team and a post is signed with its handle; another session's post is refused. Outside a session the author is `user`, and `--team <lead>` is needed when more than one team exists. `--user` posts as the user from inside a session's folder. `agent spawn --team` with no value adds a member to the calling lead's team; with a lead it adds one for the user and tells the lead in the chat. `team say` prints, per tagged session, whether the message reached it; `team list --json` returns each member's `undelivered` count and `lastError`. Delivery and tags are in [abilities.md](abilities.md#the-chat).
+
+## Flow
+
+```text
+daedal flow maps [--workspace <workspace>]
+daedal flow new <name> --deliverable <text> [--done-when <text>]
+daedal flow show [--map <map>] [--dropped]
+daedal flow history [--map <map>] [--limit <n>]
+daedal flow add <name> --in <component> --deliverable <text> [--done-when <text>] [--stages <flow>]
+daedal flow edit <component> [--name <name>] [--deliverable <text>] [--done-when <text>] [--in <component>] [--position <n>]
+daedal flow relate <from> <to> --type <type> [--note <text>]
+daedal flow drop <component|r<n>> --reason <text>
+daedal flow restore <component|r<n>>
+daedal flow delete <component|r<n>> [--with-contents]
+daedal flow stages <component> <flow> [--drop <reason> | --delete]
+daedal flow stage <start|finish|block|skip|reset> <component> <stage> [--reason <text>]
+daedal flow decide <component> "<text>"
+daedal flow link <component> (--task <task-ref> | --none)
+daedal flow remove-map <map> --force
+daedal flow types
+daedal agent spawn ... --flow-stage <component>:<stage> [--flow-map <map>]
+```
+
+Every command takes `--workspace` and `--map`; inside a session they default to its workspace and to the workspace's only map. A map is named by number (`1`, `#1`) or name; a component by number (`7`, `#7`), a path of names from the root (`"API server/Orders API"`), or a name only one component has; a relation as `r<n>`. A flow is written `research,plan,rollup:implement,after:validate=integration`. Inside a session, changing a map needs the flow ability (exit 4 without it); reading does not, and outside a session the change is the user's. `flow stage start` on a stage another running session holds exits 4. `flow show --json` returns the map with each stage's stored `state` and the `shown` state the app draws. The rules are in [abilities.md](abilities.md#flow-maps).
 
 ## Shutdown
 

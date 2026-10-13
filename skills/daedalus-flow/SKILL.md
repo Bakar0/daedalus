@@ -65,13 +65,13 @@ The rules:
 Link components that talk to or need each other, at any level and across
 parents. Pick the type that says what crosses the line:
 
-| Type | Use when |
-| --- | --- |
-| `calls` | It sends a request and waits for the answer (HTTP, RPC). |
-| `publishes to` | It sends an event or message and does not wait (queue, topic, webhook). |
-| `reads from` | It reads data the other side stores (database, cache, file). |
-| `writes to` | It writes data the other side stores. |
-| `depends on` | It needs the other side's contract or code to build. No traffic at run time. |
+| Type           | Use when                                                                     |
+| -------------- | ---------------------------------------------------------------------------- |
+| `calls`        | It sends a request and waits for the answer (HTTP, RPC).                     |
+| `publishes to` | It sends an event or message and does not wait (queue, topic, webhook).      |
+| `reads from`   | It reads data the other side stores (database, cache, file).                 |
+| `writes to`    | It writes data the other side stores.                                        |
+| `depends on`   | It needs the other side's contract or code to build. No traffic at run time. |
 
 ```
 daedal flow relate "Web client" "Orders API" --type calls --note "REST /orders"
