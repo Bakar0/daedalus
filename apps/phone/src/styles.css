@@ -506,12 +506,34 @@ main {
   flex: 1;
   margin: 0;
 }
+.terminal-frame {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 240px;
+  position: relative;
+}
 .terminal {
   background: #0b0f17;
   flex: 1;
-  min-height: 240px;
+  min-height: 0;
   overflow: hidden;
+  touch-action: none;
   padding: 6px 4px;
+}
+.jump-bottom {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  bottom: 12px;
+  box-shadow: 0 2px 10px rgb(0 0 0 / 40%);
+  color: inherit;
+  font-size: 13px;
+  min-height: 36px;
+  padding: 0 14px;
+  position: absolute;
+  right: 12px;
+  touch-action: manipulation;
 }
 .ended {
   color: var(--muted);
