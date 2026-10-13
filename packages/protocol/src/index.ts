@@ -757,6 +757,99 @@ export interface TeamDetailDto {
   messages: TeamMessageDto[];
 }
 
+export type FlowStageKindDto =
+  "research" | "plan" | "prototype" | "implement" | "validate" | "deploy";
+export type FlowRelationTypeDto =
+  "calls" | "publishes to" | "reads from" | "writes to" | "depends on";
+export type FlowStageStateDto =
+  "todo" | "running" | "done" | "skipped" | "blocked";
+/** A stored state, or `waiting` for an after stage not reached yet. */
+export type FlowShownStateDto = FlowStageStateDto | "waiting";
+export type FlowStageModeDto = "own" | "rollup" | "after";
+
+export interface FlowMapSummaryDto {
+  id: string;
+  workspaceId: string;
+  number: number;
+  name: string;
+  updatedAt: string;
+}
+
+export interface FlowComponentDto {
+  id: string;
+  parentId: string | null;
+  number: number;
+  position: number;
+  name: string;
+  deliverable: string;
+  doneWhen: string;
+  taskId: string | null;
+  droppedReason: string | null;
+}
+
+export interface FlowRelationDto {
+  id: string;
+  number: number;
+  fromId: string;
+  toId: string;
+  type: FlowRelationTypeDto;
+  note: string | null;
+  droppedReason: string | null;
+}
+
+export interface FlowStageDto {
+  id: string;
+  componentId: string;
+  kind: FlowStageKindDto;
+  position: number;
+  mode: FlowStageModeDto;
+  label: string | null;
+  state: FlowStageStateDto;
+  /** What the map shows; computed for rollup and after stages. */
+  shown: FlowShownStateDto;
+  note: string | null;
+  /** The session that claimed it; kept after it finishes. */
+  sessionId: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  droppedReason: string | null;
+}
+
+export interface FlowDecisionDto {
+  id: number;
+  componentId: string;
+  text: string;
+  author: string;
+  createdAt: string;
+}
+
+export interface FlowHistoryDto {
+  id: number;
+  text: string;
+  author: string;
+  createdAt: string;
+}
+
+/** What the Map tab draws: one whole map and its newest history. */
+export interface FlowMapDetailDto {
+  map: FlowMapSummaryDto;
+  components: FlowComponentDto[];
+  relations: FlowRelationDto[];
+  stages: FlowStageDto[];
+  decisions: FlowDecisionDto[];
+  history: FlowHistoryDto[];
+}
+
+/** Where a task appears on a flow map. */
+export interface FlowTaskLinkDto {
+  mapId: string;
+  mapNumber: number;
+  mapName: string;
+  componentId: string;
+  componentNumber: number;
+  componentName: string;
+}
+
 export interface TeamSayResultDto {
   message: TeamMessageDto;
   warnings: string[];
@@ -971,6 +1064,11 @@ export interface DesktopRpcSchema {
       /** Posts to the team chat as the user. */
       teamSay: Request<{ teamId: string; body: string }, TeamSayResultDto>;
       teamGoal: Request<{ teamId: string; goal: string }, TeamDto>;
+      /** A workspace's flow maps, oldest first. */
+      flowMaps: Request<{ workspaceId: string }, FlowMapSummaryDto[]>;
+      flowMap: Request<{ mapId: string }, FlowMapDetailDto>;
+      /** The map components linked to a task. */
+      flowTaskLinks: Request<{ taskId: string }, FlowTaskLinkDto[]>;
       routinesControl: Request<
         {
           sessionId: string;

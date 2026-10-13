@@ -61,6 +61,7 @@ export function SessionMenu({
   color,
   routines,
   orchestration,
+  flow,
   offerAbilities,
   offerOrchestration,
   onRename,
@@ -68,6 +69,7 @@ export function SessionMenu({
   onColor,
   onRoutines,
   onOrchestration,
+  onFlow,
 }: {
   name: string;
   pinned: boolean;
@@ -76,6 +78,8 @@ export function SessionMenu({
   routines: boolean;
   /** Whether the session leads a team. */
   orchestration: boolean;
+  /** Whether the session may build and change flow maps. */
+  flow: boolean;
   offerAbilities: boolean;
   /** False for a team's member, which cannot lead one. */
   offerOrchestration: boolean;
@@ -84,6 +88,7 @@ export function SessionMenu({
   onColor: (color: SessionColorDto | null) => void;
   onRoutines: (granted: boolean) => void;
   onOrchestration: (granted: boolean) => void;
+  onFlow: (granted: boolean) => void;
 }) {
   return (
     <Menu
@@ -162,6 +167,25 @@ export function SessionMenu({
               />
             </button>
           )}
+          <button
+            aria-checked={flow}
+            className="quiet menu-item"
+            onClick={() => onFlow(!flow)}
+            role="menuitemcheckbox"
+            title={
+              flow
+                ? "Revoke the flow map ability. The workspace's maps stay."
+                : "Let this session break work into a flow map and keep it current. The map shows in the Map tab."
+            }
+            type="button"
+          >
+            <span className="menu-item-label">Flow map</span>
+            <span
+              aria-hidden="true"
+              className="menu-switch"
+              data-on={flow ? "true" : undefined}
+            />
+          </button>
         </>
       )}
     </Menu>

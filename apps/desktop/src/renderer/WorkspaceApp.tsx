@@ -23,6 +23,8 @@ import type {
   FileLinkTargetDto,
   AppUpdateDto,
   TaskTimelineDto,
+  FlowTaskLinkDto,
+  AbilityIdDto,
   AgentActivity,
   AgentActivityDto,
   AgentSessionDto,
@@ -82,6 +84,8 @@ import { RoutinesPanel } from "./routines/RoutinesPanel";
 import { ProBadge } from "./ProPlan";
 import { RemoteMenu } from "./RemoteMenu";
 import { SecretsPanel } from "./SecretsPanel";
+import { FlowMapView, rememberFlowMap } from "./flow-map/FlowMapView";
+import type { StageSession } from "./flow-map/model";
 import {
   sessionStatusLine,
   AgentStatusDot,
@@ -205,7 +209,7 @@ const lastViewStorageKey = (workspaceId: string) =>
  * from the session lists nested under each workspace in the left column; it
  * has no tab of its own (#55).
  */
-export type WorkspaceView = "board" | "session" | "workspace" | "world";
+export type WorkspaceView = "board" | "session" | "workspace" | "map" | "world";
 
 /**
  * What the main column shows: one workspace, or every active workspace at
@@ -230,7 +234,9 @@ export function preferredScopeView(
   // Files and a session's terminal belong to one workspace; every workspace
   // at once is the board and the World only.
   return scope === "all" &&
-    (preferred === "workspace" || preferred === "session")
+    (preferred === "workspace" ||
+      preferred === "session" ||
+      preferred === "map")
     ? "board"
     : preferred;
 }
@@ -246,6 +252,7 @@ export function preferredWorkspaceView(
   if (rememberedView === "sessions") return "session";
   return rememberedView === "session" ||
     rememberedView === "workspace" ||
+    rememberedView === "map" ||
     rememberedView === "world"
     ? rememberedView
     : "board";
@@ -1826,6 +1833,7 @@ export function WorkspaceApp({
     color?: SessionColorDto;
     routines?: boolean;
     orchestration?: boolean;
+    flow?: boolean;
     /** The team the new session joins as a member the user added. */
     teamId?: string;
     /** A member's instructions, which it needs. */
@@ -2335,6 +2343,28 @@ export function WorkspaceApp({
     };
   }, [client, dataRevision, selectedTaskId, view]);
 
+  // Where the selected task appears on flow maps, asked for like the
+  // timeline: when a task is selected and whenever the data moves.
+  const [taskFlowLinks, setTaskFlowLinks] = useState<FlowTaskLinkDto[]>([]);
+  useEffect(() => {
+    if (!selectedTaskId || view !== "board") {
+      setTaskFlowLinks([]);
+      return;
+    }
+    let cancelled = false;
+    void client.request
+      .flowTaskLinks?.({ taskId: selectedTaskId })
+      .then((response) => {
+        if (!cancelled) setTaskFlowLinks(response.ok ? response.data : []);
+      })
+      .catch(() => {
+        if (!cancelled) setTaskFlowLinks([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, dataRevision, selectedTaskId, view]);
+
   const setFocusMode = useCallback(
     async (enabled: boolean) => {
       const response = await client.request.focusModeSet({ enabled });
@@ -2682,6 +2712,26 @@ export function WorkspaceApp({
   );
   const telemetryById = new Map(
     (snapshot?.sessionTelemetry ?? []).map((item) => [item.sessionId, item]),
+  );
+  // What a flow map's stage shows of the session working on it.
+  const flowStageSessions = new Map<string, StageSession>(
+    (snapshot?.agents ?? []).map((session) => [
+      session.id,
+      {
+        id: session.id,
+        workspaceId: session.workspaceId,
+        name: session.name,
+        provider: session.provider,
+        live:
+          !session.archivedAt &&
+          (session.status === "running" || session.status === "starting"),
+        activity: activityById.get(session.id)?.activity ?? null,
+        question: attentionById.get(session.id)?.reasons.at(-1)?.text ?? null,
+      },
+    ]),
+  );
+  const tasksById = new Map(
+    (snapshot?.tasks ?? []).map((task) => [task.id, task]),
   );
   const statusViewFor = (session: AgentSessionDto) =>
     sessionStatusView(
@@ -3425,11 +3475,12 @@ export function WorkspaceApp({
     event.preventDefault();
     if (!sessionWorkspace) return;
     const isTerminal = sessionType === "terminal";
-    const { color, routines, orchestration, teamId, instructions } =
+    const { color, routines, orchestration, flow, teamId, instructions } =
       sessionForm;
     const abilities = [
       ...(routines ? (["routines"] as const) : []),
       ...(orchestration ? (["orchestration"] as const) : []),
+      ...(flow ? (["flow"] as const) : []),
     ];
     const launch: SessionLaunchState = {
       key: crypto.randomUUID(),
@@ -3825,6 +3876,26 @@ export function WorkspaceApp({
     );
     if (!granted && routinesPanel?.sessionId === session.id)
       setRoutinesPanel(undefined);
+  }
+
+  const holdsAbility = (sessionId: string, ability: AbilityIdDto) =>
+    Boolean(
+      snapshot?.abilities.some(
+        (item) =>
+          item.sessionId === sessionId &&
+          item.ability === ability &&
+          item.enabled,
+      ),
+    );
+
+  async function setFlowAbility(session: AgentSessionDto, granted: boolean) {
+    await perform(
+      client.request.sessionAbility({
+        sessionId: session.id,
+        ability: "flow",
+        granted,
+      }),
+    );
   }
 
   async function loadRoutinesDetail(sessionId: string) {
@@ -4812,6 +4883,8 @@ export function WorkspaceApp({
             onOrchestration={(granted) =>
               void setOrchestrationAbility(session, granted)
             }
+            flow={holdsAbility(session.id, "flow")}
+            onFlow={(granted) => void setFlowAbility(session, granted)}
             pinned={Boolean(session.pinnedAt)}
             routines={holdsRoutines}
           />
@@ -5219,6 +5292,25 @@ export function WorkspaceApp({
         task={selectedTask}
         tasks={allTasks}
       />
+      {taskFlowLinks.length ? (
+        <div className="task-flow-links">
+          <span className="eyebrow">On the flow map</span>
+          {taskFlowLinks.map((link) => (
+            <button
+              className="task-flow-link"
+              key={link.componentId}
+              onClick={() => {
+                rememberFlowMap(selectedTask.workspaceId, link.mapId);
+                if (showingAll) enterWorkspace(selectedTask.workspaceId, "map");
+                else setView("map");
+              }}
+              type="button"
+            >
+              {link.mapName} › #{link.componentNumber} {link.componentName}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <TaskTimeline
         loading={taskTimelineLoading}
         onOpenJournal={(heading) => {
@@ -5412,6 +5504,19 @@ export function WorkspaceApp({
             }
           >
             Workspace
+          </button>
+          <button
+            aria-current={view === "map" ? "page" : undefined}
+            className={view === "map" ? "active" : ""}
+            disabled={!workspace || showingAll}
+            onClick={() => setView("map")}
+            title={
+              showingAll
+                ? "Pick a workspace to see its flow maps"
+                : "The workspace's flow maps"
+            }
+          >
+            Map
           </button>
         </nav>
         <div className="top-actions">
@@ -5865,6 +5970,24 @@ export function WorkspaceApp({
                   onOpenSession={showSession}
                 />
               </Suspense>
+            ) : view === "map" ? (
+              <FlowMapView
+                client={client}
+                dataRevision={dataRevision}
+                key={workspace.id}
+                onError={setError}
+                onOpenSession={(session) =>
+                  showSession(session.id, session.workspaceId)
+                }
+                onOpenTask={(task) => {
+                  setView("board");
+                  setSelectedTaskId(task.id);
+                  setEditingTask(false);
+                }}
+                sessions={flowStageSessions}
+                tasks={tasksById}
+                workspace={workspace}
+              />
             ) : view === "board" ? (
               boardView
             ) : null}
@@ -6972,6 +7095,12 @@ export function WorkspaceApp({
                       key: "orchestration",
                       label: "Orchestration",
                       description: "Lead a team of sessions toward one goal",
+                    },
+                    {
+                      key: "flow",
+                      label: "Flow map",
+                      description:
+                        "Break work into components and keep the workspace's flow map current",
                     },
                   ] as const
                 ).map((ability) => (

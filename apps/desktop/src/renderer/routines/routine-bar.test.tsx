@@ -213,10 +213,12 @@ describe("the session card menu", () => {
     renderToStaticMarkup(
       <SessionMenu
         color="blue"
+        flow={false}
         name="Argus"
         offerAbilities={offerAbilities}
         offerOrchestration={offerAbilities}
         onColor={() => {}}
+        onFlow={() => {}}
         onOrchestration={() => {}}
         onPin={() => {}}
         onRename={() => {}}
@@ -234,6 +236,7 @@ describe("the session card menu", () => {
     expect(html.match(/class="color-swatch"/g)).toHaveLength(9);
     expect(html).toContain('aria-label="Blue" class="color-swatch"');
     expect(html).toMatch(/aria-checked="true"[^>]*role="menuitemcheckbox"/);
+    expect(html).toContain("Flow map");
   });
 
   test("leaves abilities off a terminal", () => {
