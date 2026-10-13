@@ -34,6 +34,7 @@ import { forgetSessionFolders } from "./folder-trust";
 import { TaskService } from "./tasks";
 import { ProviderTeamTransport, type TeamTransport } from "./team-transport";
 import { TeamService } from "./teams";
+import { FlowService } from "./flow";
 import { TelemetryService } from "./telemetry";
 import { WorkspaceService } from "./workspaces";
 import { WorkspaceContentService } from "./workspace-content";
@@ -74,6 +75,8 @@ export interface ApplicationContext {
   routineReports: RoutineReportService;
   /** Teams: a lead, its members, and their chat. */
   teams: TeamService;
+  /** Flow maps: components, relations, flows and decisions per workspace. */
+  flow: FlowService;
   /** The routine clock; only the desktop host ticks it. */
   routineDelivery: RoutineDelivery;
   /** Keystrokes per session, and the rule for typing into a session. */
@@ -316,6 +319,7 @@ export async function createApplicationContext(
     routines,
     routineReports,
     teams: teams!,
+    flow: new FlowService(repositories, abilities, options.now),
     routineDelivery,
     deliveryGate,
     shutdown: new ShutdownService(repositories, agents, terminals, tmux),

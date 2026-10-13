@@ -118,7 +118,7 @@ export interface AgentSessionDto {
 export type SessionColorDto =
   "red" | "orange" | "gold" | "green" | "teal" | "blue" | "purple" | "pink";
 
-export type AbilityIdDto = "routines" | "orchestration";
+export type AbilityIdDto = "routines" | "orchestration" | "flow";
 
 export interface IntegratedTerminalDto {
   id: string;

@@ -356,4 +356,83 @@ describe("runMigrations", () => {
       ).toEqual({ count: 0 });
     migrated.close();
   });
+  test("flow maps keep every routine and team through the abilities rebuild", async () => {
+    const home = await mkdtemp(join(tmpdir(), "daedalus-flow-"));
+    cleanup.push(home);
+    const migrations = join(home, "migrations");
+    const source = join(import.meta.dir, "../../../../migrations");
+    await mkdir(migrations);
+    const earlier = (await readdir(source))
+      .filter((file) => file.endsWith(".sql") && file < "023_")
+      .sort();
+    for (const file of earlier)
+      await Bun.write(join(migrations, file), Bun.file(join(source, file)));
+    const databasePath = join(home, "state.db");
+    await runMigrations(databasePath, migrations);
+
+    const database = new Database(databasePath);
+    database.exec(`
+      INSERT INTO workspaces (id, slug, name, path, created_at, updated_at, task_id_prefix)
+      VALUES ('w1', 'demo', 'Demo', '/tmp/demo', 'now', 'now', 'demo');
+      INSERT INTO agent_sessions (id, workspace_id, task_id, name, provider, kind, tmux_session, command, args, working_directory, status, started_at)
+      VALUES ('s1', 'w1', NULL, 'Lead', 'claude', 'agent', 'tmux-s1', 'claude', '[]', '/tmp/demo', 'running', 'now'),
+             ('s2', 'w1', NULL, 'Member', 'claude', 'agent', 'tmux-s2', 'claude', '[]', '/tmp/demo', 'running', 'now');
+      INSERT INTO session_abilities (id, session_id, ability, config, granted_at)
+      VALUES ('ab1', 's1', 'routines', '{"purpose":"watch CI"}', 'now'),
+             ('ab2', 's1', 'orchestration', '{"goal":"ship"}', 'now');
+      INSERT INTO routines (id, ability_id, name, schedule, timeout_ms, output, body, created_at, updated_at)
+      VALUES ('r1', 'ab1', 'ci', '{"kind":"every","everyMs":60000,"text":"every 1m"}', 60000, 'task', 'check CI', 'now', 'now');
+      UPDATE agent_sessions SET team_id = 'ab2', team_handle = 'worker' WHERE id = 's2';
+      INSERT INTO team_messages (team_id, author, body, tags, created_at)
+      VALUES ('ab2', 'user', 'hello', '["lead"]', 'now');
+    `);
+    database.close();
+
+    await Bun.write(
+      join(migrations, "023_flow_maps.sql"),
+      Bun.file(join(source, "023_flow_maps.sql")),
+    );
+    await runMigrations(databasePath, migrations);
+
+    const migrated = new Database(databasePath);
+    expect(
+      migrated.query("SELECT id, ability FROM session_abilities ORDER BY id").all(),
+    ).toEqual([
+      { id: "ab1", ability: "routines" },
+      { id: "ab2", ability: "orchestration" },
+    ]);
+    expect(migrated.query("SELECT id FROM routines").all()).toEqual([{ id: "r1" }]);
+    expect(migrated.query("SELECT team_id FROM agent_sessions WHERE id = 's2'").get()).toEqual({
+      team_id: "ab2",
+    });
+    migrated.exec("PRAGMA foreign_keys = ON");
+    migrated.exec(`
+      INSERT INTO session_abilities (id, session_id, ability, granted_at)
+      VALUES ('ab3', 's2', 'flow', 'now');
+      INSERT INTO flow_maps (id, workspace_id, number, name, created_at, updated_at)
+      VALUES ('m1', 'w1', 1, 'Checkout', 'now', 'now');
+      INSERT INTO flow_components (id, map_id, parent_id, number, name, created_at, updated_at)
+      VALUES ('c1', 'm1', NULL, 1, 'Checkout', 'now', 'now');
+    `);
+    expect(() =>
+      migrated.exec(
+        "INSERT INTO session_abilities (id, session_id, ability, granted_at) VALUES ('ab4', 's2', 'nothing', 'now')",
+      ),
+    ).toThrow();
+    // The children still point at the rebuilt table: deleting the lead
+    // cascades into its routines and its team chat.
+    migrated.exec("DELETE FROM agent_sessions WHERE id = 's1'");
+    for (const table of ["routines", "team_messages"])
+      expect(
+        migrated
+          .query<{ count: number }, []>(`SELECT count(*) AS count FROM ${table}`)
+          .get(),
+      ).toEqual({ count: 0 });
+    // A map belongs to its workspace and goes with it.
+    migrated.exec("DELETE FROM agent_sessions; DELETE FROM workspaces");
+    expect(
+      migrated.query<{ count: number }, []>("SELECT count(*) AS count FROM flow_components").get(),
+    ).toEqual({ count: 0 });
+    migrated.close();
+  });
 });
