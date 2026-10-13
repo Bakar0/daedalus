@@ -21,6 +21,32 @@ interface Attachment {
   deviceId: string;
   /** Null for a Mac nobody has claimed yet. */
   userId: string | null;
+  /** When it connected; missing on sockets accepted before this was added. */
+  since?: number;
+}
+
+/**
+ * Sends unless the socket has closed. A closed socket stays in the room's
+ * list until its close finishes, which for a Mac that dropped off the network
+ * can be minutes, and a send to it throws.
+ */
+function send(socket: WebSocket, data: string | Uint8Array): void {
+  if (socket.readyState !== WebSocket.OPEN) return;
+  try {
+    socket.send(data);
+  } catch {
+    // Closed between the check and the send.
+  }
+}
+
+/** Closes unless already closed, which would throw. */
+function close(socket: WebSocket, code: number, reason: string): void {
+  if (socket.readyState !== WebSocket.OPEN) return;
+  try {
+    socket.close(code, reason);
+  } catch {
+    // Closed between the check and the close.
+  }
 }
 
 /**
@@ -70,21 +96,26 @@ export class Room extends DurableObject<Env> {
 
     if (
       role === "phone" &&
-      this.ctx.getWebSockets("phone").length >= MAX_PHONES &&
+      this.#sockets("phone").length >= MAX_PHONES &&
       this.#sockets(`phone:${deviceId}`).length === 0
     )
       return new Response("Too many phones", { status: 429 });
     // A second connection from the same device replaces the first, which is
     // what a reconnect after a network change looks like.
     for (const old of this.#sockets(`${role}:${deviceId}`)) {
-      old.send(JSON.stringify({ relay: "replaced" }));
-      old.close(CLOSE.replaced, "Replaced by a newer connection");
+      send(old, JSON.stringify({ relay: "replaced" }));
+      close(old, CLOSE.replaced, "Replaced by a newer connection");
     }
 
     const pair = new WebSocketPair();
     const server = pair[1];
     this.ctx.acceptWebSocket(server, [role, `${role}:${deviceId}`]);
-    server.serializeAttachment({ role, deviceId, userId } satisfies Attachment);
+    server.serializeAttachment({
+      role,
+      deviceId,
+      userId,
+      since: Date.now(),
+    } satisfies Attachment);
     // A claimed Mac learns which account it is on and its plan, to show
     // its user (RelayNotice in packages/remote-protocol/src/frames.ts).
     if (role === "mac" && userId)
@@ -108,8 +139,8 @@ export class Room extends DurableObject<Env> {
   async #claimed(request: Request): Promise<Response> {
     const { token } = (await request.json()) as { token: string };
     for (const mac of this.ctx.getWebSockets("mac")) {
-      mac.send(JSON.stringify({ relay: "claimed", token }));
-      mac.close(CLOSE.claimed, "Claimed");
+      send(mac, JSON.stringify({ relay: "claimed", token }));
+      close(mac, CLOSE.claimed, "Claimed");
     }
     return new Response("ok");
   }
@@ -127,7 +158,7 @@ export class Room extends DurableObject<Env> {
         ]
       : this.ctx.getWebSockets();
     for (const socket of sockets)
-      socket.close(code ?? CLOSE.forbidden, "Access removed");
+      close(socket, code ?? CLOSE.forbidden, "Access removed");
     return new Response("ok");
   }
 
@@ -137,7 +168,7 @@ export class Room extends DurableObject<Env> {
   ): Promise<void> {
     if (typeof message === "string") return;
     if (message.byteLength > MAX_FRAME_BYTES) {
-      ws.close(1009, "Frame too large");
+      close(ws, 1009, "Frame too large");
       return;
     }
     const sender = ws.deserializeAttachment() as Attachment;
@@ -150,10 +181,10 @@ export class Room extends DurableObject<Env> {
     if (!sender.userId) return;
     const target =
       sender.role === "phone"
-        ? this.#sockets("mac")[0]
-        : this.#sockets(
+        ? this.#newest("mac")
+        : this.#newest(
             `phone:${new TextDecoder().decode(frame.subarray(1, 1 + length))}`,
-          )[0];
+          );
     if (!target) return;
 
     const from = new TextEncoder().encode(sender.deviceId);
@@ -161,7 +192,7 @@ export class Room extends DurableObject<Env> {
     out[0] = from.length;
     out.set(from, 1);
     out.set(payload, 1 + from.length);
-    target.send(out);
+    send(target, out);
 
     const counted = this.#unflushed.get(sender.userId) ?? {
       bytes: 0,
@@ -222,7 +253,7 @@ export class Room extends DurableObject<Env> {
       .open;
     if (!open) {
       for (const socket of sockets)
-        socket.close(CLOSE.budgetExhausted, "Remote access is paused");
+        close(socket, CLOSE.budgetExhausted, "Remote access is paused");
     }
     for (const userId of new Set([...users, ...flushed.keys()])) {
       const counted = flushed.get(userId) ?? { bytes: 0, frames: 0 };
@@ -240,7 +271,7 @@ export class Room extends DurableObject<Env> {
       );
       if (!entitlement) {
         for (const socket of mine)
-          socket.close(CLOSE.noEntitlement, "No active access");
+          close(socket, CLOSE.noEntitlement, "No active access");
         continue;
       }
       const limit = entitlement.monthlyMb * 1024 * 1024;
@@ -249,13 +280,13 @@ export class Room extends DurableObject<Env> {
         total.bytes >= 1.1 * limit
       ) {
         for (const socket of mine)
-          socket.close(CLOSE.overQuota, "Monthly limit reached");
+          close(socket, CLOSE.overQuota, "Monthly limit reached");
       } else if (total.bytes >= limit) {
         const notice = JSON.stringify({
           relay: "quota",
           limitMb: entitlement.monthlyMb,
         });
-        for (const socket of mine) socket.send(notice);
+        for (const socket of mine) send(socket, notice);
       }
     }
     if (this.ctx.getWebSockets().length > 0)
@@ -270,14 +301,29 @@ export class Room extends DurableObject<Env> {
     this.#alarmAt = wanted;
   }
 
+  /** The open sockets with a tag; closed ones can linger in the list. */
   #sockets(tag: string): WebSocket[] {
-    return this.ctx.getWebSockets(tag);
+    return this.ctx
+      .getWebSockets(tag)
+      .filter((socket) => socket.readyState === WebSocket.OPEN);
+  }
+
+  /** The open socket with a tag that connected last. */
+  #newest(tag: string): WebSocket | undefined {
+    const since = (socket: WebSocket) =>
+      (socket.deserializeAttachment() as Attachment).since ?? 0;
+    return this.#sockets(tag).reduce<WebSocket | undefined>(
+      (best, socket) => (!best || since(socket) >= since(best) ? socket : best),
+      undefined,
+    );
   }
 
   /** Tells the other side that a device came or went. */
   #notice(role: Role, deviceId: string, online: boolean): void {
     const text = JSON.stringify({ relay: "peer", deviceId, online });
-    if (role === "phone") this.#sockets("mac")[0]?.send(text);
-    else for (const phone of this.ctx.getWebSockets("phone")) phone.send(text);
+    if (role === "phone") {
+      const mac = this.#newest("mac");
+      if (mac) send(mac, text);
+    } else for (const phone of this.#sockets("phone")) send(phone, text);
   }
 }

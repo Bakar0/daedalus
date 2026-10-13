@@ -34,3 +34,19 @@ export function typingDiff(before: string, after: string): string {
     same += 1;
   return BACKSPACE.repeat(old.length - same) + next.slice(same).join("");
 }
+
+/**
+ * The SGR mouse wheel reports for scrolling `steps` notches at a cell (1-based
+ * column and row). A positive count scrolls back to older output, as a finger
+ * dragging down does. tmux reads them whatever mouse mode it asked for: it
+ * passes them to a program that tracks the mouse, such as Claude's fullscreen
+ * view, and otherwise scrolls its own history in copy mode.
+ */
+export function wheelReports(
+  steps: number,
+  column: number,
+  row: number,
+): string {
+  const button = steps > 0 ? 64 : 65;
+  return `\u001b[<${button};${column};${row}M`.repeat(Math.abs(steps));
+}

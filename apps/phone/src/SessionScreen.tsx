@@ -7,7 +7,12 @@ import type { PhoneConnection, PhoneTerminal } from "@daedalus/remote-protocol";
 import { AgentStatusDot } from "../../desktop/src/renderer/session-view";
 import { type SessionRow, statusText } from "./sessions";
 import { Shell } from "./Shell";
-import { BACKSPACE, phoneTerminalInput, typingDiff } from "./terminal-input";
+import {
+  BACKSPACE,
+  phoneTerminalInput,
+  typingDiff,
+  wheelReports,
+} from "./terminal-input";
 
 /**
  * Keys a phone keyboard does not have, or hides. They go to the terminal as
@@ -27,6 +32,15 @@ const KEYS: Array<{ label: string; data: string; aria?: string }> = [
   { label: "^C", data: "\u0003", aria: "Control C" },
   { label: "⏎", data: "\r", aria: "Enter" },
 ];
+
+/** Rows a finger moves for one wheel notch. Three felt slow in Claude. */
+const ROWS_PER_NOTCH = 1;
+/** How much of a fling's speed is left after each 16 ms frame. */
+const FLING_DECAY = 0.95;
+/** Below this speed, in notches per millisecond, a fling stops. */
+const FLING_STOP = 0.002;
+/** Ctrl+End, which Claude's fullscreen view reads as "scroll to the bottom". */
+const CTRL_END = "\u001b[1;5F";
 
 const DARK = {
   background: "#0b0f17",
@@ -48,6 +62,8 @@ export function SessionScreen({
   const terminal = useRef<PhoneTerminal>(undefined);
   const [ended, setEnded] = useState<string>();
   const [text, setText] = useState("");
+  const [scrolledBack, setScrolledBack] = useState(false);
+  const jumpToBottom = useRef<() => void>(undefined);
 
   useEffect(() => {
     if (!host.current) return;
@@ -98,6 +114,113 @@ export function SessionScreen({
       if (input) remote.write(input);
     });
 
+    // A finger dragged up or down scrolls. tmux has the mouse, so the
+    // terminal's own scrollback stays empty: the drag goes to tmux as wheel
+    // reports, one for every ROWS_PER_NOTCH rows the finger moves, and a
+    // quick drag keeps going after the finger lifts, slowing down.
+    const screen = host.current;
+    const cells = () => {
+      const rect = xterm.element
+        ?.querySelector(".xterm-screen")
+        ?.getBoundingClientRect();
+      return rect?.height ? rect : undefined;
+    };
+    // Notches scrolled back from the bottom, so Bottom knows how far to go.
+    let back = 0;
+    let at = { column: 1, row: 1 };
+    const scroll = (steps: number) => {
+      remote.write(wheelReports(steps, at.column, at.row));
+      back = Math.max(0, back + steps);
+      setScrolledBack(back > 0);
+    };
+    let drag: { y: number; notch: number } | undefined;
+    // Recent finger positions, for the speed of a fling.
+    let trail: Array<{ y: number; t: number }> = [];
+    let fling = 0;
+    const stopFling = () => {
+      cancelAnimationFrame(fling);
+      fling = 0;
+    };
+    const touchStart = (event: TouchEvent) => {
+      stopFling();
+      const finger = event.touches[0];
+      const rect = cells();
+      drag =
+        event.touches.length === 1 && finger && rect
+          ? {
+              y: finger.clientY,
+              notch: (rect.height / xterm.rows) * ROWS_PER_NOTCH,
+            }
+          : undefined;
+      trail = finger ? [{ y: finger.clientY, t: event.timeStamp }] : [];
+    };
+    const touchMove = (event: TouchEvent) => {
+      const finger = event.touches[0];
+      const rect = cells();
+      if (!drag || !finger || !rect) return;
+      event.preventDefault();
+      event.stopPropagation();
+      trail = [
+        ...trail.filter((point) => event.timeStamp - point.t < 100),
+        { y: finger.clientY, t: event.timeStamp },
+      ];
+      const cell = (offset: number, size: number, count: number) =>
+        Math.min(count, Math.max(1, Math.floor((offset / size) * count) + 1));
+      at = {
+        column: cell(finger.clientX - rect.left, rect.width, xterm.cols),
+        row: cell(finger.clientY - rect.top, rect.height, xterm.rows),
+      };
+      const steps = Math.trunc((finger.clientY - drag.y) / drag.notch);
+      if (!steps) return;
+      drag.y += steps * drag.notch;
+      scroll(steps);
+    };
+    const touchEnd = (event: TouchEvent) => {
+      const first = trail[0];
+      const last = trail.at(-1);
+      const notch = drag?.notch;
+      drag = undefined;
+      trail = [];
+      if (
+        !first ||
+        !last ||
+        !notch ||
+        last.t <= first.t ||
+        event.timeStamp - last.t > 100
+      )
+        return;
+      let speed = (last.y - first.y) / (last.t - first.t) / notch;
+      let carried = 0;
+      let then = performance.now();
+      const frame = (now: number) => {
+        const elapsed = now - then;
+        then = now;
+        carried += speed * elapsed;
+        const steps = Math.trunc(carried);
+        if (steps) {
+          carried -= steps;
+          scroll(steps);
+        }
+        speed *= FLING_DECAY ** (elapsed / 16);
+        fling = Math.abs(speed) > FLING_STOP ? requestAnimationFrame(frame) : 0;
+      };
+      if (Math.abs(speed) > FLING_STOP) fling = requestAnimationFrame(frame);
+    };
+    // Claude's fullscreen view goes to the bottom on Ctrl+End. Anything else
+    // scrolled in tmux's history, which closes once scrolled back to the
+    // bottom, so the notches scrolled back go forward again too.
+    jumpToBottom.current = () => {
+      stopFling();
+      remote.write(CTRL_END + wheelReports(-(back + 5), at.column, at.row));
+      back = 0;
+      setScrolledBack(false);
+    };
+    const capture = { capture: true, passive: false };
+    screen.addEventListener("touchstart", touchStart, capture);
+    screen.addEventListener("touchmove", touchMove, capture);
+    screen.addEventListener("touchend", touchEnd, capture);
+    screen.addEventListener("touchcancel", touchEnd, capture);
+
     // The keyboard opening and the phone turning both change the size.
     const resize = () => {
       fit.fit();
@@ -107,6 +230,12 @@ export function SessionScreen({
     observer.observe(host.current);
     return () => {
       observer.disconnect();
+      stopFling();
+      jumpToBottom.current = undefined;
+      screen.removeEventListener("touchstart", touchStart, capture);
+      screen.removeEventListener("touchmove", touchMove, capture);
+      screen.removeEventListener("touchend", touchEnd, capture);
+      screen.removeEventListener("touchcancel", touchEnd, capture);
       typing.dispose();
       remote.close();
       terminal.current = undefined;
@@ -165,7 +294,18 @@ export function SessionScreen({
             </button>
           </div>
         ) : undefined}
-        <div className="terminal" ref={host} />
+        <div className="terminal-frame">
+          <div className="terminal" ref={host} />
+          {scrolledBack ? (
+            <button
+              className="jump-bottom"
+              onClick={() => jumpToBottom.current?.()}
+              type="button"
+            >
+              ↓ Bottom
+            </button>
+          ) : undefined}
+        </div>
         {ended ? <p className="ended">{ended}</p> : undefined}
         <div className="keys" role="toolbar" aria-label="Keys">
           {KEYS.map((key) => (

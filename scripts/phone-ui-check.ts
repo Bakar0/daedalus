@@ -677,6 +677,51 @@ try {
   )
     throw new Error("Swiping the keys row typed a key");
 
+  // Dragging the terminal scrolls tmux's history; Bottom ends it.
+  await evaluate(`(() => {
+    const box = document.querySelector('.compose textarea');
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(box, "seq 1 300");
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await tap(byText(".compose button", "Send"));
+  await waitFor(
+    "long output",
+    "document.querySelector('.xterm-rows').textContent.includes('300')",
+  );
+  const drag = async (distance: number) => {
+    const from = await evaluate<{ x: number; y: number }>(`(() => {
+      const rect = document.querySelector('.terminal').getBoundingClientRect();
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 + ${distance < 0 ? 100 : -100} };
+    })()`);
+    await send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [from],
+    });
+    for (let step = 1; step <= 10; step += 1)
+      await send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [{ x: from.x, y: from.y + (distance * step) / 10 }],
+      });
+    await send("Input.dispatchTouchEvent", {
+      type: "touchEnd",
+      touchPoints: [],
+    });
+  };
+  const copyMode =
+    "/\\[\\d+\\/\\d+\\]/.test(document.querySelector('.xterm-rows').textContent)";
+  await drag(200);
+  await waitFor("tmux history", copyMode);
+  if (
+    await evaluate<boolean>(
+      "document.querySelector('.xterm-rows').textContent.includes('300')",
+    )
+  )
+    throw new Error("Dragging down did not scroll back");
+  await waitFor("Bottom button", "document.querySelector('.jump-bottom')");
+  await tap("document.querySelector('.jump-bottom')");
+  await waitFor("history closed", `!(${copyMode})`);
+  await waitFor("Bottom gone", "!document.querySelector('.jump-bottom')");
+
   // Claude's turn marker draws from the bundled symbol font, not as emoji.
   await evaluate(`(() => {
     const box = document.querySelector('.compose textarea');
@@ -705,7 +750,7 @@ try {
     throw new Error(`Terminal too short: ${layout.terminalHeight}`);
   await screenshot("session");
   console.log(
-    "PASS the session opens on a live terminal; the box types into it as it changes, Send presses Enter, keys work and a swipe across them types nothing",
+    "PASS the session opens on a live terminal; the box types into it as it changes, Send presses Enter, keys work, a swipe across them types nothing, a drag on the terminal scrolls its history, and Bottom ends it",
   );
 
   await send("Runtime.evaluate", { expression: "history.back()" });
