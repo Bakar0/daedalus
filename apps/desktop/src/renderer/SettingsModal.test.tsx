@@ -135,6 +135,22 @@ describe("SettingsModal", () => {
     expect(accountStateLine({ ...base, state: "missing" })).toBe(
       "Not installed",
     );
+    const bedrock = {
+      ...base,
+      kind: "bedrock" as const,
+      aws: { profile: "work", region: "us-east-1" },
+    };
+    expect(
+      accountStateLine({
+        ...bedrock,
+        state: "signed-in",
+        email: "me@example.com",
+        method: "Amazon Bedrock",
+      }),
+    ).toBe("Signed in · me@example.com · Amazon Bedrock · work · us-east-1");
+    expect(accountStateLine({ ...bedrock, state: "signed-out" })).toBe(
+      "Signed out · signs in with AWS SSO (work)",
+    );
   });
 });
 

@@ -23,6 +23,7 @@ const snapshot: DesktopSnapshotDto = {
       defaultModel: null,
       defaultClaudeAccount: null,
       defaultCodexAccount: null,
+      accountModels: {},
     },
   ],
   tasks: [],

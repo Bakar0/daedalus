@@ -34,11 +34,18 @@ export interface Workspace {
   /** What Start and Start next launch when the user does not choose. */
   defaultProvider: "claude" | "codex" | null;
   /**
-   * What every session of `defaultProvider` starts with when nothing names a
-   * model, or null for the provider's own default. Never set without a
-   * provider: a model belongs to one, and clearing the provider clears it.
+   * The model `defaultProvider` starts with on its default account, or null
+   * for the provider's own default. Read from `accountModels`; kept because
+   * it is what the board settings and `--default-model` show and set.
    */
   defaultModel: string | null;
+  /**
+   * The model each provider account starts with when nothing names one,
+   * keyed by `accountModelKey`. Per account because accounts differ in the
+   * ids they take: a Bedrock account's `us.anthropic.…` is not a Claude
+   * subscription's `claude-…`.
+   */
+  accountModels: Record<string, string>;
   /**
    * The account each provider's sessions start on when nothing names one: a
    * profile id, or null for the provider's default account.
@@ -46,6 +53,42 @@ export interface Workspace {
   defaultClaudeAccount: string | null;
   defaultCodexAccount: string | null;
 }
+
+/** `claude:default`, `claude:<profile id>`, `codex:default`, … */
+export const accountModelKey = (
+  provider: string,
+  account: string | null | undefined,
+): string => `${provider}:${account || "default"}`;
+
+/** The default account a workspace starts a provider's sessions on. */
+export const workspaceDefaultAccount = (
+  workspace: Pick<Workspace, "defaultClaudeAccount" | "defaultCodexAccount">,
+  provider: string,
+): string | null =>
+  provider === "claude"
+    ? workspace.defaultClaudeAccount
+    : provider === "codex"
+      ? workspace.defaultCodexAccount
+      : null;
+
+/** What `defaultModel` reads: the default provider's default account. */
+export const derivedDefaultModel = (
+  workspace: Pick<
+    Workspace,
+    | "defaultProvider"
+    | "accountModels"
+    | "defaultClaudeAccount"
+    | "defaultCodexAccount"
+  >,
+): string | null =>
+  workspace.defaultProvider
+    ? (workspace.accountModels[
+        accountModelKey(
+          workspace.defaultProvider,
+          workspaceDefaultAccount(workspace, workspace.defaultProvider),
+        )
+      ] ?? null)
+    : null;
 
 export interface Task {
   id: UUID;

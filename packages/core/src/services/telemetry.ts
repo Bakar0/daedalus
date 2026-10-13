@@ -6,18 +6,30 @@ import type { SqliteRepositories } from "../repositories";
 import {
   accountConfig,
   accountEnvironment,
+  accountProfile,
   DEFAULT_ACCOUNT,
 } from "./account-homes";
+import { checkSignIn } from "./accounts";
+import { costTotals, readCostLedgers, type CostLedger } from "./cost-ledger";
 import { resolveAgentExecutable, sessionLaunchModel } from "./providers";
 
 const SESSION_CACHE_MS = 5_000;
 const PROVIDER_CACHE_MS = 60_000;
+/** How long a Claude account's plan, as `claude auth status` gives it, holds. */
+const PLAN_CACHE_MS = 10 * 60_000;
 const CLAUDE_USAGE_MAX_AGE_MS = 15 * 60_000;
 
 export interface UsageWindow {
   label: string;
   usedPercent: number;
   resetsAt?: string;
+  /**
+   * A spend limit's dollars: what was spent and the limit. Claude reports
+   * them behind a Claude apps gateway, a few minutes behind the percentage,
+   * and they may be absent even when the percentage is there.
+   */
+  usedUsd?: number;
+  limitUsd?: number;
 }
 
 export interface ProviderUsage {
@@ -30,6 +42,38 @@ export interface ProviderUsage {
    * two readings, never one.
    */
   account?: string;
+  /**
+   * `usage` when the account is billed per token (Bedrock, an API key, the
+   * Anthropic Console); `credits` for a Claude Enterprise seat, which spends
+   * dollars of usage credits against a monthly cap that Claude shows only on
+   * its `/usage` screen. Absent for a plan with windows.
+   */
+  billing?: "usage" | "credits";
+  /**
+   * A usage-billed account's spend, as Claude Code estimates it from token
+   * counts at list prices. Only sessions Daedalus ran are counted.
+   */
+  cost?: { todayUsd: number; monthUsd: number };
+}
+
+/**
+ * Whether an account is billed per token. Read from how it was set up, not
+ * from what Claude reports, so it is known before any session has replied.
+ */
+export function accountBilling(
+  config: DaedalusConfig,
+  provider: string,
+  account: string | null | undefined,
+): "usage" | undefined {
+  if (provider !== "claude") return undefined;
+  const profile = accountProfile(config, provider, account);
+  if (!profile)
+    return config.defaultLogins.claude === "console" ? "usage" : undefined;
+  return profile.kind === "bedrock" ||
+    profile.kind === "api-key" ||
+    ((profile.kind ?? "login") === "login" && profile.login === "console")
+    ? "usage"
+    : undefined;
 }
 
 export interface SessionTelemetry {
@@ -52,6 +96,11 @@ export interface SessionTelemetry {
     totalTokens?: number;
     usedPercent?: number;
   };
+  /**
+   * Claude Code's estimate of what this session's process has cost. Only for
+   * a usage-billed account: on a plan it is a price nobody pays.
+   */
+  costUsd?: number;
   observedAt: string;
 }
 
@@ -72,7 +121,15 @@ interface ClaudeStatusPayload {
   rate_limits?: {
     five_hour?: { used_percentage?: unknown; resets_at?: unknown };
     seven_day?: { used_percentage?: unknown; resets_at?: unknown };
+    spend_limit?: {
+      used_percentage?: unknown;
+      resets_at?: unknown;
+      used_usd?: unknown;
+      limit_usd?: unknown;
+      period?: unknown;
+    };
   };
+  cost?: { total_cost_usd?: unknown };
 }
 
 const finiteNumber = (value: unknown): number | undefined =>
@@ -83,12 +140,43 @@ const percentage = (value: unknown): number | undefined => {
   return number === undefined ? undefined : Math.min(100, Math.max(0, number));
 };
 
+const SPEND_PERIODS: Record<string, string> = {
+  daily: "day",
+  weekly: "week",
+  monthly: "month",
+};
+
+/**
+ * A gateway spend limit, labelled by its period. Its percentage may pass
+ * 100 once the limit is exceeded; the footer shows what Claude said.
+ */
+function spendWindow(
+  value: NonNullable<ClaudeStatusPayload["rate_limits"]>["spend_limit"],
+): UsageWindow | undefined {
+  const window = usageWindow(
+    (typeof value?.period === "string" && SPEND_PERIODS[value.period]) ||
+      "spend",
+    value,
+    1_000,
+  );
+  if (!window) return undefined;
+  const usedUsd = finiteNumber(value?.used_usd);
+  const limitUsd = finiteNumber(value?.limit_usd);
+  return {
+    ...window,
+    ...(usedUsd === undefined ? {} : { usedUsd }),
+    ...(limitUsd === undefined ? {} : { limitUsd }),
+  };
+}
+
 function usageWindow(
   label: string,
   value?: { used_percentage?: unknown; resets_at?: unknown },
+  ceiling = 100,
 ): UsageWindow | undefined {
-  const usedPercent = percentage(value?.used_percentage);
-  if (usedPercent === undefined) return undefined;
+  const raw = finiteNumber(value?.used_percentage);
+  if (raw === undefined) return undefined;
+  const usedPercent = Math.min(ceiling, Math.max(0, raw));
   return {
     label,
     usedPercent,
@@ -124,7 +212,8 @@ export function currentUsage(
 export function parseClaudeStatus(
   sessionId: string,
   payload: ClaudeStatusPayload,
-): { session?: SessionTelemetry; usage?: ProviderUsage } {
+): { session?: SessionTelemetry; usage?: ProviderUsage; costUsd?: number } {
+  const costUsd = finiteNumber(payload.cost?.total_cost_usd);
   const observedAt =
     typeof payload.observedAt === "string"
       ? payload.observedAt
@@ -148,6 +237,7 @@ export function parseClaudeStatus(
   const windows = [
     usageWindow("5h", payload.rate_limits?.five_hour),
     usageWindow("7d", payload.rate_limits?.seven_day),
+    spendWindow(payload.rate_limits?.spend_limit),
   ].filter((item): item is UsageWindow => Boolean(item));
   return {
     session:
@@ -173,6 +263,7 @@ export function parseClaudeStatus(
       windows.length > 0
         ? { provider: "claude", windows, observedAt }
         : undefined,
+    ...(costUsd === undefined ? {} : { costUsd }),
   };
 }
 
@@ -809,7 +900,8 @@ export class TelemetryService {
     const now = Date.now();
     if (this.sessionCache && this.sessionCache.expiresAt > now)
       return this.sessionCache.value;
-    const results = await this.readLiveSessions();
+    const billing = await this.billingByAccount();
+    const results = await this.readLiveSessions(billing);
     const accounts = this.usageAccounts();
     // Codex answers for an account whether or not a session runs on it, so
     // every Codex account is asked, at most once a minute each.
@@ -845,17 +937,27 @@ export class TelemetryService {
       changed = true;
     }
     if (changed) await this.saveUsageStore(store);
+    const spend = await this.accountSpend(new Date(now));
     // One entry per account, so a second account shows beside the first even
     // before it has a reading; an empty `windows` is "nothing known yet".
     const providerUsage = accounts.map(({ provider, account }) => {
-      const kept = store.get(`${provider}:${account ?? DEFAULT_ACCOUNT}`);
-      if (kept) return currentUsage(kept, now);
+      const key = `${provider}:${account ?? DEFAULT_ACCOUNT}`;
+      const kept = store.get(key);
+      const usage: ProviderUsage = kept
+        ? currentUsage(kept, now)
+        : {
+            provider,
+            ...(account ? { account } : {}),
+            windows: [],
+            observedAt: "",
+          };
+      const kind = billing.get(key);
+      if (!kind) return usage;
       return {
-        provider,
-        ...(account ? { account } : {}),
-        windows: [],
-        observedAt: "",
-      } satisfies ProviderUsage;
+        ...usage,
+        billing: kind,
+        ...(spend.has(key) ? { cost: spend.get(key)! } : {}),
+      };
     });
     const value = {
       providerUsage,
@@ -873,9 +975,30 @@ export class TelemetryService {
    * only wants to know which model a session runs should not wait on it.
    */
   async sessionTelemetry(): Promise<SessionTelemetry[]> {
-    return (await this.readLiveSessions())
+    return (await this.readLiveSessions(await this.billingByAccount()))
       .map((result) => result.session)
       .filter((item): item is SessionTelemetry => Boolean(item));
+  }
+
+  /**
+   * Today's and this month's estimated spend per Claude account, from every
+   * session's ledger, finished sessions included.
+   */
+  private async accountSpend(
+    now: Date,
+  ): Promise<Map<string, { todayUsd: number; monthUsd: number }>> {
+    const ledgers = await readCostLedgers(this.config.home, now);
+    if (ledgers.size === 0) return new Map();
+    const byAccount = new Map<string, CostLedger[]>();
+    for (const agent of this.repositories.listAgents()) {
+      const ledger = ledgers.get(agent.id);
+      if (!ledger || agent.provider !== "claude") continue;
+      const key = `claude:${agent.account ?? DEFAULT_ACCOUNT}`;
+      byAccount.set(key, [...(byAccount.get(key) ?? []), ledger]);
+    }
+    return new Map(
+      [...byAccount].map(([key, list]) => [key, costTotals(list, now)]),
+    );
   }
 
   /**
@@ -956,9 +1079,46 @@ export class TelemetryService {
     return join(this.config.home, "telemetry", "usage.json");
   }
 
-  private async readLiveSessions(): Promise<
-    Array<{ session?: SessionTelemetry; usage?: ProviderUsage }>
-  > {
+  private readonly planCache = new Map<
+    string,
+    { expiresAt: number; plan?: string }
+  >();
+
+  /**
+   * How each Claude account is billed. Per-token accounts are known from how
+   * they were set up; an Enterprise seat only from Claude's own answer
+   * (`subscriptionType: "enterprise"`), asked at most every ten minutes.
+   */
+  private async billingByAccount(): Promise<Map<string, "usage" | "credits">> {
+    const billing = new Map<string, "usage" | "credits">();
+    const now = Date.now();
+    await Promise.all(
+      this.usageAccounts()
+        .filter((entry) => entry.provider === "claude")
+        .map(async ({ account }) => {
+          const key = `claude:${account ?? DEFAULT_ACCOUNT}`;
+          if (accountBilling(this.config, "claude", account) === "usage") {
+            billing.set(key, "usage");
+            return;
+          }
+          let cached = this.planCache.get(key);
+          if (!cached || cached.expiresAt <= now) {
+            const signIn = await checkSignIn(this.config, "claude", account);
+            cached = {
+              expiresAt: now + PLAN_CACHE_MS,
+              ...(signIn.plan ? { plan: signIn.plan } : {}),
+            };
+            this.planCache.set(key, cached);
+          }
+          if (cached.plan === "enterprise") billing.set(key, "credits");
+        }),
+    );
+    return billing;
+  }
+
+  private async readLiveSessions(
+    billing: Map<string, "usage" | "credits">,
+  ): Promise<Array<{ session?: SessionTelemetry; usage?: ProviderUsage }>> {
     const agents = this.repositories
       .listAgents()
       .filter(
@@ -974,6 +1134,11 @@ export class TelemetryService {
           const status = await readClaudeStatus(this.config, agent);
           const transcript = await readClaudeTranscript(this.config, agent);
           const statusSession = status?.session;
+          const costUsd = billing.has(
+            `claude:${agent.account ?? DEFAULT_ACCOUNT}`,
+          )
+            ? status?.costUsd
+            : undefined;
           return {
             usage:
               status?.usage && agent.account
@@ -992,6 +1157,7 @@ export class TelemetryService {
                             statusSession?.context ?? transcript?.context,
                         }
                       : {}),
+                    ...(costUsd === undefined ? {} : { costUsd }),
                     observedAt:
                       statusSession?.observedAt ??
                       transcript?.observedAt ??

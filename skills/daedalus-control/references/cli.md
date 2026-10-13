@@ -121,6 +121,8 @@ lists fails the spawn with exit code 2; fix it with `workspace update
 daedal account list
 daedal account status [<claude|codex> [<account>]]
 daedal account add <claude|codex> <name> [--api-key | --sso | --console]
+daedal account add claude <name> --bedrock --aws-profile <profile> --aws-region <region>
+daedal account aws claude <account> --aws-profile <profile> --aws-region <region>
 daedal account method claude <account> <subscription|sso|console>
 daedal account login|logout <claude|codex> [<account>] [--sso | --console]
 daedal account rename <claude|codex> <account> <name>

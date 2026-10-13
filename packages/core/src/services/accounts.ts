@@ -3,14 +3,19 @@ import { join } from "node:path";
 import {
   deleteKeychainPassword,
   ensureDirectory,
+  findExecutable,
   keychainReadCommand,
   loginShellPath,
   runCommand,
+  standardExecutableFallbacks,
   writeKeychainPassword,
 } from "@daedalus/platform";
 import {
   saveAccounts,
+  isAwsTarget,
   saveDefaultLogin,
+  type AccountKind,
+  type AwsTarget,
   type ClaudeLogin,
   type AccountProfile,
   type AccountProvider,
@@ -24,6 +29,7 @@ import {
   accountConfig,
   accountDirectory,
   accountEnvironment,
+  accountProfile,
   DEFAULT_ACCOUNT,
   findAccount,
   providerLabel,
@@ -53,8 +59,9 @@ export interface AccountStatus extends SignIn {
   /** The configuration folder the provider reads for this account. */
   directory: string;
   createdAt: string | null;
-  kind: "login" | "api-key";
+  kind: AccountKind;
   login?: ClaudeLogin;
+  aws?: AwsTarget;
   executable: string;
   checkedAt: string;
 }
@@ -94,6 +101,64 @@ const CLAUDE_METHODS: Record<string, string> = {
 
 /** How a login-based account signs in: Claude's three login flows. */
 export type SignInVariant = ClaudeLogin;
+
+/**
+ * The AWS CLI, which a Bedrock account checks its credentials with and signs
+ * in through. Claude itself needs no CLI to call Bedrock, only the
+ * credentials the CLI's SSO login leaves behind.
+ */
+export const awsExecutable = (config: DaedalusConfig): string | undefined =>
+  findExecutable(
+    config.awsExecutable ?? "aws",
+    config.awsExecutable ? [] : standardExecutableFallbacks("aws"),
+  );
+
+const AWS_INSTALL = "brew install awscli";
+
+/**
+ * Reads `aws sts get-caller-identity`, the cheapest call that proves a
+ * profile's credentials work. A failure that names the SSO login or an
+ * expired token means signed out: `aws sso login` fixes it. Anything else
+ * (no network, a profile that does not exist) is unknown, with AWS's own
+ * words, so it is shown but does not stop a session from starting.
+ */
+export function parseAwsCallerIdentity(result: {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}): SignIn {
+  if (result.exitCode === 0) {
+    let arn: string | undefined;
+    let account: string | undefined;
+    try {
+      const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
+      arn = text(parsed.Arn);
+      account = text(parsed.Account);
+    } catch {
+      // Signed in all the same; only the detail is missing.
+    }
+    // An SSO role's ARN ends in the user's name: …/AWSReservedSSO_Role_x/me@co
+    const user = arn?.split("/").at(-1);
+    return {
+      state: "signed-in",
+      method: "Amazon Bedrock",
+      ...(user ? { email: user } : {}),
+      ...(account ? { organization: `AWS ${account}` } : {}),
+    };
+  }
+  const output = (text(result.stderr) ?? text(result.stdout) ?? "").trim();
+  if (
+    /sso|token.*(expired|invalid)|expired.*token|refresh failed|aws sso login/i.test(
+      output,
+    )
+  )
+    return { state: "signed-out", method: "Amazon Bedrock" };
+  return {
+    state: "unknown",
+    method: "Amazon Bedrock",
+    detail: output || "AWS did not say whether the profile is signed in",
+  };
+}
 
 /** The Keychain item an API-key account's key lives in. */
 export const API_KEY_SERVICE = "Daedalus Claude API key";
@@ -249,6 +314,9 @@ export async function checkSignIn(
 ): Promise<SignIn> {
   const executable = providerExecutable(config, provider);
   if (!executable) return { state: "missing" };
+  const profile = accountProfile(config, provider, accountId);
+  if (profile?.kind === "bedrock" && profile.aws)
+    return checkAwsSignIn(config, profile.aws, run);
   const env = accountEnvironment(config, provider, accountId);
   try {
     const result = await run(
@@ -273,6 +341,62 @@ export async function checkSignIn(
     };
   }
 }
+
+/** Whether a Bedrock account's AWS profile has working credentials now. */
+async function checkAwsSignIn(
+  config: DaedalusConfig,
+  aws: AwsTarget,
+  run: typeof runCommand,
+): Promise<SignIn> {
+  const executable = awsExecutable(config);
+  if (!executable)
+    return {
+      state: "unknown",
+      method: "Amazon Bedrock",
+      detail: `The AWS CLI is not installed, so the login cannot be checked. Install it with: ${AWS_INSTALL}`,
+    };
+  try {
+    const result = await run(
+      executable,
+      ["sts", "get-caller-identity", "--output", "json", ...awsArguments(aws)],
+      { timeoutMs: STATUS_TIMEOUT_MS },
+    );
+    if (result.timedOut)
+      return {
+        state: "unknown",
+        method: "Amazon Bedrock",
+        detail: "AWS took too long to report the profile's sign-in status",
+      };
+    return parseAwsCallerIdentity(result);
+  } catch (error) {
+    return {
+      state: "unknown",
+      method: "Amazon Bedrock",
+      detail: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+const awsArguments = (aws: AwsTarget): string[] => [
+  "--profile",
+  aws.profile,
+  "--region",
+  aws.region,
+];
+
+/**
+ * What a Bedrock account's `settings.json` holds: the variables that send
+ * Claude to Bedrock, and the command Claude runs on its own when the SSO
+ * token has expired, which opens the browser to sign in again.
+ */
+export const bedrockSettings = (aws: AwsTarget) => ({
+  env: {
+    CLAUDE_CODE_USE_BEDROCK: "1",
+    AWS_PROFILE: aws.profile,
+    AWS_REGION: aws.region,
+  },
+  awsAuthRefresh: `aws sso login --profile ${aws.profile}`,
+});
 
 /** Email and plan for a Codex account, or undefined if the server is silent. */
 async function readCodexAccount(
@@ -394,9 +518,11 @@ export class AccountService {
     name: string;
     directory: string;
     createdAt: string | null;
-    kind: "login" | "api-key";
+    kind: AccountKind;
     /** Claude only: which login Sign in runs. */
     login?: ClaudeLogin;
+    /** Bedrock accounts: the AWS profile and region. */
+    aws?: AwsTarget;
   }> {
     const defaults = (["claude", "codex"] as const).map((provider) => ({
       ...(provider === "claude"
@@ -412,9 +538,10 @@ export class AccountService {
     }));
     const profiles = this.config.accounts.map((profile) => ({
       kind: profile.kind ?? ("login" as const),
-      ...(profile.provider === "claude" && profile.kind !== "api-key"
+      ...(profile.provider === "claude" && (profile.kind ?? "login") === "login"
         ? { login: profile.login ?? ("subscription" as const) }
         : {}),
+      ...(profile.aws ? { aws: { ...profile.aws } } : {}),
       provider: profile.provider,
       account: profile.id,
       name: profile.name,
@@ -461,12 +588,21 @@ export class AccountService {
   async add(
     provider: string,
     name: string,
-    kind: "login" | "api-key" = "login",
+    kind: AccountKind = "login",
     login?: ClaudeLogin,
+    aws?: AwsTarget,
   ): Promise<AccountProfile> {
     const owner = accountProvider(provider);
     const trimmed = this.validName(owner, name);
-    if (login && (owner !== "claude" || kind === "api-key"))
+    if (kind === "bedrock" && owner !== "claude")
+      throw new DaedalusError("VALIDATION", "Bedrock accounts are for Claude");
+    if (kind === "bedrock") aws = validAws(aws);
+    else if (aws)
+      throw new DaedalusError(
+        "VALIDATION",
+        "An AWS profile is for Bedrock accounts",
+      );
+    if (login && (owner !== "claude" || kind !== "login"))
       throw new DaedalusError(
         "VALIDATION",
         "A choice of login is for Claude accounts that sign in",
@@ -481,8 +617,9 @@ export class AccountService {
       provider: owner,
       name: trimmed,
       createdAt: new Date().toISOString(),
-      ...(kind === "api-key" ? { kind } : {}),
+      ...(kind !== "login" ? { kind } : {}),
       ...(login ? { login } : {}),
+      ...(aws ? { aws } : {}),
     };
     const directory = accountDirectory(this.config, profile);
     await ensureDirectory(directory);
@@ -496,6 +633,10 @@ export class AccountService {
         `${JSON.stringify({ hasCompletedOnboarding: true }, null, 2)}\n`,
         { flag: "wx", mode: 0o600 },
       ).catch(() => undefined);
+    if (aws)
+      await this.writeClaudeSettings(directory, (settings) =>
+        withBedrock(settings, aws),
+      );
     await saveAccounts(this.config, [...this.config.accounts, profile]);
     await new SkillService(
       accountConfig(this.config, owner, profile.id),
@@ -527,10 +668,10 @@ export class AccountService {
       await saveDefaultLogin(this.config, login);
       return { provider: owner, account: DEFAULT_ACCOUNT, login };
     }
-    if (profile.kind === "api-key")
+    if (profile.kind === "api-key" || profile.kind === "bedrock")
       throw new DaedalusError(
         "VALIDATION",
-        `'${profile.name}' uses an API key, not a login`,
+        `'${profile.name}' uses ${profile.kind === "bedrock" ? "Bedrock" : "an API key"}, not a Claude login`,
       );
     await saveAccounts(
       this.config,
@@ -539,6 +680,38 @@ export class AccountService {
       ),
     );
     return { provider: owner, account: profile.id, login };
+  }
+
+  /**
+   * Points a Bedrock account at another AWS profile or region, in Daedalus's
+   * record and in the account's `settings.json`. Sessions already running
+   * keep the old one until they restart.
+   */
+  async setAws(
+    provider: string,
+    reference: string,
+    aws: AwsTarget,
+  ): Promise<AccountProfile> {
+    const owner = accountProvider(provider);
+    const profile = this.requireProfile(owner, reference);
+    if (profile.kind !== "bedrock")
+      throw new DaedalusError(
+        "VALIDATION",
+        `'${profile.name}' does not use Bedrock`,
+      );
+    const target = validAws(aws);
+    await this.writeClaudeSettings(
+      accountDirectory(this.config, profile),
+      (settings) => withBedrock(settings, target),
+    );
+    const changed = { ...profile, aws: target };
+    await saveAccounts(
+      this.config,
+      this.config.accounts.map((entry) =>
+        entry.id === profile.id ? changed : entry,
+      ),
+    );
+    return changed;
   }
 
   async rename(
@@ -604,9 +777,11 @@ export class AccountService {
     // Claude keeps the login in the Keychain under a name made from the
     // folder path, so deleting the folder alone would leave it there. An
     // API-key account's key is a Keychain item of Daedalus's own.
+    // A Bedrock account holds no login of its own: its AWS SSO session is
+    // the whole Mac's, and other tools may be using it.
     const executable = providerExecutable(this.config, owner);
     if (profile.kind === "api-key") await this.clearApiKey(profile);
-    else if (executable) {
+    else if (executable && profile.kind !== "bedrock") {
       const logout = this.signOutCommand(owner, profile.id);
       await runCommand(logout.executable, logout.args, {
         env: logout.env,
@@ -678,6 +853,7 @@ export class AccountService {
           createdAt: entry.createdAt,
           kind: entry.kind,
           ...(entry.login ? { login: entry.login } : {}),
+          ...(entry.aws ? { aws: entry.aws } : {}),
           executable:
             executable ??
             this.config.agents[entry.provider]?.executable ??
@@ -737,6 +913,8 @@ export class AccountService {
         "VALIDATION",
         `'${profile.name}' uses an API key, not a login; set its key instead`,
       );
+    if (profile?.kind === "bedrock" && profile.aws)
+      return this.awsCommand(profile, profile.aws, direction);
     if (owner === "codex" && variant !== "subscription")
       throw new DaedalusError(
         "VALIDATION",
@@ -766,6 +944,36 @@ export class AccountService {
       args,
       env: accountEnvironment(this.config, owner, profile?.id),
       title: `${providerLabel(owner)} sign ${direction} · ${name}`,
+    };
+  }
+
+  /**
+   * A Bedrock account signs in through AWS: `aws sso login` opens the browser
+   * for the profile's IAM Identity Center. Signing out is refused, because
+   * `aws sso logout` ends every SSO session on the Mac, not this account's.
+   */
+  private awsCommand(
+    profile: AccountProfile,
+    aws: AwsTarget,
+    direction: "in" | "out",
+  ): AccountCommand {
+    if (direction === "out")
+      throw new DaedalusError(
+        "VALIDATION",
+        `'${profile.name}' uses the AWS profile '${aws.profile}'. Signing out of AWS SSO ends every SSO session on this Mac; run 'aws sso logout' yourself if that is what you want`,
+      );
+    const executable = awsExecutable(this.config);
+    if (!executable)
+      throw new DaedalusError(
+        "DEPENDENCY",
+        `The AWS CLI is not installed. Install it with: ${AWS_INSTALL}`,
+        { provider: "claude" },
+      );
+    return {
+      executable,
+      args: ["sso", "login", "--profile", aws.profile],
+      env: {},
+      title: `AWS sign in · ${profile.name}`,
     };
   }
 
@@ -918,4 +1126,41 @@ export class AccountService {
 export function accountProvider(value: string): AccountProvider {
   if (value === "claude" || value === "codex") return value;
   throw new DaedalusError("VALIDATION", "Provider must be 'claude' or 'codex'");
+}
+
+/** An AWS target as typed, trimmed and checked; refused if malformed. */
+function validAws(aws: AwsTarget | undefined): AwsTarget {
+  const target = aws && {
+    profile: aws.profile?.trim(),
+    region: aws.region?.trim(),
+  };
+  if (!target?.profile)
+    throw new DaedalusError(
+      "VALIDATION",
+      "A Bedrock account needs the AWS profile it signs in with",
+    );
+  if (!target.region)
+    throw new DaedalusError(
+      "VALIDATION",
+      "A Bedrock account needs the AWS region to call Bedrock in",
+    );
+  if (!isAwsTarget(target))
+    throw new DaedalusError(
+      "VALIDATION",
+      "That AWS profile or region has characters AWS does not use in them",
+    );
+  return target;
+}
+
+/** Settings with the Bedrock block set, and any other `env` entry kept. */
+function withBedrock(
+  settings: Record<string, unknown>,
+  aws: AwsTarget,
+): Record<string, unknown> {
+  const block = bedrockSettings(aws);
+  const env =
+    settings.env && typeof settings.env === "object"
+      ? (settings.env as Record<string, unknown>)
+      : {};
+  return { ...settings, ...block, env: { ...env, ...block.env } };
 }

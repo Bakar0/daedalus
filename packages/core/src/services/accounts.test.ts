@@ -11,9 +11,11 @@ import {
   createApplicationContext,
   DaedalusError,
   loadConfig,
+  parseAwsCallerIdentity,
   parseClaudeAuthStatus,
   parseCodexAccount,
   parseCodexLoginStatus,
+  recordSessionCost,
 } from "../index";
 
 class FakeTmux implements TmuxClient {
@@ -152,6 +154,48 @@ describe("provider sign-in status", () => {
         stderr: "",
       }).state,
     ).toBe("unknown");
+  });
+
+  test("reads AWS's answer for a Bedrock account's profile", () => {
+    expect(
+      parseAwsCallerIdentity({
+        exitCode: 0,
+        stdout: JSON.stringify({
+          UserId: "AROAEXAMPLE:me@example.com",
+          Account: "123456789012",
+          Arn: "arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_Dev_abc/me@example.com",
+        }),
+        stderr: "",
+      }),
+    ).toEqual({
+      state: "signed-in",
+      method: "Amazon Bedrock",
+      email: "me@example.com",
+      organization: "AWS 123456789012",
+    });
+    // An expired or missing SSO token is a sign-in away from working.
+    for (const stderr of [
+      "Error when retrieving token from sso: Token has expired and refresh failed",
+      "Error loading SSO Token: Token for work does not exist",
+    ])
+      expect(
+        parseAwsCallerIdentity({ exitCode: 255, stdout: "", stderr }),
+      ).toEqual({
+        state: "signed-out",
+        method: "Amazon Bedrock",
+      });
+    // Anything else is shown, not treated as signed out.
+    expect(
+      parseAwsCallerIdentity({
+        exitCode: 255,
+        stdout: "",
+        stderr: "The config profile (nope) could not be found",
+      }),
+    ).toEqual({
+      state: "unknown",
+      method: "Amazon Bedrock",
+      detail: "The config profile (nope) could not be found",
+    });
   });
 
   test("reads Codex's text status without keeping an API key", () => {
@@ -418,6 +462,119 @@ describe("account profiles", () => {
     });
   });
 
+  test("a usage-billed account shows its estimated spend, a plan account does not", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context } = await setup(home);
+      const keychain = { write: async () => {}, remove: async () => {} };
+      const accounts = new AccountService(
+        context.config,
+        context.repositories,
+        keychain,
+      );
+      const billed = await accounts.add("claude", "API", "api-key");
+      const plan = await accounts.add("claude", "Personal");
+      for (const profile of [billed, plan])
+        await Bun.write(
+          join(home, "accounts", "claude", profile.id, "signed-in"),
+          "",
+        );
+      const workspace = await context.workspaces.create({ name: "Spend" });
+      const spawn = (account: string) =>
+        context.agents.spawn({
+          workspace: workspace.id,
+          provider: "claude",
+          account,
+        });
+      const first = await spawn(billed.id);
+      const second = await spawn(billed.id);
+      const onPlan = await spawn(plan.id);
+      const now = new Date();
+      await recordSessionCost(home, first.id, 1.25, now);
+      await recordSessionCost(home, second.id, 0.5, now);
+      await recordSessionCost(home, onPlan.id, 9, now);
+      for (const [agent, total] of [
+        [first, 1.25],
+        [onPlan, 9],
+      ] as const)
+        await Bun.write(
+          join(home, "telemetry", `${agent.id}.json`),
+          JSON.stringify({
+            observedAt: now.toISOString(),
+            model: { display_name: "Opus" },
+            cost: { total_cost_usd: total },
+          }),
+        );
+
+      const snapshot = await context.telemetry.read();
+      const footer = (account: string) =>
+        snapshot.providerUsage.find((item) => item.account === account);
+      expect(footer(billed.id)).toMatchObject({
+        billing: "usage",
+        cost: { todayUsd: 1.75, monthUsd: 1.75 },
+      });
+      // On a plan the estimate is a price nobody pays, so it is not shown.
+      expect(footer(plan.id)?.billing).toBeUndefined();
+      expect(footer(plan.id)?.cost).toBeUndefined();
+      const session = (id: string) =>
+        snapshot.sessionTelemetry.find((item) => item.sessionId === id);
+      expect(session(first.id)?.costUsd).toBe(1.25);
+      expect(session(onPlan.id)?.costUsd).toBeUndefined();
+      context.close();
+    });
+  });
+
+  test("an Enterprise seat shows this month's estimated credits", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      // A Claude whose default account is a Claude Enterprise seat.
+      const claude = join(home, "fake-claude-enterprise");
+      await Bun.write(
+        claude,
+        `#!/bin/sh
+printf '{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","subscriptionType":"enterprise"}\\n'
+`,
+      );
+      await chmod(claude, 0o755);
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { claude: { executable: claude, args: [] } },
+        }),
+      );
+      const context = await createApplicationContext({
+        env: {
+          DAEDALUS_HOME: home,
+          CLAUDE_CONFIG_DIR: join(home, "claude-default"),
+          DAEDALUS_AGENTS_HOME: join(home, "agents"),
+        },
+        tmux: new FakeTmux(),
+      });
+      const workspace = await context.workspaces.create({ name: "Org" });
+      const agent = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "claude",
+      });
+      await recordSessionCost(home, agent.id, 2.5);
+      await Bun.write(
+        join(home, "telemetry", `${agent.id}.json`),
+        JSON.stringify({
+          observedAt: new Date().toISOString(),
+          model: { display_name: "Opus" },
+          cost: { total_cost_usd: 2.5 },
+        }),
+      );
+      const snapshot = await context.telemetry.read();
+      expect(
+        snapshot.providerUsage.find((item) => item.provider === "claude"),
+      ).toMatchObject({
+        billing: "credits",
+        windows: [],
+        cost: { todayUsd: 2.5, monthUsd: 2.5 },
+      });
+      expect(snapshot.sessionTelemetry[0]?.costUsd).toBe(2.5);
+      context.close();
+    });
+  });
+
   test("a workspace can be created with a default account", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const { context } = await setup(home);
@@ -586,6 +743,154 @@ describe("account profiles", () => {
       });
       expect((await context.agents.get(agent.id)).archivedAt).not.toBeNull();
       expect(context.config.accounts).toEqual([]);
+      context.close();
+    });
+  });
+
+  test("a Bedrock account points Claude at Bedrock and signs in through AWS SSO", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      // A stand-in `aws` that is signed in once a marker file exists, and
+      // records the arguments it was asked with.
+      const aws = join(home, "fake-aws");
+      await Bun.write(
+        aws,
+        `#!/bin/sh
+echo "$@" >> "${home}/aws-calls"
+if [ -f "${home}/aws-signed-in" ]; then
+  printf '{"Account":"123456789012","Arn":"arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_Dev_abc/me@example.com"}\n'
+  exit 0
+fi
+echo "Error loading SSO Token: Token for work does not exist" >&2
+exit 255
+`,
+      );
+      await chmod(aws, 0o755);
+      const claude = await fakeClaude(home);
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { claude: { executable: claude, args: [] } },
+          awsExecutable: aws,
+        }),
+      );
+      const context = await createApplicationContext({
+        env: {
+          DAEDALUS_HOME: home,
+          CLAUDE_CONFIG_DIR: join(home, "claude-default"),
+          DAEDALUS_AGENTS_HOME: join(home, "agents"),
+        },
+        tmux: new FakeTmux(),
+      });
+
+      await expect(
+        context.accounts.add("claude", "Bedrock", "bedrock"),
+      ).rejects.toThrow("needs the AWS profile");
+      // Both values end up in a command Claude runs through a shell.
+      await expect(
+        context.accounts.add("claude", "Bedrock", "bedrock", undefined, {
+          profile: "work; rm -rf ~",
+          region: "us-east-1",
+        }),
+      ).rejects.toThrow("characters AWS does not use");
+      await expect(
+        context.accounts.add("codex", "Bedrock", "bedrock", undefined, {
+          profile: "work",
+          region: "us-east-1",
+        }),
+      ).rejects.toThrow("Bedrock accounts are for Claude");
+
+      const profile = await context.accounts.add(
+        "claude",
+        "Bedrock",
+        "bedrock",
+        undefined,
+        { profile: " work ", region: "us-east-1" },
+      );
+      expect(profile.aws).toEqual({ profile: "work", region: "us-east-1" });
+      const folder = join(home, "accounts", "claude", profile.id);
+      expect(await Bun.file(join(folder, "settings.json")).json()).toEqual({
+        env: {
+          CLAUDE_CODE_USE_BEDROCK: "1",
+          AWS_PROFILE: "work",
+          AWS_REGION: "us-east-1",
+        },
+        awsAuthRefresh: "aws sso login --profile work",
+      });
+
+      // Signed out until AWS says the profile's credentials work.
+      let [status] = await context.accounts.status({
+        provider: "claude",
+        account: "Bedrock",
+      });
+      expect(status).toMatchObject({
+        kind: "bedrock",
+        aws: { profile: "work", region: "us-east-1" },
+        state: "signed-out",
+      });
+      expect(await Bun.file(join(home, "aws-calls")).text()).toContain(
+        "sts get-caller-identity --output json --profile work --region us-east-1",
+      );
+      await Bun.write(join(home, "aws-signed-in"), "");
+      [status] = await context.accounts.status({
+        provider: "claude",
+        account: "Bedrock",
+      });
+      expect(status).toMatchObject({
+        state: "signed-in",
+        method: "Amazon Bedrock",
+        email: "me@example.com",
+      });
+
+      const signIn = context.accounts.signInCommand("claude", "Bedrock");
+      expect(signIn.executable).toBe(aws);
+      expect(signIn.args).toEqual(["sso", "login", "--profile", "work"]);
+      // Signing out of AWS SSO would end every SSO session on the Mac.
+      expect(() =>
+        context.accounts.signOutCommand("claude", "Bedrock"),
+      ).toThrow("every SSO session");
+      await expect(
+        context.accounts.setLogin("claude", "Bedrock", "sso"),
+      ).rejects.toThrow("uses Bedrock");
+
+      // Changing the profile keeps any other setting the user added.
+      await Bun.write(
+        join(folder, "settings.json"),
+        JSON.stringify({
+          ...(await Bun.file(join(folder, "settings.json")).json()),
+          env: {
+            CLAUDE_CODE_USE_BEDROCK: "1",
+            AWS_PROFILE: "work",
+            AWS_REGION: "us-east-1",
+            ANTHROPIC_MODEL: "us.anthropic.claude-opus",
+          },
+          theme: "dark",
+        }),
+      );
+      await context.accounts.setAws("claude", "Bedrock", {
+        profile: "prod",
+        region: "eu-west-1",
+      });
+      expect(await Bun.file(join(folder, "settings.json")).json()).toEqual({
+        env: {
+          CLAUDE_CODE_USE_BEDROCK: "1",
+          AWS_PROFILE: "prod",
+          AWS_REGION: "eu-west-1",
+          ANTHROPIC_MODEL: "us.anthropic.claude-opus",
+        },
+        awsAuthRefresh: "aws sso login --profile prod",
+        theme: "dark",
+      });
+      const reloaded = await loadConfig({ DAEDALUS_HOME: home });
+      expect(reloaded.accounts[0]).toMatchObject({
+        kind: "bedrock",
+        aws: { profile: "prod", region: "eu-west-1" },
+      });
+
+      // Removing it leaves the AWS login alone.
+      await Bun.write(join(home, "aws-calls"), "");
+      await context.accounts.remove("claude", "Bedrock");
+      expect(await Bun.file(join(home, "aws-calls")).text()).toBe("");
+      expect(await pathExists(folder)).toBe(false);
       context.close();
     });
   });

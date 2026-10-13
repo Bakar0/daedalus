@@ -23,6 +23,7 @@ export * from "./services/tasks";
 export * from "./services/task-history";
 export * from "./services/task-references";
 export * from "./services/telemetry";
+export * from "./services/cost-ledger";
 export * from "./services/workspaces";
 export * from "./services/workspace-content";
 export * from "./services/workspace-watch";
