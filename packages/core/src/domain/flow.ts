@@ -52,7 +52,8 @@ export const FLOW_RELATION_MEANINGS: Readonly<
 };
 
 /** A stage's state as stored. */
-export type FlowStageState = "todo" | "running" | "done" | "skipped" | "blocked";
+export type FlowStageState =
+  "todo" | "running" | "done" | "skipped" | "blocked";
 
 /**
  * A stage's state as shown: what is stored, or for a container's computed

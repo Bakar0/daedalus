@@ -6,7 +6,11 @@ import type {
   FlowStageMode,
   FlowStageState,
 } from "../domain";
-import { componentShownState, liveComponentIds, shownStages } from "./flow-rollup";
+import {
+  componentShownState,
+  liveComponentIds,
+  shownStages,
+} from "./flow-rollup";
 
 const component = (
   id: string,
@@ -69,35 +73,57 @@ describe("flow rollup", () => {
   test("a rollup stage follows the components inside", () => {
     const parent = stage("root", "implement", "todo", "rollup");
     expect(
-      shown(tree, [parent, stage("api", "implement"), stage("web", "implement")], "root"),
+      shown(
+        tree,
+        [parent, stage("api", "implement"), stage("web", "implement")],
+        "root",
+      ),
     ).toEqual(["implement:todo"]);
     expect(
       shown(
         tree,
-        [parent, stage("api", "implement", "running"), stage("web", "implement")],
+        [
+          parent,
+          stage("api", "implement", "running"),
+          stage("web", "implement"),
+        ],
         "root",
       ),
     ).toEqual(["implement:running"]);
     // One finished and one not started still means the work is under way.
     expect(
-      shown(tree, [parent, stage("api", "implement", "done"), stage("web", "implement")], "root"),
+      shown(
+        tree,
+        [parent, stage("api", "implement", "done"), stage("web", "implement")],
+        "root",
+      ),
     ).toEqual(["implement:running"]);
     expect(
       shown(
         tree,
-        [parent, stage("api", "implement", "done"), stage("web", "implement", "skipped")],
+        [
+          parent,
+          stage("api", "implement", "done"),
+          stage("web", "implement", "skipped"),
+        ],
         "root",
       ),
     ).toEqual(["implement:done"]);
     expect(
       shown(
         tree,
-        [parent, stage("api", "implement", "blocked"), stage("web", "implement", "running")],
+        [
+          parent,
+          stage("api", "implement", "blocked"),
+          stage("web", "implement", "running"),
+        ],
         "root",
       ),
     ).toEqual(["implement:blocked"]);
     // Nothing inside has the kind: there is nothing to do.
-    expect(shown(tree, [parent, stage("api", "plan")], "root")).toEqual(["implement:skipped"]);
+    expect(shown(tree, [parent, stage("api", "plan")], "root")).toEqual([
+      "implement:skipped",
+    ]);
   });
 
   test("a container cannot show done while something inside still runs, whatever was stored", () => {
@@ -109,15 +135,32 @@ describe("flow rollup", () => {
 
   test("an after stage waits for the components inside, then shows what the agent set", () => {
     const integration = stage("root", "validate", "todo", "after");
-    const base = [stage("api", "validate", "done"), stage("web", "validate", "running")];
-    expect(shown(tree, [integration, ...base], "root")).toEqual(["validate:waiting"]);
+    const base = [
+      stage("api", "validate", "done"),
+      stage("web", "validate", "running"),
+    ];
+    expect(shown(tree, [integration, ...base], "root")).toEqual([
+      "validate:waiting",
+    ]);
     expect(
-      shown(tree, [integration, base[0]!, stage("web", "validate", "done")], "root"),
+      shown(
+        tree,
+        [integration, base[0]!, stage("web", "validate", "done")],
+        "root",
+      ),
     ).toEqual(["validate:todo"]);
     // A component with no stage of that kind must finish its whole flow.
     const release = stage("root", "deploy", "todo", "after");
     expect(
-      shown(tree, [release, stage("api", "implement", "done"), stage("web", "implement", "running")], "root"),
+      shown(
+        tree,
+        [
+          release,
+          stage("api", "implement", "done"),
+          stage("web", "implement", "running"),
+        ],
+        "root",
+      ),
     ).toEqual(["deploy:waiting"]);
   });
 
@@ -133,25 +176,40 @@ describe("flow rollup", () => {
   });
 
   test("dropped components and stages leave the rollup", () => {
-    const withDropped = [...tree, component("fraud", "root", "Stripe Radar does it")];
+    const withDropped = [
+      ...tree,
+      component("fraud", "root", "Stripe Radar does it"),
+    ];
     const parent = stage("root", "implement", "todo", "rollup");
-    const droppedStage = { ...stage("web", "implement", "running"), droppedReason: "no", droppedAt: "now" };
+    const droppedStage = {
+      ...stage("web", "implement", "running"),
+      droppedReason: "no",
+      droppedAt: "now",
+    };
     expect(
       shown(
         withDropped,
-        [parent, stage("api", "implement", "done"), droppedStage, stage("fraud", "implement", "running")],
+        [
+          parent,
+          stage("api", "implement", "done"),
+          droppedStage,
+          stage("fraud", "implement", "running"),
+        ],
         "root",
       ),
     ).toEqual(["implement:done"]);
-    expect(liveComponentIds([...withDropped, component("rules", "fraud")])).toEqual(
-      new Set(["root", "api", "web"]),
-    );
+    expect(
+      liveComponentIds([...withDropped, component("rules", "fraud")]),
+    ).toEqual(new Set(["root", "api", "web"]));
   });
 
   test("a component's state for its box", () => {
     const list = (states: FlowStageState[]) =>
       componentShownState(
-        shownStages(tree, states.map((state) => stage("api", "plan", state))),
+        shownStages(
+          tree,
+          states.map((state) => stage("api", "plan", state)),
+        ),
       );
     expect(list([])).toBe("todo");
     expect(list(["done", "skipped"])).toBe("done");

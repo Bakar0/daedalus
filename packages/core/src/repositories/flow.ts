@@ -234,10 +234,7 @@ export class FlowRepository {
     updatedAt: string;
   }> {
     return this.database
-      .query<
-        { workspace_id: string; count: number; updated_at: string },
-        []
-      >(
+      .query<{ workspace_id: string; count: number; updated_at: string }, []>(
         `SELECT workspace_id, count(*) AS count, max(updated_at) AS updated_at
          FROM flow_maps GROUP BY workspace_id ORDER BY workspace_id`,
       )
@@ -515,7 +512,9 @@ export class FlowRepository {
       )
       .run(toSessionId, fromSessionId);
     const maps = new Set(
-      moved.flatMap((stage) => this.findComponent(stage.componentId)?.mapId ?? []),
+      moved.flatMap(
+        (stage) => this.findComponent(stage.componentId)?.mapId ?? [],
+      ),
     );
     for (const mapId of maps) this.touchMap(mapId, at);
   }

@@ -396,13 +396,21 @@ describe("runMigrations", () => {
 
     const migrated = new Database(databasePath);
     expect(
-      migrated.query("SELECT id, ability FROM session_abilities ORDER BY id").all(),
+      migrated
+        .query("SELECT id, ability FROM session_abilities ORDER BY id")
+        .all(),
     ).toEqual([
       { id: "ab1", ability: "routines" },
       { id: "ab2", ability: "orchestration" },
     ]);
-    expect(migrated.query("SELECT id FROM routines").all()).toEqual([{ id: "r1" }]);
-    expect(migrated.query("SELECT team_id FROM agent_sessions WHERE id = 's2'").get()).toEqual({
+    expect(migrated.query("SELECT id FROM routines").all()).toEqual([
+      { id: "r1" },
+    ]);
+    expect(
+      migrated
+        .query("SELECT team_id FROM agent_sessions WHERE id = 's2'")
+        .get(),
+    ).toEqual({
       team_id: "ab2",
     });
     migrated.exec("PRAGMA foreign_keys = ON");
@@ -425,13 +433,19 @@ describe("runMigrations", () => {
     for (const table of ["routines", "team_messages"])
       expect(
         migrated
-          .query<{ count: number }, []>(`SELECT count(*) AS count FROM ${table}`)
+          .query<{ count: number }, []>(
+            `SELECT count(*) AS count FROM ${table}`,
+          )
           .get(),
       ).toEqual({ count: 0 });
     // A map belongs to its workspace and goes with it.
     migrated.exec("DELETE FROM agent_sessions; DELETE FROM workspaces");
     expect(
-      migrated.query<{ count: number }, []>("SELECT count(*) AS count FROM flow_components").get(),
+      migrated
+        .query<{ count: number }, []>(
+          "SELECT count(*) AS count FROM flow_components",
+        )
+        .get(),
     ).toEqual({ count: 0 });
     migrated.close();
   });

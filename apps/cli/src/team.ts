@@ -12,6 +12,7 @@ import {
 import { callerSession } from "./caller";
 import { parseArguments, printResult } from "./arguments";
 import { resolveSession } from "./routines";
+import { claimSpawnedStage, spawnStageClaim } from "./flow";
 
 export const teamHelp = `Team commands:
   daedal team say "<text>" [--team <lead>] [--user]
@@ -20,6 +21,7 @@ export const teamHelp = `Team commands:
   daedal team goal [<text>] [--team <lead>]
   daedal agent spawn --team [<lead>] [--message <instructions>] [--name <name>]
       [--task <task-ref>] [--model <model>] [--account <account>]
+      [--flow-stage <component>:<stage> [--flow-map <map>]]
 
 A team is a lead, a session that holds the orchestration ability, and the
 members it or the user adds. Grant the ability with
@@ -340,10 +342,15 @@ export async function spawnTeamMember(
   const taskId = input.values.task
     ? await input.resolveTask(input.values.task, team.lead.workspaceId)
     : undefined;
+  const claim = spawnStageClaim(context, team.lead.workspaceId, input.values);
+  const message = [instructions?.trim(), claim?.line]
+    .filter(Boolean)
+    .join("\n\n");
   const result = await context.teams.spawnMember({
     team: team.id,
     addedBy: callerRole ? "lead" : "user",
-    ...(instructions ? { instructions } : {}),
+    ...(message ? { instructions: message } : {}),
+    ...(claim ? { abilities: ["flow" as const] } : {}),
     ...(input.values.name ? { name: input.values.name } : {}),
     ...(taskId ? { taskId } : {}),
     ...(input.values.provider ? { provider: input.values.provider } : {}),
@@ -352,6 +359,7 @@ export async function spawnTeamMember(
       ? { account: input.values.account }
       : {}),
   });
+  if (claim) claimSpawnedStage(context, result.session, claim);
   printResult(
     {
       ...result.session,

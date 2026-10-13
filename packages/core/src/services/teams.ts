@@ -1,4 +1,5 @@
 import type {
+  AbilityId,
   AgentSession,
   SessionAbility,
   TeamCursor,
@@ -250,6 +251,8 @@ export class TeamService {
     provider?: string;
     model?: string;
     account?: string | null;
+    /** Abilities the member holds from launch, such as flow. */
+    abilities?: AbilityId[];
   }): Promise<{ session: AgentSession; handle: string; note?: TeamSayResult }> {
     const team = this.get(input.team);
     // Optional: a member added without them starts with only its place in
@@ -289,6 +292,7 @@ export class TeamService {
         instructions ||
         "The user gives you your work in this session. Say you are ready, then wait for them.",
       team: { teamId: team.id, handle },
+      ...(input.abilities?.length ? { abilities: input.abilities } : {}),
     });
     this.repositories.teams.saveCursor({
       teamId: team.id,

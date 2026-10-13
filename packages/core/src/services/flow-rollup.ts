@@ -16,7 +16,9 @@ const finished = (state: FlowShownState) =>
 export function liveComponentIds(
   components: readonly FlowComponent[],
 ): Set<string> {
-  const byId = new Map(components.map((component) => [component.id, component]));
+  const byId = new Map(
+    components.map((component) => [component.id, component]),
+  );
   const live = new Set<string>();
   const isLive = (component: FlowComponent, seen: Set<string>): boolean => {
     if (component.droppedReason !== null) return false;
@@ -95,9 +97,7 @@ function rollup(
   if (same.length === 0) return "skipped";
   if (same.every((stage) => finished(stage.shown))) return "done";
   if (same.some((stage) => stage.shown === "blocked")) return "blocked";
-  if (
-    same.some((stage) => stage.shown === "running" || finished(stage.shown))
-  )
+  if (same.some((stage) => stage.shown === "running" || finished(stage.shown)))
     return "running";
   return "todo";
 }
@@ -124,5 +124,7 @@ export function componentShownState(
   if (current.some((stage) => stage.shown === "blocked")) return "blocked";
   if (current.some((stage) => stage.shown === "running")) return "running";
   if (current.some((stage) => finished(stage.shown))) return "running";
-  return current.some((stage) => stage.shown === "waiting") ? "waiting" : "todo";
+  return current.some((stage) => stage.shown === "waiting")
+    ? "waiting"
+    : "todo";
 }

@@ -114,17 +114,27 @@ function checkout(context: ApplicationContext, workspaceId: string) {
       deliverable: `${name} works`,
       ...(stages ? { stages: parseStageSpecs(stages) } : {}),
     });
-  const api = add(root.id, "API server", "rollup:implement,after:validate=integration");
+  const api = add(
+    root.id,
+    "API server",
+    "rollup:implement,after:validate=integration",
+  );
   const orders = add(api.id, "Orders API", "plan,implement,validate");
   const payments = add(api.id, "Payments", "plan,implement,validate");
   const web = add(root.id, "Web client", "implement");
   return { map: detail.map, root, api, orders, payments, web };
 }
 
-const shownOf = (context: ApplicationContext, mapId: string, componentId: string) =>
+const shownOf = (
+  context: ApplicationContext,
+  mapId: string,
+  componentId: string,
+) =>
   context.flow
     .detail(mapId)
-    .stages.filter((stage) => stage.componentId === componentId && !stage.droppedReason)
+    .stages.filter(
+      (stage) => stage.componentId === componentId && !stage.droppedReason,
+    )
     .map((stage) => `${stage.label ?? stage.kind}:${stage.shown}`);
 
 describe("flow maps", () => {
@@ -157,12 +167,19 @@ describe("flow maps", () => {
   test("components nest in one parent and are found by number, path or name", async () => {
     await withFlow(async ({ context, workspaceId }) => {
       const { map, api, orders } = checkout(context, workspaceId);
-      expect(context.flow.resolveComponent(map.id, `#${orders.number}`).id).toBe(orders.id);
-      expect(context.flow.resolveComponent(map.id, "Checkout/API server/Orders API").id).toBe(
+      expect(
+        context.flow.resolveComponent(map.id, `#${orders.number}`).id,
+      ).toBe(orders.id);
+      expect(
+        context.flow.resolveComponent(map.id, "Checkout/API server/Orders API")
+          .id,
+      ).toBe(orders.id);
+      expect(
+        context.flow.resolveComponent(map.id, "api server/orders api").id,
+      ).toBe(orders.id);
+      expect(context.flow.resolveComponent(map.id, "Orders API").id).toBe(
         orders.id,
       );
-      expect(context.flow.resolveComponent(map.id, "api server/orders api").id).toBe(orders.id);
-      expect(context.flow.resolveComponent(map.id, "Orders API").id).toBe(orders.id);
       expect(() =>
         context.flow.addComponent(user, map.id, {
           parentId: api.id,
@@ -170,11 +187,15 @@ describe("flow maps", () => {
           deliverable: "again",
         }),
       ).toThrow("already in that component");
-      expect(() => context.flow.editComponent(user, api.id, { parentId: orders.id })).toThrow(
-        "cannot move into itself",
-      );
       expect(() =>
-        context.flow.addComponent(user, map.id, { parentId: api.id, name: "Empty", deliverable: " " }),
+        context.flow.editComponent(user, api.id, { parentId: orders.id }),
+      ).toThrow("cannot move into itself");
+      expect(() =>
+        context.flow.addComponent(user, map.id, {
+          parentId: api.id,
+          name: "Empty",
+          deliverable: " ",
+        }),
       ).toThrow("The deliverable is required");
     });
   });
@@ -192,8 +213,16 @@ describe("flow maps", () => {
         name: "Wbe client",
         deliverable: "typo",
       });
-      context.flow.relate(user, map.id, { fromId: web.id, toId: typo.id, type: "calls" });
-      context.flow.dropComponent(user, fraud.id, "Stripe Radar scores orders already");
+      context.flow.relate(user, map.id, {
+        fromId: web.id,
+        toId: typo.id,
+        type: "calls",
+      });
+      context.flow.dropComponent(
+        user,
+        fraud.id,
+        "Stripe Radar scores orders already",
+      );
       context.flow.deleteComponent(user, typo.id);
 
       const detail = context.flow.detail(map.id);
@@ -203,18 +232,22 @@ describe("flow maps", () => {
       expect(detail.components.some((c) => c.id === typo.id)).toBe(false);
       expect(detail.relations).toHaveLength(0);
       const lines = context.flow.history(map.id).map((entry) => entry.text);
-      expect(lines).toContain("Dropped 'Fraud service': Stripe Radar scores orders already");
+      expect(lines).toContain(
+        "Dropped 'Fraud service': Stripe Radar scores orders already",
+      );
       expect(lines.some((line) => line.includes("Wbe client"))).toBe(false);
 
-      expect(() => context.flow.deleteComponent(user, api.id)).toThrow("--with-contents");
+      expect(() => context.flow.deleteComponent(user, api.id)).toThrow(
+        "--with-contents",
+      );
       context.flow.deleteComponent(user, api.id, { withContents: true });
-      expect(context.flow.detail(map.id).components.map((c) => c.name)).toEqual([
-        "Checkout",
-        "Web client",
-        "Fraud service",
-      ]);
+      expect(context.flow.detail(map.id).components.map((c) => c.name)).toEqual(
+        ["Checkout", "Web client", "Fraud service"],
+      );
       context.flow.restoreComponent(user, fraud.id);
-      expect(context.flow.detail(map.id).components.at(-1)?.droppedReason).toBeNull();
+      expect(
+        context.flow.detail(map.id).components.at(-1)?.droppedReason,
+      ).toBeNull();
     });
   });
 
@@ -227,12 +260,24 @@ describe("flow maps", () => {
         type: "calls",
         note: "REST /orders",
       });
-      expect(relation).toMatchObject({ number: 1, type: "calls", note: "REST /orders" });
+      expect(relation).toMatchObject({
+        number: 1,
+        type: "calls",
+        note: "REST /orders",
+      });
       expect(() =>
-        context.flow.relate(user, map.id, { fromId: web.id, toId: orders.id, type: "calls" }),
+        context.flow.relate(user, map.id, {
+          fromId: web.id,
+          toId: orders.id,
+          type: "calls",
+        }),
       ).toThrow("already calls");
       expect(() =>
-        context.flow.relate(user, map.id, { fromId: web.id, toId: web.id, type: "depends on" }),
+        context.flow.relate(user, map.id, {
+          fromId: web.id,
+          toId: web.id,
+          type: "depends on",
+        }),
       ).toThrow("two different components");
       const other = context.flow.createMap(user, workspaceId, {
         name: "Billing",
@@ -245,7 +290,11 @@ describe("flow maps", () => {
           type: "calls",
         }),
       ).toThrow("on another map");
-      context.flow.dropRelation(user, relation.id, "The client reads a cache instead");
+      context.flow.dropRelation(
+        user,
+        relation.id,
+        "The client reads a cache instead",
+      );
       expect(context.flow.resolveRelation(map.id, "r1").droppedReason).toBe(
         "The client reads a cache instead",
       );
@@ -255,22 +304,34 @@ describe("flow maps", () => {
   test("a container's stages follow its components and its own wait for them", async () => {
     await withFlow(async ({ context, workspaceId }) => {
       const { map, api, orders, payments } = checkout(context, workspaceId);
-      expect(shownOf(context, map.id, api.id)).toEqual(["implement:todo", "integration:waiting"]);
+      expect(shownOf(context, map.id, api.id)).toEqual([
+        "implement:todo",
+        "integration:waiting",
+      ]);
       context.flow.moveStage(user, orders.id, "implement", "start");
-      expect(shownOf(context, map.id, api.id)).toEqual(["implement:running", "integration:waiting"]);
-      expect(() => context.flow.moveStage(user, api.id, "implement", "finish")).toThrow(
-        "worked out from the components inside",
-      );
-      expect(() => context.flow.moveStage(user, api.id, "validate", "start")).toThrow(
-        "waits for the components inside",
-      );
+      expect(shownOf(context, map.id, api.id)).toEqual([
+        "implement:running",
+        "integration:waiting",
+      ]);
+      expect(() =>
+        context.flow.moveStage(user, api.id, "implement", "finish"),
+      ).toThrow("worked out from the components inside");
+      expect(() =>
+        context.flow.moveStage(user, api.id, "validate", "start"),
+      ).toThrow("waits for the components inside");
       for (const component of [orders, payments]) {
         context.flow.moveStage(user, component.id, "implement", "finish");
         context.flow.moveStage(user, component.id, "validate", "finish");
       }
-      expect(shownOf(context, map.id, api.id)).toEqual(["implement:done", "integration:todo"]);
+      expect(shownOf(context, map.id, api.id)).toEqual([
+        "implement:done",
+        "integration:todo",
+      ]);
       context.flow.moveStage(user, api.id, "validate", "start");
-      expect(shownOf(context, map.id, api.id)).toEqual(["implement:done", "integration:running"]);
+      expect(shownOf(context, map.id, api.id)).toEqual([
+        "implement:done",
+        "integration:running",
+      ]);
     });
   });
 
@@ -279,28 +340,38 @@ describe("flow maps", () => {
       const { map, orders } = checkout(context, workspaceId);
       const first = await agent(context, "First");
       const second = await agent(context, "Second");
-      const started = context.flow.moveStage(as(first), orders.id, "implement", "start");
+      const started = context.flow.moveStage(
+        as(first),
+        orders.id,
+        "implement",
+        "start",
+      );
       expect(started).toMatchObject({ shown: "running", sessionId: first.id });
-      expect(() => context.flow.moveStage(as(second), orders.id, "implement", "start")).toThrow(
-        "held by 'First'",
-      );
-      expect(() => context.flow.moveStage(as(second), orders.id, "implement", "finish")).toThrow(
-        "held by 'First'",
-      );
+      expect(() =>
+        context.flow.moveStage(as(second), orders.id, "implement", "start"),
+      ).toThrow("held by 'First'");
+      expect(() =>
+        context.flow.moveStage(as(second), orders.id, "implement", "finish"),
+      ).toThrow("held by 'First'");
       // Once the holder is gone the stage is free to take.
       await context.agents.archive(first.id);
       expect(
-        context.flow.moveStage(as(second), orders.id, "implement", "start").sessionId,
+        context.flow.moveStage(as(second), orders.id, "implement", "start")
+          .sessionId,
       ).toBe(second.id);
       // The user can always move a stage, and finishing keeps who did it.
-      expect(context.flow.moveStage(user, orders.id, "implement", "finish")).toMatchObject({
+      expect(
+        context.flow.moveStage(user, orders.id, "implement", "finish"),
+      ).toMatchObject({
         shown: "done",
         sessionId: second.id,
       });
-      expect(() => context.flow.moveStage(user, orders.id, "validate", "block")).toThrow(
-        "The reason is required",
+      expect(() =>
+        context.flow.moveStage(user, orders.id, "validate", "block"),
+      ).toThrow("The reason is required");
+      expect(context.flow.history(map.id)[0]?.text).toBe(
+        "Finished implement on 'Orders API'",
       );
-      expect(context.flow.history(map.id)[0]?.text).toBe("Finished implement on 'Orders API'");
     });
   });
 
@@ -312,12 +383,18 @@ describe("flow maps", () => {
       context.flow.moveStage(as(first), orders.id, "plan", "start");
       context.flow.moveStage(as(first), orders.id, "plan", "finish");
       context.flow.moveStage(as(first), orders.id, "implement", "start");
-      context.repositories.flow.moveHeldStages(first.id, second.id, new Date().toISOString());
+      context.repositories.flow.moveHeldStages(
+        first.id,
+        second.id,
+        new Date().toISOString(),
+      );
       const stages = context.flow
         .detail(map.id)
         .stages.filter((stage) => stage.componentId === orders.id);
       expect(stages.find((s) => s.kind === "plan")?.sessionId).toBe(first.id);
-      expect(stages.find((s) => s.kind === "implement")?.sessionId).toBe(second.id);
+      expect(stages.find((s) => s.kind === "implement")?.sessionId).toBe(
+        second.id,
+      );
     });
   });
 
@@ -326,7 +403,11 @@ describe("flow maps", () => {
       const { map, orders } = checkout(context, workspaceId);
       context.flow.moveStage(user, orders.id, "plan", "finish");
       expect(() =>
-        context.flow.setStages(user, orders.id, parseStageSpecs("prototype,implement,validate")),
+        context.flow.setStages(
+          user,
+          orders.id,
+          parseStageSpecs("prototype,implement,validate"),
+        ),
       ).toThrow("--drop");
       context.flow.setStages(
         user,
@@ -334,18 +415,33 @@ describe("flow maps", () => {
         parseStageSpecs("prototype,implement,validate"),
         { kind: "drop", reason: "The shape came out of a prototype instead" },
       );
-      const all = context.flow.detail(map.id).stages.filter((s) => s.componentId === orders.id);
-      expect(all.map((s) => `${s.kind}:${s.state}:${s.droppedReason ? "dropped" : "live"}`)).toEqual([
+      const all = context.flow
+        .detail(map.id)
+        .stages.filter((s) => s.componentId === orders.id);
+      expect(
+        all.map(
+          (s) => `${s.kind}:${s.state}:${s.droppedReason ? "dropped" : "live"}`,
+        ),
+      ).toEqual([
         "prototype:todo:live",
         "implement:todo:live",
         "validate:todo:live",
         "plan:done:dropped",
       ]);
       // Putting the kind back restores it with its state.
-      context.flow.setStages(user, orders.id, parseStageSpecs("plan,implement,validate"), {
-        kind: "delete",
-      });
-      expect(shownOf(context, map.id, orders.id)).toEqual(["plan:done", "implement:todo", "validate:todo"]);
+      context.flow.setStages(
+        user,
+        orders.id,
+        parseStageSpecs("plan,implement,validate"),
+        {
+          kind: "delete",
+        },
+      );
+      expect(shownOf(context, map.id, orders.id)).toEqual([
+        "plan:done",
+        "implement:todo",
+        "validate:todo",
+      ]);
       expect(() => parseStageSpecs("plan,plan")).toThrow("appears twice");
       expect(() => parseStageSpecs("review")).toThrow("Unknown stage");
       expect(parseStageSpecs("after:validate=integration")).toEqual([
@@ -357,12 +453,19 @@ describe("flow maps", () => {
   test("decisions and task links sit on their component", async () => {
     await withFlow(async ({ context, workspaceId }) => {
       const { map, orders } = checkout(context, workspaceId);
-      const task = await context.tasks.create({ workspace: "shop", title: "Orders API" });
+      const task = await context.tasks.create({
+        workspace: "shop",
+        title: "Orders API",
+      });
       context.flow.linkTask(user, orders.id, task.id);
       context.flow.decide(user, orders.id, "Idempotency keys on POST /orders.");
       const detail = context.flow.detail(map.id);
       expect(detail.decisions).toMatchObject([
-        { componentId: orders.id, text: "Idempotency keys on POST /orders.", author: "user" },
+        {
+          componentId: orders.id,
+          text: "Idempotency keys on POST /orders.",
+          author: "user",
+        },
       ]);
       expect(context.flow.linksForTask(task.id)).toMatchObject([
         { map: { id: map.id }, component: { id: orders.id } },

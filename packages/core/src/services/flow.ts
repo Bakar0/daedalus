@@ -23,8 +23,7 @@ import { liveComponentIds, shownStages } from "./flow-rollup";
  * A session needs the flow ability to change anything; reading is open.
  */
 export type FlowActor =
-  | { kind: "user" }
-  | { kind: "session"; session: AgentSession };
+  { kind: "user" } | { kind: "session"; session: AgentSession };
 
 /** One stage in a flow as `flow stages` takes it. */
 export interface FlowStageSpec {
@@ -35,9 +34,7 @@ export interface FlowStageSpec {
 
 /** What happens to the stages a new flow leaves out. */
 export type FlowStageRemoval =
-  | { kind: "delete" }
-  | { kind: "drop"; reason: string }
-  | undefined;
+  { kind: "delete" } | { kind: "drop"; reason: string } | undefined;
 
 export type FlowStageAction = "start" | "finish" | "block" | "skip" | "reset";
 
@@ -68,6 +65,27 @@ function text(
       `${what} is ${trimmed.length} characters; keep it to ${limit}`,
     );
   return trimmed;
+}
+
+/**
+ * A component's name. Paths split on `/`, and a bare number or `r<n>` reads
+ * as a component's or relation's number, so names cannot be either.
+ */
+function componentName(value: string | undefined): string {
+  const name = text(value, "A component's name", LIMITS.name, {
+    required: true,
+  });
+  if (name.includes("/"))
+    throw new DaedalusError(
+      "VALIDATION",
+      `'${name}' has a '/', which separates a path; pick another name`,
+    );
+  if (/^(#?\d+|r\d+)$/i.test(name))
+    throw new DaedalusError(
+      "VALIDATION",
+      `'${name}' reads as a number; pick a name with words`,
+    );
+  return name;
 }
 
 export function parseRelationType(value: string): FlowRelationType {
@@ -106,7 +124,9 @@ export function parseStageSpecs(value: string): FlowStageSpec[] {
     .map((entry): FlowStageSpec => {
       const [head, ...labelParts] = entry.split("=");
       const label = labelParts.join("=").trim();
-      const [first, second] = (head ?? "").split(":").map((part) => part.trim());
+      const [first, second] = (head ?? "")
+        .split(":")
+        .map((part) => part.trim());
       const mode = second === undefined ? "own" : first;
       if (mode !== "own" && mode !== "rollup" && mode !== "after")
         throw new DaedalusError(
@@ -132,8 +152,8 @@ export function parseStageSpecs(value: string): FlowStageSpec[] {
 const isLiveSession = (session: AgentSession | undefined) =>
   Boolean(
     session &&
-      !session.archivedAt &&
-      (session.status === "running" || session.status === "starting"),
+    !session.archivedAt &&
+    (session.status === "running" || session.status === "starting"),
   );
 
 /**
@@ -156,7 +176,8 @@ export class FlowService {
 
   getMap(mapId: string): FlowMap {
     const map = this.repositories.flow.findMap(mapId);
-    if (!map) throw new DaedalusError("NOT_FOUND", `Flow map ${mapId} not found`);
+    if (!map)
+      throw new DaedalusError("NOT_FOUND", `Flow map ${mapId} not found`);
     return map;
   }
 
@@ -181,10 +202,12 @@ export class FlowService {
   linksForTask(
     taskId: string,
   ): Array<{ map: FlowMap; component: FlowComponent }> {
-    return this.repositories.flow.componentsForTask(taskId).flatMap((component) => {
-      const map = this.repositories.flow.findMap(component.mapId);
-      return map ? [{ map, component }] : [];
-    });
+    return this.repositories.flow
+      .componentsForTask(taskId)
+      .flatMap((component) => {
+        const map = this.repositories.flow.findMap(component.mapId);
+        return map ? [{ map, component }] : [];
+      });
   }
 
   /**
@@ -231,7 +254,10 @@ export class FlowService {
     if (number) {
       const found = components.find((c) => c.number === Number(number[1]));
       if (found) return found;
-      throw new DaedalusError("NOT_FOUND", `No component #${number[1]} on this map`);
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `No component #${number[1]} on this map`,
+      );
     }
     const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
     const parts = trimmed
@@ -253,14 +279,19 @@ export class FlowService {
       if (at) return at;
       throw new DaedalusError("NOT_FOUND", `No component at '${trimmed}'`);
     }
-    const named = components.filter((component) => same(component.name, trimmed));
+    const named = components.filter((component) =>
+      same(component.name, trimmed),
+    );
     if (named.length === 1) return named[0]!;
     if (named.length > 1)
       throw new DaedalusError(
         "VALIDATION",
         `${named.length} components are called '${trimmed}' (${named.map((c) => `#${c.number}`).join(", ")}); use the number or a path`,
       );
-    throw new DaedalusError("NOT_FOUND", `No component '${trimmed}' on this map`);
+    throw new DaedalusError(
+      "NOT_FOUND",
+      `No component '${trimmed}' on this map`,
+    );
   }
 
   /** A relation by number (`3`, `r3`, `#3`) or id. */
@@ -273,7 +304,10 @@ export class FlowService {
         (number !== null && candidate.number === Number(number[1])),
     );
     if (!relation)
-      throw new DaedalusError("NOT_FOUND", `No relation '${reference}' on this map`);
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `No relation '${reference}' on this map`,
+      );
     return relation;
   }
 
@@ -303,13 +337,24 @@ export class FlowService {
     this.authorize(actor);
     const workspace = this.repositories.findWorkspace(workspaceId);
     if (!workspace)
-      throw new DaedalusError("NOT_FOUND", `Workspace ${workspaceId} not found`);
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Workspace ${workspaceId} not found`,
+      );
     if (workspace.archivedAt)
-      throw new DaedalusError("CONFLICT", `Workspace '${workspace.name}' is archived`);
-    const name = text(input.name, "A map's name", LIMITS.name, { required: true });
-    const deliverable = text(input.deliverable, "The deliverable", LIMITS.deliverable, {
-      required: true,
-    });
+      throw new DaedalusError(
+        "CONFLICT",
+        `Workspace '${workspace.name}' is archived`,
+      );
+    const name = componentName(input.name);
+    const deliverable = text(
+      input.deliverable,
+      "The deliverable",
+      LIMITS.deliverable,
+      {
+        required: true,
+      },
+    );
     const doneWhen = text(input.doneWhen, "Done when", LIMITS.doneWhen);
     const at = this.at();
     const mapId = this.repositories.immediateTransaction(() => {
@@ -318,7 +363,10 @@ export class FlowService {
           .listMaps(workspaceId)
           .some((map) => map.name.toLowerCase() === name.toLowerCase())
       )
-        throw new DaedalusError("CONFLICT", `A flow map called '${name}' already exists here`);
+        throw new DaedalusError(
+          "CONFLICT",
+          `A flow map called '${name}' already exists here`,
+        );
       const map: FlowMap = {
         id: crypto.randomUUID(),
         workspaceId,
@@ -328,9 +376,16 @@ export class FlowService {
         updatedAt: at,
       };
       this.repositories.flow.createMap(map);
-      const root = this.newComponent(map.id, null, { name, deliverable, doneWhen }, at);
+      const root = this.newComponent(
+        map.id,
+        null,
+        { name, deliverable, doneWhen },
+        at,
+      );
       this.repositories.flow.createComponent(root);
-      this.log(map.id, actor, `Started the map '${name}'`, { componentId: root.id });
+      this.log(map.id, actor, `Started the map '${name}'`, {
+        componentId: root.id,
+      });
       return map.id;
     });
     return this.detail(mapId);
@@ -357,10 +412,15 @@ export class FlowService {
     },
   ): FlowComponent {
     this.authorize(actor);
-    const name = text(input.name, "A component's name", LIMITS.name, { required: true });
-    const deliverable = text(input.deliverable, "The deliverable", LIMITS.deliverable, {
-      required: true,
-    });
+    const name = componentName(input.name);
+    const deliverable = text(
+      input.deliverable,
+      "The deliverable",
+      LIMITS.deliverable,
+      {
+        required: true,
+      },
+    );
     const doneWhen = text(input.doneWhen, "Done when", LIMITS.doneWhen);
     const at = this.at();
     return this.repositories.immediateTransaction(() => {
@@ -371,7 +431,12 @@ export class FlowService {
           `'${parent.name}' is dropped; restore it before adding to it`,
         );
       this.refuseSiblingName(mapId, parent.id, name);
-      const component = this.newComponent(mapId, parent.id, { name, deliverable, doneWhen }, at);
+      const component = this.newComponent(
+        mapId,
+        parent.id,
+        { name, deliverable, doneWhen },
+        at,
+      );
       this.repositories.flow.createComponent(component);
       if (input.stages) this.writeStages(component.id, input.stages, undefined);
       this.log(mapId, actor, `Added '${name}' in '${parent.name}'`, {
@@ -398,54 +463,95 @@ export class FlowService {
       const next: FlowComponent = { ...component, updatedAt: this.at() };
       const changes: string[] = [];
       if (input.name !== undefined) {
-        next.name = text(input.name, "A component's name", LIMITS.name, { required: true });
+        next.name = componentName(input.name);
         if (next.name !== component.name) {
           if (component.parentId !== null)
-            this.refuseSiblingName(component.mapId, component.parentId, next.name, component.id);
+            this.refuseSiblingName(
+              component.mapId,
+              component.parentId,
+              next.name,
+              component.id,
+            );
           changes.push(`renamed to '${next.name}'`);
         }
       }
       if (input.deliverable !== undefined) {
-        next.deliverable = text(input.deliverable, "The deliverable", LIMITS.deliverable, {
-          required: true,
-        });
-        if (next.deliverable !== component.deliverable) changes.push("new deliverable");
+        next.deliverable = text(
+          input.deliverable,
+          "The deliverable",
+          LIMITS.deliverable,
+          {
+            required: true,
+          },
+        );
+        if (next.deliverable !== component.deliverable)
+          changes.push("new deliverable");
       }
       if (input.doneWhen !== undefined)
         next.doneWhen = text(input.doneWhen, "Done when", LIMITS.doneWhen);
-      if (input.parentId !== undefined && input.parentId !== component.parentId) {
+      if (
+        input.parentId !== undefined &&
+        input.parentId !== component.parentId
+      ) {
         if (component.parentId === null)
-          throw new DaedalusError("VALIDATION", "The root of a map cannot move");
+          throw new DaedalusError(
+            "VALIDATION",
+            "The root of a map cannot move",
+          );
         const parent = this.componentOn(component.mapId, input.parentId);
         if (this.contains(component.id, parent.id))
           throw new DaedalusError(
             "VALIDATION",
             `'${parent.name}' is inside '${component.name}'; a component cannot move into itself`,
           );
-        this.refuseSiblingName(component.mapId, parent.id, next.name, component.id);
+        this.refuseSiblingName(
+          component.mapId,
+          parent.id,
+          next.name,
+          component.id,
+        );
         next.parentId = parent.id;
-        next.position = this.repositories.flow.nextPosition(component.mapId, parent.id);
+        next.position = this.repositories.flow.nextPosition(
+          component.mapId,
+          parent.id,
+        );
         changes.push(`moved into '${parent.name}'`);
       }
       if (input.position !== undefined) {
         if (!Number.isInteger(input.position) || input.position < 0)
-          throw new DaedalusError("VALIDATION", "--position takes a whole number from 0");
+          throw new DaedalusError(
+            "VALIDATION",
+            "--position takes a whole number from 0",
+          );
         next.position = input.position;
       }
       this.repositories.flow.updateComponent(next);
       if (next.parentId === null && next.name !== component.name)
-        this.repositories.flow.touchMap(component.mapId, next.updatedAt, next.name);
+        this.repositories.flow.touchMap(
+          component.mapId,
+          next.updatedAt,
+          next.name,
+        );
       if (changes.length)
-        this.log(component.mapId, actor, `'${component.name}' ${changes.join(", ")}`, {
-          componentId: component.id,
-        });
+        this.log(
+          component.mapId,
+          actor,
+          `'${component.name}' ${changes.join(", ")}`,
+          {
+            componentId: component.id,
+          },
+        );
       else this.repositories.flow.touchMap(component.mapId, next.updatedAt);
       return next;
     });
   }
 
   /** Marks a component considered and dropped; it stays on the map, faint. */
-  dropComponent(actor: FlowActor, componentId: string, reason: string): FlowComponent {
+  dropComponent(
+    actor: FlowActor,
+    componentId: string,
+    reason: string,
+  ): FlowComponent {
     this.authorize(actor);
     const why = text(reason, "The reason", LIMITS.reason, { required: true });
     return this.repositories.immediateTransaction(() => {
@@ -456,7 +562,12 @@ export class FlowService {
           "The root of a map cannot be dropped; delete the map instead",
         );
       const at = this.at();
-      const dropped = { ...component, droppedReason: why, droppedAt: at, updatedAt: at };
+      const dropped = {
+        ...component,
+        droppedReason: why,
+        droppedAt: at,
+        updatedAt: at,
+      };
       this.repositories.flow.updateComponent(dropped);
       this.log(component.mapId, actor, `Dropped '${component.name}': ${why}`, {
         componentId: component.id,
@@ -470,9 +581,17 @@ export class FlowService {
     return this.repositories.immediateTransaction(() => {
       const component = this.component(componentId);
       if (component.droppedReason === null)
-        throw new DaedalusError("CONFLICT", `'${component.name}' is not dropped`);
+        throw new DaedalusError(
+          "CONFLICT",
+          `'${component.name}' is not dropped`,
+        );
       if (component.parentId !== null)
-        this.refuseSiblingName(component.mapId, component.parentId, component.name, component.id);
+        this.refuseSiblingName(
+          component.mapId,
+          component.parentId,
+          component.name,
+          component.id,
+        );
       const restored = {
         ...component,
         droppedReason: null,
@@ -518,14 +637,19 @@ export class FlowService {
     });
   }
 
-  linkTask(actor: FlowActor, componentId: string, taskId: string | null): FlowComponent {
+  linkTask(
+    actor: FlowActor,
+    componentId: string,
+    taskId: string | null,
+  ): FlowComponent {
     this.authorize(actor);
     return this.repositories.immediateTransaction(() => {
       const component = this.component(componentId);
       const map = this.getMap(component.mapId);
       if (taskId !== null) {
         const task = this.repositories.findTask(taskId);
-        if (!task) throw new DaedalusError("NOT_FOUND", `Task ${taskId} not found`);
+        if (!task)
+          throw new DaedalusError("NOT_FOUND", `Task ${taskId} not found`);
         if (task.workspaceId !== map.workspaceId)
           throw new DaedalusError(
             "VALIDATION",
@@ -538,7 +662,9 @@ export class FlowService {
       this.log(
         component.mapId,
         actor,
-        task ? `Linked '${component.name}' to task #${task.number}` : `Unlinked '${component.name}' from its task`,
+        task
+          ? `Linked '${component.name}' to task #${task.number}`
+          : `Unlinked '${component.name}' from its task`,
         { componentId: component.id },
       );
       return linked;
@@ -550,7 +676,12 @@ export class FlowService {
   relate(
     actor: FlowActor,
     mapId: string,
-    input: { fromId: string; toId: string; type: FlowRelationType; note?: string },
+    input: {
+      fromId: string;
+      toId: string;
+      type: FlowRelationType;
+      note?: string;
+    },
   ): FlowRelation {
     this.authorize(actor);
     const note = text(input.note, "A relation's note", LIMITS.note) || null;
@@ -558,7 +689,10 @@ export class FlowService {
       const from = this.componentOn(mapId, input.fromId);
       const to = this.componentOn(mapId, input.toId);
       if (from.id === to.id)
-        throw new DaedalusError("VALIDATION", "A relation links two different components");
+        throw new DaedalusError(
+          "VALIDATION",
+          "A relation links two different components",
+        );
       const existing = this.repositories.flow
         .listRelations(mapId)
         .find(
@@ -586,23 +720,37 @@ export class FlowService {
         createdAt: this.at(),
       };
       this.repositories.flow.createRelation(relation);
-      this.log(mapId, actor, `'${from.name}' ${input.type} '${to.name}'${note ? ` (${note})` : ""}`, {
-        relationId: relation.id,
-      });
+      this.log(
+        mapId,
+        actor,
+        `'${from.name}' ${input.type} '${to.name}'${note ? ` (${note})` : ""}`,
+        {
+          relationId: relation.id,
+        },
+      );
       return relation;
     });
   }
 
-  dropRelation(actor: FlowActor, relationId: string, reason: string): FlowRelation {
+  dropRelation(
+    actor: FlowActor,
+    relationId: string,
+    reason: string,
+  ): FlowRelation {
     this.authorize(actor);
     const why = text(reason, "The reason", LIMITS.reason, { required: true });
     return this.repositories.immediateTransaction(() => {
       const relation = this.relation(relationId);
       const dropped = { ...relation, droppedReason: why, droppedAt: this.at() };
       this.repositories.flow.updateRelation(dropped);
-      this.log(relation.mapId, actor, `Dropped ${this.relationText(relation)}: ${why}`, {
-        relationId: relation.id,
-      });
+      this.log(
+        relation.mapId,
+        actor,
+        `Dropped ${this.relationText(relation)}: ${why}`,
+        {
+          relationId: relation.id,
+        },
+      );
       return dropped;
     });
   }
@@ -612,12 +760,20 @@ export class FlowService {
     return this.repositories.immediateTransaction(() => {
       const relation = this.relation(relationId);
       if (relation.droppedReason === null)
-        throw new DaedalusError("CONFLICT", `Relation r${relation.number} is not dropped`);
+        throw new DaedalusError(
+          "CONFLICT",
+          `Relation r${relation.number} is not dropped`,
+        );
       const restored = { ...relation, droppedReason: null, droppedAt: null };
       this.repositories.flow.updateRelation(restored);
-      this.log(relation.mapId, actor, `Restored ${this.relationText(relation)}`, {
-        relationId: relation.id,
-      });
+      this.log(
+        relation.mapId,
+        actor,
+        `Restored ${this.relationText(relation)}`,
+        {
+          relationId: relation.id,
+        },
+      );
       return restored;
     });
   }
@@ -697,14 +853,21 @@ export class FlowService {
           "VALIDATION",
           `The ${stage.kind} stage of '${component.name}' is worked out from the components inside it and cannot be set`,
         );
-      const shown = this.detail(component.mapId).stages.find((s) => s.id === stage.id);
-      if (shown?.shown === "waiting" && (action === "start" || action === "finish"))
+      const shown = this.detail(component.mapId).stages.find(
+        (s) => s.id === stage.id,
+      );
+      if (
+        shown?.shown === "waiting" &&
+        (action === "start" || action === "finish")
+      )
         throw new DaedalusError(
           "CONFLICT",
           `The ${stage.label ?? stage.kind} stage of '${component.name}' waits for the components inside it to finish their ${stage.kind}`,
         );
       const caller = actor.kind === "session" ? actor.session : undefined;
-      const holder = stage.sessionId ? this.repositories.findAgent(stage.sessionId) : undefined;
+      const holder = stage.sessionId
+        ? this.repositories.findAgent(stage.sessionId)
+        : undefined;
       const heldByOther =
         (stage.state === "running" || stage.state === "blocked") &&
         holder !== undefined &&
@@ -725,7 +888,8 @@ export class FlowService {
         case "start":
           next.state = "running";
           next.note = null;
-          next.startedAt = stage.state === "blocked" && stage.startedAt ? stage.startedAt : at;
+          next.startedAt =
+            stage.state === "blocked" && stage.startedAt ? stage.startedAt : at;
           next.finishedAt = null;
           if (caller) next.sessionId = caller.id;
           line = `Started ${label} on '${component.name}'`;
@@ -764,7 +928,9 @@ export class FlowService {
       return stage.id;
     });
     const component = this.component(componentId);
-    const shown = this.detail(component.mapId).stages.find((stage) => stage.id === stageId);
+    const shown = this.detail(component.mapId).stages.find(
+      (stage) => stage.id === stageId,
+    );
     if (!shown) throw new DaedalusError("INTERNAL", "The stage was not stored");
     return shown;
   }
@@ -773,7 +939,9 @@ export class FlowService {
 
   decide(actor: FlowActor, componentId: string, decision: string) {
     this.authorize(actor);
-    const body = text(decision, "A decision", LIMITS.decision, { required: true });
+    const body = text(decision, "A decision", LIMITS.decision, {
+      required: true,
+    });
     return this.repositories.immediateTransaction(() => {
       const component = this.component(componentId);
       const stored = this.repositories.flow.addDecision({
@@ -783,9 +951,14 @@ export class FlowService {
         sessionId: actor.kind === "session" ? actor.session.id : null,
         createdAt: this.at(),
       });
-      this.log(component.mapId, actor, `Decided on '${component.name}': ${body}`, {
-        componentId: component.id,
-      });
+      this.log(
+        component.mapId,
+        actor,
+        `Decided on '${component.name}': ${body}`,
+        {
+          componentId: component.id,
+        },
+      );
       return stored;
     });
   }
@@ -794,7 +967,8 @@ export class FlowService {
 
   /** A session changing a map must hold the flow ability; the user may. */
   private authorize(actor: FlowActor): void {
-    if (actor.kind === "session") this.abilities.require(actor.session.id, "flow");
+    if (actor.kind === "session")
+      this.abilities.require(actor.session.id, "flow");
   }
 
   private author(actor: FlowActor): string {
@@ -808,7 +982,10 @@ export class FlowService {
   private component(componentId: string): FlowComponent {
     const component = this.repositories.flow.findComponent(componentId);
     if (!component)
-      throw new DaedalusError("NOT_FOUND", `Component ${componentId} not found`);
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Component ${componentId} not found`,
+      );
     return component;
   }
 
@@ -824,23 +1001,28 @@ export class FlowService {
 
   private relation(relationId: string): FlowRelation {
     const relation = this.repositories.flow.findRelation(relationId);
-    if (!relation) throw new DaedalusError("NOT_FOUND", `Relation ${relationId} not found`);
+    if (!relation)
+      throw new DaedalusError("NOT_FOUND", `Relation ${relationId} not found`);
     return relation;
   }
 
   private relationText(relation: FlowRelation): string {
-    const name = (id: string) => this.repositories.flow.findComponent(id)?.name ?? id;
+    const name = (id: string) =>
+      this.repositories.flow.findComponent(id)?.name ?? id;
     return `'${name(relation.fromId)}' ${relation.type} '${name(relation.toId)}'`;
   }
 
   /** Whether `inner` is `outer` or sits somewhere inside it. */
   private contains(outer: string, inner: string): boolean {
-    let at: FlowComponent | undefined = this.repositories.flow.findComponent(inner);
+    let at: FlowComponent | undefined =
+      this.repositories.flow.findComponent(inner);
     const seen = new Set<string>();
     while (at && !seen.has(at.id)) {
       if (at.id === outer) return true;
       seen.add(at.id);
-      at = at.parentId ? this.repositories.flow.findComponent(at.parentId) : undefined;
+      at = at.parentId
+        ? this.repositories.flow.findComponent(at.parentId)
+        : undefined;
     }
     return false;
   }
