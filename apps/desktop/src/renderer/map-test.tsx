@@ -1,5 +1,6 @@
-// The Map tab on a fake client, for scripts/map-ui-check.ts. It renders the
-// real FlowMapView over sample data; window.mapTest changes the data the way
+// The Map bar and panel on a fake client, for scripts/map-ui-check.ts. It renders the
+// real FlowMapBar and FlowMapPanel over sample data, in a stand-in for a
+// session's terminal stage; window.mapTest changes the data the way
 // an agent's `daedal flow` commands would, and bumps the revision as the
 // host does when its fingerprint moves.
 import { useEffect, useState } from "react";
@@ -10,10 +11,10 @@ import type {
   FlowRelationDto,
   FlowStageDto,
   TaskDto,
-  WorkspaceDto,
+  FlowMapSummaryDto,
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
-import { FlowMapView } from "./flow-map/FlowMapView";
+import { FlowMapBar, FlowMapPanel } from "./flow-map/FlowMapPanel";
 import type { StageSession } from "./flow-map/model";
 import "./styles.css";
 
@@ -276,17 +277,22 @@ const task: TaskDto = {
   title: "Checkout page",
 } as TaskDto;
 
-const workspace = { id: "shop", name: "Shop", slug: "shop" } as WorkspaceDto;
+const summary: FlowMapSummaryDto = {
+  id: "map-1",
+  workspaceId: "shop",
+  number: 1,
+  name: "Checkout",
+  updatedAt: "2026-10-13T08:00:00.000Z",
+  ownerSessionId: "s-mapper",
+  stageSessionIds: ["s-builder", "s-designer", "s-tester", "s-gone"],
+  taskLinks: [],
+};
 
 let detail = sample();
 const calls: string[] = [];
 const ok = <T,>(data: T) => Promise.resolve({ ok: true as const, data });
 const client = {
   request: {
-    flowMaps: () => {
-      calls.push("flowMaps");
-      return ok([detail.map]);
-    },
     flowMap: () => {
       calls.push("flowMap");
       return ok(structuredClone(detail));
@@ -337,6 +343,7 @@ window.mapTest = {
 
 function Page() {
   const [revision, setRevision] = useState(1);
+  const [open, setOpen] = useState(true);
   useEffect(() => {
     const listener = () => setRevision((value) => value + 1);
     listeners.add(listener);
@@ -350,18 +357,32 @@ function Page() {
       data-theme="dark"
       style={{ display: "flex", flexDirection: "column", padding: "0 20px" }}
     >
-      <FlowMapView
-        client={client}
-        dataRevision={revision}
-        onError={(message) => {
-          throw new Error(message);
-        }}
-        onOpenSession={(session) => opened.push(`session:${session.id}`)}
-        onOpenTask={(item) => opened.push(`task:${item.id}`)}
-        sessions={sessions}
-        tasks={new Map([[task.id, task]])}
-        workspace={workspace}
+      <FlowMapBar
+        color={null}
+        maps={[summary]}
+        onOpenPanel={() => setOpen((value) => !value)}
+        open={open}
+        owns
       />
+      <div className="terminal-stage">
+        {open ? (
+          <FlowMapPanel
+            client={client}
+            dataRevision={revision}
+            mapId={summary.id}
+            maps={[summary]}
+            onClose={() => setOpen(false)}
+            onError={(message: string) => {
+              throw new Error(message);
+            }}
+            onOpenSession={(session) => opened.push(`session:${session.id}`)}
+            onOpenTask={(item) => opened.push(`task:${item.id}`)}
+            onSelectMap={() => {}}
+            sessions={sessions}
+            tasks={new Map([[task.id, task]])}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }

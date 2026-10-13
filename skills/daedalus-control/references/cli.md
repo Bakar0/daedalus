@@ -89,7 +89,7 @@ and `daedal routine --help` describe them. A session that holds
 talks to them with `daedal team`; the `daedalus-orchestration` and
 `daedalus-team` skills and `daedal team --help` describe it. A rebirth moves a
 session's abilities, pin and color to the successor. A session that holds
-`flow` builds and keeps the workspace's flow maps with `daedal flow`; the
+`flow` builds and keeps flow maps of its own with `daedal flow`; the
 `daedalus-flow` skill and `daedal flow --help` describe it, and any session
 can read a map with `daedal flow show`. A session with routines
 keeps its exact name; any other, a team's lead included, gets ` · 2`.

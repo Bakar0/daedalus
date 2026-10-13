@@ -58,6 +58,7 @@ const base: DesktopSnapshotDto = {
   toasts: [],
   abilities: [],
   teams: [],
+  flowMaps: [],
   routines: [],
   routineReports: [],
   settings: {

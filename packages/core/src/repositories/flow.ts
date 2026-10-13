@@ -188,10 +188,37 @@ export class FlowRepository {
       .map(mapFromRow);
   }
 
-  /** Every map, with its owner's session and the sessions holding stages. */
+  /**
+   * Every map, with its owner's session, the sessions holding stages, and
+   * the components linked to tasks: what the app needs to place a map.
+   */
   listMapOverview(): Array<
-    FlowMap & { ownerSessionId: string | null; stageSessionIds: string[] }
+    FlowMap & {
+      ownerSessionId: string | null;
+      stageSessionIds: string[];
+      taskLinks: Array<{
+        taskId: string;
+        componentId: string;
+        componentNumber: number;
+        componentName: string;
+      }>;
+    }
   > {
+    const links = this.database
+      .query<
+        {
+          map_id: string;
+          task_id: string;
+          id: string;
+          number: number;
+          name: string;
+        },
+        []
+      >(
+        `SELECT map_id, task_id, id, number, name FROM flow_components
+         WHERE task_id IS NOT NULL AND dropped_at IS NULL ORDER BY number`,
+      )
+      .all();
     const holders = this.database
       .query<{ map_id: string; session_id: string }, []>(
         `SELECT DISTINCT flow_components.map_id, flow_stages.session_id
@@ -216,6 +243,14 @@ export class FlowRepository {
         stageSessionIds: holders
           .filter((holder) => holder.map_id === row.id)
           .map((holder) => holder.session_id),
+        taskLinks: links
+          .filter((link) => link.map_id === row.id)
+          .map((link) => ({
+            taskId: link.task_id,
+            componentId: link.id,
+            componentNumber: link.number,
+            componentName: link.name,
+          })),
       }));
   }
 
@@ -308,16 +343,6 @@ export class FlowRepository {
       )
       .get(id);
     return row ? componentFromRow(row) : undefined;
-  }
-
-  /** Components linked to a task, across every map. */
-  componentsForTask(taskId: string): FlowComponent[] {
-    return this.database
-      .query<ComponentRow, [string]>(
-        "SELECT * FROM flow_components WHERE task_id = ? ORDER BY created_at",
-      )
-      .all(taskId)
-      .map(componentFromRow);
   }
 
   nextComponentNumber(mapId: string): number {

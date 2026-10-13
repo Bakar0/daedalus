@@ -68,7 +68,7 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilityDefinition>> = {
     label: "Flow map",
     providers: ["claude", "codex"],
     launchLine: (skill) =>
-      `You hold the Daedalus flow ability: you turn ideas and tasks into a flow map of components in this workspace and keep it current while the work happens ('daedal flow show', 'daedal flow add', 'daedal flow stage start'). Follow the ${skill(FLOW_SKILL)} skill whenever you build, change or work on a map. Run 'daedal flow maps' to see the maps that exist before making a new one.`,
+      `You hold the Daedalus flow ability: you turn ideas and tasks into flow maps of components that you own, and keep them current while the work happens ('daedal flow show', 'daedal flow add', 'daedal flow stage start'). Follow the ${skill(FLOW_SKILL)} skill whenever you build, change or work on a map. Run 'daedal flow show' to see your map, if you have one, before making a new one.`,
     grantNote: (skill) =>
       `Daedalus: this session now holds the flow ability and can build and change this workspace's flow maps. Read the ${skill(FLOW_SKILL)} skill before you use 'daedal flow', then carry on.`,
     revokeNote: () =>

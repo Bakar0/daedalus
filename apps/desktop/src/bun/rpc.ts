@@ -237,6 +237,12 @@ export async function desktopSnapshot(
     toasts: context.notifications.pending("toast").map(toastDto),
     abilities: context.repositories.abilities.list().map(sessionAbilityDto),
     teams: context.teams.list().map(teamDto),
+    flowMaps: context.repositories.flow.listMapOverview().map((map) => ({
+      ...flowMapSummaryDto(map),
+      ownerSessionId: map.ownerSessionId,
+      stageSessionIds: map.stageSessionIds,
+      taskLinks: map.taskLinks,
+    })),
     routines: context.abilities
       .holders("routines")
       .map((ability) =>
@@ -327,7 +333,12 @@ const sessionAbilityDto = (ability: SessionAbility): SessionAbilityDto => ({
   grantedAt: ability.grantedAt,
 });
 
-const flowMapSummaryDto = (map: FlowMap): FlowMapSummaryDto => ({
+const flowMapSummaryDto = (
+  map: FlowMap,
+): Omit<
+  FlowMapSummaryDto,
+  "ownerSessionId" | "stageSessionIds" | "taskLinks"
+> => ({
   id: map.id,
   workspaceId: map.workspaceId,
   number: map.number,
@@ -632,25 +643,12 @@ export function createDesktopRequestHandlers(
     routinesDetail: ({ sessionId }) =>
       result(() => routinesDetail(context, sessionId)),
     teamDetail: ({ teamId }) => result(() => teamDetail(context, teamId)),
-    flowMaps: ({ workspaceId }) =>
-      result(() => context.flow.listMaps(workspaceId).map(flowMapSummaryDto)),
     flowMap: ({ mapId }) =>
       result(() =>
         flowMapDetailDto(
           context.flow.detail(mapId),
           context.flow.history(mapId, FLOW_HISTORY_LINES),
         ),
-      ),
-    flowTaskLinks: ({ taskId }) =>
-      result(() =>
-        context.flow.linksForTask(taskId).map(({ map, component }) => ({
-          mapId: map.id,
-          mapNumber: map.number,
-          mapName: map.name,
-          componentId: component.id,
-          componentNumber: component.number,
-          componentName: component.name,
-        })),
       ),
     teamSay: ({ teamId, body }) =>
       mutate(async () => {

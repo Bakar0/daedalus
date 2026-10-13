@@ -389,7 +389,7 @@ export function routeEdges(
     });
   }
   let loops = 0;
-  return plans.map(({ line, a, b, mode, ay, by }) => {
+  const edges = plans.map(({ line, a, b, mode, ay, by }): Edge => {
     if (mode === "lr") {
       const mid = (a.r + b.l) / 2;
       return {
@@ -416,4 +416,38 @@ export function routeEdges(
       labelY: (ay + by) / 2 - 5,
     };
   });
+  return spreadLabels(edges);
+}
+
+/** About how wide a label is drawn at 10.5px, for spacing labels apart. */
+const labelWidth = (text: string) => text.length * 6.2 + 10;
+const LABEL_HEIGHT = 14;
+
+/**
+ * Moves labels that would cover each other down, one line at a time, so two
+ * relations through the same gap stay readable. Placed top to bottom.
+ */
+export function spreadLabels(edges: Edge[]): Edge[] {
+  const placed: Array<{ x: number; y: number; width: number }> = [];
+  const order = [...edges].sort((a, b) => a.labelY - b.labelY);
+  const moved = new Map<Edge, number>();
+  for (const edge of order) {
+    const width = labelWidth(relationLabel(edge.line));
+    let y = edge.labelY;
+    for (let tries = 0; tries < 20; tries += 1) {
+      const clash = placed.some(
+        (other) =>
+          Math.abs(other.x - edge.labelX) < (other.width + width) / 2 &&
+          Math.abs(other.y - y) < LABEL_HEIGHT,
+      );
+      if (!clash) break;
+      y += LABEL_HEIGHT;
+    }
+    placed.push({ x: edge.labelX, y, width });
+    moved.set(edge, y);
+  }
+  return edges.map((edge) => ({
+    ...edge,
+    labelY: moved.get(edge) ?? edge.labelY,
+  }));
 }

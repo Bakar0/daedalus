@@ -5,9 +5,10 @@ description: Build and keep a Daedalus flow map - break an idea or task into com
 
 # Keeping a flow map
 
-This session holds the Daedalus flow ability. A flow map belongs to the
-workspace, not to you: it outlives this session, other agents work on its
-stages, and the user watches it in the app's Map tab. Keep it true while the
+This session holds the Daedalus flow ability. The maps you make are yours:
+only you, and the user, change their shape. Other agents in the workspace
+work on their stages, a rebirth hands the maps to your successor, and the
+user watches them from your session's Map bar. Keep a map true while the
 work happens. It is the shared picture of the job, not a log.
 
 ## Resolve the CLI once
@@ -23,8 +24,8 @@ daedal flow maps
 daedal flow show [--map <n>] [--dropped]
 ```
 
-Only make a new map when the work is a new idea or system. Several maps in
-one workspace are fine; one map per idea.
+`flow show` with no `--map` shows your own map. Only make a new map when
+the work is a new idea or system; one map per idea.
 
 ## Components are deliverables
 
@@ -135,7 +136,9 @@ daedal flow stage skip "Orders API" plan --reason "The plan came from the parent
   done, not in batches at the end. The map is only useful if it is current.
 - An orchestration lead can start a member already on a stage:
   `daedal agent spawn --team --name orders --message "<instructions>" --flow-stage "Orders API:implement"`.
-  The member gets the flow ability and the claim.
+  The member gets the claim and needs no ability: any session in the
+  workspace can start, finish, block and skip stages on your map. Only you
+  and the user reset one or change the map's shape.
 - A rebirth successor takes over the stages you hold.
 
 ## Changing the map

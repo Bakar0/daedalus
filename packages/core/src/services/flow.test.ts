@@ -531,8 +531,17 @@ describe("flow maps", () => {
           author: "user",
         },
       ]);
-      expect(context.flow.linksForTask(task.id)).toMatchObject([
-        { map: { id: map.id }, component: { id: orders.id } },
+      expect(
+        context.repositories.flow
+          .listMapOverview()
+          .find((item) => item.id === map.id)?.taskLinks,
+      ).toEqual([
+        {
+          taskId: task.id,
+          componentId: orders.id,
+          componentNumber: orders.number,
+          componentName: "Orders API",
+        },
       ]);
     });
   });

@@ -198,18 +198,6 @@ export class FlowService {
     return this.repositories.flow.listHistory(mapId, limit);
   }
 
-  /** Where a task appears on maps, for the task's drawer. */
-  linksForTask(
-    taskId: string,
-  ): Array<{ map: FlowMap; component: FlowComponent }> {
-    return this.repositories.flow
-      .componentsForTask(taskId)
-      .flatMap((component) => {
-        const map = this.repositories.flow.findMap(component.mapId);
-        return map ? [{ map, component }] : [];
-      });
-  }
-
   /** The maps a session owns through its flow ability, held or revoked. */
   mapsOwnedBy(sessionId: string): FlowMap[] {
     const ability = this.repositories.abilities.findForSession(

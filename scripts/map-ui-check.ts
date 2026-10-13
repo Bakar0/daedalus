@@ -1,5 +1,5 @@
-// Drives the Map tab (map-test.html) in headless Chrome: the canvas, the
-// legend, relation lines, the heartbeat, hover, collapse, dropped items,
+// Drives the Map bar and panel (map-test.html) in headless Chrome: the
+// canvas, the legend, relation lines, the heartbeat, hover, collapse, dropped items,
 // history and a live update, in both themes. Screenshots go to artifacts/.
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -188,6 +188,21 @@ try {
     "document.querySelectorAll('.flow-edge[data-relation]').length > 0",
   );
 
+  // The legend opens from the toolbar, over the canvas.
+  check(
+    !(await evaluate<boolean>(
+      "Boolean(document.querySelector('.flow-legend'))",
+    )),
+    "The legend is open before it was asked for",
+  );
+  await evaluate(
+    "[...document.querySelectorAll('.flow-tool')].find((n) => n.textContent === 'Legend').click()",
+  );
+  await waitFor(
+    "the legend",
+    "Boolean(document.querySelector('.flow-legend'))",
+  );
+
   // The canvas: the root frame, its columns, the boxes inside, every flow.
   const layout = await evaluate<{
     columns: string[];
@@ -228,6 +243,25 @@ try {
       layout.labels.includes("publishes to · order.paid"),
     `Labels: ${JSON.stringify(layout.labels)}`,
   );
+
+  const legendShot = await screenshot("legend");
+  await evaluate(
+    "[...document.querySelectorAll('.flow-tool')].find((n) => n.textContent === 'Legend').click()",
+  );
+
+  // No two relation labels cover each other.
+  const overlaps = await evaluate<string[]>(`(() => {
+    const boxes = [...document.querySelectorAll('.flow-edge-label')].map((n) => ({ text: n.textContent, r: n.getBoundingClientRect() }));
+    const out = [];
+    for (let i = 0; i < boxes.length; i++)
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i].r, b = boxes[j].r;
+        if (a.left < b.right - 2 && b.left < a.right - 2 && a.top < b.bottom - 2 && b.top < a.bottom - 2)
+          out.push(boxes[i].text + ' / ' + boxes[j].text);
+      }
+    return out;
+  })()`);
+  check(!overlaps.length, `Overlapping labels: ${JSON.stringify(overlaps)}`);
 
   // Every relation type is drawn in its own pattern and colour.
   const styles = await evaluate<
@@ -397,7 +431,7 @@ try {
   // History, and a live change: the agent finishes a stage, the host bumps
   // the revision, and the tab reads the map again.
   await evaluate(
-    "[...document.querySelectorAll('.flow-history-toggle')][0].click()",
+    "[...document.querySelectorAll('.flow-tool')].find((n) => n.textContent === 'History').click()",
   );
   await waitFor(
     "the history",
@@ -434,6 +468,27 @@ try {
   );
   const light = await screenshot("light");
 
+  // The panel stays inside its stage, and Escape closes it; the bar opens
+  // it again.
+  const inside = await evaluate<boolean>(`(() => {
+    const panel = document.querySelector('.flow-map-panel').getBoundingClientRect();
+    const stage = document.querySelector('.terminal-stage').getBoundingClientRect();
+    return panel.left >= stage.left && panel.right <= stage.right + 1;
+  })()`);
+  check(inside, "The map panel is wider than the stage it sits on");
+  await evaluate(
+    "document.querySelector('.flow-map-panel').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))",
+  );
+  await waitFor(
+    "the panel to close",
+    "!document.querySelector('.flow-map-panel')",
+  );
+  await evaluate("document.querySelector('.flow-map-bar button').click()");
+  await waitFor(
+    "the panel to open",
+    "Boolean(document.querySelector('.flow-map-panel'))",
+  );
+
   // Nothing overflows the page sideways outside the canvas's own scroller.
   const sideways = await evaluate<boolean>(
     "document.documentElement.scrollWidth > window.innerWidth + 1",
@@ -449,6 +504,7 @@ try {
   );
   for (const path of [
     dark,
+    legendShot,
     cardShot,
     hoverShot,
     collapsedShot,

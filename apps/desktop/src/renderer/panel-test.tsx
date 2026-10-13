@@ -223,6 +223,7 @@ const snapshot: DesktopSnapshotDto = {
   toasts: [],
   abilities: [],
   teams: [],
+  flowMaps: [],
   routines: [],
   routineReports: [],
   settings: {

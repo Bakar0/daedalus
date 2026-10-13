@@ -210,7 +210,7 @@ A team is a session holding the orchestration ability, its lead, and the members
 
 ```text
 daedal flow maps [--workspace <workspace>]
-daedal flow new <name> --deliverable <text> [--done-when <text>]
+daedal flow new <name> --deliverable <text> [--done-when <text>] [--session <owner>]
 daedal flow show [--map <map>] [--dropped]
 daedal flow history [--map <map>] [--limit <n>]
 daedal flow add <name> --in <component> --deliverable <text> [--done-when <text>] [--stages <flow>]
@@ -228,7 +228,7 @@ daedal flow types
 daedal agent spawn ... --flow-stage <component>:<stage> [--flow-map <map>]
 ```
 
-Every command takes `--workspace` and `--map`; inside a session they default to its workspace and to the workspace's only map. A map is named by number (`1`, `#1`) or name; a component by number (`7`, `#7`), a path of names from the root (`"API server/Orders API"`), or a name only one component has; a relation as `r<n>`. A flow is written `research,plan,rollup:implement,after:validate=integration`. Inside a session, changing a map needs the flow ability (exit 4 without it); reading does not, and outside a session the change is the user's. `flow stage start` on a stage another running session holds exits 4. `flow show --json` returns the map with each stage's stored `state` and the `shown` state the app draws. The rules are in [abilities.md](abilities.md#flow-maps).
+Every command takes `--workspace` and `--map`; inside a session they default to its workspace and to its own map, else the map it holds a stage on, else the workspace's only map. A map belongs to the session that makes it; the user names the owner with `--session`. A map is named by number (`1`, `#1`) or name; a component by number (`7`, `#7`), a path of names from the root (`"API server/Orders API"`), or a name only one component has; a relation as `r<n>`. A flow is written `research,plan,rollup:implement,after:validate=integration`. Only the owner, while it holds the flow ability, or the user changes a map's shape (exit 4 otherwise); any session in the workspace may start, finish, block or skip a stage, and reading is open. `flow stage start` on a stage another running session holds exits 4. `flow show --json` returns the map with each stage's stored `state` and the `shown` state the app draws. The rules are in [abilities.md](abilities.md#flow-maps).
 
 ## Shutdown
 

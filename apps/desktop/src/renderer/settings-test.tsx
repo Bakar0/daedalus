@@ -50,6 +50,7 @@ const snapshot = {
   toasts: [],
   abilities: [],
   teams: [],
+  flowMaps: [],
   routines: [],
   routineReports: [],
   settings: {

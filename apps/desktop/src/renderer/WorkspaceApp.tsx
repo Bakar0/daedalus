@@ -23,8 +23,8 @@ import type {
   FileLinkTargetDto,
   AppUpdateDto,
   TaskTimelineDto,
-  FlowTaskLinkDto,
   AbilityIdDto,
+  FlowMapSummaryDto,
   AgentActivity,
   AgentActivityDto,
   AgentSessionDto,
@@ -84,7 +84,7 @@ import { RoutinesPanel } from "./routines/RoutinesPanel";
 import { ProBadge } from "./ProPlan";
 import { RemoteMenu } from "./RemoteMenu";
 import { SecretsPanel } from "./SecretsPanel";
-import { FlowMapView, rememberFlowMap } from "./flow-map/FlowMapView";
+import { FlowMapBar, FlowMapPanel } from "./flow-map/FlowMapPanel";
 import type { StageSession } from "./flow-map/model";
 import {
   sessionStatusLine,
@@ -209,7 +209,7 @@ const lastViewStorageKey = (workspaceId: string) =>
  * from the session lists nested under each workspace in the left column; it
  * has no tab of its own (#55).
  */
-export type WorkspaceView = "board" | "session" | "workspace" | "map" | "world";
+export type WorkspaceView = "board" | "session" | "workspace" | "world";
 
 /**
  * What the main column shows: one workspace, or every active workspace at
@@ -234,9 +234,7 @@ export function preferredScopeView(
   // Files and a session's terminal belong to one workspace; every workspace
   // at once is the board and the World only.
   return scope === "all" &&
-    (preferred === "workspace" ||
-      preferred === "session" ||
-      preferred === "map")
+    (preferred === "workspace" || preferred === "session")
     ? "board"
     : preferred;
 }
@@ -252,7 +250,6 @@ export function preferredWorkspaceView(
   if (rememberedView === "sessions") return "session";
   return rememberedView === "session" ||
     rememberedView === "workspace" ||
-    rememberedView === "map" ||
     rememberedView === "world"
     ? rememberedView
     : "board";
@@ -1839,6 +1836,11 @@ export function WorkspaceApp({
     /** A member's instructions, which it needs. */
     instructions?: string;
   }>({ name: "" });
+  // The Map panel over a session's terminal, and the map it shows.
+  const [mapPanel, setMapPanel] = useState<{
+    sessionId: string;
+    mapId: string;
+  }>();
   // The Routines drawer on the selected session, and what it last read.
   const [routinesPanel, setRoutinesPanel] = useState<{
     sessionId: string;
@@ -2343,28 +2345,6 @@ export function WorkspaceApp({
     };
   }, [client, dataRevision, selectedTaskId, view]);
 
-  // Where the selected task appears on flow maps, asked for like the
-  // timeline: when a task is selected and whenever the data moves.
-  const [taskFlowLinks, setTaskFlowLinks] = useState<FlowTaskLinkDto[]>([]);
-  useEffect(() => {
-    if (!selectedTaskId || view !== "board") {
-      setTaskFlowLinks([]);
-      return;
-    }
-    let cancelled = false;
-    void client.request
-      .flowTaskLinks?.({ taskId: selectedTaskId })
-      .then((response) => {
-        if (!cancelled) setTaskFlowLinks(response.ok ? response.data : []);
-      })
-      .catch(() => {
-        if (!cancelled) setTaskFlowLinks([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, dataRevision, selectedTaskId, view]);
-
   const setFocusMode = useCallback(
     async (enabled: boolean) => {
       const response = await client.request.focusModeSet({ enabled });
@@ -2733,6 +2713,34 @@ export function WorkspaceApp({
   const tasksById = new Map(
     (snapshot?.tasks ?? []).map((task) => [task.id, task]),
   );
+  // The maps a session owns, else the ones it holds a stage on: what its Map
+  // bar names and its panel can show.
+  const flowMapsFor = (sessionId: string) => {
+    const all = snapshot?.flowMaps ?? [];
+    const owned = all.filter((map) => map.ownerSessionId === sessionId);
+    return owned.length
+      ? { owns: true, maps: owned }
+      : {
+          owns: false,
+          maps: all.filter((map) => map.stageSessionIds.includes(sessionId)),
+        };
+  };
+  const taskFlowLinks = selectedTaskId
+    ? (snapshot?.flowMaps ?? []).flatMap((map) =>
+        map.taskLinks
+          .filter((link) => link.taskId === selectedTaskId)
+          .map((link) => ({ map, link })),
+      )
+    : [];
+  // A map opens in the session that owns it, over its terminal.
+  const openFlowMap = (map: FlowMapSummaryDto) => {
+    const owner = map.ownerSessionId
+      ? sessionsById.get(map.ownerSessionId)
+      : undefined;
+    if (!owner) return;
+    showSession(owner.id, owner.workspaceId);
+    setMapPanel({ sessionId: owner.id, mapId: map.id });
+  };
   const statusViewFor = (session: AgentSessionDto) =>
     sessionStatusView(
       session,
@@ -2927,6 +2935,9 @@ export function WorkspaceApp({
     (status) => status.sessionId === activeSession?.id,
   );
   const activeSessionTeam = activeSession ? teamOf(activeSession) : undefined;
+  const activeSessionMaps = activeSession
+    ? flowMapsFor(activeSession.id)
+    : { owns: false, maps: [] };
   // The drawer reads its runs on request, so it reads again whenever the
   // session's routine status moves: a run went in, finished or was queued.
   const openRoutinesStatus =
@@ -5295,18 +5306,16 @@ export function WorkspaceApp({
       {taskFlowLinks.length ? (
         <div className="task-flow-links">
           <span className="eyebrow">On the flow map</span>
-          {taskFlowLinks.map((link) => (
+          {taskFlowLinks.map(({ map, link }) => (
             <button
               className="task-flow-link"
+              disabled={!map.ownerSessionId}
               key={link.componentId}
-              onClick={() => {
-                rememberFlowMap(selectedTask.workspaceId, link.mapId);
-                if (showingAll) enterWorkspace(selectedTask.workspaceId, "map");
-                else setView("map");
-              }}
+              onClick={() => openFlowMap(map)}
+              title="Open the map in the session that owns it"
               type="button"
             >
-              {link.mapName} › #{link.componentNumber} {link.componentName}
+              {map.name} › #{link.componentNumber} {link.componentName}
             </button>
           ))}
         </div>
@@ -5504,19 +5513,6 @@ export function WorkspaceApp({
             }
           >
             Workspace
-          </button>
-          <button
-            aria-current={view === "map" ? "page" : undefined}
-            className={view === "map" ? "active" : ""}
-            disabled={!workspace || showingAll}
-            onClick={() => setView("map")}
-            title={
-              showingAll
-                ? "Pick a workspace to see its flow maps"
-                : "The workspace's flow maps"
-            }
-          >
-            Map
           </button>
         </nav>
         <div className="top-actions">
@@ -5970,24 +5966,6 @@ export function WorkspaceApp({
                   onOpenSession={showSession}
                 />
               </Suspense>
-            ) : view === "map" ? (
-              <FlowMapView
-                client={client}
-                dataRevision={dataRevision}
-                key={workspace.id}
-                onError={setError}
-                onOpenSession={(session) =>
-                  showSession(session.id, session.workspaceId)
-                }
-                onOpenTask={(task) => {
-                  setView("board");
-                  setSelectedTaskId(task.id);
-                  setEditingTask(false);
-                }}
-                sessions={flowStageSessions}
-                tasks={tasksById}
-                workspace={workspace}
-              />
             ) : view === "board" ? (
               boardView
             ) : null}
@@ -6233,6 +6211,22 @@ export function WorkspaceApp({
                 team={activeSessionTeam.team}
               />
             )}
+            {activeSession && activeSessionMaps.maps.length > 0 && (
+              <FlowMapBar
+                color={activeSession.color}
+                maps={activeSessionMaps.maps}
+                onOpenPanel={() =>
+                  mapPanel?.sessionId === activeSession.id
+                    ? setMapPanel(undefined)
+                    : setMapPanel({
+                        sessionId: activeSession.id,
+                        mapId: activeSessionMaps.maps[0]!.id,
+                      })
+                }
+                open={mapPanel?.sessionId === activeSession.id}
+                owns={activeSessionMaps.owns}
+              />
+            )}
             {activeSession ? (
               // The drawer sits over the terminal, below the routine bar, so
               // the bar's buttons stay in reach while it is open.
@@ -6306,6 +6300,32 @@ export function WorkspaceApp({
                           }),
                         ).then(() => loadTeamDetail(activeSessionTeam.team.id))
                       }
+                    />
+                  )}
+                {mapPanel?.sessionId === activeSession.id &&
+                  activeSessionMaps.maps.some(
+                    (map) => map.id === mapPanel.mapId,
+                  ) && (
+                    <FlowMapPanel
+                      client={client}
+                      dataRevision={dataRevision}
+                      mapId={mapPanel.mapId}
+                      maps={activeSessionMaps.maps}
+                      onClose={() => setMapPanel(undefined)}
+                      onError={setError}
+                      onOpenSession={(session) =>
+                        showSession(session.id, session.workspaceId)
+                      }
+                      onOpenTask={(task) => {
+                        enterWorkspace(task.workspaceId, "board");
+                        setSelectedTaskId(task.id);
+                        setEditingTask(false);
+                      }}
+                      onSelectMap={(mapId) =>
+                        setMapPanel({ sessionId: activeSession.id, mapId })
+                      }
+                      sessions={flowStageSessions}
+                      tasks={tasksById}
                     />
                   )}
                 <TerminalSurface

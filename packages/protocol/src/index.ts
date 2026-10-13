@@ -767,12 +767,24 @@ export type FlowStageStateDto =
 export type FlowShownStateDto = FlowStageStateDto | "waiting";
 export type FlowStageModeDto = "own" | "rollup" | "after";
 
+/** A flow map as the snapshot carries it: enough to place it in the app. */
 export interface FlowMapSummaryDto {
   id: string;
   workspaceId: string;
   number: number;
   name: string;
   updatedAt: string;
+  /** The session that owns the map through its flow ability. */
+  ownerSessionId: string | null;
+  /** Sessions holding a running or blocked stage on it. */
+  stageSessionIds: string[];
+  /** Components linked to board tasks. */
+  taskLinks: Array<{
+    taskId: string;
+    componentId: string;
+    componentNumber: number;
+    componentName: string;
+  }>;
 }
 
 export interface FlowComponentDto {
@@ -830,24 +842,17 @@ export interface FlowHistoryDto {
   createdAt: string;
 }
 
-/** What the Map tab draws: one whole map and its newest history. */
+/** What the Map panel draws: one whole map and its newest history. */
 export interface FlowMapDetailDto {
-  map: FlowMapSummaryDto;
+  map: Pick<
+    FlowMapSummaryDto,
+    "id" | "workspaceId" | "number" | "name" | "updatedAt"
+  >;
   components: FlowComponentDto[];
   relations: FlowRelationDto[];
   stages: FlowStageDto[];
   decisions: FlowDecisionDto[];
   history: FlowHistoryDto[];
-}
-
-/** Where a task appears on a flow map. */
-export interface FlowTaskLinkDto {
-  mapId: string;
-  mapNumber: number;
-  mapName: string;
-  componentId: string;
-  componentNumber: number;
-  componentName: string;
 }
 
 export interface TeamSayResultDto {
@@ -1015,6 +1020,8 @@ export interface DesktopSnapshotDto {
   routines: RoutinesStatusDto[];
   /** Every team: a lead holding orchestration, and what it is called. */
   teams: TeamDto[];
+  /** Every flow map, with its owner, for the Map bar and the task drawer. */
+  flowMaps: FlowMapSummaryDto[];
   /** Every routine report that has a task, for the task's card and drawer. */
   routineReports: RoutineReportDto[];
   settings: DesktopSettingsDto;
@@ -1064,11 +1071,7 @@ export interface DesktopRpcSchema {
       /** Posts to the team chat as the user. */
       teamSay: Request<{ teamId: string; body: string }, TeamSayResultDto>;
       teamGoal: Request<{ teamId: string; goal: string }, TeamDto>;
-      /** A workspace's flow maps, oldest first. */
-      flowMaps: Request<{ workspaceId: string }, FlowMapSummaryDto[]>;
       flowMap: Request<{ mapId: string }, FlowMapDetailDto>;
-      /** The map components linked to a task. */
-      flowTaskLinks: Request<{ taskId: string }, FlowTaskLinkDto[]>;
       routinesControl: Request<
         {
           sessionId: string;

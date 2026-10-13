@@ -4,7 +4,7 @@ Every agent in Daedalus is an ordinary session. A session can be named,
 pinned and colored, and it can hold abilities: things Daedalus adds to it on
 top of being a session. There are three: routines, orchestration, which
 makes a session the lead of a team, and flow, which lets a session build and
-keep the workspace's flow maps.
+keep flow maps of its own.
 
 ## Name, pin and color
 
@@ -334,14 +334,17 @@ skill). A rebirth successor reads it first.
 ## Flow maps
 
 A session holding the flow ability turns an idea or a task into a flow map
-and keeps it current while the work happens. The map belongs to the
-workspace, not to the session: it outlives every session that works on it,
-and different agents run different stages of one map. A workspace can hold
-several maps, one per idea or system. The app draws them in the Map tab.
+and keeps it current while the work happens. The map belongs to that
+session, through its flow ability row, the way a team belongs to its lead
+(decided 2026-10-13): a rebirth moves the row and the map with it, a revoke
+freezes the map, and a new grant brings it back. Other agents in the
+workspace work on its stages. A session can own several maps, one per idea
+or system. The app shows them from the owner's Map bar.
 
 ```
 daedal agent spawn --workspace <w> --provider claude --name Mapper --ability flow
-daedal flow new "Checkout" --deliverable "A customer pays for an order"
+daedal flow new "Checkout" --deliverable "A customer pays for an order"   # inside Mapper
+daedal flow new "Checkout" --session Mapper --deliverable "..."           # the user
 daedal flow add "API server" --in Checkout --deliverable "Orders over REST"
 daedal flow relate "Web client" "API server" --type calls --note "REST /orders"
 daedal flow stages "API server" rollup:implement,after:validate=integration
@@ -374,8 +377,8 @@ the rules the agent follows.
 - **Claims.** `flow stage start` claims the stage for the calling session
   and records it. Another running session's claim is refused (exit 4). A
   finished stage keeps the session that did it. `agent spawn --flow-stage
-<component>:<stage>` starts a session with the flow ability and the stage
-  already claimed, alone or with `--team`. A rebirth moves the stages a
+<component>:<stage>` starts a session with the stage already claimed,
+  alone or with `--team`; it needs no ability to work the stage. A rebirth moves the stages a
   session holds (running or blocked) to the successor.
 - **Dropped or deleted.** `flow drop --reason` keeps a component, relation
   or stage on the map, faint, with the reason: something considered and
@@ -389,13 +392,17 @@ history`).
 - **Tasks.** `flow link <component> --task <ref>` links a component to a
   board task. Its box shows the task number and the task's drawer names the
   map. Finishing stages never changes the task's status.
-- **Who changes a map.** Inside a session, every command that changes a map
-  needs the flow ability; reading does not. Outside a session the change is
-  the user's and is signed `user`. The app only reads: the user edits by
-  asking an agent or with `daedal flow` in a terminal.
-- **Storage.** SQLite only (migration `023_flow_maps.sql`): `flow_maps`,
+- **Who changes a map.** Its shape (components, relations, flows,
+  decisions, task links, resets) changes only by the owner while it holds
+  the flow ability, or by the user from a terminal, signed `user`. Any
+  session in the map's workspace may start, finish, block or skip a stage.
+  Reading is open. The app only reads: the user edits by asking the owner
+  or with `daedal flow` in a terminal.
+- **Storage.** SQLite only (migrations `023_flow_maps.sql` and
+  `024_flow_map_owner.sql`, which gives each map its owner's
+  `session_abilities` row in `ability_id`): `flow_maps`,
   `flow_components`, `flow_relations`, `flow_stages`, `flow_decisions` and
-  `flow_history`. A map belongs to its workspace and goes with it. No file
+  `flow_history`. Removing the owner session removes its maps. No file
   copy is written; `daedal flow show [--json]` prints it.
 - **Worktrees.** A stage has no worktree of its own. The session working on
   it gets worktrees the way every session does, one per repository it

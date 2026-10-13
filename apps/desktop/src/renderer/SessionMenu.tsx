@@ -174,8 +174,8 @@ export function SessionMenu({
             role="menuitemcheckbox"
             title={
               flow
-                ? "Revoke the flow map ability. The workspace's maps stay."
-                : "Let this session break work into a flow map and keep it current. The map shows in the Map tab."
+                ? "Revoke the flow map ability. Its maps stay, read only, until it is granted again."
+                : "Let this session break work into a flow map and keep it current. The map opens from the Map bar above its terminal."
             }
             type="button"
           >
