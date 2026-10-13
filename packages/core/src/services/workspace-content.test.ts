@@ -20,8 +20,10 @@ import {
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { createApplicationContext, parseGitHubRepositoryPages } from "../index";
 import {
+  ensureSessionInstructionFiles,
   pullRequestAnswerHoldsHead,
   sessionDirectoryName,
+  sessionInstructionsTemplate,
   sessionTaskDirectoryName,
 } from "./workspace-content";
 
@@ -2440,7 +2442,7 @@ Before working in this workspace:
       });
     });
 
-    test("requires a branch name, and refuses an invalid or taken one", async () => {
+    test("requires a branch name, and refuses an invalid or taken one, here or on origin", async () => {
       await withTemporaryDaedalusHome(async (home) => {
         const source = join(home, "source", "product");
         await createRepository(source);
@@ -2488,6 +2490,38 @@ Before working in this workspace:
             repository: "product",
           }),
         ).rejects.toThrow("--branch <name> is required");
+        await expect(
+          context.workspaceContent.createSessionWorktree({
+            session: second.id,
+            repository: "product",
+            branch: "@{-1}",
+          }),
+        ).rejects.toThrow("not a valid branch name");
+
+        // A teammate's branch on origin is taken too.
+        await git(["-C", source, "branch", "fix/teammate"]);
+        await expect(
+          context.workspaceContent.createSessionWorktree({
+            session: second.id,
+            repository: "product",
+            branch: "fix/teammate",
+          }),
+        ).rejects.toThrow("already exists on origin");
+
+        // A repeat call returns the worktree, but not under another name.
+        expect(
+          await context.workspaceContent.createSessionWorktree({
+            session: first.id,
+            repository: "product",
+          }),
+        ).toEqual(worktree);
+        await expect(
+          context.workspaceContent.createSessionWorktree({
+            session: first.id,
+            repository: "product",
+            branch: "feat/other",
+          }),
+        ).rejects.toThrow("already has a worktree");
         context.close();
       });
     });
@@ -2888,5 +2922,33 @@ Before working in this workspace:
         second.close();
       });
     });
+  });
+});
+
+test("a session's instructions from before --branch was required are upgraded, and removed when turned off", async () => {
+  await withTemporaryDaedalusHome(async (home) => {
+    const workspacePath = join(home, "workspace");
+    const sessionPath = join(home, "session");
+    await mkdir(sessionPath, { recursive: true });
+    const agentsPath = join(sessionPath, "AGENTS.md");
+    const current = sessionInstructionsTemplate(workspacePath);
+    const previous = current.replace(
+      / --branch <branch-name>`, then work in the returned path\..*$/m,
+      "`, then work in the returned path.",
+    );
+    expect(previous).not.toContain("--branch");
+
+    await Bun.write(agentsPath, previous);
+    await ensureSessionInstructionFiles(sessionPath, workspacePath, home, true);
+    expect(await readFile(agentsPath, "utf8")).toBe(current);
+
+    await Bun.write(agentsPath, previous);
+    await ensureSessionInstructionFiles(
+      sessionPath,
+      workspacePath,
+      home,
+      false,
+    );
+    expect(await pathExists(agentsPath)).toBe(false);
   });
 });
