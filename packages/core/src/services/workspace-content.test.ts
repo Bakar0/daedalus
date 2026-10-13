@@ -2400,7 +2400,7 @@ Before working in this workspace:
           repository: "product",
         });
         expect(worktree.branchName).toBe(
-          `daedalus/agent-status-in-the-app-${session.id.slice(0, 8)}`,
+          `agent-status-in-the-app-${session.id.slice(0, 8)}`,
         );
 
         // The agent moves its work to a branch of its own.

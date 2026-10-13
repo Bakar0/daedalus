@@ -4359,7 +4359,7 @@ export class WorkspaceContentService {
       ? pathSegment(task.title, "task").slice(0, 40).replace(/-+$/, "")
       : "session";
     const sessionSegment = pathSegment(session.id, "session");
-    let branchName = `daedalus/${topic}-${sessionSegment.slice(0, 8)}`;
+    let branchName = `${topic}-${sessionSegment.slice(0, 8)}`;
     const taken = await runCommand(git, [
       ...sourceArguments,
       "rev-parse",
@@ -4368,7 +4368,7 @@ export class WorkspaceContentService {
       `refs/heads/${branchName}`,
     ]);
     if (taken.exitCode === 0)
-      branchName = `daedalus/${topic}-${sessionSegment}`;
+      branchName = `${topic}-${sessionSegment}`;
     const result = await runCommand(git, [
       ...sourceArguments,
       "worktree",
