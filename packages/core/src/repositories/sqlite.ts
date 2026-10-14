@@ -25,6 +25,7 @@ import type {
 } from "../domain";
 import { accountModelKey, derivedDefaultModel } from "../domain";
 import { AbilityRepository, RoutineRepository } from "./abilities";
+import { FlowRepository } from "./flow";
 import { SecretRepository } from "./secrets";
 import { TeamRepository } from "./teams";
 
@@ -368,6 +369,7 @@ export class SqliteRepositories {
   readonly routines: RoutineRepository;
   readonly teams: TeamRepository;
   readonly secrets: SecretRepository;
+  readonly flow: FlowRepository;
 
   constructor(databasePath: string) {
     this.database = new Database(databasePath, { create: true });
@@ -378,6 +380,7 @@ export class SqliteRepositories {
     this.routines = new RoutineRepository(this.database);
     this.teams = new TeamRepository(this.database);
     this.secrets = new SecretRepository(this.database);
+    this.flow = new FlowRepository(this.database);
   }
 
   /**

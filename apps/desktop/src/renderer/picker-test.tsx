@@ -52,6 +52,7 @@ const snapshot = {
   toasts: [],
   abilities: [],
   teams: [],
+  flowMaps: [],
   routines: [],
   routineReports: [],
   repositories: [

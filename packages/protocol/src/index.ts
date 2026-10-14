@@ -126,7 +126,7 @@ export interface AgentSessionDto {
 export type SessionColorDto =
   "red" | "orange" | "gold" | "green" | "teal" | "blue" | "purple" | "pink";
 
-export type AbilityIdDto = "routines" | "orchestration";
+export type AbilityIdDto = "routines" | "orchestration" | "flow";
 
 export interface IntegratedTerminalDto {
   id: string;
@@ -789,6 +789,104 @@ export interface TeamDetailDto {
   messages: TeamMessageDto[];
 }
 
+export type FlowStageKindDto =
+  "research" | "plan" | "prototype" | "implement" | "validate" | "deploy";
+export type FlowRelationTypeDto =
+  "calls" | "publishes to" | "reads from" | "writes to" | "depends on";
+export type FlowStageStateDto =
+  "todo" | "running" | "done" | "skipped" | "blocked";
+/** A stored state, or `waiting` for an after stage not reached yet. */
+export type FlowShownStateDto = FlowStageStateDto | "waiting";
+export type FlowStageModeDto = "own" | "rollup" | "after";
+
+/** A flow map as the snapshot carries it: enough to place it in the app. */
+export interface FlowMapSummaryDto {
+  id: string;
+  workspaceId: string;
+  number: number;
+  name: string;
+  updatedAt: string;
+  /** The session that owns the map through its flow ability. */
+  ownerSessionId: string | null;
+  /** Sessions holding a running or blocked stage on it. */
+  stageSessionIds: string[];
+  /** Components linked to board tasks. */
+  taskLinks: Array<{
+    taskId: string;
+    componentId: string;
+    componentNumber: number;
+    componentName: string;
+  }>;
+}
+
+export interface FlowComponentDto {
+  id: string;
+  parentId: string | null;
+  number: number;
+  position: number;
+  name: string;
+  deliverable: string;
+  doneWhen: string;
+  taskId: string | null;
+  droppedReason: string | null;
+}
+
+export interface FlowRelationDto {
+  id: string;
+  number: number;
+  fromId: string;
+  toId: string;
+  type: FlowRelationTypeDto;
+  note: string | null;
+  droppedReason: string | null;
+}
+
+export interface FlowStageDto {
+  id: string;
+  componentId: string;
+  kind: FlowStageKindDto;
+  position: number;
+  mode: FlowStageModeDto;
+  label: string | null;
+  state: FlowStageStateDto;
+  /** What the map shows; computed for rollup and after stages. */
+  shown: FlowShownStateDto;
+  note: string | null;
+  /** The session that claimed it; kept after it finishes. */
+  sessionId: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  droppedReason: string | null;
+}
+
+export interface FlowDecisionDto {
+  id: number;
+  componentId: string;
+  text: string;
+  author: string;
+  createdAt: string;
+}
+
+export interface FlowHistoryDto {
+  id: number;
+  text: string;
+  author: string;
+  createdAt: string;
+}
+
+/** What the Map panel draws: one whole map and its newest history. */
+export interface FlowMapDetailDto {
+  map: Pick<
+    FlowMapSummaryDto,
+    "id" | "workspaceId" | "number" | "name" | "updatedAt"
+  >;
+  components: FlowComponentDto[];
+  relations: FlowRelationDto[];
+  stages: FlowStageDto[];
+  decisions: FlowDecisionDto[];
+  history: FlowHistoryDto[];
+}
+
 export interface TeamSayResultDto {
   message: TeamMessageDto;
   warnings: string[];
@@ -954,6 +1052,8 @@ export interface DesktopSnapshotDto {
   routines: RoutinesStatusDto[];
   /** Every team: a lead holding orchestration, and what it is called. */
   teams: TeamDto[];
+  /** Every flow map, with its owner, for the Map bar and the task drawer. */
+  flowMaps: FlowMapSummaryDto[];
   /** Every routine report that has a task, for the task's card and drawer. */
   routineReports: RoutineReportDto[];
   settings: DesktopSettingsDto;
@@ -976,7 +1076,8 @@ type Request<Params, Response> = {
 };
 
 /** The app's own window, or the World opened in a window of its own. */
-export type DesktopWindowRole = "main" | "world";
+/** `map` is a flow map in a window of its own, one window per map. */
+export type DesktopWindowRole = "main" | "world" | "map";
 
 /** Stable contract shared by Electrobun's Bun and renderer runtimes. */
 export interface DesktopRpcSchema {
@@ -1003,6 +1104,7 @@ export interface DesktopRpcSchema {
       /** Posts to the team chat as the user. */
       teamSay: Request<{ teamId: string; body: string }, TeamSayResultDto>;
       teamGoal: Request<{ teamId: string; goal: string }, TeamDto>;
+      flowMap: Request<{ mapId: string }, FlowMapDetailDto>;
       routinesControl: Request<
         {
           sessionId: string;
@@ -1600,7 +1702,14 @@ export interface DesktopRpcSchema {
        * load the same page, and a `views://` URL carries no parameters, so a
        * page learns what to draw by asking.
        */
-      windowRole: Request<Record<string, never>, { role: DesktopWindowRole }>;
+      windowRole: Request<
+        Record<string, never>,
+        { role: DesktopWindowRole; mapId?: string }
+      >;
+      /** Opens a flow map in a window of its own, or brings it forward. */
+      flowMapWindowOpen: Request<{ mapId: string }, { opened: boolean }>;
+      /** Brings the main window forward on a task's drawer. */
+      taskFocus: Request<{ taskId: string }, { focused: boolean }>;
       /** Opens the World in a window of its own, or brings it forward. */
       worldWindowOpen: Request<Record<string, never>, { opened: boolean }>;
       /**

@@ -171,7 +171,9 @@ describe("desktop RPC handlers", () => {
         {
           role: "world",
           openWorld: () => calls.push("open"),
+          openMap: (id) => calls.push(`map ${id}`),
           focusSession: (id) => calls.push(`focus ${id}`),
+          focusTask: (id) => calls.push(`task ${id}`),
         },
       );
       try {
@@ -187,7 +189,35 @@ describe("desktop RPC handlers", () => {
           ok: true,
           data: { focused: true },
         });
-        expect(calls).toEqual(["open", "focus s1"]);
+        expect(await world.taskFocus({ taskId: "t1" })).toEqual({
+          ok: true,
+          data: { focused: true },
+        });
+        // A map window opens only for a map that exists.
+        expect(await world.flowMapWindowOpen({ mapId: "nope" })).toMatchObject({
+          ok: false,
+          error: { code: "NOT_FOUND" },
+        });
+        expect(calls).toEqual(["open", "focus s1", "task t1"]);
+        // A map window learns which map it shows with its role.
+        expect(
+          await createDesktopRequestHandlers(
+            context,
+            undefined,
+            undefined,
+            "",
+            undefined,
+            undefined,
+            {
+              role: "map",
+              mapId: "m1",
+              openWorld: () => {},
+              openMap: () => {},
+              focusSession: () => {},
+              focusTask: () => {},
+            },
+          ).windowRole({}),
+        ).toEqual({ ok: true, data: { role: "map", mapId: "m1" } });
         // Handlers made without a window host serve the main window.
         expect(
           await createDesktopRequestHandlers(context).windowRole({}),

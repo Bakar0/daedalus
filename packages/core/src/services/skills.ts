@@ -71,6 +71,7 @@ import routinesSkillTemplate from "../../../../skills/daedalus-routines/SKILL.md
 import routineRunSkillTemplate from "../../../../skills/daedalus-routine/SKILL.md" with { type: "text" };
 import orchestrationSkillTemplate from "../../../../skills/daedalus-orchestration/SKILL.md" with { type: "text" };
 import teamSkillTemplate from "../../../../skills/daedalus-team/SKILL.md" with { type: "text" };
+import flowSkillTemplate from "../../../../skills/daedalus-flow/SKILL.md" with { type: "text" };
 
 export type SkillProvider = "claude" | "codex" | "cursor";
 export type SkillOrigin = "daedalus" | "user" | "plugin";
@@ -215,6 +216,16 @@ export const MANAGED_SKILLS: readonly ManagedSkillDefinition[] = [
     defaultEnabled: true,
     defaultMode: "on-demand",
     skillFiles: [{ path: "SKILL.md", contents: teamSkillTemplate }],
+  },
+  {
+    id: "daedalus-flow",
+    title: "Flow map",
+    summary:
+      "Lets a session that holds the flow ability build and keep a flow map: components that each deliver something, typed relations, a flow of stages on each, and decisions. Sessions without the ability can read maps but not change them.",
+    supportsAlways: false,
+    defaultEnabled: true,
+    defaultMode: "on-demand",
+    skillFiles: [{ path: "SKILL.md", contents: flowSkillTemplate }],
   },
   {
     id: "unslop",

@@ -1,0 +1,671 @@
+/* The Map panel (#65): a session's flow map as the architecture canvas,
+   over the session's terminal. Colours come from the app's theme variables;
+   the map adds its own for progress and relation types. */
+
+.flow-map-view {
+  --flow-done: #3fcf7f;
+  --flow-done-ink: #06210f;
+  --flow-attention: #ffb454;
+  --flow-blocked: var(--danger);
+  --flow-calls: #5aa2ff;
+  --flow-publishes: #b89cff;
+  --flow-reads: #4fd1c5;
+  --flow-writes: #ffb454;
+  --flow-depends: #8a97ad;
+  --flow-label-halo: #0a1022;
+}
+/* Over the terminal like the Team drawer, but the whole stage: the canvas
+   scrolls inside it and never widens the window's columns. */
+.flow-map-panel {
+  background: var(--overlay);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  box-shadow: 0 18px 50px rgb(0 0 0 / 0.45);
+  display: grid;
+  gap: 10px;
+  grid-template-rows: auto minmax(0, 1fr);
+  inset: 8px;
+  min-width: 0;
+  outline: none;
+  padding: 12px 14px;
+  position: absolute;
+  z-index: 10;
+}
+.app[data-theme="light"] .flow-map-view {
+  --flow-done: #16a05a;
+  --flow-done-ink: #ffffff;
+  --flow-attention: #c77700;
+  --flow-calls: #1f6fdc;
+  --flow-publishes: #7a4fe0;
+  --flow-reads: #0f8f86;
+  --flow-writes: #c46a00;
+  --flow-depends: #6a768c;
+  --flow-label-halo: #eef2f9;
+}
+
+.flow-toolbar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  position: relative;
+}
+.flow-map-title {
+  align-items: baseline;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+.flow-map-title h2 {
+  font-size: 15px;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.flow-map-title select {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  max-width: 320px;
+  padding: 4px 8px;
+}
+.flow-toolbar-end {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.flow-toggle {
+  align-items: center;
+  color: var(--secondary);
+  display: flex;
+  gap: 6px;
+}
+.flow-map-view .flow-tool {
+  border: 1px solid var(--line);
+  font-size: 12px;
+  padding: 4px 10px;
+}
+.flow-map-view .flow-tool.active {
+  background: var(--accent-wash);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* ------------------------------------------------------------ legend */
+
+/* Opened from the toolbar, over the canvas, so it costs no room. */
+.flow-legend {
+  background: var(--elevated);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.35);
+  display: grid;
+  gap: 6px;
+  padding: 10px 14px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  width: min(560px, 100%);
+  z-index: 30;
+}
+.flow-legend-row {
+  align-items: center;
+  display: grid;
+  font-size: 12px;
+  gap: 8px;
+  grid-template-columns: 56px max-content minmax(0, 1fr);
+}
+.flow-legend-row span {
+  color: var(--muted);
+}
+.flow-legend-calls {
+  color: var(--flow-calls);
+}
+.flow-legend-publishes {
+  color: var(--flow-publishes);
+}
+.flow-legend-reads {
+  color: var(--flow-reads);
+}
+.flow-legend-writes {
+  color: var(--flow-writes);
+}
+.flow-legend-depends {
+  color: var(--flow-depends);
+}
+
+/* ------------------------------------------------------------ layout */
+
+.flow-body {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 0;
+}
+.flow-scroll {
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 12px;
+}
+.flow-history {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: auto;
+  padding: 10px 12px;
+  width: 300px;
+}
+.flow-history ol {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+.flow-history li {
+  display: grid;
+  font-size: 12px;
+  gap: 2px;
+}
+.flow-history small {
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------ canvas */
+
+.flow-canvas {
+  /* Wide enough for every column at its minimum, with room on the right
+     for the loops of links inside the last column; the tab scrolls. */
+  min-width: min-content;
+  padding-right: 72px;
+  position: relative;
+}
+.flow-frame {
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  padding: 14px;
+}
+.flow-columns {
+  align-items: start;
+  display: grid;
+  gap: 130px;
+  grid-auto-columns: minmax(300px, 1fr);
+  grid-auto-flow: column;
+  margin-top: 14px;
+}
+.flow-column {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  min-width: 0;
+  padding: 10px;
+  position: relative;
+  z-index: 3;
+}
+.flow-inside {
+  display: grid;
+  gap: 26px;
+  margin-top: 10px;
+}
+.flow-box {
+  background: var(--elevated);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  padding: 8px 10px;
+  position: relative;
+  z-index: 3;
+}
+.flow-box .flow-box {
+  background: var(--raised);
+}
+.flow-box .flow-inside {
+  gap: 14px;
+}
+.flow-hover {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.flow-dropped {
+  opacity: 0.45;
+}
+.flow-dropped > .flow-head .flow-name {
+  text-decoration: line-through;
+}
+
+.flow-head {
+  display: grid;
+  gap: 4px;
+}
+.flow-title {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+.flow-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.flow-box .flow-name {
+  font-size: 12.5px;
+}
+.flow-number {
+  color: var(--muted);
+  font-size: 11px;
+}
+.flow-map-view .flow-caret {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 3px;
+}
+.flow-map-view .flow-task-chip {
+  background: var(--accent-wash);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 10.5px;
+  margin-left: auto;
+  padding: 1px 7px;
+}
+.flow-map-view .flow-task-chip:hover {
+  border-color: var(--accent);
+}
+.flow-deliverable {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.flow-reason {
+  color: var(--flow-attention);
+  font-size: 11.5px;
+}
+.flow-decisions {
+  border-left: 2px solid var(--accent);
+  color: var(--secondary);
+  display: grid;
+  font-size: 11.5px;
+  gap: 3px;
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 1px 0 1px 9px;
+}
+.flow-map-view .flow-link {
+  background: none;
+  border: 0;
+  color: var(--accent);
+  font-size: 11px;
+  padding: 0;
+}
+
+/* ---------------------------------------------------------- flow line */
+
+.flow-line {
+  align-items: center;
+  display: flex;
+  /* A long flow in a narrow box wraps rather than overlapping. */
+  flex-wrap: wrap;
+  min-width: 0;
+  padding: 3px 0;
+  row-gap: 5px;
+}
+.flow-line-empty {
+  color: var(--muted);
+  font-size: 11px;
+}
+.flow-step {
+  align-items: center;
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.flow-step:first-child {
+  flex: 0 0 auto;
+}
+.flow-segment {
+  background: var(--line-strong);
+  flex: 1;
+  height: 2px;
+  min-width: 12px;
+}
+.flow-segment-lit {
+  background: var(--flow-done);
+  height: 3px;
+}
+.flow-segment-blocked {
+  background: var(--flow-blocked);
+}
+.flow-segment-hold {
+  background: repeating-linear-gradient(
+    90deg,
+    var(--line-strong) 0 4px,
+    transparent 4px 7px
+  );
+}
+.flow-map-view .flow-station-wrap {
+  flex: none;
+  position: relative;
+}
+.flow-map-view .flow-station {
+  align-items: center;
+  background: var(--raised);
+  border: 1.5px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  display: flex;
+  font-size: 10.5px;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  white-space: nowrap;
+}
+.flow-map-view .flow-station:disabled {
+  cursor: default;
+  opacity: 1;
+}
+.flow-map-view .flow-station-mode {
+  font-size: 10px;
+  opacity: 0.8;
+}
+.flow-map-view .flow-station-done {
+  background: var(--flow-done);
+  border-color: var(--flow-done);
+  color: var(--flow-done-ink);
+  font-weight: 600;
+}
+.flow-map-view .flow-station-skipped {
+  border-style: dashed;
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+.flow-map-view .flow-station-running {
+  background: color-mix(in srgb, var(--flow-done) 18%, transparent);
+  border-color: var(--flow-done);
+  color: var(--text);
+  font-weight: 600;
+}
+.flow-map-view .flow-station-blocked {
+  background: color-mix(in srgb, var(--flow-blocked) 16%, transparent);
+  border-color: var(--flow-blocked);
+  color: var(--text);
+}
+.flow-map-view .flow-station-waiting {
+  border-style: dashed;
+}
+.flow-map-view .flow-station-dropped {
+  opacity: 0.4;
+  text-decoration: line-through;
+}
+.flow-map-view .flow-station-stalled {
+  color: var(--flow-attention);
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+/* The stage at work beats like a heart: a double pulse. Amber and faster
+   when its agent needs the user; still, and marked stalled, when its
+   session ended. */
+.flow-map-view .flow-beat-working {
+  --beat: var(--flow-done);
+  animation: flow-heartbeat 1.3s ease-in-out infinite;
+}
+.flow-map-view .flow-beat-attention {
+  --beat: var(--flow-attention);
+  animation: flow-heartbeat 0.75s ease-in-out infinite;
+  background: color-mix(in srgb, var(--flow-attention) 20%, transparent);
+  border-color: var(--flow-attention);
+}
+.flow-map-view .flow-beat-stalled {
+  border-color: var(--flow-attention);
+  border-style: dashed;
+}
+@keyframes flow-heartbeat {
+  0%,
+  45%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--beat) 0%, transparent);
+    transform: scale(1);
+  }
+  12% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--beat) 35%, transparent);
+    transform: scale(1.12);
+  }
+  22% {
+    transform: scale(1);
+  }
+  32% {
+    box-shadow: 0 0 0 7px color-mix(in srgb, var(--beat) 0%, transparent);
+    transform: scale(1.08);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .flow-beat-working,
+  .flow-beat-attention,
+  .flow-edge {
+    animation: none !important;
+  }
+}
+
+.flow-stage-card {
+  background: var(--overlay);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.35);
+  display: grid;
+  font-size: 12px;
+  gap: 4px;
+  left: 50%;
+  min-width: 220px;
+  padding: 9px 11px;
+  position: absolute;
+  top: calc(100% + 6px);
+  transform: translateX(-50%);
+  z-index: 20;
+}
+.flow-stage-card small {
+  color: var(--muted);
+}
+.flow-stage-card-session {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 4px;
+  margin-top: 4px;
+  padding-top: 6px;
+}
+.flow-stage-card-question {
+  color: var(--flow-attention);
+}
+.flow-map-view .flow-stage-card button {
+  background: var(--accent);
+  border: 0;
+  border-radius: 6px;
+  color: #fff;
+  justify-self: start;
+  margin-top: 2px;
+  padding: 4px 10px;
+}
+
+/* ------------------------------------------------------------- edges */
+
+.flow-edges {
+  height: 100%;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  position: absolute;
+  width: 100%;
+  z-index: 2;
+}
+.flow-edge-labels {
+  z-index: 4;
+}
+.flow-edge {
+  fill: none;
+  opacity: 0.85;
+  stroke-width: 1.6;
+  transition: opacity 120ms;
+}
+.flow-edge-calls {
+  stroke: var(--flow-calls);
+}
+.flow-edge-publishes {
+  animation: flow-move-12 1.2s linear infinite;
+  stroke: var(--flow-publishes);
+  stroke-dasharray: 7 5;
+}
+.flow-edge-reads,
+.flow-edge-writes {
+  animation: flow-move-6 0.9s linear infinite;
+  stroke-dasharray: 2 4;
+  stroke-linecap: round;
+  stroke-width: 2;
+}
+.flow-edge-reads {
+  stroke: var(--flow-reads);
+}
+.flow-edge-writes {
+  stroke: var(--flow-writes);
+}
+.flow-edge-depends {
+  opacity: 0.6;
+  stroke: var(--flow-depends);
+  stroke-dasharray: 10 4 2 4;
+  stroke-width: 2;
+}
+.flow-edge.flow-edge-dropped {
+  animation: none;
+  opacity: 0.2;
+}
+/* Each offset is a whole number of dash periods, so the loop has no jump. */
+@keyframes flow-move-12 {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+@keyframes flow-move-6 {
+  to {
+    stroke-dashoffset: -12;
+  }
+}
+.flow-marker-filled,
+.flow-marker-open {
+  stroke-width: 1.5;
+}
+.flow-marker-open {
+  fill: none;
+}
+.flow-marker-calls path {
+  fill: var(--flow-calls);
+  stroke: var(--flow-calls);
+}
+.flow-marker-publishes path {
+  fill: var(--flow-publishes);
+  stroke: var(--flow-publishes);
+}
+.flow-marker-reads path {
+  fill: var(--flow-reads);
+  stroke: var(--flow-reads);
+}
+.flow-marker-writes path {
+  fill: var(--flow-writes);
+  stroke: var(--flow-writes);
+}
+.flow-marker-depends path {
+  fill: none;
+  stroke: var(--flow-depends);
+}
+
+.flow-edge-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  paint-order: stroke;
+  stroke: var(--flow-label-halo);
+  stroke-width: 4px;
+  transition: opacity 120ms;
+}
+.flow-edge-label-calls {
+  fill: var(--flow-calls);
+}
+.flow-edge-label-publishes {
+  fill: var(--flow-publishes);
+}
+.flow-edge-label-reads {
+  fill: var(--flow-reads);
+}
+.flow-edge-label-writes {
+  fill: var(--flow-writes);
+}
+.flow-edge-label-depends {
+  fill: var(--flow-depends);
+}
+.flow-edge-label.flow-edge-dropped {
+  opacity: 0.2;
+}
+
+/* Hovering a box lights its relations and fades the rest. */
+.flow-edges-faded .flow-edge,
+.flow-edges-faded .flow-edge-label {
+  opacity: 0.12;
+}
+.flow-edges-faded .flow-edge.flow-edge-on {
+  opacity: 1;
+  stroke-width: 2.4;
+}
+.flow-edges-faded .flow-edge-label.flow-edge-on {
+  opacity: 1;
+}
+.flow-edges-faded .flow-edge-on.flow-edge-dropped {
+  opacity: 0.35;
+}
+
+/* A hovered column comes forward, so a stage card that spills out of it is
+   drawn over its neighbours and the relation labels. */
+.flow-column:hover,
+.flow-box:hover {
+  z-index: 5;
+}
+
+/* A station keeps its colour under the pointer; the quiet button hover
+   would turn it grey. */
+.flow-map-view .flow-station:hover {
+  background: var(--raised-hover);
+}
+.flow-map-view .flow-station-done:hover {
+  background: var(--flow-done);
+}
+.flow-map-view .flow-station-running:hover {
+  background: color-mix(in srgb, var(--flow-done) 26%, transparent);
+}
+.flow-map-view .flow-beat-attention:hover {
+  background: color-mix(in srgb, var(--flow-attention) 28%, transparent);
+}
+
+/* The panel takes focus so Escape closes it; it draws no ring for that. */
+.flow-map-panel:focus,
+.flow-map-panel:focus-visible {
+  outline: none;
+}
+
+/* A map in a window of its own fills the window instead of sitting over a
+   terminal. */
+.app.flow-map-window {
+  display: block;
+  height: 100vh;
+  position: relative;
+}
+.flow-map-panel.flow-map-windowed {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  inset: 0;
+}
+.flow-map-window-error {
+  bottom: 12px;
+  color: var(--danger);
+  left: 16px;
+  position: absolute;
+}

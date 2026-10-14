@@ -2,8 +2,9 @@
 
 Every agent in Daedalus is an ordinary session. A session can be named,
 pinned and colored, and it can hold abilities: things Daedalus adds to it on
-top of being a session. There are two: routines, and orchestration, which
-makes a session the lead of a team.
+top of being a session. There are three: routines, orchestration, which
+makes a session the lead of a team, and flow, which lets a session build and
+keep flow maps of its own.
 
 ## Name, pin and color
 
@@ -46,7 +47,7 @@ daedal session abilities <session>
   asks for a routine, a run arrives as the run skill's own command, and the
   `routine` commands refuse a session without the ability. The app's
   Routines panel tells the user how to ask instead.
-- **Orchestration** adds one line to the launch prompt saying what the
+- **Orchestration** and **flow** each add one line to the launch prompt saying what the
   session holds and which skill to follow. Granted to a running session,
   Daedalus sends one note, as described under Delivery below; until then
   `session abilities` shows the note as waiting.
@@ -329,3 +330,82 @@ session directly.
 The lead keeps the plan, the members, the contracts between them and every
 decision in `TEAM.md` in its working directory (the `daedalus-orchestration`
 skill). A rebirth successor reads it first.
+
+## Flow maps
+
+A session holding the flow ability turns an idea or a task into a flow map
+and keeps it current while the work happens. The map belongs to that
+session, through its flow ability row, the way a team belongs to its lead
+(decided 2026-10-13): a rebirth moves the row and the map with it, a revoke
+freezes the map, and a new grant brings it back. Other agents in the
+workspace work on its stages. A session can own several maps, one per idea
+or system. The app shows them from the owner's Map bar.
+
+```
+daedal agent spawn --workspace <w> --provider claude --name Mapper --ability flow
+daedal flow new "Checkout" --deliverable "A customer pays for an order"   # inside Mapper
+daedal flow new "Checkout" --session Mapper --deliverable "..."           # the user
+daedal flow add "API server" --in Checkout --deliverable "Orders over REST"
+daedal flow relate "Web client" "API server" --type calls --note "REST /orders"
+daedal flow stages "API server" rollup:implement,after:validate=integration
+daedal flow stage start "Orders API" implement
+daedal flow show
+```
+
+`daedal flow --help` lists every command; the `daedalus-flow` skill holds
+the rules the agent follows.
+
+- **Everything is a component.** A map starts as one root component, the
+  idea or task. Components nest inside exactly one parent. Each states its
+  deliverable in one line and, optionally, how anyone can tell it was
+  delivered. A component is a deliverable, not a step: one that cannot be
+  split into parts that each deliver something stays whole.
+- **Relations** link any two components of a map, at any level, with one of
+  five types: `calls`, `publishes to`, `reads from`, `writes to`,
+  `depends on`, and an optional short note. Only Daedalus defines types.
+  Relations describe the system; they do not make one stage wait for
+  another.
+- **Flows.** Each component has a list of stages, each kind once, from the
+  fixed set research, plan, prototype, implement, validate, deploy. A stage
+  is `own` (an agent sets it), `rollup` (a container's stage worked out from
+  the same kind on the components inside: running while any runs, done when
+  all are done or skipped, blocked when one is), or `after` (a container's
+  own stage, such as integration, that can start only once every component
+  inside finished that kind, or its whole flow when it has none of that
+  kind). Rollup and waiting states are computed on read and never stored,
+  so a container cannot show done while something inside still runs.
+- **Claims.** `flow stage start` claims the stage for the calling session
+  and records it. Another running session's claim is refused (exit 4). A
+  finished stage keeps the session that did it. `agent spawn --flow-stage
+<component>:<stage>` starts a session with the stage already claimed,
+  alone or with `--team`; it needs no ability to work the stage. A rebirth moves the stages a
+  session holds (running or blocked) to the successor.
+- **Dropped or deleted.** `flow drop --reason` keeps a component, relation
+  or stage on the map, faint, with the reason: something considered and
+  decided against. `flow delete` removes it with no trace, including its
+  history lines: noise such as a typo. A component holding others needs
+  `--with-contents`. Leaving a started stage out of a new flow needs
+  `--drop <reason>` or `--delete`.
+- **Decisions** sit on the component they belong to (`flow decide`), with
+  their author. Every change adds one line to the map's history (`flow
+history`).
+- **Tasks.** `flow link <component> --task <ref>` links a component to a
+  board task. Its box shows the task number and the task's drawer names the
+  map. Finishing stages never changes the task's status.
+- **Who changes a map.** Its shape (components, relations, flows,
+  decisions, task links, resets) changes only by the owner while it holds
+  the flow ability, or by the user from a terminal, signed `user`. Any
+  session in the map's workspace may start, finish, block or skip a stage.
+  Reading is open. The app only reads: the user edits by asking the owner
+  or with `daedal flow` in a terminal.
+- **Storage.** SQLite only (migrations `023_flow_maps.sql` and
+  `024_flow_map_owner.sql`, which gives each map its owner's
+  `session_abilities` row in `ability_id`): `flow_maps`,
+  `flow_components`, `flow_relations`, `flow_stages`, `flow_decisions` and
+  `flow_history`. Removing the owner session removes its maps. No file
+  copy is written; `daedal flow show [--json]` prints it.
+- **Worktrees.** A stage has no worktree of its own. The session working on
+  it gets worktrees the way every session does, one per repository it
+  changes, so parallel stages are already apart. An `after` stage such as
+  integration runs in a session that merges or checks out the branches of
+  the components inside.

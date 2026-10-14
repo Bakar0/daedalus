@@ -23,6 +23,8 @@ import type {
   FileLinkTargetDto,
   AppUpdateDto,
   TaskTimelineDto,
+  AbilityIdDto,
+  FlowMapSummaryDto,
   AgentActivity,
   AgentActivityDto,
   AgentSessionDto,
@@ -90,6 +92,8 @@ import { RoutinesPanel } from "./routines/RoutinesPanel";
 import { ProBadge } from "./ProPlan";
 import { RemoteMenu } from "./RemoteMenu";
 import { SecretsPanel } from "./SecretsPanel";
+import { FlowMapBar, FlowMapPanel } from "./flow-map/FlowMapPanel";
+import { stageSessionsFrom } from "./flow-map/model";
 import {
   sessionStatusLine,
   AgentStatusDot,
@@ -1845,11 +1849,17 @@ export function WorkspaceApp({
     color?: SessionColorDto;
     routines?: boolean;
     orchestration?: boolean;
+    flow?: boolean;
     /** The team the new session joins as a member the user added. */
     teamId?: string;
     /** A member's instructions, which it needs. */
     instructions?: string;
   }>({ name: "" });
+  // The Map panel over a session's terminal, and the map it shows.
+  const [mapPanel, setMapPanel] = useState<{
+    sessionId: string;
+    mapId: string;
+  }>();
   // The Routines drawer on the selected session, and what it last read.
   const [routinesPanel, setRoutinesPanel] = useState<{
     sessionId: string;
@@ -2672,6 +2682,39 @@ export function WorkspaceApp({
   const telemetryById = new Map(
     (snapshot?.sessionTelemetry ?? []).map((item) => [item.sessionId, item]),
   );
+  // What a flow map's stage shows of the session working on it.
+  const flowStageSessions = stageSessionsFrom(snapshot);
+  const tasksById = new Map(
+    (snapshot?.tasks ?? []).map((task) => [task.id, task]),
+  );
+  // The maps a session owns, else the ones it holds a stage on: what its Map
+  // bar names and its panel can show.
+  const flowMapsFor = (sessionId: string) => {
+    const all = snapshot?.flowMaps ?? [];
+    const owned = all.filter((map) => map.ownerSessionId === sessionId);
+    return owned.length
+      ? { owns: true, maps: owned }
+      : {
+          owns: false,
+          maps: all.filter((map) => map.stageSessionIds.includes(sessionId)),
+        };
+  };
+  const taskFlowLinks = selectedTaskId
+    ? (snapshot?.flowMaps ?? []).flatMap((map) =>
+        map.taskLinks
+          .filter((link) => link.taskId === selectedTaskId)
+          .map((link) => ({ map, link })),
+      )
+    : [];
+  // A map opens in the session that owns it, over its terminal.
+  const openFlowMap = (map: FlowMapSummaryDto) => {
+    const owner = map.ownerSessionId
+      ? sessionsById.get(map.ownerSessionId)
+      : undefined;
+    if (!owner) return;
+    showSession(owner.id, owner.workspaceId);
+    setMapPanel({ sessionId: owner.id, mapId: map.id });
+  };
   const statusViewFor = (session: AgentSessionDto) =>
     sessionStatusView(
       session,
@@ -2866,6 +2909,9 @@ export function WorkspaceApp({
     (status) => status.sessionId === activeSession?.id,
   );
   const activeSessionTeam = activeSession ? teamOf(activeSession) : undefined;
+  const activeSessionMaps = activeSession
+    ? flowMapsFor(activeSession.id)
+    : { owns: false, maps: [] };
   // The drawer reads its runs on request, so it reads again whenever the
   // session's routine status moves: a run went in, finished or was queued.
   const openRoutinesStatus =
@@ -3461,11 +3507,12 @@ export function WorkspaceApp({
     event.preventDefault();
     if (!sessionWorkspace) return;
     const isTerminal = sessionType === "terminal";
-    const { color, routines, orchestration, teamId, instructions } =
+    const { color, routines, orchestration, flow, teamId, instructions } =
       sessionForm;
     const abilities = [
       ...(routines ? (["routines"] as const) : []),
       ...(orchestration ? (["orchestration"] as const) : []),
+      ...(flow ? (["flow"] as const) : []),
     ];
     const launch: SessionLaunchState = {
       key: crypto.randomUUID(),
@@ -3874,6 +3921,26 @@ export function WorkspaceApp({
     );
     if (!granted && routinesPanel?.sessionId === session.id)
       setRoutinesPanel(undefined);
+  }
+
+  const holdsAbility = (sessionId: string, ability: AbilityIdDto) =>
+    Boolean(
+      snapshot?.abilities.some(
+        (item) =>
+          item.sessionId === sessionId &&
+          item.ability === ability &&
+          item.enabled,
+      ),
+    );
+
+  async function setFlowAbility(session: AgentSessionDto, granted: boolean) {
+    await perform(
+      client.request.sessionAbility({
+        sessionId: session.id,
+        ability: "flow",
+        granted,
+      }),
+    );
   }
 
   async function loadRoutinesDetail(sessionId: string) {
@@ -4861,6 +4928,8 @@ export function WorkspaceApp({
             onOrchestration={(granted) =>
               void setOrchestrationAbility(session, granted)
             }
+            flow={holdsAbility(session.id, "flow")}
+            onFlow={(granted) => void setFlowAbility(session, granted)}
             pinned={Boolean(session.pinnedAt)}
             routines={holdsRoutines}
           />
@@ -5268,6 +5337,23 @@ export function WorkspaceApp({
         task={selectedTask}
         tasks={allTasks}
       />
+      {taskFlowLinks.length ? (
+        <div className="task-flow-links">
+          <span className="eyebrow">On the flow map</span>
+          {taskFlowLinks.map(({ map, link }) => (
+            <button
+              className="task-flow-link"
+              disabled={!map.ownerSessionId}
+              key={link.componentId}
+              onClick={() => openFlowMap(map)}
+              title="Open the map in the session that owns it"
+              type="button"
+            >
+              {map.name} › #{link.componentNumber} {link.componentName}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <TaskTimeline
         loading={taskTimelineLoading}
         onOpenJournal={(heading) => {
@@ -6159,6 +6245,22 @@ export function WorkspaceApp({
                 team={activeSessionTeam.team}
               />
             )}
+            {activeSession && activeSessionMaps.maps.length > 0 && (
+              <FlowMapBar
+                color={activeSession.color}
+                maps={activeSessionMaps.maps}
+                onOpenPanel={() =>
+                  mapPanel?.sessionId === activeSession.id
+                    ? setMapPanel(undefined)
+                    : setMapPanel({
+                        sessionId: activeSession.id,
+                        mapId: activeSessionMaps.maps[0]!.id,
+                      })
+                }
+                open={mapPanel?.sessionId === activeSession.id}
+                owns={activeSessionMaps.owns}
+              />
+            )}
             {activeSession ? (
               // The drawer sits over the terminal, below the routine bar, so
               // the bar's buttons stay in reach while it is open.
@@ -6232,6 +6334,40 @@ export function WorkspaceApp({
                           }),
                         ).then(() => loadTeamDetail(activeSessionTeam.team.id))
                       }
+                    />
+                  )}
+                {mapPanel?.sessionId === activeSession.id &&
+                  activeSessionMaps.maps.some(
+                    (map) => map.id === mapPanel.mapId,
+                  ) && (
+                    <FlowMapPanel
+                      client={client}
+                      dataRevision={dataRevision}
+                      mapId={mapPanel.mapId}
+                      maps={activeSessionMaps.maps}
+                      onClose={() => setMapPanel(undefined)}
+                      onError={setError}
+                      onPopOut={() => {
+                        void perform(
+                          client.request.flowMapWindowOpen({
+                            mapId: mapPanel.mapId,
+                          }),
+                        );
+                        setMapPanel(undefined);
+                      }}
+                      onOpenSession={(session) =>
+                        showSession(session.id, session.workspaceId)
+                      }
+                      onOpenTask={(task) => {
+                        enterWorkspace(task.workspaceId, "board");
+                        setSelectedTaskId(task.id);
+                        setEditingTask(false);
+                      }}
+                      onSelectMap={(mapId) =>
+                        setMapPanel({ sessionId: activeSession.id, mapId })
+                      }
+                      sessions={flowStageSessions}
+                      tasks={tasksById}
                     />
                   )}
                 <TerminalSurface
@@ -7048,6 +7184,12 @@ export function WorkspaceApp({
                       key: "orchestration",
                       label: "Orchestration",
                       description: "Lead a team of sessions toward one goal",
+                    },
+                    {
+                      key: "flow",
+                      label: "Flow map",
+                      description:
+                        "Break work into components and keep the workspace's flow map current",
                     },
                   ] as const
                 ).map((ability) => (

@@ -1053,6 +1053,239 @@ describe("daedal team", () => {
   }, 60_000);
 });
 
+describe("daedal flow", () => {
+  test("the user and a session with the ability build a map; a session without it only reads", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const fakeCodex = join(home, "fake-codex");
+      await Bun.write(
+        fakeCodex,
+        "#!/bin/sh\necho 'Ask Codex to do anything'\nexec cat\n",
+      );
+      await runCommand("chmod", ["+x", fakeCodex]);
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { codex: { executable: fakeCodex, args: [] } },
+        }),
+      );
+      const env = { CODEX_HOME: join(home, "codex"), DAEDALUS_SESSION_ID: "" };
+      const run = (args: string[], cwd?: string) =>
+        cli(home, args, env, undefined, cwd);
+      const json = async (args: string[], cwd?: string) => {
+        const result = await run([...args, "--json"], cwd);
+        expect(result.stderr).toBe("");
+        expect(result.exitCode).toBe(0);
+        return JSON.parse(result.stdout).data;
+      };
+      try {
+        await json(["workspace", "create", "Shop"]);
+        const outside = await run(["flow", "maps"]);
+        expect(outside.exitCode).toBe(2);
+        expect(outside.stderr).toContain("--workspace is required");
+
+        // A map belongs to a session with the ability; the user names it.
+        await json([
+          "agent",
+          "spawn",
+          "--workspace",
+          "shop",
+          "--provider",
+          "codex",
+          "--name",
+          "Mapper",
+          "--ability",
+          "flow",
+        ]);
+        const map = await json([
+          "flow",
+          "new",
+          "Checkout",
+          "--session",
+          "Mapper",
+          "--deliverable",
+          "A customer pays for an order",
+        ]);
+        expect(map.map).toMatchObject({ number: 1, name: "Checkout" });
+        const w = ["--workspace", "shop"];
+        await json([
+          "flow",
+          "add",
+          "API server",
+          "--in",
+          "Checkout",
+          "--deliverable",
+          "Orders over REST",
+          "--stages",
+          "rollup:implement,after:validate=integration",
+          ...w,
+        ]);
+        await json([
+          "flow",
+          "add",
+          "Orders API",
+          "--in",
+          "API server",
+          "--deliverable",
+          "POST /orders",
+          "--stages",
+          "plan,implement,validate",
+          ...w,
+        ]);
+        await json([
+          "flow",
+          "add",
+          "Web client",
+          "--in",
+          "1",
+          "--deliverable",
+          "Checkout screens",
+          ...w,
+        ]);
+        expect(
+          await json([
+            "flow",
+            "relate",
+            "Web client",
+            "API server/Orders API",
+            "--type",
+            "calls",
+            "--note",
+            "REST /orders",
+            ...w,
+          ]),
+        ).toMatchObject({ number: 1, type: "calls" });
+        const badType = await run([
+          "flow",
+          "relate",
+          "Web client",
+          "Orders API",
+          "--type",
+          "pokes",
+          ...w,
+        ]);
+        expect(badType.exitCode).toBe(2);
+        expect(badType.stderr).toContain(
+          "calls, publishes to, reads from, writes to, depends on",
+        );
+
+        const plain = await json([
+          "agent",
+          "spawn",
+          ...w,
+          "--provider",
+          "codex",
+          "--name",
+          "Plain",
+        ]);
+        const refused = await run(
+          ["flow", "add", "Docs", "--in", "1", "--deliverable", "A guide"],
+          plain.workingDirectory,
+        );
+        expect(refused.exitCode).toBe(4);
+        expect(refused.stderr).toContain("does not hold the flow map ability");
+        // Reading needs nothing, and the session's workspace is the default.
+        const shown = await run(["flow", "show"], plain.workingDirectory);
+        expect(shown.exitCode).toBe(0);
+        expect(shown.stdout).toContain("#3 Orders API");
+        expect(shown.stdout).toContain(
+          "flow: plan todo → implement todo → validate todo",
+        );
+        expect(shown.stdout).toContain("integration (after inside) waiting");
+        expect(shown.stdout).toContain(
+          "r1 Web client calls Orders API (REST /orders)",
+        );
+
+        // A session started on a stage holds the ability and the claim.
+        const builder = await json([
+          "agent",
+          "spawn",
+          ...w,
+          "--provider",
+          "codex",
+          "--name",
+          "Builder",
+          "--flow-stage",
+          "Orders API:implement",
+        ]);
+        const detail = await json(["flow", "show", ...w]);
+        const implement = detail.stages.find(
+          (stage: { kind: string; componentId: string }) =>
+            stage.kind === "implement" &&
+            stage.componentId === detail.components[2].id,
+        );
+        expect(implement).toMatchObject({
+          shown: "running",
+          sessionId: builder.id,
+        });
+        const api = detail.stages.find(
+          (stage: { kind: string; componentId: string }) =>
+            stage.kind === "implement" &&
+            stage.componentId === detail.components[1].id,
+        );
+        expect(api.shown).toBe("running");
+        const taken = await run([
+          "agent",
+          "spawn",
+          ...w,
+          "--provider",
+          "codex",
+          "--flow-stage",
+          "Orders API:implement",
+        ]);
+        expect(taken.exitCode).toBe(4);
+        expect(taken.stderr).toContain("held by 'Builder'");
+
+        expect(
+          (
+            await json(
+              ["flow", "stage", "finish", "3", "implement"],
+              builder.workingDirectory,
+            )
+          ).shown,
+        ).toBe("done");
+        await json([
+          "flow",
+          "drop",
+          "Web client",
+          "--reason",
+          "The storefront team builds it",
+          ...w,
+        ]);
+        await json([
+          "flow",
+          "drop",
+          "r1",
+          "--reason",
+          "Goes with the client",
+          ...w,
+        ]);
+        const quiet = await run(["flow", "show", ...w]);
+        expect(quiet.stdout).not.toContain("Web client");
+        expect(quiet.stdout).toContain("(2 dropped, shown with --dropped)");
+        const loud = await run(["flow", "show", "--dropped", ...w]);
+        expect(loud.stdout).toContain(
+          "#4 Web client DROPPED: The storefront team builds it",
+        );
+        const history = await json(["flow", "history", ...w]);
+        expect(history[0]).toMatchObject({
+          author: "user",
+          text: "Dropped 'Web client' calls 'Orders API': Goes with the client",
+        });
+        expect(
+          history.some((line: { author: string }) => line.author === "Builder"),
+        ).toBe(true);
+
+        const help = await run(["flow", "--help"]);
+        expect(help.stdout).toContain(
+          "daedal flow stage <start|finish|block|skip|reset>",
+        );
+      } finally {
+        await run(["shutdown", "--json"]);
+      }
+    });
+  }, 60_000);
+});
+
 describe("the calling session's workspace", () => {
   test("task create and agent spawn default --workspace to it", async () => {
     await withTemporaryDaedalusHome(async (home) => {

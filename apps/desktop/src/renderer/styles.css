@@ -7873,3 +7873,23 @@ dd {
   gap: 6px;
   margin: 0;
 }
+
+/* The task drawer's line naming where the task sits on flow maps (#65). */
+.task-flow-links {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin: 10px 0;
+}
+.task-flow-link {
+  background: var(--accent-wash);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 12px;
+  padding: 2px 10px;
+}
+.task-flow-link:hover {
+  border-color: var(--accent);
+}

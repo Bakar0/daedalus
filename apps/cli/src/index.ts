@@ -35,6 +35,12 @@ import { accountChecks, accountCommand, accountHelp } from "./accounts";
 import { routineCommand, routineHelp, sessionCommand } from "./routines";
 import { spawnTeamMember, takeTeamOption, teamCommand, teamHelp } from "./team";
 import {
+  claimSpawnedStage,
+  flowCommand,
+  flowHelp,
+  spawnStageClaim,
+} from "./flow";
+import {
   execCommand,
   execJsonFlag,
   secretCommand,
@@ -363,6 +369,7 @@ Usage:
   daedal session <rename|pin|unpin|color|abilities|grant|revoke> ... [--json]
   daedal routine <add|list|get|enable|disable|run|remove|purpose|pause|resume|runs|start|done|fail|report|resolve|reports|feedback> ... [--json]
   daedal team <say|chat|list|goal> ... [--json]
+  daedal flow <maps|new|show|history|add|edit|relate|drop|restore|delete|stages|stage|decide|link|remove-map|types> ... [--json]
   daedal secret <list|set|remove> ... [--json]
   daedal exec [--secret <NAME>]... -- <command> [<args>...]
   daedal attention "<reason>" [--session <agent-id>] [--clear] [--json]
@@ -375,6 +382,7 @@ Run 'daedal <command> --help' for command details.`;
 const commandHelp: Record<string, string> = {
   ...routineHelp,
   team: teamHelp,
+  flow: flowHelp,
   account: accountHelp,
   secret: secretHelp,
   exec: secretHelp,
@@ -446,6 +454,7 @@ it was cleared, journal entries whose heading names the task, and done.`,
   daedal agent models <codex|claude> [--account <account>]
   daedal agent spawn [--workspace <workspace>] (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine]
   daedal agent spawn ... [--ability <ability>[,<ability>]] [--color <color>] [--pin]
+  daedal agent spawn ... [--flow-stage <component>:<stage> [--flow-map <map>]]
   daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>] [--user]
   daedal agent list [--workspace <workspace>] [--running|--archived]
   daedal agent reorder --workspace <workspace> <agent-id> [<agent-id>...]
@@ -487,6 +496,11 @@ and 'daedal routine --help'.
 'agent spawn --team' adds a member to a team: with no value, the team of the
 lead running it; with a lead, that lead's team, and the lead is told in the
 team chat. See 'daedal team --help'.
+
+'agent spawn --flow-stage <component>:<stage>' starts a session that holds
+that stage of a flow map claimed for it; its first message says which
+stage it owns. It needs no ability to work the stage. It works with --team too.
+See 'daedal flow --help'.
 
 'agent spawn' without --model starts with the workspace's default model when
 --provider is the workspace's default provider. Otherwise Claude is asked for
@@ -1227,6 +1241,8 @@ async function agentCommand(
         "message",
         "ability",
         "color",
+        "flow-stage",
+        "flow-map",
       ],
       ["refine", "pin", "user"],
     );
@@ -1254,6 +1270,20 @@ async function agentCommand(
     const task = parsed.values.task
       ? await resolveTaskReference(context, parsed.values.task, workspace)
       : undefined;
+    const spawner = await callerSession(context).catch(() => undefined);
+    const claim = spawnStageClaim(
+      context,
+      (await context.workspaces.get(workspace)).id,
+      parsed.values,
+      spawner,
+    );
+    const abilities = (parsed.values.ability ?? "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const message = [parsed.values.message?.trim(), claim?.line]
+      .filter(Boolean)
+      .join("\n\n");
     const result = await context.agents.spawn({
       workspace,
       provider: parsed.values.provider,
@@ -1264,23 +1294,17 @@ async function agentCommand(
       ...(parsed.values.account !== undefined
         ? { account: parsed.values.account }
         : {}),
-      message: parsed.values.message,
+      message: message || undefined,
       draftBrief: parsed.flags.has("refine") || undefined,
       // An agent starting a session from inside its own, as a handoff does.
-      spawnedBy: (await callerSession(context).catch(() => undefined))?.id,
-      ...(parsed.values.ability
-        ? {
-            abilities: parsed.values.ability
-              .split(",")
-              .map((item) => item.trim())
-              .filter(Boolean),
-          }
-        : {}),
+      spawnedBy: spawner?.id,
+      ...(abilities.length ? { abilities } : {}),
       ...(parsed.values.color
         ? { color: sessionColor(parsed.values.color) }
         : {}),
       ...(parsed.flags.has("pin") ? { pinned: true } : {}),
     });
+    if (claim) claimSpawnedStage(context, result, claim);
     printResult(result, json, () =>
       console.log(
         `Spawned ${result.name} (${result.provider}) in ${result.tmuxSession}`,
@@ -2645,6 +2669,7 @@ export async function runCli(
       "session",
       "routine",
       "team",
+      "flow",
       "secret",
     ].includes(args[0]!)
   )
@@ -2678,6 +2703,14 @@ export async function runCli(
       return await teamCommand(context, args.slice(1), json);
     if (args[0] === "secret")
       return await secretCommand(context, args.slice(1), json);
+    if (args[0] === "flow")
+      return await flowCommand(
+        context,
+        args.slice(1),
+        json,
+        (reference, workspace) =>
+          resolveTaskReference(context, reference, workspace),
+      );
     if (args[0] === "routine")
       return await routineCommand(context, args.slice(1), json, (reference) =>
         resolveTaskReference(context, reference),

@@ -21,6 +21,8 @@ import {
   type RoutineRun,
   type RoutinesStatus,
   type SessionAbility,
+  type FlowMap,
+  type FlowMapDetail,
   type Team,
   type TeamMessage,
   USER_HANDLE,
@@ -48,6 +50,8 @@ import type {
   RoutinesDetailDto,
   RoutinesStatusDto,
   SessionAbilityDto,
+  FlowMapDetailDto,
+  FlowMapSummaryDto,
   TeamDetailDto,
   TeamDto,
   TeamMessageDto,
@@ -234,6 +238,12 @@ export async function desktopSnapshot(
     toasts: context.notifications.pending("toast").map(toastDto),
     abilities: context.repositories.abilities.list().map(sessionAbilityDto),
     teams: context.teams.list().map(teamDto),
+    flowMaps: context.repositories.flow.listMapOverview().map((map) => ({
+      ...flowMapSummaryDto(map),
+      ownerSessionId: map.ownerSessionId,
+      stageSessionIds: map.stageSessionIds,
+      taskLinks: map.taskLinks,
+    })),
     routines: context.abilities
       .holders("routines")
       .map((ability) =>
@@ -275,6 +285,9 @@ export function desktopDataFingerprint(context: ApplicationContext): string {
     activity: context.repositories.listAgentActivity(),
     attention: context.repositories.listSessionAttention(),
     notifications: context.repositories.listPendingNotifications(),
+    // Every change to a map moves its time, so a change from the CLI redraws
+    // the Map tab on the next tick.
+    flowMaps: context.repositories.flow.fingerprint(),
     // A run starting or ending, or a hold changing, changes what the
     // session's bar says, so it reloads too.
     abilities: context.repositories.abilities.list().map((ability) => ({
@@ -319,6 +332,77 @@ const sessionAbilityDto = (ability: SessionAbility): SessionAbilityDto => ({
   purpose: ability.config.purpose ?? null,
   noteWaiting: Boolean(ability.pendingNote),
   grantedAt: ability.grantedAt,
+});
+
+const flowMapSummaryDto = (
+  map: FlowMap,
+): Omit<
+  FlowMapSummaryDto,
+  "ownerSessionId" | "stageSessionIds" | "taskLinks"
+> => ({
+  id: map.id,
+  workspaceId: map.workspaceId,
+  number: map.number,
+  name: map.name,
+  updatedAt: map.updatedAt,
+});
+
+/** How many history lines the Map tab shows. */
+const FLOW_HISTORY_LINES = 200;
+
+const flowMapDetailDto = (
+  detail: FlowMapDetail,
+  history: ReturnType<ApplicationContext["flow"]["history"]>,
+): FlowMapDetailDto => ({
+  map: flowMapSummaryDto(detail.map),
+  components: detail.components.map((component) => ({
+    id: component.id,
+    parentId: component.parentId,
+    number: component.number,
+    position: component.position,
+    name: component.name,
+    deliverable: component.deliverable,
+    doneWhen: component.doneWhen,
+    taskId: component.taskId,
+    droppedReason: component.droppedReason,
+  })),
+  relations: detail.relations.map((relation) => ({
+    id: relation.id,
+    number: relation.number,
+    fromId: relation.fromId,
+    toId: relation.toId,
+    type: relation.type,
+    note: relation.note,
+    droppedReason: relation.droppedReason,
+  })),
+  stages: detail.stages.map((stage) => ({
+    id: stage.id,
+    componentId: stage.componentId,
+    kind: stage.kind,
+    position: stage.position,
+    mode: stage.mode,
+    label: stage.label,
+    state: stage.state,
+    shown: stage.shown,
+    note: stage.note,
+    sessionId: stage.sessionId,
+    startedAt: stage.startedAt,
+    finishedAt: stage.finishedAt,
+    droppedReason: stage.droppedReason,
+  })),
+  decisions: detail.decisions.map((decision) => ({
+    id: decision.id,
+    componentId: decision.componentId,
+    text: decision.text,
+    author: decision.author,
+    createdAt: decision.createdAt,
+  })),
+  history: history.map((entry) => ({
+    id: entry.id,
+    text: entry.text,
+    author: entry.author,
+    createdAt: entry.createdAt,
+  })),
 });
 
 const teamDto = (team: Team): TeamDto => ({
@@ -437,8 +521,12 @@ function routinesDetail(
  */
 export interface DesktopWindowHost {
   role: DesktopWindowRole;
+  /** The map a `map` window shows. */
+  mapId?: string;
   openWorld(): void;
+  openMap(mapId: string): void;
   focusSession(sessionId: string): void;
+  focusTask(taskId: string): void;
 }
 
 /** Where no host runs a connector, as in tests: phone access is off. */
@@ -515,7 +603,9 @@ const NO_REMOTE: DesktopRemoteHost = {
 const MAIN_WINDOW_ONLY: DesktopWindowHost = {
   role: "main",
   openWorld: () => {},
+  openMap: () => {},
   focusSession: () => {},
+  focusTask: () => {},
 };
 
 /** A terminal copy past this is a runaway program, not a selection. */
@@ -560,6 +650,13 @@ export function createDesktopRequestHandlers(
     routinesDetail: ({ sessionId }) =>
       result(() => routinesDetail(context, sessionId)),
     teamDetail: ({ teamId }) => result(() => teamDetail(context, teamId)),
+    flowMap: ({ mapId }) =>
+      result(() =>
+        flowMapDetailDto(
+          context.flow.detail(mapId),
+          context.flow.history(mapId, FLOW_HISTORY_LINES),
+        ),
+      ),
     teamSay: ({ teamId, body }) =>
       mutate(async () => {
         const said = await context.teams.say({
@@ -625,7 +722,22 @@ export function createDesktopRequestHandlers(
           throw new DaedalusError("NOT_FOUND", `Report '${id}' was not found`);
         return { ...context.routineReports.verdict(ability, id, verdict) };
       }),
-    windowRole: () => result(() => ({ role: windows.role })),
+    windowRole: () =>
+      result(() => ({
+        role: windows.role,
+        ...(windows.mapId ? { mapId: windows.mapId } : {}),
+      })),
+    flowMapWindowOpen: ({ mapId }) =>
+      result(() => {
+        context.flow.getMap(mapId);
+        windows.openMap(mapId);
+        return { opened: true };
+      }),
+    taskFocus: ({ taskId }) =>
+      result(() => {
+        windows.focusTask(taskId);
+        return { focused: true };
+      }),
     worldWindowOpen: () =>
       result(() => {
         windows.openWorld();

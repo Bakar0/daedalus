@@ -1399,6 +1399,12 @@ export class AgentService {
     // handle now names the successor alone.
     this.repositories.transaction(() => {
       this.repositories.abilities.moveToSession(predecessor.id, session.id);
+      // Flow stages the predecessor was working on are the successor's now.
+      this.repositories.flow.moveHeldStages(
+        predecessor.id,
+        session.id,
+        new Date().toISOString(),
+      );
       if (predecessor.teamId)
         this.repositories.setAgentTeam(predecessor.id, null, null);
     });

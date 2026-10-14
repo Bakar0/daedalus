@@ -57,7 +57,7 @@ library ID.
 
 ```text
 daedal agent models <codex|claude> [--account <account>]
-daedal agent spawn [--workspace <workspace>] (--provider <codex|claude> | --command <configured-name>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine] [--ability routines|orchestration] [--color <color>] [--pin]
+daedal agent spawn [--workspace <workspace>] (--provider <codex|claude> | --command <configured-name>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine] [--ability routines|orchestration|flow] [--color <color>] [--pin] [--flow-stage <component>:<stage>]
 daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>]
 daedal agent list [--workspace <workspace>] [--running|--archived]
 daedal agent get <agent-id>
@@ -78,6 +78,7 @@ daedal team say "<text>" [--team <lead>] [--user]
 daedal team chat [--all] [--team <lead>]
 daedal team list [--team <lead>]
 daedal team goal [<text>] [--team <lead>]
+daedal flow maps|show|history|new|add|edit|relate|drop|restore|delete|stages|stage|decide|link|types ...
 ```
 
 `<session>` is a session id, or its name when only one live session has it.
@@ -87,7 +88,10 @@ and `daedal routine --help` describe them. A session that holds
 `orchestration` leads a team: it adds members with `agent spawn --team` and
 talks to them with `daedal team`; the `daedalus-orchestration` and
 `daedalus-team` skills and `daedal team --help` describe it. A rebirth moves a
-session's abilities, pin and color to the successor. A session with routines
+session's abilities, pin and color to the successor. A session that holds
+`flow` builds and keeps flow maps of its own with `daedal flow`; the
+`daedalus-flow` skill and `daedal flow --help` describe it, and any session
+can read a map with `daedal flow show`. A session with routines
 keeps its exact name; any other, a team's lead included, gets ` · 2`.
 
 Inside a session, `task create` and `agent spawn` default `--workspace` to

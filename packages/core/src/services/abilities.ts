@@ -19,6 +19,8 @@ export const ORCHESTRATION_SKILL = "daedalus-orchestration";
 export const TEAM_SKILL = "daedalus-team";
 /** Where a lead keeps its team's state, in its own working directory. */
 export const TEAM_FILE = "TEAM.md";
+/** How a session builds and keeps a flow map. */
+export const FLOW_SKILL = "daedalus-flow";
 
 /**
  * What an ability is: a definition in code. Its data, if it has any, hangs
@@ -60,6 +62,17 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilityDefinition>> = {
       `Daedalus: this session now holds the orchestration ability and leads a team. Read the ${skill(ORCHESTRATION_SKILL)} skill now, then wait for the user.`,
     revokeNote: () =>
       "Daedalus: the orchestration ability was removed from this session. Your team has ended and its members keep running as plain sessions; do not run team commands.",
+  },
+  flow: {
+    id: "flow",
+    label: "Flow map",
+    providers: ["claude", "codex"],
+    launchLine: (skill) =>
+      `You hold the Daedalus flow ability: you turn ideas and tasks into flow maps of components that you own, and keep them current while the work happens ('daedal flow show', 'daedal flow add', 'daedal flow stage start'). Follow the ${skill(FLOW_SKILL)} skill whenever you build, change or work on a map. Run 'daedal flow show' to see your map, if you have one, before making a new one.`,
+    grantNote: (skill) =>
+      `Daedalus: this session now holds the flow ability and can build and change this workspace's flow maps. Read the ${skill(FLOW_SKILL)} skill before you use 'daedal flow', then carry on.`,
+    revokeNote: () =>
+      "Daedalus: the flow ability was removed from this session. Do not run 'daedal flow' commands that change a map; reading one with 'daedal flow show' still works.",
   },
 };
 

@@ -15,10 +15,11 @@ export const SESSION_COLORS = [
 export type SessionColor = (typeof SESSION_COLORS)[number];
 
 /**
- * What a session can be granted on top of being a session: routines, and
- * orchestration, which makes the session the lead of a team.
+ * What a session can be granted on top of being a session: routines,
+ * orchestration, which makes the session the lead of a team, and flow, which
+ * lets it build and change the workspace's flow maps.
  */
-export type AbilityId = "routines" | "orchestration";
+export type AbilityId = "routines" | "orchestration" | "flow";
 
 /**
  * An ability a session holds. Its data hangs off `id`, which stays the same
