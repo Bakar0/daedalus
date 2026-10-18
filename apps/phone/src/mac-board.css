@@ -575,8 +575,15 @@
   font-size: 11px;
   line-height: 1.35;
 }
-.board-settings-percent {
-  width: 52px;
+.board-settings-rebirth {
+  align-items: center;
+  color: var(--secondary);
+  display: flex;
+  gap: 5px;
+}
+.board-settings-rebirth select {
+  flex: 1;
+  min-width: 0;
 }
 @container board (max-width: 430px) {
   .board-session-detail {
@@ -682,6 +689,25 @@
 }
 .world-needs-head .eyebrow {
   margin-bottom: 0;
+}
+.percent-input {
+  align-items: center;
+  color: var(--secondary);
+  display: inline-flex;
+  font-size: 11px;
+  gap: 3px;
+}
+.percent-input input {
+  border-radius: 5px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  height: 20px;
+  padding: 0 5px;
+  text-align: right;
+  width: 34px;
+}
+.rebirth-choices .percent-input {
+  margin-left: 2px;
 }
 .report-details {
   align-items: center;

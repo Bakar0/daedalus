@@ -157,6 +157,11 @@ export interface DaedalusConfig {
    */
   trustSessionFoldersEnabled: boolean;
   /**
+   * The context percent, 10 to 100, at which sessions are asked for a
+   * rebirth when neither their workspace nor they set one; null is off.
+   */
+  autoRebirthPercent: number | null;
+  /**
    * Suppresses toasts and desktop notifications without touching activity
    * tracking, so the board stays live while the interruptions stop.
    */
@@ -218,6 +223,7 @@ type StoredConfig = Partial<
     | "workspaceInstructionFilesEnabled"
     | "autoRestoreSessionsEnabled"
     | "trustSessionFoldersEnabled"
+    | "autoRebirthPercent"
     | "focusMode"
     | "remoteEnabled"
     | "remoteRelay"
@@ -339,6 +345,13 @@ export async function loadConfig(
       stored.workspaceInstructionFilesEnabled !== false,
     autoRestoreSessionsEnabled: stored.autoRestoreSessionsEnabled !== false,
     trustSessionFoldersEnabled: stored.trustSessionFoldersEnabled !== false,
+    autoRebirthPercent:
+      typeof stored.autoRebirthPercent === "number" &&
+      Number.isInteger(stored.autoRebirthPercent) &&
+      stored.autoRebirthPercent >= 10 &&
+      stored.autoRebirthPercent <= 100
+        ? stored.autoRebirthPercent
+        : null,
     focusMode: stored.focusMode === true,
     remoteEnabled: stored.remoteEnabled === true,
     remoteKeepAwake: stored.remoteKeepAwake === true,
@@ -447,6 +460,15 @@ export async function saveTrustSessionFoldersEnabled(
 ): Promise<void> {
   await saveSetting(config, { trustSessionFoldersEnabled: enabled });
   config.trustSessionFoldersEnabled = enabled;
+}
+
+/** The caller validates the percent (see `autoRebirthPercent`). */
+export async function saveAutoRebirthPercent(
+  config: DaedalusConfig,
+  percent: number | null,
+): Promise<void> {
+  await saveSetting(config, { autoRebirthPercent: percent });
+  config.autoRebirthPercent = percent;
 }
 
 export async function saveRemoteEnabled(

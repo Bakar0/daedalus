@@ -31,8 +31,8 @@ export interface WorkspaceDto {
   position: number;
   /** Start on a board card moves a `todo` or `blocked` task to `in_progress`. */
   startSetsInProgress: boolean;
-  /** Context percent that triggers an automatic rebirth; null is off. */
-  autoRebirthPercent: number | null;
+  /** Context percent that triggers an automatic rebirth; null is global's. */
+  autoRebirthPercent: AutoRebirthDto;
   /** What Start and Start next launch with; null leaves it to the app. */
   defaultProvider: "claude" | "codex" | null;
   /**
@@ -113,6 +113,8 @@ export interface AgentSessionDto {
   /** When it was pinned to the top of its workspace's list, or null. */
   pinnedAt: string | null;
   color: SessionColorDto | null;
+  /** Its own rebirth threshold; null takes its workspace's. */
+  autoRebirthPercent: AutoRebirthDto;
   /** The account profile it runs on, or null for the provider's default. */
   account: string | null;
   /** The team it is a member of (the lead's orchestration ability id). */
@@ -121,6 +123,36 @@ export interface AgentSessionDto {
   teamHandle: string | null;
   /** The session that started this one with `agent spawn`, as a handoff does. */
   spawnedBy: string | null;
+}
+
+/**
+ * One level of the automatic rebirth setting: a context percent from 10 to
+ * 100, `"off"`, or null to take the level above (session, then workspace,
+ * then the global default in `SettingsDto`).
+ */
+export type AutoRebirthDto = number | "off" | null;
+
+/**
+ * Where a threshold lands when first turned on. Late enough to get real work
+ * out of a session, early enough that the note is written before the window
+ * fills.
+ */
+export const DEFAULT_AUTO_REBIRTH_PERCENT = 85;
+
+/**
+ * Where a session holding routines is reborn when its threshold comes to off,
+ * so its routines keep running. The core's copy is in `routine-delivery.ts`.
+ */
+export const ROUTINES_REBIRTH_PERCENT = 60;
+
+/** The context percent that triggers a session's rebirth, or null for none. */
+export function resolveAutoRebirth(
+  session: AutoRebirthDto,
+  workspace: AutoRebirthDto,
+  global: number | null,
+): number | null {
+  const level = session ?? workspace ?? global;
+  return level === "off" ? null : level;
 }
 
 export type SessionColorDto =
@@ -499,6 +531,8 @@ export interface DesktopSettingsDto {
   workspaceInstructionFilesEnabled: boolean;
   autoRestoreSessionsEnabled: boolean;
   trustSessionFoldersEnabled: boolean;
+  /** The global rebirth threshold, 10 to 100, or null for off. */
+  autoRebirthPercent: number | null;
   focusMode: boolean;
   providers: ProviderAvailabilityDto[];
   /** Every account, default ones first. Sign-in state is `accountStatus`. */
@@ -983,13 +1017,14 @@ export interface DesktopRpcSchema {
   bun: {
     requests: {
       snapshot: Request<Record<string, never>, DesktopSnapshotDto>;
-      /** Name, pin and color, any of them, on any session. */
+      /** Name, pin, color and rebirth threshold, any of them. */
       sessionUpdate: Request<
         {
           sessionId: string;
           name?: string;
           pinned?: boolean;
           color?: SessionColorDto | null;
+          autoRebirthPercent?: AutoRebirthDto;
         },
         AgentSessionDto
       >;
@@ -1097,8 +1132,8 @@ export interface DesktopRpcSchema {
           name?: string;
           slug?: string;
           startSetsInProgress?: boolean;
-          /** 10 to 100, or null to turn automatic rebirth off. */
-          autoRebirthPercent?: number | null;
+          /** 10 to 100, `"off"`, or null for the global default. */
+          autoRebirthPercent?: AutoRebirthDto;
           defaultProvider?: "claude" | "codex" | null;
           defaultModel?: string | null;
           /** A profile id, or null for the default account. */
@@ -1234,6 +1269,11 @@ export interface DesktopRpcSchema {
       trustSessionFoldersSet: Request<
         { enabled: boolean },
         { enabled: boolean }
+      >;
+      /** The global rebirth threshold, 10 to 100, or null for off. */
+      autoRebirthSet: Request<
+        { percent: number | null },
+        { percent: number | null }
       >;
       focusModeSet: Request<{ enabled: boolean }, { enabled: boolean }>;
       /**

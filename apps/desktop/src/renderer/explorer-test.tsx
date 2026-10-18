@@ -84,6 +84,7 @@ const snapshot: DesktopSnapshotDto = {
     workspaceInstructionFilesEnabled: true,
     autoRestoreSessionsEnabled: true,
     trustSessionFoldersEnabled: true,
+    autoRebirthPercent: null,
     focusMode: false,
     accounts: [],
     providers: [],

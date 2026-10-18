@@ -1,6 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
-import type { RoutinesDetailDto, RoutinesStatusDto } from "@daedalus/protocol";
+import type {
+  AutoRebirthDto,
+  RoutinesDetailDto,
+  RoutinesStatusDto,
+} from "@daedalus/protocol";
 import { clockLabel, RoutineBar, routineBarText } from "./RoutineBar";
 import { RoutinesPanel } from "./RoutinesPanel";
 import { SessionMenu } from "../SessionMenu";
@@ -209,13 +213,20 @@ describe("the Routines panel", () => {
 });
 
 describe("the session card menu", () => {
-  const render = (offerAbilities: boolean, routines: boolean) =>
+  const render = (
+    offerAbilities: boolean,
+    routines: boolean,
+    autoRebirth: AutoRebirthDto = null,
+  ) =>
     renderToStaticMarkup(
       <SessionMenu
+        autoRebirth={autoRebirth}
         color="blue"
+        inheritedRebirth={85}
         name="Argus"
         offerAbilities={offerAbilities}
         offerOrchestration={offerAbilities}
+        onAutoRebirth={() => {}}
         onColor={() => {}}
         onOrchestration={() => {}}
         onPin={() => {}}
@@ -225,6 +236,10 @@ describe("the session card menu", () => {
         pinned
         routines={routines}
       />,
+    );
+  const rebirthChoices = (html: string) =>
+    [...html.matchAll(/class="rebirth-choice"[^>]*>([^<]+)</g)].map(
+      (match) => match[1],
     );
 
   test("offers rename, unpin, nine colors and the routines ability", () => {
@@ -236,7 +251,26 @@ describe("the session card menu", () => {
     expect(html).toMatch(/aria-checked="true"[^>]*role="menuitemcheckbox"/);
   });
 
-  test("leaves abilities off a terminal", () => {
-    expect(render(false, false)).not.toContain("Abilities");
+  test("leaves abilities and rebirth off a terminal", () => {
+    const html = render(false, false);
+    expect(html).not.toContain("Abilities");
+    expect(html).not.toContain("rebirth-choice");
+  });
+
+  test("offers the workspace's rebirth threshold as Default", () => {
+    const html = render(true, false);
+    expect(html).toContain("workspace: 85%");
+    expect(rebirthChoices(html)).toEqual(["Default", "Off", "On"]);
+    expect(html).toMatch(
+      /aria-checked="true" class="rebirth-choice"[^>]*>Default</,
+    );
+    expect(html).not.toContain("percent-input");
+  });
+
+  test("a threshold of its own is On, with any percent in its field", () => {
+    const html = render(true, false, 73);
+    expect(html).toContain("own setting");
+    expect(html).toMatch(/aria-checked="true" class="rebirth-choice"[^>]*>On</);
+    expect(html).toMatch(/class="percent-input"><input[^>]*value="73"/);
   });
 });

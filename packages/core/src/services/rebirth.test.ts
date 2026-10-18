@@ -170,6 +170,21 @@ describe("continuing a session in a fresh one", () => {
     });
   });
 
+  test("a successor keeps its predecessor's own rebirth threshold", async () => {
+    await withRebirthContext(async (context) => {
+      const { first } = await startedTask(context);
+      await context.agents.setAutoRebirth(first.id, 75);
+      const result = await context.agents.continueSession({
+        id: first.id,
+        archive: "later",
+      });
+      expect(result.session.autoRebirthPercent).toBe(75);
+      expect(
+        (await context.agents.get(result.session.id)).autoRebirthPercent,
+      ).toBe(75);
+    });
+  });
+
   test("refuses terminals and archived sessions", async () => {
     await withRebirthContext(async (context) => {
       const { workspace, first } = await startedTask(context);
@@ -283,6 +298,56 @@ describe("automatic rebirth", () => {
         autoRebirthPercent: null,
       });
       expect(off.autoRebirthPercent).toBeNull();
+      const explicit = await context.workspaces.update(workspace.id, {
+        autoRebirthPercent: "off",
+      });
+      expect(explicit.autoRebirthPercent).toBe("off");
+      expect(
+        (await context.workspaces.get(workspace.id)).autoRebirthPercent,
+      ).toBe("off");
+    });
+  });
+
+  test("a session takes its own threshold, else its workspace's, else the global one", async () => {
+    await withRebirthContext(async (context) => {
+      const { workspace, first } = await startedTask(context);
+      const quiet = await context.workspaces.create({ name: "Quiet" });
+      await context.workspaces.update(quiet.id, { autoRebirthPercent: "off" });
+      const loud = await context.agents.spawn({
+        workspace: quiet.id,
+        provider: "codex",
+      });
+      const opted = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      context.config.autoRebirthPercent = 70;
+      // Its own beats a workspace that is off, and off beats the global one.
+      expect(
+        (await context.agents.setAutoRebirth(loud.id, 90)).autoRebirthPercent,
+      ).toBe(90);
+      await context.agents.setAutoRebirth(opted.id, "off");
+      expect((await context.agents.get(opted.id)).autoRebirthPercent).toBe(
+        "off",
+      );
+      await expect(
+        context.agents.setAutoRebirth(loud.id, 5),
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+      const at = (percent: number) =>
+        [first, loud, opted].map((item) => ({
+          sessionId: item.id,
+          context: { usedPercent: percent },
+        }));
+      expect(
+        (await context.agents.sweepAutoRebirths(at(75))).map((item) => item.id),
+      ).toEqual([first.id]);
+      expect(
+        (await context.agents.sweepAutoRebirths(at(95))).map((item) => item.id),
+      ).toEqual([loud.id]);
+      expect(
+        context.agents.autoRebirthThreshold(await context.agents.get(opted.id)),
+      ).toBeNull();
+      expect(context.agents.autoRebirthThreshold(first)).toBe(70);
     });
   });
 

@@ -15,11 +15,13 @@
  * thing between the user and every control.
  */
 import React from "react";
-import type {
-  AppUpdateDto,
-  DesktopSettingsDto,
-  IntegratedTerminalDto,
-  RpcResult,
+import { PercentInput } from "./PercentInput";
+import {
+  DEFAULT_AUTO_REBIRTH_PERCENT,
+  type AppUpdateDto,
+  type DesktopSettingsDto,
+  type IntegratedTerminalDto,
+  type RpcResult,
 } from "@daedalus/protocol";
 import { AccountsPanel } from "./AccountsPanel";
 import type { DesktopClient } from "./client-types";
@@ -279,6 +281,34 @@ export function SettingsModal({
               }
               title="Trust session folders"
             />
+            <h3>Rebirth</h3>
+            <SettingRow
+              checked={settings.autoRebirthPercent !== null}
+              disabled={busy}
+              description="When a session's context fills to this point, it writes a rebirth note and a fresh agent with an empty context takes over its work. A workspace sets its own in its board settings, and a session in its card menu; both start on this default."
+              onChange={(enabled) =>
+                void perform(
+                  client.request.autoRebirthSet({
+                    percent: enabled ? DEFAULT_AUTO_REBIRTH_PERCENT : null,
+                  }),
+                )
+              }
+              title="Rebirth sessions automatically"
+            />
+            {settings.autoRebirthPercent !== null && (
+              <div className="settings-percent-row">
+                At
+                <PercentInput
+                  disabled={busy}
+                  label="Context percent that triggers a rebirth"
+                  onCommit={(percent) =>
+                    void perform(client.request.autoRebirthSet({ percent }))
+                  }
+                  value={settings.autoRebirthPercent}
+                />
+                of the context window
+              </div>
+            )}
           </section>
         ) : undefined}
 

@@ -55,6 +55,7 @@ const snapshot: DesktopSnapshotDto = {
       position: 1,
       pinnedAt: null,
       color: null,
+      autoRebirthPercent: null,
     },
     {
       id: "panel-test-blocked",
@@ -83,6 +84,7 @@ const snapshot: DesktopSnapshotDto = {
       position: 1,
       pinnedAt: null,
       color: null,
+      autoRebirthPercent: null,
     },
     // A fourth card, still starting. Opening a session that has not finished
     // starting is the ordinary way to open a new one, and the transition to
@@ -115,6 +117,7 @@ const snapshot: DesktopSnapshotDto = {
       position: 4,
       pinnedAt: null,
       color: null,
+      autoRebirthPercent: null,
     },
     // A third card, so a drag has somewhere to travel and the reorder check
     // can move one past two others rather than just swapping a pair.
@@ -145,6 +148,7 @@ const snapshot: DesktopSnapshotDto = {
       position: 3,
       pinnedAt: null,
       color: null,
+      autoRebirthPercent: null,
     },
   ],
   terminals: [],
@@ -237,6 +241,7 @@ const snapshot: DesktopSnapshotDto = {
     workspaceInstructionFilesEnabled: true,
     autoRestoreSessionsEnabled: true,
     trustSessionFoldersEnabled: true,
+    autoRebirthPercent: null,
     focusMode: false,
     accounts: [],
     providers: [],

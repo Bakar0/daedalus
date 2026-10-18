@@ -14,18 +14,21 @@ import {
   type ReportOwner,
   type ReportVerdictChoice,
 } from "./routines/ReportDetails";
-import type {
-  AccountDto,
-  RoutineReportDto,
-  AgentActivityDto,
-  AgentSessionDto,
-  ProviderModelCatalogDto,
-  SessionAttentionDto,
-  SessionTelemetryDto,
-  SessionWorktreeDto,
-  TaskDto,
-  WorkspaceDto,
+import {
+  DEFAULT_AUTO_REBIRTH_PERCENT,
+  type AccountDto,
+  type AutoRebirthDto,
+  type RoutineReportDto,
+  type AgentActivityDto,
+  type AgentSessionDto,
+  type ProviderModelCatalogDto,
+  type SessionAttentionDto,
+  type SessionTelemetryDto,
+  type SessionWorktreeDto,
+  type TaskDto,
+  type WorkspaceDto,
 } from "@daedalus/protocol";
+import { PercentInput } from "./PercentInput";
 import {
   BOARD_LANES,
   boardLanes,
@@ -83,6 +86,8 @@ export interface BoardViewProps {
   availableProviders: BoardProvider[];
   /** Every account; the settings offer a choice once a provider has two. */
   accounts?: AccountDto[];
+  /** The app's global rebirth threshold; null is off. */
+  globalAutoRebirth?: number | null;
   /** Model lists by `accountModelKey`: each account offers its own. */
   modelCatalogs: Partial<Record<string, ProviderModelCatalogDto>>;
   onNeedModels: (provider: BoardProvider, account: string) => void;
@@ -119,7 +124,7 @@ export interface BoardViewProps {
   ) => void;
   onUpdateSettings: (changes: {
     startSetsInProgress?: boolean;
-    autoRebirthPercent?: number | null;
+    autoRebirthPercent?: AutoRebirthDto;
     defaultProvider?: BoardProvider | null;
     defaultModel?: string | null;
     defaultClaudeAccount?: string | null;
@@ -431,14 +436,10 @@ function AnswerBox({
   );
 }
 
-/** Where the checkbox lands when first ticked. Late enough to get real work
- * out of a session, early enough that the note is written before the window
- * fills. */
-const DEFAULT_AUTO_REBIRTH_PERCENT = 85;
-
 function BoardSettings({
   accounts,
   availableProviders,
+  globalAutoRebirth,
   modelCatalogs,
   onNeedModels,
   onUpdate,
@@ -446,6 +447,8 @@ function BoardSettings({
 }: {
   accounts: AccountDto[];
   availableProviders: BoardProvider[];
+  /** The app's global threshold, which "Global default" takes. */
+  globalAutoRebirth: number | null;
   modelCatalogs: BoardViewProps["modelCatalogs"];
   onNeedModels: BoardViewProps["onNeedModels"];
   onUpdate: BoardViewProps["onUpdateSettings"];
@@ -613,35 +616,44 @@ function BoardSettings({
           />
           Start moves the task to in progress
         </label>
-        <label className="board-settings-toggle">
-          <input
-            checked={workspace.autoRebirthPercent !== null}
-            onChange={(event) =>
-              onUpdate({
-                autoRebirthPercent: event.target.checked
-                  ? DEFAULT_AUTO_REBIRTH_PERCENT
-                  : null,
-              })
-            }
-            type="checkbox"
-          />
-          Rebirth as a new agent at
-          <input
-            aria-label="Context percent that triggers a rebirth"
-            className="board-settings-percent"
-            disabled={workspace.autoRebirthPercent === null}
-            max={100}
-            min={10}
-            onChange={(event) => {
-              const value = Number(event.target.value);
-              if (Number.isInteger(value) && value >= 10 && value <= 100)
-                onUpdate({ autoRebirthPercent: value });
-            }}
-            step={5}
-            type="number"
-            value={workspace.autoRebirthPercent ?? DEFAULT_AUTO_REBIRTH_PERCENT}
-          />
-          % context
+        <label>
+          Rebirth as a new agent
+          <span className="board-settings-rebirth">
+            <select
+              aria-label="When this workspace's sessions are reborn"
+              onChange={(event) =>
+                onUpdate({
+                  autoRebirthPercent:
+                    event.target.value === "default"
+                      ? null
+                      : event.target.value === "off"
+                        ? "off"
+                        : (globalAutoRebirth ?? DEFAULT_AUTO_REBIRTH_PERCENT),
+                })
+              }
+              value={
+                workspace.autoRebirthPercent === null
+                  ? "default"
+                  : workspace.autoRebirthPercent === "off"
+                    ? "off"
+                    : "percent"
+              }
+            >
+              <option value="default">
+                Global default ·{" "}
+                {globalAutoRebirth === null ? "off" : `${globalAutoRebirth}%`}
+              </option>
+              <option value="off">Off</option>
+              <option value="percent">At a context percent</option>
+            </select>
+            {typeof workspace.autoRebirthPercent === "number" && (
+              <PercentInput
+                label="Context percent that triggers a rebirth"
+                onCommit={(value) => onUpdate({ autoRebirthPercent: value })}
+                value={workspace.autoRebirthPercent}
+              />
+            )}
+          </span>
         </label>
       </div>
     </details>
@@ -1075,6 +1087,7 @@ export function BoardView(props: BoardViewProps) {
             <BoardSettings
               accounts={props.accounts ?? []}
               availableProviders={props.availableProviders}
+              globalAutoRebirth={props.globalAutoRebirth ?? null}
               modelCatalogs={props.modelCatalogs}
               onNeedModels={props.onNeedModels}
               onUpdate={props.onUpdateSettings}

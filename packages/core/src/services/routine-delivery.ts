@@ -22,7 +22,10 @@ export const MAX_RUNS_IN_FLIGHT: Readonly<Record<string, number>> = {
   claude: 3,
   codex: 1,
 };
-/** The context share a routines session is reborn at, when its workspace sets none. */
+/**
+ * The context share a routines session is reborn at when its threshold comes
+ * to off. The renderer's copy is `ROUTINES_REBIRTH_PERCENT` in the protocol.
+ */
 export const ROUTINES_REBIRTH_PERCENT = 60;
 /** A drain waits this long for runs in flight before being reborn anyway. */
 export const DRAIN_LIMIT_MS = 10 * 60_000;
@@ -238,9 +241,9 @@ export class RoutineDelivery {
       drain = undefined;
     }
     if (!drain) {
-      const workspace = this.repositories.findWorkspace(session.workspaceId);
+      // Routines need a rebirth to keep running, so off means this default.
       const threshold =
-        workspace?.autoRebirthPercent ?? ROUTINES_REBIRTH_PERCENT;
+        this.agents.autoRebirthThreshold(session) ?? ROUTINES_REBIRTH_PERCENT;
       const percent = input.contextPercent(session.id);
       if (percent !== undefined && percent >= threshold) {
         drain = { sessionId: session.id, since: now };

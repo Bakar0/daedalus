@@ -71,6 +71,7 @@ const base: DesktopSnapshotDto = {
     workspaceInstructionFilesEnabled: true,
     autoRestoreSessionsEnabled: true,
     trustSessionFoldersEnabled: true,
+    autoRebirthPercent: null,
     focusMode: false,
     accounts: [],
     providers: [
@@ -363,6 +364,7 @@ describe("desktop application shell", () => {
           position: 1,
           pinnedAt: null,
           color: null,
+          autoRebirthPercent: null,
         },
       ),
     ).toBe(true);
@@ -546,6 +548,7 @@ describe("desktop application shell", () => {
       position: 0,
       pinnedAt: null,
       color: null,
+      autoRebirthPercent: null,
     });
     const two: DesktopSnapshotDto = {
       ...base,
@@ -1241,6 +1244,7 @@ describe("desktop application shell", () => {
           position: 1,
           pinnedAt: null,
           color: null,
+          autoRebirthPercent: null,
         },
         {
           id: "agent-needs-attention",
@@ -1269,6 +1273,7 @@ describe("desktop application shell", () => {
           position: 1,
           pinnedAt: null,
           color: null,
+          autoRebirthPercent: null,
         },
       ],
       settings: {
@@ -1515,6 +1520,7 @@ describe("desktop application shell", () => {
       position: 0,
       pinnedAt: null,
       color: null,
+      autoRebirthPercent: null,
     });
     const html = renderToStaticMarkup(
       <App
@@ -1679,6 +1685,7 @@ describe("desktop application shell", () => {
       position: 1,
       pinnedAt: null,
       color: null,
+      autoRebirthPercent: null,
     };
     const snapshot: DesktopSnapshotDto = {
       ...base,
@@ -1718,7 +1725,8 @@ describe("desktop application shell", () => {
         },
       ],
       agents: [
-        running,
+        // Its own threshold, so the pill marks where it is reborn.
+        { ...running, autoRebirthPercent: 85 },
         {
           ...running,
           id: "22222222-2222-4222-8222-222222222222",
@@ -1726,6 +1734,17 @@ describe("desktop application shell", () => {
           provider: "claude",
           kind: "agent",
           tmuxSession: "daedalus_two",
+        },
+      ],
+      sessionTelemetry: [
+        {
+          sessionId: running.id,
+          context: {
+            usedTokens: 150_000,
+            totalTokens: 200_000,
+            usedPercent: 75,
+          },
+          observedAt: "now",
         },
       ],
     };
@@ -1745,6 +1764,15 @@ describe("desktop application shell", () => {
     expect(html).toContain('class="session-status-label">running</span>');
     expect(html).toContain("11111111 · started");
     expect(html).toContain("22222222 · started");
+    // Context used ends the status row, orange from 70%; only the session
+    // that reported it carries one.
+    expect(html).toMatch(
+      /class="session-context-pill" data-level="high" title="Context 150k of 200k tokens used · Rebirths at 85%">.*?75%<\/span>/,
+    );
+    expect(html).toContain('class="session-context-rebirth" style="left:85%"');
+    expect(html.match(/session-context-pill/g)).toHaveLength(1);
+    // 75% of five blocks lights four.
+    expect(html.match(/data-lit="true"/g)).toHaveLength(4);
     expect(html).toContain("Terminal for Terminal task 11111111");
     expect(html).toContain("mode-session");
     // The terminal takes the main column, with the workspace panel (its
@@ -1805,6 +1833,7 @@ describe("desktop application shell", () => {
           position: 1,
           pinnedAt: null,
           color: null,
+          autoRebirthPercent: null,
         },
       ],
     };
@@ -1885,6 +1914,7 @@ describe("desktop application shell", () => {
           position: 1,
           pinnedAt: null,
           color: null,
+          autoRebirthPercent: null,
         },
       ],
       settings: { ...base.settings, tmuxAvailable: true },
@@ -2015,6 +2045,7 @@ describe("desktop application shell", () => {
           position: 1,
           pinnedAt: null,
           color: null,
+          autoRebirthPercent: null,
         },
       ],
     };
@@ -2189,6 +2220,7 @@ const liveSession: AgentSessionDto = {
   position: 1,
   pinnedAt: null,
   color: null,
+  autoRebirthPercent: null,
 };
 
 const at = (iso: string) => Date.parse(iso);

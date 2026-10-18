@@ -12,8 +12,10 @@ import {
 import type { DaedalusConfig } from "../config";
 import {
   accountModelKey,
+  resolveAutoRebirth,
   SESSION_COLORS,
   type AgentSession,
+  type AutoRebirth,
   type SessionColor,
   type TeamMembership,
   type Workspace,
@@ -60,7 +62,7 @@ import { checkSignIn } from "./accounts";
 import { forgetSessionFolders, trustSessionFolder } from "./folder-trust";
 import { applyManualOrder } from "./ordering";
 import type { TaskService } from "./tasks";
-import type { WorkspaceService } from "./workspaces";
+import { autoRebirthPercent, type WorkspaceService } from "./workspaces";
 import type { WorkspaceContentService } from "./workspace-content";
 
 const UUID_FILE =
@@ -1063,6 +1065,7 @@ export class AgentService {
         input.continueFrom?.pinnedAt ??
         (input.pinned ? new Date().toISOString() : null),
       color: input.continueFrom?.color ?? input.color ?? null,
+      autoRebirthPercent: input.continueFrom?.autoRebirthPercent ?? null,
       account,
       teamId: team?.teamId ?? null,
       teamHandle: team?.handle ?? null,
@@ -1271,8 +1274,29 @@ export class AgentService {
   }
 
   /**
-   * Asks every running session whose context has passed its workspace's
-   * threshold to be reborn. Once per session: a request already made stands
+   * The context percent that triggers this session's rebirth: its own, else
+   * its workspace's, else the global default. Null when that comes to off.
+   */
+  autoRebirthThreshold(agent: AgentSession): number | null {
+    return resolveAutoRebirth(
+      agent.autoRebirthPercent,
+      this.repositories.findWorkspace(agent.workspaceId)?.autoRebirthPercent ??
+        null,
+      this.config.autoRebirthPercent,
+    );
+  }
+
+  /** Sets this session's own rebirth threshold; null takes its workspace's. */
+  async setAutoRebirth(id: string, value: AutoRebirth): Promise<AgentSession> {
+    const agent = await this.get(id);
+    const checked = autoRebirthPercent(value);
+    this.repositories.setAgentAutoRebirth(agent.id, checked);
+    return { ...agent, autoRebirthPercent: checked };
+  }
+
+  /**
+   * Asks every running session whose context has passed its threshold (see
+   * `autoRebirthThreshold`) to be reborn. Once per session: a request already made stands
    * until the successor archives it, so the agent is not nagged every tick
    * while it writes the note.
    */
@@ -1282,22 +1306,24 @@ export class AgentService {
       context?: { usedPercent?: number };
     }>,
   ): Promise<AgentSession[]> {
-    const thresholds = new Map(
+    const workspaces = new Map(
       this.repositories
         .listWorkspaces()
-        .filter((workspace) => workspace.autoRebirthPercent !== null)
-        .map((workspace) => [workspace.id, workspace.autoRebirthPercent!]),
+        .map((workspace) => [workspace.id, workspace.autoRebirthPercent]),
     );
-    if (thresholds.size === 0) return [];
     const usage = new Map(
       telemetry.map((item) => [item.sessionId, item.context?.usedPercent]),
     );
     const requested: AgentSession[] = [];
     for (const agent of this.repositories.listAgents()) {
-      const threshold = thresholds.get(agent.workspaceId);
+      const threshold = resolveAutoRebirth(
+        agent.autoRebirthPercent,
+        workspaces.get(agent.workspaceId) ?? null,
+        this.config.autoRebirthPercent,
+      );
       const percent = usage.get(agent.id);
       if (
-        threshold === undefined ||
+        threshold === null ||
         percent === undefined ||
         percent < threshold ||
         agent.kind !== "agent" ||

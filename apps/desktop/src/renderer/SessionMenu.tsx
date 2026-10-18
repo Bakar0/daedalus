@@ -1,9 +1,15 @@
 /**
- * The menu on a session card: rename, pin, color and abilities. Every session
- * has the first three; abilities are offered on Claude and Codex agents.
+ * The menu on a session card: rename, pin, color, rebirth and abilities.
+ * Every session has the first three; rebirth and abilities are offered on
+ * Claude and Codex agents.
  */
-import type { SessionColorDto } from "@daedalus/protocol";
+import {
+  DEFAULT_AUTO_REBIRTH_PERCENT,
+  type AutoRebirthDto,
+  type SessionColorDto,
+} from "@daedalus/protocol";
 import { Menu, MenuDots } from "./Menu";
+import { PercentInput } from "./PercentInput";
 
 export const SESSION_COLORS: readonly SessionColorDto[] = [
   "red",
@@ -55,10 +61,85 @@ export function ColorSwatches({
   );
 }
 
+/**
+ * The session's own rebirth threshold: Default (its workspace's, named in the
+ * heading), Off, or On at a percent of its own, typed in the field that On
+ * shows.
+ */
+function RebirthChoices({
+  value,
+  inherited,
+  onChange,
+}: {
+  value: AutoRebirthDto;
+  /** What Default comes to: the workspace's or the global threshold. */
+  inherited: number | null;
+  onChange: (value: AutoRebirthDto) => void;
+}) {
+  const mode = value === null ? "default" : value === "off" ? "off" : "on";
+  const choices = [
+    {
+      mode: "default",
+      label: "Default",
+      title:
+        inherited === null
+          ? "Use the workspace's setting, which is off"
+          : `Use the workspace's setting: rebirth at ${inherited}% context`,
+      pick: () => onChange(null),
+    },
+    {
+      mode: "off",
+      label: "Off",
+      title: "Never rebirth this session on its own",
+      pick: () => onChange("off"),
+    },
+    {
+      mode: "on",
+      label: "On",
+      title: "Rebirth this session at a context percent of its own",
+      pick: () => onChange(inherited ?? DEFAULT_AUTO_REBIRTH_PERCENT),
+    },
+  ];
+  return (
+    <span
+      aria-label="Automatic rebirth"
+      className="rebirth-choices"
+      role="group"
+    >
+      {choices.map((choice) => (
+        <button
+          aria-checked={mode === choice.mode}
+          className="rebirth-choice"
+          key={choice.mode}
+          onClick={(event) => {
+            // On keeps the menu open, for the percent field it shows.
+            if (choice.mode === "on") event.stopPropagation();
+            if (mode !== choice.mode) choice.pick();
+          }}
+          role="menuitemradio"
+          title={choice.title}
+          type="button"
+        >
+          {choice.label}
+        </button>
+      ))}
+      {typeof value === "number" && (
+        <PercentInput
+          label="Context percent that triggers this session's rebirth"
+          onCommit={onChange}
+          value={value}
+        />
+      )}
+    </span>
+  );
+}
+
 export function SessionMenu({
   name,
   pinned,
   color,
+  autoRebirth,
+  inheritedRebirth,
   routines,
   orchestration,
   offerAbilities,
@@ -66,12 +147,17 @@ export function SessionMenu({
   onRename,
   onPin,
   onColor,
+  onAutoRebirth,
   onRoutines,
   onOrchestration,
 }: {
   name: string;
   pinned: boolean;
   color: SessionColorDto | null;
+  /** The session's own rebirth threshold; null takes its workspace's. */
+  autoRebirth: AutoRebirthDto;
+  /** The threshold Default comes to, or null for off. */
+  inheritedRebirth: number | null;
   /** Whether the session holds the routines ability now. */
   routines: boolean;
   /** Whether the session leads a team. */
@@ -82,6 +168,7 @@ export function SessionMenu({
   onRename: () => void;
   onPin: (pinned: boolean) => void;
   onColor: (color: SessionColorDto | null) => void;
+  onAutoRebirth: (value: AutoRebirthDto) => void;
   onRoutines: (granted: boolean) => void;
   onOrchestration: (granted: boolean) => void;
 }) {
@@ -94,7 +181,7 @@ export function SessionMenu({
       placement="left"
       summary={<MenuDots />}
       summaryClassName="session-card-action"
-      title="Rename, pin, color and abilities"
+      title="Rename, pin, color, rebirth and abilities"
     >
       <button
         className="quiet menu-item"
@@ -119,6 +206,22 @@ export function SessionMenu({
       <ColorSwatches onChange={onColor} role="menuitemradio" value={color} />
       {offerAbilities && (
         <>
+          <hr className="menu-separator" />
+          <span className="menu-heading">
+            Rebirth
+            <span className="menu-heading-note">
+              {autoRebirth === null
+                ? inheritedRebirth === null
+                  ? "workspace: off"
+                  : `workspace: ${inheritedRebirth}%`
+                : "own setting"}
+            </span>
+          </span>
+          <RebirthChoices
+            inherited={inheritedRebirth}
+            onChange={onAutoRebirth}
+            value={autoRebirth}
+          />
           <hr className="menu-separator" />
           <span className="menu-heading">Abilities</span>
           <button

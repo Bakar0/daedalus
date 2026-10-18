@@ -8,7 +8,7 @@ Add `--json` anywhere on a non-interactive command for a compact result envelope
 daedal workspace create <name> [--slug <slug>] [--path <path>]
 daedal workspace list [--archived]
 daedal workspace get <workspace>
-daedal workspace update <workspace> [--name <name>] [--slug <slug>] [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--default-model <model>|none] [--default-claude-account <account>|default] [--default-codex-account <account>|default] [--auto-rebirth <percent>|off]
+daedal workspace update <workspace> [--name <name>] [--slug <slug>] [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--default-model <model>|none] [--default-claude-account <account>|default] [--default-codex-account <account>|default] [--auto-rebirth <percent>|off|default]
 daedal workspace archive <workspace>
 daedal workspace restore <workspace>
 daedal workspace remove <workspace> [--delete-files] --force
@@ -72,6 +72,7 @@ daedal agent remove <agent-id>
 daedal session rename <session> <name>
 daedal session pin|unpin <session>
 daedal session color <session> <red|orange|gold|green|teal|blue|purple|pink|none>
+daedal session rebirth-at <session> <percent>|off|default
 daedal session abilities <session>
 daedal session grant|revoke <session> <ability>
 daedal team say "<text>" [--team <lead>] [--user]
@@ -105,8 +106,11 @@ unless you pass others. The note from `--note-file` is written to
 it continues the session it runs in, and archives that session just after the
 command exits. `agent rebirth` asks a running agent to write the note and run
 `agent continue` itself; it is what the app's Rebirth button sends.
-With `workspace update --auto-rebirth <percent>`, the app sends the same
-request on its own once a session's context passes that share of its window.
+The app sends the same request on its own once a session's context passes
+its rebirth threshold: the session's own (`session rebirth-at`), else its
+workspace's (`workspace update --auto-rebirth`), else the global default in
+Settings > Sessions, which is off until set. `off` at a level turns it off
+whatever the level above says; `default` takes the level above.
 
 `agent models` does not require a workspace. With `--json`, pass an exact
 `data.models[].id` to `agent spawn --model`; omit `--model` to use the

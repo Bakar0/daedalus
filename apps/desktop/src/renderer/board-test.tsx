@@ -87,6 +87,7 @@ const session = (
   position: sequence++,
   pinnedAt: null,
   color: null,
+  autoRebirthPercent: null,
   ...overrides,
 });
 
@@ -351,6 +352,7 @@ const snapshot: DesktopSnapshotDto = {
     workspaceInstructionFilesEnabled: true,
     autoRestoreSessionsEnabled: true,
     trustSessionFoldersEnabled: true,
+    autoRebirthPercent: null,
     focusMode: false,
     accounts: [],
     providers: [

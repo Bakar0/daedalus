@@ -28,6 +28,7 @@ export const routineHelp = {
   daedal session rename <session> <name>
   daedal session pin|unpin <session>
   daedal session color <session> <${SESSION_COLORS.join("|")}|none>
+  daedal session rebirth-at <session> <percent>|off|default
   daedal session abilities <session>
   daedal session grant <session> <ability>
   daedal session revoke <session> <ability>
@@ -35,6 +36,9 @@ export const routineHelp = {
 <session> is a session id, or a session's name when only one live session
 has it. Pinned sessions sit at the top of their workspace's list. The color
 marks the session's card, its World figure and the tasks its routines file.
+'rebirth-at' sets the context percent (10 to 100) at which this session is
+asked for a rebirth, or turns it off for this session; 'default' takes its
+workspace's setting (see 'daedal workspace --help').
 
 Abilities: ${ABILITY_IDS.join(", ")}. 'grant' gives a running session an
 ability. Routines say nothing to the session: ask it for a routine. For
@@ -284,6 +288,22 @@ export async function sessionCommand(
     const session = await context.agents.setColor(
       (await resolveSession(context, reference!)).id,
       value === "none" ? null : value,
+    );
+    printResult({ session }, json, () => console.log(sessionLine(session)));
+    return 0;
+  }
+  if (action === "rebirth-at") {
+    const usage = "daedal session rebirth-at <session> <percent>|off|default";
+    expectPositionals(parsed.positionals, 2, usage);
+    const value = parsed.positionals[1]!;
+    if (value !== "off" && value !== "default" && !/^\d+$/.test(value))
+      throw new DaedalusError(
+        "VALIDATION",
+        "The rebirth threshold must be a percent from 10 to 100, 'off' or 'default'",
+      );
+    const session = await context.agents.setAutoRebirth(
+      (await resolveSession(context, reference!)).id,
+      value === "default" ? null : value === "off" ? "off" : Number(value),
     );
     printResult({ session }, json, () => console.log(sessionLine(session)));
     return 0;

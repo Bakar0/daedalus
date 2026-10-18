@@ -21,6 +21,7 @@ const settings: DesktopSettingsDto = {
   workspaceInstructionFilesEnabled: true,
   autoRestoreSessionsEnabled: true,
   trustSessionFoldersEnabled: true,
+  autoRebirthPercent: null,
   focusMode: false,
   accounts: [
     {

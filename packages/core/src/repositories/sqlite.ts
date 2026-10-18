@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import type {
+  AutoRebirth,
   AgentActivity,
   AgentActivitySource,
   AgentSession,
@@ -39,6 +40,7 @@ interface WorkspaceRow {
   position: number;
   start_sets_in_progress: number;
   auto_handoff_percent: number | null;
+  auto_rebirth_percent: number | null;
   default_provider: "claude" | "codex" | null;
   default_model: string | null;
   account_models: string;
@@ -88,6 +90,7 @@ interface AgentRow {
   position: number;
   pinned_at: string | null;
   color: SessionColor | null;
+  auto_rebirth_percent: number | null;
   account: string | null;
   team_id: string | null;
   team_handle: string | null;
@@ -157,6 +160,15 @@ function accountModels(text: string): Record<string, string> {
   }
 }
 
+// `auto_rebirth_percent` (025) holds NULL for inherit and 0 for off.
+const autoRebirthColumn = (value: AutoRebirth): number | null =>
+  value === "off" ? 0 : value;
+const autoRebirthFromColumn = (value: number | null): AutoRebirth =>
+  value === 0 ? "off" : value;
+// What `auto_handoff_percent` (016) can say, for builds before 025.
+const legacyAutoRebirth = (value: AutoRebirth): number | null =>
+  typeof value === "number" ? value : null;
+
 const workspaceFromRow = (row: WorkspaceRow): Workspace => {
   const workspace = {
     id: row.id,
@@ -168,7 +180,7 @@ const workspaceFromRow = (row: WorkspaceRow): Workspace => {
     archivedAt: row.archived_at,
     position: row.position,
     startSetsInProgress: row.start_sets_in_progress !== 0,
-    autoRebirthPercent: row.auto_handoff_percent,
+    autoRebirthPercent: autoRebirthFromColumn(row.auto_rebirth_percent),
     defaultProvider: row.default_provider,
     accountModels: accountModels(row.account_models),
     defaultClaudeAccount: row.default_claude_account,
@@ -215,6 +227,7 @@ const agentFromRow = (row: AgentRow): AgentSession => ({
   position: row.position,
   pinnedAt: row.pinned_at,
   color: row.color,
+  autoRebirthPercent: autoRebirthFromColumn(row.auto_rebirth_percent),
   account: row.account,
   teamId: row.team_id,
   teamHandle: row.team_handle,
@@ -414,8 +427,8 @@ export class SqliteRepositories {
          (id, slug, name, path, created_at, updated_at, archived_at,
           task_id_prefix, position, start_sets_in_progress, default_provider,
           default_model, auto_handoff_percent, default_claude_account,
-          default_codex_account, account_models)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          default_codex_account, account_models, auto_rebirth_percent)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         workspace.id,
@@ -430,10 +443,11 @@ export class SqliteRepositories {
         workspace.startSetsInProgress ? 1 : 0,
         workspace.defaultProvider,
         workspace.defaultModel,
-        workspace.autoRebirthPercent,
+        legacyAutoRebirth(workspace.autoRebirthPercent),
         workspace.defaultClaudeAccount,
         workspace.defaultCodexAccount,
         JSON.stringify(workspace.accountModels),
+        autoRebirthColumn(workspace.autoRebirthPercent),
       );
   }
 
@@ -489,7 +503,7 @@ export class SqliteRepositories {
          archived_at = ?, start_sets_in_progress = ?, default_provider = ?,
          default_model = ?, auto_handoff_percent = ?,
          default_claude_account = ?, default_codex_account = ?,
-         account_models = ? WHERE id = ?`,
+         account_models = ?, auto_rebirth_percent = ? WHERE id = ?`,
       )
       .run(
         workspace.slug,
@@ -500,10 +514,11 @@ export class SqliteRepositories {
         workspace.startSetsInProgress ? 1 : 0,
         workspace.defaultProvider,
         workspace.defaultModel,
-        workspace.autoRebirthPercent,
+        legacyAutoRebirth(workspace.autoRebirthPercent),
         workspace.defaultClaudeAccount,
         workspace.defaultCodexAccount,
         JSON.stringify(workspace.accountModels),
+        autoRebirthColumn(workspace.autoRebirthPercent),
         workspace.id,
       );
   }
@@ -847,8 +862,8 @@ export class SqliteRepositories {
           working_directory, status, exit_code, started_at, ended_at,
           provider_session_id, archived_at, resume_count, lost_reason,
           resume_on_start, handoff_requested_at, position, pinned_at, color,
-          account, team_id, team_handle, spawned_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          account, team_id, team_handle, spawned_by, auto_rebirth_percent)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         agent.id,
@@ -878,6 +893,7 @@ export class SqliteRepositories {
         agent.teamId,
         agent.teamHandle,
         agent.spawnedBy,
+        autoRebirthColumn(agent.autoRebirthPercent),
       );
   }
 
@@ -902,6 +918,12 @@ export class SqliteRepositories {
     this.database
       .query("UPDATE agent_sessions SET color = ? WHERE id = ?")
       .run(color, id);
+  }
+
+  setAgentAutoRebirth(id: string, value: AutoRebirth): void {
+    this.database
+      .query("UPDATE agent_sessions SET auto_rebirth_percent = ? WHERE id = ?")
+      .run(autoRebirthColumn(value), id);
   }
 
   /**

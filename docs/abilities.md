@@ -201,8 +201,9 @@ and an urgent flag. Only the session calls `daedal routine report`.
 
 ### Rebirth, failures and missed runs
 
-- A session holding routines is reborn once its context passes the
-  workspace's auto-rebirth percent, or 60% when the workspace sets none. The
+- A session holding routines is reborn once its context passes its
+  auto-rebirth threshold (its own, its workspace's or the global default),
+  or 60% when that comes to off. The
   generic rebirth sweep leaves it alone. Delivery stops, runs in flight get up
   to 10 minutes to finish, and the rebirth request goes in under the delivery
   rule. A rebirth not completed in 15 minutes is finished by Daedalus without

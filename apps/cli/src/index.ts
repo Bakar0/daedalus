@@ -386,7 +386,7 @@ const commandHelp: Record<string, string> = {
   daedal workspace get <workspace>
   daedal workspace update <workspace> [--name <name>] [--slug <slug>]
       [--start-sets-in-progress on|off] [--default-provider claude|codex|none]
-      [--default-model <model>|none] [--auto-rebirth <percent>|off]
+      [--default-model <model>|none] [--auto-rebirth <percent>|off|default]
       [--default-claude-account <account>|default]
       [--default-codex-account <account>|default]
   daedal workspace archive <workspace>
@@ -408,9 +408,12 @@ remembered model the account no longer offers makes those spawns fail,
 naming the fix, rather than start a session that cannot answer.
 --default-claude-account and --default-codex-account name the account each
 provider's sessions start on when nothing chooses one; see 'daedal account'.
---auto-rebirth (off by default) asks a session to hand its work to a fresh
-agent once its context passes that percent of the window; see 'agent
-continue'. The desktop app runs the check about once a second.`,
+--auto-rebirth asks a session to hand its work to a fresh agent once its
+context passes that percent of the window; see 'agent continue'. 'default'
+(the default) takes the app's global setting, which is off until set in
+Settings > Sessions; 'off' turns it off for this workspace whatever that
+says. A session can override it with 'daedal session rebirth-at'. The
+desktop app runs the check about once a second.`,
   task: `Task commands:
   daedal task create [--workspace <workspace>] --title <title> [--description <text> | --description-file <path|->] [--priority <priority>]
   daedal task list [--workspace <workspace>] [--status <status>]
@@ -807,17 +810,18 @@ async function workspaceCommand(
     expectPositionals(
       parsed.positionals,
       1,
-      "daedal workspace update <workspace> [--name <name>] [--slug <slug>] [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--default-model <model>|none] [--auto-rebirth <percent>|off]",
+      "daedal workspace update <workspace> [--name <name>] [--slug <slug>] [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--default-model <model>|none] [--auto-rebirth <percent>|off|default]",
     );
     const autoRebirth = parsed.values["auto-rebirth"];
     if (
       autoRebirth !== undefined &&
       autoRebirth !== "off" &&
+      autoRebirth !== "default" &&
       !/^\d+$/.test(autoRebirth)
     )
       throw new DaedalusError(
         "VALIDATION",
-        "--auto-rebirth must be a percent from 10 to 100, or 'off'",
+        "--auto-rebirth must be a percent from 10 to 100, 'off' or 'default'",
       );
     const startSetting = parsed.values["start-sets-in-progress"];
     if (
@@ -838,9 +842,11 @@ async function workspaceCommand(
       autoRebirthPercent:
         autoRebirth === undefined
           ? undefined
-          : autoRebirth === "off"
+          : autoRebirth === "default"
             ? null
-            : Number(autoRebirth),
+            : autoRebirth === "off"
+              ? "off"
+              : Number(autoRebirth),
       defaultProvider: parsed.values["default-provider"],
       defaultModel:
         defaultModel === undefined

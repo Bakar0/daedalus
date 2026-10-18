@@ -15,6 +15,7 @@ import {
   accountModelKey,
   derivedDefaultModel,
   workspaceDefaultAccount,
+  type AutoRebirth,
   type Workspace,
 } from "../domain";
 import { DaedalusError } from "../errors";
@@ -79,9 +80,14 @@ function boardProvider(value: string | null): "claude" | "codex" | null {
  * Below 10 a session would be reborn before it had read the brief; the check
  * constraint on the column says the same thing.
  */
-export function autoRebirthPercent(value: number | null): number | null {
-  if (value === null) return null;
-  if (!Number.isInteger(value) || value < 10 || value > 100)
+export function autoRebirthPercent<T extends AutoRebirth>(value: T): T {
+  if (value === null || value === "off") return value;
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < 10 ||
+    value > 100
+  )
     throw new DaedalusError(
       "VALIDATION",
       "Automatic rebirth percent must be a whole number from 10 to 100, or off",
@@ -275,8 +281,8 @@ export class WorkspaceService {
       name?: string;
       slug?: string;
       startSetsInProgress?: boolean;
-      /** 10 to 100; `null` turns automatic rebirth off. */
-      autoRebirthPercent?: number | null;
+      /** 10 to 100, `"off"`, or `null` for the global default. */
+      autoRebirthPercent?: AutoRebirth;
       /** `null` clears it back to "no preference". */
       defaultProvider?: string | null;
       /**

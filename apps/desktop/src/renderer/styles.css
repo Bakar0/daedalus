@@ -981,6 +981,60 @@ button:not(
 .workspace-sessions .session-card-status[data-error] .session-status-label {
   color: var(--danger);
 }
+/* Context used, kept to the end of the status row while the label shrinks.
+   The text stays quiet; only the blocks carry the warning colour until red. */
+.session-context-pill {
+  --context-fill: var(--muted);
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  gap: 4px;
+  margin-left: auto;
+  padding-right: 4px;
+}
+.session-context-pill[data-level="warm"] {
+  --context-fill: #d8c16a;
+}
+.session-context-pill[data-level="high"] {
+  --context-fill: #e8955a;
+}
+.session-context-pill[data-level="full"] {
+  --context-fill: var(--danger);
+  color: var(--danger);
+}
+.app[data-theme="light"] .session-context-pill[data-level="warm"] {
+  --context-fill: #a88a10;
+}
+.app[data-theme="light"] .session-context-pill[data-level="high"] {
+  --context-fill: #c4621c;
+}
+.session-context-blocks {
+  display: flex;
+  gap: 1.5px;
+  position: relative;
+}
+/* Where the session is reborn on its own: a hairline taller than the blocks. */
+.session-context-rebirth {
+  background: var(--secondary);
+  border-radius: 1px;
+  bottom: -2px;
+  opacity: 0.75;
+  position: absolute;
+  top: -2px;
+  transform: translateX(-50%);
+  width: 1px;
+}
+.session-context-blocks > span {
+  background: var(--line-strong);
+  border-radius: 1px;
+  height: 5px;
+  width: 4px;
+}
+.session-context-blocks > span[data-lit] {
+  background: var(--context-fill);
+}
 .workspace-card-archive,
 .workspace-terminal-action {
   opacity: 0.48;
@@ -3922,8 +3976,10 @@ dd {
   padding: 10px 5px 9px 9px !important;
   text-align: left;
 }
+/* Fills the card, so the status row's context pill reaches its right edge. */
 .session-card-main > span:last-child {
   display: grid;
+  flex: 1;
   gap: 3px;
   min-width: 0;
 }
@@ -4608,6 +4664,16 @@ dd {
   font-size: 11px;
   line-height: 1.45;
 }
+/* A setting row's value, under its text: past the 28px switch and its gap. */
+.settings-percent-row {
+  align-items: center;
+  color: var(--secondary);
+  display: flex;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  gap: 6px;
+  padding-left: 38px;
+}
 .settings-choice {
   align-items: center;
   display: flex;
@@ -5097,8 +5163,15 @@ dd {
   font-size: 11px;
   line-height: 1.35;
 }
-.board-settings-percent {
-  width: 52px;
+.board-settings-rebirth {
+  align-items: center;
+  color: var(--secondary);
+  display: flex;
+  gap: 5px;
+}
+.board-settings-rebirth select {
+  flex: 1;
+  min-width: 0;
 }
 
 /* Compact width hides the detail line, which is the one thing on a session
@@ -6198,6 +6271,58 @@ dd {
   text-transform: uppercase;
 }
 
+.menu-heading-note {
+  font-weight: 500;
+  letter-spacing: 0;
+  margin-left: 6px;
+  opacity: 0.8;
+  text-transform: none;
+}
+/* A whole percent, small enough to sit in a line of text or a menu row. */
+.percent-input {
+  align-items: center;
+  color: var(--secondary);
+  display: inline-flex;
+  font-size: 11px;
+  gap: 3px;
+}
+.percent-input input {
+  border-radius: 5px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  height: 20px;
+  padding: 0 5px;
+  text-align: right;
+  width: 34px;
+}
+.rebirth-choices .percent-input {
+  margin-left: 2px;
+}
+/* A session's own rebirth threshold, as a row of small chips. */
+.rebirth-choices {
+  display: flex;
+  gap: 4px;
+  padding: 4px 9px 6px;
+}
+.rebirth-choice {
+  background: transparent !important;
+  border: 1px solid var(--line-strong) !important;
+  border-radius: 999px !important;
+  color: var(--secondary) !important;
+  font-size: 10px !important;
+  font-variant-numeric: tabular-nums;
+  min-height: 0 !important;
+  padding: 2px 7px !important;
+}
+.rebirth-choice:hover,
+.rebirth-choice:focus-visible {
+  border-color: var(--muted) !important;
+}
+.rebirth-choice[aria-checked="true"] {
+  background: var(--accent-wash) !important;
+  border-color: var(--accent) !important;
+  color: var(--text) !important;
+}
 .color-swatches {
   display: flex;
   flex-wrap: nowrap;
