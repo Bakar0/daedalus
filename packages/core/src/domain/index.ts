@@ -27,10 +27,10 @@ export interface Workspace {
    */
   startSetsInProgress: boolean;
   /**
-   * Context share, in percent, at which a session is asked for a rebirth to a
-   * fresh one. Null is off.
+   * Context share, in percent, at which its sessions are asked for a rebirth
+   * to a fresh one. Null takes the global default. See `AutoRebirth`.
    */
-  autoRebirthPercent: number | null;
+  autoRebirthPercent: AutoRebirth;
   /** What Start and Start next launch when the user does not choose. */
   defaultProvider: "claude" | "codex" | null;
   /**
@@ -150,6 +150,11 @@ export interface AgentSession {
   pinnedAt: string | null;
   /** The mark on its card, its World figure and its routines' tasks. */
   color: SessionColor | null;
+  /**
+   * This session's own rebirth threshold. Null takes its workspace's.
+   * Carried to its successor, like its color.
+   */
+  autoRebirthPercent: AutoRebirth;
   /**
    * The account profile it runs on, or null for the provider's default.
    * Fixed at spawn: every relaunch points the provider at the same folder,
@@ -526,3 +531,21 @@ export interface PresenceState {
 }
 
 export * from "./abilities";
+
+/**
+ * One level of the automatic rebirth setting: a context percent from 10 to
+ * 100, `"off"`, or null to take the level above. A session takes its
+ * workspace's, a workspace takes the global default, and the global default
+ * is a percent or off.
+ */
+export type AutoRebirth = number | "off" | null;
+
+/** The context percent that triggers a session's rebirth, or null for none. */
+export function resolveAutoRebirth(
+  session: AutoRebirth,
+  workspace: AutoRebirth,
+  global: number | null,
+): number | null {
+  const level = session ?? workspace ?? global;
+  return level === "off" ? null : level;
+}

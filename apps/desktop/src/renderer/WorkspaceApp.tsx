@@ -47,6 +47,11 @@ import type {
   WorkspaceDto,
   ToastDto,
 } from "@daedalus/protocol";
+import {
+  resolveAutoRebirth,
+  ROUTINES_REBIRTH_PERCENT,
+  type AutoRebirthDto,
+} from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import { UpdateBanner } from "./UpdateBanner";
@@ -408,6 +413,56 @@ const elapsedLabel = (
 };
 
 /** A loop back to the start with a plus: the same work, a fresh agent. */
+// How full the agent's context window is, at the end of the card's status
+// row: five blocks of 20%, grey, then yellow from 50%, orange from 70% and
+// red from 90%, when a rebirth is worth it. A tick across the blocks marks
+// where this session is reborn on its own.
+const CONTEXT_BLOCKS = 5;
+
+function ContextPill({
+  percent,
+  rebirthAt,
+  totalTokens,
+  usedTokens,
+}: {
+  percent: number;
+  /** The context percent of its automatic rebirth, or null for none. */
+  rebirthAt: number | null;
+  totalTokens?: number;
+  usedTokens: number;
+}) {
+  const used = Math.min(100, Math.max(0, percent));
+  const level =
+    used >= 90 ? "full" : used >= 70 ? "high" : used >= 50 ? "warm" : undefined;
+  // A block lights once its half is used, so 1% shows nothing and 95% all.
+  const lit = Math.round((used / 100) * CONTEXT_BLOCKS);
+  return (
+    <span
+      className="session-context-pill"
+      data-level={level}
+      title={[
+        `Context ${compactTokenLabel(usedTokens)}${totalTokens ? ` of ${compactTokenLabel(totalTokens)}` : ""} tokens used`,
+        rebirthAt === null
+          ? "No automatic rebirth"
+          : `Rebirths at ${rebirthAt}%`,
+      ].join(" · ")}
+    >
+      <span className="session-context-blocks" aria-hidden="true">
+        {Array.from({ length: CONTEXT_BLOCKS }, (_, index) => (
+          <span data-lit={index < lit ? "true" : undefined} key={index} />
+        ))}
+        {rebirthAt !== null && (
+          <i
+            className="session-context-rebirth"
+            style={{ left: `${rebirthAt}%` }}
+          />
+        )}
+      </span>
+      {Math.round(used)}%
+    </span>
+  );
+}
+
 function RebirthIcon() {
   return (
     <svg
@@ -3832,7 +3887,12 @@ export function WorkspaceApp({
 
   async function updateSession(
     session: AgentSessionDto,
-    change: { name?: string; pinned?: boolean; color?: SessionColorDto | null },
+    change: {
+      name?: string;
+      pinned?: boolean;
+      color?: SessionColorDto | null;
+      autoRebirthPercent?: AutoRebirthDto;
+    },
   ) {
     await perform(
       client.request.sessionUpdate({ sessionId: session.id, ...change }),
@@ -4636,6 +4696,24 @@ export function WorkspaceApp({
     const holdsRoutines = routinesBySession.has(session.id);
     const waitingRuns = routinesBySession.get(session.id)?.waiting.length ?? 0;
     const team = teamOf(session);
+    const context = telemetryById.get(session.id)?.context;
+    const workspaceRebirth =
+      snapshot?.workspaces.find((item) => item.id === session.workspaceId)
+        ?.autoRebirthPercent ?? null;
+    const inheritedRebirth = resolveAutoRebirth(
+      null,
+      workspaceRebirth,
+      snapshot?.settings.autoRebirthPercent ?? null,
+    );
+    const ownRebirth = resolveAutoRebirth(
+      session.autoRebirthPercent,
+      workspaceRebirth,
+      snapshot?.settings.autoRebirthPercent ?? null,
+    );
+    // A session with routines is reborn at 60% when nothing sets a threshold,
+    // so its routines keep running (see the routine delivery rule).
+    const rebirthAt =
+      ownRebirth ?? (holdsRoutines ? ROUTINES_REBIRTH_PERCENT : null);
     // An archived lead pauses its team; its members stand on their own.
     const leadArchived =
       team?.role === "member" &&
@@ -4754,6 +4832,14 @@ export function WorkspaceApp({
                   ? `failed to start · ${startupError}`
                   : sessionStatusLine(statusView, now)}
               </span>
+              {context?.usedPercent !== undefined && !startupError && (
+                <ContextPill
+                  percent={context.usedPercent}
+                  rebirthAt={rebirthAt}
+                  totalTokens={context.totalTokens}
+                  usedTokens={context.usedTokens}
+                />
+              )}
             </em>
           </span>
         </button>
@@ -4846,11 +4932,16 @@ export function WorkspaceApp({
           </ConfirmButton>
           {/* Last, so rebirth and archive open to its left on hover. */}
           <SessionMenu
+            autoRebirth={session.autoRebirthPercent}
             color={session.color}
+            inheritedRebirth={inheritedRebirth}
             name={sessionName(session)}
             offerAbilities={
               session.kind === "agent" &&
               (session.provider === "claude" || session.provider === "codex")
+            }
+            onAutoRebirth={(autoRebirthPercent) =>
+              void updateSession(session, { autoRebirthPercent })
             }
             onColor={(color) => void updateSession(session, { color })}
             onPin={(pinned) => void updateSession(session, { pinned })}
@@ -5309,6 +5400,7 @@ export function WorkspaceApp({
   const boardView = workspace ? (
     <BoardView
       accounts={snapshot?.settings.accounts}
+      globalAutoRebirth={snapshot?.settings.autoRebirthPercent}
       activity={activityById}
       attention={attentionById}
       availableProviders={availableBoardProviders}

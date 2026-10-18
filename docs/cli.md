@@ -38,7 +38,7 @@ daedal workspace create <name> [--slug <slug>] [--path <path>]
 daedal workspace list [--json]
 daedal workspace get <workspace> [--json]
 daedal workspace update <workspace> [--name <name>] [--slug <slug>]
-    [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--auto-rebirth <percent>|off]
+    [--start-sets-in-progress on|off] [--default-provider claude|codex|none] [--auto-rebirth <percent>|off|default]
     [--default-model <model>|none]
     [--default-claude-account <account>|default] [--default-codex-account <account>|default]
 daedal workspace reorder <workspace> [<workspace>...]
@@ -56,7 +56,7 @@ The three board settings are per workspace. `--start-sets-in-progress` (on by de
 
 `--default-claude-account` and `--default-codex-account` name the account each provider's sessions start on when nothing chooses one (see Account below); `default` is the provider's own account. Removing an account resets every workspace default that named it.
 
-`--auto-rebirth <percent>` (off by default) asks a running Claude or Codex session to hand its work to a fresh agent once its context reaches that share of the window; `off` turns it back off, and the value must be a whole number from 10 to 100. The check runs on the desktop app's one-second tick against the same context telemetry the usage footer shows, so it does nothing while the app is closed. Each session is asked once; the request is recorded as `rebirthRequestedAt` on the session and stands until the successor archives it. What the agent is asked to do is exactly what `agent rebirth` sends.
+`--auto-rebirth <percent>` asks a running Claude or Codex session to hand its work to a fresh agent once its context reaches that share of the window; the value must be a whole number from 10 to 100. `default`, which every workspace starts with, takes the global default in Settings > Sessions (off until set), and `off` turns it off for the workspace whatever the global default says. A session overrides its workspace with `daedal session rebirth-at <session> <percent>|off|default`, and its successor keeps that override. The check runs on the desktop app's one-second tick against the same context telemetry the usage footer shows, so it does nothing while the app is closed. Each session is asked once; the request is recorded as `rebirthRequestedAt` on the session and stands until the successor archives it. What the agent is asked to do is exactly what `agent rebirth` sends.
 
 Removal requires `--force`. Without `--delete-files`, it unregisters the workspace and preserves every file. With `--delete-files`, it only removes a canonical, non-root, non-symlink directory carrying the exact registered workspace ID marker. Live agents block removal.
 
@@ -192,6 +192,7 @@ Without `--workspace`, these commands use the workspace of the session they run 
 daedal session rename <session> <name>
 daedal session pin|unpin <session>
 daedal session color <session> <red|orange|gold|green|teal|blue|purple|pink|none>
+daedal session rebirth-at <session> <percent>|off|default
 daedal session abilities <session>
 daedal session grant|revoke <session> <ability>
 ```

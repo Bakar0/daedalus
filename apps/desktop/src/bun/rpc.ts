@@ -3,11 +3,13 @@ import packageJson from "../../../../package.json";
 import { readPasteboardFiles, writePasteboardFiles } from "@daedalus/platform";
 import {
   accountDirectory,
+  autoRebirthPercent,
   channelName,
   DaedalusError,
   INSTALL_COMMANDS,
   normalizeError,
   saveAutoRestoreSessionsEnabled,
+  saveAutoRebirthPercent,
   saveTrustSessionFoldersEnabled,
   type AccountProfile,
   type AgentActivityState,
@@ -253,6 +255,7 @@ export async function desktopSnapshot(
         context.config.workspaceInstructionFilesEnabled,
       autoRestoreSessionsEnabled: context.config.autoRestoreSessionsEnabled,
       trustSessionFoldersEnabled: context.config.trustSessionFoldersEnabled,
+      autoRebirthPercent: context.config.autoRebirthPercent,
       focusMode: context.config.focusMode,
       ...capabilities,
       accounts: context.accounts.list().map((item) => ({ ...item })),
@@ -540,13 +543,15 @@ export function createDesktopRequestHandlers(
 
   return {
     snapshot: () => result(() => desktopSnapshot(context)),
-    sessionUpdate: ({ sessionId, name, pinned, color }) =>
+    sessionUpdate: ({ sessionId, name, pinned, color, autoRebirthPercent }) =>
       mutate(async () => {
         if (name !== undefined) await context.agents.rename(sessionId, name);
         if (pinned !== undefined)
           await context.agents.setPinned(sessionId, pinned);
         if (color !== undefined)
           await context.agents.setColor(sessionId, color);
+        if (autoRebirthPercent !== undefined)
+          await context.agents.setAutoRebirth(sessionId, autoRebirthPercent);
         return agentDto(await context.agents.get(sessionId));
       }),
     sessionAbility: ({ sessionId, ability, granted }) =>
@@ -837,6 +842,12 @@ export function createDesktopRequestHandlers(
       mutate(async () => {
         await saveTrustSessionFoldersEnabled(context.config, enabled);
         return { enabled };
+      }),
+    autoRebirthSet: ({ percent }) =>
+      mutate(async () => {
+        if (percent !== null) autoRebirthPercent(percent);
+        await saveAutoRebirthPercent(context.config, percent);
+        return { percent };
       }),
     focusModeSet: ({ enabled }) =>
       mutate(async () => ({

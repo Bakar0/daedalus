@@ -81,6 +81,7 @@ const session = (
   position: 0,
   pinnedAt: null,
   color: null,
+  autoRebirthPercent: null,
   ...overrides,
 });
 

@@ -95,6 +95,7 @@ function addSession(
     teamId: null,
     teamHandle: null,
     spawnedBy: null,
+    autoRebirthPercent: null,
   };
   context.repositories.createAgent(session);
   tmux.sessions.add(session.tmuxSession);

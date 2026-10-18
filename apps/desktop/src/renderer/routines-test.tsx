@@ -58,6 +58,7 @@ const agent = (
   position,
   pinnedAt: null,
   color: null,
+  autoRebirthPercent: null,
   ...extra,
 });
 
@@ -216,6 +217,7 @@ let current: DesktopSnapshotDto = {
     workspaceInstructionFilesEnabled: true,
     autoRestoreSessionsEnabled: true,
     trustSessionFoldersEnabled: true,
+    autoRebirthPercent: null,
     focusMode: false,
     accounts: [],
     providers: [

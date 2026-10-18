@@ -12,7 +12,7 @@ export const PHONE_CSS = join(root, "apps/phone/src/mac-board.css");
 
 /** Board classes, and what a card uses from elsewhere: buttons, dialogs. */
 const WANTED =
-  /\.(board-(?!detail-column|column)|count-badge|quiet\b|create-button|session-status-unconfirmed|report-|app-dialog|modal|confirmation-content|detail-title|eyebrow)/;
+  /\.(board-(?!detail-column|column)|count-badge|percent-input|quiet\b|create-button|session-status-unconfirmed|report-|app-dialog|modal|confirmation-content|detail-title|eyebrow)/;
 
 interface Block {
   head: string;
