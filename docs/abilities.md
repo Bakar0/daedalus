@@ -273,7 +273,9 @@ rebirth successor takes both, and the predecessor leaves the team.
   @server needs the user: …" or "@lead @server stopped running.". A lead
   needing the user posts nothing, and neither does a rebirth or a member's
   permission prompt: only the user can answer one, on the member's card, and
-  the note would wake the lead at its full context for nothing.
+  the note would wake the lead at its full context for nothing. A member the
+  lead itself stops or archives posts nothing either: the note is skipped
+  when the posting process runs as the lead (`DAEDALUS_SESSION_ID`).
 - **Pausing and ending a team.** Archiving the lead, by hand or by quitting
   the app with "Quit and stop sessions", pauses the team: members keep their
   handle and color, messages to the lead wait for it, no member can be added,

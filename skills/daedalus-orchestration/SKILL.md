@@ -116,8 +116,22 @@ to the user: ask here, or run `daedal attention "<question>"`.
 ## When members report
 
 When a member says it is done or blocked, check the result against the plan
-and the contracts, update TEAM.md, and unblock or reassign. When the whole
-goal is met, tell the user what each member did and what is left.
+and the contracts, update TEAM.md, and unblock or reassign.
+
+When a member's piece is done and checked, and no more work is coming its
+way, archive it:
+
+```
+daedal agent archive <member-session-id>
+```
+
+A finished member left running still holds its whole context and is woken
+by every `@all`. Archiving keeps its conversation and worktree, so it can be
+restored, and a message tagging its handle waits until then. Mark it
+archived in TEAM.md. Keep a member running while it waits on a review, a
+merge or another member's work, or while the user is talking to it.
+
+When the whole goal is met, tell the user what each member did and what is left.
 
 Do not run team commands after Daedalus says the ability was removed: the
 team has ended and the members keep running on their own.

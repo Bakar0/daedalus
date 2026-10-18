@@ -395,7 +395,8 @@ export class TeamService {
 
   /**
    * Tells a member's lead, in the chat, that the member needs the user or
-   * stopped. Only the lead is tagged. Nothing for a lead or a non-member.
+   * stopped. Only the lead is tagged. Nothing for a lead or a non-member,
+   * nor when the lead's own process made the change.
    * Never throws.
    */
   async noteMemberStatus(
@@ -405,6 +406,10 @@ export class TeamService {
     try {
       const membership = this.membership(sessionId);
       if (!membership || membership.reader.role !== "member") return undefined;
+      // The lead archiving or stopping a member already knows: a note would
+      // only wake it again, at its full context.
+      if (process.env.DAEDALUS_SESSION_ID === membership.team.lead.id)
+        return undefined;
       return await this.say({
         team: membership.team.id,
         author: DAEDALUS_HANDLE,

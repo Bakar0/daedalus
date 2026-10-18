@@ -634,6 +634,27 @@ describe("teams", () => {
     });
   });
 
+  test("the lead is not told about a member it archived itself", async () => {
+    await withTeams(async ({ context, transport }) => {
+      const { session: leader } = await lead(context);
+      const done = await context.teams.spawnMember({
+        team: leader.id,
+        addedBy: "lead",
+        name: "done",
+        instructions: "Finish.",
+      });
+      const previous = process.env.DAEDALUS_SESSION_ID;
+      process.env.DAEDALUS_SESSION_ID = leader.id;
+      try {
+        await context.agents.archive(done.session.id, true);
+      } finally {
+        if (previous === undefined) delete process.env.DAEDALUS_SESSION_ID;
+        else process.env.DAEDALUS_SESSION_ID = previous;
+      }
+      expect(transport.to(leader)).toHaveLength(0);
+    });
+  });
+
   test("handles and tags", () => {
     expect(teamHandleBase("Server worker #2!")).toBe("server-worker-2");
     expect(teamHandleBase("   ")).toBe("member");
