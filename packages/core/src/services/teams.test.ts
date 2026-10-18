@@ -610,6 +610,14 @@ describe("teams", () => {
       expect(asked!.text).toBe(
         '[team "Checkout API"] daedalus: @lead @server needs the user: Which database should I use?',
       );
+      // A permission prompt goes to the user only; the lead is not woken.
+      await context.activity.record({
+        sessionId: server.session.id,
+        activity: "needs_permission",
+        detail: "Bash(git push)",
+        source: "hook",
+      });
+      expect(transport.to(leader)).toHaveLength(1);
       // Archiving a running member stops it first; the lead hears once.
       await context.agents.archive(server.session.id, true);
       expect(transport.to(leader).map((item) => item.text)).toEqual([

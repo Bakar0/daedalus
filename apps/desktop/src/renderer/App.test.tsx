@@ -1736,6 +1736,18 @@ describe("desktop application shell", () => {
           tmuxSession: "daedalus_two",
         },
       ],
+      // It leads a team whose TEAM.md, like the workspace journal, is past
+      // its compact size.
+      teams: [{ id: "ab1", leadId: running.id, name: "T", goal: null }],
+      largeFiles: [
+        { kind: "journal", workspaceId: "w1", sessionId: null, bytes: 164_418 },
+        {
+          kind: "team",
+          workspaceId: "w1",
+          sessionId: running.id,
+          bytes: 84_775,
+        },
+      ],
       sessionTelemetry: [
         {
           sessionId: running.id,
@@ -1771,6 +1783,13 @@ describe("desktop application shell", () => {
     );
     expect(html).toContain('class="session-context-rebirth" style="left:85%"');
     expect(html.match(/session-context-pill/g)).toHaveLength(1);
+    // The journal's chip on the workspace card, the team file's on the lead.
+    expect(html).toMatch(
+      /class="large-file-chip" data-kind="journal" title="JOURNAL.md is 164 KB[^"]*\/daedalus-compact-workspace journal[^"]*">Journal 164 KB · compact</,
+    );
+    expect(html).toMatch(
+      /class="large-file-chip" data-kind="team" title="TEAM.md is 85 KB[^"]*\/daedalus-compact-workspace team[^"]*">TEAM 85 KB</,
+    );
     // 75% of five blocks lights four.
     expect(html.match(/data-lit="true"/g)).toHaveLength(4);
     expect(html).toContain("Terminal for Terminal task 11111111");

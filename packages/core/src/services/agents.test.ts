@@ -11,6 +11,7 @@ import {
   isMissingCodexConversationError,
   recoverCodexSessionId,
   reviveFailureReason,
+  sessionDirectories,
   DAEDALUS_STATUS_INSTRUCTIONS,
 } from "../index";
 
@@ -84,6 +85,17 @@ describe("AgentService", () => {
       "Execute task #123. Do not merely summarize or restate it; complete the task.",
     );
     expect(buildAgentPrompt({})).toBeUndefined();
+  });
+
+  test("gives a session the repos folder once, not every repository in it", () => {
+    expect(
+      sessionDirectories("/ws", [
+        "/ws/repos/api",
+        "/ws/repos/web",
+        "/library/elsewhere",
+      ]),
+    ).toEqual(["/ws/repos", "/library/elsewhere"]);
+    expect(sessionDirectories("/ws", [])).toEqual([]);
   });
 
   test("recovers Codex's persisted UUID without typing a rename command", async () => {

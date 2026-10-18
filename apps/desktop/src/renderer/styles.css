@@ -6224,6 +6224,21 @@ dd {
   font-weight: 600;
   margin-right: 6px;
 }
+/* A journal or team file past its compact size. Quiet amber: worth doing,
+   never urgent, and the title says the command. */
+.large-file-chip {
+  color: #d8a54a;
+  font-size: 10px;
+  font-weight: 600;
+  margin-right: 6px;
+  white-space: nowrap;
+}
+.app[data-theme="light"] .large-file-chip {
+  color: #a8650c;
+}
+.workspace-card-content > .large-file-chip {
+  justify-self: start;
+}
 .session-card[data-team-member="true"] {
   margin-left: 14px;
 }

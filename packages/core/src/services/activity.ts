@@ -173,6 +173,7 @@ export class ActivityService {
   private attentionListener: (
     session: AgentSession,
     reason: string,
+    activity: AgentActivity,
   ) => Promise<unknown> = async () => undefined;
 
   /**
@@ -180,7 +181,11 @@ export class ActivityService {
    * user is notified. The team service tells a member's lead.
    */
   onAttention(
-    listener: (session: AgentSession, reason: string) => Promise<unknown>,
+    listener: (
+      session: AgentSession,
+      reason: string,
+      activity: AgentActivity,
+    ) => Promise<unknown>,
   ): void {
     this.attentionListener = listener;
   }
@@ -715,6 +720,7 @@ export class ActivityService {
       await this.attentionListener(
         session,
         reason ?? this.reasonText(session, stored.activity, detail),
+        stored.activity,
       ).catch(() => undefined);
     const subtitle = this.alertSubtitle(session);
     return this.notifications.notify({

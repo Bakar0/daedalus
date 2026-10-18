@@ -48,9 +48,11 @@ import type {
   ToastDto,
 } from "@daedalus/protocol";
 import {
+  COMPACT_WORKSPACE_SKILL,
   resolveAutoRebirth,
   ROUTINES_REBIRTH_PERCENT,
   type AutoRebirthDto,
+  type LargeFileDto,
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { SettingsModal, type SettingsSection } from "./SettingsModal";
@@ -459,6 +461,28 @@ function ContextPill({
         )}
       </span>
       {Math.round(used)}%
+    </span>
+  );
+}
+
+// A journal or team file big enough that every session reading it pays for
+// it on each call after. The chip names the size and the command that moves
+// the old part out; Daedalus never runs it on its own.
+function LargeFileChip({ file }: { file: LargeFileDto }) {
+  const size = `${Math.round(file.bytes / 1000)} KB`;
+  const command = `/${COMPACT_WORKSPACE_SKILL} ${file.kind}`;
+  return (
+    <span
+      className="large-file-chip"
+      data-kind={file.kind}
+      title={
+        file.kind === "journal"
+          ? `JOURNAL.md is ${size}, and sessions in this workspace read it. Run ${command} in one of its sessions to move old entries to journal/.`
+          : `TEAM.md is ${size}, and the lead and its members read it. Run ${command} in this lead's session to move finished work to TEAM-ARCHIVE.md.`
+      }
+    >
+      {/* A session card's second line is narrow; the tooltip says the rest. */}
+      {file.kind === "journal" ? `Journal ${size} · compact` : `TEAM ${size}`}
     </span>
   );
 }
@@ -4714,6 +4738,12 @@ export function WorkspaceApp({
     // so its routines keep running (see the routine delivery rule).
     const rebirthAt =
       ownRebirth ?? (holdsRoutines ? ROUTINES_REBIRTH_PERCENT : null);
+    const teamFile =
+      team?.role === "lead"
+        ? snapshot?.largeFiles?.find(
+            (file) => file.kind === "team" && file.sessionId === session.id,
+          )
+        : undefined;
     // An archived lead pauses its team; its members stand on their own.
     const leadArchived =
       team?.role === "member" &&
@@ -4791,6 +4821,7 @@ export function WorkspaceApp({
                     : `@${team.handle}${leadArchived ? " · lead archived" : ""}`}
                 </span>
               )}
+              {teamFile && <LargeFileChip file={teamFile} />}
               {holdsRoutines ? (
                 <span className="session-routines-badge">
                   Routines
@@ -5702,6 +5733,10 @@ export function WorkspaceApp({
               ).length;
               const sessionLabel = `${itemSessions.length} ${itemSessions.length === 1 ? "session" : "sessions"}`;
               const insightLabel = `${sessionLabel} in ${item.name}: ${liveCount} live, ${attentionCount} need you`;
+              const journalFile = snapshot?.largeFiles?.find(
+                (file) =>
+                  file.kind === "journal" && file.workspaceId === item.id,
+              );
               const sessionList = renderWorkspaceSessions(item);
               const expanded = !collapsedWorkspaceIds.has(item.id);
 
@@ -5769,6 +5804,7 @@ export function WorkspaceApp({
                         </strong>
                         {/* The card only speaks up when the folder is gone. */}
                         {!item.available && <small>folder missing</small>}
+                        {journalFile && <LargeFileChip file={journalFile} />}
                         <span
                           aria-label={insightLabel}
                           className="workspace-session-insights"

@@ -7,6 +7,7 @@ import {
   channelName,
   DaedalusError,
   INSTALL_COMMANDS,
+  largeFiles,
   normalizeError,
   saveAutoRestoreSessionsEnabled,
   saveAutoRebirthPercent,
@@ -37,6 +38,7 @@ import type {
   AccountDto,
   AgentActivityDto,
   AppUpdateDto,
+  LargeFileDto,
   QuitChoice,
   AgentSessionDto,
   DesktopRpcSchema,
@@ -196,6 +198,12 @@ const workspaceContentDto = (
   worktrees: content.worktrees.map((item) => ({ ...item })),
 });
 
+const currentLargeFiles = (context: ApplicationContext): LargeFileDto[] =>
+  largeFiles(
+    context.repositories.listWorkspaces(),
+    context.teams.list().map((team) => team.lead),
+  ).map((file) => ({ ...file }));
+
 export async function desktopSnapshot(
   context: ApplicationContext,
 ): Promise<DesktopSnapshotDto> {
@@ -236,6 +244,7 @@ export async function desktopSnapshot(
     toasts: context.notifications.pending("toast").map(toastDto),
     abilities: context.repositories.abilities.list().map(sessionAbilityDto),
     teams: context.teams.list().map(teamDto),
+    largeFiles: currentLargeFiles(context),
     routines: context.abilities
       .holders("routines")
       .map((ability) =>
@@ -276,6 +285,12 @@ export function desktopDataFingerprint(context: ApplicationContext): string {
     // starts waiting on the user has to reach the window on the next tick,
     // exactly like a session that starts or stops.
     activity: context.repositories.listAgentActivity(),
+    // A journal or team file crossing its compact size changes a card. To
+    // the kilobyte, so each line a session appends does not reload the window.
+    largeFiles: currentLargeFiles(context).map(
+      (file) =>
+        `${file.kind}:${file.sessionId ?? file.workspaceId}:${Math.round(file.bytes / 1000)}`,
+    ),
     attention: context.repositories.listSessionAttention(),
     notifications: context.repositories.listPendingNotifications(),
     // A run starting or ending, or a hold changing, changes what the

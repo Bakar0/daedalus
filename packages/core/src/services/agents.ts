@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import {
   findExecutable,
+  isPathInside,
   loginShellPath,
   pathExists,
   runCommand,
@@ -101,6 +102,28 @@ const LOST_REASON_OUTPUT_LIMIT = 200;
 // again. Discovery is a provider subprocess, about a second for Claude, and
 // the catalog only changes when the account or the provider build does.
 const MODEL_CATALOG_TTL_MS = 10 * 60_000;
+
+/**
+ * The directories a session is given beyond its working directory. Every
+ * attached repository checked out under the workspace's `repos/` folder is
+ * covered by that one folder: the session can still read all of them, and
+ * the provider does not load each repository's own skills, commands and
+ * agents into every session's startup context. With 76 repositories that
+ * was about 6k tokens on every model call. A repository's skills still load
+ * once the session works on files inside it.
+ */
+export function sessionDirectories(
+  workspacePath: string,
+  repositoryPaths: readonly string[],
+): string[] {
+  const reposFolder = join(workspacePath, "repos");
+  const directories: string[] = [];
+  for (const path of repositoryPaths) {
+    const directory = isPathInside(reposFolder, path) ? reposFolder : path;
+    if (!directories.includes(directory)) directories.push(directory);
+  }
+  return directories;
+}
 
 /**
  * What to put on the card when a revive failed. A provider that refused to
@@ -1033,9 +1056,12 @@ export class AgentService {
           model,
           acceptPeerMessages:
             Boolean(team) || abilities.includes("orchestration"),
-          additionalDirectories: prepared.references.map(
-            (repository) =>
-              repository.referencePath ?? repository.canonicalPath,
+          additionalDirectories: sessionDirectories(
+            workspace.path,
+            prepared.references.map(
+              (repository) =>
+                repository.referencePath ?? repository.canonicalPath,
+            ),
           ),
         });
     const session: AgentSession = {
@@ -1955,12 +1981,15 @@ export class AgentService {
         );
       if (agent.provider === "claude" || agent.provider === "codex")
         await this.requireSignedIn(agent.provider, agent.account);
-      const additionalDirectories = this.repositories
-        .listWorkspaceRepositories(workspace.id)
-        .flatMap((repository) => [
-          "--add-dir",
-          repository.referencePath ?? repository.canonicalPath,
-        ]);
+      const additionalDirectories = sessionDirectories(
+        workspace.path,
+        this.repositories
+          .listWorkspaceRepositories(workspace.id)
+          .map(
+            (repository) =>
+              repository.referencePath ?? repository.canonicalPath,
+          ),
+      ).flatMap((directory) => ["--add-dir", directory]);
       const selectedModel = modelArgument(agent.args);
       const modelArgs = selectedModel ? ["--model", selectedModel] : [];
       if (agent.provider === "codex") {
