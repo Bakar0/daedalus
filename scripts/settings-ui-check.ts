@@ -275,7 +275,6 @@ try {
     "Skills",
     "Sessions",
     "Notifications",
-    "Remote",
     "About",
   ]) {
     const opened = await evaluate<string>(`(() => {
@@ -744,9 +743,11 @@ try {
   console.log(
     `Agents: ${agents.rows.length} accounts (signed in with email, signed out with a one-click Sign in, Add and sign in with SSO sending both requests, a sign-in running under its row and turning it signed in, an API-key account with Set key, Codex not installed with ${agents.install.length} install commands), none past the pane`,
   );
-  // Pro first. Without it the header offers Get Pro, and Remote says phone
-  // access is a Pro feature and leads to Settings › Account. There the Mac
-  // signs in (the browser's part is instant here) and takes an invite code.
+  // Pro first. It is invite-only: signed out, or signed in without a plan,
+  // nothing about it shows (no header badge, no Remote, no plan on Account),
+  // only the sign-in. Once the account is an admin, the header offers Get
+  // Pro, Remote says phone access is a Pro feature and leads to Account,
+  // and Account takes an invite code.
   // Then Remote is the full section: a pairing code as a QR code, a phone
   // finishing pairing hides the code and lists the phone, and Remove (two
   // clicks, in place) forgets it.
@@ -754,13 +755,15 @@ try {
     evaluate<string>(
       "document.querySelector('.topbar .pro-badge')?.textContent.trim() ?? ''",
     );
-  if ((await headerBadge()) !== "Get Pro")
-    throw new Error(`Header without Pro: "${await headerBadge()}"`);
   const openSection = (label: string) =>
     evaluate(`(() => {
       [...document.querySelectorAll('.settings-nav button')]
         .find((one) => one.textContent.trim() === ${JSON.stringify(label)}).click();
     })()`);
+  const hasSection = (label: string) =>
+    evaluate<boolean>(
+      `[...document.querySelectorAll('.settings-nav button')].some((one) => one.textContent.trim() === ${JSON.stringify(label)})`,
+    );
   const currentSection = () =>
     evaluate<string>(
       "document.querySelector('.settings-nav button[aria-current=\"page\"]').textContent.trim()",
@@ -773,6 +776,18 @@ try {
     evaluate<string>(
       "document.querySelector('.account-panel')?.textContent ?? ''",
     );
+  const proHidden = async (when: string) => {
+    const text = await accountText();
+    if (
+      (await headerBadge()) ||
+      (await hasSection("Remote")) ||
+      (await evaluate<boolean>(
+        "Boolean(document.querySelector('.remote-menu'))",
+      )) ||
+      /\bPro\b|Plan|invite/i.test(text)
+    )
+      throw new Error(`Pro shows ${when}: ${text.slice(0, 400)}`);
+  };
   const waitFor = async (label: string, check: () => Promise<boolean>) => {
     for (let attempt = 0; attempt < 80; attempt++) {
       if (await check()) return;
@@ -780,38 +795,20 @@ try {
     }
     throw new Error(`Timed out waiting for ${label}`);
   };
-  await openSection("Remote");
+  await openSection("Account");
   await Bun.sleep(150);
-  const gated = await panelText();
-  if (
-    !gated.includes("Phone access is a Pro feature") ||
-    gated.includes("Allow phone access") ||
-    gated.includes("Show pairing code") ||
-    !(await evaluate<boolean>(
-      "getComputedStyle([...document.querySelectorAll('.settings-nav button')].find((one) => one.textContent.trim() === 'Remote'), '::after').content.includes('Pro')",
-    ))
-  )
-    throw new Error(`Remote without Pro: ${gated.slice(0, 400)}`);
-  await clickAt(
-    "[...document.querySelectorAll('.remote-panel button')].find((one) => one.textContent.trim() === 'Sign in and get Pro')",
-  );
-  await Bun.sleep(150);
-  if ((await currentSection()) !== "Account")
-    throw new Error("Remote's Get Pro did not open Account");
-  const beforeSignIn = await accountText();
-  if (
-    !beforeSignIn.includes("Sign in with Google") ||
-    !beforeSignIn.includes("FreeCurrent") ||
-    !beforeSignIn.includes("Sign in above to get Pro")
-  )
-    throw new Error(`Account before sign-in: ${beforeSignIn.slice(0, 400)}`);
+  if (!(await accountText()).includes("Sign in with Google"))
+    throw new Error(
+      `Account before sign-in: ${(await accountText()).slice(0, 400)}`,
+    );
+  await proHidden("before sign-in");
   await clickAt(
     "[...document.querySelectorAll('.account-panel button')].find((one) => one.textContent.trim() === 'Sign in with Google')",
   );
   // The page learns it is signed in on its next poll, as it would once the
   // browser finishes.
   await waitFor("signed in without a plan", async () =>
-    (await accountText()).includes("Free. This account has no Pro plan."),
+    (await accountText()).includes("Signed in on this Mac."),
   );
   const opened = await evaluate<string[]>("window.opened ?? []");
   if (
@@ -819,6 +816,34 @@ try {
     !(await accountText()).includes("owner@example.com")
   )
     throw new Error(`Account after sign-in: ${JSON.stringify(opened)}`);
+  await proHidden("to an account without a plan");
+  await evaluate("window.remoteMakeAdmin()");
+  await waitFor(
+    "Get Pro in the header for an admin",
+    async () => (await headerBadge()) === "Get Pro",
+  );
+  await waitFor("Remote for an admin", () => hasSection("Remote"));
+  await openSection("Remote");
+  await Bun.sleep(150);
+  const gated = await panelText();
+  if (
+    !gated.includes("Phone access is a Pro feature") ||
+    gated.includes("Show pairing code") ||
+    !(await evaluate<boolean>(
+      "getComputedStyle([...document.querySelectorAll('.settings-nav button')].find((one) => one.textContent.trim() === 'Remote'), '::after').content.includes('Pro')",
+    ))
+  )
+    throw new Error(`Remote without Pro: ${gated.slice(0, 400)}`);
+  await clickAt(
+    "[...document.querySelectorAll('.remote-panel button')].find((one) => one.textContent.trim() === 'Get Pro')",
+  );
+  await Bun.sleep(150);
+  if ((await currentSection()) !== "Account")
+    throw new Error("Remote's Get Pro did not open Account");
+  if (!(await accountText()).includes("Free. This account has no Pro plan."))
+    throw new Error(
+      `Account for an admin: ${(await accountText()).slice(0, 400)}`,
+    );
   const typeInvite = (code: string) =>
     evaluate(`(() => {
       const input = document.querySelector('.plan-get input');
@@ -1132,7 +1157,7 @@ try {
   );
   if (left !== 0) throw new Error("Remote: Remove did not forget the phone");
   console.log(
-    "Pro: without it the header says Get Pro and Remote (tagged Pro) only leads to Account; Account signs the Mac in through the browser, shows Free as current, formats an invite code as it is typed (wrong12345 reads WRONG-12345), refuses a wrong one and takes a good one; then the header says Pro; an admin account unlocks admin with Google (locked before), makes a named Pro key (uses, trial, name), sees it as one short line, renames it in place, filters keys and accounts with the fuzzy matcher, shows each change under Activity, and ends an account's plan from its menu, every row's menu on one edge and nothing past the pane; Remote is on with Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account, its Pro plan and recent activity; Remove forgets it",
+    "Pro: signed out or without a plan nothing shows (no badge, no Remote, no phone menu, no plan), only the sign-in; for an admin the header says Get Pro and Remote (tagged Pro) only leads to Account, which shows Free as current, formats an invite code as it is typed (wrong12345 reads WRONG-12345), refuses a wrong one and takes a good one; then the header says Pro; an admin account unlocks admin with Google (locked before), makes a named Pro key (uses, trial, name), sees it as one short line, renames it in place, filters keys and accounts with the fuzzy matcher, shows each change under Activity, and ends an account's plan from its menu, every row's menu on one edge and nothing past the pane; Remote is on with Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account, its Pro plan and recent activity; Remove forgets it",
   );
   // And General, where a switch sits beside a two-line description and the
   // alignment either reads or does not.
