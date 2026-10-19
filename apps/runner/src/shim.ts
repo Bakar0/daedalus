@@ -4,7 +4,12 @@
 import type { CommandResult } from "@daedalus/remote-protocol";
 import { RUNNER_PATHS } from "@daedalus/remote-protocol";
 import { toWorkspacePath } from "./paths";
-import { isQueueable, socketPath, type ShimRequest } from "./shim-protocol";
+import {
+  FORWARDED_VARIABLES,
+  isQueueable,
+  socketPath,
+  type ShimRequest,
+} from "./shim-protocol";
 
 const OFFLINE = 75;
 
@@ -20,7 +25,8 @@ const request: ShimRequest = {
   env: Object.fromEntries(
     Object.entries(process.env).filter(
       (entry): entry is [string, string] =>
-        entry[0].startsWith("DAEDALUS_") && entry[1] !== undefined,
+        (FORWARDED_VARIABLES as readonly string[]).includes(entry[0]) &&
+        entry[1] !== undefined,
     ),
   ),
   queueable: isQueueable(argv),

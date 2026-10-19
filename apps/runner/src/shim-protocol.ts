@@ -19,3 +19,15 @@ export const socketPath = (
 /** `daedal agent event ...` is a hook event and may wait for the Mac. */
 export const isQueueable = (argv: string[]): boolean =>
   argv[0] === "agent" && argv[1] === "event";
+
+/**
+ * The only variables the shim forwards. Anything else with a `DAEDALUS_`
+ * prefix, the runner token above all, stays out of the call, which the runner
+ * writes to disk and sends to the Mac.
+ */
+export const FORWARDED_VARIABLES = [
+  "DAEDALUS_SESSION_ID",
+  "DAEDALUS_TASK_ID",
+  "DAEDALUS_TASK_NUMBER",
+  "DAEDALUS_WORKSPACE_ID",
+] as const;
