@@ -6979,22 +6979,24 @@ export function WorkspaceApp({
                 value={sessionForm.name}
               />
             </label>
-            {/* A member runs on its lead's provider. */}
-            {!memberTeam && (
-              <fieldset className="session-tool-picker">
-                <legend>Choose a tool</legend>
-                <div
-                  aria-label="Session tool"
-                  className="session-tool-row"
-                  role="radiogroup"
-                >
-                  {(
-                    [
-                      { id: "claude", label: "Claude" },
-                      { id: "codex", label: "Codex" },
-                      { id: "terminal", label: "Terminal" },
-                    ] as const
-                  ).map((tool) => {
+            {/* A member picks Claude or Codex whatever its lead runs on, and
+                the picker starts on the lead's. It cannot be a terminal. */}
+            <fieldset className="session-tool-picker">
+              <legend>Choose a tool</legend>
+              <div
+                aria-label="Session tool"
+                className="session-tool-row"
+                role="radiogroup"
+              >
+                {(
+                  [
+                    { id: "claude", label: "Claude" },
+                    { id: "codex", label: "Codex" },
+                    { id: "terminal", label: "Terminal" },
+                  ] as const
+                )
+                  .filter((tool) => !memberTeam || tool.id !== "terminal")
+                  .map((tool) => {
                     const available =
                       tool.id === "terminal" ||
                       Boolean(
@@ -7030,9 +7032,8 @@ export function WorkspaceApp({
                       </button>
                     );
                   })}
-                </div>
-              </fieldset>
-            )}
+              </div>
+            </fieldset>
             {sessionType !== "terminal" && sessionAccounts.length > 1 && (
               // Right under the tool it belongs to, and the same field as
               // Create workspace's.

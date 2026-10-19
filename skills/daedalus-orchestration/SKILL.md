@@ -55,11 +55,12 @@ daedal agent spawn --team --name server --message "<instructions>"
 - Instructions say what the member owns, what it must not touch, the
   contracts it must follow, and what "done" means. Tell it to tag @lead
   only when done or blocked.
-- Members start in your workspace on your provider; a team cannot mix
-  Claude and Codex.
-- Pick the member's model with `--model` (see below).
+- Members start in your workspace, on your provider unless you pass
+  `--provider claude` or `--provider codex`. A team can mix them.
+- Pick the member's model with `--model` (see below). The model must be
+  one the member's provider offers.
 
-Record the member in TEAM.md, with its model and why.
+Record the member in TEAM.md, with its provider, its model and why.
 
 ## Choosing a member's model
 

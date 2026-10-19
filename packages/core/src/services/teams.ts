@@ -242,7 +242,9 @@ export class TeamService {
   }
 
   /**
-   * Starts a member in the lead's workspace on the lead's provider. When the
+   * Starts a member in the lead's workspace, on Claude or Codex, the lead's
+   * provider unless one is asked for. A team may mix them, because each
+   * session gets team messages through its own provider's inbox. When the
    * user added it, the lead is told in the chat, with the instructions.
    */
   async spawnMember(input: {
@@ -270,10 +272,11 @@ export class TeamService {
         "CONFLICT",
         `The lead '${team.name}' is archived, so its team is paused; restore it first`,
       );
-    if (input.provider && input.provider !== team.lead.provider)
+    const provider = input.provider ?? team.lead.provider;
+    if (provider !== "claude" && provider !== "codex")
       throw new DaedalusError(
         "VALIDATION",
-        `Every member of '${team.name}' runs on ${team.lead.provider}, the lead's provider`,
+        `A team member runs on claude or codex, not ${provider}`,
       );
     const task = input.taskId
       ? this.repositories.findTask(input.taskId)
@@ -283,7 +286,7 @@ export class TeamService {
     const joinedAfter = this.repositories.teams.lastMessageId(team.id);
     const session = await this.agents.spawn({
       workspace: team.lead.workspaceId,
-      provider: team.lead.provider,
+      provider,
       ...(input.taskId ? { taskId: input.taskId } : {}),
       ...(input.name ? { name: input.name } : {}),
       ...(input.model ? { model: input.model } : {}),
@@ -505,7 +508,7 @@ export class TeamService {
     const claimed = claim.pending.at(-1)!.id;
     try {
       await this.transport.deliver({
-        session: reader.session,
+        session: await this.agents.recoverCodexThread(reader.session),
         text: this.deliveryText(team, reader, claim.pending),
         from: this.deliveryFrom(team, claim.pending),
       });

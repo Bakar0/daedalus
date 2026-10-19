@@ -287,8 +287,16 @@ export async function recoverCodexSessionId(input: {
       .split("-");
     dateDirectories.add(join(input.sessionsDirectory, year!, month!, day!));
   }
-  const candidatesById = new Map<string, number>();
-  const addCandidate = (id: string, distance: number) => {
+  // A rollout names its folder, so one in this session's folder outranks
+  // writer locks, which name none: another Codex thread started in the same
+  // seconds would otherwise make the match ambiguous.
+  const rolloutCandidates = new Map<string, number>();
+  const lockCandidates = new Map<string, number>();
+  const addCandidate = (
+    candidatesById: Map<string, number>,
+    id: string,
+    distance: number,
+  ) => {
     const previous = candidatesById.get(id);
     if (previous === undefined || distance < previous)
       candidatesById.set(id, distance);
@@ -324,7 +332,7 @@ export async function recoverCodexSessionId(input: {
               const timestamp = Date.parse(record.payload.timestamp ?? "");
               const distance = Math.abs(timestamp - startedAt);
               if (Number.isFinite(distance) && distance <= window)
-                addCandidate(id, distance);
+                addCandidate(rolloutCandidates, id, distance);
               return;
             }
           } catch {
@@ -353,7 +361,7 @@ export async function recoverCodexSessionId(input: {
             Number.isFinite(distance) &&
             distance <= SESSION_RECOVERY_WINDOW_MS
           )
-            addCandidate(id, distance);
+            addCandidate(lockCandidates, id, distance);
         } catch {
           // The owning Codex process may remove its lock while it exits.
         }
@@ -362,7 +370,9 @@ export async function recoverCodexSessionId(input: {
   } catch {
     // Older Codex releases do not have a writer-lock directory.
   }
-  const candidates = [...candidatesById].map(([id, distance]) => ({
+  const candidates = [
+    ...(rolloutCandidates.size ? rolloutCandidates : lockCandidates),
+  ].map(([id, distance]) => ({
     id,
     distance,
   }));
@@ -2248,6 +2258,35 @@ export class AgentService {
     for (const session of sessions) await this.prepareArchivable(session);
     for (const session of sessions)
       if (!session.archivedAt) await this.archive(session.id);
+  }
+
+  /**
+   * A Codex session's thread id, found again and saved when spawn missed it,
+   * because its rollout was not written yet. Team messages reach Codex only
+   * through `codex queue <thread>`. The window is as wide as activity
+   * detection's: the session's folder is its own, so anything written there
+   * since it started is its conversation.
+   */
+  async recoverCodexThread(agent: AgentSession): Promise<AgentSession> {
+    if (agent.provider !== "codex" || agent.providerSessionId) return agent;
+    const recoveredId = await recoverCodexSessionId({
+      sessionsDirectory: this.sessionConfig(agent).codexSessionsDirectory,
+      workingDirectory: agent.workingDirectory,
+      startedAt: agent.startedAt,
+      claimedIds: this.repositories
+        .listAgents()
+        .flatMap((session) =>
+          session.providerSessionId ? [session.providerSessionId] : [],
+        ),
+      windowMs: Math.max(
+        SESSION_RECOVERY_WINDOW_MS,
+        Date.now() - Date.parse(agent.startedAt) + SESSION_RECOVERY_WINDOW_MS,
+      ),
+    });
+    if (!recoveredId) return agent;
+    const recovered = { ...agent, providerSessionId: recoveredId };
+    this.repositories.updateAgent(recovered);
+    return recovered;
   }
 
   /**
