@@ -221,7 +221,7 @@ export const MANAGED_SKILLS: readonly ManagedSkillDefinition[] = [
     id: "daedalus-compact-workspace",
     title: "Compact workspace",
     summary:
-      "Adds /daedalus-compact-workspace journal and /daedalus-compact-workspace team, which move what is no longer current in JOURNAL.md or a lead's TEAM.md to an archive file. A workspace or lead card suggests it when the file grows large.",
+      "Adds /daedalus-compact-workspace journal and /daedalus-compact-workspace team, which move what is no longer current in JOURNAL.md or a lead's TEAM.md to an archive file. A session's header suggests it, with the command to copy, when the file grows large.",
     supportsAlways: false,
     defaultEnabled: true,
     defaultMode: "on-demand",

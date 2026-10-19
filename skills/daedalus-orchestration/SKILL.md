@@ -32,8 +32,8 @@ whenever something changes:
 A rebirth successor reads it first, so write it for someone who knows
 nothing about the conversation. Members can read it too.
 
-Keep it to what is current. When it passes 20 KB your card in Daedalus says
-so; then run `/daedalus-compact-workspace team`, which moves finished work
+Keep it to what is current. When it passes 20 KB your session header in Daedalus
+says so; then run `/daedalus-compact-workspace team`, which moves finished work
 and replaced decisions to `TEAM-ARCHIVE.md`.
 
 Set the goal in Daedalus as well, so new members are told it at launch:

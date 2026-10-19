@@ -146,7 +146,7 @@ export const DEFAULT_AUTO_REBIRTH_PERCENT = 85;
 export const ROUTINES_REBIRTH_PERCENT = 60;
 
 /**
- * Past these sizes the card of the file's owner suggests compacting it: every
+ * Past these sizes a session's header suggests compacting the file: every
  * session that reads the file pays for all of it, on every model call after.
  * The core's copies are in `context-files.ts`.
  */
@@ -1005,8 +1005,9 @@ export interface DesktopSnapshotDto {
 }
 
 /**
- * A `JOURNAL.md` (on its workspace's card) or a lead's `TEAM.md` (on the
- * lead's card) big enough that compacting it is worth suggesting.
+ * A `JOURNAL.md` (shown on its workspace's sessions that are not team
+ * members) or a lead's `TEAM.md` (shown on the lead) big enough that
+ * compacting it is worth suggesting.
  */
 export interface LargeFileDto {
   kind: "journal" | "team";

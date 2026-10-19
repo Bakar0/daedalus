@@ -340,9 +340,12 @@ skill). A rebirth successor reads it first.
 Every session that reads `JOURNAL.md` or a lead's `TEAM.md` pays for the whole
 file on every model call after. The desktop snapshot's `largeFiles` lists each
 workspace journal past 50 KB and each running lead's `TEAM.md` past 20 KB
-(`context-files.ts`), and the workspace card or the lead's card shows a chip
-such as "Journal 164 KB · compact". Its tooltip names the command:
-`/daedalus-compact-workspace journal` in any session of the workspace, or
-`/daedalus-compact-workspace team` in the lead. The skill moves what is no
+(`context-files.ts`). A session's header then shows a bar for each that it
+reads: "JOURNAL.md is 164 KB. Every session that reads it pays for all of it.
+To shrink it, run:" with `/daedalus-compact-workspace journal` and a Copy
+button. The journal bar shows on every session of the workspace that is not
+a team member; the `TEAM.md` bar, with `/daedalus-compact-workspace team`,
+on the lead only. Members get neither, since the lead owns both files. The
+skill moves what is no
 longer current, unchanged, to `journal/YYYY-MM.md` or `TEAM-ARCHIVE.md`.
 Daedalus never runs it on its own.

@@ -1,6 +1,6 @@
 ---
 name: daedalus-compact-workspace
-description: Shrink a Daedalus workspace's JOURNAL.md or a team lead's TEAM.md by moving what is no longer current into an archive file, keeping every word. Use when the user runs /daedalus-compact-workspace journal or /daedalus-compact-workspace team, or when a Daedalus card says the journal or team file is large. Handles one file per run.
+description: Shrink a Daedalus workspace's JOURNAL.md or a team lead's TEAM.md by moving what is no longer current into an archive file, keeping every word. Use when the user runs /daedalus-compact-workspace journal or /daedalus-compact-workspace team, or when the Daedalus session header says the journal or team file is large. Handles one file per run.
 argument-hint: "journal | team"
 ---
 

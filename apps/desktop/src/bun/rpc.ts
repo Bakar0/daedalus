@@ -285,7 +285,7 @@ export function desktopDataFingerprint(context: ApplicationContext): string {
     // starts waiting on the user has to reach the window on the next tick,
     // exactly like a session that starts or stops.
     activity: context.repositories.listAgentActivity(),
-    // A journal or team file crossing its compact size changes a card. To
+    // A journal or team file crossing its compact size changes a header. To
     // the kilobyte, so each line a session appends does not reload the window.
     largeFiles: currentLargeFiles(context).map(
       (file) =>
