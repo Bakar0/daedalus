@@ -16,7 +16,7 @@ window.addEventListener("error", (event) =>
 );
 import { botsCharacter, createBot } from "./world/characters/bots";
 import { PERSONAS } from "./world/characters/personas";
-import type { SessionColorDto } from "@daedalus/protocol";
+import type { NamedSessionColorDto, SessionColorDto } from "@daedalus/protocol";
 import { SESSION_COLOR_HEX } from "./world/session-color";
 import type { WorldActor } from "./world/world-model";
 import type { ActorFigure, WorldLook } from "./world/world-theme";
@@ -61,12 +61,14 @@ const params = new URLSearchParams(location.search);
 // `?wrap=5` puts five states on a line, for a closer look.
 const wrap = Number(params.get("wrap")) || COLUMNS.length;
 const lines = Math.ceil(COLUMNS.length / wrap);
-const SESSION_COLOR_NAMES = Object.keys(SESSION_COLOR_HEX) as SessionColorDto[];
+const SESSION_COLOR_NAMES = Object.keys(
+  SESSION_COLOR_HEX,
+) as NamedSessionColorDto[];
 const colorParam = params.get("color");
 const colorFor = (index: number): SessionColorDto | null =>
   colorParam === "all"
     ? SESSION_COLOR_NAMES[index % SESSION_COLOR_NAMES.length]!
-    : SESSION_COLOR_NAMES.includes(colorParam as SessionColorDto)
+    : SESSION_COLOR_NAMES.includes(colorParam as NamedSessionColorDto)
       ? (colorParam as SessionColorDto)
       : null;
 const appearance: WorldLook["appearance"] =

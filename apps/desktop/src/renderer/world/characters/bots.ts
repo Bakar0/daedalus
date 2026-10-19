@@ -4,7 +4,7 @@ import type { ActorFrame, WorldCharacter, WorldLook } from "../world-theme";
 import { COSTUMES, type Costume, type CostumeFrame } from "./costumes";
 import { ATTENTION, blinking, DONE, ERROR, FigureBase } from "./parts";
 import { personaFor, type Persona } from "./personas";
-import { SESSION_COLOR_HEX } from "../session-color";
+import { sessionColorHex } from "../session-color";
 
 /**
  * Little hovering robots. The screen is the face, the antenna light is the
@@ -53,7 +53,7 @@ class Bot extends FigureBase {
   /** Read every frame, so a color picked on the card shows at once. */
   private get finish(): Finish {
     const color = this.actor.color;
-    return color ? { ...this.base, trim: SESSION_COLOR_HEX[color] } : this.base;
+    return color ? { ...this.base, trim: sessionColorHex(color) } : this.base;
   }
 
   protected pose(t: number, { walking }: ActorFrame) {

@@ -142,18 +142,39 @@ export const encodeRunnerMessage = (
   return out;
 };
 
-/** Pod layout the runner, gateway and chart share. */
+/**
+ * Pod layout the runner, gateway and chart share. Two containers from one
+ * image (artifacts/cloud-sessions/h1-pod-spec.md): `runner` (uid 1000) holds
+ * the relay link, token, identity and queue; `session` (uid 1001) runs
+ * `sessiond`, which owns tmux and does all workspace work. Neither runs the
+ * other's code, and the runner treats every `sessiond` reply as untrusted.
+ */
 export const RUNNER_PATHS = {
+  /** Session container only. */
   workspace: "/workspace",
+  /** Session container only. */
   cache: "/cache",
-  /** Runner state on the workspace volume: identity key, event queue. */
-  state: "/workspace/.daedalus-runner",
+  /** Runner container only, on PVC `ws-<id>-state`: identity key, event queue. */
+  state: "/var/lib/daedalus-runner",
+  /** Runner container only: the runner token, from Secret `ws-<id>-runner`. */
+  token: "/run/daedalus-token/token",
+  /**
+   * An `emptyDir` both containers mount, for Unix sockets: S3 Files and other
+   * network file systems cannot hold them.
+   */
+  runtime: "/run/daedalus-runner",
+  /** Where the runner listens for the `daedal` shim. */
+  shimSocket: "/run/daedalus-runner/daedal.sock",
+  /** Where `sessiond` listens for the runner. */
+  sessionSocket: "/run/daedalus-runner/session.sock",
 } as const;
 
-/** Environment the gateway's controller gives a workspace pod. */
+/**
+ * Environment the gateway's controller gives the runner container. Nothing
+ * secret: the token is a file at `RUNNER_PATHS.token`.
+ */
 export const RUNNER_ENV = {
   gatewayUrl: "DAEDALUS_GATEWAY_URL",
-  runnerToken: "DAEDALUS_RUNNER_TOKEN",
   workspaceId: "DAEDALUS_WORKSPACE_ID",
   macId: "DAEDALUS_MAC_ID",
   macKey: "DAEDALUS_MAC_KEY",

@@ -1,0 +1,27 @@
+# Who may reach the gateway pod. The public port is open to all, as the
+# public Service decides. The runner port takes traffic only from tenant
+# namespaces (those with the daedalus.dev/user label the gateway sets).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "daedalus.gatewayName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "daedalus.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "daedalus.selector" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.gateway.service.port }}
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: daedalus.dev/user
+                operator: Exists
+      ports:
+        - protocol: TCP
+          port: {{ .Values.gateway.service.runnerPort }}

@@ -43,6 +43,19 @@ ranges for pods.
 
 ## gVisor (optional)
 
-Install runsc in the kind node, add a `runsc` containerd runtime, create a
-`RuntimeClass` named `gvisor` with handler `runsc`, then install with
+Tested on kind with gVisor release-20261012.0, arm64. Newer releases ship one
+tarball per architecture, `https://storage.googleapis.com/gvisor/releases/release/<version>/<arch>/gvisor.tar.bz2`
+with a `.sha512` beside it (there is no `latest` path and no bare `runsc`).
+Extract it and copy `runsc`, `containerd-shim-runsc-v1` and the `gvisor-bin`
+directory into `/usr/local/bin` in the kind node. Use `docker cp` into `/opt`,
+not `/tmp`, which is a tmpfs in the node. Then append to
+`/etc/containerd/config.toml`:
+
+```
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
+  runtime_type = "io.containerd.runsc.v1"
+```
+
+Run `systemctl restart containerd` in the node, create a `RuntimeClass` named
+`gvisor` with handler `runsc`, and install with
 `--set workspace.runtimeClassName=gvisor`. Not scripted yet.

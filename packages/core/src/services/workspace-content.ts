@@ -2816,6 +2816,8 @@ export class WorkspaceContentService {
       await this.closeTerminalsIn(worktree.path);
       await this.discardWorktree(repository, worktree);
     }
+    // A cloud session's folder is on its workspace volume, not here.
+    if (session.hostId) return;
     const workspace = await this.workspaces.get(session.workspaceId);
     const worktreesRoot = join(workspace.path, "worktrees");
     const folder = resolve(session.workingDirectory);

@@ -29,6 +29,10 @@ import { IntegratedTerminalService } from "./integrated-terminals";
 import { NotificationService } from "./notifications";
 import { PresenceService } from "./presence";
 import { ShutdownService } from "./shutdown";
+import { CloudService } from "../cloud/cloud-service";
+import { CLOUD_LAUNCH_SECRETS } from "./cloud-launch";
+import { LocalSessionHost } from "./session-host";
+import { SessionHosts } from "./session-hosts";
 import { TaskHistoryService } from "./task-history";
 import { forgetSessionFolders } from "./folder-trust";
 import { TaskService } from "./tasks";
@@ -81,6 +85,10 @@ export interface ApplicationContext {
   /** Ends everything at once. Nothing else in the app reaches for it. */
   shutdown: ShutdownService;
   tmux: TmuxClient;
+  /** Where sessions run: this Mac, and any connected cloud hosts. */
+  hosts: SessionHosts;
+  /** Cloud workspaces: the gateway sign-in and the link to their runners. */
+  cloud: CloudService;
   close(): void;
 }
 
@@ -128,15 +136,27 @@ export async function createApplicationContext(
     .update(config.home)
     .digest("hex")
     .slice(0, 12);
+  const tmuxSocket = `daedalus-${socketSuffix}`;
+  const tmuxExecutable =
+    findTmuxExecutable(options.env ?? process.env) ?? "tmux";
   const tmux =
     options.tmux ??
     new CommandTmuxClient(
-      `daedalus-${socketSuffix}`,
-      findTmuxExecutable(options.env ?? process.env) ?? "tmux",
+      tmuxSocket,
+      tmuxExecutable,
       runCommand,
       config.home,
       options.env ?? process.env,
     );
+  const hosts = new SessionHosts(
+    new LocalSessionHost(
+      tmux,
+      tmux instanceof CommandTmuxClient
+        ? { socketName: tmux.socketName, executable: tmux.executable }
+        : { socketName: tmuxSocket, executable: tmuxExecutable },
+    ),
+    tmux,
+  );
   let agents!: AgentService;
   let teams: TeamService | undefined;
   const endedNoted = new Map<string, number>();
@@ -176,7 +196,7 @@ export async function createApplicationContext(
     workspaces,
     workspaceContent,
     tasks,
-    tmux,
+    hosts,
     config,
     abilities,
     (sessionId) => {
@@ -201,12 +221,21 @@ export async function createApplicationContext(
         })
         .catch(() => undefined),
   );
+  agents.onCloudSecrets((workspaceId) =>
+    secrets.values(workspaceId, CLOUD_LAUNCH_SECRETS),
+  );
   const terminals = new IntegratedTerminalService(
     repositories,
     workspaces,
-    tmux,
+    hosts.local,
     config,
   );
+  const cloud = new CloudService({
+    config,
+    repositories,
+    workspaces,
+    hosts,
+  });
   const events = new EventBus();
   const logger = new JsonLogger(config.logsDirectory);
   const workspaceWatch = new WorkspaceWatchService(
@@ -320,9 +349,12 @@ export async function createApplicationContext(
     deliveryGate,
     shutdown: new ShutdownService(repositories, agents, terminals, tmux),
     tmux,
+    hosts,
+    cloud,
     // Watchers are kernel resources held outside the database, so they are
     // released here rather than left to the process exiting.
     close: () => {
+      cloud.close();
       workspaceWatch.close();
       workspaceContent.close();
       repositories.close();

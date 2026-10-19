@@ -97,3 +97,48 @@ describe("the calling session", () => {
     ).rejects.toThrow("2 running sessions work in");
   });
 });
+
+describe("cloud callers", () => {
+  const cloud = (id: string) =>
+    session(id, ".", { hostId: "ws:one" } as Partial<AgentSession>);
+
+  test("a cloud call is its own session, never a local one in the folder", async () => {
+    const local = session("local", join(root, "workspace"));
+    const context = contextWith([local, cloud("cloud")]);
+    expect(
+      await callerSession(context, {
+        directory: join(root, "workspace"),
+        environmentId: "cloud",
+        cloudCaller: "ws:one",
+      }),
+    ).toMatchObject({ id: "cloud" });
+    expect(
+      await callerSession(context, {
+        directory: join(root, "workspace"),
+        environmentId: "local",
+        cloudCaller: "ws:one",
+      }),
+    ).toBeUndefined();
+  });
+
+  test("a cloud call cannot name a session on another host", async () => {
+    const context = contextWith([cloud("cloud")]);
+    expect(
+      await callerSession(context, {
+        environmentId: "cloud",
+        cloudCaller: "ws:two",
+      }),
+    ).toBeUndefined();
+  });
+
+  test("a local call never matches a cloud session by folder", async () => {
+    const context = contextWith([cloud("cloud")]);
+    expect(
+      await callerSession(context, {
+        directory: process.cwd(),
+        environmentId: undefined,
+        cloudCaller: undefined,
+      }),
+    ).toBeUndefined();
+  });
+});

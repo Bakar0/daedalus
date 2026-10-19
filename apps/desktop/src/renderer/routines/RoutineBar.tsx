@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { RoutinesStatusDto, SessionColorDto } from "@daedalus/protocol";
 import { relativeTime } from "./time";
+import { sessionColorStyle } from "../session-color-style";
 
 /** "0:40", "1:20": minutes and seconds, for the typing countdown. */
 export function clockLabel(milliseconds: number): string {
@@ -102,6 +103,7 @@ export function RoutineBar({
       aria-label="Routines"
       className="routine-bar"
       data-color={color ?? undefined}
+      style={sessionColorStyle(color)}
       data-held={held ? "true" : undefined}
       data-paused={status.paused ? "true" : undefined}
     >

@@ -4,6 +4,7 @@ import {
   type LargeFileDto,
   type SessionColorDto,
 } from "@daedalus/protocol";
+import { sessionColorStyle } from "./session-color-style";
 
 const FILE_NAME: Record<LargeFileDto["kind"], string> = {
   journal: "JOURNAL.md",
@@ -37,6 +38,7 @@ export function LargeFileBar({
       aria-label={`${FILE_NAME[file.kind]} size`}
       className="routine-bar large-file-bar"
       data-color={color ?? undefined}
+      style={sessionColorStyle(color)}
     >
       <div className="routine-bar-row">
         <span

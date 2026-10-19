@@ -95,6 +95,7 @@ interface AgentRow {
   team_id: string | null;
   team_handle: string | null;
   spawned_by: string | null;
+  host_id: string | null;
 }
 
 interface IntegratedTerminalRow {
@@ -232,6 +233,7 @@ const agentFromRow = (row: AgentRow): AgentSession => ({
   teamId: row.team_id,
   teamHandle: row.team_handle,
   spawnedBy: row.spawned_by,
+  hostId: row.host_id,
 });
 
 const integratedTerminalFromRow = (
@@ -862,8 +864,8 @@ export class SqliteRepositories {
           working_directory, status, exit_code, started_at, ended_at,
           provider_session_id, archived_at, resume_count, lost_reason,
           resume_on_start, handoff_requested_at, position, pinned_at, color,
-          account, team_id, team_handle, spawned_by, auto_rebirth_percent)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          account, team_id, team_handle, spawned_by, auto_rebirth_percent, host_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         agent.id,
@@ -894,6 +896,7 @@ export class SqliteRepositories {
         agent.teamHandle,
         agent.spawnedBy,
         autoRebirthColumn(agent.autoRebirthPercent),
+        agent.hostId,
       );
   }
 
@@ -1036,6 +1039,42 @@ export class SqliteRepositories {
 
   deleteAgent(id: string): void {
     this.database.query("DELETE FROM agent_sessions WHERE id = ?").run(id);
+  }
+
+  /** The cloud id of a local workspace's twin on a gateway, if it has one. */
+  cloudWorkspaceId(workspaceId: string): string | undefined {
+    return (
+      this.database
+        .query<{ cloud_id: string }, [string]>(
+          "SELECT cloud_id FROM cloud_workspaces WHERE workspace_id = ?",
+        )
+        .get(workspaceId)?.cloud_id ?? undefined
+    );
+  }
+
+  /** The local workspace a cloud workspace was made from. */
+  workspaceForCloud(cloudId: string): string | undefined {
+    return (
+      this.database
+        .query<{ workspace_id: string }, [string]>(
+          "SELECT workspace_id FROM cloud_workspaces WHERE cloud_id = ?",
+        )
+        .get(cloudId)?.workspace_id ?? undefined
+    );
+  }
+
+  linkCloudWorkspace(workspaceId: string, cloudId: string): void {
+    this.database
+      .query(
+        "INSERT INTO cloud_workspaces (workspace_id, cloud_id) VALUES (?, ?)",
+      )
+      .run(workspaceId, cloudId);
+  }
+
+  unlinkCloudWorkspace(cloudId: string): void {
+    this.database
+      .query("DELETE FROM cloud_workspaces WHERE cloud_id = ?")
+      .run(cloudId);
   }
 
   createIntegratedTerminal(terminal: IntegratedTerminal): void {

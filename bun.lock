@@ -54,6 +54,12 @@
         "uqr": "0.1.3",
       },
     },
+    "apps/gateway": {
+      "name": "@daedalus/gateway",
+      "dependencies": {
+        "@daedalus/remote-protocol": "workspace:*",
+      },
+    },
     "apps/phone": {
       "name": "@daedalus/phone",
       "dependencies": {
@@ -72,10 +78,19 @@
         "wrangler": "4.149.0",
       },
     },
+    "apps/runner": {
+      "name": "@daedalus/runner",
+      "dependencies": {
+        "@daedalus/platform": "workspace:*",
+        "@daedalus/protocol": "workspace:*",
+        "@daedalus/remote-protocol": "workspace:*",
+      },
+    },
     "packages/core": {
       "name": "@daedalus/core",
       "dependencies": {
         "@daedalus/platform": "workspace:*",
+        "@daedalus/remote-protocol": "workspace:*",
       },
     },
     "packages/platform": {
@@ -122,6 +137,8 @@
 
     "@daedalus/desktop": ["@daedalus/desktop@workspace:apps/desktop"],
 
+    "@daedalus/gateway": ["@daedalus/gateway@workspace:apps/gateway"],
+
     "@daedalus/phone": ["@daedalus/phone@workspace:apps/phone"],
 
     "@daedalus/platform": ["@daedalus/platform@workspace:packages/platform"],
@@ -131,6 +148,8 @@
     "@daedalus/relay": ["@daedalus/relay@workspace:apps/relay"],
 
     "@daedalus/remote-protocol": ["@daedalus/remote-protocol@workspace:packages/remote-protocol"],
+
+    "@daedalus/runner": ["@daedalus/runner@workspace:apps/runner"],
 
     "@daedalus/test-utils": ["@daedalus/test-utils@workspace:packages/test-utils"],
 

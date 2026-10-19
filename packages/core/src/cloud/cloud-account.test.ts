@@ -1,0 +1,145 @@
+import { mkdtemp, rm, stat } from "node:fs/promises";
+import { join } from "node:path";
+import { afterEach, describe, expect, test } from "vitest";
+import type { RunnerMethod } from "@daedalus/remote-protocol";
+import { BrokerTransport, brokerAvailable, serveBroker } from "./broker";
+import { CloudAccount, type TokenVault } from "./cloud-account";
+import { GatewayClient } from "./gateway-client";
+import type { RunnerTransport } from "./link";
+
+const homes: string[] = [];
+afterEach(async () => {
+  for (const home of homes.splice(0))
+    await rm(home, { recursive: true, force: true });
+});
+// Short, because a Unix socket path has to fit in 104 bytes.
+async function newHome(): Promise<string> {
+  const home = await mkdtemp("/tmp/dc-");
+  homes.push(home);
+  return home;
+}
+
+const memoryVault = (): TokenVault & { token?: string } => {
+  const vault: TokenVault & { token?: string } = {
+    read: async () => vault.token,
+    write: async (token) => {
+      vault.token = token;
+    },
+    remove: async () => {
+      delete vault.token;
+    },
+  };
+  return vault;
+};
+
+const user = { id: "alice", email: "alice@example.com" };
+
+describe("cloud account", () => {
+  test("keeps the token in the vault and the rest in a private file", async () => {
+    const home = await newHome();
+    const vault = memoryVault();
+    const account = new CloudAccount(home, vault);
+    await account.save({ gatewayUrl: "http://g:8080", user, token: "t1" });
+    expect(vault.token).toBe("t1");
+    const file = join(home, "cloud", "account.json");
+    expect(await Bun.file(file).text()).not.toContain("t1");
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    expect(await account.signIn()).toEqual({
+      gatewayUrl: "http://g:8080",
+      user,
+      token: "t1",
+    });
+  });
+
+  test("pins a runner key once and refuses a different one", async () => {
+    const account = new CloudAccount(await newHome(), memoryVault());
+    await account.save({ gatewayUrl: "http://g:8080", user, token: "t" });
+    await account.pin("w1", "key-a");
+    await account.pin("w1", "key-a");
+    await expect(account.pin("w1", "key-b")).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    expect(await account.pinned("w1")).toBe("key-a");
+    // Signing in again as the same user keeps the pins; another user does not.
+    await account.save({ gatewayUrl: "http://g:8080", user, token: "t2" });
+    expect(await account.pinned("w1")).toBe("key-a");
+    await account.save({
+      gatewayUrl: "http://g:8080",
+      user: { id: "bob", email: "bob@example.com" },
+      token: "t3",
+    });
+    expect(await account.pinned("w1")).toBeUndefined();
+  });
+});
+
+describe("gateway client", () => {
+  test("sends the bearer token and reads gateway errors", async () => {
+    const seen: Array<{ url: string; auth: string | null }> = [];
+    const client = new GatewayClient("http://g:8080/ignored", "tok", (async (
+      url: URL,
+      init: RequestInit,
+    ) => {
+      seen.push({
+        url: String(url),
+        auth: new Headers(init.headers).get("authorization"),
+      });
+      return Response.json(
+        { error: { code: "NOT_FOUND", message: "No such workspace" } },
+        { status: 404 },
+      );
+    }) as unknown as typeof fetch);
+    await expect(client.getWorkspace("w1")).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: "No such workspace",
+    });
+    expect(seen).toEqual([
+      { url: "http://g:8080/v1/workspaces/w1", auth: "Bearer tok" },
+    ]);
+    expect(client.connectUrl("m1")).toBe("ws://g:8080/v1/connect?macId=m1");
+  });
+
+  test("refuses an address that is not http", () => {
+    expect(() => new GatewayClient("file:///etc")).toThrow();
+  });
+});
+
+describe("broker", () => {
+  test("serves runner methods to another process over a private socket", async () => {
+    const home = await newHome();
+    const calls: Array<{ method: RunnerMethod; params: unknown }> = [];
+    const transport: RunnerTransport = {
+      unavailable: async (workspaceId) =>
+        workspaceId === "asleep" ? "asleep" : undefined,
+      request: async (_workspaceId, method, params) => {
+        calls.push({ method, params });
+        if (method === "host.stop") throw new Error("no such session");
+        return ["s1"] as never;
+      },
+    };
+    expect(await brokerAvailable(home)).toBe(false);
+    const stop = await serveBroker(home, transport);
+    try {
+      const socket = join(home, "cloud", "broker.sock");
+      expect((await stat(socket)).mode & 0o777).toBe(0o600);
+      expect((await stat(join(home, "cloud"))).mode & 0o777).toBe(0o700);
+      expect(await brokerAvailable(home)).toBe(true);
+      const client = new BrokerTransport(home);
+      expect(await client.unavailable("asleep")).toBe("asleep");
+      expect(await client.unavailable("w1")).toBeUndefined();
+      expect(await client.request("w1", "host.listLive", null)).toEqual(["s1"]);
+      await expect(
+        client.request("w1", "host.stop", { session: "x" }),
+      ).rejects.toThrow("no such session");
+      await expect(
+        client.request("w1", "daedal.call" as RunnerMethod, null as never),
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+      expect(calls.map((call) => call.method)).toEqual([
+        "host.listLive",
+        "host.stop",
+      ]);
+    } finally {
+      await stop();
+    }
+    expect(await brokerAvailable(home)).toBe(false);
+  });
+});

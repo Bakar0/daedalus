@@ -163,6 +163,7 @@ export {
   parseRememberedDirectories,
   planExplorerRefresh,
 } from "./files/explorer-state";
+import { sessionColorStyle } from "./session-color-style";
 
 /** The handle a member name becomes, as the core makes it. */
 function teamHandlePreview(name: string): string {
@@ -4737,6 +4738,7 @@ export function WorkspaceApp({
         }
         className={`session-card tone-${statusView.tone} ${view === "session" && session.id === highlightedSessionId ? "selected" : ""}`}
         data-color={session.color ?? undefined}
+        style={sessionColorStyle(session.color)}
         data-pinned={session.pinnedAt ? "true" : undefined}
         data-attention={statusView.attention ? "true" : undefined}
         data-dragging={reorder.draggingId === session.id ? "true" : undefined}
