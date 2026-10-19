@@ -148,6 +148,11 @@ export const RUNNER_PATHS = {
   cache: "/cache",
   /** Runner state on the workspace volume: identity key, event queue. */
   state: "/workspace/.daedalus-runner",
+  /**
+   * An `emptyDir`, for the `daedal` shim's Unix socket: S3 Files and other
+   * network file systems cannot hold sockets.
+   */
+  runtime: "/run/daedalus-runner",
 } as const;
 
 /** Environment the gateway's controller gives a workspace pod. */
@@ -157,4 +162,6 @@ export const RUNNER_ENV = {
   workspaceId: "DAEDALUS_WORKSPACE_ID",
   macId: "DAEDALUS_MAC_ID",
   macKey: "DAEDALUS_MAC_KEY",
+  /** Minutes with no live session and no open terminal before the runner asks to sleep. */
+  idleMinutes: "DAEDALUS_WORKSPACE_IDLE_MINUTES",
 } as const;

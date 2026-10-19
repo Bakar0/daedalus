@@ -22,6 +22,10 @@
  *   GET    /v1/workspaces/:id       -> CloudWorkspace
  *   POST   /v1/workspaces/:id/wake  -> CloudWorkspace
  *   POST   /v1/workspaces/:id/sleep -> CloudWorkspace
+ *                                   Also allowed with a runner token, for
+ *                                   its own workspace only: the runner's
+ *                                   idle sleep. Another id is 404; every
+ *                                   other route with a runner token is 401.
  *   DELETE /v1/workspaces/:id       -> 204; deletes the pod, its volume and token
  *   GET    /v1/connect              WebSocket. A user token joins as
  *                                   `mac:<macId>` (query `macId`); a runner
