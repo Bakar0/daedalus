@@ -148,6 +148,11 @@ export const RUNNER_PATHS = {
   cache: "/cache",
   /** Runner state on the workspace volume: identity key, event queue. */
   state: "/workspace/.daedalus-runner",
+  /**
+   * An `emptyDir`, for the `daedal` shim's Unix socket: S3 Files and other
+   * network file systems cannot hold sockets.
+   */
+  runtime: "/run/daedalus-runner",
 } as const;
 
 /** Environment the gateway's controller gives a workspace pod. */
