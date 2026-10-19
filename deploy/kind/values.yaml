@@ -1,0 +1,15 @@
+# Values for the local kind cluster. Used by deploy/kind/up.sh.
+gateway:
+  devLogin: true
+  publicUrl: http://localhost:8080
+  service:
+    type: NodePort
+    nodePort: 30080
+workspace:
+  storageSize: 2Gi
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 1Gi }
+tenant:
+  quota: { pods: "5", requests.cpu: "2", requests.memory: 4Gi }
+  # kind pods use 10.244.0.0/16, services 10.96.0.0/16, nodes 172.x

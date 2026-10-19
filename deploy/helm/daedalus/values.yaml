@@ -1,0 +1,29 @@
+image:
+  gateway: { repository: daedalus-gateway, tag: dev, pullPolicy: IfNotPresent }
+  runner: { repository: daedalus-runner, tag: dev, pullPolicy: IfNotPresent }
+gateway:
+  devLogin: false # POST /v1/dev/login; the kind values turn it on
+  publicUrl: "" # how Macs reach the gateway
+  storage: { size: 1Gi, storageClass: "" } # gateway SQLite PVC
+  service:
+    port: 8080
+    type: ClusterIP
+    nodePort: null # only used when type is NodePort
+workspace:
+  storageClass: ""
+  storageSize: 20Gi
+  resources:
+    requests: { cpu: "1", memory: 2Gi }
+    limits: { cpu: "2", memory: 4Gi }
+  runtimeClassName: "" # "gvisor" to sandbox workspace pods
+  idleMinutes: 30 # runner asks the gateway to sleep it after this
+tenant:
+  quota: { pods: "10", requests.cpu: "8", requests.memory: 16Gi }
+  # Egress to these CIDRs is blocked for workspace pods, so a workspace cannot
+  # reach other namespaces' pods, nodes or the cloud metadata service. Set it
+  # to cover your cluster's pod, service and node ranges.
+  blockedEgressCIDRs:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 169.254.0.0/16
