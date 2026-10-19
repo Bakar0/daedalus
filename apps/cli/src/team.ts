@@ -19,7 +19,8 @@ export const teamHelp = `Team commands:
   daedal team list [--team <lead>]
   daedal team goal [<text>] [--team <lead>]
   daedal agent spawn --team [<lead>] [--message <instructions>] [--name <name>]
-      [--task <task-ref>] [--model <model>] [--account <account>]
+      [--task <task-ref>] [--provider claude|codex] [--model <model>]
+      [--account <account>]
 
 A team is a lead, a session that holds the orchestration ability, and the
 members it or the user adds. Grant the ability with
@@ -31,8 +32,10 @@ lead's session.
 team, and needs --message. '--team <lead>' adds one to that lead's team for
 the user, who may leave out --message and instruct the member in its own
 session; the lead is told in the chat either way.
-Members start in the lead's workspace on the lead's provider. Each member
-has a handle, made from --name or the task's title, that the chat uses.
+Members start in the lead's workspace, on the lead's provider unless
+--provider picks the other one. A team can mix Claude and Codex, with
+either as the lead. Each member has a handle, made from --name or the
+task's title, that the chat uses.
 
 Everyone in the team, and the user, posts to one chat. Tags decide who is
 told: @<handle> pushes the message into that member's session, @lead into

@@ -449,7 +449,7 @@ it was cleared, journal entries whose heading names the task, and done.`,
   daedal agent models <codex|claude> [--account <account>]
   daedal agent spawn [--workspace <workspace>] (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine]
   daedal agent spawn ... [--ability <ability>[,<ability>]] [--color <color>] [--pin]
-  daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>] [--user]
+  daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>] [--provider claude|codex] [--user]
   daedal agent list [--workspace <workspace>] [--running|--archived]
   daedal agent reorder --workspace <workspace> <agent-id> [<agent-id>...]
   daedal agent get <agent-id>
@@ -489,7 +489,8 @@ and 'daedal routine --help'.
 
 'agent spawn --team' adds a member to a team: with no value, the team of the
 lead running it; with a lead, that lead's team, and the lead is told in the
-team chat. See 'daedal team --help'.
+team chat. The member runs on the lead's provider unless --provider picks
+the other; a team can mix Claude and Codex. See 'daedal team --help'.
 
 'agent spawn' without --model starts with the workspace's default model when
 --provider is the workspace's default provider. Otherwise Claude is asked for

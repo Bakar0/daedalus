@@ -152,6 +152,40 @@ describe("AgentService", () => {
     });
   });
 
+  test("a rollout in the session's folder outranks writer locks of other threads", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const startedAt = new Date().toISOString();
+      const id = "01a15542-0778-71a1-833b-002d0b026df2";
+      const other = "01a15542-091b-7663-b40f-f681fb976a5e";
+      const codexHome = join(home, "codex");
+      const cwd = join(home, "worktree");
+      const [year, month, day] = startedAt.slice(0, 10).split("-");
+      const directory = join(codexHome, "sessions", year!, month!, day!);
+      await mkdir(directory, { recursive: true });
+      await Bun.write(
+        join(directory, `rollout-${startedAt.slice(0, 19)}-${id}.jsonl`),
+        `${JSON.stringify({
+          type: "session_meta",
+          payload: { id, timestamp: startedAt, cwd },
+        })}\n`,
+      );
+      // Two threads started in the same second: this one and another
+      // session's, which a lock alone cannot tell apart.
+      const locksDirectory = join(codexHome, "thread-writer-locks");
+      await mkdir(locksDirectory, { recursive: true });
+      await Bun.write(join(locksDirectory, `${id}.lock`), "");
+      await Bun.write(join(locksDirectory, `${other}.lock`), "");
+
+      await expect(
+        recoverCodexSessionId({
+          sessionsDirectory: join(codexHome, "sessions"),
+          workingDirectory: cwd,
+          startedAt,
+        }),
+      ).resolves.toBe(id);
+    });
+  });
+
   test("recognizes only Codex's missing-conversation archive result", () => {
     expect(
       isMissingCodexConversationError(

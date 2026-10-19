@@ -226,8 +226,9 @@ In the app:
 - **Orchestration** is a switch in Create session and in a session's card
   menu, like Routines. A member's menu does not offer it.
 - A lead's card has a **+** that adds a member: a name, which becomes its
-  `@handle`, a model, and optional **Instructions**. The member runs on the
-  lead's provider, in its workspace and in its color. Without instructions
+  `@handle`, Claude or Codex (the lead's provider is chosen at first), a
+  model, and optional **Instructions**. The member runs in the lead's
+  workspace and in its color. Without instructions
   it starts knowing only its team, its lead and the goal, says it is ready,
   and waits for the user to instruct it in its own session; the lead is
   told so in the chat.
@@ -258,8 +259,10 @@ so the team follows the lead with no other change. A member records its team
 in `agent_sessions.team_id` and its handle in `team_handle`; a member's
 rebirth successor takes both, and the predecessor leaves the team.
 
-- **Members** start in the lead's workspace on the lead's provider; a team
-  never mixes Claude and Codex. A task is optional. The handle comes from
+- **Members** start in the lead's workspace, on the lead's provider unless
+  `--provider` asks for the other. A team can mix Claude and Codex in any
+  combination of lead and members, because each session gets team
+  messages through its own provider's inbox. A task is optional. The handle comes from
   `--name`, else the task title, else `member`, with `-2`, `-3` for repeats.
   `lead`, `user`, `daedalus` and `all` are reserved. The launch prompt names
   the team, the lead, the other members and the goal, and points to the

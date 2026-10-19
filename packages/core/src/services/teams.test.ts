@@ -40,9 +40,10 @@ class FakeTmux implements TmuxClient {
   async attach() {
     return 0;
   }
-  // Claude at its prompt, so a launch counts as ready at once.
+  // Claude and Codex both at their prompts, so a launch of either counts
+  // as ready at once.
   async capture() {
-    return "❯ \n  ⏵⏵ auto mode on (shift+tab to cycle)";
+    return "› Ask Codex to do anything\n\n❯ \n  ⏵⏵ auto mode on (shift+tab to cycle)";
   }
   async sendKeys() {}
   async send() {}
@@ -70,6 +71,7 @@ class FakeTransport implements TeamTransport {
 }
 
 interface Harness {
+  home: string;
   context: ApplicationContext;
   tmux: FakeTmux;
   transport: FakeTransport;
@@ -106,7 +108,7 @@ async function withTeams(run: (harness: Harness) => Promise<void>) {
     });
     try {
       await context.workspaces.create({ name: "Shop", slug: "shop" });
-      await run({ context, tmux, transport });
+      await run({ home, context, tmux, transport });
     } finally {
       context.close();
     }
@@ -155,7 +157,7 @@ describe("teams", () => {
     });
   });
 
-  test("the lead adds members with handles, on its own provider", async () => {
+  test("the lead adds members with handles, on its provider by default", async () => {
     await withTeams(async ({ context, tmux, transport }) => {
       const { session: leader, team } = await lead(context);
       context.teams.setGoal(team.id, "Ship v2 checkout");
@@ -203,10 +205,10 @@ describe("teams", () => {
         context.teams.spawnMember({
           team: team.id,
           addedBy: "lead",
-          provider: "codex",
+          provider: "custom",
           instructions: "Anything.",
         }),
-      ).rejects.toThrow("runs on claude, the lead's provider");
+      ).rejects.toThrow("A team member runs on claude or codex, not custom");
       await expect(
         context.teams.spawnMember({
           team: team.id,
@@ -221,6 +223,89 @@ describe("teams", () => {
         }),
       ).toThrow("a member cannot lead one");
       expect(transport.delivered).toEqual([]);
+    });
+  });
+
+  test("a team mixes Claude and Codex, in either role", async () => {
+    await withTeams(async ({ home, context, tmux, transport }) => {
+      const { session: leader, team } = await lead(context);
+      const codexMember = await context.teams.spawnMember({
+        team: team.id,
+        addedBy: "lead",
+        name: "client",
+        provider: "codex",
+        instructions: "Build the client.",
+      });
+      expect(codexMember.session).toMatchObject({
+        provider: "codex",
+        teamId: team.id,
+        teamHandle: "client",
+      });
+      expect(prompt(tmux.launches.at(-1)!)).toContain("daedalus-team");
+      // Codex wrote its rollout after spawn looked for it, so the thread id
+      // is found when the first message goes out.
+      expect(codexMember.session.providerSessionId).toBeNull();
+      const threadId = "01a15541-49ac-7e22-ae2b-98e6a0677ee5";
+      const startedAt = codexMember.session.startedAt;
+      const [year, month, day] = startedAt.slice(0, 10).split("-");
+      const rollouts = join(home, "codex", "sessions", year!, month!, day!);
+      await mkdir(rollouts, { recursive: true });
+      await Bun.write(
+        join(rollouts, `rollout-${startedAt.slice(0, 19)}-${threadId}.jsonl`),
+        `${JSON.stringify({
+          type: "session_meta",
+          payload: {
+            id: threadId,
+            timestamp: startedAt,
+            cwd: codexMember.session.workingDirectory,
+          },
+        })}\n`,
+      );
+
+      await context.teams.say({
+        team: team.id,
+        author: "lead",
+        body: "@client the token field is access_token",
+      });
+      expect(transport.to(codexMember.session)).toHaveLength(1);
+      expect(
+        transport.to(codexMember.session)[0]!.session.providerSessionId,
+      ).toBe(threadId);
+      expect(
+        (await context.agents.get(codexMember.session.id)).providerSessionId,
+      ).toBe(threadId);
+      await context.teams.say({
+        team: team.id,
+        author: "client",
+        body: "@lead done",
+      });
+      expect(transport.to(leader)).toHaveLength(1);
+
+      // A Codex lead with a Claude member.
+      const codexLead = await context.agents.spawn({
+        workspace: "shop",
+        provider: "codex",
+        name: "Billing",
+        abilities: ["orchestration"],
+      });
+      const claudeMember = await context.teams.spawnMember({
+        team: codexLead.id,
+        addedBy: "user",
+        name: "server",
+        provider: "claude",
+      });
+      expect(claudeMember.session.provider).toBe("claude");
+      expect(launchSettings(tmux.launches.at(-1)!).crossSessionInbound).toBe(
+        "accept",
+      );
+      // Without --provider a member runs on its lead's.
+      const defaulted = await context.teams.spawnMember({
+        team: codexLead.id,
+        addedBy: "lead",
+        name: "worker",
+        instructions: "Run the tests.",
+      });
+      expect(defaulted.session.provider).toBe("codex");
     });
   });
 
