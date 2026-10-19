@@ -42,9 +42,22 @@ The file is `JOURNAL.md` at the workspace root, the folder that holds
    the intro and any `## Standing decisions` section.
 2. Choose what moves: the oldest entries first, whatever their age, until
    what stays is under {{journalTargetKb}} KB. Always keep the newest entry.
-3. Read the entries that move for decisions that still hold: a choice, a
-   rule, a source of truth, a constraint someone must keep following. Skip
-   what a later entry replaced.
+3. Find the decisions that still hold in the entries that move: a choice,
+   a rule, a source of truth, a constraint someone must keep following.
+   Skip what a later entry replaced. When the entries that move are more
+   than {{journalLimitKb}} KB together, do not read them whole; reading
+   them would cost more than the compaction saves. Pull out only the
+   lines that state a decision or a rule, with each entry's heading, and
+   judge those:
+
+   ```sh
+   grep -n -i -E '^## |decision|decided|convention|rule|never|always|must|source of truth|from now on' JOURNAL.md
+   ```
+
+   Many decisions are already in `BRIEF.md`; do not repeat those. An entry
+   without a date in its heading takes the month of the nearest dated entry
+   before it; give its decision that month, not an invented day.
+
 4. Append the moving entries, unchanged and in order, to
    `journal/YYYY-MM.md` by the month of each entry's date. Create the folder
    and files as needed.
