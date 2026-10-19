@@ -927,7 +927,8 @@ export class AgentService {
     input: Parameters<AgentService["spawn"]>[0] & { host: string },
   ): Promise<AgentSession> {
     const workspace = await this.workspaces.getActive(input.workspace);
-    if (input.host !== cloudHostId(workspace.id))
+    const cloudId = this.repositories.cloudWorkspaceId(workspace.id);
+    if (!cloudId || input.host !== cloudHostId(cloudId))
       throw new DaedalusError(
         "VALIDATION",
         "A cloud session runs on its own workspace's cloud host",

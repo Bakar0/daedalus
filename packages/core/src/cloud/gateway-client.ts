@@ -121,6 +121,7 @@ export class GatewayClient {
         response.status === 401
           ? "The gateway did not accept the sign-in; run 'daedal cloud login' again"
           : (error?.message ?? `The gateway answered ${response.status}`),
+        error?.code ? { gatewayCode: error.code } : undefined,
       );
     }
     return parsed as T;

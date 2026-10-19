@@ -27,6 +27,8 @@ import { RemoteSessionHost } from "./remote-session-host";
 
 /** How long a command that opened its own link waits for a runner. */
 const RUNNER_WAIT_MS = 20_000;
+/** How long a wake keeps trying while the old pod is still going. */
+const WAKE_RETRY_MS = 30_000;
 
 export interface CloudServiceOptions {
   config: DaedalusConfig;
@@ -111,7 +113,10 @@ export class CloudService {
     return { gatewayUrl: signIn.gatewayUrl, user };
   }
 
-  /** Makes a cloud workspace of a local one: the same id, its own pod. */
+  /**
+   * Makes a cloud workspace of a local one, with a pod of its own. The gateway
+   * names it by a UUID of its own, which this Mac links to the local one.
+   */
   async create(
     workspaceReference: string,
     resources?: { cpu?: string; memory?: string },
@@ -119,13 +124,21 @@ export class CloudService {
     const workspace =
       await this.options.workspaces.getActive(workspaceReference);
     const identity = await this.identity();
-    return (await this.#client()).createWorkspace({
-      workspaceId: workspace.id,
+    const { repositories } = this.options;
+    const cloudId =
+      repositories.cloudWorkspaceId(workspace.id) ?? crypto.randomUUID();
+    const created = await (
+      await this.#client()
+    ).createWorkspace({
+      workspaceId: cloudId,
       name: workspace.name,
       macId: identity.id,
       macKey: identity.publicKey,
       ...(resources ? { resources } : {}),
     });
+    if (!repositories.cloudWorkspaceId(workspace.id))
+      repositories.linkCloudWorkspace(workspace.id, cloudId);
+    return created;
   }
 
   async list(): Promise<CloudWorkspace[]> {
@@ -138,10 +151,27 @@ export class CloudService {
     );
   }
 
+  /**
+   * Wakes a workspace. Right after a sleep the gateway answers CONFLICT until
+   * the old pod is gone, so that is retried with backoff for up to 30 seconds.
+   */
   async wake(workspaceReference: string): Promise<CloudWorkspace> {
-    return (await this.#client()).wakeWorkspace(
-      await this.#workspaceId(workspaceReference),
-    );
+    const client = await this.#client();
+    const workspaceId = await this.#workspaceId(workspaceReference);
+    const deadline = Date.now() + WAKE_RETRY_MS;
+    for (let delay = 250; ; delay = Math.min(delay * 2, 4_000)) {
+      try {
+        return await client.wakeWorkspace(workspaceId);
+      } catch (error) {
+        if (
+          !(error instanceof DaedalusError) ||
+          error.details?.gatewayCode !== "CONFLICT" ||
+          Date.now() + delay > deadline
+        )
+          throw error;
+        await Bun.sleep(delay);
+      }
+    }
   }
 
   /**
@@ -162,15 +192,18 @@ export class CloudService {
     await (await this.#client()).deleteWorkspace(workspaceId);
     this.#endSessions(workspaceId, "exited");
     await this.account.unpin(workspaceId);
+    this.options.repositories.unlinkCloudWorkspace(workspaceId);
     this.options.hosts.unregister(cloudHostId(workspaceId));
   }
 
   #endSessions(
-    workspaceId: string,
+    cloudId: string,
     status: "lost" | "exited",
     lostReason?: string,
   ): void {
-    const hostId = cloudHostId(workspaceId);
+    const hostId = cloudHostId(cloudId);
+    const workspaceId = this.options.repositories.workspaceForCloud(cloudId);
+    if (!workspaceId) return;
     const now = new Date().toISOString();
     this.options.repositories.transaction(() => {
       for (const session of this.options.repositories.listAgents({
@@ -189,11 +222,23 @@ export class CloudService {
     });
   }
 
+  /** The cloud id of a local workspace, or a cloud id given as it is. */
   async #workspaceId(reference: string): Promise<string> {
     // A workspace removed on this Mac can still be deleted in the cloud.
-    return /^[0-9a-f-]{36}$/i.test(reference)
-      ? reference.toLowerCase()
-      : (await this.options.workspaces.get(reference)).id;
+    if (
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        reference,
+      )
+    )
+      return reference.toLowerCase();
+    const workspace = await this.options.workspaces.get(reference);
+    const cloudId = this.options.repositories.cloudWorkspaceId(workspace.id);
+    if (!cloudId)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Workspace '${workspace.name}' has no cloud workspace; run 'daedal cloud create'`,
+      );
+    return cloudId;
   }
 
   /**

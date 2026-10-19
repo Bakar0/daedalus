@@ -13,6 +13,7 @@ import {
 import { CLOUD_CALLER_VARIABLE } from "./cloud-launch";
 
 const WS = "11111111-1111-4111-8111-111111111111";
+const LOCAL = "cloudy";
 const OTHER_WS = "22222222-2222-4222-8222-222222222222";
 const HOST = `ws:${WS}`;
 const SESSION = "33333333-3333-4333-8333-333333333333";
@@ -22,18 +23,24 @@ const OWN_TASK = "66666666-6666-4666-8666-666666666666";
 
 let root: string;
 const agents: Record<string, Partial<AgentSession>> = {
-  [SESSION]: { id: SESSION, workspaceId: WS, hostId: HOST, taskId: OWN_TASK },
-  [LOCAL_SESSION]: { id: LOCAL_SESSION, workspaceId: WS, hostId: null },
+  [SESSION]: {
+    id: SESSION,
+    workspaceId: LOCAL,
+    hostId: HOST,
+    taskId: OWN_TASK,
+  },
+  [LOCAL_SESSION]: { id: LOCAL_SESSION, workspaceId: LOCAL, hostId: null },
 };
 const tasks: Record<string, Partial<Task>> = {
   [OTHER_TASK]: { id: OTHER_TASK, workspaceId: OTHER_WS, number: 1 },
-  [OWN_TASK]: { id: OWN_TASK, workspaceId: WS, number: 7 },
+  [OWN_TASK]: { id: OWN_TASK, workspaceId: LOCAL, number: 7 },
 };
 const repositories = {
   findAgent: (id: string) => agents[id] as AgentSession | undefined,
   findTask: (id: string) => tasks[id] as Task | undefined,
+  workspaceForCloud: (id: string) => (id === WS ? LOCAL : undefined),
   findWorkspace: (id: string) =>
-    id === WS
+    id === LOCAL
       ? ({ id, path: join(root, "workspace") } as Workspace)
       : undefined,
 };
@@ -100,7 +107,7 @@ describe("cloud daedal calls", () => {
   test("pins tasks and sessions to the host's workspace", () => {
     expect(decide(["task", "list", "--json"])).toMatchObject({
       allowed: true,
-      argv: ["task", "list", "--workspace", WS, "--json"],
+      argv: ["task", "list", "--workspace", LOCAL, "--json"],
     });
     expect(decide(["task", "list", "--workspace", OTHER_WS])).toMatchObject({
       allowed: false,
@@ -113,7 +120,7 @@ describe("cloud daedal calls", () => {
     });
     expect(decide(["task", "update", "#7", "--title", "New"])).toMatchObject({
       allowed: true,
-      argv: ["task", "update", "#7", "--title", "New", "--workspace", WS],
+      argv: ["task", "update", "#7", "--title", "New", "--workspace", LOCAL],
     });
     expect(
       decide(["task", "update", "7", "--description-file", "/etc/passwd"]),
@@ -126,7 +133,7 @@ describe("cloud daedal calls", () => {
     });
     expect(decide(["agent", "list"])).toMatchObject({
       allowed: true,
-      argv: ["agent", "list", "--workspace", WS],
+      argv: ["agent", "list", "--workspace", LOCAL],
     });
   });
 

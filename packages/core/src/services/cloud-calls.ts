@@ -142,7 +142,10 @@ function parse(args: string[], spec: Spec): Parsed | string {
  * the call itself is believed.
  */
 export function decideCall(
-  repositories: Pick<SqliteRepositories, "findAgent" | "findTask">,
+  repositories: Pick<
+    SqliteRepositories,
+    "findAgent" | "findTask" | "workspaceForCloud"
+  >,
   hostId: string,
   call: Pick<DaedalCall, "argv" | "env">,
 ): CallDecision {
@@ -150,7 +153,8 @@ export function decideCall(
     allowed: false,
     reason,
   });
-  const workspaceId = cloudHostWorkspace(hostId);
+  const cloudId = cloudHostWorkspace(hostId);
+  const workspaceId = cloudId && repositories.workspaceForCloud(cloudId);
   if (!workspaceId) return refuse("an unknown host");
   const argv = call.argv.filter((argument) => argument !== "--json");
   const json = argv.length !== call.argv.length;
@@ -286,7 +290,7 @@ const tail = (text: string) =>
 export interface CloudCallOptions {
   repositories: Pick<
     SqliteRepositories,
-    "findAgent" | "findTask" | "findWorkspace"
+    "findAgent" | "findTask" | "findWorkspace" | "workspaceForCloud"
   >;
   home: string;
   /** The Mac's own `daedal`, as executable and leading arguments. */
@@ -332,7 +336,9 @@ export class CloudCalls {
       env: call.env ?? {},
     });
     if (!decision.allowed) return refused(decision.reason);
-    const workspaceId = cloudHostWorkspace(hostId)!;
+    const workspaceId = this.options.repositories.workspaceForCloud(
+      cloudHostWorkspace(hostId)!,
+    )!;
     const workspace = this.options.repositories.findWorkspace(workspaceId);
     if (!workspace) return refused("a workspace this Mac does not have");
     const cwd = await mapCloudDirectory(workspace.path, String(call.cwd));

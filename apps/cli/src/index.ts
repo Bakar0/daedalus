@@ -34,6 +34,7 @@ import { callerSession } from "./caller";
 import { accountChecks, accountCommand, accountHelp } from "./accounts";
 import { routineCommand, routineHelp, sessionCommand } from "./routines";
 import { spawnTeamMember, takeTeamOption, teamCommand, teamHelp } from "./team";
+import { cloudCommand, cloudHelp } from "./cloud";
 import {
   execCommand,
   execJsonFlag,
@@ -364,6 +365,7 @@ Usage:
   daedal routine <add|list|get|enable|disable|run|remove|purpose|pause|resume|runs|start|done|fail|report|resolve|reports|feedback> ... [--json]
   daedal team <say|chat|list|goal> ... [--json]
   daedal secret <list|set|remove> ... [--json]
+  daedal cloud <login|status|logout|create|list|get|sleep|wake|delete|spawn> ... [--json]
   daedal exec [--secret <NAME>]... -- <command> [<args>...]
   daedal attention "<reason>" [--session <agent-id>] [--clear] [--json]
   daedal notify "<message>" [--level info|success|error] [--desktop] [--json]
@@ -378,6 +380,7 @@ const commandHelp: Record<string, string> = {
   account: accountHelp,
   secret: secretHelp,
   exec: secretHelp,
+  cloud: cloudHelp,
   workspace: `Workspace commands:
   daedal workspace create <name> [--slug <slug>] [--path <path>]
       [--default-claude-account <account>] [--default-codex-account <account>]
@@ -2653,6 +2656,7 @@ export async function runCli(
       "routine",
       "team",
       "secret",
+      "cloud",
     ].includes(args[0]!)
   )
     throw new DaedalusError("VALIDATION", `Unknown command '${args[0]}'`);
@@ -2685,6 +2689,8 @@ export async function runCli(
       return await teamCommand(context, args.slice(1), json);
     if (args[0] === "secret")
       return await secretCommand(context, args.slice(1), json);
+    if (args[0] === "cloud")
+      return await cloudCommand(context, args.slice(1), json);
     if (args[0] === "routine")
       return await routineCommand(context, args.slice(1), json, (reference) =>
         resolveTaskReference(context, reference),

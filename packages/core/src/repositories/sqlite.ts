@@ -1041,6 +1041,42 @@ export class SqliteRepositories {
     this.database.query("DELETE FROM agent_sessions WHERE id = ?").run(id);
   }
 
+  /** The cloud id of a local workspace's twin on a gateway, if it has one. */
+  cloudWorkspaceId(workspaceId: string): string | undefined {
+    return (
+      this.database
+        .query<{ cloud_id: string }, [string]>(
+          "SELECT cloud_id FROM cloud_workspaces WHERE workspace_id = ?",
+        )
+        .get(workspaceId)?.cloud_id ?? undefined
+    );
+  }
+
+  /** The local workspace a cloud workspace was made from. */
+  workspaceForCloud(cloudId: string): string | undefined {
+    return (
+      this.database
+        .query<{ workspace_id: string }, [string]>(
+          "SELECT workspace_id FROM cloud_workspaces WHERE cloud_id = ?",
+        )
+        .get(cloudId)?.workspace_id ?? undefined
+    );
+  }
+
+  linkCloudWorkspace(workspaceId: string, cloudId: string): void {
+    this.database
+      .query(
+        "INSERT INTO cloud_workspaces (workspace_id, cloud_id) VALUES (?, ?)",
+      )
+      .run(workspaceId, cloudId);
+  }
+
+  unlinkCloudWorkspace(cloudId: string): void {
+    this.database
+      .query("DELETE FROM cloud_workspaces WHERE cloud_id = ?")
+      .run(cloudId);
+  }
+
   createIntegratedTerminal(terminal: IntegratedTerminal): void {
     this.database
       .query(

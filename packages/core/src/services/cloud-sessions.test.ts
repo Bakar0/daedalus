@@ -89,7 +89,9 @@ const setUp = async (home: string) => {
     tmux,
   });
   const workspace = await context.workspaces.create({ name: "Cloud" });
-  const host = new FakeCloudHost(cloudHostId(workspace.id));
+  const cloudId = crypto.randomUUID();
+  context.repositories.linkCloudWorkspace(workspace.id, cloudId);
+  const host = new FakeCloudHost(cloudHostId(cloudId));
   context.hosts.register(host);
   return { context, tmux, workspace, host };
 };
