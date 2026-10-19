@@ -142,6 +142,15 @@ describe("SkillService", () => {
         );
         expect(routine).toContain(`"${join(home, "bin", "daedal")}"`);
         expect(routine).not.toContain("{{daedal}}");
+        // The compact skill aims at the sizes the session header measures.
+        const compact = await readFile(
+          join(claudeHome, "skills", "daedalus-compact-workspace", "SKILL.md"),
+          "utf8",
+        );
+        expect(compact).toContain("| `JOURNAL.md` | 50 KB");
+        expect(compact).toContain("under 25 KB");
+        expect(compact).toContain("| `TEAM.md`    | 20 KB");
+        expect(compact).not.toContain("{{");
         expect(
           await readlink(join(agentsHome, "skills", "daedalus-rebirth")),
         ).toBe(join(home, "skills", "daedalus-rebirth"));
