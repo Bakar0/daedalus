@@ -4,14 +4,18 @@
  * Claude and Codex agents.
  */
 import {
+  customSessionColor,
   DEFAULT_AUTO_REBIRTH_PERCENT,
   type AutoRebirthDto,
+  type NamedSessionColorDto,
   type SessionColorDto,
 } from "@daedalus/protocol";
+import { useState } from "react";
 import { Menu, MenuDots } from "./Menu";
 import { PercentInput } from "./PercentInput";
+import { sessionColorStyle } from "./session-color-style";
 
-export const SESSION_COLORS: readonly SessionColorDto[] = [
+export const SESSION_COLORS: readonly NamedSessionColorDto[] = [
   "red",
   "orange",
   "gold",
@@ -25,7 +29,37 @@ export const SESSION_COLORS: readonly SessionColorDto[] = [
 const capitalize = (text: string) =>
   text.slice(0, 1).toUpperCase() + text.slice(1);
 
-/** One swatch per color plus None, as a radio row. */
+/** `hsl()` as the `#rrggbb` a session color is kept in. */
+function hslHex(hue: number, saturation: number, lightness: number): string {
+  const s = saturation / 100;
+  const l = lightness / 100;
+  const channel = (n: number) => {
+    const k = (n + hue / 30) % 12;
+    const value =
+      l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(value * 255)
+      .toString(16)
+      .padStart(2, "0");
+  };
+  return `#${channel(0)}${channel(8)}${channel(4)}`;
+}
+
+/**
+ * The grid the rainbow swatch opens: ten hues from dark to light, and a row
+ * of greys. Ten across, so it lines up under the swatch row.
+ */
+export const COLOR_GRID: readonly string[] = [
+  ...[34, 46, 58, 72].flatMap((lightness) =>
+    Array.from({ length: 10 }, (_, index) => hslHex(index * 36, 62, lightness)),
+  ),
+  ...Array.from({ length: 10 }, (_, index) => hslHex(0, 0, 18 + index * 8)),
+];
+
+/**
+ * One swatch per color plus None, as a radio row, and last a rainbow swatch
+ * that opens a grid of more colors under the row. Picking from the grid works
+ * like picking a swatch: in a menu, it closes the menu.
+ */
 export function ColorSwatches({
   value,
   onChange,
@@ -36,6 +70,8 @@ export function ColorSwatches({
   /** `menuitemradio` inside a menu, `radio` in a form. */
   role?: "radio" | "menuitemradio";
 }) {
+  const [gridOpen, setGridOpen] = useState(false);
+  const custom = customSessionColor(value) ?? null;
   return (
     <span
       aria-label="Session color"
@@ -57,6 +93,41 @@ export function ColorSwatches({
           type="button"
         />
       ))}
+      <button
+        aria-checked={custom !== null}
+        aria-expanded={gridOpen}
+        aria-label="More colors"
+        className="color-swatch color-swatch-more"
+        onClick={(event) => {
+          // Opening the grid keeps the menu open.
+          event.stopPropagation();
+          setGridOpen(!gridOpen);
+        }}
+        role={role}
+        title={custom ? `Color ${custom}. More colors` : "More colors"}
+        type="button"
+      />
+      {gridOpen && (
+        <span aria-label="More colors" className="color-grid" role="group">
+          {COLOR_GRID.map((hex) => (
+            <button
+              aria-checked={custom === hex}
+              aria-label={hex}
+              className="color-swatch"
+              data-color={hex}
+              key={hex}
+              onClick={() => {
+                setGridOpen(false);
+                if (value !== hex) onChange(hex as SessionColorDto);
+              }}
+              role={role}
+              style={sessionColorStyle(hex as SessionColorDto)}
+              title={hex}
+              type="button"
+            />
+          ))}
+        </span>
+      )}
     </span>
   );
 }
