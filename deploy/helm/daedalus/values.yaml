@@ -22,8 +22,11 @@ tenant:
   # Egress to these CIDRs is blocked for workspace pods, so a workspace cannot
   # reach other namespaces' pods, nodes or the cloud metadata service. Set it
   # to cover your cluster's pod, service and node ranges.
+  # The chart renders IPv4 blocks only; the policy has no IPv6 egress rule, so
+  # fd00:ec2::254 is already unreachable.
   blockedEgressCIDRs:
     - 10.0.0.0/8
     - 172.16.0.0/12
     - 192.168.0.0/16
     - 169.254.0.0/16
+    - 169.254.169.254/32 # cloud instance metadata, also inside the /16
