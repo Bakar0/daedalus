@@ -1,0 +1,7 @@
+apiVersion: v2
+name: daedalus
+description: Daedalus cloud workspaces. A gateway that runs one pod per workspace.
+type: application
+version: 0.1.0
+appVersion: dev
+kubeVersion: ">=1.30.0-0"
