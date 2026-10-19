@@ -76,6 +76,7 @@ const ALLOWED: Record<string, Spec> = {
     ],
     positionals: { min: 1, max: 1 },
   },
+  "task status": { values: ["workspace"], positionals: { min: 2, max: 2 } },
   "agent list": {
     values: ["workspace"],
     flags: ["running", "archived"],
@@ -89,6 +90,7 @@ const WORKSPACE_PINNED = new Set([
   "task list",
   "task get",
   "task update",
+  "task status",
   "agent list",
 ]);
 
@@ -198,7 +200,11 @@ export function decideCall(
     parsed.values.get("description-file") !== "-"
   )
     return refuse("a description file on this Mac");
-  if (command === "task get" || command === "task update") {
+  if (
+    command === "task get" ||
+    command === "task update" ||
+    command === "task status"
+  ) {
     const reference = parsed.positionals[0]!;
     if (UUID.test(reference)) {
       if (repositories.findTask(reference)?.workspaceId !== workspaceId)

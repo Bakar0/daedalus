@@ -137,6 +137,26 @@ describe("cloud daedal calls", () => {
     });
   });
 
+  test("allows task status on the workspace's own tasks only", () => {
+    expect(decide(["task", "status", "#7", "done"])).toMatchObject({
+      allowed: true,
+      argv: ["task", "status", "#7", "done", "--workspace", LOCAL],
+    });
+    expect(decide(["task", "status", OWN_TASK, "done"])).toMatchObject({
+      allowed: true,
+    });
+    expect(decide(["task", "status", OTHER_TASK, "done"])).toMatchObject({
+      allowed: false,
+    });
+    expect(decide(["task", "status", "other#1", "done"])).toMatchObject({
+      allowed: false,
+    });
+    expect(
+      decide(["task", "status", "7", "done", "--workspace", OTHER_WS]),
+    ).toMatchObject({ allowed: false });
+    expect(decide(["task", "status", "7"])).toMatchObject({ allowed: false });
+  });
+
   test("refuses an option hidden in a value or a positional", () => {
     expect(
       decide(["task", "update", "7", "--title", "--workspace"]),
