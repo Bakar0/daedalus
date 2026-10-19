@@ -1,0 +1,4 @@
+Daedalus gateway installed in namespace {{ .Release.Namespace }}.
+In-cluster URL: {{ include "daedalus.internalUrl" . }}
+Label the namespace for restricted Pod Security:
+  kubectl label ns {{ .Release.Namespace }} pod-security.kubernetes.io/enforce=restricted

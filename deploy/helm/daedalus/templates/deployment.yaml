@@ -1,0 +1,104 @@
+{{- $r := .Values.workspace.resources }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "daedalus.gatewayName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "daedalus.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # SQLite on a ReadWriteOnce volume: never run two gateways at once.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "daedalus.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "daedalus.labels" . | nindent 8 }}
+        app.kubernetes.io/component: gateway
+      annotations:
+        checksum/tenant: {{ include (print $.Template.BasePath "/tenant-configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "daedalus.gatewayName" . }}
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: "{{ .Values.image.gateway.repository }}:{{ .Values.image.gateway.tag }}"
+          imagePullPolicy: {{ .Values.image.gateway.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: {{ .Values.gateway.service.port }}
+          env:
+            - name: DAEDALUS_GATEWAY_PORT
+              value: {{ .Values.gateway.service.port | quote }}
+            - name: DAEDALUS_GATEWAY_DB
+              value: /data/gateway.sqlite
+            - name: DAEDALUS_GATEWAY_DEV_LOGIN
+              value: {{ .Values.gateway.devLogin | quote }}
+            - name: DAEDALUS_GATEWAY_PUBLIC_URL
+              value: {{ .Values.gateway.publicUrl | quote }}
+            - name: DAEDALUS_GATEWAY_INTERNAL_URL
+              value: {{ include "daedalus.internalUrl" . | quote }}
+            - name: DAEDALUS_GATEWAY_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: DAEDALUS_GATEWAY_SERVICE_ACCOUNT
+              value: {{ include "daedalus.gatewayName" . | quote }}
+            - name: DAEDALUS_RUNNER_IMAGE
+              value: "{{ .Values.image.runner.repository }}:{{ .Values.image.runner.tag }}"
+            - name: DAEDALUS_RUNNER_IMAGE_PULL_POLICY
+              value: {{ .Values.image.runner.pullPolicy | quote }}
+            - name: DAEDALUS_WORKSPACE_STORAGE_CLASS
+              value: {{ .Values.workspace.storageClass | quote }}
+            - name: DAEDALUS_WORKSPACE_STORAGE_SIZE
+              value: {{ .Values.workspace.storageSize | quote }}
+            - name: DAEDALUS_WORKSPACE_CPU_REQUEST
+              value: {{ $r.requests.cpu | quote }}
+            - name: DAEDALUS_WORKSPACE_MEMORY_REQUEST
+              value: {{ $r.requests.memory | quote }}
+            - name: DAEDALUS_WORKSPACE_CPU_LIMIT
+              value: {{ $r.limits.cpu | quote }}
+            - name: DAEDALUS_WORKSPACE_MEMORY_LIMIT
+              value: {{ $r.limits.memory | quote }}
+            - name: DAEDALUS_WORKSPACE_RUNTIME_CLASS
+              value: {{ .Values.workspace.runtimeClassName | quote }}
+            - name: DAEDALUS_WORKSPACE_IDLE_MINUTES
+              value: {{ .Values.workspace.idleMinutes | quote }}
+            - name: DAEDALUS_TENANT_DIR
+              value: /etc/daedalus/tenant
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: tmp, mountPath: /tmp }
+            - { name: tenant, mountPath: /etc/daedalus/tenant, readOnly: true }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "daedalus.gatewayName" . }}-data
+        - name: tmp
+          emptyDir: {}
+        - name: tenant
+          configMap:
+            name: daedalus-tenant

@@ -1,0 +1,51 @@
+# Needs Kubernetes 1.30 or later (ValidatingAdmissionPolicy is GA there).
+{{- $user := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "daedalus.gatewayName" .) }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: daedalus-gateway-scope
+  labels:
+    {{- include "daedalus.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [namespaces]
+      - apiGroups: [rbac.authorization.k8s.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [rolebindings]
+  matchConditions:
+    - name: from-gateway
+      expression: request.userInfo.username == {{ $user | quote }}
+  variables:
+    - name: obj
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+  validations:
+    - message: the gateway may only change namespaces named u-* with the daedalus.dev/user label
+      expression: >-
+        request.resource.resource != 'namespaces' ||
+        (variables.obj.metadata.name.startsWith('u-') &&
+         has(variables.obj.metadata.labels) &&
+         'daedalus.dev/user' in variables.obj.metadata.labels)
+    - message: the gateway may only change rolebindings in namespaces named u-* with the daedalus.dev/user label, and only to daedalus-tenant-admin
+      expression: >-
+        request.resource.resource != 'rolebindings' ||
+        (request.namespace.startsWith('u-') &&
+         has(namespaceObject.metadata.labels) &&
+         'daedalus.dev/user' in namespaceObject.metadata.labels &&
+         variables.obj.roleRef.kind == 'ClusterRole' &&
+         variables.obj.roleRef.name == 'daedalus-tenant-admin')
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: daedalus-gateway-scope
+  labels:
+    {{- include "daedalus.labels" . | nindent 4 }}
+spec:
+  policyName: daedalus-gateway-scope
+  validationActions: [Deny]

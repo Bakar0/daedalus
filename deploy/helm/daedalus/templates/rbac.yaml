@@ -1,0 +1,59 @@
+# The gateway creates namespaces at runtime and RBAC has no namespace wildcard,
+# so it gets no cluster-wide access to pods or secrets. Instead:
+#  1. daedalus-gateway (cluster-wide) can manage namespaces and rolebindings,
+#     and may bind only daedalus-tenant-admin.
+#  2. After creating u-<userId>, the gateway creates a RoleBinding there from its
+#     ServiceAccount to daedalus-tenant-admin. Only then can it touch pods and
+#     secrets, and only in that namespace.
+#  3. A ValidatingAdmissionPolicy (admission-policy.yaml) limits namespace and
+#     rolebinding writes by the gateway to namespaces named u-* with the
+#     daedalus.dev/user label.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: daedalus-gateway
+  labels:
+    {{- include "daedalus.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, create, delete]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [rolebindings]
+    verbs: [create, delete]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles]
+    verbs: [bind]
+    resourceNames: [daedalus-tenant-admin]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: daedalus-tenant-admin
+  labels:
+    {{- include "daedalus.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods, secrets, persistentvolumeclaims, resourcequotas, serviceaccounts]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: daedalus-gateway
+  labels:
+    {{- include "daedalus.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: daedalus-gateway
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "daedalus.gatewayName" . }}
+    namespace: {{ .Release.Namespace }}
