@@ -6323,10 +6323,12 @@ dd {
   border-color: var(--accent) !important;
   color: var(--text) !important;
 }
+/* Ten across: None, the eight colors and More colors; the grid of more
+   colors spans the full width under them. */
 .color-swatches {
-  display: flex;
-  flex-wrap: nowrap;
+  display: grid;
   gap: 5px;
+  grid-template-columns: repeat(10, 18px);
   padding: 4px 9px 6px;
 }
 .color-swatch {
@@ -6355,6 +6357,34 @@ dd {
   top: 50%;
   transform: rotate(-45deg);
   width: 12px;
+}
+/* More colors: always a rainbow; the ring says a grid color is chosen. */
+.color-swatch-more {
+  background: conic-gradient(
+    #e5675f,
+    #f0b44c,
+    #5fb878,
+    #4cb5ad,
+    #5b9be6,
+    #a07ee0,
+    #e076b0,
+    #e5675f
+  ) !important;
+  border-color: transparent !important;
+}
+.color-swatch-more::after {
+  content: none;
+}
+/* The grid opens on its own line under the swatches, ten across. */
+.color-grid {
+  display: grid;
+  gap: 5px;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(10, 18px);
+  padding-top: 6px;
+}
+.color-grid .color-swatch {
+  border-color: transparent !important;
 }
 .color-swatch[aria-checked="true"] {
   box-shadow:

@@ -15,6 +15,7 @@ import {
   sessionDisplayOrder,
   teamLookup,
 } from "../../desktop/src/renderer/session-order";
+import { sessionColorStyle } from "../../desktop/src/renderer/session-color-style";
 import {
   AgentStatusDot,
   type SessionStatusView,
@@ -147,6 +148,7 @@ export function SessionRowView({
       <button
         className="session-row"
         data-color={session.color ?? undefined}
+        style={sessionColorStyle(session.color)}
         data-session-id={session.id}
         data-team-member={row.member ? "true" : undefined}
         onClick={() => onOpen(session.id)}

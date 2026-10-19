@@ -979,7 +979,8 @@ export class AgentService {
             input,
           )
         : chosen;
-    if (input.color !== undefined) sessionColor(input.color);
+    const color =
+      input.color === undefined ? undefined : sessionColor(input.color);
     // Checked before anything is prepared, so a session that cannot hold an
     // ability is refused without leaving a worktree behind. A successor
     // holds what its predecessor held.
@@ -1100,7 +1101,7 @@ export class AgentService {
       pinnedAt:
         input.continueFrom?.pinnedAt ??
         (input.pinned ? new Date().toISOString() : null),
-      color: input.continueFrom?.color ?? input.color ?? null,
+      color: input.continueFrom?.color ?? color ?? null,
       autoRebirthPercent: input.continueFrom?.autoRebirthPercent ?? null,
       account,
       teamId: team?.teamId ?? null,
@@ -1679,7 +1680,7 @@ export class AgentService {
     return { ...agent, pinnedAt };
   }
 
-  /** Marks a session with one of the fixed colors, or clears it with null. */
+  /** Marks a session with a named or `#rrggbb` color, or clears it with null. */
   async setColor(id: string, color: string | null): Promise<AgentSession> {
     const agent = await this.get(id);
     const value = color === null ? null : sessionColor(color);
@@ -2392,12 +2393,16 @@ export class AgentService {
   }
 }
 
-/** A session color, or a clear refusal naming the ones there are. */
+/**
+ * A session color: a named one, or `#rrggbb` (kept in lower case). Anything
+ * else is refused with the names there are.
+ */
 export function sessionColor(value: string): SessionColor {
-  if (!(SESSION_COLORS as readonly string[]).includes(value))
-    throw new DaedalusError(
-      "VALIDATION",
-      `Color must be one of: ${SESSION_COLORS.join(", ")}`,
-    );
-  return value as SessionColor;
+  if ((SESSION_COLORS as readonly string[]).includes(value))
+    return value as SessionColor;
+  if (/^#[0-9a-f]{6}$/i.test(value)) return value.toLowerCase() as SessionColor;
+  throw new DaedalusError(
+    "VALIDATION",
+    `Color must be one of: ${SESSION_COLORS.join(", ")}, or #rrggbb`,
+  );
 }

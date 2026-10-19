@@ -164,8 +164,18 @@ export function resolveAutoRebirth(
   return level === "off" ? null : level;
 }
 
-export type SessionColorDto =
+export type NamedSessionColorDto =
   "red" | "orange" | "gold" | "green" | "teal" | "blue" | "purple" | "pink";
+
+/** One of the named colors, or any color picked as `#rrggbb`. */
+export type SessionColorDto = NamedSessionColorDto | `#${string}`;
+
+/** The `#rrggbb` of a picked color; undefined for a named color or none. */
+export function customSessionColor(
+  color: SessionColorDto | null | undefined,
+): string | undefined {
+  return color?.startsWith("#") ? color : undefined;
+}
 
 export type AbilityIdDto = "routines" | "orchestration";
 

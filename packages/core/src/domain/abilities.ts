@@ -12,7 +12,8 @@ export const SESSION_COLORS = [
   "pink",
 ] as const;
 
-export type SessionColor = (typeof SESSION_COLORS)[number];
+/** One of the named colors, or any color picked as `#rrggbb`. */
+export type SessionColor = (typeof SESSION_COLORS)[number] | `#${string}`;
 
 /**
  * What a session can be granted on top of being a session: routines, and

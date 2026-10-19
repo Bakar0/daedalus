@@ -191,7 +191,7 @@ Without `--workspace`, these commands use the workspace of the session they run 
 ```text
 daedal session rename <session> <name>
 daedal session pin|unpin <session>
-daedal session color <session> <red|orange|gold|green|teal|blue|purple|pink|none>
+daedal session color <session> <red|orange|gold|green|teal|blue|purple|pink|#rrggbb|none>
 daedal session rebirth-at <session> <percent>|off|default
 daedal session abilities <session>
 daedal session grant|revoke <session> <ability>

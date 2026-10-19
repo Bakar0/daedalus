@@ -448,6 +448,15 @@ describe("abilities", () => {
       await expect(
         context.agents.setColor(session.id, "mauve"),
       ).rejects.toThrow("Color must be one of");
+      // Any picked color, kept in lower case.
+      await context.agents.setColor(session.id, "#1A2B3C");
+      expect(await context.agents.get(session.id)).toMatchObject({
+        color: "#1a2b3c",
+      });
+      for (const bad of ["#12345", "#1234567", "#gggggg", "1a2b3c"])
+        await expect(context.agents.setColor(session.id, bad)).rejects.toThrow(
+          "or #rrggbb",
+        );
     });
   });
 

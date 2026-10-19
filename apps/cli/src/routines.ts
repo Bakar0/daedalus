@@ -27,7 +27,7 @@ export const routineHelp = {
   session: `Session commands:
   daedal session rename <session> <name>
   daedal session pin|unpin <session>
-  daedal session color <session> <${SESSION_COLORS.join("|")}|none>
+  daedal session color <session> <${SESSION_COLORS.join("|")}|#rrggbb|none>
   daedal session rebirth-at <session> <percent>|off|default
   daedal session abilities <session>
   daedal session grant <session> <ability>
@@ -282,7 +282,7 @@ export async function sessionCommand(
     return 0;
   }
   if (action === "color") {
-    const usage = `daedal session color <session> <${SESSION_COLORS.join("|")}|none>`;
+    const usage = `daedal session color <session> <${SESSION_COLORS.join("|")}|#rrggbb|none>`;
     expectPositionals(parsed.positionals, 2, usage);
     const value = parsed.positionals[1]!;
     const session = await context.agents.setColor(

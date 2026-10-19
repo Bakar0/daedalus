@@ -7,6 +7,7 @@ import type {
 } from "@daedalus/protocol";
 import { relativeTime } from "../routines/time";
 import { useOutsideDismiss } from "../use-outside-dismiss";
+import { sessionColorStyle } from "../session-color-style";
 
 /**
  * The bar above the terminal of a team's lead or member: which team, and a
@@ -37,6 +38,7 @@ export function TeamBar({
       aria-label="Team"
       className="routine-bar team-bar"
       data-color={color ?? undefined}
+      style={sessionColorStyle(color)}
     >
       <div className="routine-bar-row">
         <span className="routine-bar-text">

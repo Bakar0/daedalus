@@ -12,13 +12,15 @@ Any session, with or without abilities:
 ```
 daedal session rename <session> <name>
 daedal session pin|unpin <session>
-daedal session color <session> <red|orange|gold|green|teal|blue|purple|pink|none>
+daedal session color <session> <red|orange|gold|green|teal|blue|purple|pink|#rrggbb|none>
 ```
 
 `<session>` is a session id, or a session's name when exactly one live
 session has it. Pinned sessions sit at the top of their workspace's list, in
 the order they were pinned. The color marks the session's card on its left
-edge, and the chip on tasks its routines file. A rebirth successor keeps the
+edge, and the chip on tasks its routines file. Besides the eight named colors,
+a session can take any `#rrggbb`; in the app, the rainbow swatch at the end
+of the color row opens a grid of 50 more. A rebirth successor keeps the
 pin and the color, and a session that holds routines also keeps its exact
 name rather than gaining a ` · 2`, because its routines' tasks are signed
 with it. A team's lead is numbered like any other session; the team's name

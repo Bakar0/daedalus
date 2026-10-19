@@ -1,4 +1,5 @@
 import type { RoutineReportDto, SessionColorDto } from "@daedalus/protocol";
+import { sessionColorStyle } from "../session-color-style";
 
 export type ReportVerdictChoice = "useful" | "noise" | null;
 
@@ -35,6 +36,7 @@ export function ReportDetails({
           <span
             className="report-session"
             data-color={owner.color ?? undefined}
+            style={sessionColorStyle(owner.color)}
           >
             {owner.name}
           </span>
