@@ -257,3 +257,24 @@ export function isTyping(data: string): boolean {
     .replace(/\x1b[O@-_][^\x1b]?/g, "");
   return rest.length > 0;
 }
+
+/**
+ * `TerminalConnection` builds its bridge synchronously, and a host opens its
+ * terminal asynchronously, so this opens the terminal first and hands it
+ * over. Output that arrives before the connection exists is kept for it.
+ */
+export async function openedBridge(
+  open: (onOutput: (output: Uint8Array) => void) => Promise<TerminalBridge>,
+): Promise<(onOutput: (output: Uint8Array) => void) => TerminalBridge> {
+  let sink: ((output: Uint8Array) => void) | undefined;
+  const early: Uint8Array[] = [];
+  const bridge = await open((output) => {
+    if (sink) sink(output);
+    else early.push(output);
+  });
+  return (onOutput) => {
+    sink = onOutput;
+    for (const output of early.splice(0)) onOutput(output);
+    return bridge;
+  };
+}

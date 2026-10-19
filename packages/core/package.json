@@ -6,6 +6,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@daedalus/platform": "workspace:*"
+    "@daedalus/platform": "workspace:*",
+    "@daedalus/remote-protocol": "workspace:*"
   }
 }

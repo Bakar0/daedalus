@@ -174,6 +174,12 @@ export interface AgentSession {
    * spawn`, as a handoff does, or null when the user or the app did.
    */
   spawnedBy: UUID | null;
+  /**
+   * The cloud host it runs on (`ws:<workspaceId>`), or null for this Mac.
+   * Fixed at spawn. On a cloud host `workingDirectory` is relative to the
+   * workspace root there.
+   */
+  hostId: string | null;
 }
 
 export interface IntegratedTerminal {
