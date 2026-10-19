@@ -18,6 +18,31 @@ const CODES: Record<GatewayErrorCode, ErrorCode> = {
   INTERNAL: "INTERNAL",
 };
 
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * The origin of a gateway address. It must be https: the token travels in
+ * every request, and the runner keys this Mac pins come back in answers.
+ * Plain http is allowed only to this machine, as for a kind cluster.
+ */
+export function gatewayOrigin(address: string): string {
+  let url: URL;
+  try {
+    url = new URL(address);
+  } catch {
+    throw new DaedalusError("VALIDATION", "The gateway address is not a URL");
+  }
+  if (
+    url.protocol !== "https:" &&
+    !(url.protocol === "http:" && LOOPBACK.has(url.hostname))
+  )
+    throw new DaedalusError(
+      "VALIDATION",
+      "A gateway address starts with https:// (http:// only for localhost)",
+    );
+  return url.origin;
+}
+
 /** The gateway's HTTP API (packages/remote-protocol/src/gateway.ts). */
 export class GatewayClient {
   readonly url: string;
@@ -27,13 +52,7 @@ export class GatewayClient {
     private readonly token?: string,
     private readonly fetcher: typeof fetch = fetch,
   ) {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:")
-      throw new DaedalusError(
-        "VALIDATION",
-        "A gateway address starts with https:// or http://",
-      );
-    this.url = parsed.origin;
+    this.url = gatewayOrigin(url);
   }
 
   devLogin(email: string): Promise<DevLoginResponse> {
@@ -98,6 +117,8 @@ export class GatewayClient {
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: AbortSignal.timeout(30_000),
+        // A redirect would carry the token to another origin.
+        redirect: "error",
       });
     } catch (error) {
       throw new DaedalusError(

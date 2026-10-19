@@ -12,6 +12,19 @@ import type { RunnerTransport } from "./link";
 /** A start waits for the provider's first screen, so it gets longer. */
 const START_TIMEOUT_MS = 60_000;
 const LIST_TIMEOUT_MS = 5_000;
+const MAX_SESSIONS = 10_000;
+const MAX_CAPTURE = 1024 * 1024;
+
+/**
+ * A reply that is not the shape its method promises. The runner is not
+ * trusted, so a reply is checked before it is used, and a bad one reads as
+ * the host being unavailable.
+ */
+const malformed = (method: string) =>
+  new DaedalusError(
+    "DEPENDENCY",
+    `The workspace's runner sent a malformed reply to ${method}`,
+  );
 
 /**
  * A cloud workspace's pod, reached through its runner. Each call is one of
@@ -61,26 +74,44 @@ export class RemoteSessionHost implements SessionHost {
     );
   }
 
-  isLive(session: string): Promise<boolean> {
-    return this.transport.request(this.workspaceId, "host.isLive", {
-      session,
-    });
+  async isLive(session: string): Promise<boolean> {
+    const live: unknown = await this.transport.request(
+      this.workspaceId,
+      "host.isLive",
+      { session },
+    );
+    if (typeof live !== "boolean") throw malformed("host.isLive");
+    return live;
   }
 
-  listLive(): Promise<string[]> {
-    return this.transport.request(
+  async listLive(): Promise<string[]> {
+    const names: unknown = await this.transport.request(
       this.workspaceId,
       "host.listLive",
       null,
       LIST_TIMEOUT_MS,
     );
+    if (
+      !Array.isArray(names) ||
+      names.length > MAX_SESSIONS ||
+      !names.every((name) => typeof name === "string")
+    )
+      throw malformed("host.listLive");
+    return names as string[];
   }
 
-  capture(session: string, options?: { styled?: boolean }): Promise<string> {
-    return this.transport.request(this.workspaceId, "host.capture", {
-      session,
-      ...(options?.styled ? { styled: true } : {}),
-    });
+  async capture(
+    session: string,
+    options?: { styled?: boolean },
+  ): Promise<string> {
+    const screen: unknown = await this.transport.request(
+      this.workspaceId,
+      "host.capture",
+      { session, ...(options?.styled ? { styled: true } : {}) },
+    );
+    if (typeof screen !== "string") throw malformed("host.capture");
+    // A screen is a few kilobytes; the rest of a long one is scrollback.
+    return screen.length > MAX_CAPTURE ? screen.slice(-MAX_CAPTURE) : screen;
   }
 
   async sendKeys(session: string, keys: string[]): Promise<void> {

@@ -74,14 +74,19 @@ describe("cloud account", () => {
 
 describe("gateway client", () => {
   test("sends the bearer token and reads gateway errors", async () => {
-    const seen: Array<{ url: string; auth: string | null }> = [];
-    const client = new GatewayClient("http://g:8080/ignored", "tok", (async (
+    const seen: Array<{
+      url: string;
+      auth: string | null;
+      redirect: RequestRedirect | undefined;
+    }> = [];
+    const client = new GatewayClient("https://g:8443/ignored", "tok", (async (
       url: URL,
       init: RequestInit,
     ) => {
       seen.push({
         url: String(url),
         auth: new Headers(init.headers).get("authorization"),
+        redirect: init.redirect,
       });
       return Response.json(
         { error: { code: "NOT_FOUND", message: "No such workspace" } },
@@ -93,13 +98,31 @@ describe("gateway client", () => {
       message: "No such workspace",
     });
     expect(seen).toEqual([
-      { url: "http://g:8080/v1/workspaces/w1", auth: "Bearer tok" },
+      {
+        url: "https://g:8443/v1/workspaces/w1",
+        auth: "Bearer tok",
+        redirect: "error",
+      },
     ]);
-    expect(client.connectUrl("m1")).toBe("ws://g:8080/v1/connect?macId=m1");
+    expect(client.connectUrl("m1")).toBe("wss://g:8443/v1/connect?macId=m1");
   });
 
-  test("refuses an address that is not http", () => {
-    expect(() => new GatewayClient("file:///etc")).toThrow();
+  test("takes https, and http only to this machine", () => {
+    for (const address of [
+      "file:///etc",
+      "http://gateway.example.com",
+      "http://10.0.0.5:8080",
+      "http://localhost.evil.com",
+      "not a url",
+    ])
+      expect(() => new GatewayClient(address)).toThrow();
+    for (const address of [
+      "https://gateway.example.com",
+      "http://localhost:8080",
+      "http://127.0.0.1:8080",
+      "http://[::1]:8080",
+    ])
+      expect(() => new GatewayClient(address)).not.toThrow();
   });
 });
 

@@ -306,8 +306,8 @@ export interface CloudCallOptions {
 }
 
 /**
- * Answers `daedal.call` for one host. A call id already answered gets the
- * same answer again without running anything, which is what makes the
+ * Answers `daedal.call` for every host. A call id that host already had
+ * answered gets the same answer without running anything, which makes the
  * runner's replay of its queue safe.
  */
 export class CloudCalls {
@@ -316,10 +316,13 @@ export class CloudCalls {
   constructor(private readonly options: CloudCallOptions) {}
 
   async answer(hostId: string, call: DaedalCall): Promise<CommandResult> {
-    const known = this.#answered.get(call.callId);
+    // Keyed by host too: a call id is only unique within one runner's calls,
+    // and one runner must never get an answer made for another.
+    const key = `${hostId}\n${String(call.callId)}`;
+    const known = this.#answered.get(key);
     if (known) return known;
     const result = await this.#run(hostId, call);
-    this.#answered.set(call.callId, result);
+    this.#answered.set(key, result);
     // Enough to cover a replayed queue; the oldest answers go first.
     if (this.#answered.size > 4096)
       this.#answered.delete(this.#answered.keys().next().value!);
