@@ -7,7 +7,7 @@ import {
   saveRemoteKeepAwake,
   saveRemoteMacName,
 } from "@daedalus/core";
-import { runCommand, TmuxPtyBridge } from "@daedalus/platform";
+import { runCommand } from "@daedalus/platform";
 import type {
   DesktopSnapshotDto,
   AdminAccountDto,
@@ -60,7 +60,12 @@ import {
   RemoteStore,
   type SecretVault,
 } from "./remote-store";
-import { isTyping, TerminalConnection, type TerminalSocket } from "./terminal";
+import {
+  isTyping,
+  openedBridge,
+  TerminalConnection,
+  type TerminalSocket,
+} from "./terminal";
 
 export {
   type AuditEntry,
@@ -1199,6 +1204,14 @@ export function agentTerminalOpener(
       void sizes.release(session).catch(() => undefined);
     };
     await sizes.hold(session, initial);
+    const createBridge = await openedBridge((onOutput) =>
+      context.agents
+        .sessionHost(agent)
+        .openTerminal(session, initial, onOutput),
+    ).catch((error: unknown) => {
+      release();
+      throw error;
+    });
     const connection = new TerminalConnection({
       agentId: agent.id,
       socket: {
@@ -1210,13 +1223,7 @@ export function agentTerminalOpener(
         },
       },
       status: "reconnected",
-      createBridge: (onOutput) =>
-        new TmuxPtyBridge(
-          onOutput,
-          { socketName: tmux.socketName, session },
-          initial,
-          tmux.executable,
-        ),
+      createBridge,
       onInput: (data) => {
         if (isTyping(data)) context.deliveryGate.noteKeystroke(agent.id);
       },

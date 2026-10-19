@@ -21,7 +21,6 @@ import {
   CommandTmuxClient,
   isInheritedSessionVariable,
   pathExists,
-  TmuxPtyBridge,
 } from "@daedalus/platform";
 import type {
   DesktopCommand,
@@ -46,6 +45,7 @@ import { createDesktopRequestHandlers, desktopDataFingerprint } from "./rpc";
 import {
   authorizeTerminalRequest,
   isTyping,
+  openedBridge,
   TerminalConnection,
 } from "./terminal";
 
@@ -184,10 +184,6 @@ const terminalTmux = context.tmux;
 if (!(terminalTmux instanceof CommandTmuxClient))
   throw new Error("Desktop terminal requires the command tmux adapter");
 const phoneSizes = new PhoneWindowSize(terminalTmux);
-const terminalTarget = (session: string) => ({
-  socketName: terminalTmux.socketName,
-  session,
-});
 const preexistingLiveIds = new Set([
   ...context.repositories
     .listAgents()
@@ -230,10 +226,12 @@ const server = Bun.serve<SocketData>({
   websocket: {
     async open(socket) {
       try {
-        const target =
+        const agent =
           socket.data.targetKind === "agent"
             ? await context.agents.get(socket.data.targetId)
-            : await context.terminals.get(socket.data.targetId);
+            : undefined;
+        const target =
+          agent ?? (await context.terminals.get(socket.data.targetId));
         if (target.status !== "running" && target.status !== "starting") {
           const status: TerminalServerMessage = {
             type: "status",
@@ -244,7 +242,16 @@ const server = Bun.serve<SocketData>({
           socket.close();
           return;
         }
-        const tmuxTarget = terminalTarget(target.tmuxSession);
+        const host = agent
+          ? context.agents.sessionHost(agent)
+          : context.hosts.local;
+        const createBridge = await openedBridge((onOutput) =>
+          host.openTerminal(
+            target.tmuxSession,
+            socket.data.initialSize ?? { cols: 80, rows: 24 },
+            onOutput,
+          ),
+        );
         const connection = new TerminalConnection({
           agentId: target.id,
           socket,
@@ -253,13 +260,7 @@ const server = Bun.serve<SocketData>({
           )
             ? "reconnected"
             : "live",
-          createBridge: (onOutput) =>
-            new TmuxPtyBridge(
-              onOutput,
-              tmuxTarget,
-              socket.data.initialSize,
-              terminalTmux.executable,
-            ),
+          createBridge,
           onInput: (data) => {
             // A real keystroke holds Daedalus's own typing into this
             // session for a while, so a routine never lands in a draft.

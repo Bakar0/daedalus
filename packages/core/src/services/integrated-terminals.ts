@@ -1,14 +1,10 @@
 import { isAbsolute, resolve } from "node:path";
-import {
-  findExecutable,
-  isPathInside,
-  pathExists,
-  type TmuxClient,
-} from "@daedalus/platform";
+import { findExecutable, isPathInside, pathExists } from "@daedalus/platform";
 import type { DaedalusConfig } from "../config";
 import type { IntegratedTerminal } from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
+import type { SessionHost } from "./session-host";
 import type { WorkspaceService } from "./workspaces";
 
 async function resolveWorkingDirectory(
@@ -37,7 +33,7 @@ export class IntegratedTerminalService {
   constructor(
     private readonly repositories: SqliteRepositories,
     private readonly workspaces: WorkspaceService,
-    private readonly tmux: TmuxClient,
+    private readonly host: SessionHost,
     private readonly config: DaedalusConfig,
   ) {}
 
@@ -67,7 +63,7 @@ export class IntegratedTerminalService {
      */
     workingDirectory?: string;
   }): Promise<IntegratedTerminal> {
-    if (!(await this.tmux.probe()))
+    if ((await this.host.probe()) !== undefined)
       throw new DaedalusError("DEPENDENCY", "tmux is not available on PATH");
     const workspace = input.workspace
       ? await this.workspaces.getActive(input.workspace)
@@ -108,7 +104,7 @@ export class IntegratedTerminalService {
     };
     this.repositories.createIntegratedTerminal(terminal);
     try {
-      await this.tmux.createSession({
+      await this.host.start({
         session: terminal.tmuxSession,
         cwd: terminal.workingDirectory,
         executable: terminal.command,
@@ -118,8 +114,8 @@ export class IntegratedTerminalService {
       this.repositories.updateIntegratedTerminal(running);
       return running;
     } catch (error) {
-      if (await this.tmux.hasSession(terminal.tmuxSession))
-        await this.tmux.stop(terminal.tmuxSession, true).catch(() => undefined);
+      if (await this.host.isLive(terminal.tmuxSession))
+        await this.host.stop(terminal.tmuxSession, true).catch(() => undefined);
       this.repositories.deleteIntegratedTerminal(terminal.id);
       throw error;
     }
@@ -138,7 +134,7 @@ export class IntegratedTerminalService {
     args: string[];
     env?: Record<string, string>;
   }): Promise<IntegratedTerminal> {
-    if (!(await this.tmux.probe()))
+    if ((await this.host.probe()) !== undefined)
       throw new DaedalusError("DEPENDENCY", "tmux is not available on PATH");
     const id = crypto.randomUUID();
     const terminal: IntegratedTerminal = {
@@ -156,7 +152,7 @@ export class IntegratedTerminalService {
     };
     this.repositories.createIntegratedTerminal(terminal);
     try {
-      await this.tmux.createSession({
+      await this.host.start({
         session: terminal.tmuxSession,
         cwd: terminal.workingDirectory,
         executable: terminal.command,
@@ -168,8 +164,8 @@ export class IntegratedTerminalService {
       this.repositories.updateIntegratedTerminal(running);
       return running;
     } catch (error) {
-      if (await this.tmux.hasSession(terminal.tmuxSession))
-        await this.tmux.stop(terminal.tmuxSession, true).catch(() => undefined);
+      if (await this.host.isLive(terminal.tmuxSession))
+        await this.host.stop(terminal.tmuxSession, true).catch(() => undefined);
       this.repositories.deleteIntegratedTerminal(terminal.id);
       throw error;
     }
@@ -178,7 +174,7 @@ export class IntegratedTerminalService {
   async close(id: string): Promise<IntegratedTerminal> {
     const terminal = await this.get(id);
     if (terminal.status === "running" || terminal.status === "starting")
-      await this.tmux.stop(terminal.tmuxSession, true);
+      await this.host.stop(terminal.tmuxSession, true);
     this.repositories.deleteIntegratedTerminal(id);
     return {
       ...terminal,
@@ -202,10 +198,11 @@ export class IntegratedTerminalService {
 
   async reconcile(liveSessions?: ReadonlySet<string>): Promise<void> {
     // See `AgentService.reconcile`: the host passes one shared answer.
-    if (liveSessions === undefined && !(await this.tmux.probe())) return;
+    if (liveSessions === undefined && (await this.host.probe()) !== undefined)
+      return;
     const live =
       liveSessions ??
-      (await this.tmux.listSessions().then(
+      (await this.host.listLive().then(
         (sessions) => new Set(sessions),
         () => undefined,
       ));
@@ -246,9 +243,9 @@ export class IntegratedTerminalService {
     options: { automatic?: boolean } = {},
   ): Promise<IntegratedTerminal[]> {
     if (options.automatic && !this.config.autoRestoreSessionsEnabled) return [];
-    if (!(await this.tmux.probe())) return [];
+    if ((await this.host.probe()) !== undefined) return [];
     // Unanswered, every terminal would look dead and get a second copy.
-    const live = await this.tmux.listSessions().then(
+    const live = await this.host.listLive().then(
       (sessions) => new Set(sessions),
       () => undefined,
     );
@@ -285,7 +282,7 @@ export class IntegratedTerminalService {
         revivedAt: now,
       };
       try {
-        await this.tmux.createSession({
+        await this.host.start({
           session: reopened.tmuxSession,
           cwd: reopened.workingDirectory,
           executable: reopened.command,

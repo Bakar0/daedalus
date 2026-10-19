@@ -1,4 +1,6 @@
 import { leaveInInbox, postToInbox, usesInbox } from "./session-inbox";
+import type { SessionHost } from "./session-host";
+import type { SessionHosts } from "./session-hosts";
 import { readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
@@ -8,7 +10,6 @@ import {
   loginShellPath,
   pathExists,
   runCommand,
-  type TmuxClient,
 } from "@daedalus/platform";
 import type { DaedalusConfig } from "../config";
 import {
@@ -500,7 +501,7 @@ export class AgentService {
     private readonly workspaces: WorkspaceService,
     private readonly workspaceContent: WorkspaceContentService,
     private readonly tasks: TaskService,
-    private readonly tmux: TmuxClient,
+    private readonly hosts: SessionHosts,
     private readonly config: DaedalusConfig,
     private readonly abilities: AbilityService,
     /**
@@ -652,7 +653,7 @@ export class AgentService {
     let lastScreen = "";
 
     while (Date.now() < deadline) {
-      if (!(await this.tmux.hasSession(tmuxSession)))
+      if (!(await this.hosts.local.isLive(tmuxSession)))
         throw new DaedalusError(
           "INTERNAL",
           `${provider} exited before finishing startup`,
@@ -660,7 +661,7 @@ export class AgentService {
             startupOutput: lastScreen.replace(/\s+/g, " ").trim().slice(-600),
           },
         );
-      const screen = await this.tmux.capture(tmuxSession);
+      const screen = await this.hosts.local.capture(tmuxSession);
       lastScreen = screen;
 
       // Readiness is checked first: an answered prompt stays in the
@@ -686,7 +687,7 @@ export class AgentService {
       await Bun.sleep(PROVIDER_STARTUP_POLL_MS);
     }
 
-    if (!(await this.tmux.hasSession(tmuxSession)))
+    if (!(await this.hosts.local.isLive(tmuxSession)))
       throw new Error(`${provider} exited before finishing startup`);
     // Still running but not at its prompt: some screen this code does not
     // know, which a new provider release can add at any time. The user can
@@ -703,7 +704,7 @@ export class AgentService {
       available: boolean;
     }>;
   }> {
-    const tmuxVersion = await this.tmux.probe();
+    const tmuxVersion = await this.hosts.localTmux.probe();
     return {
       tmuxAvailable: Boolean(tmuxVersion),
       tmuxVersion,
@@ -944,7 +945,7 @@ export class AgentService {
         "VALIDATION",
         "Task does not belong to the selected workspace",
       );
-    if (!(await this.tmux.probe()))
+    if ((await this.hosts.local.probe()) !== undefined)
       throw new DaedalusError("DEPENDENCY", "tmux is not available on PATH");
     if (input.terminal && (input.provider || input.command))
       throw new DaedalusError(
@@ -1122,7 +1123,7 @@ export class AgentService {
       );
     try {
       if (!input.terminal) await this.trustFolder(session);
-      await this.tmux.createSession({
+      await this.hosts.local.start({
         session: session.tmuxSession,
         cwd: session.workingDirectory,
         executable: launch.executable,
@@ -1166,8 +1167,10 @@ export class AgentService {
           session.id,
           input.continueFrom.id,
         );
-      if (await this.tmux.hasSession(session.tmuxSession))
-        await this.tmux.stop(session.tmuxSession, true).catch(() => undefined);
+      if (await this.hosts.local.isLive(session.tmuxSession))
+        await this.hosts.local
+          .stop(session.tmuxSession, true)
+          .catch(() => undefined);
       this.repositories.updateAgent({
         ...session,
         status: "exited",
@@ -1304,7 +1307,7 @@ export class AgentService {
     // composer an Enter does nothing, so this is safe if the popup changes.
     if (agent.provider === "codex") {
       await Bun.sleep(CODEX_MENTION_SETTLE_MS);
-      await this.tmux.sendKeys(agent.tmuxSession, ["Enter"]);
+      await this.hosts.local.sendKeys(agent.tmuxSession, ["Enter"]);
     }
     return agent;
   }
@@ -1512,11 +1515,15 @@ export class AgentService {
   async reconcile(liveSessions?: ReadonlySet<string>): Promise<void> {
     // The host asks tmux once per tick and shares the answer with the
     // terminals; anyone else asks here.
-    if (liveSessions === undefined && !(await this.tmux.probe())) return;
+    if (
+      liveSessions === undefined &&
+      (await this.hosts.local.probe()) !== undefined
+    )
+      return;
     // A tmux that did not answer settles nothing; the next call asks again.
     const live =
       liveSessions ??
-      (await this.tmux.listSessions().then(
+      (await this.hosts.local.listLive().then(
         (sessions) => new Set(sessions),
         () => undefined,
       ));
@@ -1625,9 +1632,14 @@ export class AgentService {
     return agent;
   }
 
+  /** The host the session runs on. */
+  sessionHost(_agent: AgentSession): SessionHost {
+    return this.hosts.local;
+  }
+
   async attach(id: string): Promise<number> {
     const agent = await this.requireRunning(id);
-    return this.tmux.attach(agent.tmuxSession);
+    return this.hosts.localTmux.attach(agent.tmuxSession);
   }
 
   /**
@@ -1640,7 +1652,7 @@ export class AgentService {
     options: { styled?: boolean } = {},
   ): Promise<string> {
     const agent = await this.requireRunning(id);
-    return this.tmux.capture(agent.tmuxSession, options);
+    return this.hosts.local.capture(agent.tmuxSession, options);
   }
 
   async send(id: string, text: string): Promise<AgentSession> {
@@ -1650,7 +1662,7 @@ export class AgentService {
         "Agent input text must not be empty",
       );
     const agent = await this.requireRunning(id);
-    await this.tmux.send(agent.tmuxSession, text);
+    await this.hosts.local.send(agent.tmuxSession, text);
     return agent;
   }
 
@@ -1703,7 +1715,7 @@ export class AgentService {
         "CONFLICT",
         `Agent session '${id}' is not running`,
       );
-    await this.tmux.stop(agent.tmuxSession, force);
+    await this.hosts.local.stop(agent.tmuxSession, force);
     const stopped: AgentSession = {
       ...agent,
       status: "exited",
@@ -1862,7 +1874,7 @@ export class AgentService {
       .listAgents()
       .filter((agent) => agent.resumeOnStart && agent.archivedAt);
     if (!marked.length) return result;
-    if (!(await this.tmux.probe())) return result;
+    if ((await this.hosts.local.probe()) !== undefined) return result;
     for (const agent of marked) {
       try {
         result.resumed.push(await this.restore(agent.id));
@@ -1944,7 +1956,7 @@ export class AgentService {
         "CONFLICT",
         "Restore the workspace before restoring its sessions",
       );
-    if (!(await this.tmux.probe()))
+    if ((await this.hosts.local.probe()) !== undefined)
       throw new DaedalusError("DEPENDENCY", "tmux is not available on PATH");
 
     let executable = agent.command;
@@ -2105,14 +2117,14 @@ export class AgentService {
     // Last thing before the launch, because the window between the sweep's own
     // check and this one is where a racing CLI would put a second runtime on
     // the same tmux name for the same conversation.
-    if (await this.tmux.hasSession(agent.tmuxSession))
+    if (await this.hosts.local.isLive(agent.tmuxSession))
       throw new DaedalusError(
         "CONFLICT",
         `tmux session '${agent.tmuxSession}' is already live`,
       );
     try {
       if (agent.kind === "agent") await this.trustFolder(agent);
-      await this.tmux.createSession({
+      await this.hosts.local.start({
         session: restoring.tmuxSession,
         cwd: agent.workingDirectory,
         executable,
@@ -2161,8 +2173,8 @@ export class AgentService {
       // A launch that got as far as tmux but not as far as a ready provider
       // leaves a live session behind a row that says otherwise. Nothing
       // reconciles that direction, so it is cleaned up here.
-      if (await this.tmux.hasSession(restoring.tmuxSession))
-        await this.tmux
+      if (await this.hosts.local.isLive(restoring.tmuxSession))
+        await this.hosts.local
           .stop(restoring.tmuxSession, true)
           .catch(() => undefined);
       // Only put back what was taken out. A revived session's conversation was
@@ -2205,7 +2217,7 @@ export class AgentService {
       return { ...result, halted: "disabled" };
     // Without tmux there is nothing to put a session back into, and the whole
     // sweep would be one identical failure per card.
-    if (!(await this.tmux.probe()))
+    if ((await this.hosts.local.probe()) !== undefined)
       return { ...result, halted: "tmux_unavailable" };
     const release = await acquireReviveLock(this.config.home);
     if (!release) return { ...result, halted: "sweep_in_progress" };
@@ -2221,7 +2233,7 @@ export class AgentService {
           const current = this.repositories.findAgent(next.id);
           if (!current || current.status !== "lost" || current.archivedAt)
             continue;
-          if (await this.tmux.hasSession(current.tmuxSession)) {
+          if (await this.hosts.local.isLive(current.tmuxSession)) {
             // Someone else won the race. Adopting the live session is right;
             // launching a second one under the same name is not.
             this.repositories.updateAgent({

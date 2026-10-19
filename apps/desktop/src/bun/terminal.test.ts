@@ -3,6 +3,7 @@ import {
   authorizeTerminalRequest,
   BoundedTerminalBuffer,
   isTyping,
+  openedBridge,
   TerminalConnection,
 } from "./terminal";
 
@@ -186,5 +187,27 @@ describe("isTyping", () => {
     // Mouse reports scroll and select; they are not typing.
     expect(isTyping("\x1b[<64;10;5M\x1b[<65;10;5M")).toBe(false);
     expect(isTyping("\x1b[M`!!")).toBe(false);
+  });
+});
+
+describe("opened bridge", () => {
+  test("keeps output from before the connection and forwards the rest", async () => {
+    let emit: (output: Uint8Array) => void = () => {};
+    const bridge = {
+      start: async () => {},
+      write: () => {},
+      resize: () => {},
+      close: () => {},
+    };
+    const create = await openedBridge(async (onOutput) => {
+      emit = onOutput;
+      onOutput(new Uint8Array([1]));
+      return bridge;
+    });
+    emit(new Uint8Array([2]));
+    const received: number[] = [];
+    expect(create((output) => received.push(...output))).toBe(bridge);
+    emit(new Uint8Array([3]));
+    expect(received).toEqual([1, 2, 3]);
   });
 });
