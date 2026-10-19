@@ -1,0 +1,789 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  decodeRelayFrame,
+  encodeRelayFrame,
+  RUNNER_ENV,
+  type CloudWorkspace,
+} from "@daedalus/remote-protocol";
+import { loadConfig, type GatewayConfig } from "./config";
+import { Controller } from "./controller";
+import { FakeKube } from "./fake-kube";
+import { Relay } from "./relay";
+import { createGateway } from "./server";
+import { sha256, Store } from "./store";
+
+const TENANT = [
+  { apiVersion: "v1", kind: "ServiceAccount", metadata: { name: "runner" } },
+  {
+    apiVersion: "networking.k8s.io/v1",
+    kind: "NetworkPolicy",
+    metadata: { name: "tenant" },
+    spec: { podSelector: {}, policyTypes: ["Ingress"] },
+  },
+  {
+    apiVersion: "v1",
+    kind: "ResourceQuota",
+    metadata: { name: "tenant" },
+    spec: { hard: { pods: "10" } },
+  },
+];
+
+const key = (fill: number) => Buffer.alloc(32, fill).toString("base64url");
+const WS_A = "0f8e2c1a-7b3d-4e5f-9a6b-1c2d3e4f5a6b";
+const WS_B = "11111111-2222-4333-8444-555555555555";
+const MAC_A = "macAAAAAAAAAAAAAAAAAAA";
+const MAC_B = "macBBBBBBBBBBBBBBBBBBB";
+
+let dir: string;
+let kube: FakeKube;
+let store: Store;
+let config: GatewayConfig;
+let server: ReturnType<typeof Bun.serve>;
+let base: string;
+let logs: string[];
+const sockets: WebSocket[] = [];
+
+function start(overrides: Record<string, string> = {}) {
+  config = loadConfig({
+    DAEDALUS_GATEWAY_DEV_LOGIN: "true",
+    DAEDALUS_GATEWAY_INTERNAL_URL: "http://daedalus-gateway.daedalus:8080",
+    DAEDALUS_GATEWAY_NAMESPACE: "daedalus",
+    DAEDALUS_RUNNER_IMAGE: "daedalus-runner:dev",
+    DAEDALUS_WORKSPACE_STORAGE_CLASS: "standard",
+    ...overrides,
+  });
+  config.dbPath = join(dir, "gateway.sqlite");
+  store = new Store(config.dbPath);
+  const gateway = createGateway({
+    config,
+    store,
+    controller: new Controller(kube, config, TENANT),
+    relay: new Relay(),
+    log: (message) => logs.push(message),
+  });
+  server = Bun.serve({ ...gateway, port: 0 });
+  base = `http://localhost:${server.port}`;
+}
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "gateway-test-"));
+  kube = new FakeKube();
+  logs = [];
+  start();
+});
+
+afterEach(async () => {
+  for (const socket of sockets.splice(0)) socket.close();
+  await server.stop(true);
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+async function api(
+  token: string | undefined,
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; json: ApiBody }> {
+  const response = await fetch(`${base}${path}`, {
+    method,
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(body ? { "Content-Type": "application/json" } : {}),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const text = await response.text();
+  return {
+    status: response.status,
+    json: (text ? JSON.parse(text) : {}) as ApiBody,
+  };
+}
+
+/** Any of the gateway's response bodies, read loosely by the assertions. */
+type ApiBody = Partial<CloudWorkspace> & {
+  error?: { code: string; message: string };
+  workspaces?: CloudWorkspace[];
+  id?: string;
+  email?: string;
+};
+
+/** The parts of a pod the assertions read. */
+interface TestPod {
+  metadata: { labels: Record<string, string> };
+  spec: {
+    runtimeClassName?: string;
+    serviceAccountName: string;
+    automountServiceAccountToken: boolean;
+    securityContext: Record<string, unknown>;
+    volumes: unknown[];
+    containers: {
+      name: string;
+      image: string;
+      securityContext: Record<string, unknown>;
+      resources: unknown;
+      env: { name: string; value?: string; valueFrom?: unknown }[];
+      volumeMounts: unknown[];
+    }[];
+  };
+}
+
+const testPod = (userId: string, workspaceId: string) =>
+  kube.pod(`u-${userId}`, `ws-${workspaceId}`) as unknown as TestPod;
+
+async function login(email: string) {
+  const response = await fetch(`${base}/v1/dev/login`, {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+  return (await response.json()) as {
+    user: { id: string; email: string };
+    token: string;
+  };
+}
+
+const createBody = (workspaceId = WS_A, macId = MAC_A) => ({
+  workspaceId,
+  name: "My workspace",
+  macId,
+  macKey: key(1),
+});
+
+/** The runner token the controller put in the workspace's Secret. */
+function runnerToken(userId: string, workspaceId: string): string {
+  const secret = kube.objects.get(
+    `/api/v1/namespaces/u-${userId}/secrets/ws-${workspaceId}-runner`,
+  ) as { stringData: { token: string } };
+  return secret.stringData.token;
+}
+
+/** A WebSocket with its messages queued, so a test can await the next. */
+async function connect(token: string, query: string) {
+  const queue: (string | Uint8Array)[] = [];
+  const waiters: ((value: string | Uint8Array) => void)[] = [];
+  const socket = new WebSocket(
+    `${base.replace("http", "ws")}/v1/connect?${query}`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+    } as unknown as string[],
+  );
+  socket.binaryType = "arraybuffer";
+  sockets.push(socket);
+  let closed: { code: number } | null = null;
+  socket.addEventListener("message", (event) => {
+    const data =
+      typeof event.data === "string"
+        ? event.data
+        : new Uint8Array(event.data as ArrayBuffer);
+    const waiter = waiters.shift();
+    if (waiter) waiter(data);
+    else queue.push(data);
+  });
+  socket.addEventListener("close", (event) => {
+    closed = { code: event.code };
+  });
+  await new Promise<void>((resolve, reject) => {
+    socket.addEventListener("open", () => resolve());
+    socket.addEventListener("error", () =>
+      reject(new Error("WebSocket failed")),
+    );
+  });
+  return {
+    socket,
+    closed: () => closed,
+    next(timeoutMs = 1000): Promise<string | Uint8Array> {
+      const queued = queue.shift();
+      if (queued !== undefined) return Promise.resolve(queued);
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error("No message")),
+          timeoutMs,
+        );
+        waiters.push((value) => {
+          clearTimeout(timer);
+          resolve(value);
+        });
+      });
+    },
+    /** Resolves true when nothing arrives within the time. */
+    async silent(ms = 150): Promise<boolean> {
+      if (queue.length) return false;
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          waiters.splice(waiters.indexOf(waiter), 1);
+          resolve(true);
+        }, ms);
+        const waiter = (value: string | Uint8Array) => {
+          clearTimeout(timer);
+          queue.unshift(value);
+          resolve(false);
+        };
+        waiters.push(waiter);
+      });
+    },
+  };
+}
+
+const bytes = (text: string) => new TextEncoder().encode(text);
+const peer = (deviceId: string, online: boolean) =>
+  JSON.stringify({ relay: "peer", deviceId, online });
+
+describe("dev login and tokens", () => {
+  test("is off unless configured", async () => {
+    await server.stop(true);
+    store.close();
+    start({ DAEDALUS_GATEWAY_DEV_LOGIN: "false" });
+    const { status, json } = await api(undefined, "POST", "/v1/dev/login", {
+      email: "a@example.com",
+    });
+    expect(status).toBe(404);
+    expect(json.error?.code).toBe("NOT_FOUND");
+  });
+
+  test("signs in, keeps the same user per email, and stores only hashes", async () => {
+    const first = await login("Ada@Example.com");
+    const second = await login("ada@example.com");
+    expect(first.user.id).toMatch(/^[a-z0-9]{1,20}$/);
+    expect(second.user.id).toBe(first.user.id);
+    expect(second.token).not.toBe(first.token);
+    expect((await api(first.token, "GET", "/v1/me")).json).toEqual({
+      id: first.user.id,
+      email: "ada@example.com",
+    });
+    const raw = await Bun.file(config.dbPath).arrayBuffer();
+    const text = Buffer.from(raw).toString("latin1");
+    expect(text.includes(first.token)).toBe(false);
+    expect(store.tokenOwner(first.token)).toEqual({
+      kind: "user",
+      userId: first.user.id,
+    });
+    expect(sha256(first.token)).toHaveLength(64);
+  });
+
+  test("refuses missing and unknown tokens", async () => {
+    expect((await api(undefined, "GET", "/v1/me")).status).toBe(401);
+    const { status, json } = await api("nope", "GET", "/v1/workspaces");
+    expect(status).toBe(401);
+    expect(json.error?.code).toBe("UNAUTHORIZED");
+  });
+
+  test("validates the email", async () => {
+    const { status, json } = await api(undefined, "POST", "/v1/dev/login", {
+      email: "not an email",
+    });
+    expect(status).toBe(400);
+    expect(json.error?.code).toBe("VALIDATION");
+  });
+
+  test("health needs no token", async () => {
+    const response = await fetch(`${base}/health`);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("ok");
+  });
+});
+
+describe("controller", () => {
+  test("creates the namespace, its RoleBinding first, then the rest", async () => {
+    const { user, token } = await login("a@example.com");
+    const { status, json } = await api(token, "POST", "/v1/workspaces", {
+      ...createBody(WS_A.toUpperCase()),
+    });
+    expect(status).toBe(201);
+    expect(json).toMatchObject({
+      workspaceId: WS_A,
+      name: "My workspace",
+      status: "starting",
+      reason: null,
+      runnerOnline: false,
+      runnerKey: null,
+    } satisfies Partial<CloudWorkspace>);
+
+    const ns = `u-${user.id}`;
+    expect(kube.calls).toEqual([
+      "POST /api/v1/namespaces",
+      `POST /apis/rbac.authorization.k8s.io/v1/namespaces/${ns}/rolebindings`,
+      `POST /api/v1/namespaces/${ns}/serviceaccounts`,
+      `POST /apis/networking.k8s.io/v1/namespaces/${ns}/networkpolicies`,
+      `POST /api/v1/namespaces/${ns}/resourcequotas`,
+      `POST /api/v1/namespaces/${ns}/secrets`,
+      `POST /api/v1/namespaces/${ns}/persistentvolumeclaims`,
+      `POST /api/v1/namespaces/${ns}/pods`,
+      `GET /api/v1/namespaces/${ns}/pods/ws-${WS_A}`,
+    ]);
+    expect(kube.objects.get(`/api/v1/namespaces/${ns}`)).toMatchObject({
+      metadata: { labels: { "daedalus.dev/user": user.id } },
+    });
+    expect(
+      kube.objects.get(
+        `/apis/rbac.authorization.k8s.io/v1/namespaces/${ns}/rolebindings/daedalus-gateway`,
+      ),
+    ).toMatchObject({
+      roleRef: { kind: "ClusterRole", name: "daedalus-tenant-admin" },
+      subjects: [
+        {
+          kind: "ServiceAccount",
+          name: "daedalus-gateway",
+          namespace: "daedalus",
+        },
+      ],
+    });
+    expect(
+      kube.objects.get(`/api/v1/namespaces/${ns}/serviceaccounts/runner`),
+    ).toMatchObject({ metadata: { namespace: ns } });
+    expect(
+      kube.objects.get(
+        `/api/v1/namespaces/${ns}/persistentvolumeclaims/ws-${WS_A}`,
+      ),
+    ).toMatchObject({
+      spec: {
+        storageClassName: "standard",
+        resources: { requests: { storage: "20Gi" } },
+      },
+    });
+    // The Secret holds the token; the database only its hash.
+    const token2 = runnerToken(user.id, WS_A);
+    expect(store.tokenOwner(token2)).toEqual({
+      kind: "runner",
+      userId: user.id,
+      workspaceId: WS_A,
+    });
+  });
+
+  test("builds the pod TEAM.md describes", async () => {
+    await server.stop(true);
+    store.close();
+    start({ DAEDALUS_WORKSPACE_RUNTIME_CLASS: "gvisor" });
+    const { user, token } = await login("a@example.com");
+    await api(token, "POST", "/v1/workspaces", {
+      ...createBody(),
+      resources: { cpu: "3", memory: "6Gi" },
+    });
+    const pod = testPod(user.id, WS_A);
+    expect(pod.metadata.labels).toEqual({
+      "daedalus.dev/user": user.id,
+      "daedalus.dev/workspace": WS_A,
+    });
+    expect(pod.spec.runtimeClassName).toBe("gvisor");
+    expect(pod.spec.serviceAccountName).toBe("runner");
+    expect(pod.spec.automountServiceAccountToken).toBe(false);
+    expect(pod.spec.securityContext).toMatchObject({
+      runAsNonRoot: true,
+      runAsUser: 1000,
+      fsGroup: 1000,
+      seccompProfile: { type: "RuntimeDefault" },
+    });
+    const container = pod.spec.containers[0]!;
+    expect(container.name).toBe("runner");
+    expect(container.image).toBe("daedalus-runner:dev");
+    expect(container.securityContext).toMatchObject({
+      allowPrivilegeEscalation: false,
+      capabilities: { drop: ["ALL"] },
+    });
+    expect(container.resources).toEqual({
+      requests: { cpu: "3", memory: "6Gi" },
+      limits: { cpu: "3", memory: "6Gi" },
+    });
+    const env = Object.fromEntries(
+      container.env.map((entry) => [
+        entry.name,
+        entry.value ?? entry.valueFrom,
+      ]),
+    );
+    expect(env).toEqual({
+      [RUNNER_ENV.gatewayUrl]: "http://daedalus-gateway.daedalus:8080",
+      [RUNNER_ENV.runnerToken]: {
+        secretKeyRef: { name: `ws-${WS_A}-runner`, key: "token" },
+      },
+      [RUNNER_ENV.workspaceId]: WS_A,
+      [RUNNER_ENV.macId]: MAC_A,
+      [RUNNER_ENV.macKey]: key(1),
+      [RUNNER_ENV.idleMinutes]: "30",
+    });
+    expect(container.volumeMounts).toEqual([
+      { name: "workspace", mountPath: "/workspace" },
+      { name: "cache", mountPath: "/cache" },
+      { name: "runtime", mountPath: "/run/daedalus-runner" },
+    ]);
+    expect(pod.spec.volumes).toEqual([
+      { name: "workspace", persistentVolumeClaim: { claimName: `ws-${WS_A}` } },
+      { name: "cache", emptyDir: {} },
+      { name: "runtime", emptyDir: { medium: "Memory", sizeLimit: "16Mi" } },
+    ]);
+  });
+
+  test("uses the chart's default resources", async () => {
+    const { user, token } = await login("a@example.com");
+    await api(token, "POST", "/v1/workspaces", createBody());
+    const pod = testPod(user.id, WS_A);
+    expect(pod.spec.runtimeClassName).toBeUndefined();
+    expect(pod.spec.containers[0]!.resources).toEqual({
+      requests: { cpu: "1", memory: "2Gi" },
+      limits: { cpu: "2", memory: "4Gi" },
+    });
+  });
+
+  test("validates the request", async () => {
+    const { token } = await login("a@example.com");
+    for (const body of [
+      { ...createBody(), workspaceId: "not-a-uuid" },
+      { ...createBody(), macId: "x" },
+      { ...createBody(), macKey: "short" },
+      { ...createBody(), name: "" },
+      { ...createBody(), resources: { cpu: "lots" } },
+    ]) {
+      const { status, json } = await api(token, "POST", "/v1/workspaces", body);
+      expect(status).toBe(400);
+      expect(json.error?.code).toBe("VALIDATION");
+    }
+    expect(kube.calls).toEqual([]);
+  });
+
+  test("refuses a second workspace with the same id", async () => {
+    const { token } = await login("a@example.com");
+    await api(token, "POST", "/v1/workspaces", createBody());
+    const { status, json } = await api(
+      token,
+      "POST",
+      "/v1/workspaces",
+      createBody(),
+    );
+    expect(status).toBe(409);
+    expect(json.error?.code).toBe("CONFLICT");
+  });
+
+  test("turns a quota refusal into QUOTA and leaves nothing behind", async () => {
+    const { user, token } = await login("a@example.com");
+    kube.podQuota = 0;
+    const { status, json } = await api(
+      token,
+      "POST",
+      "/v1/workspaces",
+      createBody(),
+    );
+    expect(status).toBe(429);
+    expect(json.error?.code).toBe("QUOTA");
+    expect(json.error?.message).toContain("exceeded quota");
+    expect((await api(token, "GET", "/v1/workspaces")).json.workspaces).toEqual(
+      [],
+    );
+    const ns = `u-${user.id}`;
+    expect(kube.paths().filter((path) => path.includes(`ws-${WS_A}`))).toEqual(
+      [],
+    );
+    expect(store.workspace(user.id, WS_A)).toBeNull();
+    expect(kube.objects.has(`/api/v1/namespaces/${ns}`)).toBe(true);
+  });
+
+  test("sleep keeps the volume and token; wake brings the pod back", async () => {
+    const { user, token } = await login("a@example.com");
+    await api(token, "POST", "/v1/workspaces", createBody());
+    const ns = `u-${user.id}`;
+
+    const slept = await api(token, "POST", `/v1/workspaces/${WS_A}/sleep`);
+    expect(slept.status).toBe(200);
+    expect(slept.json.status).toBe("sleeping");
+    expect(kube.pod(ns, `ws-${WS_A}`)).toBeUndefined();
+    expect(
+      kube.objects.has(
+        `/api/v1/namespaces/${ns}/persistentvolumeclaims/ws-${WS_A}`,
+      ),
+    ).toBe(true);
+    expect(
+      kube.objects.has(`/api/v1/namespaces/${ns}/secrets/ws-${WS_A}-runner`),
+    ).toBe(true);
+    expect(
+      (await api(token, "GET", `/v1/workspaces/${WS_A}`)).json.status,
+    ).toBe("sleeping");
+
+    const woke = await api(token, "POST", `/v1/workspaces/${WS_A}/wake`);
+    expect(woke.status).toBe(200);
+    expect(woke.json.status).toBe("starting");
+    expect(kube.pod(ns, `ws-${WS_A}`)).toBeDefined();
+  });
+
+  test("wake while the old pod is still stopping is CONFLICT, then works", async () => {
+    const { token } = await login("a@example.com");
+    await api(token, "POST", "/v1/workspaces", createBody());
+    kube.slowPodDeletes = true;
+    await api(token, "POST", `/v1/workspaces/${WS_A}/sleep`);
+    const early = await api(token, "POST", `/v1/workspaces/${WS_A}/wake`);
+    expect(early.status).toBe(409);
+    expect(
+      (await api(token, "GET", `/v1/workspaces/${WS_A}`)).json.status,
+    ).toBe("sleeping");
+    kube.finishDeletes();
+    expect(
+      (await api(token, "POST", `/v1/workspaces/${WS_A}/wake`)).status,
+    ).toBe(200);
+  });
+
+  test("a pod that cannot pull its image is failed with the reason", async () => {
+    const { user, token } = await login("a@example.com");
+    await api(token, "POST", "/v1/workspaces", createBody());
+    const pod = kube.pod(`u-${user.id}`, `ws-${WS_A}`)!;
+    pod.status = {
+      phase: "Pending",
+      containerStatuses: [
+        {
+          state: {
+            waiting: { reason: "ImagePullBackOff", message: "image not found" },
+          },
+        },
+      ],
+    };
+    const { json } = await api(token, "GET", `/v1/workspaces/${WS_A}`);
+    expect(json.status).toBe("failed");
+    expect(json.reason).toBe("ImagePullBackOff: image not found");
+    // Wake replaces it.
+    expect(
+      (await api(token, "POST", `/v1/workspaces/${WS_A}/wake`)).json.status,
+    ).toBe("starting");
+  });
+
+  test("delete removes pod, volume and token, and the namespace with the last one", async () => {
+    const { user, token } = await login("a@example.com");
+    await api(token, "POST", "/v1/workspaces", createBody(WS_A));
+    await api(token, "POST", "/v1/workspaces", createBody(WS_B));
+    const runner = runnerToken(user.id, WS_A);
+    const ns = `u-${user.id}`;
+
+    expect((await api(token, "DELETE", `/v1/workspaces/${WS_A}`)).status).toBe(
+      204,
+    );
+    expect(kube.paths().filter((path) => path.includes(WS_A))).toEqual([]);
+    expect(kube.objects.has(`/api/v1/namespaces/${ns}`)).toBe(true);
+    expect(store.tokenOwner(runner)).toBeNull();
+    expect((await api(token, "GET", `/v1/workspaces/${WS_A}`)).status).toBe(
+      404,
+    );
+
+    expect((await api(token, "DELETE", `/v1/workspaces/${WS_B}`)).status).toBe(
+      204,
+    );
+    expect(kube.objects.has(`/api/v1/namespaces/${ns}`)).toBe(false);
+  });
+
+  test("creating in a namespace still being deleted is CONFLICT", async () => {
+    const { user, token } = await login("a@example.com");
+    await api(token, "POST", "/v1/workspaces", createBody(WS_A));
+    kube.terminate(`u-${user.id}`);
+    const { status } = await api(
+      token,
+      "POST",
+      "/v1/workspaces",
+      createBody(WS_B),
+    );
+    expect(status).toBe(409);
+  });
+});
+
+describe("runner tokens", () => {
+  async function setup() {
+    const { user, token } = await login("a@example.com");
+    await api(token, "POST", "/v1/workspaces", createBody(WS_A));
+    await api(token, "POST", "/v1/workspaces", createBody(WS_B));
+    return { user, token, runner: runnerToken(user.id, WS_A) };
+  }
+
+  test("pin the first key and refuse a different one", async () => {
+    const { token, runner } = await setup();
+    const first = await connect(runner, `runnerKey=${key(7)}`);
+    first.socket.close();
+    const { json } = await api(token, "GET", `/v1/workspaces/${WS_A}`);
+    expect(json.runnerKey).toBe(key(7));
+
+    const other = await api(runner, "GET", `/v1/connect?runnerKey=${key(8)}`);
+    expect(other.status).toBe(409);
+    expect(other.json.error?.code).toBe("CONFLICT");
+    const missing = await api(runner, "GET", "/v1/connect");
+    expect(missing.status).toBe(400);
+    // The same key again is fine.
+    const again = await connect(runner, `runnerKey=${key(7)}`);
+    expect(again.socket.readyState).toBe(WebSocket.OPEN);
+  });
+
+  test("may sleep only their own workspace, and use no other route", async () => {
+    const { runner } = await setup();
+    expect(
+      (await api(runner, "POST", `/v1/workspaces/${WS_B}/sleep`)).status,
+    ).toBe(404);
+    for (const [method, path] of [
+      ["GET", "/v1/me"],
+      ["GET", "/v1/workspaces"],
+      ["GET", `/v1/workspaces/${WS_A}`],
+      ["POST", `/v1/workspaces/${WS_A}/wake`],
+      ["DELETE", `/v1/workspaces/${WS_A}`],
+      ["POST", "/v1/workspaces"],
+    ] as const)
+      expect(
+        (
+          await api(
+            runner,
+            method,
+            path,
+            method === "POST" ? createBody() : undefined,
+          )
+        ).status,
+      ).toBe(401);
+    const slept = await api(runner, "POST", `/v1/workspaces/${WS_A}/sleep`);
+    expect(slept.status).toBe(200);
+    expect(slept.json.status).toBe("sleeping");
+  });
+
+  test("a user token cannot join as a runner or without a Mac id", async () => {
+    const { token } = await setup();
+    expect(
+      (await api(token, "GET", `/v1/connect?runnerKey=${key(7)}`)).status,
+    ).toBe(400);
+  });
+});
+
+describe("relay", () => {
+  test("carries frames between a Mac and its runner with rewritten ids", async () => {
+    const { user, token } = await login("a@example.com");
+    await api(token, "POST", "/v1/workspaces", createBody());
+    const mac = await connect(token, `macId=${MAC_A}`);
+    const runner = await connect(
+      runnerToken(user.id, WS_A),
+      `runnerKey=${key(7)}`,
+    );
+
+    // Each learns the other is online.
+    expect(await mac.next()).toBe(peer(`ws:${WS_A}`, true));
+    expect(await runner.next()).toBe(peer(`mac:${MAC_A}`, true));
+
+    runner.socket.send(encodeRelayFrame("", bytes("hello mac")));
+    const atMac = decodeRelayFrame((await mac.next()) as Uint8Array);
+    expect(atMac.deviceId).toBe(`ws:${WS_A}`);
+    expect(new TextDecoder().decode(atMac.payload)).toBe("hello mac");
+
+    mac.socket.send(encodeRelayFrame(`ws:${WS_A}`, bytes("hello runner")));
+    const atRunner = decodeRelayFrame((await runner.next()) as Uint8Array);
+    expect(atRunner.deviceId).toBe(`mac:${MAC_A}`);
+    expect(new TextDecoder().decode(atRunner.payload)).toBe("hello runner");
+
+    // A runner connected means a running workspace.
+    const { json } = await api(token, "GET", `/v1/workspaces/${WS_A}`);
+    expect(json).toMatchObject({ status: "running", runnerOnline: true });
+
+    mac.socket.close();
+    expect(await runner.next()).toBe(peer(`mac:${MAC_A}`, false));
+  });
+
+  test("tells a Mac that joins later which runners are online", async () => {
+    const { user, token } = await login("a@example.com");
+    await api(token, "POST", "/v1/workspaces", createBody());
+    const runner = await connect(
+      runnerToken(user.id, WS_A),
+      `runnerKey=${key(7)}`,
+    );
+    const mac = await connect(token, `macId=${MAC_A}`);
+    expect(await mac.next()).toBe(peer(`ws:${WS_A}`, true));
+    expect(await runner.next()).toBe(peer(`mac:${MAC_A}`, true));
+    runner.socket.close();
+    expect(await mac.next()).toBe(peer(`ws:${WS_A}`, false));
+  });
+
+  test("a second connection from a Mac replaces the first", async () => {
+    const { token } = await login("a@example.com");
+    const first = await connect(token, `macId=${MAC_A}`);
+    await connect(token, `macId=${MAC_A}`);
+    expect(await first.next()).toBe(JSON.stringify({ relay: "replaced" }));
+    await Bun.sleep(50);
+    expect(first.closed()?.code).toBe(4000);
+  });
+
+  test("Macs cannot reach Macs and runners cannot reach runners", async () => {
+    const { user, token } = await login("a@example.com");
+    await api(token, "POST", "/v1/workspaces", createBody(WS_A));
+    await api(token, "POST", "/v1/workspaces", createBody(WS_B));
+    const mac = await connect(token, `macId=${MAC_A}`);
+    const otherMac = await connect(token, `macId=${MAC_B}`);
+    const runnerA = await connect(
+      runnerToken(user.id, WS_A),
+      `runnerKey=${key(7)}`,
+    );
+    const runnerB = await connect(
+      runnerToken(user.id, WS_B),
+      `runnerKey=${key(8)}`,
+    );
+    // Drain the online notices.
+    await Bun.sleep(100);
+    for (const client of [mac, otherMac, runnerA, runnerB])
+      while (!(await client.silent(20))) await client.next();
+
+    mac.socket.send(encodeRelayFrame(`mac:${MAC_B}`, bytes("x")));
+    runnerA.socket.send(encodeRelayFrame(`ws:${WS_B}`, bytes("x")));
+    expect(await otherMac.silent()).toBe(true);
+    expect(await runnerB.silent()).toBe(true);
+  });
+
+  test("deleting a workspace disconnects its runner", async () => {
+    const { user, token } = await login("a@example.com");
+    await api(token, "POST", "/v1/workspaces", createBody());
+    const runner = await connect(
+      runnerToken(user.id, WS_A),
+      `runnerKey=${key(7)}`,
+    );
+    await api(token, "DELETE", `/v1/workspaces/${WS_A}`);
+    await Bun.sleep(50);
+    expect(runner.closed()?.code).toBe(4403);
+  });
+});
+
+describe("isolation between users", () => {
+  test("user B cannot list, read, wake, sleep, delete or connect to A's workspace", async () => {
+    const a = await login("a@example.com");
+    const b = await login("b@example.com");
+    expect(a.user.id).not.toBe(b.user.id);
+    await api(a.token, "POST", "/v1/workspaces", createBody(WS_A, MAC_A));
+
+    expect((await api(b.token, "GET", "/v1/workspaces")).json).toEqual({
+      workspaces: [],
+    });
+    for (const [method, path] of [
+      ["GET", `/v1/workspaces/${WS_A}`],
+      ["POST", `/v1/workspaces/${WS_A}/wake`],
+      ["POST", `/v1/workspaces/${WS_A}/sleep`],
+      ["DELETE", `/v1/workspaces/${WS_A}`],
+    ] as const) {
+      const { status, json } = await api(b.token, method, path);
+      expect(status).toBe(404);
+      expect(json.error?.code).toBe("NOT_FOUND");
+    }
+    // Nothing of A's changed.
+    const own = await api(a.token, "GET", `/v1/workspaces/${WS_A}`);
+    expect(own.json.status).toBe("starting");
+    expect(kube.pod(`u-${a.user.id}`, `ws-${WS_A}`)).toBeDefined();
+
+    // B's Mac, even claiming A's Mac id, is in B's room: it hears nothing of
+    // A's runner and its frames to it go nowhere.
+    const runnerA = await connect(
+      runnerToken(a.user.id, WS_A),
+      `runnerKey=${key(7)}`,
+    );
+    const macB = await connect(b.token, `macId=${MAC_A}`);
+    expect(await macB.silent()).toBe(true);
+    expect(await runnerA.silent()).toBe(true);
+    macB.socket.send(encodeRelayFrame(`ws:${WS_A}`, bytes("let me in")));
+    expect(await runnerA.silent()).toBe(true);
+    runnerA.socket.send(encodeRelayFrame(`mac:${MAC_A}`, bytes("for A only")));
+    expect(await macB.silent()).toBe(true);
+
+    // B may make a workspace with the same id; it is B's own, elsewhere.
+    const mine = await api(
+      b.token,
+      "POST",
+      "/v1/workspaces",
+      createBody(WS_A, MAC_B),
+    );
+    expect(mine.status).toBe(201);
+    expect(kube.pod(`u-${b.user.id}`, `ws-${WS_A}`)).toBeDefined();
+    expect(runnerToken(b.user.id, WS_A)).not.toBe(runnerToken(a.user.id, WS_A));
+    await api(b.token, "DELETE", `/v1/workspaces/${WS_A}`);
+    expect(kube.pod(`u-${a.user.id}`, `ws-${WS_A}`)).toBeDefined();
+  });
+});

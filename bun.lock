@@ -54,6 +54,12 @@
         "uqr": "0.1.3",
       },
     },
+    "apps/gateway": {
+      "name": "@daedalus/gateway",
+      "dependencies": {
+        "@daedalus/remote-protocol": "workspace:*",
+      },
+    },
     "apps/phone": {
       "name": "@daedalus/phone",
       "dependencies": {
@@ -121,6 +127,8 @@
     "@daedalus/core": ["@daedalus/core@workspace:packages/core"],
 
     "@daedalus/desktop": ["@daedalus/desktop@workspace:apps/desktop"],
+
+    "@daedalus/gateway": ["@daedalus/gateway@workspace:apps/gateway"],
 
     "@daedalus/phone": ["@daedalus/phone@workspace:apps/phone"],
 
