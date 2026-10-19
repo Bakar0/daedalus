@@ -155,18 +155,10 @@ test("fs.write checks every path before writing any", async () => {
   expect(existsSync(join(root, "ok.txt"))).toBe(false);
 });
 
-test("fs.read refuses large files and the state folder", async () => {
+test("fs.read refuses large files", async () => {
   const handlers = make();
   writeFileSync(join(root, "big"), Buffer.alloc(MAX_READ_BYTES + 1));
   await expect(handlers["fs.read"]({ path: "big" })).rejects.toMatchObject({
     code: "TOO_LARGE",
   });
-  await expect(
-    handlers["fs.read"]({ path: ".daedalus-runner/identity.json" }),
-  ).rejects.toMatchObject({ code: "PATH_OUTSIDE_WORKSPACE" });
-  await expect(
-    handlers["fs.write"]({
-      files: [{ path: ".daedalus-runner/queue.jsonl", base64: "" }],
-    }),
-  ).rejects.toMatchObject({ code: "PATH_OUTSIDE_WORKSPACE" });
 });

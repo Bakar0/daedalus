@@ -2,9 +2,6 @@ import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { RunnerError } from "./errors";
 
-/** Name of the runner's state folder inside the workspace root. */
-export const STATE_DIRECTORY_NAME = ".daedalus-runner";
-
 const realpathOfExisting = (path: string): string => {
   let current = path;
   const tail: string[] = [];
@@ -30,8 +27,9 @@ const inside = (root: string, path: string): boolean => {
 
 /**
  * Turns a request path into an absolute path under `root`. Refuses absolute
- * paths, `..` that leaves the root, symlinks that point out of it, and the
- * runner's own state folder (identity key and event queue).
+ * paths, `..` that leaves the root, and symlinks that point out of it. This
+ * runs in `sessiond` as the session uid, so it guards against mistakes, not
+ * against the agent: the agent can already do anything that uid can.
  */
 export function resolveWorkspacePath(root: string, requested: string): string {
   if (typeof requested !== "string" || requested.includes("\0"))
@@ -53,12 +51,6 @@ export function resolveWorkspacePath(root: string, requested: string): string {
     throw new RunnerError(
       "PATH_OUTSIDE_WORKSPACE",
       `Path ${requested} leaves the workspace through a link`,
-    );
-  const state = join(realRoot, STATE_DIRECTORY_NAME);
-  if (inside(state, real))
-    throw new RunnerError(
-      "PATH_OUTSIDE_WORKSPACE",
-      "The runner's state folder is not reachable",
     );
   return absolute;
 }

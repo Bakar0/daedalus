@@ -1,20 +1,26 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { join } from "node:path";
-import { CommandTmuxClient, findTmuxExecutable } from "@daedalus/platform";
 import {
   RUNNER_ENV,
   RUNNER_PATHS,
   type CommandResult,
 } from "@daedalus/remote-protocol";
-import { createHandlers } from "./handlers";
 import { loadOrCreateIdentity } from "./identity";
 import { EventQueue } from "./queue";
-import { deadPanes, Runner, tmuxTerminals, type ConnectRelay } from "./runner";
+import { Runner, type ConnectRelay } from "./runner";
+import { SessiondClient } from "./sessiond-client";
 import { socketPath, type ShimRequest } from "./shim-protocol";
 
+// The entry point of the runner container (uid 1000). It runs no tmux and no
+// workspace command and does not mount /workspace: the session container's
+// `sessiond` does that work (artifacts/cloud-sessions/h1-pod-spec.md).
 const VERSION = "0.1.0";
-const TMUX_SOCKET = "daedalus";
-const TICK_MS = 2000;
 
 const log = (message: string): void => {
   console.log(`[runner] ${message}`);
@@ -47,56 +53,32 @@ const connectRelay: ConnectRelay = (url, token, callbacks) => {
   };
 };
 
+/** The token is a file the gateway rotates on wake, so it is read each time. */
+const readToken = (): string => {
+  const token = readFileSync(RUNNER_PATHS.token, "utf8").trim();
+  if (!token) throw new Error("the token file is empty");
+  return token;
+};
+
 async function main(): Promise<void> {
   const gatewayUrl = required(RUNNER_ENV.gatewayUrl);
-  const token = required(RUNNER_ENV.runnerToken);
   const workspaceId = required(RUNNER_ENV.workspaceId);
   const macId = required(RUNNER_ENV.macId);
   const macKey = required(RUNNER_ENV.macKey);
   const idleMinutes = Number(process.env[RUNNER_ENV.idleMinutes] ?? 30);
-  // Sessions and commands inherit this process's environment, so the token
-  // and keys leave it before anything is started.
-  for (const name of Object.values(RUNNER_ENV)) delete process.env[name];
 
   mkdirSync(RUNNER_PATHS.state, { recursive: true, mode: 0o700 });
-  mkdirSync(RUNNER_PATHS.runtime, { recursive: true, mode: 0o700 });
-  const home = join(RUNNER_PATHS.workspace, ".home");
-  mkdirSync(home, { recursive: true });
   const identity = await loadOrCreateIdentity(RUNNER_PATHS.state);
 
-  const tmuxPath = findTmuxExecutable();
-  const tmux = new CommandTmuxClient(
-    TMUX_SOCKET,
-    tmuxPath,
-    undefined,
-    RUNNER_PATHS.workspace,
-  );
-  const baseEnv = {
-    PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
-    HOME: home,
-    TMPDIR: "/tmp",
-    LANG: "C.UTF-8",
-  };
-  let runner: Runner | undefined;
-  const handlers = createHandlers({
-    root: RUNNER_PATHS.workspace,
-    tmux,
-    version: VERSION,
-    baseEnv,
-    onSessionStarted: (session, keep) => runner?.watchSession(session, keep),
-  });
-  runner = new Runner({
+  const runner = new Runner({
     gatewayUrl,
-    token,
+    readToken,
     workspaceId,
     macId,
     macKey,
     identity,
-    handlers,
+    backend: new SessiondClient(RUNNER_PATHS.sessionSocket),
     queue: new EventQueue(join(RUNNER_PATHS.state, "queue.jsonl")),
-    tmux,
-    deadPanes: () => deadPanes(tmuxPath ?? "tmux"),
-    openTerminal: tmuxTerminals(TMUX_SOCKET),
     connect: connectRelay,
     idleMinutes: Number.isFinite(idleMinutes) ? idleMinutes : 30,
     log,
@@ -104,7 +86,6 @@ async function main(): Promise<void> {
 
   const path = socketPath();
   if (existsSync(path)) rmSync(path);
-  const calls = runner;
   Bun.listen<{ buffer: string }>({
     unix: path,
     socket: {
@@ -117,7 +98,7 @@ async function main(): Promise<void> {
         let result: CommandResult;
         try {
           const request = JSON.parse(socket.data.buffer) as ShimRequest;
-          result = await calls.daedalCall({
+          result = await runner.daedalCall({
             callId: crypto.randomUUID(),
             argv: request.argv,
             cwd: request.cwd,
@@ -138,18 +119,11 @@ async function main(): Promise<void> {
       },
     },
   });
-
-  // The runner is PID 1 in the pod, and the kernel drops signals for PID 1
-  // unless it has a handler, so without these a sleep waits out the grace period.
-  for (const signal of ["SIGTERM", "SIGINT"] as const) {
-    process.on(signal, () => {
-      log(`${signal} received, exiting`);
-      process.exit(0);
-    });
-  }
+  // Any uid in the pod may call `daedal`; sessions run as another uid.
+  chmodSync(path, 0o666);
 
   runner.start();
-  setInterval(() => void runner.tick(), TICK_MS);
+  setInterval(() => void runner.tick(), 2000);
   log(`runner ${VERSION} for workspace ${workspaceId} started`);
 }
 

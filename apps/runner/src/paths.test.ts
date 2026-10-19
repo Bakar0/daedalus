@@ -37,13 +37,6 @@ test("refuses a symlink that points out of the workspace", () => {
   expect(resolveWorkspacePath(root, "real/file")).toBe(join(root, "real/file"));
 });
 
-test("refuses the runner state folder", () => {
-  expect(() =>
-    resolveWorkspacePath(root, ".daedalus-runner/identity.json"),
-  ).toThrow();
-  expect(() => resolveWorkspacePath(root, ".daedalus-runner")).toThrow();
-});
-
 test("toWorkspacePath maps a directory or falls back to the root", () => {
   expect(toWorkspacePath(root, join(root, "a/b"))).toBe("a/b");
   expect(toWorkspacePath(root, root)).toBe(".");

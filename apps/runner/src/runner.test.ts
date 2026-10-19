@@ -19,15 +19,10 @@ import {
   type RunnerSecureMessage,
   type SecureChannel,
 } from "@daedalus/remote-protocol";
-import { FakeTmux } from "./fake-tmux";
-import { createHandlers } from "./handlers";
+import { FakeBackend } from "./fake-backend";
+import type { FakeTmux } from "./fake-tmux";
 import { EventQueue } from "./queue";
-import {
-  Runner,
-  type RelayCallbacks,
-  type RelaySocket,
-  type Terminal,
-} from "./runner";
+import { Runner, type RelayCallbacks, type RelaySocket } from "./runner";
 
 /** The Mac's end of the relay: answers the handshake, then reads and writes secure messages. */
 class FakeMac {
@@ -97,53 +92,34 @@ let connects: { url: string; token: string }[];
 let macIdentity: DeviceIdentity;
 let runnerIdentity: DeviceIdentity;
 let sleeps: string[];
-let terminals: { session: string; writes: string[]; close: () => void }[];
+let backend: FakeBackend;
 let now: number;
-let dead: Map<string, number | null>;
+let token = "runner-token";
 
 beforeEach(async () => {
   await sodiumReady();
   dir = mkdtempSync(join(tmpdir(), "runner-relay-"));
-  tmux = new FakeTmux();
+  backend = new FakeBackend(dir);
+  tmux = backend.tmux;
   queue = new EventQueue(join(dir, "queue.jsonl"));
   macIdentity = createIdentity();
   runnerIdentity = createIdentity();
   connects = [];
   sleeps = [];
-  terminals = [];
   now = 1_000_000;
-  dead = new Map();
   const socket: RelaySocket = {
     send: (frame) => mac.receive(frame),
     close: () => {},
   };
   runner = new Runner({
     gatewayUrl: "http://gateway.test:8080",
-    token: "runner-token",
+    readToken: () => token,
     workspaceId: "ws-1",
     macId: macIdentity.id,
     macKey: macIdentity.publicKey,
     identity: runnerIdentity,
-    handlers: createHandlers({
-      root: dir,
-      tmux,
-      version: "t",
-      baseEnv: { PATH: "/usr/bin" },
-    }),
+    backend,
     queue,
-    tmux,
-    deadPanes: async () => dead,
-    openTerminal: (session) => {
-      const record = { session, writes: [] as string[], close: () => {} };
-      terminals.push(record);
-      const terminal: Terminal = {
-        start: () => new Promise(() => {}),
-        write: (data) => record.writes.push(data),
-        resize: () => {},
-        close: () => record.close(),
-      };
-      return terminal;
-    },
     connect: (url, token, cb) => {
       connects.push({ url, token });
       callbacks = cb;
@@ -340,7 +316,7 @@ test("terminals open on a live session, take input and close with the link", asy
     message: { type: "input", data: "ls\r" },
   });
   await tick();
-  expect(terminals[0]!.writes).toEqual(["ls\r"]);
+  expect(backend.terminals[0]!.writes).toEqual(["ls\r"]);
   mac.sendSecure({
     t: "term.open",
     ch: 2,
@@ -389,7 +365,7 @@ test("reports the real exit code of a dead pane, then kills the session", async 
   tmux.sessions.add("s1");
   runner.watchSession("s1");
   macOnline(true);
-  dead.set("s1", 7);
+  backend.dead["s1"] = 7;
   await runner.tick();
   expect(mac.received).toContainEqual({
     t: "session.exited",
@@ -405,7 +381,7 @@ test("a keepOnExit session reports its exit once and stays in tmux", async () =>
   tmux.sessions.add("s2");
   runner.watchSession("s2", true);
   macOnline(true);
-  dead.set("s2", 0);
+  backend.dead["s2"] = 0;
   await runner.tick();
   await runner.tick();
   expect(mac.received.filter((m) => m.t === "session.exited")).toEqual([
@@ -417,9 +393,51 @@ test("a keepOnExit session reports its exit once and stays in tmux", async () =>
 test("a dead pane does not count as activity for idle sleep", async () => {
   tmux.sessions.add("s3");
   runner.watchSession("s3", true);
-  dead.set("s3", 0);
+  backend.dead["s3"] = 0;
   await runner.tick();
   now += 31 * 60_000;
   await runner.tick();
   expect(sleeps.length).toBe(1);
+});
+
+test("reads the token again on every connect and sleep request", async () => {
+  token = "token-two";
+  callbacks.close();
+  await new Promise((r) => setTimeout(r, 1500));
+  expect(connects.at(-1)!.token).toBe("token-two");
+  token = "token-three";
+  await runner.tick();
+  now += 31 * 60_000;
+  await runner.tick();
+  expect(sleeps).toEqual(["POST /v1/workspaces/ws-1/sleep Bearer token-three"]);
+});
+
+test("an unreadable token file means no connection attempt, and a retry later", async () => {
+  runner.stop();
+  const before = connects.length;
+  token = "";
+  const failing = () => {
+    throw new Error("no token file");
+  };
+  const second = new Runner({
+    gatewayUrl: "http://gateway.test:8080",
+    readToken: failing,
+    workspaceId: "ws-1",
+    macId: macIdentity.id,
+    macKey: macIdentity.publicKey,
+    identity: runnerIdentity,
+    backend,
+    queue,
+    connect: (url, t, cb) => {
+      connects.push({ url, token: t });
+      callbacks = cb;
+      return { send() {}, close() {} };
+    },
+    idleMinutes: 30,
+    backoff: { initialMs: 10, maxMs: 20 },
+  });
+  second.start();
+  await new Promise((r) => setTimeout(r, 100));
+  second.stop();
+  expect(connects.length).toBe(before);
 });
