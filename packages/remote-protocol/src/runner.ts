@@ -157,4 +157,6 @@ export const RUNNER_ENV = {
   workspaceId: "DAEDALUS_WORKSPACE_ID",
   macId: "DAEDALUS_MAC_ID",
   macKey: "DAEDALUS_MAC_KEY",
+  /** Minutes with no live session and no open terminal before the runner asks to sleep. */
+  idleMinutes: "DAEDALUS_WORKSPACE_IDLE_MINUTES",
 } as const;
