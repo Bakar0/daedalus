@@ -139,6 +139,15 @@ async function main(): Promise<void> {
     },
   });
 
+  // The runner is PID 1 in the pod, and the kernel drops signals for PID 1
+  // unless it has a handler, so without these a sleep waits out the grace period.
+  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+    process.on(signal, () => {
+      log(`${signal} received, exiting`);
+      process.exit(0);
+    });
+  }
+
   runner.start();
   setInterval(() => void runner.tick(), TICK_MS);
   log(`runner ${VERSION} for workspace ${workspaceId} started`);
