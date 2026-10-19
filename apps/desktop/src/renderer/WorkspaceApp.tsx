@@ -52,6 +52,7 @@ import {
   ROUTINES_REBIRTH_PERCENT,
   type AutoRebirthDto,
 } from "@daedalus/protocol";
+import { LargeFileBar } from "./LargeFileBar";
 import type { DesktopClient } from "./client-types";
 import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import { UpdateBanner } from "./UpdateBanner";
@@ -2139,6 +2140,17 @@ export function WorkspaceApp({
       void client.request.clipboardWrite({ text }).then((response) => {
         if (!response.ok) setError(response.error.message);
       });
+    },
+    [client],
+  );
+
+  // Resolves whether the text reached the clipboard, so a Copy button can
+  // say "Copied" only when it did.
+  const copyCommandText = useCallback(
+    async (text: string) => {
+      const response = await client.request.clipboardWrite({ text });
+      if (!response.ok) setError(response.error.message);
+      return response.ok && response.data.written;
     },
     [client],
   );
@@ -6251,6 +6263,22 @@ export function WorkspaceApp({
                 team={activeSessionTeam.team}
               />
             )}
+            {activeSession &&
+              activeSessionTeam?.role !== "member" &&
+              (snapshot?.largeFiles ?? [])
+                .filter((file) =>
+                  file.kind === "journal"
+                    ? file.workspaceId === activeSession.workspaceId
+                    : file.sessionId === activeSession.id,
+                )
+                .map((file) => (
+                  <LargeFileBar
+                    color={activeSession.color}
+                    file={file}
+                    key={file.kind}
+                    onCopy={copyCommandText}
+                  />
+                ))}
             {activeSession ? (
               // The drawer sits over the terminal, below the routine bar, so
               // the bar's buttons stay in reach while it is open.

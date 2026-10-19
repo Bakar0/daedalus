@@ -145,6 +145,15 @@ export const DEFAULT_AUTO_REBIRTH_PERCENT = 85;
  */
 export const ROUTINES_REBIRTH_PERCENT = 60;
 
+/**
+ * Past these sizes a session's header suggests compacting the file: every
+ * session that reads the file pays for all of it, on every model call after.
+ * The core's copies are in `context-files.ts`.
+ */
+export const JOURNAL_COMPACT_BYTES = 50_000;
+export const TEAM_COMPACT_BYTES = 20_000;
+export const COMPACT_WORKSPACE_SKILL = "daedalus-compact-workspace";
+
 /** The context percent that triggers a session's rebirth, or null for none. */
 export function resolveAutoRebirth(
   session: AutoRebirthDto,
@@ -990,7 +999,22 @@ export interface DesktopSnapshotDto {
   teams: TeamDto[];
   /** Every routine report that has a task, for the task's card and drawer. */
   routineReports: RoutineReportDto[];
+  /** Workspace journals and team files grown past their compact size. */
+  largeFiles?: LargeFileDto[];
   settings: DesktopSettingsDto;
+}
+
+/**
+ * A `JOURNAL.md` (shown on its workspace's sessions that are not team
+ * members) or a lead's `TEAM.md` (shown on the lead) big enough that
+ * compacting it is worth suggesting.
+ */
+export interface LargeFileDto {
+  kind: "journal" | "team";
+  workspaceId: string;
+  /** The lead, for a team file; null for a journal. */
+  sessionId: string | null;
+  bytes: number;
 }
 
 export interface RpcFailure {

@@ -3,7 +3,11 @@ import { join, resolve } from "node:path";
 import { mkdir, rm } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import { runCommand } from "@daedalus/platform";
-import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
+import {
+  NO_LOGIN_SHELL,
+  withoutProviderClis,
+  withTemporaryDaedalusHome,
+} from "@daedalus/test-utils";
 import packageJson from "../../../package.json";
 
 interface CliResult {
@@ -23,7 +27,10 @@ async function cli(
     [process.execPath, "run", join(import.meta.dir, "index.ts"), ...args],
     {
       cwd,
-      env: { ...process.env, DAEDALUS_HOME: home, ...env },
+      // No login shell: spawning or checking an agent would otherwise start
+      // the developer's interactive shell for its PATH, a second or more per
+      // command, which pushed whole tests past the timeout.
+      env: { ...process.env, ...NO_LOGIN_SHELL, DAEDALUS_HOME: home, ...env },
       stdin: stdin === undefined ? "ignore" : new Blob([stdin]),
       stdout: "pipe",
       stderr: "pipe",
@@ -83,6 +90,8 @@ describe("daedal CLI contract", () => {
 
   test("resolves tmux identically with and without Homebrew on PATH", async () => {
     await withTemporaryDaedalusHome(async (home) => {
+      // Only tmux is compared; the provider checks would run the real CLIs.
+      await withoutProviderClis(home);
       const tmuxCheck = async (env: Record<string, string> = {}) => {
         const { stdout } = await cli(home, ["doctor", "--json"], env);
         const envelope = JSON.parse(stdout) as {

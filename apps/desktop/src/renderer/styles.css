@@ -6520,6 +6520,24 @@ dd {
   font-size: 11px !important;
   padding: 3px 8px !important;
 }
+/* The command to compact a large journal or team file, selectable as text
+   and beside a Copy button. */
+.large-file-command {
+  background: var(--elevated);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text);
+  flex: 0 0 auto;
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  padding: 2px 6px;
+  user-select: text;
+  white-space: nowrap;
+}
+/* The size sentence wraps rather than cutting off the command beside it. */
+.large-file-bar .routine-bar-text {
+  white-space: normal;
+}
 .routine-bar-waiting {
   margin-top: 4px;
 }

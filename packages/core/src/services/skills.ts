@@ -71,6 +71,7 @@ import routinesSkillTemplate from "../../../../skills/daedalus-routines/SKILL.md
 import routineRunSkillTemplate from "../../../../skills/daedalus-routine/SKILL.md" with { type: "text" };
 import orchestrationSkillTemplate from "../../../../skills/daedalus-orchestration/SKILL.md" with { type: "text" };
 import teamSkillTemplate from "../../../../skills/daedalus-team/SKILL.md" with { type: "text" };
+import compactWorkspaceSkillTemplate from "../../../../skills/daedalus-compact-workspace/SKILL.md" with { type: "text" };
 
 export type SkillProvider = "claude" | "codex" | "cursor";
 export type SkillOrigin = "daedalus" | "user" | "plugin";
@@ -215,6 +216,16 @@ export const MANAGED_SKILLS: readonly ManagedSkillDefinition[] = [
     defaultEnabled: true,
     defaultMode: "on-demand",
     skillFiles: [{ path: "SKILL.md", contents: teamSkillTemplate }],
+  },
+  {
+    id: "daedalus-compact-workspace",
+    title: "Compact workspace",
+    summary:
+      "Adds /daedalus-compact-workspace journal and /daedalus-compact-workspace team, which move what is no longer current in JOURNAL.md or a lead's TEAM.md to an archive file. A session's header suggests it, with the command to copy, when the file grows large.",
+    supportsAlways: false,
+    defaultEnabled: true,
+    defaultMode: "on-demand",
+    skillFiles: [{ path: "SKILL.md", contents: compactWorkspaceSkillTemplate }],
   },
   {
     id: "unslop",

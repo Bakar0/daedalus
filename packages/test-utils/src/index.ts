@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { runCommand } from "@daedalus/platform";
@@ -39,3 +39,29 @@ export async function withTemporaryDaedalusHome<T>(
     await rm(home, { recursive: true, force: true });
   }
 }
+
+/**
+ * Points a test home's Claude and Codex at executables that do not exist, so
+ * nothing the test calls launches the real ones from the developer's PATH.
+ * A snapshot or `doctor` otherwise runs `claude auth status` and `codex
+ * app-server`, which ask the network and took 1 to 5 seconds a run, past the
+ * 5-second test timeout under a loaded suite.
+ *
+ * A missing provider makes Daedalus ask the login shell for a PATH instead,
+ * so a test that runs the CLI as a subprocess also passes `SHELL: ""`
+ * (`NO_LOGIN_SHELL`) in its environment.
+ */
+export async function withoutProviderClis(home: string): Promise<void> {
+  await writeFile(
+    join(home, "config.json"),
+    JSON.stringify({
+      agents: {
+        claude: { executable: join(home, "no-claude"), args: [] },
+        codex: { executable: join(home, "no-codex"), args: [] },
+      },
+    }),
+  );
+}
+
+/** The environment that keeps a subprocess from starting a login shell. */
+export const NO_LOGIN_SHELL = { SHELL: "" } as const;

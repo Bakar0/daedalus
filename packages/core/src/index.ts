@@ -36,6 +36,7 @@ export * from "./services/routine-files";
 export * from "./services/routines";
 export * from "./services/team-transport";
 export * from "./services/teams";
+export * from "./services/context-files";
 export * from "./services/session-inbox";
 export * from "./services/secrets";
 export * from "./services/secret-mask";

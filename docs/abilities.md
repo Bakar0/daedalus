@@ -271,7 +271,11 @@ rebirth successor takes both, and the predecessor leaves the team.
   user is notified about it, and when it stops or is archived, Daedalus
   posts a note in the chat as `daedalus`, tagging only the lead: "@lead
   @server needs the user: …" or "@lead @server stopped running.". A lead
-  needing the user posts nothing, and neither does a rebirth.
+  needing the user posts nothing, and neither does a rebirth or a member's
+  permission prompt: only the user can answer one, on the member's card, and
+  the note would wake the lead at its full context for nothing. A member the
+  lead itself stops or archives posts nothing either: the note is skipped
+  when the posting process runs as the lead (`DAEDALUS_SESSION_ID`).
 - **Pausing and ending a team.** Archiving the lead, by hand or by quitting
   the app with "Quit and stop sessions", pauses the team: members keep their
   handle and color, messages to the lead wait for it, no member can be added,
@@ -330,3 +334,17 @@ session directly.
 The lead keeps the plan, the members, the contracts between them and every
 decision in `TEAM.md` in its working directory (the `daedalus-orchestration`
 skill). A rebirth successor reads it first.
+
+### Large journal and team files
+
+Every session that reads `JOURNAL.md` or a lead's `TEAM.md` pays for the whole
+file on every model call after. The desktop snapshot's `largeFiles` lists each
+workspace journal past 50 KB and each running lead's `TEAM.md` past 20 KB
+(`context-files.ts`). A session's header then shows a bar for each that it
+reads: "JOURNAL.md is 164 KB. To shrink it, run:" with `/daedalus-compact-workspace journal` and a Copy
+button. The journal bar shows on every session of the workspace that is not
+a team member; the `TEAM.md` bar, with `/daedalus-compact-workspace team`,
+on the lead only. Members get neither, since the lead owns both files. The
+skill moves what is no
+longer current, unchanged, to `journal/YYYY-MM.md` or `TEAM-ARCHIVE.md`.
+Daedalus never runs it on its own.

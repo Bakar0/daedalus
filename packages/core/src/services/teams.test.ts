@@ -610,6 +610,14 @@ describe("teams", () => {
       expect(asked!.text).toBe(
         '[team "Checkout API"] daedalus: @lead @server needs the user: Which database should I use?',
       );
+      // A permission prompt goes to the user only; the lead is not woken.
+      await context.activity.record({
+        sessionId: server.session.id,
+        activity: "needs_permission",
+        detail: "Bash(git push)",
+        source: "hook",
+      });
+      expect(transport.to(leader)).toHaveLength(1);
       // Archiving a running member stops it first; the lead hears once.
       await context.agents.archive(server.session.id, true);
       expect(transport.to(leader).map((item) => item.text)).toEqual([
@@ -623,6 +631,27 @@ describe("teams", () => {
       });
       expect(transport.to(leader)).toHaveLength(2);
       expect(context.repositories.teams.messages(team.id)).toHaveLength(2);
+    });
+  });
+
+  test("the lead is not told about a member it archived itself", async () => {
+    await withTeams(async ({ context, transport }) => {
+      const { session: leader } = await lead(context);
+      const done = await context.teams.spawnMember({
+        team: leader.id,
+        addedBy: "lead",
+        name: "done",
+        instructions: "Finish.",
+      });
+      const previous = process.env.DAEDALUS_SESSION_ID;
+      process.env.DAEDALUS_SESSION_ID = leader.id;
+      try {
+        await context.agents.archive(done.session.id, true);
+      } finally {
+        if (previous === undefined) delete process.env.DAEDALUS_SESSION_ID;
+        else process.env.DAEDALUS_SESSION_ID = previous;
+      }
+      expect(transport.to(leader)).toHaveLength(0);
     });
   });
 

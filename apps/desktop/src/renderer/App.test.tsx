@@ -1657,6 +1657,81 @@ describe("desktop application shell", () => {
     expect(html).toContain("folder missing");
   });
 
+  test("a team member's header says nothing about large files", () => {
+    const session = (id: string, extra: object) => ({
+      id,
+      workspaceId: "w1",
+      taskId: null,
+      name: id,
+      provider: "claude" as const,
+      kind: "agent" as const,
+      tmuxSession: `daedalus_${id}`,
+      command: "claude",
+      args: [],
+      workingDirectory: "/tmp/demo",
+      status: "running" as const,
+      exitCode: null,
+      startedAt: "now",
+      endedAt: null,
+      providerSessionId: id,
+      account: null,
+      teamId: null,
+      teamHandle: null,
+      spawnedBy: null,
+      archivedAt: null,
+      resumeCount: 0,
+      lostReason: null,
+      rebirthRequestedAt: null,
+      position: 1,
+      pinnedAt: null,
+      color: null,
+      autoRebirthPercent: null,
+      ...extra,
+    });
+    const snapshot: DesktopSnapshotDto = {
+      ...base,
+      workspaces: [
+        {
+          id: "w1",
+          slug: "demo",
+          name: "Demo",
+          path: "/tmp/demo",
+          createdAt: "now",
+          updatedAt: "now",
+          archivedAt: null,
+          available: true,
+          position: 1,
+          startSetsInProgress: true,
+          autoRebirthPercent: null,
+          defaultProvider: null,
+          defaultModel: null,
+          defaultClaudeAccount: null,
+          defaultCodexAccount: null,
+          accountModels: {},
+        },
+      ],
+      agents: [
+        session("lead", {}),
+        session("member", { teamId: "ab1", teamHandle: "server" }),
+      ],
+      teams: [{ id: "ab1", leadId: "lead", name: "T", goal: null }],
+      largeFiles: [
+        { kind: "journal", workspaceId: "w1", sessionId: null, bytes: 164_418 },
+        { kind: "team", workspaceId: "w1", sessionId: "lead", bytes: 84_775 },
+      ],
+    };
+    const html = renderToStaticMarkup(
+      <App
+        injectedClient={client}
+        initialActiveAgentId="member"
+        initialSnapshot={snapshot}
+        initialWorkspaceView="session"
+      />,
+    );
+    expect(html).toContain("@server in T");
+    expect(html).not.toContain("large-file-bar");
+  });
+
   test("renders the active session's terminal as the main column", () => {
     const running = {
       id: "11111111-1111-4111-8111-111111111111",
@@ -1736,6 +1811,18 @@ describe("desktop application shell", () => {
           tmuxSession: "daedalus_two",
         },
       ],
+      // It leads a team whose TEAM.md, like the workspace journal, is past
+      // its compact size.
+      teams: [{ id: "ab1", leadId: running.id, name: "T", goal: null }],
+      largeFiles: [
+        { kind: "journal", workspaceId: "w1", sessionId: null, bytes: 164_418 },
+        {
+          kind: "team",
+          workspaceId: "w1",
+          sessionId: running.id,
+          bytes: 84_775,
+        },
+      ],
       sessionTelemetry: [
         {
           sessionId: running.id,
@@ -1771,6 +1858,27 @@ describe("desktop application shell", () => {
     );
     expect(html).toContain('class="session-context-rebirth" style="left:85%"');
     expect(html.match(/session-context-pill/g)).toHaveLength(1);
+    // The lead's header says both sizes in the same words, with the command
+    // to copy; the cards say nothing.
+    const bars = [
+      ...html.matchAll(
+        /<section aria-label="([^"]+) size" class="routine-bar large-file-bar">.*?<\/section>/g,
+      ),
+    ];
+    expect(bars.map((bar) => bar[1])).toEqual(["JOURNAL.md", "TEAM.md"]);
+    expect(bars[0]![0]).toContain(
+      ">JOURNAL.md is 164 KB. To shrink it, run:</span>",
+    );
+    expect(bars[0]![0]).toContain(
+      '<code class="large-file-command">/daedalus-compact-workspace journal</code>',
+    );
+    expect(bars[1]![0]).toContain(
+      ">TEAM.md is 85 KB. To shrink it, run:</span>",
+    );
+    expect(bars[1]![0]).toContain(
+      '<code class="large-file-command">/daedalus-compact-workspace team</code>',
+    );
+    expect(bars[1]![0]).toContain(">Copy</button>");
     // 75% of five blocks lights four.
     expect(html.match(/data-lit="true"/g)).toHaveLength(4);
     expect(html).toContain("Terminal for Terminal task 11111111");

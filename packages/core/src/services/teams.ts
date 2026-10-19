@@ -115,8 +115,13 @@ export class TeamService {
   ) {
     agents.onTeamLaunch((member) => this.memberLaunchLines(member));
     agents.onSessionRunning((session) => this.flushSession(session.id));
-    activity?.onAttention((session, reason) =>
-      this.noteMemberStatus(session.id, `needs the user: ${reason}`),
+    // A permission prompt is for the user, who sees it on the member's card.
+    // Posting it would wake the lead, at its full context, for something it
+    // cannot approve.
+    activity?.onAttention(async (session, reason, state) =>
+      state === "needs_permission"
+        ? undefined
+        : this.noteMemberStatus(session.id, `needs the user: ${reason}`),
     );
     abilities.onRevoke("orchestration", (ability) =>
       this.repositories.clearTeam(ability.id),
@@ -229,7 +234,7 @@ export class TeamService {
         others.length
           ? `The other members: ${others.map((reader) => `@${reader.handle} ('${reader.session.name}')`).join(", ")}.`
           : "You are the first member.",
-        `Talk to the team with 'daedal team say "@${LEAD_HANDLE} ..."', tagging whoever needs it, and read the chat with 'daedal team chat'. Report progress, blockers and when you are done to @${LEAD_HANDLE}. Messages that begin with [team "${team.name}"] come from teammates, not from the user. Follow the ${skill} skill. The lead keeps the plan and the contracts between members in ${TEAM_FILE} in its folder, ${team.lead.workingDirectory}; read it when you need the full picture.`,
+        `Talk to the team with 'daedal team say "@${LEAD_HANDLE} ..."', tagging whoever needs it, and read the chat with 'daedal team chat'. Tag @${LEAD_HANDLE} when you are done or blocked; post progress without a tag, and do not reply only to acknowledge. Messages that begin with [team "${team.name}"] come from teammates, not from the user. Follow the ${skill} skill. The lead keeps the plan and the contracts between members in ${TEAM_FILE} in its folder, ${team.lead.workingDirectory}; read it when you need the full picture.`,
       ]
         .filter(Boolean)
         .join(" "),
@@ -390,7 +395,8 @@ export class TeamService {
 
   /**
    * Tells a member's lead, in the chat, that the member needs the user or
-   * stopped. Only the lead is tagged. Nothing for a lead or a non-member.
+   * stopped. Only the lead is tagged. Nothing for a lead or a non-member,
+   * nor when the lead's own process made the change.
    * Never throws.
    */
   async noteMemberStatus(
@@ -400,6 +406,10 @@ export class TeamService {
     try {
       const membership = this.membership(sessionId);
       if (!membership || membership.reader.role !== "member") return undefined;
+      // The lead archiving or stopping a member already knows: a note would
+      // only wake it again, at its full context.
+      if (process.env.DAEDALUS_SESSION_ID === membership.team.lead.id)
+        return undefined;
       return await this.say({
         team: membership.team.id,
         author: DAEDALUS_HANDLE,

@@ -29,10 +29,17 @@ Tags decide who is told:
 - An unknown tag is refused with the list of handles. `daedal team list`
   shows them too.
 
-Report to @lead when you finish, when you are blocked, and when you change
-something another member depends on. Tag the members it affects directly
-rather than asking the lead to pass it on. Keep messages short; put long
-material in a file and give the path.
+Every tag wakes the session it names, and a woken session re-reads its whole
+context before it answers, often hundreds of thousands of tokens. So:
+
+- Tag @lead when you finish, when you are blocked, and when you need a
+  decision. Nothing else.
+- Post progress without a tag. The lead reads it with `daedal team chat`
+  when it next decides something.
+- When you change something another member depends on, tag that member
+  directly rather than asking the lead to pass it on.
+- Do not reply to a message only to acknowledge it.
+- Keep messages short; put long material in a file and give the path.
 
 ## Reading
 

@@ -3,7 +3,10 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { createApplicationContext } from "@daedalus/core";
 import type { TmuxClient, TmuxLaunch } from "@daedalus/platform";
-import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
+import {
+  withoutProviderClis,
+  withTemporaryDaedalusHome,
+} from "@daedalus/test-utils";
 import packageJson from "../../../../package.json";
 import { createDesktopRequestHandlers, desktopDataFingerprint } from "./rpc";
 
@@ -267,6 +270,7 @@ describe("desktop RPC handlers", () => {
 
   test("snapshot reports configuration and dependency availability", async () => {
     await withTemporaryDaedalusHome(async (home) => {
+      await withoutProviderClis(home);
       const context = await createApplicationContext({
         env: { ...process.env, DAEDALUS_HOME: home },
         tmux: new FakeTmux(),

@@ -74,6 +74,9 @@ Run, as your last action, from your working directory:
 Pass the user's instructions with `--message "<text>"` as well, so they reach
 the next agent in its launch prompt, not only in the note.
 
+If you were told to move to another model (by the user, or by your team's
+lead), add `--model <model>`.
+
 The command starts the new session on your task and archives this one as soon
 as the command exits, so do nothing after it. If it fails, report the error and
 stop; do not try to work around it by starting a session another way.
