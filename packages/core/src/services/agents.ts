@@ -1,6 +1,14 @@
 import { leaveInInbox, postToInbox, usesInbox } from "./session-inbox";
 import type { SessionHost } from "./session-host";
 import type { SessionHosts } from "./session-hosts";
+import {
+  cloudClaudeArgs,
+  cloudEnvironment,
+  cloudHostId,
+  CLOUD_CLAUDE,
+  CLOUD_SHELL,
+  CLOUD_WORKING_DIRECTORY,
+} from "./cloud-launch";
 import { readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
@@ -644,6 +652,7 @@ export class AgentService {
   private async waitForProviderReady(
     provider: string,
     tmuxSession: string,
+    host: SessionHost = this.hosts.local,
   ): Promise<"ready" | "question"> {
     if (provider !== "codex" && provider !== "claude") return "ready";
     // When a recognised question was first seen, so a frame only passing
@@ -653,7 +662,7 @@ export class AgentService {
     let lastScreen = "";
 
     while (Date.now() < deadline) {
-      if (!(await this.hosts.local.isLive(tmuxSession)))
+      if (!(await host.isLive(tmuxSession)))
         throw new DaedalusError(
           "INTERNAL",
           `${provider} exited before finishing startup`,
@@ -661,7 +670,7 @@ export class AgentService {
             startupOutput: lastScreen.replace(/\s+/g, " ").trim().slice(-600),
           },
         );
-      const screen = await this.hosts.local.capture(tmuxSession);
+      const screen = await host.capture(tmuxSession);
       lastScreen = screen;
 
       // Readiness is checked first: an answered prompt stays in the
@@ -687,7 +696,7 @@ export class AgentService {
       await Bun.sleep(PROVIDER_STARTUP_POLL_MS);
     }
 
-    if (!(await this.hosts.local.isLive(tmuxSession)))
+    if (!(await host.isLive(tmuxSession)))
       throw new Error(`${provider} exited before finishing startup`);
     // Still running but not at its prompt: some screen this code does not
     // know, which a new provider release can add at any time. The user can
@@ -897,6 +906,263 @@ export class AgentService {
     );
   }
 
+  private cloudSecrets: (
+    workspaceId: string,
+  ) => Promise<Record<string, string>> = async () => ({});
+
+  /** Reads the secrets a cloud session is launched with; set by the context. */
+  onCloudSecrets(
+    read: (workspaceId: string) => Promise<Record<string, string>>,
+  ): void {
+    this.cloudSecrets = read;
+  }
+
+  /**
+   * Spawns on the workspace's cloud host. Stage 0 runs Claude or a login
+   * shell in the workspace root of the pod: no worktrees, no account
+   * profiles, no continuation and no brief drafting. Hooks reach the Mac
+   * through the pod's `daedal`, which the runner relays.
+   */
+  private async spawnCloud(
+    input: Parameters<AgentService["spawn"]>[0] & { host: string },
+  ): Promise<AgentSession> {
+    const workspace = await this.workspaces.getActive(input.workspace);
+    if (input.host !== cloudHostId(workspace.id))
+      throw new DaedalusError(
+        "VALIDATION",
+        "A cloud session runs on its own workspace's cloud host",
+      );
+    if (input.continueFrom || input.draftBrief || input.command)
+      throw new DaedalusError(
+        "VALIDATION",
+        "A cloud session cannot continue a session, draft a brief or run a custom command yet",
+      );
+    if (input.terminal && input.provider)
+      throw new DaedalusError(
+        "VALIDATION",
+        "A terminal session cannot also select an agent provider",
+      );
+    const provider = input.terminal ? undefined : (input.provider ?? "claude");
+    if (provider !== undefined && provider !== "claude")
+      throw new DaedalusError(
+        "VALIDATION",
+        "A cloud session runs Claude or a terminal",
+      );
+    if (input.account && input.account !== DEFAULT_ACCOUNT)
+      throw new DaedalusError(
+        "VALIDATION",
+        "A cloud session has no account profiles",
+      );
+    const task = input.taskId ? this.tasks.get(input.taskId) : undefined;
+    if (task && task.workspaceId !== workspace.id)
+      throw new DaedalusError(
+        "VALIDATION",
+        "Task does not belong to the selected workspace",
+      );
+    const requestedName = input.name?.trim();
+    if (requestedName && requestedName.length > 240)
+      throw new DaedalusError(
+        "VALIDATION",
+        "Session name must contain at most 240 characters",
+      );
+    if (input.color !== undefined) sessionColor(input.color);
+    const host = this.hosts.get(input.host);
+    const unavailable = await host.probe();
+    if (unavailable) throw new DaedalusError("DEPENDENCY", unavailable);
+    const abilities = this.abilities.validate(
+      { kind: input.terminal ? "terminal" : "agent", provider: "claude" },
+      input.abilities ?? [],
+    );
+    const id = crypto.randomUUID();
+    const name =
+      requestedName ||
+      task?.title ||
+      (input.terminal ? "Terminal" : "Claude session");
+    const team = input.team;
+    const prompt = buildAgentPrompt({
+      taskNumber: task?.number,
+      message: [
+        ...this.abilities.launchLines(abilities),
+        ...(team ? this.teamLaunchLines(team) : []),
+        input.message?.trim(),
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      mode: "execute",
+      note: input.note,
+    });
+    const executable = input.terminal ? CLOUD_SHELL : CLOUD_CLAUDE;
+    const args = input.terminal
+      ? ["-l"]
+      : cloudClaudeArgs(this.config, {
+          sessionId: id,
+          sessionName: name,
+          model: input.model,
+          prompt,
+          acceptPeerMessages:
+            Boolean(team) || abilities.includes("orchestration"),
+        });
+    const session: AgentSession = {
+      id,
+      workspaceId: workspace.id,
+      taskId: task?.id ?? null,
+      name,
+      provider: input.terminal ? "custom" : "claude",
+      kind: input.terminal ? "terminal" : "agent",
+      tmuxSession: `daedalus_${id.replaceAll("-", "")}`,
+      command: executable,
+      args,
+      workingDirectory: CLOUD_WORKING_DIRECTORY,
+      status: "starting",
+      exitCode: null,
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+      providerSessionId: input.terminal ? null : id,
+      archivedAt: null,
+      resumeCount: 0,
+      lostReason: null,
+      rebirthRequestedAt: null,
+      resumeOnStart: false,
+      position: this.repositories.nextAgentPosition(workspace.id),
+      pinnedAt: input.pinned ? new Date().toISOString() : null,
+      color: input.color ?? null,
+      autoRebirthPercent: null,
+      account: null,
+      teamId: team?.teamId ?? null,
+      teamHandle: team?.handle ?? null,
+      spawnedBy: input.spawnedBy ?? null,
+      hostId: host.id,
+    };
+    this.repositories.transaction(() => {
+      this.repositories.createAgent(session);
+      for (const ability of abilities)
+        this.abilities.grant(session.id, ability, { live: false });
+    });
+    try {
+      await this.startCloud(host, session);
+      const startup = input.terminal
+        ? "ready"
+        : await this.waitForProviderReady("claude", session.tmuxSession, host);
+      const running = { ...session, status: "running" as const };
+      this.repositories.updateAgent(running);
+      if (task && !input.terminal) this.markTaskStarted(workspace, task.id);
+      if (startup === "question") this.askedAtStartup(running);
+      else if (!input.terminal) await this.readyAtStartup(running);
+      await this.sessionRunning(running);
+      return running;
+    } catch (error) {
+      if (await host.isLive(session.tmuxSession).catch(() => false))
+        await host.stop(session.tmuxSession, true).catch(() => undefined);
+      this.repositories.updateAgent({
+        ...session,
+        status: "exited",
+        endedAt: new Date().toISOString(),
+      });
+      throw new DaedalusError(
+        error instanceof DaedalusError ? error.code : "INTERNAL",
+        error instanceof Error ? error.message : String(error),
+        error instanceof DaedalusError ? error.details : undefined,
+      );
+    }
+  }
+
+  /** Starts a cloud session's process with its environment and secrets. */
+  private async startCloud(
+    host: SessionHost,
+    session: AgentSession,
+  ): Promise<void> {
+    const task = session.taskId
+      ? this.repositories.findTask(session.taskId)
+      : undefined;
+    await host.start({
+      session: session.tmuxSession,
+      cwd: session.workingDirectory,
+      executable: session.command,
+      args: session.args,
+      env: cloudEnvironment({
+        sessionId: session.id,
+        workspaceId: session.workspaceId,
+        workingDirectory: session.workingDirectory,
+        task,
+      }),
+      secrets:
+        session.kind === "agent"
+          ? await this.cloudSecrets(session.workspaceId).catch(() => ({}))
+          : undefined,
+    });
+  }
+
+  /**
+   * Starts a cloud session again with its conversation resumed, as `relaunch`
+   * does on this Mac. A sleeping workspace's pod is gone, so waking it leaves
+   * every session that was running there lost, with its conversation on the
+   * workspace volume.
+   */
+  private async relaunchCloud(agent: AgentSession): Promise<AgentSession> {
+    const host = this.hosts.get(agent.hostId);
+    const unavailable = await host.probe();
+    if (unavailable) throw new DaedalusError("DEPENDENCY", unavailable);
+    if (agent.kind === "agent" && !agent.providerSessionId)
+      throw new DaedalusError(
+        "CONFLICT",
+        "This session has no conversation to resume",
+      );
+    const restoring: AgentSession = {
+      ...agent,
+      args:
+        agent.kind === "agent"
+          ? cloudClaudeArgs(this.config, {
+              sessionId: agent.id,
+              sessionName: agent.name,
+              model: modelArgument(agent.args),
+              acceptPeerMessages:
+                Boolean(agent.teamId) ||
+                Boolean(this.abilities.held(agent.id, "orchestration")),
+              resume: agent.providerSessionId!,
+            })
+          : agent.args,
+      status: "starting",
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+      exitCode: null,
+      lostReason: null,
+      rebirthRequestedAt: null,
+    };
+    if (await host.isLive(agent.tmuxSession))
+      throw new DaedalusError(
+        "CONFLICT",
+        `tmux session '${agent.tmuxSession}' is already live`,
+      );
+    try {
+      await this.startCloud(host, restoring);
+      const startup =
+        agent.kind === "agent"
+          ? await this.waitForProviderReady(
+              "claude",
+              restoring.tmuxSession,
+              host,
+            )
+          : "ready";
+      const restored: AgentSession = {
+        ...restoring,
+        status: "running",
+        archivedAt: null,
+        resumeCount: agent.resumeCount + 1,
+      };
+      if (agent.archivedAt)
+        this.repositories.abilities.setPausedForSession(agent.id, false);
+      this.repositories.updateAgent(restored);
+      if (startup === "question") this.askedAtStartup(restored);
+      else if (agent.kind === "agent") await this.readyAtStartup(restored);
+      await this.sessionRunning(restored);
+      return restored;
+    } catch (error) {
+      if (await host.isLive(restoring.tmuxSession).catch(() => false))
+        await host.stop(restoring.tmuxSession, true).catch(() => undefined);
+      throw error;
+    }
+  }
+
   async spawn(input: {
     workspace: string;
     taskId?: string;
@@ -931,7 +1197,10 @@ export class AgentService {
     pinned?: boolean;
     /** The team it joins, and its handle there. A successor keeps both. */
     team?: TeamMembership;
+    /** A cloud host to run on (`ws:<workspaceId>`); this Mac when omitted. */
+    host?: string;
   }): Promise<AgentSession> {
+    if (input.host) return this.spawnCloud({ ...input, host: input.host });
     const workspace = await this.workspaces.getActive(input.workspace);
     const task = input.taskId ? this.tasks.get(input.taskId) : undefined;
     const requestedName = input.name?.trim();
@@ -1107,6 +1376,7 @@ export class AgentService {
       teamId: team?.teamId ?? null,
       teamHandle: team?.handle ?? null,
       spawnedBy: input.spawnedBy ?? null,
+      hostId: null,
     };
     this.repositories.transaction(() => {
       this.repositories.createAgent(session);
@@ -1307,7 +1577,7 @@ export class AgentService {
     // composer an Enter does nothing, so this is safe if the popup changes.
     if (agent.provider === "codex") {
       await Bun.sleep(CODEX_MENTION_SETTLE_MS);
-      await this.hosts.local.sendKeys(agent.tmuxSession, ["Enter"]);
+      await this.sessionHost(agent).sendKeys(agent.tmuxSession, ["Enter"]);
     }
     return agent;
   }
@@ -1491,6 +1761,11 @@ export class AgentService {
         "CONFLICT",
         "Only agent sessions can hand their work to a new session",
       );
+    if (agent.hostId)
+      throw new DaedalusError(
+        "CONFLICT",
+        "A cloud session cannot be reborn yet",
+      );
     if (agent.archivedAt)
       throw new DaedalusError(
         "CONFLICT",
@@ -1514,24 +1789,31 @@ export class AgentService {
    */
   async reconcile(liveSessions?: ReadonlySet<string>): Promise<void> {
     // The host asks tmux once per tick and shares the answer with the
-    // terminals; anyone else asks here.
-    if (
-      liveSessions === undefined &&
-      (await this.hosts.local.probe()) !== undefined
-    )
-      return;
-    // A tmux that did not answer settles nothing; the next call asks again.
-    const live =
+    // terminals; anyone else asks here. A tmux that did not answer settles
+    // nothing; the next call asks again.
+    const local =
       liveSessions ??
-      (await this.hosts.local.listLive().then(
-        (sessions) => new Set(sessions),
-        () => undefined,
-      ));
-    if (!live) return;
+      ((await this.hosts.local.probe()) === undefined
+        ? await this.hosts.local.listLive().then(
+            (sessions) => new Set(sessions),
+            () => undefined,
+          )
+        : undefined);
+    // A cloud host is asked only once this process holds it, and one that
+    // does not answer (its workspace asleep, the Mac offline) settles none of
+    // its sessions.
+    const cloud = new Map<string, ReadonlySet<string>>();
+    for (const host of this.hosts.cloud()) {
+      const names = await host.listLive().catch(() => undefined);
+      if (names) cloud.set(host.id, new Set(names));
+    }
+    if (!local && cloud.size === 0) return;
     const now = new Date().toISOString();
     const endedAtStartup: string[] = [];
     this.repositories.transaction(() => {
       for (const agent of this.repositories.listAgents()) {
+        const live = agent.hostId ? cloud.get(agent.hostId) : local;
+        if (!live) continue;
         if (
           (agent.status === "starting" || agent.status === "running") &&
           !live.has(agent.tmuxSession)
@@ -1633,12 +1915,17 @@ export class AgentService {
   }
 
   /** The host the session runs on. */
-  sessionHost(_agent: AgentSession): SessionHost {
-    return this.hosts.local;
+  sessionHost(agent: AgentSession): SessionHost {
+    return this.hosts.get(agent.hostId);
   }
 
   async attach(id: string): Promise<number> {
     const agent = await this.requireRunning(id);
+    if (agent.hostId)
+      throw new DaedalusError(
+        "CONFLICT",
+        "A cloud session has no local tmux to attach to; open it in the app",
+      );
     return this.hosts.localTmux.attach(agent.tmuxSession);
   }
 
@@ -1652,7 +1939,7 @@ export class AgentService {
     options: { styled?: boolean } = {},
   ): Promise<string> {
     const agent = await this.requireRunning(id);
-    return this.hosts.local.capture(agent.tmuxSession, options);
+    return this.sessionHost(agent).capture(agent.tmuxSession, options);
   }
 
   async send(id: string, text: string): Promise<AgentSession> {
@@ -1662,7 +1949,7 @@ export class AgentService {
         "Agent input text must not be empty",
       );
     const agent = await this.requireRunning(id);
-    await this.hosts.local.send(agent.tmuxSession, text);
+    await this.sessionHost(agent).send(agent.tmuxSession, text);
     return agent;
   }
 
@@ -1715,7 +2002,7 @@ export class AgentService {
         "CONFLICT",
         `Agent session '${id}' is not running`,
       );
-    await this.hosts.local.stop(agent.tmuxSession, force);
+    await this.sessionHost(agent).stop(agent.tmuxSession, force);
     const stopped: AgentSession = {
       ...agent,
       status: "exited",
@@ -1756,6 +2043,7 @@ export class AgentService {
       .catch(() => undefined);
     if (
       workspace &&
+      !agent.hostId &&
       resolve(agent.workingDirectory) !== resolve(workspace.path)
     )
       await forgetSessionFolders(this.config, agent.workingDirectory);
@@ -1922,7 +2210,7 @@ export class AgentService {
           "CONFLICT",
           "Custom sessions do not define a native resume capability",
         );
-      if (!(await pathExists(agent.workingDirectory)))
+      if (!agent.hostId && !(await pathExists(agent.workingDirectory)))
         throw new DaedalusError(
           "CONFLICT",
           `Working directory ${agent.workingDirectory} no longer exists`,
@@ -1956,6 +2244,7 @@ export class AgentService {
         "CONFLICT",
         "Restore the workspace before restoring its sessions",
       );
+    if (agent.hostId) return this.relaunchCloud(agent);
     if ((await this.hosts.local.probe()) !== undefined)
       throw new DaedalusError("DEPENDENCY", "tmux is not available on PATH");
 
@@ -2227,13 +2516,19 @@ export class AgentService {
         .listAgents(
           options.workspaceId ? { workspaceId: options.workspaceId } : {},
         )
-        .filter((agent) => agent.status === "lost" && !agent.archivedAt);
+        .filter(
+          (agent) =>
+            agent.status === "lost" &&
+            !agent.archivedAt &&
+            // A cloud session comes back once this process holds its host.
+            this.hosts.find(agent.hostId) !== undefined,
+        );
       const workers = Array.from({ length: REVIVE_CONCURRENCY }, async () => {
         for (let next = queue.shift(); next; next = queue.shift()) {
           const current = this.repositories.findAgent(next.id);
           if (!current || current.status !== "lost" || current.archivedAt)
             continue;
-          if (await this.hosts.local.isLive(current.tmuxSession)) {
+          if (await this.sessionHost(current).isLive(current.tmuxSession)) {
             // Someone else won the race. Adopting the live session is right;
             // launching a second one under the same name is not.
             this.repositories.updateAgent({

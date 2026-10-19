@@ -490,6 +490,7 @@ describe("task timeline", () => {
     teamId: null,
     teamHandle: null,
     spawnedBy: null,
+    hostId: null,
     autoRebirthPercent: null,
   };
 
@@ -771,6 +772,7 @@ describe("task cost", () => {
       teamId: null,
       teamHandle: null,
       spawnedBy: null,
+      hostId: null,
       autoRebirthPercent: null,
     };
     const stopped = {

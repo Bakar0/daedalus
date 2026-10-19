@@ -1,6 +1,7 @@
 import { realpath } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 import {
+  CLOUD_CALLER_VARIABLE,
   DaedalusError,
   type AgentSession,
   type ApplicationContext,
@@ -32,18 +33,32 @@ export async function callerSession(
   options: {
     directory?: string;
     environmentId?: string | undefined;
+    /** The cloud host a call came from; see `CLOUD_CALLER_VARIABLE`. */
+    cloudCaller?: string | undefined;
   } = {},
 ): Promise<AgentSession | undefined> {
   const environmentId =
     "environmentId" in options
       ? options.environmentId
       : process.env.DAEDALUS_SESSION_ID;
+  const cloudCaller =
+    "cloudCaller" in options
+      ? options.cloudCaller
+      : process.env[CLOUD_CALLER_VARIABLE];
+  if (cloudCaller) {
+    const named = environmentId
+      ? context.repositories.findAgent(environmentId)
+      : undefined;
+    return named?.hostId === cloudCaller ? named : undefined;
+  }
   const here = await real(options.directory ?? process.cwd());
   let best: AgentSession[] = [];
   let bestDepth = -1;
   for (const session of context.repositories.listAgents()) {
     if (session.archivedAt) continue;
     if (session.status !== "running" && session.status !== "starting") continue;
+    // Its folder is in a pod, and its calls name it through the variable.
+    if (session.hostId) continue;
     const folder = await real(session.workingDirectory);
     if (!contains(folder, here)) continue;
     const depth = folder.split(sep).length;

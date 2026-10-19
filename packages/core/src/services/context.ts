@@ -29,6 +29,7 @@ import { IntegratedTerminalService } from "./integrated-terminals";
 import { NotificationService } from "./notifications";
 import { PresenceService } from "./presence";
 import { ShutdownService } from "./shutdown";
+import { CLOUD_LAUNCH_SECRETS } from "./cloud-launch";
 import { LocalSessionHost } from "./session-host";
 import { SessionHosts } from "./session-hosts";
 import { TaskHistoryService } from "./task-history";
@@ -216,6 +217,9 @@ export async function createApplicationContext(
           ifActivity: ["unknown"],
         })
         .catch(() => undefined),
+  );
+  agents.onCloudSecrets((workspaceId) =>
+    secrets.values(workspaceId, CLOUD_LAUNCH_SECRETS),
   );
   const terminals = new IntegratedTerminalService(
     repositories,
