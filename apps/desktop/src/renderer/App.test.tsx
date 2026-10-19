@@ -1867,12 +1867,14 @@ describe("desktop application shell", () => {
     ];
     expect(bars.map((bar) => bar[1])).toEqual(["JOURNAL.md", "TEAM.md"]);
     expect(bars[0]![0]).toContain(
-      "JOURNAL.md is 164 KB. Every session that reads it pays for all of it. To shrink it, run:",
+      ">JOURNAL.md is 164 KB. To shrink it, run:</span>",
     );
     expect(bars[0]![0]).toContain(
       '<code class="large-file-command">/daedalus-compact-workspace journal</code>',
     );
-    expect(bars[1]![0]).toContain("TEAM.md is 85 KB. Every session");
+    expect(bars[1]![0]).toContain(
+      ">TEAM.md is 85 KB. To shrink it, run:</span>",
+    );
     expect(bars[1]![0]).toContain(
       '<code class="large-file-command">/daedalus-compact-workspace team</code>',
     );

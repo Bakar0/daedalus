@@ -39,9 +39,12 @@ export function LargeFileBar({
       data-color={color ?? undefined}
     >
       <div className="routine-bar-row">
-        <span className="routine-bar-text">
-          {FILE_NAME[file.kind]} is {Math.round(file.bytes / 1000)} KB. Every
-          session that reads it pays for all of it. To shrink it, run:
+        <span
+          className="routine-bar-text"
+          title="Every session that reads it pays for all of it, on every model call after. The command moves what is no longer current to an archive file."
+        >
+          {FILE_NAME[file.kind]} is {Math.round(file.bytes / 1000)} KB. To
+          shrink it, run:
         </span>
         <code className="large-file-command">{command}</code>
         <span className="routine-bar-actions">
