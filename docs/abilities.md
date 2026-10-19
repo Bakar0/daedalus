@@ -346,5 +346,13 @@ button. The journal bar shows on every session of the workspace that is not
 a team member; the `TEAM.md` bar, with `/daedalus-compact-workspace team`,
 on the lead only. Members get neither, since the lead owns both files. The
 skill moves what is no
-longer current, unchanged, to `journal/YYYY-MM.md` or `TEAM-ARCHIVE.md`.
+longer current, unchanged, to `journal/YYYY-MM.md` or `TEAM-ARCHIVE.md`,
+aiming for half the limit. Daedalus fills the limits and targets into the
+installed skill (`{{journalLimitKb}}` and the rest, in `skills.ts`), so the
+skill and the bar use the same numbers.
+
+The generated `AGENTS.md` and session instruction files keep entries small at
+the source: an entry is a dated heading and at most 5 one-line bullets, and
+evidence goes in `artifacts/`. Files still holding the earlier journal line
+are upgraded on the next sync.
 Daedalus never runs it on its own.

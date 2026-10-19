@@ -73,6 +73,8 @@ import orchestrationSkillTemplate from "../../../../skills/daedalus-orchestratio
 import teamSkillTemplate from "../../../../skills/daedalus-team/SKILL.md" with { type: "text" };
 import compactWorkspaceSkillTemplate from "../../../../skills/daedalus-compact-workspace/SKILL.md" with { type: "text" };
 
+import { JOURNAL_COMPACT_BYTES, TEAM_COMPACT_BYTES } from "./context-files";
+
 export type SkillProvider = "claude" | "codex" | "cursor";
 export type SkillOrigin = "daedalus" | "user" | "plugin";
 /** Which directory a skill was found in, which is how the list groups. */
@@ -246,6 +248,21 @@ export const MANAGED_SKILLS: readonly ManagedSkillDefinition[] = [
     },
   },
 ] as const;
+
+/**
+ * The values a built-in skill names in `{{...}}`: the CLI by full path, and
+ * the sizes past which the session header suggests compacting a file, so the
+ * compact skill aims at the same numbers the header measures.
+ */
+function fillSkillValues(contents: string, daedal: string): string {
+  const kb = (bytes: number) => String(Math.round(bytes / 1000));
+  return contents
+    .replaceAll("{{daedal}}", daedal)
+    .replaceAll("{{journalLimitKb}}", kb(JOURNAL_COMPACT_BYTES))
+    .replaceAll("{{journalTargetKb}}", kb(JOURNAL_COMPACT_BYTES / 2))
+    .replaceAll("{{teamLimitKb}}", kb(TEAM_COMPACT_BYTES))
+    .replaceAll("{{teamTargetKb}}", kb(TEAM_COMPACT_BYTES / 2));
+}
 
 const managedDefinition = (id: string): ManagedSkillDefinition | undefined =>
   MANAGED_SKILLS.find((definition) => definition.id === id);
@@ -836,7 +853,7 @@ export class SkillService {
     // into the background runs commands with another process's environment.
     const daedal = join(this.config.home, "bin", "daedal");
     const skillFiles = definition.skillFiles.map((file) => {
-      const contents = file.contents.replaceAll("{{daedal}}", daedal);
+      const contents = fillSkillValues(file.contents, daedal);
       return file.path === "SKILL.md" && linkName !== definition.id
         ? { ...file, contents: withFrontmatterName(contents, linkName) }
         : { ...file, contents };

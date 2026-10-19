@@ -14,11 +14,22 @@ they need history.
 `$ARGUMENTS` says which file: `journal` or `team`. If it is empty or
 anything else, ask the user which one and stop. Never do both in one run.
 
+Daedalus shows a bar in the session header when a file passes its limit:
+
+| File         | Limit                 | Aim for under          |
+| ------------ | --------------------- | ---------------------- |
+| `JOURNAL.md` | {{journalLimitKb}} KB | {{journalTargetKb}} KB |
+| `TEAM.md`    | {{teamLimitKb}} KB    | {{teamTargetKb}} KB    |
+
+Aim for half the limit, so the bar does not come back after a few entries.
+Measure with `wc -c` before and after; 1 KB is 1,000 bytes.
+
 Rules for both:
 
 - Move text, never rewrite or summarize it in the archive. Nothing is lost.
 - Keep the file's own heading and any lines Daedalus generated.
-- When unsure whether something is still current, keep it.
+- When unsure whether something is still current, keep it, unless that
+  leaves the file over its limit.
 - Write the archive first, then the shortened file, so an interruption
   leaves a duplicate rather than a gap.
 
@@ -27,19 +38,27 @@ Rules for both:
 The file is `JOURNAL.md` at the workspace root, the folder that holds
 `BRIEF.md` (one level up from `worktrees/` if you are in a worktree).
 
-1. Read it. Entries are `## <date> — <title>` sections, oldest first.
-2. Pick the entries older than 14 days. Read them for decisions that still
-   hold: a choice, a rule, a source of truth, a constraint someone must keep
-   following. Skip what a later entry replaced.
-3. Append the old entries, unchanged and in order, to `journal/YYYY-MM.md`
-   by the month of each entry's date. Create the folder and files as needed.
-4. In `JOURNAL.md`, keep or create a `## Standing decisions` section right
+1. Read it. Entries are `## <date> — <title>` sections, oldest first, after
+   the intro and any `## Standing decisions` section.
+2. Choose what moves: the oldest entries first, whatever their age, until
+   what stays is under {{journalTargetKb}} KB. Always keep the newest entry.
+3. Read the entries that move for decisions that still hold: a choice, a
+   rule, a source of truth, a constraint someone must keep following. Skip
+   what a later entry replaced.
+4. Append the moving entries, unchanged and in order, to
+   `journal/YYYY-MM.md` by the month of each entry's date. Create the folder
+   and files as needed.
+5. In `JOURNAL.md`, keep or create a `## Standing decisions` section right
    after the top heading and its intro. Add one line per decision from
-   step 2: `- <date>: <decision> (journal/YYYY-MM.md)`. Drop lines there
-   that a newer decision replaced.
-5. Remove the moved entries from `JOURNAL.md`, and make sure the intro says:
+   step 3: `- <date>: <decision> (journal/YYYY-MM.md)`. Drop lines there
+   that a newer decision replaced. Keep each line to one sentence; the
+   section must stay small, or it becomes the next thing to compact.
+6. Remove the moved entries from `JOURNAL.md`, and make sure the intro says:
    `Older entries are in journal/, by month; grep there for history.`
-6. Tell the user in two lines: the size before and after, how many entries
+7. If the file is still over {{journalTargetKb}} KB because the entries that
+   stay are long, do not cut them. Name the longest ones and their sizes to
+   the user: they hold detail that belongs in a file under `artifacts/`.
+8. Tell the user in two lines: the size before and after, how many entries
    moved, and how many standing decisions the file now has.
 
 ## team
@@ -63,5 +82,8 @@ lead; a member says so and stops.
    reports, run and pull request logs.
 4. Make sure `TEAM.md` says near the top:
    `History: TEAM-ARCHIVE.md in this folder; grep it when you need it.`
-5. Tell the user in two lines: the size before and after, and what moved.
+5. If what stays is still over {{teamTargetKb}} KB, say which parts are
+   large. Long contracts or plans can move to a file beside `TEAM.md`,
+   linked from it; ask the user before doing that.
+6. Tell the user in two lines: the size before and after, and what moved.
    Do not post in the team chat; members read the file when they need it.

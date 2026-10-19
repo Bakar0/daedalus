@@ -20,7 +20,9 @@ import {
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { createApplicationContext, parseGitHubRepositoryPages } from "../index";
 import {
+  AGENTS_TEMPLATE,
   ensureSessionInstructionFiles,
+  ensureWorkspaceContentFiles,
   pullRequestAnswerHoldsHead,
   sessionDirectoryName,
   sessionInstructionsTemplate,
@@ -2925,6 +2927,50 @@ Before working in this workspace:
   });
 });
 
+// The journal line generated instruction files carried before entries had a
+// size, in place of the current one.
+function withUnsizedJournal(workspacePath: string, current: string): string {
+  const journal = join(workspacePath, "JOURNAL.md");
+  return current.replace(
+    /^2\. .*$/m,
+    `2. \`${journal}\` contains chronological decisions, progress, blockers, questions, and handoffs. Read recent entries when prior workspace activity matters, and add meaningful updates when useful.`,
+  );
+}
+
+test("a session's instructions from before journal entries had a size are upgraded", async () => {
+  await withTemporaryDaedalusHome(async (home) => {
+    const workspacePath = join(home, "workspace");
+    const sessionPath = join(home, "session");
+    await mkdir(sessionPath, { recursive: true });
+    const agentsPath = join(sessionPath, "AGENTS.md");
+    const current = sessionInstructionsTemplate(workspacePath);
+    expect(current).toContain("at most 5 one-line bullets");
+    expect(current).toContain(join(workspacePath, "journal"));
+    const previous = withUnsizedJournal(workspacePath, current);
+    expect(previous).not.toBe(current);
+
+    await Bun.write(agentsPath, previous);
+    await ensureSessionInstructionFiles(sessionPath, workspacePath, home, true);
+    expect(await readFile(agentsPath, "utf8")).toBe(current);
+  });
+});
+
+test("a workspace's AGENTS.md from before journal entries had a size is upgraded", async () => {
+  await withTemporaryDaedalusHome(async (home) => {
+    const workspacePath = join(home, "workspace");
+    await mkdir(workspacePath, { recursive: true });
+    const agentsPath = join(workspacePath, "AGENTS.md");
+    const previous = AGENTS_TEMPLATE.replace(
+      /^2\. .*$/m,
+      "2. \`JOURNAL.md\` contains chronological decisions, progress, blockers, questions, and handoffs. Read recent entries when prior workspace activity matters, and add meaningful updates when useful.",
+    );
+    expect(previous).not.toBe(AGENTS_TEMPLATE);
+    await Bun.write(agentsPath, previous);
+    await ensureWorkspaceContentFiles(workspacePath, home);
+    expect(await readFile(agentsPath, "utf8")).toBe(AGENTS_TEMPLATE);
+  });
+});
+
 test("a session's instructions from before --branch was required are upgraded, and removed when turned off", async () => {
   await withTemporaryDaedalusHome(async (home) => {
     const workspacePath = join(home, "workspace");
@@ -2932,7 +2978,7 @@ test("a session's instructions from before --branch was required are upgraded, a
     await mkdir(sessionPath, { recursive: true });
     const agentsPath = join(sessionPath, "AGENTS.md");
     const current = sessionInstructionsTemplate(workspacePath);
-    const previous = current.replace(
+    const previous = withUnsizedJournal(workspacePath, current).replace(
       / --branch <branch-name>`, then work in the returned path\..*$/m,
       "`, then work in the returned path.",
     );
