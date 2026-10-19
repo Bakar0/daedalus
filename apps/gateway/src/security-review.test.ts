@@ -14,7 +14,7 @@ import { Store } from "./store";
  * Security review of cloud sessions stage 0; the ids name findings in
  * artifacts/cloud-sessions/security-review.md. `test.failing` passes while
  * the weakness is there; when it is fixed, it fails and should become a
- * plain `test`.
+ * plain `test`. L-1 and L-8 are fixed.
  */
 
 const WS = "0f8e2c1a-7b3d-4e5f-9a6b-1c2d3e4f5a6b";
@@ -43,7 +43,7 @@ beforeEach(() => {
     relay: new Relay(),
     log: () => {},
   });
-  server = Bun.serve({ ...gateway, port: 0 });
+  server = Bun.serve({ ...gateway.public, port: 0 });
   base = `http://localhost:${server.port}`;
 });
 
@@ -62,29 +62,26 @@ async function login(email: string): Promise<string> {
 }
 
 describe("security review: gateway", () => {
-  test.failing(
-    "L-8: a workspace cannot ask for zero CPU and memory (no limit at all)",
-    async () => {
-      const token = await login("alice@example.com");
-      const response = await fetch(`${base}/v1/workspaces`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          workspaceId: WS,
-          name: "zero",
-          macId: "macAAAAAAAAAAAAAAAAAAA",
-          macKey: key(1),
-          resources: { cpu: "0", memory: "0" },
-        }),
-      });
-      // Today: 201, and the pod gets limits of 0, which Kubernetes reads as
-      // "no limit" (QoS BestEffort; memory.max is "max" in the pod).
-      expect(response.status).toBe(400);
-    },
-  );
+  test("L-8: a workspace cannot ask for zero CPU and memory (no limit at all)", async () => {
+    const token = await login("alice@example.com");
+    const response = await fetch(`${base}/v1/workspaces`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        workspaceId: WS,
+        name: "zero",
+        macId: "macAAAAAAAAAAAAAAAAAAA",
+        macKey: key(1),
+        resources: { cpu: "0", memory: "0" },
+      }),
+    });
+    // Was 201, and the pod got limits of 0, which Kubernetes reads as
+    // "no limit" (QoS BestEffort; memory.max is "max" in the pod).
+    expect(response.status).toBe(400);
+  });
 });
 
 /** A socket the relay can hold, recording what it is sent. */
@@ -99,41 +96,36 @@ function fakeSocket(data: Peer) {
 }
 
 describe("security review: relay", () => {
-  test.failing(
-    "L-1: a runner reaches only the Mac its workspace was made from",
-    () => {
-      const relay = new Relay();
-      const user = "u1";
-      const ownMac = fakeSocket({
-        role: "mac",
-        userId: user,
-        deviceId: "mac:own",
-      });
-      const otherMac = fakeSocket({
-        role: "mac",
-        userId: user,
-        deviceId: "mac:other",
-      });
-      const runner = fakeSocket({
-        role: "runner",
-        userId: user,
-        deviceId: `ws:${WS}`,
-        workspaceId: WS,
-        macDeviceId: "mac:own",
-      });
-      for (const peer of [ownMac, otherMac, runner]) relay.open(peer.socket);
-      otherMac.sent.length = 0;
-      relay.message(
-        runner.socket,
-        Buffer.from(encodeRelayFrame("mac:other", new Uint8Array([7]))),
-      );
-      const frames = otherMac.sent.filter(
-        (item): item is Uint8Array => typeof item !== "string",
-      );
-      // Today the frame arrives, from `ws:<id>`.
-      expect(frames.map((frame) => decodeRelayFrame(frame).deviceId)).toEqual(
-        [],
-      );
-    },
-  );
+  test("L-1: a runner reaches only the Mac its workspace was made from", () => {
+    const relay = new Relay();
+    const user = "u1";
+    const ownMac = fakeSocket({
+      role: "mac",
+      userId: user,
+      deviceId: "mac:own",
+    });
+    const otherMac = fakeSocket({
+      role: "mac",
+      userId: user,
+      deviceId: "mac:other",
+    });
+    const runner = fakeSocket({
+      role: "runner",
+      userId: user,
+      deviceId: `ws:${WS}`,
+      workspaceId: WS,
+      macDeviceId: "mac:own",
+    });
+    for (const peer of [ownMac, otherMac, runner]) relay.open(peer.socket);
+    otherMac.sent.length = 0;
+    relay.message(
+      runner.socket,
+      Buffer.from(encodeRelayFrame("mac:other", new Uint8Array([7]))),
+    );
+    const frames = otherMac.sent.filter(
+      (item): item is Uint8Array => typeof item !== "string",
+    );
+    // The frame used to arrive, from `ws:<id>`.
+    expect(frames.map((frame) => decodeRelayFrame(frame).deviceId)).toEqual([]);
+  });
 });

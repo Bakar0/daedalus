@@ -14,5 +14,5 @@ COPY --from=build /out/gateway.js ./gateway.js
 # The chart runs it as uid 1000 with a read-only root and /data for SQLite.
 USER 1000:1000
 ENV DAEDALUS_GATEWAY_PORT=8080
-EXPOSE 8080
+EXPOSE 8080 8081
 CMD ["bun", "gateway.js"]

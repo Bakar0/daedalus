@@ -18,18 +18,22 @@ const gateway = createGateway({
   controller,
   relay: new Relay(),
 });
-const server = Bun.serve({
-  ...gateway,
-  hostname: "0.0.0.0",
-  port: config.port,
-});
+const servers = [
+  Bun.serve({ ...gateway.public, hostname: "0.0.0.0", port: config.port }),
+  // Only the in-cluster Service exposes this one; runner tokens work here only.
+  Bun.serve({
+    ...gateway.runner,
+    hostname: "0.0.0.0",
+    port: config.runnerPort,
+  }),
+];
 console.log(
-  `Gateway listening on ${server.port}${config.devLogin ? " with dev login" : ""}`,
+  `Gateway listening on ${config.port}, runners on ${config.runnerPort}${config.devLogin ? ", with dev login" : ""}`,
 );
 
 for (const signal of ["SIGTERM", "SIGINT"] as const)
   process.on(signal, () => {
-    void server.stop().then(() => {
+    void Promise.all(servers.map((server) => server.stop())).then(() => {
       store.close();
       process.exit(0);
     });

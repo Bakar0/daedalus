@@ -8,9 +8,9 @@ import type { RelayNotice } from "@daedalus/remote-protocol";
  * (see `packages/remote-protocol/src/frames.ts`), checks the sender may talk
  * to it, and rewrites it to the sender's id before forwarding.
  *
- * A Mac may send only to runners and a runner only to Macs, both within the
- * room, so nothing ever crosses users. A runner that leaves the id empty
- * sends to the Mac its workspace was made from.
+ * A Mac may send only to runners in the room, and a runner only to the Mac
+ * its workspace was made from, so nothing ever crosses users. A runner may
+ * leave the id empty for that Mac.
  *
  * Unlike apps/relay, a device that joins is told which of its peers are
  * online already, so a runner knows at once whether to queue its events.
@@ -58,6 +58,14 @@ export class Relay {
 
   isOnline(userId: string, deviceId: string): boolean {
     return this.#rooms.get(userId)?.has(deviceId) ?? false;
+  }
+
+  /** How many Macs of the user are connected. */
+  macCount(userId: string): number {
+    let count = 0;
+    for (const socket of this.#rooms.get(userId)?.values() ?? [])
+      if (socket.data.role === "mac") count += 1;
+    return count;
   }
 
   /** Closes a device's socket, as when its workspace is deleted. */
@@ -110,8 +118,9 @@ export class Relay {
     if (length === undefined || frame.length < 1 + length) return;
     let to = decoder.decode(frame.subarray(1, 1 + length));
     if (sender.role === "runner" && to === "") to = sender.macDeviceId;
+    // A Mac reaches any runner of its user; a runner only its own Mac.
     const allowed =
-      sender.role === "mac" ? to.startsWith("ws:") : to.startsWith("mac:");
+      sender.role === "mac" ? to.startsWith("ws:") : to === sender.macDeviceId;
     if (!allowed) return;
     const target = room.get(to);
     if (!target) return;

@@ -6,15 +6,20 @@ gateway:
   publicUrl: "" # how Macs reach the gateway
   storage: { size: 1Gi, storageClass: "" } # gateway SQLite PVC
   service:
-    port: 8080
+    port: 8080 # public: Macs and users
+    runnerPort: 8081 # runner pods only; in-cluster Service and NetworkPolicy
     type: ClusterIP
     nodePort: null # only used when type is NodePort
+  limits:
+    workspacesPerUser: 5
 workspace:
   storageClass: ""
   storageSize: 20Gi
   resources:
     requests: { cpu: "1", memory: 2Gi }
     limits: { cpu: "2", memory: 4Gi }
+  # The most a user may ask for when creating a workspace.
+  maxResources: { cpu: "4", memory: 8Gi }
   runtimeClassName: "" # "gvisor" to sandbox workspace pods
   idleMinutes: 30 # runner asks the gateway to sleep it after this
 tenant:

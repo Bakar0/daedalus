@@ -241,6 +241,31 @@ export class Store {
     return this.workspace(userId, workspaceId)?.runnerKey === key;
   }
 
+  /**
+   * Gives the workspace a new runner token, so the one an earlier pod held
+   * stops working. Called on every wake.
+   */
+  replaceRunnerToken(userId: string, workspaceId: string, token: string) {
+    this.#db.transaction(() => {
+      this.revokeRunnerToken(userId, workspaceId);
+      this.#db
+        .query(
+          `INSERT INTO tokens (hash, kind, user_id, workspace_id, created_at)
+           VALUES (?, 'runner', ?, ?, ?)`,
+        )
+        .run(sha256(token), userId, workspaceId, new Date().toISOString());
+    })();
+  }
+
+  /** Ends the workspace's runner token, as on sleep. */
+  revokeRunnerToken(userId: string, workspaceId: string): void {
+    this.#db
+      .query(
+        "DELETE FROM tokens WHERE kind = 'runner' AND user_id = ? AND workspace_id = ?",
+      )
+      .run(userId, workspaceId);
+  }
+
   /** Removes the workspace and its runner token. */
   deleteWorkspace(userId: string, workspaceId: string): void {
     this.#db.transaction(() => {

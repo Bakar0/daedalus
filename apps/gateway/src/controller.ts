@@ -12,7 +12,14 @@ import type { WorkspaceRow } from "./store";
 /**
  * Creates and deletes what a workspace runs on, as TEAM.md "Pod" lays out:
  * per user a namespace `u-<userId>` with the chart's tenant objects, and per
- * workspace a Secret holding the runner token, a PVC and a pod.
+ * workspace two PVCs (the workspace, and the runner's state), a Secret
+ * holding the runner token while the workspace is awake, and a pod.
+ *
+ * The pod has two containers (artifacts/cloud-sessions/h1-pod-spec.md).
+ * `session` (uid 1001) runs sessiond, tmux and everything the agents start.
+ * `runner` (uid 1000) holds the relay link, the token and the identity key,
+ * on volumes the session container does not mount, so agent code cannot
+ * take them.
  *
  * The gateway may only create namespaces and RoleBindings cluster-wide. So
  * the first thing it puts in a new namespace is a RoleBinding that gives
@@ -24,10 +31,13 @@ const USER_LABEL = "daedalus.dev/user";
 const WORKSPACE_LABEL = "daedalus.dev/workspace";
 const TENANT_ROLE = "daedalus-tenant-admin";
 const ROLE_BINDING = "daedalus-gateway";
+/** Pod Security level and version every tenant namespace enforces. */
+const POD_SECURITY = { level: "restricted", version: "v1.30" } as const;
 
 export const namespaceFor = (userId: string) => `u-${userId}`;
 export const podName = (workspaceId: string) => `ws-${workspaceId}`;
 export const pvcName = (workspaceId: string) => `ws-${workspaceId}`;
+export const statePvcName = (workspaceId: string) => `ws-${workspaceId}-state`;
 export const secretName = (workspaceId: string) => `ws-${workspaceId}-runner`;
 
 const core = (namespace: string, plural: string) =>
@@ -169,12 +179,21 @@ export class Controller {
   /** The user's namespace, its RoleBinding first, then the tenant objects. */
   async ensureTenant(userId: string): Promise<void> {
     const namespace = namespaceFor(userId);
+    const podSecurity: Record<string, string> = {};
+    for (const mode of ["enforce", "warn", "audit"]) {
+      podSecurity[`pod-security.kubernetes.io/${mode}`] = POD_SECURITY.level;
+      podSecurity[`pod-security.kubernetes.io/${mode}-version`] =
+        POD_SECURITY.version;
+    }
     await this.#create(
       "/api/v1/namespaces",
       {
         apiVersion: "v1",
         kind: "Namespace",
-        metadata: { name: namespace, labels: { [USER_LABEL]: userId } },
+        metadata: {
+          name: namespace,
+          labels: { [USER_LABEL]: userId, ...podSecurity },
+        },
       },
       "Creating the user's namespace",
     );
@@ -231,40 +250,62 @@ export class Controller {
   }
 
   /**
-   * The Secret and PVC that outlive the pod through sleep. Either existing
-   * already is an error: an old Secret would hold a token the database no
-   * longer knows, and an old volume another workspace's files.
+   * The two PVCs that outlive the pod through sleep. Either existing already
+   * is an error: an old volume would hold another workspace's files or key.
    */
-  async createStorage(row: WorkspaceRow, runnerToken: string): Promise<void> {
+  async createVolumes(row: WorkspaceRow): Promise<void> {
     const namespace = namespaceFor(row.userId);
-    const labels = this.#labels(row);
+    const { storageClass, storageSize, stateSize } = this.config.workspace;
+    for (const [name, size, what] of [
+      [pvcName(row.workspaceId), storageSize, "Creating the workspace volume"],
+      [statePvcName(row.workspaceId), stateSize, "Creating the runner volume"],
+    ] as const)
+      await this.#create(
+        core(namespace, "persistentvolumeclaims"),
+        {
+          apiVersion: "v1",
+          kind: "PersistentVolumeClaim",
+          metadata: { name, namespace, labels: this.#labels(row) },
+          spec: {
+            accessModes: ["ReadWriteOnce"],
+            resources: { requests: { storage: size } },
+            ...(storageClass ? { storageClassName: storageClass } : {}),
+          },
+        },
+        what,
+        "error",
+      );
+  }
+
+  /**
+   * Writes the runner token Secret, replacing any earlier one. There is no
+   * update right, so replacing is delete and create.
+   */
+  async writeToken(row: WorkspaceRow, runnerToken: string): Promise<void> {
+    const namespace = namespaceFor(row.userId);
+    await this.deleteToken(row);
     await this.#create(
       core(namespace, "secrets"),
       {
         apiVersion: "v1",
         kind: "Secret",
-        metadata: { name: secretName(row.workspaceId), namespace, labels },
+        metadata: {
+          name: secretName(row.workspaceId),
+          namespace,
+          labels: this.#labels(row),
+        },
         type: "Opaque",
         stringData: { token: runnerToken },
       },
-      "Creating the runner token",
+      "Writing the runner token",
       "error",
     );
-    const { storageClass, storageSize } = this.config.workspace;
-    await this.#create(
-      core(namespace, "persistentvolumeclaims"),
-      {
-        apiVersion: "v1",
-        kind: "PersistentVolumeClaim",
-        metadata: { name: pvcName(row.workspaceId), namespace, labels },
-        spec: {
-          accessModes: ["ReadWriteOnce"],
-          resources: { requests: { storage: storageSize } },
-          ...(storageClass ? { storageClassName: storageClass } : {}),
-        },
-      },
-      "Creating the workspace volume",
-      "error",
+  }
+
+  async deleteToken(row: WorkspaceRow): Promise<void> {
+    await this.#delete(
+      `${core(namespaceFor(row.userId), "secrets")}/${secretName(row.workspaceId)}`,
+      "Deleting the runner token",
     );
   }
 
@@ -285,18 +326,19 @@ export class Controller {
     );
   }
 
-  /** Removes the pod, the volume and the token Secret. */
+  /** Removes the pod, both volumes and the token Secret. */
   async deleteWorkspace(row: WorkspaceRow): Promise<void> {
     const namespace = namespaceFor(row.userId);
     await this.stopPod(row);
-    await this.#delete(
-      `${core(namespace, "persistentvolumeclaims")}/${pvcName(row.workspaceId)}`,
-      "Deleting the workspace volume",
-    );
-    await this.#delete(
-      `${core(namespace, "secrets")}/${secretName(row.workspaceId)}`,
-      "Deleting the runner token",
-    );
+    for (const name of [
+      pvcName(row.workspaceId),
+      statePvcName(row.workspaceId),
+    ])
+      await this.#delete(
+        `${core(namespace, "persistentvolumeclaims")}/${name}`,
+        "Deleting a workspace volume",
+      );
+    await this.deleteToken(row);
   }
 
   /** The workspace's pod, or null when there is none. */
@@ -317,16 +359,45 @@ export class Controller {
 
   podSpec(row: WorkspaceRow): KubeObject {
     const { workspace, runner } = this.config;
-    const requests = {
-      cpu: row.cpu ?? workspace.requests.cpu,
-      memory: row.memory ?? workspace.requests.memory,
-    };
     // A size the user asked for is both the request and the limit.
-    const limits = {
-      cpu: row.cpu ?? workspace.limits.cpu,
-      memory: row.memory ?? workspace.limits.memory,
+    const cpu = {
+      request: row.cpu ?? workspace.requests.cpu,
+      limit: row.cpu ?? workspace.limits.cpu,
+    };
+    const memory = {
+      request: row.memory ?? workspace.requests.memory,
+      limit: row.memory ?? workspace.limits.memory,
     };
     const value = (name: string, value: string) => ({ name, value });
+    const container = (
+      name: string,
+      uid: number,
+      script: string,
+    ): KubeObject => ({
+      name,
+      image: runner.image,
+      imagePullPolicy: runner.pullPolicy,
+      command: ["bun", `/opt/daedalus/${script}`],
+      securityContext: {
+        runAsNonRoot: true,
+        runAsUser: uid,
+        runAsGroup: uid,
+        allowPrivilegeEscalation: false,
+        readOnlyRootFilesystem: true,
+        capabilities: { drop: ["ALL"] },
+        seccompProfile: { type: "RuntimeDefault" },
+      },
+    });
+    const mount = (name: string, mountPath: string, readOnly = false) => ({
+      name,
+      mountPath,
+      ...(readOnly ? { readOnly } : {}),
+    });
+    const tokenDir = RUNNER_PATHS.token.slice(
+      0,
+      RUNNER_PATHS.token.lastIndexOf("/"),
+    );
+    const tokenFile = RUNNER_PATHS.token.slice(tokenDir.length + 1);
     return {
       apiVersion: "v1",
       kind: "Pod",
@@ -334,11 +405,13 @@ export class Controller {
         name: podName(row.workspaceId),
         namespace: namespaceFor(row.userId),
         labels: this.#labels(row),
+        annotations: { "kubectl.kubernetes.io/default-container": "session" },
       },
       spec: {
         serviceAccountName: "runner",
         automountServiceAccountToken: false,
         enableServiceLinks: false,
+        shareProcessNamespace: false,
         restartPolicy: "Always",
         terminationGracePeriodSeconds: 10,
         ...(workspace.runtimeClass
@@ -346,46 +419,61 @@ export class Controller {
           : {}),
         securityContext: {
           runAsNonRoot: true,
-          runAsUser: 1000,
-          runAsGroup: 1000,
-          fsGroup: 1000,
+          fsGroup: 2000,
+          fsGroupChangePolicy: "OnRootMismatch",
           seccompProfile: { type: "RuntimeDefault" },
         },
         containers: [
           {
-            name: "runner",
-            image: runner.image,
-            imagePullPolicy: runner.pullPolicy,
+            ...container("runner", 1000, "runner.js"),
+            // Nothing secret: the token is a file on its own volume.
             env: [
               value(RUNNER_ENV.gatewayUrl, this.config.internalUrl),
-              {
-                name: RUNNER_ENV.runnerToken,
-                valueFrom: {
-                  secretKeyRef: {
-                    name: secretName(row.workspaceId),
-                    key: "token",
-                  },
-                },
-              },
               value(RUNNER_ENV.workspaceId, row.workspaceId),
               value(RUNNER_ENV.macId, row.macId),
               value(RUNNER_ENV.macKey, row.macKey),
               value(RUNNER_ENV.idleMinutes, workspace.idleMinutes),
             ],
-            resources: { requests, limits },
-            volumeMounts: [
-              { name: "workspace", mountPath: RUNNER_PATHS.workspace },
-              { name: "cache", mountPath: RUNNER_PATHS.cache },
-              // The shim's Unix socket; S3 Files volumes cannot hold one.
-              { name: "runtime", mountPath: RUNNER_PATHS.runtime },
-            ],
-            securityContext: {
-              runAsNonRoot: true,
-              runAsUser: 1000,
-              allowPrivilegeEscalation: false,
-              capabilities: { drop: ["ALL"] },
-              seccompProfile: { type: "RuntimeDefault" },
+            resources: {
+              requests: {
+                cpu: "50m",
+                memory: "64Mi",
+                "ephemeral-storage": "64Mi",
+              },
+              limits: {
+                cpu: "500m",
+                memory: "256Mi",
+                "ephemeral-storage": "256Mi",
+              },
             },
+            volumeMounts: [
+              mount("state", RUNNER_PATHS.state),
+              mount("token", tokenDir, true),
+              mount("shared", RUNNER_PATHS.runtime),
+              mount("runner-tmp", "/tmp"),
+            ],
+          },
+          {
+            ...container("session", 1001, "sessiond.js"),
+            env: [],
+            resources: {
+              requests: {
+                cpu: cpu.request,
+                memory: memory.request,
+                "ephemeral-storage": workspace.ephemeral.request,
+              },
+              limits: {
+                cpu: cpu.limit,
+                memory: memory.limit,
+                "ephemeral-storage": workspace.ephemeral.limit,
+              },
+            },
+            volumeMounts: [
+              mount("workspace", RUNNER_PATHS.workspace),
+              mount("cache", RUNNER_PATHS.cache),
+              mount("shared", RUNNER_PATHS.runtime),
+              mount("session-tmp", "/tmp"),
+            ],
           },
         ],
         volumes: [
@@ -393,11 +481,22 @@ export class Controller {
             name: "workspace",
             persistentVolumeClaim: { claimName: pvcName(row.workspaceId) },
           },
-          { name: "cache", emptyDir: {} },
           {
-            name: "runtime",
-            emptyDir: { medium: "Memory", sizeLimit: "16Mi" },
+            name: "state",
+            persistentVolumeClaim: { claimName: statePvcName(row.workspaceId) },
           },
+          {
+            name: "token",
+            secret: {
+              secretName: secretName(row.workspaceId),
+              defaultMode: 0o440,
+              items: [{ key: "token", path: tokenFile }],
+            },
+          },
+          { name: "shared", emptyDir: { medium: "Memory", sizeLimit: "16Mi" } },
+          { name: "cache", emptyDir: { sizeLimit: workspace.cacheSize } },
+          { name: "runner-tmp", emptyDir: { sizeLimit: "64Mi" } },
+          { name: "session-tmp", emptyDir: { sizeLimit: workspace.tmpSize } },
         ],
       },
     };

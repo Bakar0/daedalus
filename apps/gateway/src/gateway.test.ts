@@ -6,6 +6,7 @@ import {
   decodeRelayFrame,
   encodeRelayFrame,
   RUNNER_ENV,
+  RUNNER_PATHS,
   type CloudWorkspace,
 } from "@daedalus/remote-protocol";
 import { loadConfig, type GatewayConfig } from "./config";
@@ -42,7 +43,10 @@ let kube: FakeKube;
 let store: Store;
 let config: GatewayConfig;
 let server: ReturnType<typeof Bun.serve>;
+let runnerServer: ReturnType<typeof Bun.serve>;
 let base: string;
+/** The runner listener, which only the in-cluster Service exposes. */
+let runnerBase: string;
 let logs: string[];
 const sockets: WebSocket[] = [];
 
@@ -64,9 +68,21 @@ function start(overrides: Record<string, string> = {}) {
     relay: new Relay(),
     log: (message) => logs.push(message),
   });
-  server = Bun.serve({ ...gateway, port: 0 });
+  server = Bun.serve({ ...gateway.public, port: 0 });
+  runnerServer = Bun.serve({ ...gateway.runner, port: 0 });
   base = `http://localhost:${server.port}`;
+  runnerBase = `http://localhost:${runnerServer.port}`;
 }
+
+async function stop() {
+  await server.stop(true);
+  await runnerServer.stop(true);
+  store.close();
+}
+
+/** Runner tokens go to the runner listener, everything else to the public. */
+const listenerFor = (token: string | undefined) =>
+  token && store.tokenOwner(token)?.kind === "runner" ? runnerBase : base;
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "gateway-test-"));
@@ -77,8 +93,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   for (const socket of sockets.splice(0)) socket.close();
-  await server.stop(true);
-  store.close();
+  await stop();
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -87,8 +102,9 @@ async function api(
   method: string,
   path: string,
   body?: unknown,
+  at = listenerFor(token),
 ): Promise<{ status: number; json: ApiBody }> {
-  const response = await fetch(`${base}${path}`, {
+  const response = await fetch(`${at}${path}`, {
     method,
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -118,15 +134,22 @@ interface TestPod {
     runtimeClassName?: string;
     serviceAccountName: string;
     automountServiceAccountToken: boolean;
+    shareProcessNamespace: boolean;
     securityContext: Record<string, unknown>;
-    volumes: unknown[];
+    volumes: {
+      name: string;
+      persistentVolumeClaim?: { claimName: string };
+      secret?: { secretName: string; defaultMode?: number; items?: unknown[] };
+      emptyDir?: unknown;
+    }[];
     containers: {
       name: string;
       image: string;
+      command: string[];
       securityContext: Record<string, unknown>;
       resources: unknown;
       env: { name: string; value?: string; valueFrom?: unknown }[];
-      volumeMounts: unknown[];
+      volumeMounts: { name: string; mountPath: string; readOnly?: boolean }[];
     }[];
   };
 }
@@ -161,11 +184,11 @@ function runnerToken(userId: string, workspaceId: string): string {
 }
 
 /** A WebSocket with its messages queued, so a test can await the next. */
-async function connect(token: string, query: string) {
+async function connect(token: string, query: string, at = listenerFor(token)) {
   const queue: (string | Uint8Array)[] = [];
   const waiters: ((value: string | Uint8Array) => void)[] = [];
   const socket = new WebSocket(
-    `${base.replace("http", "ws")}/v1/connect?${query}`,
+    `${at.replace("http", "ws")}/v1/connect?${query}`,
     {
       headers: { Authorization: `Bearer ${token}` },
     } as unknown as string[],
@@ -233,8 +256,7 @@ const peer = (deviceId: string, online: boolean) =>
 
 describe("dev login and tokens", () => {
   test("is off unless configured", async () => {
-    await server.stop(true);
-    store.close();
+    await stop();
     start({ DAEDALUS_GATEWAY_DEV_LOGIN: "false" });
     const { status, json } = await api(undefined, "POST", "/v1/dev/login", {
       email: "a@example.com",
@@ -308,13 +330,22 @@ describe("controller", () => {
       `POST /api/v1/namespaces/${ns}/serviceaccounts`,
       `POST /apis/networking.k8s.io/v1/namespaces/${ns}/networkpolicies`,
       `POST /api/v1/namespaces/${ns}/resourcequotas`,
-      `POST /api/v1/namespaces/${ns}/secrets`,
       `POST /api/v1/namespaces/${ns}/persistentvolumeclaims`,
+      `POST /api/v1/namespaces/${ns}/persistentvolumeclaims`,
+      `DELETE /api/v1/namespaces/${ns}/secrets/ws-${WS_A}-runner`,
+      `POST /api/v1/namespaces/${ns}/secrets`,
       `POST /api/v1/namespaces/${ns}/pods`,
       `GET /api/v1/namespaces/${ns}/pods/ws-${WS_A}`,
     ]);
+    // H-2: Pod Security "restricted" is enforced in every tenant namespace.
     expect(kube.objects.get(`/api/v1/namespaces/${ns}`)).toMatchObject({
-      metadata: { labels: { "daedalus.dev/user": user.id } },
+      metadata: {
+        labels: {
+          "daedalus.dev/user": user.id,
+          "pod-security.kubernetes.io/enforce": "restricted",
+          "pod-security.kubernetes.io/enforce-version": "v1.30",
+        },
+      },
     });
     expect(
       kube.objects.get(
@@ -343,6 +374,16 @@ describe("controller", () => {
         resources: { requests: { storage: "20Gi" } },
       },
     });
+    expect(
+      kube.objects.get(
+        `/api/v1/namespaces/${ns}/persistentvolumeclaims/ws-${WS_A}-state`,
+      ),
+    ).toMatchObject({
+      spec: {
+        storageClassName: "standard",
+        resources: { requests: { storage: "1Gi" } },
+      },
+    });
     // The Secret holds the token; the database only its hash.
     const token2 = runnerToken(user.id, WS_A);
     expect(store.tokenOwner(token2)).toEqual({
@@ -352,9 +393,8 @@ describe("controller", () => {
     });
   });
 
-  test("builds the pod TEAM.md describes", async () => {
-    await server.stop(true);
-    store.close();
+  test("builds the pod artifacts/cloud-sessions/h1-pod-spec.md describes", async () => {
+    await stop();
     start({ DAEDALUS_WORKSPACE_RUNTIME_CLASS: "gvisor" });
     const { user, token } = await login("a@example.com");
     await api(token, "POST", "/v1/workspaces", {
@@ -369,49 +409,124 @@ describe("controller", () => {
     expect(pod.spec.runtimeClassName).toBe("gvisor");
     expect(pod.spec.serviceAccountName).toBe("runner");
     expect(pod.spec.automountServiceAccountToken).toBe(false);
-    expect(pod.spec.securityContext).toMatchObject({
+    expect(pod.spec.shareProcessNamespace).toBe(false);
+    expect(pod.spec.securityContext).toEqual({
       runAsNonRoot: true,
-      runAsUser: 1000,
-      fsGroup: 1000,
+      fsGroup: 2000,
+      fsGroupChangePolicy: "OnRootMismatch",
       seccompProfile: { type: "RuntimeDefault" },
     });
-    const container = pod.spec.containers[0]!;
-    expect(container.name).toBe("runner");
-    expect(container.image).toBe("daedalus-runner:dev");
-    expect(container.securityContext).toMatchObject({
-      allowPrivilegeEscalation: false,
-      capabilities: { drop: ["ALL"] },
-    });
-    expect(container.resources).toEqual({
-      requests: { cpu: "3", memory: "6Gi" },
-      limits: { cpu: "3", memory: "6Gi" },
-    });
-    const env = Object.fromEntries(
-      container.env.map((entry) => [
-        entry.name,
-        entry.value ?? entry.valueFrom,
-      ]),
-    );
-    expect(env).toEqual({
-      [RUNNER_ENV.gatewayUrl]: "http://daedalus-gateway.daedalus:8080",
-      [RUNNER_ENV.runnerToken]: {
-        secretKeyRef: { name: `ws-${WS_A}-runner`, key: "token" },
-      },
-      [RUNNER_ENV.workspaceId]: WS_A,
-      [RUNNER_ENV.macId]: MAC_A,
-      [RUNNER_ENV.macKey]: key(1),
-      [RUNNER_ENV.idleMinutes]: "30",
-    });
-    expect(container.volumeMounts).toEqual([
-      { name: "workspace", mountPath: "/workspace" },
-      { name: "cache", mountPath: "/cache" },
-      { name: "runtime", mountPath: "/run/daedalus-runner" },
+    const [runner, session] = pod.spec.containers;
+    expect(pod.spec.containers.map((c) => c.name)).toEqual([
+      "runner",
+      "session",
     ]);
+    for (const [container, uid, script] of [
+      [runner!, 1000, "runner.js"],
+      [session!, 1001, "sessiond.js"],
+    ] as const) {
+      expect(container.image).toBe("daedalus-runner:dev");
+      expect(container.command).toEqual(["bun", `/opt/daedalus/${script}`]);
+      expect(container.securityContext).toEqual({
+        runAsNonRoot: true,
+        runAsUser: uid,
+        runAsGroup: uid,
+        allowPrivilegeEscalation: false,
+        readOnlyRootFilesystem: true,
+        capabilities: { drop: ["ALL"] },
+        seccompProfile: { type: "RuntimeDefault" },
+      });
+    }
+    // The user's size is the session's; the runner's is fixed and small.
+    expect(session!.resources).toEqual({
+      requests: { cpu: "3", memory: "6Gi", "ephemeral-storage": "1Gi" },
+      limits: { cpu: "3", memory: "6Gi", "ephemeral-storage": "4Gi" },
+    });
+    expect(runner!.resources).toEqual({
+      requests: { cpu: "50m", memory: "64Mi", "ephemeral-storage": "64Mi" },
+      limits: { cpu: "500m", memory: "256Mi", "ephemeral-storage": "256Mi" },
+    });
+    // Nothing secret in either environment: the token is a file.
+    expect(runner!.env).toEqual([
+      {
+        name: RUNNER_ENV.gatewayUrl,
+        value: "http://daedalus-gateway.daedalus:8080",
+      },
+      { name: RUNNER_ENV.workspaceId, value: WS_A },
+      { name: RUNNER_ENV.macId, value: MAC_A },
+      { name: RUNNER_ENV.macKey, value: key(1) },
+      { name: RUNNER_ENV.idleMinutes, value: "30" },
+    ]);
+    expect(session!.env).toEqual([]);
     expect(pod.spec.volumes).toEqual([
       { name: "workspace", persistentVolumeClaim: { claimName: `ws-${WS_A}` } },
-      { name: "cache", emptyDir: {} },
-      { name: "runtime", emptyDir: { medium: "Memory", sizeLimit: "16Mi" } },
+      {
+        name: "state",
+        persistentVolumeClaim: { claimName: `ws-${WS_A}-state` },
+      },
+      {
+        name: "token",
+        secret: {
+          secretName: `ws-${WS_A}-runner`,
+          defaultMode: 0o440,
+          items: [{ key: "token", path: "token" }],
+        },
+      },
+      { name: "shared", emptyDir: { medium: "Memory", sizeLimit: "16Mi" } },
+      { name: "cache", emptyDir: { sizeLimit: "2Gi" } },
+      { name: "runner-tmp", emptyDir: { sizeLimit: "64Mi" } },
+      { name: "session-tmp", emptyDir: { sizeLimit: "1Gi" } },
     ]);
+  });
+
+  // H-1 in artifacts/cloud-sessions/security-review.md: agent code took the
+  // runner token and identity key because they shared a container and uid.
+  // This is the mount table of h1-pod-spec.md, per container.
+  test("only the runner container mounts the token and state; only the session mounts the workspace", async () => {
+    const { user, token } = await login("a@example.com");
+    await api(token, "POST", "/v1/workspaces", createBody());
+    const pod = testPod(user.id, WS_A);
+    const volumes = new Map(
+      pod.spec.volumes.map((volume) => [volume.name, volume]),
+    );
+    /** Each container's mounts as path -> what backs it. */
+    const mounts = (name: string) =>
+      Object.fromEntries(
+        pod.spec.containers
+          .find((container) => container.name === name)!
+          .volumeMounts.map((mount) => {
+            const volume = volumes.get(mount.name)!;
+            const source =
+              volume.persistentVolumeClaim?.claimName ??
+              (volume.secret
+                ? `secret ${volume.secret.secretName}`
+                : undefined) ??
+              `emptyDir ${mount.name}`;
+            return [
+              mount.mountPath,
+              mount.readOnly ? `${source} (read-only)` : source,
+            ];
+          }),
+      );
+    expect(mounts("runner")).toEqual({
+      [RUNNER_PATHS.state]: `ws-${WS_A}-state`,
+      "/run/daedalus-token": `secret ws-${WS_A}-runner (read-only)`,
+      [RUNNER_PATHS.runtime]: "emptyDir shared",
+      "/tmp": "emptyDir runner-tmp",
+    });
+    expect(mounts("session")).toEqual({
+      [RUNNER_PATHS.workspace]: `ws-${WS_A}`,
+      [RUNNER_PATHS.cache]: "emptyDir cache",
+      [RUNNER_PATHS.runtime]: "emptyDir shared",
+      "/tmp": "emptyDir session-tmp",
+    });
+    expect(RUNNER_PATHS.token).toBe("/run/daedalus-token/token");
+    expect(RUNNER_PATHS.shimSocket.startsWith(`${RUNNER_PATHS.runtime}/`)).toBe(
+      true,
+    );
+    expect(
+      RUNNER_PATHS.sessionSocket.startsWith(`${RUNNER_PATHS.runtime}/`),
+    ).toBe(true);
   });
 
   test("uses the chart's default resources", async () => {
@@ -419,9 +534,9 @@ describe("controller", () => {
     await api(token, "POST", "/v1/workspaces", createBody());
     const pod = testPod(user.id, WS_A);
     expect(pod.spec.runtimeClassName).toBeUndefined();
-    expect(pod.spec.containers[0]!.resources).toEqual({
-      requests: { cpu: "1", memory: "2Gi" },
-      limits: { cpu: "2", memory: "4Gi" },
+    expect(pod.spec.containers[1]!.resources).toEqual({
+      requests: { cpu: "1", memory: "2Gi", "ephemeral-storage": "1Gi" },
+      limits: { cpu: "2", memory: "4Gi", "ephemeral-storage": "4Gi" },
     });
   });
 
@@ -433,6 +548,10 @@ describe("controller", () => {
       { ...createBody(), macKey: "short" },
       { ...createBody(), name: "" },
       { ...createBody(), resources: { cpu: "lots" } },
+      { ...createBody(), resources: { cpu: "0" } },
+      { ...createBody(), resources: { memory: "0Gi" } },
+      { ...createBody(), resources: { cpu: "5" } },
+      { ...createBody(), resources: { memory: "9Gi" } },
     ]) {
       const { status, json } = await api(token, "POST", "/v1/workspaces", body);
       expect(status).toBe(400);
@@ -477,23 +596,38 @@ describe("controller", () => {
     expect(kube.objects.has(`/api/v1/namespaces/${ns}`)).toBe(true);
   });
 
-  test("sleep keeps the volume and token; wake brings the pod back", async () => {
+  test("sleep keeps both volumes and ends the token; wake brings the pod back with a new one", async () => {
     const { user, token } = await login("a@example.com");
     await api(token, "POST", "/v1/workspaces", createBody());
     const ns = `u-${user.id}`;
+    const first = runnerToken(user.id, WS_A);
 
     const slept = await api(token, "POST", `/v1/workspaces/${WS_A}/sleep`);
     expect(slept.status).toBe(200);
     expect(slept.json.status).toBe("sleeping");
     expect(kube.pod(ns, `ws-${WS_A}`)).toBeUndefined();
-    expect(
-      kube.objects.has(
-        `/api/v1/namespaces/${ns}/persistentvolumeclaims/ws-${WS_A}`,
-      ),
-    ).toBe(true);
+    for (const name of [`ws-${WS_A}`, `ws-${WS_A}-state`])
+      expect(
+        kube.objects.has(
+          `/api/v1/namespaces/${ns}/persistentvolumeclaims/${name}`,
+        ),
+      ).toBe(true);
+    // H-1 fix 3: no runner token exists while the workspace sleeps.
     expect(
       kube.objects.has(`/api/v1/namespaces/${ns}/secrets/ws-${WS_A}-runner`),
-    ).toBe(true);
+    ).toBe(false);
+    expect(store.tokenOwner(first)).toBeNull();
+    expect(
+      (
+        await api(
+          first,
+          "GET",
+          `/v1/connect?runnerKey=${key(7)}`,
+          undefined,
+          runnerBase,
+        )
+      ).status,
+    ).toBe(401);
     expect(
       (await api(token, "GET", `/v1/workspaces/${WS_A}`)).json.status,
     ).toBe("sleeping");
@@ -502,6 +636,40 @@ describe("controller", () => {
     expect(woke.status).toBe(200);
     expect(woke.json.status).toBe("starting");
     expect(kube.pod(ns, `ws-${WS_A}`)).toBeDefined();
+    const second = runnerToken(user.id, WS_A);
+    expect(second).not.toBe(first);
+    expect(store.tokenOwner(second)).toEqual({
+      kind: "runner",
+      userId: user.id,
+      workspaceId: WS_A,
+    });
+  });
+
+  test("replacing a failed pod also replaces the token and drops the old runner", async () => {
+    const { user, token } = await login("a@example.com");
+    await api(token, "POST", "/v1/workspaces", createBody());
+    const first = runnerToken(user.id, WS_A);
+    const runner = await connect(first, `runnerKey=${key(7)}`);
+    kube.pod(`u-${user.id}`, `ws-${WS_A}`)!.status = { phase: "Failed" };
+    expect(
+      (await api(token, "POST", `/v1/workspaces/${WS_A}/wake`)).status,
+    ).toBe(200);
+    await Bun.sleep(50);
+    expect(runner.closed()?.code).toBe(4403);
+    expect(store.tokenOwner(first)).toBeNull();
+    expect(runnerToken(user.id, WS_A)).not.toBe(first);
+  });
+
+  test("a user may have at most the configured number of workspaces", async () => {
+    await stop();
+    start({ DAEDALUS_GATEWAY_MAX_WORKSPACES: "1" });
+    const { token } = await login("a@example.com");
+    expect(
+      (await api(token, "POST", "/v1/workspaces", createBody(WS_A))).status,
+    ).toBe(201);
+    const second = await api(token, "POST", "/v1/workspaces", createBody(WS_B));
+    expect(second.status).toBe(429);
+    expect(second.json.error?.code).toBe("QUOTA");
   });
 
   test("wake while the old pod is still stopping is CONFLICT, then works", async () => {
@@ -641,6 +809,47 @@ describe("runner tokens", () => {
   });
 });
 
+describe("listeners", () => {
+  // H-1 fix 2: a runner token taken out of a pod is useless from outside the
+  // cluster, because only the in-cluster runner listener accepts it.
+  test("runner tokens work only on the runner listener", async () => {
+    const { user, token } = await login("a@example.com");
+    await api(token, "POST", "/v1/workspaces", createBody());
+    const runner = runnerToken(user.id, WS_A);
+    for (const [method, path] of [
+      ["GET", `/v1/connect?runnerKey=${key(7)}`],
+      ["POST", `/v1/workspaces/${WS_A}/sleep`],
+    ] as const) {
+      const outside = await api(runner, method, path, undefined, base);
+      expect(outside.status).toBe(401);
+    }
+    expect(store.workspace(user.id, WS_A)?.runnerKey).toBeNull();
+    const inside = await connect(runner, `runnerKey=${key(7)}`, runnerBase);
+    expect(inside.socket.readyState).toBe(WebSocket.OPEN);
+  });
+
+  test("user tokens and dev login do not work on the runner listener", async () => {
+    const { token } = await login("a@example.com");
+    for (const [method, path] of [
+      ["GET", "/v1/me"],
+      ["GET", "/v1/workspaces"],
+      ["GET", `/v1/connect?macId=${MAC_A}`],
+    ] as const)
+      expect(
+        (await api(token, method, path, undefined, runnerBase)).status,
+      ).toBe(401);
+    const login2 = await api(
+      undefined,
+      "POST",
+      "/v1/dev/login",
+      { email: "b@example.com" },
+      runnerBase,
+    );
+    expect(login2.status).toBe(401);
+    expect((await fetch(`${runnerBase}/health`)).status).toBe(200);
+  });
+});
+
 describe("relay", () => {
   test("carries frames between a Mac and its runner with rewritten ids", async () => {
     const { user, token } = await login("a@example.com");
@@ -694,6 +903,20 @@ describe("relay", () => {
     expect(await first.next()).toBe(JSON.stringify({ relay: "replaced" }));
     await Bun.sleep(50);
     expect(first.closed()?.code).toBe(4000);
+  });
+
+  test("a user may connect at most 10 Macs at once", async () => {
+    const { token } = await login("a@example.com");
+    const macs = Array.from(
+      { length: 10 },
+      (_, index) => `mac${String(index).padStart(2, "0")}AAAAAAAAAAAAAAAAA`,
+    );
+    for (const macId of macs) await connect(token, `macId=${macId}`);
+    const eleventh = await api(token, "GET", `/v1/connect?macId=${MAC_B}`);
+    expect(eleventh.status).toBe(429);
+    expect(eleventh.json.error?.code).toBe("QUOTA");
+    // A Mac already connected may still reconnect.
+    await connect(token, `macId=${macs[0]}`);
   });
 
   test("Macs cannot reach Macs and runners cannot reach runners", async () => {

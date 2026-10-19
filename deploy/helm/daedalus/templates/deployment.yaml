@@ -43,9 +43,15 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.gateway.service.port }}
+            - name: runners
+              containerPort: {{ .Values.gateway.service.runnerPort }}
           env:
             - name: DAEDALUS_GATEWAY_PORT
               value: {{ .Values.gateway.service.port | quote }}
+            - name: DAEDALUS_GATEWAY_RUNNER_PORT
+              value: {{ .Values.gateway.service.runnerPort | quote }}
+            - name: DAEDALUS_GATEWAY_MAX_WORKSPACES
+              value: {{ .Values.gateway.limits.workspacesPerUser | quote }}
             - name: DAEDALUS_GATEWAY_DB
               value: /data/gateway.sqlite
             - name: DAEDALUS_GATEWAY_DEV_LOGIN
@@ -76,6 +82,10 @@ spec:
               value: {{ $r.limits.cpu | quote }}
             - name: DAEDALUS_WORKSPACE_MEMORY_LIMIT
               value: {{ $r.limits.memory | quote }}
+            - name: DAEDALUS_WORKSPACE_CPU_MAX
+              value: {{ .Values.workspace.maxResources.cpu | quote }}
+            - name: DAEDALUS_WORKSPACE_MEMORY_MAX
+              value: {{ .Values.workspace.maxResources.memory | quote }}
             - name: DAEDALUS_WORKSPACE_RUNTIME_CLASS
               value: {{ .Values.workspace.runtimeClassName | quote }}
             - name: DAEDALUS_WORKSPACE_IDLE_MINUTES

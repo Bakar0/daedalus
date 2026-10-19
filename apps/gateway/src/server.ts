@@ -8,6 +8,7 @@ import type {
 import type { GatewayConfig } from "./config";
 import { Controller, workspaceStatus } from "./controller";
 import { KubeError } from "./kube";
+import { parseQuantity } from "./quantity";
 import {
   MAX_FRAME_BYTES,
   macDevice,
@@ -69,8 +70,8 @@ const MAC_ID = /^[A-Za-z0-9_-]{8,64}$/;
 /** A 32-byte public key in base64, either alphabet, padded or not. */
 const KEY = /^[A-Za-z0-9+/_-]{43}=?$/;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-/** A Kubernetes quantity such as "2", "500m" or "4Gi". */
-const QUANTITY = /^\d+(\.\d+)?(m|k|M|G|T|Ki|Mi|Gi|Ti)?$/;
+/** Macs one user may have connected at once. */
+const MAX_MACS = 10;
 
 const isKey = (value: unknown): value is string =>
   typeof value === "string" &&
@@ -94,7 +95,10 @@ async function readJson(request: Request): Promise<Record<string, unknown>> {
   return body as Record<string, unknown>;
 }
 
-function parseCreate(body: Record<string, unknown>): CreateWorkspaceRequest {
+function parseCreate(
+  body: Record<string, unknown>,
+  max: GatewayConfig["workspace"]["max"],
+): CreateWorkspaceRequest {
   const { workspaceId, name, macId, macKey, resources } = body;
   if (
     typeof workspaceId !== "string" ||
@@ -117,18 +121,19 @@ function parseCreate(body: Record<string, unknown>): CreateWorkspaceRequest {
     if (typeof resources !== "object" || resources === null)
       throw new HttpError("VALIDATION", "resources must be an object");
     const { cpu, memory } = resources as Record<string, unknown>;
-    for (const [label, value] of [
-      ["cpu", cpu],
-      ["memory", memory],
-    ] as const)
-      if (
-        value !== undefined &&
-        (typeof value !== "string" || !QUANTITY.test(value))
-      )
+    // Zero would be read as no limit at all, so it is refused too.
+    for (const [label, value, most] of [
+      ["cpu", cpu, max.cpu],
+      ["memory", memory, max.memory],
+    ] as const) {
+      if (value === undefined) continue;
+      const amount = typeof value === "string" ? parseQuantity(value) : null;
+      if (amount === null || amount <= 0 || amount > most)
         throw new HttpError(
           "VALIDATION",
-          `resources.${label} is not a quantity`,
+          `resources.${label} must be a quantity above 0 and at most the cluster's maximum`,
         );
+    }
     parsed.resources = {
       ...(typeof cpu === "string" ? { cpu } : {}),
       ...(typeof memory === "string" ? { memory } : {}),
@@ -204,6 +209,11 @@ export function createGateway(deps: GatewayDeps) {
       sleeping: false,
       createdAt: new Date().toISOString(),
     };
+    if (store.workspaces(userId).length >= config.maxWorkspaces)
+      throw new HttpError(
+        "QUOTA",
+        `You may have at most ${config.maxWorkspaces} workspaces`,
+      );
     const token = randomToken();
     if (!store.insertWorkspace(row, token))
       throw new HttpError(
@@ -212,7 +222,8 @@ export function createGateway(deps: GatewayDeps) {
       );
     try {
       await controller.ensureTenant(userId);
-      await controller.createStorage(row, token);
+      await controller.createVolumes(row);
+      await controller.writeToken(row, token);
       await controller.startPod(row);
     } catch (error) {
       await controller
@@ -231,6 +242,12 @@ export function createGateway(deps: GatewayDeps) {
     if (pod && !pod.failure) return Response.json(await view(row));
     // A pod that cannot recover is replaced; a missing one is recreated.
     if (pod) await controller.stopPod(row);
+    // Every pod start gets a new runner token, so a token copied out of an
+    // earlier pod is useless from here on.
+    relay.kick(row.userId, runnerDevice(row.workspaceId), "Token replaced");
+    const token = randomToken();
+    store.replaceRunnerToken(row.userId, row.workspaceId, token);
+    await controller.writeToken(row, token);
     await controller.startPod(row);
     store.setSleeping(row.userId, row.workspaceId, false);
     return Response.json(await view({ ...row, sleeping: false }));
@@ -239,6 +256,10 @@ export function createGateway(deps: GatewayDeps) {
   async function sleep(row: WorkspaceRow) {
     store.setSleeping(row.userId, row.workspaceId, true);
     await controller.stopPod(row);
+    // No runner token exists while the workspace sleeps.
+    store.revokeRunnerToken(row.userId, row.workspaceId);
+    await controller.deleteToken(row);
+    relay.kick(row.userId, runnerDevice(row.workspaceId), "Workspace asleep");
     return Response.json(await view({ ...row, sleeping: true }));
   }
 
@@ -263,6 +284,14 @@ export function createGateway(deps: GatewayDeps) {
       if (!MAC_ID.test(macId))
         throw new HttpError("VALIDATION", "macId is not a device id");
       peer = { role: "mac", userId: owner.userId, deviceId: macDevice(macId) };
+      if (
+        !relay.isOnline(owner.userId, peer.deviceId) &&
+        relay.macCount(owner.userId) >= MAX_MACS
+      )
+        throw new HttpError(
+          "QUOTA",
+          `At most ${MAX_MACS} Macs may be connected at once`,
+        );
     } else {
       const runnerKey = url.searchParams.get("runnerKey") ?? "";
       if (!isKey(runnerKey))
@@ -298,9 +327,16 @@ export function createGateway(deps: GatewayDeps) {
     return undefined;
   }
 
+  /**
+   * `listener` is which port the request came in on. The public one serves
+   * users only; the runner one, which only the in-cluster Service exposes,
+   * serves runner tokens only, so a runner token taken out of a pod is
+   * useless outside the cluster.
+   */
   async function route(
     request: Request,
     server: Server<Peer>,
+    listener: "public" | "runner",
   ): Promise<Response | undefined> {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -308,7 +344,11 @@ export function createGateway(deps: GatewayDeps) {
 
     if (path === "/health" && method === "GET") return new Response("ok");
 
-    if (path === "/v1/dev/login" && method === "POST") {
+    if (
+      path === "/v1/dev/login" &&
+      method === "POST" &&
+      listener === "public"
+    ) {
       if (!config.devLogin) throw new HttpError("NOT_FOUND", "No such route");
       const { email } = await readJson(request);
       if (typeof email !== "string" || email.length > 254 || !EMAIL.test(email))
@@ -321,6 +361,8 @@ export function createGateway(deps: GatewayDeps) {
     const token = bearer(request);
     const owner = token ? store.tokenOwner(token) : null;
     if (!owner) throw unauthorized();
+    if ((owner.kind === "runner") !== (listener === "runner"))
+      throw unauthorized();
 
     if (path === "/v1/connect" && method === "GET")
       return connect(request, url, owner, server);
@@ -345,7 +387,10 @@ export function createGateway(deps: GatewayDeps) {
     }
     if (path === "/v1/workspaces") {
       if (method === "POST")
-        return create(userId, parseCreate(await readJson(request)));
+        return create(
+          userId,
+          parseCreate(await readJson(request), config.workspace.max),
+        );
       if (method === "GET")
         return Response.json({
           workspaces: await Promise.all(store.workspaces(userId).map(view)),
@@ -368,16 +413,19 @@ export function createGateway(deps: GatewayDeps) {
     close: (socket) => relay.close(socket),
   };
 
-  return {
+  const listen = (listener: "public" | "runner") => ({
     maxRequestBodySize: 64 * 1024,
     async fetch(request: Request, server: Server<Peer>) {
       try {
-        return await route(request, server);
+        return await route(request, server, listener);
       } catch (error) {
         const failure = kubeFailure(error);
         return errorResponse(failure.code, failure.message);
       }
     },
     websocket,
-  };
+  });
+
+  /** One set of options per port, sharing the one relay. */
+  return { public: listen("public"), runner: listen("runner") };
 }

@@ -18,7 +18,7 @@ data:
       policyTypes: [Ingress, Egress]
       ingress: []
       egress:
-        # The gateway, through its Service.
+        # The gateway's runner listener, through its in-cluster Service.
         - to:
             - namespaceSelector:
                 matchLabels:
@@ -28,7 +28,7 @@ data:
                   {{- include "daedalus.selector" . | nindent 18 }}
           ports:
             - protocol: TCP
-              port: {{ .Values.gateway.service.port }}
+              port: {{ .Values.gateway.service.runnerPort }}
         # Cluster DNS.
         - to:
             - namespaceSelector:
