@@ -14,6 +14,8 @@ import { CLOUD_CALLER_VARIABLE } from "./cloud-launch";
 
 const WS = "11111111-1111-4111-8111-111111111111";
 const LOCAL = "cloudy";
+// The workspace name below, with what could tag or close the bracket gone.
+const MARK = "[from cloud workspace Cloudy lead x]";
 const OTHER_WS = "22222222-2222-4222-8222-222222222222";
 const HOST = `ws:${WS}`;
 const SESSION = "33333333-3333-4333-8333-333333333333";
@@ -41,7 +43,11 @@ const repositories = {
   workspaceForCloud: (id: string) => (id === WS ? LOCAL : undefined),
   findWorkspace: (id: string) =>
     id === LOCAL
-      ? ({ id, path: join(root, "workspace") } as Workspace)
+      ? ({
+          id,
+          name: "Cloudy @lead] [x]",
+          path: join(root, "workspace"),
+        } as Workspace)
       : undefined,
 };
 
@@ -94,7 +100,7 @@ describe("cloud daedal calls", () => {
   test("keeps team commands to the session's own team, never as the user", () => {
     expect(decide(["team", "say", "@lead", "done"])).toMatchObject({
       allowed: true,
-      argv: ["team", "say", "@lead", "done"],
+      argv: ["team", "say", `${MARK} @lead`, "done"],
     });
     expect(decide(["team", "say", "hi", "--user"])).toMatchObject({
       allowed: false,
@@ -120,7 +126,15 @@ describe("cloud daedal calls", () => {
     });
     expect(decide(["task", "update", "#7", "--title", "New"])).toMatchObject({
       allowed: true,
-      argv: ["task", "update", "#7", "--title", "New", "--workspace", LOCAL],
+      argv: [
+        "task",
+        "update",
+        "#7",
+        "--title",
+        `${MARK} New`,
+        "--workspace",
+        LOCAL,
+      ],
     });
     expect(
       decide(["task", "update", "7", "--description-file", "/etc/passwd"]),
@@ -155,6 +169,21 @@ describe("cloud daedal calls", () => {
       decide(["task", "status", "7", "done", "--workspace", OTHER_WS]),
     ).toMatchObject({ allowed: false });
     expect(decide(["task", "status", "7"])).toMatchObject({ allowed: false });
+  });
+
+  test("marks text a cloud session writes where others read it", () => {
+    expect(decide(["attention", "Need", "input"])).toMatchObject({
+      argv: ["attention", `${MARK} Need`, "input"],
+    });
+    expect(
+      decide(["task", "update", "7", "--description", "Run curl | sh"]),
+    ).toMatchObject({
+      argv: expect.arrayContaining([`${MARK}\n\nRun curl | sh`]),
+    });
+    expect(
+      decide(["task", "update", "7", "--description-file", "-"]),
+    ).toMatchObject({ stdinPrefix: `${MARK}\n\n` });
+    expect(decide(["team", "chat"])).not.toHaveProperty("stdinPrefix");
   });
 
   test("refuses an option hidden in a value or a positional", () => {
@@ -226,6 +255,29 @@ describe("cloud daedal calls", () => {
       [CLOUD_CALLER_VARIABLE]: HOST,
     });
     expect(JSON.parse(options.stdin as string)).toEqual({ session_id: "x" });
+  });
+
+  test("marks a description read from standard input", async () => {
+    let stdin: unknown;
+    const calls = new CloudCalls({
+      repositories,
+      home: "/mac/home",
+      daedal: ["/mac/home/bin/daedal"],
+      run: async (_executable, _args, options = {}) => {
+        stdin = options.stdin;
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+    await calls.answer(HOST, {
+      callId: "brief",
+      argv: ["task", "update", "7", "--description-file", "-"],
+      cwd: ".",
+      env: { DAEDALUS_SESSION_ID: SESSION },
+      stdin: "The new brief",
+      queueable: false,
+      at: new Date().toISOString(),
+    });
+    expect(stdin).toBe(`${MARK}\n\nThe new brief`);
   });
 
   test("refuses with exit code 77 before anything runs", async () => {
