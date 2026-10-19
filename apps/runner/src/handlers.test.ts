@@ -47,6 +47,7 @@ test("host.start resolves cwd, merges secrets into env and owns PATH and HOME", 
     PATH: "/usr/bin",
     HOME: "/workspace/.home",
   });
+  expect(launch.keepOnExit).toBe(true);
   expect(started).toEqual(["daedalus_1"]);
 });
 

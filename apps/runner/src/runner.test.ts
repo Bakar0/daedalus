@@ -99,6 +99,7 @@ let runnerIdentity: DeviceIdentity;
 let sleeps: string[];
 let terminals: { session: string; writes: string[]; close: () => void }[];
 let now: number;
+let dead: Map<string, number | null>;
 
 beforeEach(async () => {
   await sodiumReady();
@@ -111,6 +112,7 @@ beforeEach(async () => {
   sleeps = [];
   terminals = [];
   now = 1_000_000;
+  dead = new Map();
   const socket: RelaySocket = {
     send: (frame) => mac.receive(frame),
     close: () => {},
@@ -130,6 +132,7 @@ beforeEach(async () => {
     }),
     queue,
     tmux,
+    deadPanes: async () => dead,
     openTerminal: (session) => {
       const record = { session, writes: [] as string[], close: () => {} };
       terminals.push(record);
@@ -380,4 +383,43 @@ test("reconnects with backoff after the gateway drops", async () => {
   callbacks.close();
   await new Promise((r) => setTimeout(r, 1500));
   expect(connects.length).toBe(before + 1);
+});
+
+test("reports the real exit code of a dead pane, then kills the session", async () => {
+  tmux.sessions.add("s1");
+  runner.watchSession("s1");
+  macOnline(true);
+  dead.set("s1", 7);
+  await runner.tick();
+  expect(mac.received).toContainEqual({
+    t: "session.exited",
+    session: "s1",
+    exitCode: 7,
+  });
+  expect(tmux.sessions.has("s1")).toBe(false);
+  await runner.tick();
+  expect(mac.received.filter((m) => m.t === "session.exited")).toHaveLength(1);
+});
+
+test("a keepOnExit session reports its exit once and stays in tmux", async () => {
+  tmux.sessions.add("s2");
+  runner.watchSession("s2", true);
+  macOnline(true);
+  dead.set("s2", 0);
+  await runner.tick();
+  await runner.tick();
+  expect(mac.received.filter((m) => m.t === "session.exited")).toEqual([
+    { t: "session.exited", session: "s2", exitCode: 0 },
+  ]);
+  expect(tmux.sessions.has("s2")).toBe(true);
+});
+
+test("a dead pane does not count as activity for idle sleep", async () => {
+  tmux.sessions.add("s3");
+  runner.watchSession("s3", true);
+  dead.set("s3", 0);
+  await runner.tick();
+  now += 31 * 60_000;
+  await runner.tick();
+  expect(sleeps.length).toBe(1);
 });

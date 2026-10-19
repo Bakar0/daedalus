@@ -13,7 +13,8 @@ export interface ShimRequest {
 export const socketPath = (
   environment: NodeJS.ProcessEnv = process.env,
 ): string =>
-  environment.DAEDALUS_RUNNER_SOCKET ?? join(RUNNER_PATHS.state, "shim.sock");
+  environment.DAEDALUS_RUNNER_SOCKET ??
+  join(RUNNER_PATHS.runtime, "daedal.sock");
 
 /** `daedal agent event ...` is a hook event and may wait for the Mac. */
 export const isQueueable = (argv: string[]): boolean =>

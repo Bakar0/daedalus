@@ -9,7 +9,7 @@ import {
 import { createHandlers } from "./handlers";
 import { loadOrCreateIdentity } from "./identity";
 import { EventQueue } from "./queue";
-import { Runner, tmuxTerminals, type ConnectRelay } from "./runner";
+import { deadPanes, Runner, tmuxTerminals, type ConnectRelay } from "./runner";
 import { socketPath, type ShimRequest } from "./shim-protocol";
 
 const VERSION = "0.1.0";
@@ -59,6 +59,7 @@ async function main(): Promise<void> {
   for (const name of Object.values(RUNNER_ENV)) delete process.env[name];
 
   mkdirSync(RUNNER_PATHS.state, { recursive: true, mode: 0o700 });
+  mkdirSync(RUNNER_PATHS.runtime, { recursive: true, mode: 0o700 });
   const home = join(RUNNER_PATHS.workspace, ".home");
   mkdirSync(home, { recursive: true });
   const identity = await loadOrCreateIdentity(RUNNER_PATHS.state);
@@ -82,7 +83,7 @@ async function main(): Promise<void> {
     tmux,
     version: VERSION,
     baseEnv,
-    onSessionStarted: (session) => runner?.watchSession(session),
+    onSessionStarted: (session, keep) => runner?.watchSession(session, keep),
   });
   runner = new Runner({
     gatewayUrl,
@@ -94,6 +95,7 @@ async function main(): Promise<void> {
     handlers,
     queue: new EventQueue(join(RUNNER_PATHS.state, "queue.jsonl")),
     tmux,
+    deadPanes: () => deadPanes(tmuxPath ?? "tmux"),
     openTerminal: tmuxTerminals(TMUX_SOCKET),
     connect: connectRelay,
     idleMinutes: Number.isFinite(idleMinutes) ? idleMinutes : 30,

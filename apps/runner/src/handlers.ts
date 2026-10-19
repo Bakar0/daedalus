@@ -51,7 +51,7 @@ export interface HandlerDeps {
     options: CommandOptions,
   ) => Promise<ProcessResult>;
   /** Called after a session starts, so the runner can watch it end. */
-  onSessionStarted?: (session: string) => void;
+  onSessionStarted?: (session: string, keepOnExit: boolean) => void;
 }
 
 const tail = (text: string): string => {
@@ -121,9 +121,11 @@ export function createHandlers(deps: HandlerDeps): RunnerHandlers {
         // Secrets reach tmux as process arguments and live in its memory;
         // nothing here writes them down.
         env: environment(launch.env, launch.secrets),
-        ...(launch.keepOnExit ? { keepOnExit: true } : {}),
+        // Always keep the pane, so the runner can read its exit status before
+        // it removes the session (see `Runner.tick`).
+        keepOnExit: true,
       });
-      deps.onSessionStarted?.(launch.session);
+      deps.onSessionStarted?.(launch.session, launch.keepOnExit === true);
       return null;
     },
 

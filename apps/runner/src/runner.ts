@@ -1,4 +1,4 @@
-import { TmuxPtyBridge, type TmuxClient } from "@daedalus/platform";
+import { runCommand, TmuxPtyBridge, type TmuxClient } from "@daedalus/platform";
 import {
   decodePayload,
   decodeRelayFrame,
@@ -71,6 +71,8 @@ export interface RunnerOptions {
   handlers: RunnerHandlers;
   queue: EventQueue;
   tmux: TmuxClient;
+  /** Panes whose command ended, by session, with the exit status. */
+  deadPanes: () => Promise<Map<string, number | null>>;
   openTerminal: OpenTerminal;
   connect: ConnectRelay;
   idleMinutes: number;
@@ -113,6 +115,8 @@ export class Runner {
   readonly #pending = new Map<number, Pending>();
   readonly #terminals = new Map<number, Terminal>();
   readonly #known = new Set<string>();
+  readonly #keep = new Set<string>();
+  readonly #reported = new Set<string>();
   readonly #exited: { session: string; exitCode: number | null }[] = [];
   #draining = false;
   readonly #idle: IdleTracker;
@@ -467,29 +471,53 @@ export class Runner {
 
   // --- session watching and idle sleep ----------------------------------
 
-  watchSession(session: string): void {
+  watchSession(session: string, keepOnExit = false): void {
     this.#known.add(session);
+    if (keepOnExit) this.#keep.add(session);
+    this.#reported.delete(session);
+  }
+
+  #reportExit(session: string, exitCode: number | null): void {
+    const exit = { session, exitCode };
+    if (this.#channel) this.#send({ t: "session.exited", ...exit });
+    else this.#exited.push(exit);
   }
 
   /** One pass of session bookkeeping; the daemon calls it on a timer. */
   async tick(): Promise<void> {
     let live: string[];
+    let dead: Map<string, number | null>;
     try {
       live = await this.#o.tmux.listSessions();
+      dead = await this.#o.deadPanes();
     } catch {
       // tmux did not answer. That says nothing about the sessions.
       return;
     }
     const liveSet = new Set(live);
     for (const session of live) this.#known.add(session);
+    // Every session runs with remain-on-exit, so an ended command leaves a
+    // dead pane that still holds its exit status.
+    for (const [session, exitCode] of dead) {
+      if (this.#reported.has(session)) continue;
+      this.#reported.add(session);
+      this.#reportExit(session, exitCode);
+      if (!this.#keep.has(session)) {
+        this.#known.delete(session);
+        await this.#o.tmux.stop(session, true).catch(() => {});
+      }
+    }
     for (const session of [...this.#known]) {
       if (liveSet.has(session)) continue;
       this.#known.delete(session);
-      const exit = { session, exitCode: null };
-      if (this.#channel) this.#send({ t: "session.exited", ...exit });
-      else this.#exited.push(exit);
+      this.#keep.delete(session);
+      // Removed from outside (a stop request): no status to report.
+      if (!this.#reported.delete(session)) this.#reportExit(session, null);
     }
-    const active = live.length > 0 || this.#terminals.size > 0;
+    for (const session of [...this.#reported])
+      if (!liveSet.has(session)) this.#reported.delete(session);
+    const running = live.filter((session) => !dead.has(session));
+    const active = running.length > 0 || this.#terminals.size > 0;
     const now = this.#now();
     if (!this.#idle.observe(active, now)) return;
     if (
@@ -518,4 +546,36 @@ export class Runner {
       this.#log(`sleep request failed: ${(error as Error).message}`);
     }
   }
+}
+
+/** Dead panes across the runner's tmux server: session name to exit status. */
+export async function deadPanes(
+  tmuxExecutable: string,
+  socketName = "daedalus",
+): Promise<Map<string, number | null>> {
+  const result = await runCommand(
+    tmuxExecutable,
+    [
+      "-L",
+      socketName,
+      "list-panes",
+      "-a",
+      "-F",
+      "#{session_name}\t#{pane_dead}\t#{pane_dead_status}",
+    ],
+    { timeoutMs: 10_000 },
+  );
+  const dead = new Map<string, number | null>();
+  if (result.exitCode !== 0) {
+    if (/no server running|error connecting to/i.test(result.stderr))
+      return dead;
+    throw new Error(result.stderr.trim() || "tmux list-panes failed");
+  }
+  for (const line of result.stdout.split("\n")) {
+    const [session, isDead, status] = line.split("\t");
+    if (!session || isDead !== "1") continue;
+    const code = Number.parseInt(status ?? "", 10);
+    dead.set(session, Number.isNaN(code) ? null : code);
+  }
+  return dead;
 }
