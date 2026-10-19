@@ -3,6 +3,7 @@ import { DaedalusError } from "../errors";
 import { daedalusClaudeSettings } from "./hook-install";
 import {
   CLAUDE_DEFAULT_RENDERER,
+  DAEDALUS_STATUS_INSTRUCTIONS,
   isValidModelName,
   permissionModeArgs,
 } from "./providers";
@@ -63,6 +64,8 @@ export function cloudClaudeArgs(
   return [
     "--settings",
     JSON.stringify({ ...settings, tui: CLAUDE_DEFAULT_RENDERER }),
+    "--append-system-prompt",
+    DAEDALUS_STATUS_INSTRUCTIONS,
     ...permissionModeArgs("claude", config.agents.claude?.permissionMode),
     ...(model ? ["--model", model] : []),
     ...(input.resume

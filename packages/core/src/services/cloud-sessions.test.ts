@@ -125,6 +125,7 @@ describe("cloud sessions", () => {
       expect(launch.env?.DAEDALUS_HOME).toBeUndefined();
       expect(launch.env?.PATH).toBeUndefined();
       expect(launch.args).toContain("--session-id");
+      expect(launch.args).toContain("--append-system-prompt");
       expect(launch.args.at(-1)).toBe("Hello");
       const settings = JSON.parse(
         launch.args[launch.args.indexOf("--settings") + 1]!,
