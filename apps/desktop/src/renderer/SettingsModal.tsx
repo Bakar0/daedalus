@@ -25,7 +25,7 @@ import {
 } from "@daedalus/protocol";
 import { AccountsPanel } from "./AccountsPanel";
 import type { DesktopClient } from "./client-types";
-import { AccountPanel } from "./ProPlan";
+import { AccountPanel, showsPro, useRemoteState } from "./ProPlan";
 import { RemotePanel } from "./RemotePanel";
 import { SkillsPanel } from "./SkillsPanel";
 import { updateMessage } from "./UpdateBanner";
@@ -174,30 +174,36 @@ export function SettingsModal({
   updates?: SettingsUpdateControls;
 }) {
   const updateAvailable = updates?.update?.state === "available";
+  // Remote is phone access, a Pro feature: hidden unless the account has Pro
+  // or is an admin.
+  const [remoteState] = useRemoteState(client, 5_000);
+  const pro = showsPro(remoteState);
   return (
     <div className="settings">
       <nav aria-label="Settings sections" className="settings-nav">
-        {SETTINGS_SECTIONS.map((entry) => (
-          <button
-            aria-current={entry.id === section ? "page" : undefined}
-            className={entry.id === section ? "is-current" : ""}
-            // A Pro feature: the tag is drawn by CSS, so the label stays
-            // the button's text.
-            data-pro={entry.id === "remote" ? "" : undefined}
-            key={entry.id}
-            onClick={() => onSection(entry.id)}
-            type="button"
-          >
-            {entry.label}
-            {entry.id === "about" && updateAvailable ? (
-              <span
-                aria-label="Update available"
-                className="update-dot"
-                role="img"
-              />
-            ) : undefined}
-          </button>
-        ))}
+        {SETTINGS_SECTIONS.filter((entry) => entry.id !== "remote" || pro).map(
+          (entry) => (
+            <button
+              aria-current={entry.id === section ? "page" : undefined}
+              className={entry.id === section ? "is-current" : ""}
+              // A Pro feature: the tag is drawn by CSS, so the label stays
+              // the button's text.
+              data-pro={entry.id === "remote" ? "" : undefined}
+              key={entry.id}
+              onClick={() => onSection(entry.id)}
+              type="button"
+            >
+              {entry.label}
+              {entry.id === "about" && updateAvailable ? (
+                <span
+                  aria-label="Update available"
+                  className="update-dot"
+                  role="img"
+                />
+              ) : undefined}
+            </button>
+          ),
+        )}
       </nav>
 
       <div className="settings-pane">
@@ -325,7 +331,7 @@ export function SettingsModal({
           </section>
         ) : undefined}
 
-        {section === "remote" ? (
+        {section === "remote" && pro ? (
           <section className="settings-section">
             <RemotePanel
               busy={busy}

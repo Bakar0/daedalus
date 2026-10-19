@@ -3,6 +3,10 @@
  * the badge by the logo, and the tag on Pro features. The relay is what
  * enforces the plan; these only show it and lead to where it is changed.
  *
+ * Pro is invite-only: everything about it, phone access included, shows only
+ * to an account that has a plan or is an admin (`showsPro`). Anyone else
+ * sees the sign-in and nothing more.
+ *
  * The plan comes with the remote state (`remoteGet`): the account the Mac
  * signed in to and its plan, as the relay last reported them.
  */
@@ -24,6 +28,13 @@ import { repositoryFuzzyScore } from "./repository-search";
 /** Whether the Mac's account has a plan that lets phones in right now. */
 export const hasPlan = (state: RemoteStateDto | undefined): boolean =>
   Boolean(state?.signedIn && state.plan && state.lockedBy !== "no_plan");
+
+/**
+ * Whether this Mac shows anything about Pro: its account has a plan or is
+ * an admin. An admin gives plans from the admin section.
+ */
+export const showsPro = (state: RemoteStateDto | undefined): boolean =>
+  Boolean(state?.signedIn && (state.admin || hasPlan(state)));
 
 /** "Pro plan" or "Pro plan until Nov 1, 2026". */
 export function planText(plan: { name: string; expiresAt: string | null }) {
@@ -69,7 +80,7 @@ export function ProBadge({
   onOpen: () => void;
 }) {
   const [state] = useRemoteState(client, 5_000);
-  if (!state) return null;
+  if (!state || !showsPro(state)) return null;
   return hasPlan(state) ? (
     <button
       className="quiet pro-badge"
@@ -127,6 +138,7 @@ export function AccountPanel({
   }, [state?.signedIn]);
 
   const pro = hasPlan(state);
+  const visible = showsPro(state);
 
   return (
     <div className="account-panel">
@@ -138,7 +150,9 @@ export function AccountPanel({
             <small>
               {pro && state.plan
                 ? planText(state.plan)
-                : "Free. This account has no Pro plan."}
+                : visible
+                  ? "Free. This account has no Pro plan."
+                  : "Signed in on this Mac."}
             </small>
           </span>
           <ConfirmButton
@@ -158,8 +172,7 @@ export function AccountPanel({
       ) : (
         <div className="account-signin">
           <p>
-            Sign in with Google to use Daedalus Pro on this Mac. Use the same
-            account on your phone.
+            Sign in with Google to connect this Mac to your Daedalus account.
           </p>
           <div className="account-actions">
             <button
@@ -188,77 +201,88 @@ export function AccountPanel({
         </div>
       )}
 
-      <h3>Plan</h3>
-      <div className="plan-cards">
-        <section className={`plan-card ${pro ? "" : "is-current"}`}>
-          <header>
-            <strong>Free</strong>
-            {pro ? undefined : <span className="plan-current">Current</span>}
-          </header>
-          <ul>
-            {FREE_FEATURES.map((feature) => (
-              <li key={feature}>{feature}</li>
-            ))}
-          </ul>
-        </section>
-        <section className={`plan-card pro ${pro ? "is-current" : ""}`}>
-          <header>
-            <strong>Pro</strong>
-            {pro ? <span className="plan-current">Current</span> : undefined}
-          </header>
-          <ul>
-            <li>Everything in Free</li>
-            {PRO_FEATURES.map((feature) => (
-              <li key={feature}>{feature}</li>
-            ))}
-          </ul>
-          {pro ? (
-            <p className="plan-note">
-              {state?.plan ? planText(state.plan) : "Pro"}. Thank you.
-            </p>
-          ) : state?.signedIn ? (
-            <form
-              className="plan-get"
-              onSubmit={async (event) => {
-                event.preventDefault();
-                setError(undefined);
-                const next = await client.request.remoteRedeemInvite({ code });
-                if (!next.ok) {
-                  setError(next.error.message);
-                  return;
-                }
-                setState(next.data);
-                setCode("");
-              }}
-            >
-              <p className="plan-note">
-                Paid plans are coming. For now, Pro comes with an invite code.
-              </p>
-              <div className="plan-get-row">
-                <input
-                  aria-label="Invite code"
-                  disabled={busy}
-                  maxLength={11}
-                  onChange={(event) =>
-                    setCode(formatInviteCode(event.target.value))
-                  }
-                  placeholder="XXXXX-XXXXX"
-                  spellCheck={false}
-                  value={code}
-                />
-                <button
-                  disabled={busy || !inviteCodeComplete(code)}
-                  type="submit"
+      {visible ? (
+        <>
+          <h3>Plan</h3>
+          <div className="plan-cards">
+            <section className={`plan-card ${pro ? "" : "is-current"}`}>
+              <header>
+                <strong>Free</strong>
+                {pro ? undefined : (
+                  <span className="plan-current">Current</span>
+                )}
+              </header>
+              <ul>
+                {FREE_FEATURES.map((feature) => (
+                  <li key={feature}>{feature}</li>
+                ))}
+              </ul>
+            </section>
+            <section className={`plan-card pro ${pro ? "is-current" : ""}`}>
+              <header>
+                <strong>Pro</strong>
+                {pro ? (
+                  <span className="plan-current">Current</span>
+                ) : undefined}
+              </header>
+              <ul>
+                <li>Everything in Free</li>
+                {PRO_FEATURES.map((feature) => (
+                  <li key={feature}>{feature}</li>
+                ))}
+              </ul>
+              {pro ? (
+                <p className="plan-note">
+                  {state?.plan ? planText(state.plan) : "Pro"}. Thank you.
+                </p>
+              ) : state?.signedIn ? (
+                <form
+                  className="plan-get"
+                  onSubmit={async (event) => {
+                    event.preventDefault();
+                    setError(undefined);
+                    const next = await client.request.remoteRedeemInvite({
+                      code,
+                    });
+                    if (!next.ok) {
+                      setError(next.error.message);
+                      return;
+                    }
+                    setState(next.data);
+                    setCode("");
+                  }}
                 >
-                  Get Pro
-                </button>
-              </div>
-            </form>
-          ) : (
-            <p className="plan-note">Sign in above to get Pro.</p>
-          )}
-        </section>
-      </div>
+                  <p className="plan-note">
+                    Paid plans are coming. For now, Pro comes with an invite
+                    code.
+                  </p>
+                  <div className="plan-get-row">
+                    <input
+                      aria-label="Invite code"
+                      disabled={busy}
+                      maxLength={11}
+                      onChange={(event) =>
+                        setCode(formatInviteCode(event.target.value))
+                      }
+                      placeholder="XXXXX-XXXXX"
+                      spellCheck={false}
+                      value={code}
+                    />
+                    <button
+                      disabled={busy || !inviteCodeComplete(code)}
+                      type="submit"
+                    >
+                      Get Pro
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <p className="plan-note">Sign in above to get Pro.</p>
+              )}
+            </section>
+          </div>
+        </>
+      ) : undefined}
       {error ? (
         <p className="accounts-error" role="alert">
           {error}

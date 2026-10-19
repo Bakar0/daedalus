@@ -8,7 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { RemoteStateDto, RpcResult } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { Menu, MenuCheck } from "./Menu";
-import { hasPlan, ProTag } from "./ProPlan";
+import { hasPlan, ProTag, showsPro } from "./ProPlan";
 import { remoteLook, remoteStatusText } from "./RemotePanel";
 
 const POLL_MS = 3_000;
@@ -54,6 +54,8 @@ export function RemoteMenu({
     return () => window.clearInterval(timer);
   }, [refresh]);
 
+  // Phone access is Pro, and Pro shows only to those who have it.
+  if (!showsPro(state)) return null;
   const look = remoteLook(state);
   return (
     <Menu

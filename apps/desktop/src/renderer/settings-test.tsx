@@ -34,6 +34,7 @@ const snapshot = {
       autoRebirthPercent: null,
       defaultProvider: null,
       defaultModel: null,
+      accountModels: {},
       defaultClaudeAccount: null,
       defaultCodexAccount: null,
     },
@@ -505,11 +506,11 @@ Object.assign(client.request, {
     return remoteState();
   },
   // The browser's part is instant here: the Mac comes back signed in, with
-  // no plan yet.
+  // no plan and not an admin. The check calls `remoteMakeAdmin()` to stand
+  // in for the relay putting the account on its admin list.
   remoteSignIn: async () => {
     remote.enabled = true;
     remote.signedIn = true;
-    remote.admin = true;
     remote.account = "owner@example.com";
     remote.status = "locked";
     remote.lockedBy = "no_plan";
@@ -650,6 +651,9 @@ Object.assign(client.request, {
     code: "650182",
     expiresAt: Date.now() + 2 * 60_000,
   };
+};
+(window as unknown as { remoteMakeAdmin: () => void }).remoteMakeAdmin = () => {
+  remote.admin = true;
 };
 
 createRoot(document.getElementById("root")!).render(

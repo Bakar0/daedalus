@@ -84,8 +84,13 @@ describe("SettingsModal", () => {
   test("every section is reachable and marks the current one", () => {
     const markup = render("skills");
     for (const entry of SETTINGS_SECTIONS)
-      expect(markup).toContain(entry.label);
+      if (entry.id !== "remote") expect(markup).toContain(entry.label);
     expect(markup).toContain('aria-current="page"');
+  });
+
+  test("Remote is Pro, so it is not there until the account has Pro", () => {
+    expect(render("skills")).not.toContain(">Remote<");
+    expect(render("remote")).not.toContain("Phone access");
   });
 
   test("read-only facts live in About, not in front of the controls", () => {
