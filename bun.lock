@@ -76,6 +76,7 @@
       "name": "@daedalus/core",
       "dependencies": {
         "@daedalus/platform": "workspace:*",
+        "@daedalus/remote-protocol": "workspace:*",
       },
     },
     "packages/platform": {

@@ -29,6 +29,7 @@ import { IntegratedTerminalService } from "./integrated-terminals";
 import { NotificationService } from "./notifications";
 import { PresenceService } from "./presence";
 import { ShutdownService } from "./shutdown";
+import { CloudService } from "../cloud/cloud-service";
 import { CLOUD_LAUNCH_SECRETS } from "./cloud-launch";
 import { LocalSessionHost } from "./session-host";
 import { SessionHosts } from "./session-hosts";
@@ -86,6 +87,8 @@ export interface ApplicationContext {
   tmux: TmuxClient;
   /** Where sessions run: this Mac, and any connected cloud hosts. */
   hosts: SessionHosts;
+  /** Cloud workspaces: the gateway sign-in and the link to their runners. */
+  cloud: CloudService;
   close(): void;
 }
 
@@ -227,6 +230,12 @@ export async function createApplicationContext(
     hosts.local,
     config,
   );
+  const cloud = new CloudService({
+    config,
+    repositories,
+    workspaces,
+    hosts,
+  });
   const events = new EventBus();
   const logger = new JsonLogger(config.logsDirectory);
   const workspaceWatch = new WorkspaceWatchService(
@@ -341,9 +350,11 @@ export async function createApplicationContext(
     shutdown: new ShutdownService(repositories, agents, terminals, tmux),
     tmux,
     hosts,
+    cloud,
     // Watchers are kernel resources held outside the database, so they are
     // released here rather than left to the process exiting.
     close: () => {
+      cloud.close();
       workspaceWatch.close();
       workspaceContent.close();
       repositories.close();

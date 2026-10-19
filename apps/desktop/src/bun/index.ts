@@ -417,11 +417,22 @@ const remote = new RemoteHost({
   log: (event, fields) => void context.logger.write("info", event, fields),
 });
 announceRemote = () => remote.announce();
-void remote.start().catch((error) =>
+const remoteStarted = remote.start().catch((error) =>
   context.logger.write("error", "remote_start_failed", {
     message: error instanceof Error ? error.message : String(error),
   }),
 );
+
+// Cloud workspaces: the app holds this Mac's one link to the gateway, and a
+// `daedal` command reaches the runners through it. After the phone's store
+// is open, so both use the one device identity rather than racing to make it.
+void remoteStarted
+  .then(() => context.cloud.hold())
+  .catch((error) =>
+    context.logger.write("error", "cloud_link_failed", {
+      message: error instanceof Error ? error.message : String(error),
+    }),
+  );
 
 const createRpc = (role: DesktopWindowRole = "main") =>
   BrowserView.defineRPC<DesktopRpcSchema>({

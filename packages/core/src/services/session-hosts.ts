@@ -8,6 +8,7 @@ import type { LocalSessionHost, SessionHost } from "./session-host";
  */
 export class SessionHosts {
   readonly #cloud = new Map<string, SessionHost>();
+  #resolve: ((hostId: string) => SessionHost | undefined) | undefined;
 
   constructor(
     readonly local: LocalSessionHost,
@@ -33,8 +34,21 @@ export class SessionHosts {
     return [...this.#cloud.values()];
   }
 
+  /**
+   * Makes the cloud host for an id this process has not met yet, such as the
+   * first time a command touches a cloud session. What it makes is kept.
+   */
+  resolveWith(resolve: (hostId: string) => SessionHost | undefined): void {
+    this.#resolve = resolve;
+  }
+
   find(hostId: string | null | undefined): SessionHost | undefined {
-    return hostId ? this.#cloud.get(hostId) : this.local;
+    if (!hostId) return this.local;
+    const known = this.#cloud.get(hostId);
+    if (known) return known;
+    const made = this.#resolve?.(hostId);
+    if (made) this.register(made);
+    return made;
   }
 
   get(hostId: string | null | undefined): SessionHost {
