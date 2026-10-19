@@ -72,6 +72,14 @@
         "wrangler": "4.149.0",
       },
     },
+    "apps/runner": {
+      "name": "@daedalus/runner",
+      "dependencies": {
+        "@daedalus/platform": "workspace:*",
+        "@daedalus/protocol": "workspace:*",
+        "@daedalus/remote-protocol": "workspace:*",
+      },
+    },
     "packages/core": {
       "name": "@daedalus/core",
       "dependencies": {
@@ -131,6 +139,8 @@
     "@daedalus/relay": ["@daedalus/relay@workspace:apps/relay"],
 
     "@daedalus/remote-protocol": ["@daedalus/remote-protocol@workspace:packages/remote-protocol"],
+
+    "@daedalus/runner": ["@daedalus/runner@workspace:apps/runner"],
 
     "@daedalus/test-utils": ["@daedalus/test-utils@workspace:packages/test-utils"],
 
