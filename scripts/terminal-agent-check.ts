@@ -56,7 +56,7 @@ try {
 
   const capture = await tmux.capture(session);
   if (!capture.includes("NOISE_DONE"))
-    throw new Error("Bounded reconnect capture missed recent output");
+    throw new Error("Reconnect capture missed recent output");
 
   const secondOutput: string[] = [];
   const secondBridge = tmux.openPty(session, { cols: 80, rows: 24 }, (bytes) =>
@@ -75,7 +75,7 @@ try {
   console.log("PASS resize (31 rows x 93 columns)");
   console.log("PASS Shift+Tab escape sequence");
   console.log(`PASS noisy redraw (${observedBytes} PTY bytes observed)`);
-  console.log("PASS bounded capture and reconnect");
+  console.log("PASS capture and reconnect");
   console.log("PASS tmux remains authoritative across bridge cleanup");
 } finally {
   await tmux.stop(session, true);

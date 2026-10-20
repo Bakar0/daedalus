@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import {
-  boundTerminalCapture,
   BUNDLED_TMUX_VARIABLE,
   clampTerminalSize,
   CommandTmuxClient,
@@ -15,18 +14,6 @@ import {
   TMUX_COMMAND_TIMEOUT_MS,
   tmuxCommandBytes,
 } from "./tmux";
-
-test("terminal captures preserve recent complete UTF-8 within a byte bound", () => {
-  const capture = boundTerminalCapture(
-    `old output ${"x".repeat(20)}שלום 😀`,
-    16,
-  );
-  const decoded = new TextDecoder().decode(capture);
-  expect(capture.byteLength).toBeLessThanOrEqual(23);
-  expect(decoded).toMatch(/^\u001b\[H\u001b\[2J/);
-  expect(decoded).toContain("שלום 😀");
-  expect(decoded).not.toContain("�");
-});
 
 describe("findTmuxExecutable", () => {
   test("prefers the tmux the app bundles", async () => {

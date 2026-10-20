@@ -70,9 +70,10 @@ export interface TmuxClient {
    */
   killServer(): Promise<boolean>;
   /**
-   * Attaches to `session` through a real pseudo-terminal and streams what tmux
-   * draws to `onOutput`. The size, 80 by 24 when absent, is clamped (see `clampTerminalSize`). The
-   * caller starts it with `start()` and ends it with `close()`.
+   * Attaches to `session` through a real pseudo-terminal and streams what
+   * tmux draws to `onOutput`. The size, 80 by 24 when absent, is clamped (see
+   * `clampTerminalSize`). The caller starts it with `start()` and ends it
+   * with `close()`.
    */
   openPty(
     session: string,
@@ -538,25 +539,6 @@ export class CommandTmuxClient implements TmuxClient {
 }
 
 export const SEND_ENTER_DELAY_MS = 300;
-
-export const TERMINAL_CAPTURE_BYTES = 1024 * 1024;
-
-export function boundTerminalCapture(
-  screen: string,
-  limit = TERMINAL_CAPTURE_BYTES,
-): Uint8Array {
-  const encoded = new TextEncoder().encode(screen.replace(/\r?\n/g, "\r\n"));
-  let body =
-    encoded.byteLength > limit
-      ? encoded.slice(encoded.byteLength - limit)
-      : encoded;
-  while (body.length > 0 && (body[0]! & 0xc0) === 0x80) body = body.slice(1);
-  const reset = new TextEncoder().encode("\u001b[H\u001b[2J");
-  const output = new Uint8Array(reset.byteLength + body.byteLength);
-  output.set(reset);
-  output.set(body, reset.byteLength);
-  return output;
-}
 
 const terminalArgs = (socketName: string, ...args: string[]) => [
   "-u",
