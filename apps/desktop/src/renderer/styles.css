@@ -6683,6 +6683,9 @@ dd {
 .team-message-head small {
   margin-left: auto;
 }
+.team-message-cloud {
+  color: var(--accent);
+}
 .team-message p {
   color: var(--text);
   font-size: 12px;

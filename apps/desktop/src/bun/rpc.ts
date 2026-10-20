@@ -346,9 +346,13 @@ const teamDto = (team: Team): TeamDto => ({
   goal: team.goal,
 });
 
-const teamMessageDto = (message: TeamMessage): TeamMessageDto => ({
+const teamMessageDto = (
+  message: TeamMessage,
+  cloud: string | undefined,
+): TeamMessageDto => ({
   id: message.id,
   author: message.author,
+  ...(cloud ? { cloud } : {}),
   body: message.body,
   tags: [...message.tags],
   createdAt: message.createdAt,
@@ -367,6 +371,7 @@ async function teamDetail(
     all: true,
     limit: TEAM_PANEL_MESSAGES,
   });
+  const cloud = context.teams.cloudMarks(team);
   return {
     team: teamDto(team),
     members: members.map((member) => ({
@@ -379,7 +384,9 @@ async function teamDetail(
       undelivered: member.undelivered,
       lastError: member.lastError,
     })),
-    messages: messages.map(teamMessageDto),
+    messages: messages.map((message) =>
+      teamMessageDto(message, cloud(message.author)),
+    ),
   };
 }
 
@@ -588,7 +595,8 @@ export function createDesktopRequestHandlers(
           body,
         });
         return {
-          message: teamMessageDto(said.message),
+          // The user's own post, never a cloud session's.
+          message: teamMessageDto(said.message, undefined),
           warnings: said.warnings,
         };
       }),

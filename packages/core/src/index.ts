@@ -19,6 +19,7 @@ export * from "./services/session-host";
 export * from "./services/session-hosts";
 export * from "./services/remote-store";
 export * from "./services/cloud-calls";
+export * from "./services/cloud-mark";
 export * from "./cloud/broker";
 export * from "./cloud/cloud-account";
 export * from "./cloud/cloud-service";

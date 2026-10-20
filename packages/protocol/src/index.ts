@@ -832,6 +832,8 @@ export interface TeamMessageDto {
   id: number;
   /** `lead`, `user`, `daedalus` or a member's handle. */
   author: string;
+  /** The cloud mark of an author on a cloud host: `[cloud final]`. */
+  cloud?: string;
   body: string;
   tags: string[];
   createdAt: string;

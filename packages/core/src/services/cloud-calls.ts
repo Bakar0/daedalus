@@ -4,6 +4,7 @@ import { runCommand } from "@daedalus/platform";
 import type { CommandResult, DaedalCall } from "@daedalus/remote-protocol";
 import type { SqliteRepositories } from "../repositories";
 import { CLOUD_CALLER_VARIABLE, cloudHostWorkspace } from "./cloud-launch";
+import { cloudMark, markBlock, markOneLine } from "./cloud-mark";
 
 /**
  * `daedal` run inside a cloud workspace's pod, answered on this Mac.
@@ -30,8 +31,8 @@ export type CallDecision =
       allowed: true;
       argv: string[];
       sessionId: string | undefined;
-      /** Put before the standard input: a description read from it. */
-      stdinPrefix?: string;
+      /** Marks the standard input, a description read from it, as a block. */
+      stdinMark?: string;
     }
   | { allowed: false; reason: string };
 
@@ -228,23 +229,21 @@ export function decideCall(
   }
 
   // Text a cloud session writes where agents and the user read it is marked
-  // as coming from the cloud, so nobody takes it for the user or a local
-  // agent (M-4).
+  // as coming from the cloud, on every line, so nobody takes it for the user
+  // or a local agent (M-4, N-1). A team message is marked in its header when
+  // it is shown, from its author's session, so it is passed on as written.
   const mark = cloudMark(repositories.findWorkspace(workspaceId)?.name);
-  let stdinPrefix: string | undefined;
-  if (command === "team say" || command === "attention")
-    if (parsed.positionals.length)
-      parsed.positionals[0] = `${mark} ${parsed.positionals[0]}`;
+  let stdinMark: string | undefined;
+  if (command === "attention" && parsed.positionals.length)
+    parsed.positionals = [markOneLine(mark, parsed.positionals.join(" "))];
   if (command === "task update") {
-    for (const name of ["title", "description"]) {
-      const value = parsed.values.get(name);
-      if (value !== undefined)
-        parsed.values.set(
-          name,
-          name === "title" ? `${mark} ${value}` : `${mark}\n\n${value}`,
-        );
-    }
-    if (parsed.values.has("description-file")) stdinPrefix = `${mark}\n\n`;
+    const title = parsed.values.get("title");
+    if (title !== undefined)
+      parsed.values.set("title", markOneLine(mark, title));
+    const description = parsed.values.get("description");
+    if (description !== undefined)
+      parsed.values.set("description", markBlock(mark, description));
+    if (parsed.values.has("description-file")) stdinMark = mark;
   }
 
   const pinned =
@@ -264,7 +263,7 @@ export function decideCall(
       ...(json ? ["--json"] : []),
     ],
     sessionId: session?.id,
-    ...(stdinPrefix ? { stdinPrefix } : {}),
+    ...(stdinMark ? { stdinMark } : {}),
   };
 }
 
@@ -389,8 +388,8 @@ export class CloudCalls {
       decision.argv[0] === "agent" && decision.argv[1] === "event";
     const stdin = isEvent
       ? sanitizeHookInput(call.stdin)
-      : decision.stdinPrefix
-        ? `${decision.stdinPrefix}${call.stdin ?? ""}`
+      : decision.stdinMark
+        ? markBlock(decision.stdinMark, call.stdin ?? "")
         : call.stdin;
     const [executable, ...leading] = this.options.daedal;
     const result = await (this.options.run ?? runCommand)(
@@ -446,16 +445,3 @@ const inherited = (): Record<string, string> =>
       process.env[name] ? [[name, process.env[name]!]] : [],
     ),
   );
-
-/**
- * How text from a cloud session is marked. The workspace name is kept to
- * letters, digits, spaces, dots and dashes, so it can neither tag anyone nor
- * close the brackets early.
- */
-export function cloudMark(workspaceName: string | undefined): string {
-  const name = (workspaceName ?? "")
-    .replace(/[^\p{L}\p{N} ._-]/gu, "")
-    .trim()
-    .slice(0, 60);
-  return name ? `[from cloud workspace ${name}]` : "[from a cloud workspace]";
-}
