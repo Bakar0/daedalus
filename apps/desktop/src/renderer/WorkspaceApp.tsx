@@ -164,7 +164,7 @@ export {
   planExplorerRefresh,
 } from "./files/explorer-state";
 import { sessionColorStyle } from "./session-color-style";
-import { acceptsClipboardWrite } from "./terminal-clipboard";
+import { TerminalClipboardGate } from "./terminal-clipboard";
 
 /** The handle a member name becomes, as the core makes it. */
 function teamHandlePreview(name: string): string {
@@ -1129,7 +1129,7 @@ function TerminalSurface({
   const focusRef = useRef<() => void>(() => undefined);
   const inputRef = useRef<(data: string) => void>(() => undefined);
   const [connection, setConnection] = useState("connecting");
-  // A cloud session's output is untrusted; see `acceptsClipboardWrite`.
+  // A cloud session's output is untrusted; see `TerminalClipboardGate`.
   const cloudRef = useRef(false);
   cloudRef.current = Boolean(session?.hostId);
   const [now, setNow] = useState(Date.now());
@@ -1192,14 +1192,18 @@ function TerminalSurface({
     let lastSentSize: string | undefined;
     const pending: Uint8Array[] = [];
     let pendingBytes = 0;
-    // When the user last pressed or let go of the mouse in this terminal,
-    // which is when tmux copies a selection.
-    let lastPointerAt: number | undefined;
-    const notePointer = () => {
-      lastPointerAt = Date.now();
-    };
-    container.addEventListener("mousedown", notePointer, true);
-    container.addEventListener("mouseup", notePointer, true);
+    // The mouse gestures in this terminal that may copy; tmux copies a
+    // drag as the button comes up.
+    const clipboardGate = new TerminalClipboardGate();
+    const notePress = (event: MouseEvent) =>
+      clipboardGate.press(event.clientX, event.clientY);
+    const noteMove = (event: MouseEvent) =>
+      clipboardGate.move(event.clientX, event.clientY);
+    const noteRelease = () => clipboardGate.release(Date.now());
+    container.addEventListener("mousedown", notePress, true);
+    // A drag can end outside the terminal.
+    window.addEventListener("mousemove", noteMove, true);
+    window.addEventListener("mouseup", noteRelease, true);
     const drain = () => {
       frame = undefined;
       const chunks = pending.splice(0);
@@ -1374,10 +1378,10 @@ function TerminalSurface({
       // a `?` query would hand the clipboard to whatever runs in the pane.
       terminal.parser.registerOscHandler(52, (data) => {
         if (
-          !acceptsClipboardWrite({
+          !clipboardGate.accepts({
             cloud: cloudRef.current,
-            lastPointerAt,
             now: Date.now(),
+            hasSelection: terminal?.hasSelection() ?? false,
           })
         )
           return true;
@@ -1540,8 +1544,9 @@ function TerminalSurface({
       // and the browser hands focus back to the body.
       heldCaretRef.current = holdsCaret(containerRef.current);
       disposed = true;
-      container.removeEventListener("mousedown", notePointer, true);
-      container.removeEventListener("mouseup", notePointer, true);
+      container.removeEventListener("mousedown", notePress, true);
+      window.removeEventListener("mousemove", noteMove, true);
+      window.removeEventListener("mouseup", noteRelease, true);
       fitRef.current = () => undefined;
       focusRef.current = () => undefined;
       inputRef.current = () => undefined;
