@@ -182,7 +182,9 @@ export function heartbeatDue(
   at: number,
 ): boolean {
   if (ifActivity && !ifActivity.includes(stored.activity)) return false;
-  return at - Date.parse(stored.observedAt) >= HEARTBEAT_INTERVAL_MS;
+  // Written as "not recent" so an unparseable `observedAt` lets the
+  // heartbeat through, which repairs it.
+  return !(at - Date.parse(stored.observedAt) < HEARTBEAT_INTERVAL_MS);
 }
 
 const ACTIVITY_HEADLINE: Record<AgentActivity, string | null> = {

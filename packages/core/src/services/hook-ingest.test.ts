@@ -4,6 +4,8 @@ import type { TmuxClient, TmuxLaunch } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
   createApplicationContext,
+  HEARTBEAT_INTERVAL_MS,
+  heartbeatDue,
   ingestHook,
   ingestStatusLine,
   readActivityRecord,
@@ -245,6 +247,30 @@ describe("ingestHook", () => {
     });
   });
 
+  test("a database that stays down is tried twice, not once per step", async () => {
+    await withSession(async ({ sessionId, home }) => {
+      let attempts = 0;
+      await ingestHook({
+        home,
+        sessionId,
+        event: "Stop",
+        readPayload: async () =>
+          JSON.stringify({
+            hook_event_name: "Stop",
+            last_assistant_message: "All done.",
+          }),
+        openContext: async () => {
+          attempts += 1;
+          throw new Error("SQLITE_BUSY");
+        },
+      });
+      expect(attempts).toBe(2);
+      expect((await readActivityRecord(home, sessionId))?.activity).toBe(
+        "done",
+      );
+    });
+  });
+
   test("writes the record when the control plane cannot be opened", async () => {
     await withSession(async ({ sessionId, home }) => {
       await ingestHook({
@@ -304,6 +330,20 @@ describe("ingestHook", () => {
         "hook",
       );
     });
+  });
+});
+
+describe("heartbeatDue", () => {
+  test("lets a heartbeat repair an unparseable observedAt", () => {
+    const now = Date.now();
+    const at = (observedAt: string) =>
+      heartbeatDue({ activity: "working", observedAt }, ["working"], now);
+    expect(at("not a date")).toBe(true);
+    expect(at(new Date(now).toISOString())).toBe(false);
+    expect(at(new Date(now - HEARTBEAT_INTERVAL_MS).toISOString())).toBe(true);
+    expect(
+      heartbeatDue({ activity: "idle", observedAt: "x" }, ["working"], now),
+    ).toBe(false);
   });
 });
 

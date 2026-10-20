@@ -65,13 +65,17 @@ export interface HookIngestInput {
  */
 export async function ingestHook(input: HookIngestInput): Promise<void> {
   let opened: Promise<ApplicationContext> | undefined;
-  // A failed open is forgotten rather than cached, so a database that was
-  // busy for the routines check is tried again for the reading and the flush.
+  let failedOpens = 0;
+  // The first failed open is forgotten, so a database that was busy for the
+  // routines check is tried once more for the reading and the flush. A second
+  // failure sticks: each attempt can wait out the busy timeout, and a turn
+  // must not wait for three.
   const context = () =>
     (opened ??= Promise.resolve()
       .then(input.openContext)
       .catch((error: unknown) => {
-        opened = undefined;
+        failedOpens += 1;
+        if (failedOpens === 1) opened = undefined;
         throw error;
       }));
   try {
@@ -211,8 +215,10 @@ async function claudeBackgroundAgents(
  * written only when the rule admits the observation over the record already
  * there, and when the index then rejects it anyway (the two disagreed, after
  * a hook ran with the database down) the write is undone. The undo happens
- * only while the record is still the one this hook wrote, so it never puts an
- * old reading over a newer one from a concurrent hook.
+ * only while the record is still the one this hook wrote, so it does not put
+ * an old reading over a newer one a concurrent hook wrote earlier. A write
+ * that lands between the re-read and the undo can still be lost; the next
+ * hook writes the record again.
  */
 async function applyObservation(input: {
   home: string;
