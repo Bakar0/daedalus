@@ -21,6 +21,7 @@ import {
   type SecureChannel,
 } from "@daedalus/remote-protocol";
 import { DaedalusError } from "../errors";
+import { gatewayOrigin } from "./gateway-client";
 
 /**
  * This Mac's one connection to a cloud gateway's relay, as `mac:<macId>`, and
@@ -302,7 +303,7 @@ export class CloudLink implements RunnerTransport {
   // --- the relay connection ---------------------------------------------
 
   #connect(): void {
-    const url = new URL("/v1/connect", this.#o.gatewayUrl);
+    const url = new URL("/v1/connect", gatewayOrigin(this.#o.gatewayUrl));
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     url.searchParams.set("macId", this.#o.identity.id);
     const socket = (this.#o.connect ?? connectWebSocket)(
@@ -428,28 +429,40 @@ export class CloudLink implements RunnerTransport {
     const decoded = decodePayload(payload);
     if (decoded.kind === "plain") {
       const message = decoded.message;
-      if (message.type === "hello") {
-        const key = await this.#o.runnerKey(workspaceId);
-        if (!key) throw new Error("No runner key to accept this runner with");
+      // A new handshake runs beside a live channel, which goes only once the
+      // new one is proven: a hello alone, which anyone on the path could
+      // replay, must not end the session's terminals. A failed handshake
+      // costs only itself.
+      try {
+        if (message.type === "hello") {
+          const key = await this.#o.runnerKey(workspaceId);
+          if (!key) throw new Error("No runner key to accept this runner with");
+          const handshake = acceptHandshake(
+            this.#o.identity,
+            key,
+            message as Hello,
+          );
+          state.handshake = handshake;
+          this.#sendRaw(workspaceId, encodePlain(handshake.welcome));
+          return;
+        }
+        if (message.type !== "ready") return;
+        if (!state.handshake) throw new Error("Ready without a handshake");
+        const channel = state.handshake.finish(message as Ready);
         this.#drop(workspaceId);
-        const handshake = acceptHandshake(
-          this.#o.identity,
-          key,
-          message as Hello,
-        );
-        state.handshake = handshake;
-        this.#sendRaw(workspaceId, encodePlain(handshake.welcome));
+        state.channel = channel;
+      } catch (error) {
+        delete state.handshake;
+        this.#o.log?.("cloud_runner_handshake_failed", {
+          workspaceId,
+          message: error instanceof Error ? error.message : String(error),
+        });
         return;
       }
-      if (message.type === "ready") {
-        if (!state.handshake) throw new Error("Ready without a handshake");
-        state.channel = state.handshake.finish(message as Ready);
-        delete state.handshake;
-        state.online = true;
-        this.#o.log?.("cloud_runner_linked", { workspaceId });
-        this.#o.onRunner?.(workspaceId, true);
-        for (const waiter of state.waiting.splice(0)) waiter();
-      }
+      state.online = true;
+      this.#o.log?.("cloud_runner_linked", { workspaceId });
+      this.#o.onRunner?.(workspaceId, true);
+      for (const waiter of state.waiting.splice(0)) waiter();
       return;
     }
     if (!state.channel) throw new Error("Sealed frame before the handshake");

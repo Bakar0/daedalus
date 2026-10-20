@@ -1806,8 +1806,13 @@ export class AgentService {
     // its sessions.
     const cloud = new Map<string, ReadonlySet<string>>();
     for (const host of this.hosts.cloud()) {
-      const names = await host.listLive().catch(() => undefined);
-      if (names) cloud.set(host.id, new Set(names));
+      // The set is made inside the catch, so a host whose answer cannot be
+      // read settles nothing rather than ending the whole pass.
+      const live = await host
+        .listLive()
+        .then((names) => new Set(names))
+        .catch(() => undefined);
+      if (live) cloud.set(host.id, live);
     }
     if (!local && cloud.size === 0) return;
     const now = new Date().toISOString();
@@ -2530,7 +2535,11 @@ export class AgentService {
           const current = this.repositories.findAgent(next.id);
           if (!current || current.status !== "lost" || current.archivedAt)
             continue;
-          if (await this.sessionHost(current).isLive(current.tmuxSession)) {
+          if (
+            await this.sessionHost(current)
+              .isLive(current.tmuxSession)
+              .catch(() => false)
+          ) {
             // Someone else won the race. Adopting the live session is right;
             // launching a second one under the same name is not.
             this.repositories.updateAgent({

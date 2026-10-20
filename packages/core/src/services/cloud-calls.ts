@@ -26,7 +26,13 @@ export const REFUSED_MESSAGE = "not allowed from a cloud session";
 
 /** A refusal, or the arguments to run, rewritten to pin the workspace. */
 export type CallDecision =
-  | { allowed: true; argv: string[]; sessionId: string | undefined }
+  | {
+      allowed: true;
+      argv: string[];
+      sessionId: string | undefined;
+      /** Put before the standard input: a description read from it. */
+      stdinPrefix?: string;
+    }
   | { allowed: false; reason: string };
 
 interface Spec {
@@ -146,7 +152,7 @@ function parse(args: string[], spec: Spec): Parsed | string {
 export function decideCall(
   repositories: Pick<
     SqliteRepositories,
-    "findAgent" | "findTask" | "workspaceForCloud"
+    "findAgent" | "findTask" | "findWorkspace" | "workspaceForCloud"
   >,
   hostId: string,
   call: Pick<DaedalCall, "argv" | "env">,
@@ -221,6 +227,26 @@ export function decideCall(
       return refuse("a session in another workspace");
   }
 
+  // Text a cloud session writes where agents and the user read it is marked
+  // as coming from the cloud, so nobody takes it for the user or a local
+  // agent (M-4).
+  const mark = cloudMark(repositories.findWorkspace(workspaceId)?.name);
+  let stdinPrefix: string | undefined;
+  if (command === "team say" || command === "attention")
+    if (parsed.positionals.length)
+      parsed.positionals[0] = `${mark} ${parsed.positionals[0]}`;
+  if (command === "task update") {
+    for (const name of ["title", "description"]) {
+      const value = parsed.values.get(name);
+      if (value !== undefined)
+        parsed.values.set(
+          name,
+          name === "title" ? `${mark} ${value}` : `${mark}\n\n${value}`,
+        );
+    }
+    if (parsed.values.has("description-file")) stdinPrefix = `${mark}\n\n`;
+  }
+
   const pinned =
     WORKSPACE_PINNED.has(command) && !parsed.values.has("workspace")
       ? ["--workspace", workspaceId]
@@ -238,6 +264,7 @@ export function decideCall(
       ...(json ? ["--json"] : []),
     ],
     sessionId: session?.id,
+    ...(stdinPrefix ? { stdinPrefix } : {}),
   };
 }
 
@@ -306,8 +333,8 @@ export interface CloudCallOptions {
 }
 
 /**
- * Answers `daedal.call` for one host. A call id already answered gets the
- * same answer again without running anything, which is what makes the
+ * Answers `daedal.call` for every host. A call id that host already had
+ * answered gets the same answer without running anything, which makes the
  * runner's replay of its queue safe.
  */
 export class CloudCalls {
@@ -316,10 +343,13 @@ export class CloudCalls {
   constructor(private readonly options: CloudCallOptions) {}
 
   async answer(hostId: string, call: DaedalCall): Promise<CommandResult> {
-    const known = this.#answered.get(call.callId);
+    // Keyed by host too: a call id is only unique within one runner's calls,
+    // and one runner must never get an answer made for another.
+    const key = `${hostId}\n${String(call.callId)}`;
+    const known = this.#answered.get(key);
     if (known) return known;
     const result = await this.#run(hostId, call);
-    this.#answered.set(call.callId, result);
+    this.#answered.set(key, result);
     // Enough to cover a replayed queue; the oldest answers go first.
     if (this.#answered.size > 4096)
       this.#answered.delete(this.#answered.keys().next().value!);
@@ -357,7 +387,11 @@ export class CloudCalls {
       : undefined;
     const isEvent =
       decision.argv[0] === "agent" && decision.argv[1] === "event";
-    const stdin = isEvent ? sanitizeHookInput(call.stdin) : call.stdin;
+    const stdin = isEvent
+      ? sanitizeHookInput(call.stdin)
+      : decision.stdinPrefix
+        ? `${decision.stdinPrefix}${call.stdin ?? ""}`
+        : call.stdin;
     const [executable, ...leading] = this.options.daedal;
     const result = await (this.options.run ?? runCommand)(
       executable!,
@@ -412,3 +446,16 @@ const inherited = (): Record<string, string> =>
       process.env[name] ? [[name, process.env[name]!]] : [],
     ),
   );
+
+/**
+ * How text from a cloud session is marked. The workspace name is kept to
+ * letters, digits, spaces, dots and dashes, so it can neither tag anyone nor
+ * close the brackets early.
+ */
+export function cloudMark(workspaceName: string | undefined): string {
+  const name = (workspaceName ?? "")
+    .replace(/[^\p{L}\p{N} ._-]/gu, "")
+    .trim()
+    .slice(0, 60);
+  return name ? `[from cloud workspace ${name}]` : "[from a cloud workspace]";
+}

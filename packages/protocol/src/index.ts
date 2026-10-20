@@ -123,6 +123,8 @@ export interface AgentSessionDto {
   teamHandle: string | null;
   /** The session that started this one with `agent spawn`, as a handoff does. */
   spawnedBy: string | null;
+  /** The cloud host it runs on (`ws:<cloud workspace id>`); null or absent for this Mac. */
+  hostId?: string | null;
 }
 
 /**

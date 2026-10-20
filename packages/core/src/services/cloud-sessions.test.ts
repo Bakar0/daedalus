@@ -200,6 +200,24 @@ describe("cloud sessions", () => {
     });
   });
 
+  test("a host that answers nonsense settles nothing and stops nothing", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, workspace, host } = await setUp(home);
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        host: host.id,
+      });
+      host.listLive = async () => ({}) as never;
+      await expect(
+        context.agents.reconcile(new Set()),
+      ).resolves.toBeUndefined();
+      expect(context.repositories.findAgent(session.id)?.status).toBe(
+        "running",
+      );
+      context.close();
+    });
+  });
+
   test("a lost cloud session revives with its conversation resumed", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const { context, workspace, host } = await setUp(home);

@@ -164,6 +164,7 @@ export {
   planExplorerRefresh,
 } from "./files/explorer-state";
 import { sessionColorStyle } from "./session-color-style";
+import { acceptsClipboardWrite } from "./terminal-clipboard";
 
 /** The handle a member name becomes, as the core makes it. */
 function teamHandlePreview(name: string): string {
@@ -1128,6 +1129,9 @@ function TerminalSurface({
   const focusRef = useRef<() => void>(() => undefined);
   const inputRef = useRef<(data: string) => void>(() => undefined);
   const [connection, setConnection] = useState("connecting");
+  // A cloud session's output is untrusted; see `acceptsClipboardWrite`.
+  const cloudRef = useRef(false);
+  cloudRef.current = Boolean(session?.hostId);
   const [now, setNow] = useState(Date.now());
   const connectionIssue = ["connected", "reconnected"].includes(connection)
     ? undefined
@@ -1188,6 +1192,14 @@ function TerminalSurface({
     let lastSentSize: string | undefined;
     const pending: Uint8Array[] = [];
     let pendingBytes = 0;
+    // When the user last pressed or let go of the mouse in this terminal,
+    // which is when tmux copies a selection.
+    let lastPointerAt: number | undefined;
+    const notePointer = () => {
+      lastPointerAt = Date.now();
+    };
+    container.addEventListener("mousedown", notePointer, true);
+    container.addEventListener("mouseup", notePointer, true);
     const drain = () => {
       frame = undefined;
       const chunks = pending.splice(0);
@@ -1361,6 +1373,14 @@ function TerminalSurface({
       // shell, and anything else that writes OSC 52. Only a write is honoured;
       // a `?` query would hand the clipboard to whatever runs in the pane.
       terminal.parser.registerOscHandler(52, (data) => {
+        if (
+          !acceptsClipboardWrite({
+            cloud: cloudRef.current,
+            lastPointerAt,
+            now: Date.now(),
+          })
+        )
+          return true;
         const encoded = data.slice(data.indexOf(";") + 1);
         if (!encoded || encoded === "?") return true;
         try {
@@ -1520,6 +1540,8 @@ function TerminalSurface({
       // and the browser hands focus back to the body.
       heldCaretRef.current = holdsCaret(containerRef.current);
       disposed = true;
+      container.removeEventListener("mousedown", notePointer, true);
+      container.removeEventListener("mouseup", notePointer, true);
       fitRef.current = () => undefined;
       focusRef.current = () => undefined;
       inputRef.current = () => undefined;

@@ -98,7 +98,7 @@ const setUp = async (runnerKey?: string) => {
   const relay = new FakeRelay();
   const answered: unknown[] = [];
   const cloudLink = new CloudLink({
-    gatewayUrl: "http://gateway.test:8080",
+    gatewayUrl: "https://gateway.test:8443",
     token: "user-token",
     identity: mac,
     runnerKey: async () => runnerKey ?? runner.publicKey,
@@ -119,7 +119,7 @@ describe("cloud link", () => {
   test("joins as the Mac with the user token", async () => {
     const { relay, mac, cloudLink } = await setUp();
     const url = new URL(relay.url);
-    expect(url.protocol).toBe("ws:");
+    expect(url.protocol).toBe("wss:");
     expect(url.pathname).toBe("/v1/connect");
     expect(url.searchParams.get("macId")).toBe(mac.id);
     expect(relay.token).toBe("user-token");
@@ -221,6 +221,58 @@ describe("cloud link", () => {
     );
     await ended;
     expect(output).toEqual([104, 105]);
+    cloudLink.stop();
+  });
+
+  test("a hello that does not finish leaves the live channel alone", async () => {
+    const { relay, mac, runner, cloudLink } = await setUp();
+    const channel = await link(relay, runner, mac);
+    await Bun.sleep(5);
+    // An impostor's hello fails at once; a replayed one gets a welcome
+    // but never a ready.
+    const impostor = createIdentity();
+    relay.fromRunner(
+      encodePlain(
+        startHandshake(impostor, { macId: mac.id, macKey: mac.publicKey })
+          .hello,
+      ),
+    );
+    relay.fromRunner(
+      encodePlain(
+        startHandshake(runner, { macId: mac.id, macKey: mac.publicKey }).hello,
+      ),
+    );
+    await relay.next();
+    await Bun.sleep(5);
+    expect(cloudLink.linked(WS)).toBe(true);
+    const live = new RemoteSessionHost(WS, cloudLink).listLive();
+    const request = open(channel, await relay.next());
+    relay.fromRunner(
+      sealed(channel, {
+        t: "res",
+        id: (request as { id: number }).id,
+        result: [],
+      }),
+    );
+    expect(await live).toEqual([]);
+    cloudLink.stop();
+  });
+
+  test("a completed new handshake replaces the channel", async () => {
+    const { relay, mac, runner, cloudLink } = await setUp();
+    await link(relay, runner, mac);
+    const second = await link(relay, runner, mac);
+    await Bun.sleep(5);
+    const live = new RemoteSessionHost(WS, cloudLink).listLive();
+    const request = open(second, await relay.next());
+    relay.fromRunner(
+      sealed(second, {
+        t: "res",
+        id: (request as { id: number }).id,
+        result: ["s"],
+      }),
+    );
+    expect(await live).toEqual(["s"]);
     cloudLink.stop();
   });
 
