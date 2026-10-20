@@ -485,15 +485,12 @@ export function updateSettings(
       }
       await writeFileAtomic(configPath, `${JSON.stringify(next, null, 2)}\n`);
       const live = config as unknown as Record<string, unknown>;
-      const written = {
-        ...current,
-        claudeOutputStyleWritten: current.claudeOutputStyleWritten,
-        ...patch,
-      };
-      for (const [key, value] of Object.entries(written)) {
-        if (value === undefined) delete live[key];
-        else live[key] = value;
-      }
+      // What loadConfig would give for the file just written, so the live
+      // config holds validated, defaulted values rather than the raw patch.
+      const settings = settingsFromStored(next);
+      Object.assign(live, settings);
+      if (settings.claudeOutputStyleWritten === undefined)
+        delete live.claudeOutputStyleWritten;
     });
   settingsQueues.set(config.home, run);
   void run

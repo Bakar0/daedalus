@@ -1,4 +1,4 @@
-import { rename, rm, writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   deleteKeychainPassword,

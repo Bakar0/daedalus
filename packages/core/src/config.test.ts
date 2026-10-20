@@ -80,12 +80,15 @@ describe("loadConfig", () => {
         JSON.stringify({
           ...stored,
           accounts: [...stored.accounts, profile("cli-two")],
+          focusMode: true,
           customSetting: "keep-me",
         }),
       );
       await updateSettings(config, (current) => ({
         accounts: [...current.accounts, profile("app-three")],
       }));
+      // A setting the other writer changed follows the file too.
+      expect(config.focusMode).toBe(true);
       const ids = (accounts: { id: string }[]) => accounts.map((a) => a.id);
       const reloaded = await loadConfig({ DAEDALUS_HOME: home });
       expect(ids(reloaded.accounts)).toEqual([
