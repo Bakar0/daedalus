@@ -74,6 +74,16 @@ spec:
               value: {{ .Values.workspace.storageClass | quote }}
             - name: DAEDALUS_WORKSPACE_STORAGE_SIZE
               value: {{ .Values.workspace.storageSize | quote }}
+            - name: DAEDALUS_WORKSPACE_STATE_SIZE
+              value: {{ .Values.workspace.stateSize | quote }}
+            - name: DAEDALUS_WORKSPACE_CACHE_SIZE
+              value: {{ .Values.workspace.cacheSize | quote }}
+            - name: DAEDALUS_WORKSPACE_TMP_SIZE
+              value: {{ .Values.workspace.tmpSize | quote }}
+            - name: DAEDALUS_WORKSPACE_EPHEMERAL_REQUEST
+              value: {{ .Values.workspace.ephemeralStorage.request | quote }}
+            - name: DAEDALUS_WORKSPACE_EPHEMERAL_LIMIT
+              value: {{ .Values.workspace.ephemeralStorage.limit | quote }}
             - name: DAEDALUS_WORKSPACE_CPU_REQUEST
               value: {{ $r.requests.cpu | quote }}
             - name: DAEDALUS_WORKSPACE_MEMORY_REQUEST

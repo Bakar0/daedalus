@@ -30,6 +30,19 @@ rolebinding writes outside namespaces named `u-*` that carry the
 `daedalus.dev/user` label, and rolebindings to any role but
 `daedalus-tenant-admin`.
 
+Two more admission policies back this up. `daedalus-gateway-scope` requires the
+labels `pod-security.kubernetes.io/enforce=restricted` and
+`enforce-version=v1.30` on every namespace the gateway creates, and exactly one
+subject, the gateway ServiceAccount, on every RoleBinding. `daedalus-gateway-pods`
+allows the gateway to create only the two-container workspace pod: containers
+`runner` and `session`, both with the chart's runner image (repository and tag),
+no host namespaces or host ports, no privileged containers, service account
+`runner` without a token, and volumes limited to the pod's own `ws-<id>` and
+`ws-<id>-state` PVCs, its `ws-<id>-runner` Secret and emptyDirs. The volumes
+`state` and `token` may be mounted only in `runner`, and `workspace` and `cache`
+only in `session`. `deploy/kind/policy-test/run.sh` runs these cases as server
+dry runs against the kind cluster. By digest instead of tag is a 1b change.
+
 The tenant RBAC verbs are get, list, watch, create and delete. The gateway
 cannot update or patch objects, so it must create and delete rather than apply.
 
@@ -59,3 +72,28 @@ not `/tmp`, which is a tmpfs in the node. Then append to
 Run `systemctl restart containerd` in the node, create a `RuntimeClass` named
 `gvisor` with handler `runsc`, and install with
 `--set workspace.runtimeClassName=gvisor`. Not scripted yet.
+
+## EKS checklist (before 1b)
+
+The chart's defaults were checked on kind only. On EKS, confirm each item:
+
+- The VPC CNI's network policy agent is on (`enableNetworkPolicy: "true"` in the
+  `vpc-cni` add-on configuration). Without it every NetworkPolicy is silently
+  ignored. Check that a tenant pod cannot reach a pod in another namespace
+  before installing anything else.
+- Prefer private node subnets. Nodes with public IPs are reachable through
+  `0.0.0.0/0` minus the private ranges, so a workspace could reach node
+  NodePorts and host-network listeners. If you must use public subnets, add
+  the node public addresses to `tenant.blockedEgressCIDRs`.
+- Set `tenant.blockedEgressCIDRs` to cover the VPC CIDR, which may be public
+  space if you use a secondary CIDR. The default covers RFC 1918 and
+  link-local, so it includes the metadata address 169.254.169.254.
+- Require IMDSv2 with hop limit 1 on the node group so pods cannot use the
+  metadata service even if the policy is off.
+- The policy has no IPv6 egress rule, so an enforcing CNI blocks IPv6 egress,
+  including `fd00:ec2::254`. Verify on a dual-stack cluster.
+- The EKS public API endpoint is reachable from tenant pods, which hold no
+  token. Restrict it with `publicAccessCidrs` or use a private endpoint.
+- DNS to kube-dns is open, so a workspace can resolve cluster service names and
+  send data out through DNS queries. Accept it for stage 0 or add a DNS policy.
+- Label the release namespace `pod-security.kubernetes.io/enforce=restricted`.
