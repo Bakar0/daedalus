@@ -15,6 +15,11 @@ gateway:
 workspace:
   storageClass: ""
   storageSize: 20Gi
+  stateSize: 1Gi # PVC ws-<id>-state: runner identity and event queue
+  cacheSize: 2Gi # sizeLimit of the session /cache emptyDir
+  tmpSize: 1Gi # sizeLimit of the session /tmp emptyDir
+  # Ephemeral storage of the session container; the node's disk is shared.
+  ephemeralStorage: { request: 1Gi, limit: 4Gi }
   resources:
     requests: { cpu: "1", memory: 2Gi }
     limits: { cpu: "2", memory: 4Gi }
@@ -23,7 +28,16 @@ workspace:
   runtimeClassName: "" # "gvisor" to sandbox workspace pods
   idleMinutes: 30 # runner asks the gateway to sleep it after this
 tenant:
-  quota: { pods: "10", requests.cpu: "8", requests.memory: 16Gi }
+  # Each workspace has 2 PVCs (data and state) and a runner container that
+  # requests 50m CPU, 64Mi memory and 64Mi ephemeral storage. Size the quota for
+  # gateway.limits.workspacesPerUser workspaces: 5 x 2 PVCs, 5 x (20Gi + 1Gi).
+  quota:
+    pods: "10"
+    persistentvolumeclaims: "10"
+    requests.storage: 110Gi
+    requests.ephemeral-storage: 20Gi
+    requests.cpu: "8"
+    requests.memory: 16Gi
   # Egress to these CIDRs is blocked for workspace pods, so a workspace cannot
   # reach other namespaces' pods, nodes or the cloud metadata service. Set it
   # to cover your cluster's pod, service and node ranges.

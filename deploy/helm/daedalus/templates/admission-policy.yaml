@@ -25,20 +25,29 @@ spec:
     - name: obj
       expression: "request.operation == 'DELETE' ? oldObject : object"
   validations:
-    - message: the gateway may only change namespaces named u-* with the daedalus.dev/user label
+    - message: the gateway may only change namespaces named u-* with the daedalus.dev/user label, and create them with pod-security enforce=restricted and enforce-version=v1.30
       expression: >-
         request.resource.resource != 'namespaces' ||
         (variables.obj.metadata.name.startsWith('u-') &&
          has(variables.obj.metadata.labels) &&
-         'daedalus.dev/user' in variables.obj.metadata.labels)
-    - message: the gateway may only change rolebindings in namespaces named u-* with the daedalus.dev/user label, and only to daedalus-tenant-admin
+         'daedalus.dev/user' in variables.obj.metadata.labels &&
+         (request.operation == 'DELETE' ||
+          ('pod-security.kubernetes.io/enforce' in variables.obj.metadata.labels &&
+           variables.obj.metadata.labels['pod-security.kubernetes.io/enforce'] == 'restricted' &&
+           'pod-security.kubernetes.io/enforce-version' in variables.obj.metadata.labels &&
+           variables.obj.metadata.labels['pod-security.kubernetes.io/enforce-version'] == 'v1.30')))
+    - message: the gateway may only change rolebindings in namespaces named u-* with the daedalus.dev/user label, and only to daedalus-tenant-admin for the gateway ServiceAccount
       expression: >-
         request.resource.resource != 'rolebindings' ||
         (request.namespace.startsWith('u-') &&
          has(namespaceObject.metadata.labels) &&
          'daedalus.dev/user' in namespaceObject.metadata.labels &&
          variables.obj.roleRef.kind == 'ClusterRole' &&
-         variables.obj.roleRef.name == 'daedalus-tenant-admin')
+         variables.obj.roleRef.name == 'daedalus-tenant-admin' &&
+         size(variables.obj.subjects) == 1 &&
+         variables.obj.subjects.all(s, s.kind == 'ServiceAccount' &&
+           s.name == {{ include "daedalus.gatewayName" . | quote }} &&
+           s.namespace == {{ .Release.Namespace | quote }}))
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
@@ -48,4 +57,76 @@ metadata:
     {{- include "daedalus.labels" . | nindent 4 }}
 spec:
   policyName: daedalus-gateway-scope
+  validationActions: [Deny]
+---
+# Pods the gateway creates may only be the approved two-container workspace pod.
+# A compromised gateway cannot start a privileged or host-mounting pod.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: daedalus-gateway-pods
+  labels:
+    {{- include "daedalus.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  matchConditions:
+    - name: from-gateway
+      expression: request.userInfo.username == {{ $user | quote }}
+  variables:
+    - name: name
+      expression: object.metadata.name
+    - name: spec
+      expression: object.spec
+  validations:
+    - message: pod must be named ws-<id> in a namespace u-*
+      expression: variables.name.startsWith('ws-') && request.namespace.startsWith('u-')
+    - message: pod must have exactly the containers runner and session, no init or ephemeral containers
+      expression: >-
+        size(variables.spec.containers) == 2 &&
+        variables.spec.containers.exists(c, c.name == 'runner') &&
+        variables.spec.containers.exists(c, c.name == 'session') &&
+        !has(variables.spec.initContainers) &&
+        !has(variables.spec.ephemeralContainers)
+    - message: both containers must use the chart's runner image and must not be privileged or use host ports
+      expression: >-
+        variables.spec.containers.all(c,
+          c.image == {{ printf "%s:%s" .Values.image.runner.repository .Values.image.runner.tag | quote }} &&
+          (!has(c.securityContext) || !has(c.securityContext.privileged) || c.securityContext.privileged == false) &&
+          (!has(c.ports) || c.ports.all(p, !has(p.hostPort) || p.hostPort == 0)))
+    - message: pod must not use host namespaces or a shared process namespace, and must use service account runner without a token
+      expression: >-
+        (!has(variables.spec.hostNetwork) || variables.spec.hostNetwork == false) &&
+        (!has(variables.spec.hostPID) || variables.spec.hostPID == false) &&
+        (!has(variables.spec.hostIPC) || variables.spec.hostIPC == false) &&
+        (!has(variables.spec.shareProcessNamespace) || variables.spec.shareProcessNamespace == false) &&
+        has(variables.spec.serviceAccountName) && variables.spec.serviceAccountName == 'runner' &&
+        has(variables.spec.automountServiceAccountToken) && variables.spec.automountServiceAccountToken == false
+    - message: volumes must be exactly the workspace and state PVCs of this pod, its runner Secret, and emptyDirs
+      expression: >-
+        has(variables.spec.volumes) && variables.spec.volumes.all(v,
+          (v.name == 'workspace' && has(v.persistentVolumeClaim) && v.persistentVolumeClaim.claimName == variables.name) ||
+          (v.name == 'state' && has(v.persistentVolumeClaim) && v.persistentVolumeClaim.claimName == variables.name + '-state') ||
+          (v.name == 'token' && has(v.secret) && v.secret.secretName == variables.name + '-runner') ||
+          (v.name in ['shared', 'cache', 'runner-tmp', 'session-tmp'] && has(v.emptyDir)))
+    - message: state and token may be mounted only in the runner container, workspace and cache only in the session container
+      expression: >-
+        variables.spec.containers.all(c,
+          !has(c.volumeMounts) || c.volumeMounts.all(m,
+            c.name == 'runner' ? !(m.name in ['workspace', 'cache', 'session-tmp'])
+                               : !(m.name in ['state', 'token', 'runner-tmp'])))
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: daedalus-gateway-pods
+  labels:
+    {{- include "daedalus.labels" . | nindent 4 }}
+spec:
+  policyName: daedalus-gateway-pods
   validationActions: [Deny]
