@@ -10,7 +10,7 @@
  * The plan comes with the remote state (`remoteGet`): the account the Mac
  * signed in to and its plan, as the relay last reported them.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   type AdminAccountDto,
   type AdminKeyDto,
@@ -24,6 +24,7 @@ import type { DesktopClient } from "./client-types";
 import { ConfirmButton } from "./ConfirmButton";
 import { Menu, MenuDots } from "./Menu";
 import { repositoryFuzzyScore } from "./repository-search";
+import { useMutation, useRpcQuery, type RpcQueryResult } from "./use-rpc";
 
 /** Whether the Mac's account has a plan that lets phones in right now. */
 export const hasPlan = (state: RemoteStateDto | undefined): boolean =>
@@ -44,23 +45,18 @@ export function planText(plan: { name: string; expiresAt: string | null }) {
     : name;
 }
 
-/** The remote state, asked again every `pollMs` while mounted. */
+/**
+ * The remote state, asked again every `pollMs` while mounted. A host without
+ * phone access (a test page) has no answer to give, so `data` stays empty.
+ */
 export function useRemoteState(
   client: DesktopClient,
   pollMs: number,
-): [RemoteStateDto | undefined, (state: RemoteStateDto) => void] {
-  const [state, setState] = useState<RemoteStateDto>();
-  const refresh = useCallback(async () => {
-    // A host without phone access (a test page) has no answer to give.
-    const result = await client.request.remoteGet({}).catch(() => undefined);
-    if (result?.ok) setState(result.data);
-  }, [client]);
-  useEffect(() => {
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), pollMs);
-    return () => window.clearInterval(timer);
-  }, [refresh, pollMs]);
-  return [state, setState];
+): RpcQueryResult<RemoteStateDto> {
+  return useRpcQuery(() => client.request.remoteGet({}), {
+    pollMs,
+    deps: [client],
+  });
 }
 
 /** Marks a Pro feature, in a menu, a tab or a heading. */
@@ -79,7 +75,7 @@ export function ProBadge({
   client: DesktopClient;
   onOpen: () => void;
 }) {
-  const [state] = useRemoteState(client, 5_000);
+  const { data: state } = useRemoteState(client, 5_000);
   if (!state || !showsPro(state)) return null;
   return hasPlan(state) ? (
     <button
@@ -118,7 +114,7 @@ export function AccountPanel({
   client: DesktopClient;
   perform: <T>(operation: Promise<RpcResult<T>>) => Promise<T | undefined>;
 }) {
-  const [state, setState] = useRemoteState(client, 2_000);
+  const { data: state, refresh } = useRemoteState(client, 2_000);
   const [code, setCode] = useState("");
   const [error, setError] = useState<string>();
   const [signingIn, setSigningIn] = useState(false);
@@ -129,10 +125,10 @@ export function AccountPanel({
     void client.request
       .remoteRefreshAccount({})
       .then((result) => {
-        if (result.ok) setState(result.data);
+        if (result.ok) void refresh();
       })
       .catch(() => undefined);
-  }, [client, setState]);
+  }, [client, refresh]);
   useEffect(() => {
     if (state?.signedIn) setSigningIn(false);
   }, [state?.signedIn]);
@@ -161,8 +157,8 @@ export function AccountPanel({
             className="quiet"
             disabled={busy}
             onConfirm={async () => {
-              const next = await perform(client.request.remoteLeaveAccount({}));
-              if (next) setState(next);
+              if (await perform(client.request.remoteLeaveAccount({})))
+                await refresh();
             }}
             type="button"
           >
@@ -248,7 +244,7 @@ export function AccountPanel({
                       setError(next.error.message);
                       return;
                     }
-                    setState(next.data);
+                    await refresh();
                     setCode("");
                   }}
                 >
@@ -366,21 +362,16 @@ function accountLine(account: AdminAccountDto): string {
  * most), or on Lock. Until then the Mac's own sign-in is not enough.
  */
 function AdminGate({ busy, client }: { busy: boolean; client: DesktopClient }) {
-  const [until, setUntil] = useState<string | null>();
   const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState<string>();
-  const check = useCallback(async () => {
-    const result = await client.request.remoteAdminStatus({});
-    if (result.ok) {
-      setUntil(result.data.unlockedUntil);
-      if (result.data.unlockedUntil) setWaiting(false);
-    }
-  }, [client]);
+  const { data: status, refresh: check } = useRpcQuery(
+    () => client.request.remoteAdminStatus({}),
+    { pollMs: 3_000, deps: [client] },
+  );
+  const until = status?.unlockedUntil;
   useEffect(() => {
-    void check();
-    const timer = window.setInterval(() => void check(), 3_000);
-    return () => window.clearInterval(timer);
-  }, [check]);
+    if (until) setWaiting(false);
+  }, [until]);
 
   if (until === undefined) return null;
   if (!until)
@@ -432,7 +423,7 @@ function AdminGate({ busy, client }: { busy: boolean; client: DesktopClient }) {
           className="quiet"
           onClick={async () => {
             await client.request.remoteAdminLock({});
-            setUntil(null);
+            await check();
           }}
           type="button"
         >
@@ -459,10 +450,21 @@ function AdminSection({
   /** A change moves the unlock's end on; the gate reads it again. */
   onChange: () => void;
 }) {
-  const [keys, setKeys] = useState<AdminKeyDto[]>();
-  const [accounts, setAccounts] = useState<AdminAccountDto[]>();
-  const [activity, setActivity] = useState<AdminLogEntryDto[]>();
-  const [error, setError] = useState<string>();
+  const keyQuery = useRpcQuery(() => client.request.remoteAdminKeys({}), {
+    deps: [client],
+  });
+  const accountQuery = useRpcQuery(
+    () => client.request.remoteAdminAccounts({}),
+    { deps: [client] },
+  );
+  const logQuery = useRpcQuery(() => client.request.remoteAdminLog({}), {
+    deps: [client],
+  });
+  const keys = keyQuery.data;
+  const accounts = accountQuery.data;
+  const activity = logQuery.data;
+  const [mutationError, setError] = useState<string>();
+  const error = mutationError ?? keyQuery.error ?? accountQuery.error;
   const [made, setMade] = useState<string>();
   const [copied, setCopied] = useState<string>();
   const [creating, setCreating] = useState(false);
@@ -502,34 +504,19 @@ function AdminSection({
     accountLine,
   );
 
-  const load = useCallback(async () => {
-    const [keyList, accountList, log] = await Promise.all([
-      client.request.remoteAdminKeys({}),
-      client.request.remoteAdminAccounts({}),
-      client.request.remoteAdminLog({}),
-    ]);
-    if (log.ok) setActivity(log.data);
-    if (keyList.ok) setKeys(keyList.data);
-    else setError(keyList.error.message);
-    if (accountList.ok) setAccounts(accountList.data);
-    else setError(accountList.error.message);
-  }, [client]);
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const run = async <T,>(operation: Promise<RpcResult<T>>) => {
-    setError(undefined);
-    const result = await operation;
-    if (!result.ok) {
-      setError(result.error.message);
+  const { run } = useMutation({
+    onStart: () => setError(undefined),
+    onError: setError,
+    onSettled: async ({ ok }) => {
+      if (ok)
+        await Promise.all([
+          keyQuery.refresh(),
+          accountQuery.refresh(),
+          logQuery.refresh(),
+        ]);
       onChange();
-      return undefined;
-    }
-    await load();
-    onChange();
-    return result.data;
-  };
+    },
+  });
   const copy = async (code: string) => {
     const result = await client.request.clipboardWrite({ text: code });
     if (result.ok) setCopied(code);

@@ -177,7 +177,7 @@ export function SettingsModal({
   const updateAvailable = updates?.update?.state === "available";
   // Remote is phone access, a Pro feature: hidden unless the account has Pro
   // or is an admin.
-  const [remoteState] = useRemoteState(client, 5_000);
+  const { data: remoteState } = useRemoteState(client, 5_000);
   const pro = showsPro(remoteState);
   return (
     <div className="settings">
