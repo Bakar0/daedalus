@@ -12,6 +12,7 @@ import Electrobun, {
 import {
   channelHome,
   createApplicationContext,
+  ReadModel,
   sweepProviderActivity,
   WORKSPACE_FILES_CHANGED,
   type WorkspaceFilesChanged,
@@ -42,7 +43,7 @@ import { installCliShim } from "./cli-shim";
 import { QuitController } from "./quit";
 import { UpdateController } from "./updates";
 import { agentTerminalOpener, PhoneWindowSize, RemoteHost } from "./remote";
-import { createDesktopRequestHandlers, desktopDataFingerprint } from "./rpc";
+import { createDesktopRequestHandlers } from "./rpc";
 import {
   authorizeTerminalRequest,
   isTyping,
@@ -310,8 +311,13 @@ const rendererUrl = `views://mainview/index.html`;
 ApplicationMenu.setApplicationMenu(APPLICATION_MENU);
 
 let revision = 0;
-let fingerprint = desktopDataFingerprint(context);
-let telemetryFingerprint = "";
+const readModel = new ReadModel(context);
+/**
+ * The read model's version as of the last announcement. A promise, so a
+ * window's own mutation replaces it at once and the next tick compares against
+ * that rather than announcing the same change a second time.
+ */
+let fingerprint = readModel.version().catch(() => "");
 let dockBadgeCount = 0;
 
 /**
@@ -327,7 +333,7 @@ async function recordAttentionCount(count: number): Promise<void> {
 }
 
 function announce(source: "desktop" | "external"): void {
-  fingerprint = desktopDataFingerprint(context);
+  fingerprint = readModel.version().catch(() => "");
   // There is no window between closing one and reopening from the Dock, and
   // a repository finishing its clone in that gap must not throw.
   revision += 1;
@@ -411,7 +417,9 @@ const remote = new RemoteHost({
   context,
   macName: hostname().replace(/\.local$/, ""),
   handlers: () =>
-    createDesktopRequestHandlers(context, () => announce("desktop")),
+    createDesktopRequestHandlers(context, {
+      onMutation: () => announce("desktop"),
+    }),
   openTerminal: agentTerminalOpener(context, terminalTmux, phoneSizes),
   log: (event, fields) => void context.logger.write("info", event, fields),
 });
@@ -428,32 +436,31 @@ const createRpc = (role: DesktopWindowRole = "main") =>
     // minutes for large histories or slower remotes.
     maxRequestTime: 10 * 60_000,
     handlers: {
-      requests: createDesktopRequestHandlers(
-        context,
-        () => announce("desktop"),
-        Utils.openExternal,
+      requests: createDesktopRequestHandlers(context, {
+        onMutation: () => announce("desktop"),
+        openExternal: Utils.openExternal,
         terminalEndpoint,
-        {
+        quit: {
           dialogShown: () => quitController.dialogShown(),
           decide: (choice) => quitController.decide(choice),
         },
-        {
+        updates: {
           current: () => updates.update,
           check: () => updates.check({ manual: true }),
           install: () => updates.install(),
           dismiss: (version) => updates.dismiss(version),
         },
-        {
+        windows: {
           role,
           openWorld: openWorldWindow,
           focusSession: focusMainSession,
         },
-        (text) => {
+        clipboardWrite: (text) => {
           Utils.clipboardWriteText(text);
           return true;
         },
         remote,
-      ),
+      }),
     },
   });
 
@@ -721,8 +728,8 @@ setInterval(async () => {
   if (checkingForExternalChanges) return;
   checkingForExternalChanges = true;
   try {
-    // Reconciliation updates stale sessions; SQLite fingerprinting also catches
-    // mutations performed by another process such as the CLI.
+    // Reconciliation updates stale sessions; the read model's version also
+    // catches mutations performed by another process such as the CLI.
     //
     // Every child launched here blocks this thread inside `posix_spawn` until
     // the child has started, and on a loaded machine that was observed taking
@@ -833,17 +840,11 @@ setInterval(async () => {
     await recordAttentionCount(
       context.repositories.listSessionAttention().length,
     );
-    const next = desktopDataFingerprint(context);
-    const nextTelemetryFingerprint = JSON.stringify(
-      await context.telemetry.read(),
-    );
-    if (
-      next !== fingerprint ||
-      nextTelemetryFingerprint !== telemetryFingerprint
-    ) {
-      telemetryFingerprint = nextTelemetryFingerprint;
-      announce("external");
-    }
+    const seen = fingerprint;
+    const next = await readModel.version();
+    // A mutation announced while this read ran has already reloaded the
+    // windows, and the next tick compares against its version.
+    if (fingerprint === seen && next !== (await seen)) announce("external");
   } catch (error) {
     await context.logger.write("error", "desktop_change_check_failed", {
       message: error instanceof Error ? error.message : String(error),

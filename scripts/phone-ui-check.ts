@@ -290,7 +290,9 @@ try {
     store,
     handlers: withTeam(
       // As in the app: a change made from a phone tells the phones.
-      createDesktopRequestHandlers(context, () => connector?.announce()),
+      createDesktopRequestHandlers(context, {
+        onMutation: () => connector?.announce(),
+      }),
       lead.id,
       member.id,
     ),

@@ -1,14 +1,14 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { createApplicationContext } from "@daedalus/core";
+import { createApplicationContext, ReadModel } from "@daedalus/core";
 import type { TmuxClient, TmuxLaunch } from "@daedalus/platform";
 import {
   withoutProviderClis,
   withTemporaryDaedalusHome,
 } from "@daedalus/test-utils";
 import packageJson from "../../../../package.json";
-import { createDesktopRequestHandlers, desktopDataFingerprint } from "./rpc";
+import { createDesktopRequestHandlers } from "./rpc";
 
 class FakeTmux implements TmuxClient {
   sessions = new Set<string>();
@@ -49,7 +49,12 @@ describe("desktop RPC handlers", () => {
       await Bun.write(
         join(home, "config.json"),
         JSON.stringify({
-          agents: { shell: { executable: "/bin/sh", args: ["-l"] } },
+          agents: {
+            shell: { executable: "/bin/sh", args: ["-l"] },
+            // The version reads usage, which must not start the real CLIs.
+            claude: { executable: join(home, "no-claude"), args: [] },
+            codex: { executable: join(home, "no-codex"), args: [] },
+          },
         }),
       );
       const context = await createApplicationContext({
@@ -57,12 +62,14 @@ describe("desktop RPC handlers", () => {
         tmux: new FakeTmux(),
       });
       let mutations = 0;
-      const rpc = createDesktopRequestHandlers(context, () => mutations++);
+      const rpc = createDesktopRequestHandlers(context, {
+        onMutation: () => mutations++,
+      });
       try {
         const workspace = await rpc.workspaceCreate({ name: "Desktop Demo" });
         expect(workspace.ok).toBe(true);
         if (!workspace.ok) return;
-        const workspaceFingerprint = desktopDataFingerprint(context);
+        const workspaceVersion = await new ReadModel(context).version();
 
         const task = await rpc.taskCreate({
           workspace: workspace.data.id,
@@ -72,7 +79,9 @@ describe("desktop RPC handlers", () => {
         });
         expect(task.ok && task.data.status).toBe("todo");
         if (!task.ok) return;
-        expect(desktopDataFingerprint(context)).not.toBe(workspaceFingerprint);
+        expect(await new ReadModel(context).version()).not.toBe(
+          workspaceVersion,
+        );
 
         const progressed = await rpc.taskSetStatus({
           id: task.data.id,
@@ -139,7 +148,9 @@ describe("desktop RPC handlers", () => {
         tmux: new FakeTmux(),
       });
       let mutations = 0;
-      const rpc = createDesktopRequestHandlers(context, () => mutations++);
+      const rpc = createDesktopRequestHandlers(context, {
+        onMutation: () => mutations++,
+      });
       try {
         const response = await rpc.taskRemove({ id: "missing", force: true });
         expect(response).toEqual({
@@ -164,19 +175,13 @@ describe("desktop RPC handlers", () => {
         tmux: new FakeTmux(),
       });
       const calls: string[] = [];
-      const world = createDesktopRequestHandlers(
-        context,
-        undefined,
-        undefined,
-        "",
-        undefined,
-        undefined,
-        {
+      const world = createDesktopRequestHandlers(context, {
+        windows: {
           role: "world",
           openWorld: () => calls.push("open"),
           focusSession: (id) => calls.push(`focus ${id}`),
         },
-      );
+      });
       try {
         expect(await world.windowRole({})).toEqual({
           ok: true,
@@ -208,9 +213,11 @@ describe("desktop RPC handlers", () => {
         tmux: new FakeTmux(),
       });
       const opened: string[] = [];
-      const rpc = createDesktopRequestHandlers(context, undefined, (url) => {
-        opened.push(url);
-        return true;
+      const rpc = createDesktopRequestHandlers(context, {
+        openExternal: (url) => {
+          opened.push(url);
+          return true;
+        },
       });
       try {
         expect(
@@ -239,19 +246,12 @@ describe("desktop RPC handlers", () => {
         tmux: new FakeTmux(),
       });
       const copied: string[] = [];
-      const rpc = createDesktopRequestHandlers(
-        context,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        (text) => {
+      const rpc = createDesktopRequestHandlers(context, {
+        clipboardWrite: (text) => {
           copied.push(text);
           return true;
         },
-      );
+      });
       try {
         expect(await rpc.clipboardWrite({ text: "one line\nanother" })).toEqual(
           { ok: true, data: { written: true } },
@@ -409,12 +409,8 @@ describe("desktop RPC handlers", () => {
       });
       const decisions: string[] = [];
       let shown = 0;
-      const rpc = createDesktopRequestHandlers(
-        context,
-        () => {},
-        () => false,
-        "",
-        {
+      const rpc = createDesktopRequestHandlers(context, {
+        quit: {
           dialogShown: () => {
             shown += 1;
           },
@@ -422,7 +418,7 @@ describe("desktop RPC handlers", () => {
             decisions.push(choice);
           },
         },
-      );
+      });
       try {
         expect(await rpc.quitDialogShown({})).toEqual({
           ok: true,

@@ -7,8 +7,8 @@ import {
   channelName,
   DaedalusError,
   INSTALL_COMMANDS,
-  largeFiles,
   normalizeError,
+  ReadModel,
   saveAutoRestoreSessionsEnabled,
   saveAutoRebirthPercent,
   saveTrustSessionFoldersEnabled,
@@ -38,7 +38,6 @@ import type {
   AccountDto,
   AgentActivityDto,
   AppUpdateDto,
-  LargeFileDto,
   QuitChoice,
   AgentSessionDto,
   DesktopRpcSchema,
@@ -198,135 +197,51 @@ const workspaceContentDto = (
   worktrees: content.worktrees.map((item) => ({ ...item })),
 });
 
-const currentLargeFiles = (context: ApplicationContext): LargeFileDto[] =>
-  largeFiles(
-    context.repositories.listWorkspaces(),
-    context.teams.list().map((team) => team.lead),
-  ).map((file) => ({ ...file }));
-
+/** The read model's view, as the window and the phone receive it. */
 export async function desktopSnapshot(
-  context: ApplicationContext,
+  readModel: ReadModel,
 ): Promise<DesktopSnapshotDto> {
-  const [workspaces, tasks, agents, terminals, capabilities, telemetry] =
-    await Promise.all([
-      context.workspaces.listWithHealth(),
-      context.tasks.list({}),
-      context.agents.list({ includeArchived: true }),
-      context.terminals.list(),
-      context.agents.capabilities(),
-      context.telemetry.read(),
-    ]);
-  const references = context.tasks.references(tasks);
+  const view = await readModel.snapshot();
+  const { config, capabilities, accounts } = view.settings;
   return {
-    workspaces: workspaces.map(({ workspace, available }) =>
+    workspaces: view.workspaces.map(({ workspace, available }) =>
       workspaceDto(workspace, available),
     ),
-    tasks: tasks.map((task) => ({
+    tasks: view.tasks.map(({ task, references }) => ({
       ...taskDto(task),
-      references: (references.get(task.id) ?? []).map((item) => ({
-        ...item,
-      })),
+      references: references.map((item) => ({ ...item })),
     })),
-    agents: agents.map(agentDto),
-    terminals: terminals.map(integratedTerminalDto),
-    repositories: context.workspaceContent
-      .listRepositoryLibrary()
-      .map(repositoryLibraryDto),
-    ...telemetry,
-    sessionActivity: context.activity.list().map(agentActivityDto),
-    worktrees: context.workspaceContent
-      .listWorktrees()
-      .map((worktree) => ({ ...worktree })),
-    shipped: context.workspaceContent
-      .listShippedPullRequests()
-      .map((item) => ({ ...item })),
-    attention: context.activity.listAttention().map(sessionAttentionDto),
-    toasts: context.notifications.pending("toast").map(toastDto),
-    abilities: context.repositories.abilities.list().map(sessionAbilityDto),
-    teams: context.teams.list().map(teamDto),
-    largeFiles: currentLargeFiles(context),
-    routines: context.abilities
-      .holders("routines")
-      .map((ability) =>
-        routinesStatusDto(context.routineDelivery.status(ability)),
-      ),
-    routineReports: context.repositories.routines
-      .listReportsWithTasks()
-      .map((report) => ({ ...report })),
+    agents: view.agents.map(agentDto),
+    terminals: view.terminals.map(integratedTerminalDto),
+    repositories: view.repositories.map(repositoryLibraryDto),
+    ...view.telemetry,
+    sessionActivity: view.sessionActivity.map(agentActivityDto),
+    worktrees: view.worktrees.map((worktree) => ({ ...worktree })),
+    shipped: view.shipped.map((item) => ({ ...item })),
+    attention: view.attention.map(sessionAttentionDto),
+    toasts: view.toasts.map(toastDto),
+    abilities: view.abilities.map(sessionAbilityDto),
+    teams: view.teams.map(teamDto),
+    largeFiles: view.largeFiles.map((file) => ({ ...file })),
+    routines: view.routines.map(routinesStatusDto),
+    routineReports: view.routineReports.map((report) => ({ ...report })),
     settings: {
       version: packageJson.version,
-      channel: channelName(context.config.home),
-      home: context.config.home,
-      workspaceRoot: context.config.workspaceRoot,
-      databasePath: context.config.databasePath,
-      repositoryRoot: context.config.repositoryRoot,
-      workspaceInstructionFilesEnabled:
-        context.config.workspaceInstructionFilesEnabled,
-      autoRestoreSessionsEnabled: context.config.autoRestoreSessionsEnabled,
-      trustSessionFoldersEnabled: context.config.trustSessionFoldersEnabled,
-      autoRebirthPercent: context.config.autoRebirthPercent,
-      focusMode: context.config.focusMode,
+      channel: channelName(config.home),
+      home: config.home,
+      workspaceRoot: config.workspaceRoot,
+      databasePath: config.databasePath,
+      repositoryRoot: config.repositoryRoot,
+      workspaceInstructionFilesEnabled: config.workspaceInstructionFilesEnabled,
+      autoRestoreSessionsEnabled: config.autoRestoreSessionsEnabled,
+      trustSessionFoldersEnabled: config.trustSessionFoldersEnabled,
+      autoRebirthPercent: config.autoRebirthPercent,
+      focusMode: config.focusMode,
       ...capabilities,
-      accounts: context.accounts.list().map((item) => ({ ...item })),
+      accounts: accounts.map((item) => ({ ...item })),
     },
   };
 }
-
-export function desktopDataFingerprint(context: ApplicationContext): string {
-  return JSON.stringify({
-    workspaces: context.repositories.listWorkspaces(),
-    tasks: context.repositories.listTasks({}),
-    agents: context.repositories.listAgents(),
-    terminals: context.repositories.listIntegratedTerminals(),
-    workspaceRepositories: context.repositories.listWorkspaceRepositories(),
-    sessionWorktrees: context.repositories.listSessionWorktrees(),
-    repositoryLibrary: context.repositories.listRepositoryLibrary(),
-    // Activity and attention are the point of the indicators: a session that
-    // starts waiting on the user has to reach the window on the next tick,
-    // exactly like a session that starts or stops.
-    activity: context.repositories.listAgentActivity(),
-    // A journal or team file crossing its compact size changes a header. To
-    // the kilobyte, so each line a session appends does not reload the window.
-    largeFiles: currentLargeFiles(context).map(
-      (file) =>
-        `${file.kind}:${file.sessionId ?? file.workspaceId}:${Math.round(file.bytes / 1000)}`,
-    ),
-    attention: context.repositories.listSessionAttention(),
-    notifications: context.repositories.listPendingNotifications(),
-    // A run starting or ending, or a hold changing, changes what the
-    // session's bar says, so it reloads too.
-    abilities: context.repositories.abilities.list().map((ability) => ({
-      ability,
-      ...(ability.enabled && ability.ability === "routines"
-        ? {
-            status: fingerprintStatus(context.routineDelivery.status(ability)),
-            routines: context.repositories.routines.list(ability.id),
-            reports: context.repositories.routines.listReports(ability.id, {
-              states: ["open", "resolved"],
-            }),
-          }
-        : {}),
-    })),
-  });
-}
-
-/**
- * A routines status as the fingerprint sees it. Every keystroke moves the
- * quiet time, so the times are rounded to ten seconds: a reload per tick
- * while the user types would resend the whole snapshot for nothing.
- */
-const fingerprintStatus = (status: RoutinesStatus) => ({
-  ...status,
-  lastKeystrokeAt: null,
-  hold: status.hold
-    ? {
-        ...status.hold,
-        until: status.hold.until
-          ? Math.floor(Date.parse(status.hold.until) / 10_000)
-          : undefined,
-      }
-    : null,
-});
 
 const sessionAbilityDto = (ability: SessionAbility): SessionAbilityDto => ({
   id: ability.id,
@@ -539,17 +454,38 @@ const MAIN_WINDOW_ONLY: DesktopWindowHost = {
 /** A terminal copy past this is a runaway program, not a selection. */
 const MAX_CLIPBOARD_TEXT = 1024 * 1024;
 
+/**
+ * What the host lends a set of handlers. Every part is optional: where no host
+ * runs one, as in tests and for the phone, the handlers fall back to doing
+ * nothing or refusing.
+ */
+export interface DesktopHost {
+  /** Told after every mutation that succeeded, so the windows reload. */
+  onMutation(): void;
+  openExternal(url: string): boolean;
+  terminalEndpoint: string;
+  quit: DesktopQuitHost;
+  updates: DesktopUpdateHost;
+  windows: DesktopWindowHost;
+  clipboardWrite(text: string): boolean;
+  remote: DesktopRemoteHost;
+}
+
 export function createDesktopRequestHandlers(
   context: ApplicationContext,
-  onMutation: () => void = () => {},
-  openExternal: (url: string) => boolean = () => false,
-  terminalEndpoint = "",
-  quit: DesktopQuitHost = { dialogShown: () => {}, decide: async () => {} },
-  updates: DesktopUpdateHost = NO_UPDATES,
-  windows: DesktopWindowHost = MAIN_WINDOW_ONLY,
-  clipboardWrite: (text: string) => boolean = () => false,
-  remote: DesktopRemoteHost = NO_REMOTE,
+  host: Partial<DesktopHost> = {},
 ): DesktopRequestHandlers {
+  const {
+    onMutation = () => {},
+    openExternal = () => false,
+    terminalEndpoint = "",
+    quit = { dialogShown: () => {}, decide: async () => {} },
+    updates = NO_UPDATES,
+    windows = MAIN_WINDOW_ONLY,
+    clipboardWrite = () => false,
+    remote = NO_REMOTE,
+  } = host;
+  const readModel = new ReadModel(context);
   const mutate = async <T>(operation: () => T | Promise<T>) => {
     const response = await result(operation);
     if (response.ok) onMutation();
@@ -557,7 +493,7 @@ export function createDesktopRequestHandlers(
   };
 
   return {
-    snapshot: () => result(() => desktopSnapshot(context)),
+    snapshot: () => result(() => desktopSnapshot(readModel)),
     sessionUpdate: ({ sessionId, name, pinned, color, autoRebirthPercent }) =>
       mutate(async () => {
         if (name !== undefined) await context.agents.rename(sessionId, name);
