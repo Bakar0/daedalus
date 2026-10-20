@@ -36,6 +36,8 @@ async function runShim(
       PATH: process.env.PATH!,
       DAEDALUS_RUNNER_SOCKET: path,
       DAEDALUS_SESSION_ID: "sess-1",
+      DAEDALUS_RUNNER_TOKEN: "tok",
+      DAEDALUS_MAC_KEY: "key",
       SECRET_THING: "no",
     },
     stdin: new Blob([stdin]),
@@ -65,6 +67,9 @@ test("sends argv, DAEDALUS_ variables and stdin; prints the result and exits wit
   expect(run.seen.stdin).toBe('{"hook":1}');
   expect(run.seen.env.DAEDALUS_SESSION_ID).toBe("sess-1");
   expect(run.seen.env.SECRET_THING).toBeUndefined();
+  expect(run.seen.env.DAEDALUS_RUNNER_TOKEN).toBeUndefined();
+  expect(run.seen.env.DAEDALUS_MAC_KEY).toBeUndefined();
+  expect(Object.keys(run.seen.env)).toEqual(["DAEDALUS_SESSION_ID"]);
   expect(run.seen.cwd).toBe(".");
 });
 

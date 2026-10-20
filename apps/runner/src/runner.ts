@@ -1,4 +1,3 @@
-import { runCommand, TmuxPtyBridge, type TmuxClient } from "@daedalus/platform";
 import {
   decodePayload,
   decodeRelayFrame,
@@ -17,10 +16,15 @@ import {
   type SecureChannel,
   type Welcome,
 } from "@daedalus/remote-protocol";
+import type { SessionBackend, Terminal } from "./backend";
 import { RunnerError } from "./errors";
-import type { RunnerHandlers } from "./handlers";
 import { IdleTracker } from "./idle";
 import type { EventQueue } from "./queue";
+import {
+  MAC_FACING_METHODS,
+  type SessiondMethod,
+  type SessiondMethods,
+} from "./sessiond-protocol";
 
 export const OFFLINE_EXIT_CODE = 75;
 export const OFFLINE_MESSAGE = "Daedalus on the Mac is offline";
@@ -43,37 +47,18 @@ export type ConnectRelay = (
   callbacks: RelayCallbacks,
 ) => RelaySocket;
 
-export interface Terminal {
-  start(): Promise<void>;
-  write(data: string): void;
-  resize(cols: number, rows: number): void;
-  close(): void;
-}
-
-export type OpenTerminal = (
-  session: string,
-  size: { cols: number; rows: number },
-  onOutput: (output: Uint8Array) => void,
-) => Terminal;
-
-export const tmuxTerminals =
-  (socketName: string): OpenTerminal =>
-  (session, size, onOutput) =>
-    new TmuxPtyBridge(onOutput, { socketName, session }, size);
+export type { SessionBackend, Terminal } from "./backend";
 
 export interface RunnerOptions {
   gatewayUrl: string;
-  token: string;
+  /** Read on every connect and every sleep request: the token rotates on wake. */
+  readToken: () => string;
   workspaceId: string;
   macId: string;
   macKey: string;
   identity: DeviceIdentity;
-  handlers: RunnerHandlers;
+  backend: SessionBackend;
   queue: EventQueue;
-  tmux: TmuxClient;
-  /** Panes whose command ended, by session, with the exit status. */
-  deadPanes: () => Promise<Map<string, number | null>>;
-  openTerminal: OpenTerminal;
   connect: ConnectRelay;
   idleMinutes: number;
   /** Defaults to the global `fetch`. */
@@ -159,7 +144,15 @@ export class Runner {
     const url = new URL("/v1/connect", this.#o.gatewayUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     url.searchParams.set("runnerKey", this.#o.identity.publicKey);
-    const socket = this.#o.connect(url.toString(), this.#o.token, {
+    let token: string;
+    try {
+      token = this.#o.readToken();
+    } catch (error) {
+      this.#log(`cannot read the runner token: ${(error as Error).message}`);
+      this.#scheduleReconnect();
+      return;
+    }
+    const socket = this.#o.connect(url.toString(), token, {
       open: () => {
         this.#log("connected to the gateway");
         this.#retryDelay = this.#o.backoff?.initialMs ?? 1000;
@@ -328,29 +321,28 @@ export class Runner {
   }
 
   async #serve(id: number, method: string, params: unknown): Promise<void> {
-    const handler = Object.hasOwn(this.#o.handlers, method)
-      ? (
-          this.#o.handlers as unknown as Record<
-            string,
-            (p: unknown) => Promise<unknown>
-          >
-        )[method]
-      : undefined;
-    if (!handler) {
+    if (!MAC_FACING_METHODS.has(method)) {
       this.#send({ t: "err", id, code: "UNKNOWN_METHOD", message: method });
       return;
     }
     try {
-      const result = await handler(params);
+      const result = await this.#o.backend.call(
+        method as SessiondMethod,
+        params as never,
+      );
+      if (method === "host.start") {
+        const launch = params as { session: string; keepOnExit?: boolean };
+        this.watchSession(launch.session, launch.keepOnExit === true);
+      }
       this.#send({ t: "res", id, result });
     } catch (error) {
-      const code = error instanceof RunnerError ? error.code : "FAILED";
-      // The message can name a path or a tmux failure, never params, so it
-      // cannot carry a secret.
+      // The error is a RunnerError from `SessiondClient`, whose code and
+      // message are already checked. Params, which can hold secrets, are
+      // never part of it.
       this.#send({
         t: "err",
         id,
-        code,
+        code: error instanceof RunnerError ? error.code : "FAILED",
         message: error instanceof Error ? error.message : String(error),
       });
     }
@@ -376,19 +368,15 @@ export class Runner {
   }): Promise<void> {
     const { ch, session } = message;
     try {
-      if (!(await this.#o.tmux.hasSession(session))) {
-        this.#send({
-          t: "term.server",
-          ch,
-          message: { type: "status", status: "lost", agentId: session },
-        });
-        return;
-      }
-      const terminal = this.#o.openTerminal(
+      const terminal = await this.#o.backend.openTerminal(
         session,
         { cols: message.cols, rows: message.rows },
         (data) => this.#sendOutput(ch, data),
       );
+      if (!this.#channel) {
+        terminal.close();
+        return;
+      }
       this.#terminals.set(ch, terminal);
       this.#send({
         t: "term.server",
@@ -408,7 +396,10 @@ export class Runner {
       this.#send({
         t: "term.server",
         ch,
-        message: { type: "error", message: (error as Error).message },
+        message:
+          error instanceof RunnerError && error.code === "LOST"
+            ? { type: "status", status: "lost", agentId: session }
+            : { type: "error", message: (error as Error).message },
       });
     }
   }
@@ -488,10 +479,21 @@ export class Runner {
     let live: string[];
     let dead: Map<string, number | null>;
     try {
-      live = await this.#o.tmux.listSessions();
-      dead = await this.#o.deadPanes();
+      live = await this.#o.backend.call("host.listLive", null);
+      dead = new Map(
+        Object.entries(await this.#o.backend.call("deadPanes", null)),
+      );
+      live = Array.isArray(live)
+        ? live.filter((name) => typeof name === "string")
+        : [];
+      dead = new Map(
+        [...dead].filter(
+          ([, status]) => status === null || typeof status === "number",
+        ),
+      );
     } catch {
-      // tmux did not answer. That says nothing about the sessions.
+      // The session container did not answer. That says nothing about the
+      // sessions.
       return;
     }
     const liveSet = new Set(live);
@@ -504,7 +506,9 @@ export class Runner {
       this.#reportExit(session, exitCode);
       if (!this.#keep.has(session)) {
         this.#known.delete(session);
-        await this.#o.tmux.stop(session, true).catch(() => {});
+        await this.#o.backend
+          .call("host.stop", { session, force: true })
+          .catch(() => {});
       }
     }
     for (const session of [...this.#known]) {
@@ -537,7 +541,7 @@ export class Runner {
     try {
       const response = await (this.#o.fetch ?? fetch)(url, {
         method: "POST",
-        headers: { authorization: `Bearer ${this.#o.token}` },
+        headers: { authorization: `Bearer ${this.#o.readToken()}` },
       });
       this.#log(
         `asked the gateway to sleep this workspace: ${response.status}`,
@@ -546,36 +550,4 @@ export class Runner {
       this.#log(`sleep request failed: ${(error as Error).message}`);
     }
   }
-}
-
-/** Dead panes across the runner's tmux server: session name to exit status. */
-export async function deadPanes(
-  tmuxExecutable: string,
-  socketName = "daedalus",
-): Promise<Map<string, number | null>> {
-  const result = await runCommand(
-    tmuxExecutable,
-    [
-      "-L",
-      socketName,
-      "list-panes",
-      "-a",
-      "-F",
-      "#{session_name}\t#{pane_dead}\t#{pane_dead_status}",
-    ],
-    { timeoutMs: 10_000 },
-  );
-  const dead = new Map<string, number | null>();
-  if (result.exitCode !== 0) {
-    if (/no server running|error connecting to/i.test(result.stderr))
-      return dead;
-    throw new Error(result.stderr.trim() || "tmux list-panes failed");
-  }
-  for (const line of result.stdout.split("\n")) {
-    const [session, isDead, status] = line.split("\t");
-    if (!session || isDead !== "1") continue;
-    const code = Number.parseInt(status ?? "", 10);
-    dead.set(session, Number.isNaN(code) ? null : code);
-  }
-  return dead;
 }
