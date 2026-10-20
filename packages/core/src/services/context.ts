@@ -18,8 +18,9 @@ import { ActivityService } from "./activity";
 import { AbilityService } from "./abilities";
 import { findAccount } from "./account-homes";
 import { AccountService } from "./accounts";
-import { DeliveryGate } from "./delivery";
+import type { DeliveryGate } from "./delivery";
 import { RoutineDelivery } from "./routine-delivery";
+import { SessionChannel } from "./session-channel";
 import { RoutineReportService } from "./routine-reports";
 import { RoutineService } from "./routines";
 import { SecretService } from "./secrets";
@@ -76,6 +77,8 @@ export interface ApplicationContext {
   teams: TeamService;
   /** The routine clock; only the desktop host ticks it. */
   routineDelivery: RoutineDelivery;
+  /** How Daedalus hands a line to a running session it did not get from the user. */
+  sessionChannel: SessionChannel;
   /** Keystrokes per session, and the rule for typing into a session. */
   deliveryGate: DeliveryGate;
   /** Ends everything at once. Nothing else in the app reaches for it. */
@@ -98,7 +101,7 @@ export interface ApplicationContextOptions {
   canDrawToasts?: () => boolean;
   /** Injected so tests never write to a real session's inbox. */
   teamTransport?: TeamTransport;
-  /** Injected so tests stand in for a Claude session's inbox waiter. */
+  /** Injected so tests stand in for a Claude session's inbox pipe. */
   sessionInbox?: (session: AgentSession, line: string) => Promise<boolean>;
   /** Injected so staleness decay is testable without waiting ten minutes. */
   now?: () => Date;
@@ -171,6 +174,12 @@ export async function createApplicationContext(
     () => options.onRepositoriesChanged?.(),
     (folder) => terminals.closeInside(folder),
   );
+  const sessionChannel = new SessionChannel(
+    config,
+    tmux,
+    options.now,
+    options.sessionInbox,
+  );
   agents = new AgentService(
     repositories,
     workspaces,
@@ -179,6 +188,7 @@ export async function createApplicationContext(
     tmux,
     config,
     abilities,
+    sessionChannel,
     (sessionId) => {
       activity.forget(sessionId);
       // Archiving a running session stops it first, which ends it twice.
@@ -269,16 +279,14 @@ export async function createApplicationContext(
     notifications,
     options.now,
   );
-  const deliveryGate = new DeliveryGate(options.now);
   const routineDelivery = new RoutineDelivery(
     repositories,
     abilities,
     agents,
     routines,
     routineReports,
-    deliveryGate,
+    sessionChannel,
     options.now,
-    options.sessionInbox,
   );
   if (options.reconcile !== false) {
     // A clone only lives as long as the process running it, so anything still
@@ -317,7 +325,8 @@ export async function createApplicationContext(
     routineReports,
     teams: teams!,
     routineDelivery,
-    deliveryGate,
+    sessionChannel,
+    deliveryGate: sessionChannel.gate,
     shutdown: new ShutdownService(repositories, agents, terminals, tmux),
     tmux,
     // Watchers are kernel resources held outside the database, so they are

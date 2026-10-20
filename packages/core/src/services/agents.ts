@@ -1,4 +1,3 @@
-import { leaveInInbox, postToInbox, usesInbox } from "./session-inbox";
 import { readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
@@ -15,6 +14,7 @@ import {
   accountModelKey,
   resolveAutoRebirth,
   SESSION_COLORS,
+  type AgentActivityState,
   type AgentSession,
   type AutoRebirth,
   type SessionColor,
@@ -45,10 +45,11 @@ import {
   sessionLaunchModel,
 } from "./providers";
 import {
-  channelArtifactName,
-  skillLinkPaths,
-  type SkillProvider,
-} from "./skills";
+  installedSkill,
+  requireSkill,
+  type DeliveryResult,
+  type SessionChannel,
+} from "./session-channel";
 import type { AbilityService } from "./abilities";
 import {
   accountConfig,
@@ -78,9 +79,6 @@ const SESSION_RECOVERY_WINDOW_MS = 60_000;
 const SESSION_RECOVERY_UNIQUENESS_MS = 2_000;
 const PROVIDER_STARTUP_TIMEOUT_MS = 30_000;
 const PROVIDER_STARTUP_POLL_MS = 150;
-// How long Codex takes to turn a picked `$skill` mention into a chip before
-// a second Enter can submit it.
-const CODEX_MENTION_SETTLE_MS = 400;
 // How long a startup question must stay on screen before startup hands it to
 // the user rather than treating it as a frame on the way to the prompt.
 const STARTUP_QUESTION_SETTLE_MS = 2_000;
@@ -503,6 +501,8 @@ export class AgentService {
     private readonly tmux: TmuxClient,
     private readonly config: DaedalusConfig,
     private readonly abilities: AbilityService,
+    /** How Daedalus hands a rebirth request to a running session. */
+    private readonly channel: SessionChannel,
     /**
      * Called when a session is *over* — stopped, archived, removed. An
      * attention badge on a session that is over is the purest form of a badge
@@ -1187,48 +1187,53 @@ export class AgentService {
 
   /**
    * The one-click half of a rebirth: asks a running agent to write a note for
-   * its successor and then run `daedal agent continue` itself.
+   * its successor and then run `daedal agent continue` itself. A Claude
+   * session with an inbox gets it in its mailbox, so it arrives even
+   * mid-turn and never shows as something the user typed.
    */
   async requestRebirth(id: string): Promise<AgentSession> {
+    const outcome = await this.rebirth(id, { when: "now" });
+    if ("session" in outcome) return outcome.session;
+    // Nothing holds a line sent now but a stopped session or a missing skill.
+    throw new DaedalusError(
+      "CONFLICT",
+      "held" in outcome ? outcome.held.text : "The rebirth request was held",
+      { sessionId: id },
+    );
+  }
+
+  /**
+   * A rebirth request under the delivery rule, for the routines clock: it
+   * goes in only while the session waits at its prompt.
+   */
+  async requestRebirthAtPrompt(
+    id: string,
+    activity: AgentActivityState | undefined,
+  ): Promise<DeliveryResult> {
+    const outcome = await this.rebirth(id, { when: "at-prompt", activity });
+    return "session" in outcome ? { delivered: true } : outcome;
+  }
+
+  private async rebirth(
+    id: string,
+    options: { when: "now" | "at-prompt"; activity?: AgentActivityState },
+  ): Promise<
+    { session: AgentSession } | Exclude<DeliveryResult, { delivered: true }>
+  > {
     const agent = await this.requireContinuable(id);
-    if (usesInbox(agent)) {
-      // Left in the mailbox, so it arrives even mid-turn, and never shows
-      // as something the user typed.
-      const skill = await this.requireSkill(agent, REBIRTH_SKILL);
-      await leaveInInbox(
-        this.config,
-        agent.id,
-        `Daedalus: continue your work in a fresh session now. Run the ${skill} skill.`,
-      );
-    } else await this.invokeSkill(agent.id, REBIRTH_SKILL);
+    const skill = await requireSkill(this.config, agent, REBIRTH_SKILL);
+    const outcome = await this.channel.deliver(
+      agent,
+      `Daedalus: continue your work in a fresh session now. Run the ${skill} skill.`,
+      { ...options, skill: { id: REBIRTH_SKILL } },
+    );
+    if (!("delivered" in outcome)) return outcome;
     const requested = {
       ...agent,
       rebirthRequestedAt: new Date().toISOString(),
     };
     this.repositories.updateAgent(requested);
-    return requested;
-  }
-
-  /**
-   * Hands a line to a running Claude session through its inbox, without
-   * typing. False when the session has no inbox or is not waiting on it.
-   */
-  async postToInbox(id: string, line: string): Promise<boolean> {
-    const agent = await this.requireRunning(id);
-    if (!usesInbox(agent)) return false;
-    return postToInbox(this.config, agent.id, line);
-  }
-
-  /**
-   * Leaves a note in a running Claude session's inbox mailbox: it arrives
-   * now if the session waits at its prompt, else when its turn ends. False
-   * when the session has no inbox.
-   */
-  async leaveNote(id: string, line: string): Promise<boolean> {
-    const agent = await this.requireRunning(id);
-    if (!usesInbox(agent)) return false;
-    await leaveInInbox(this.config, agent.id, line);
-    return true;
+    return { session: requested };
   }
 
   /**
@@ -1240,74 +1245,12 @@ export class AgentService {
     provider: string | undefined,
   ): Promise<string | undefined> {
     if (provider !== "claude" && provider !== "codex") return undefined;
-    const skillName = await this.installedSkill(provider, REFINEMENT_SKILL);
+    const skillName = await installedSkill(
+      this.config,
+      provider,
+      REFINEMENT_SKILL,
+    );
     return skillName ? buildSkillInvocation(provider, skillName) : undefined;
-  }
-
-  /** The skill's installed name for the provider, if it is installed. */
-  private async installedSkill(
-    provider: SkillProvider,
-    skillId: string,
-  ): Promise<string | undefined> {
-    const skillName = channelArtifactName(this.config, skillId);
-    const installed = skillLinkPaths(this.config, skillName).find((link) =>
-      link.providers.includes(provider),
-    );
-    return installed && (await pathExists(join(installed.path, "SKILL.md")))
-      ? skillName
-      : undefined;
-  }
-
-  /** The skill's installed name, or `CONFLICT` when it is not installed. */
-  private async requireSkill(
-    agent: AgentSession,
-    skillId: string,
-  ): Promise<string> {
-    if (agent.provider !== "claude" && agent.provider !== "codex")
-      throw new DaedalusError(
-        "CONFLICT",
-        "Only Claude and Codex sessions can run Daedalus skills",
-      );
-    const skillName = await this.installedSkill(
-      agent.provider as SkillProvider,
-      skillId,
-    );
-    if (!skillName)
-      throw new DaedalusError(
-        "CONFLICT",
-        `The ${skillId} skill is not installed for ${agent.provider}. Turn it on in Settings, Skills, or with 'daedal skill enable ${skillId}'.`,
-      );
-    return skillName;
-  }
-
-  /**
-   * Types a Daedalus managed skill into a Claude or Codex session, with its
-   * arguments: `/name args` for Claude, `$name args` for Codex. Refuses with
-   * `CONFLICT` when the skill is not installed for the session's provider.
-   */
-  async invokeSkill(
-    id: string,
-    skillId: string,
-    args = "",
-  ): Promise<AgentSession> {
-    const agent = await this.requireRunning(id);
-    const skillName = await this.requireSkill(agent, skillId);
-    await this.send(
-      agent.id,
-      buildSkillInvocation(
-        agent.provider as "claude" | "codex",
-        skillName,
-        args,
-      ),
-    );
-    // In Codex, `$name` opens the skill mention popup, and the first Enter
-    // only picks the skill from it. The second one submits. On an empty
-    // composer an Enter does nothing, so this is safe if the popup changes.
-    if (agent.provider === "codex") {
-      await Bun.sleep(CODEX_MENTION_SETTLE_MS);
-      await this.tmux.sendKeys(agent.tmuxSession, ["Enter"]);
-    }
-    return agent;
   }
 
   /**
