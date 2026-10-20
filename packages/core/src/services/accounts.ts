@@ -22,13 +22,14 @@ import {
   type DaedalusConfig,
 } from "../config";
 import { DaedalusError } from "../errors";
-import type { IntegratedTerminal } from "../domain";
+import type { AgentSession, IntegratedTerminal, Workspace } from "../domain";
 import type { SqliteRepositories } from "../repositories";
 import type { IntegratedTerminalService } from "./integrated-terminals";
 import {
   accountConfig,
   accountDirectory,
   accountEnvironment,
+  accountName,
   accountProfile,
   DEFAULT_ACCOUNT,
   findAccount,
@@ -578,6 +579,103 @@ export class AccountService {
         `There is already a ${providerLabel(provider)} account named '${trimmed}'`,
       );
     return trimmed;
+  }
+
+  /**
+   * The account a session launches on: the one asked for, else its
+   * predecessor's when it carries on one on the same provider, else the
+   * workspace's default for that provider, else the provider's own. Null is
+   * the provider's own account.
+   *
+   * A workspace default whose profile was removed falls back to the default
+   * account, because removing a profile already clears those. A predecessor's
+   * account that is gone is refused instead: the conversation the session is
+   * meant to carry on lived in that folder.
+   *
+   * Then refuses an account its provider says is signed out, which would
+   * otherwise open a terminal that fails on its first turn. Only a definite
+   * "signed out" stops it: a provider too old to say, or one that did not
+   * answer, gets the benefit of the doubt.
+   */
+  async forLaunch(
+    provider: string,
+    input: {
+      /** An account by id or name; `default` or null for the provider's own. */
+      requested?: string | null;
+      /** The session this launch carries on, or the session itself on a resume. */
+      previous?: Pick<AgentSession, "provider" | "account">;
+      workspace: Pick<
+        Workspace,
+        "defaultClaudeAccount" | "defaultCodexAccount"
+      >;
+    },
+  ): Promise<string | null> {
+    if (provider !== "claude" && provider !== "codex") {
+      if (input.requested && input.requested !== DEFAULT_ACCOUNT)
+        throw new DaedalusError(
+          "VALIDATION",
+          "A custom command has no accounts; choose --provider to pick one",
+        );
+      return null;
+    }
+    const account = this.pickAccount(provider, input);
+    await this.requireSignedIn(provider, account);
+    return account;
+  }
+
+  private pickAccount(
+    provider: AccountProvider,
+    input: {
+      requested?: string | null;
+      previous?: Pick<AgentSession, "provider" | "account">;
+      workspace: Pick<
+        Workspace,
+        "defaultClaudeAccount" | "defaultCodexAccount"
+      >;
+    },
+  ): string | null {
+    if (input.requested !== undefined)
+      return findAccount(this.config, provider, input.requested)?.id ?? null;
+    const previous = input.previous;
+    if (previous && previous.provider === provider) {
+      if (
+        previous.account &&
+        !accountProfile(this.config, provider, previous.account)
+      )
+        throw new DaedalusError(
+          "CONFLICT",
+          `This session ran on the ${providerLabel(provider)} account '${previous.account}', which was removed`,
+        );
+      return previous.account;
+    }
+    const preferred =
+      provider === "claude"
+        ? input.workspace.defaultClaudeAccount
+        : input.workspace.defaultCodexAccount;
+    return accountProfile(this.config, provider, preferred) ? preferred : null;
+  }
+
+  private async requireSignedIn(
+    provider: AccountProvider,
+    account: string | null,
+  ): Promise<void> {
+    const signIn = await checkSignIn(this.config, provider, account);
+    if (signIn.state !== "signed-out") return;
+    const name = accountName(this.config, provider, account);
+    if (accountProfile(this.config, provider, account)?.kind === "api-key")
+      throw new DaedalusError(
+        "DEPENDENCY",
+        `The ${name} account has no API key. Set it in Settings → Agents, or pipe it to 'daedal account key claude ${JSON.stringify(name)}'.`,
+        { provider, account, reason: "signed-out" },
+      );
+    const reference = account
+      ? ` ${JSON.stringify(accountProfile(this.config, provider, account)?.name ?? account)}`
+      : "";
+    throw new DaedalusError(
+      "DEPENDENCY",
+      `${providerLabel(provider)} is not signed in on the ${name} account. Sign in from Settings → Agents, or run 'daedal account login ${provider}${reference}'.`,
+      { provider, account: account ?? DEFAULT_ACCOUNT, reason: "signed-out" },
+    );
   }
 
   /**
