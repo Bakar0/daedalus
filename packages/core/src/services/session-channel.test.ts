@@ -154,7 +154,7 @@ describe("session channel", () => {
   test("an inbox takes a line at the prompt, and typing does not hold it", async () => {
     await withChannel(async ({ context, tmux, inbox, reading, claude }) => {
       const session = await claude();
-      context.sessionChannel.gate.noteKeystroke(session.id);
+      context.deliveryGate.noteKeystroke(session.id);
       expect(context.sessionChannel.quietUntil(session)).toBeNull();
       expect(
         await context.sessionChannel.deliver(session, "run 7 is due", {
@@ -162,7 +162,7 @@ describe("session channel", () => {
           activity: reading("idle"),
           skill: RUN,
         }),
-      ).toEqual({ delivered: true });
+      ).toEqual({ kind: "delivered" });
       expect(inbox.lines).toEqual(["run 7 is due"]);
       expect(tmux.sent).toEqual([]);
     });
@@ -176,7 +176,10 @@ describe("session channel", () => {
           when: "at-prompt",
           activity: reading("working"),
         }),
-      ).toEqual({ held: { reason: "busy", text: "the session is busy" } });
+      ).toEqual({
+        kind: "held",
+        held: { reason: "busy", text: "the session is busy" },
+      });
       inbox.open = false;
       expect(
         await context.sessionChannel.deliver(session, "run 7 is due", {
@@ -184,6 +187,7 @@ describe("session channel", () => {
           activity: reading("idle"),
         }),
       ).toEqual({
+        kind: "held",
         held: {
           reason: "busy",
           text: "the session is not waiting at its prompt",
@@ -203,7 +207,7 @@ describe("session channel", () => {
             activity: reading("idle"),
             skill: RUN,
           });
-        channel.gate.noteKeystroke(session.id);
+        context.deliveryGate.noteKeystroke(session.id);
         expect(await deliver()).toMatchObject({ held: { reason: "typing" } });
         expect(channel.quietUntil(session)).not.toBeNull();
         advance(QUIET_AFTER_TYPING_MS);
@@ -212,7 +216,7 @@ describe("session channel", () => {
           held: { reason: "input-text" },
         });
         tmux.screen = IDLE_SCREEN;
-        expect(await deliver()).toEqual({ delivered: true });
+        expect(await deliver()).toEqual({ kind: "delivered" });
         expect(tmux.sent.map((item) => item.text)).toEqual([
           expect.stringMatching(/^\/daedalus-routine(-\w+)? 7$/),
         ]);
@@ -230,16 +234,16 @@ describe("session channel", () => {
             activity,
           });
         const before = reading("idle");
-        expect(await send(before)).toEqual({ delivered: true });
+        expect(await send(before)).toEqual({ kind: "delivered" });
         advance(16_000);
         // No reading since the last line: it may not have landed.
-        expect(await send(before)).toEqual({ settling: true });
-        expect(await send(reading("idle"))).toEqual({ delivered: true });
+        expect(await send(before)).toEqual({ kind: "settling" });
+        expect(await send(reading("idle"))).toEqual({ kind: "delivered" });
         advance(5_000);
-        expect(await send(reading("idle"))).toEqual({ settling: true });
+        expect(await send(reading("idle"))).toEqual({ kind: "settling" });
         // Without a reading for two minutes, the last line counts as lost.
         advance(2 * 60_000);
-        expect(await send(before)).toEqual({ delivered: true });
+        expect(await send(before)).toEqual({ kind: "delivered" });
         expect(tmux.sent).toHaveLength(3);
       },
     );
@@ -275,7 +279,7 @@ describe("session channel", () => {
             when: "next-prompt",
             activity: working,
           }),
-        ).toEqual({ delivered: true });
+        ).toEqual({ kind: "delivered" });
         expect(
           await Bun.file(
             `${inboxPath(context.config, session.id)}.mail`,
@@ -296,13 +300,13 @@ describe("session channel", () => {
   test("now types at once, whatever the gate says, into a running session", async () => {
     await withChannel(async ({ context, tmux, typedClaude }) => {
       const session = await typedClaude();
-      context.sessionChannel.gate.noteKeystroke(session.id);
+      context.deliveryGate.noteKeystroke(session.id);
       tmux.screen = IDLE_SCREEN.replace("❯ ", "❯ half a thought");
       expect(
         await context.sessionChannel.deliver(session, "hand off", {
           when: "now",
         }),
-      ).toEqual({ delivered: true });
+      ).toEqual({ kind: "delivered" });
       expect(tmux.sent.map((item) => item.text)).toEqual(["hand off"]);
       expect(
         await context.sessionChannel.deliver(
@@ -311,6 +315,7 @@ describe("session channel", () => {
           { when: "now" },
         ),
       ).toEqual({
+        kind: "held",
         held: { reason: "stopped", text: "the session is not running" },
       });
     });

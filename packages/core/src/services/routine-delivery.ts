@@ -163,7 +163,7 @@ export class RoutineDelivery {
         !ability.paused && next
           ? { routine: next.name, at: next.nextRunAt! }
           : null,
-      lastKeystrokeAt: this.channel.gate.lastKeystrokeAt(ability.sessionId),
+      lastKeystrokeAt: this.channel.lastKeystrokeAt(ability.sessionId),
       routines: this.repositories.routines.list(ability.id).length,
       openReports: open.length,
       openUrgentReports: open.filter((report) => report.urgent).length,
@@ -186,7 +186,7 @@ export class RoutineDelivery {
       ? this.routines.runNow(ability, name)
       : this.routines.waitingRuns(ability)[0];
     if (!run) throw new DaedalusError("CONFLICT", "No routine run is waiting");
-    this.channel.gate.skipQuietOnce(ability.sessionId);
+    this.channel.skipQuietOnce(ability.sessionId);
     return { ...run, ...(name ? {} : { alreadyQueued: true }) };
   }
 
@@ -259,8 +259,8 @@ export class RoutineDelivery {
         skill: { id: ROUTINE_RUN_SKILL, args: String(next.id) },
       },
     );
-    if ("settling" in outcome) return;
-    if ("held" in outcome) return this.hold(ability, outcome.held);
+    if (outcome.kind === "settling") return;
+    if (outcome.kind === "held") return this.hold(ability, outcome.held);
     this.hold(ability, null);
     result.delivered.push(this.routines.markDelivered(next, session.id));
   }
@@ -279,23 +279,26 @@ export class RoutineDelivery {
     input: RoutineTickInput,
   ): Promise<void> {
     const now = this.now().getTime();
-    this.hold(ability, {
+    const waiting = delivered.length > 0 && now - drain.since < DRAIN_LIMIT_MS;
+    const rebirth: DeliveryHold = {
       reason: "rebirth",
-      text:
-        delivered.length && now - drain.since < DRAIN_LIMIT_MS
-          ? "waiting for runs in flight before a rebirth"
-          : "the session is being reborn",
-    });
+      text: waiting
+        ? "waiting for runs in flight before a rebirth"
+        : "the session is being reborn",
+    };
     if (session.rebirthRequestedAt) {
+      this.hold(ability, rebirth);
       if (now - Date.parse(session.rebirthRequestedAt) >= REBIRTH_LIMIT_MS)
         await this.agents.continueSession({ id: session.id });
       return;
     }
-    if (delivered.length && now - drain.since < DRAIN_LIMIT_MS) return;
-    await this.agents.requestRebirthAtPrompt(
-      session.id,
+    if (waiting) return this.hold(ability, rebirth);
+    const outcome = await this.agents.requestRebirthAtPrompt(
+      session,
       input.activity(session.id),
     );
+    // Why the rebirth request is not going in, when the gate holds it.
+    this.hold(ability, outcome.kind === "held" ? outcome.held : rebirth);
   }
 
   /**
@@ -315,7 +318,7 @@ export class RoutineDelivery {
       when: "next-prompt",
       activity: input.activity(session.id),
     });
-    if (!("delivered" in outcome)) return false;
+    if (outcome.kind !== "delivered") return false;
     this.abilities.noteDelivered(row, note);
     return true;
   }

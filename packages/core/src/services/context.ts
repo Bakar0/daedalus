@@ -18,7 +18,7 @@ import { ActivityService } from "./activity";
 import { AbilityService } from "./abilities";
 import { findAccount } from "./account-homes";
 import { AccountService } from "./accounts";
-import type { DeliveryGate } from "./delivery";
+import { DeliveryGate } from "./delivery";
 import { RoutineDelivery } from "./routine-delivery";
 import { SessionChannel } from "./session-channel";
 import { RoutineReportService } from "./routine-reports";
@@ -174,9 +174,11 @@ export async function createApplicationContext(
     () => options.onRepositoriesChanged?.(),
     (folder) => terminals.closeInside(folder),
   );
+  const deliveryGate = new DeliveryGate(options.now);
   const sessionChannel = new SessionChannel(
     config,
     tmux,
+    deliveryGate,
     options.now,
     options.sessionInbox,
   );
@@ -326,7 +328,7 @@ export async function createApplicationContext(
     teams: teams!,
     routineDelivery,
     sessionChannel,
-    deliveryGate: sessionChannel.gate,
+    deliveryGate,
     shutdown: new ShutdownService(repositories, agents, terminals, tmux),
     tmux,
     // Watchers are kernel resources held outside the database, so they are

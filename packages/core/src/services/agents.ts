@@ -44,12 +44,8 @@ import {
   resolveProvider,
   sessionLaunchModel,
 } from "./providers";
-import {
-  installedSkill,
-  requireSkill,
-  type DeliveryResult,
-  type SessionChannel,
-} from "./session-channel";
+import type { DeliveryResult, SessionChannel } from "./session-channel";
+import { installedSkill, requireSkill } from "./skills";
 import type { AbilityService } from "./abilities";
 import {
   accountConfig,
@@ -1192,48 +1188,58 @@ export class AgentService {
    * mid-turn and never shows as something the user typed.
    */
   async requestRebirth(id: string): Promise<AgentSession> {
-    const outcome = await this.rebirth(id, { when: "now" });
-    if ("session" in outcome) return outcome.session;
-    // Nothing holds a line sent now but a stopped session or a missing skill.
-    throw new DaedalusError(
-      "CONFLICT",
-      "held" in outcome ? outcome.held.text : "The rebirth request was held",
-      { sessionId: id },
+    const agent = await this.requireContinuable(id);
+    const outcome = await this.channel.deliver(
+      agent,
+      () => this.rebirthLine(agent),
+      { when: "now", skill: { id: REBIRTH_SKILL } },
     );
+    if (outcome.kind === "held")
+      throw new DaedalusError(
+        "CONFLICT",
+        outcome.held.reason === "stopped"
+          ? `Agent session '${id}' is not running`
+          : outcome.held.text,
+      );
+    return this.markRebirthRequested(agent);
   }
 
   /**
    * A rebirth request under the delivery rule, for the routines clock: it
-   * goes in only while the session waits at its prompt.
+   * goes in only while the session waits at its prompt, and an inbox keeps
+   * it in the mailbox so it is never lost.
    */
   async requestRebirthAtPrompt(
-    id: string,
+    session: AgentSession,
     activity: AgentActivityState | undefined,
   ): Promise<DeliveryResult> {
-    const outcome = await this.rebirth(id, { when: "at-prompt", activity });
-    return "session" in outcome ? { delivered: true } : outcome;
+    const outcome = await this.channel.deliver(
+      session,
+      async () => this.rebirthLine(await this.requireContinuable(session.id)),
+      {
+        when: "at-prompt",
+        activity,
+        skill: { id: REBIRTH_SKILL },
+        mustArrive: true,
+      },
+    );
+    if (outcome.kind === "delivered") this.markRebirthRequested(session);
+    return outcome;
   }
 
-  private async rebirth(
-    id: string,
-    options: { when: "now" | "at-prompt"; activity?: AgentActivityState },
-  ): Promise<
-    { session: AgentSession } | Exclude<DeliveryResult, { delivered: true }>
-  > {
-    const agent = await this.requireContinuable(id);
+  /** The rebirth request an inbox takes; it needs the skill installed. */
+  private async rebirthLine(agent: AgentSession): Promise<string> {
     const skill = await requireSkill(this.config, agent, REBIRTH_SKILL);
-    const outcome = await this.channel.deliver(
-      agent,
-      `Daedalus: continue your work in a fresh session now. Run the ${skill} skill.`,
-      { ...options, skill: { id: REBIRTH_SKILL } },
-    );
-    if (!("delivered" in outcome)) return outcome;
+    return `Daedalus: continue your work in a fresh session now. Run the ${skill} skill.`;
+  }
+
+  private markRebirthRequested(agent: AgentSession): AgentSession {
     const requested = {
       ...agent,
       rebirthRequestedAt: new Date().toISOString(),
     };
     this.repositories.updateAgent(requested);
-    return { session: requested };
+    return requested;
   }
 
   /**

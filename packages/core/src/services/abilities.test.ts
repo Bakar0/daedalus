@@ -901,6 +901,30 @@ describe("routine delivery", () => {
     });
   });
 
+  test("a drain leaves the rebirth in an inbox's mailbox when nothing reads the pipe", async () => {
+    await withAbilities(async (harness) => {
+      const { context, tmux, inbox } = harness;
+      const { session, ability } = await argus(harness);
+      context.routines.add(ability, { text: routineText("ci-health") });
+      await tick(harness);
+      const [inFlight] = context.routines.deliveredRuns(ability);
+      context.routines.start(ability, inFlight!.id);
+      await context.routines.done(ability, inFlight!.id, "quiet", "ok");
+      // At its prompt by every reading, but its waiter is not reading: a
+      // turn interrupted with Esc fires no Stop hook.
+      inbox.open = false;
+      await tick(harness, idle(harness, { contextPercent: () => 72 }));
+      const mailbox = Bun.file(`${inboxPath(context.config, session.id)}.mail`);
+      expect(await mailbox.text()).toMatch(
+        /^Daedalus: continue your work in a fresh session now\. Run the daedalus-rebirth(-\w+)? skill\.\n$/,
+      );
+      expect(
+        context.repositories.findAgent(session.id)?.rebirthRequestedAt,
+      ).not.toBeNull();
+      expect(tmux.sent).toEqual([]);
+    });
+  });
+
   test("a paused ability queues nothing and fires once on resume", async () => {
     await withAbilities(async (harness) => {
       const { context, tmux } = harness;

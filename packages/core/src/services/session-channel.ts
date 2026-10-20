@@ -1,16 +1,11 @@
-import { join } from "node:path";
-import { pathExists, type TmuxClient } from "@daedalus/platform";
+import type { TmuxClient } from "@daedalus/platform";
 import type { DaedalusConfig } from "../config";
 import type { AgentActivityState, AgentSession } from "../domain";
 import { DaedalusError } from "../errors";
-import { DeliveryGate, type DeliveryHold } from "./delivery";
+import type { DeliveryGate, DeliveryHold } from "./delivery";
 import { buildSkillInvocation } from "./providers";
 import { leaveInInbox, postToInbox, usesInbox } from "./session-inbox";
-import {
-  channelArtifactName,
-  skillLinkPaths,
-  type SkillProvider,
-} from "./skills";
+import { requireSkill } from "./skills";
 
 /** Between two lines delivered into one session, at least this long. */
 const DELIVERY_GAP_MS = 15_000;
@@ -31,7 +26,8 @@ const CODEX_MENTION_SETTLE_MS = 400;
  * - `now`: the user asked for it, so nothing holds it. An inbox takes it in
  *   its mailbox, which arrives mid-turn; otherwise it is typed at once.
  * - `at-prompt`: only while the session waits at its prompt, under the
- *   delivery gate. An inbox takes it only while its waiter is reading.
+ *   delivery gate. An inbox takes it only while its waiter is reading,
+ *   unless it must arrive.
  * - `next-prompt`: an inbox takes it in its mailbox at once, and it arrives
  *   when the session is next at its prompt. Typed, it waits like `at-prompt`.
  */
@@ -46,6 +42,11 @@ export interface DeliveryOptions {
    * inbox still takes the line, which should name the skill.
    */
   skill?: { id: string; args?: string };
+  /**
+   * For `at-prompt`: once the gate lets it through, an inbox keeps the line
+   * in its mailbox even if its waiter is not reading, so it is never lost.
+   */
+  mustArrive?: boolean;
 }
 
 /**
@@ -54,9 +55,25 @@ export interface DeliveryOptions {
  * - `settling`: the last line has not landed yet; nothing new to say.
  */
 export type DeliveryResult =
-  { delivered: true } | { held: DeliveryHold } | { settling: true };
+  | { kind: "delivered" }
+  | { kind: "held"; held: DeliveryHold }
+  | { kind: "settling" };
 
-const DELIVERED = { delivered: true } as const;
+/** A line sent `now` is never left to settle. */
+export type ImmediateDeliveryResult = Exclude<
+  DeliveryResult,
+  { kind: "settling" }
+>;
+
+/**
+ * The line, or how to make it once it may go in, so the checks it needs run
+ * only then. A typed skill still resolves it, for those checks.
+ */
+export type DeliveryLine = string | (() => Promise<string>);
+
+const DELIVERED = { kind: "delivered" } as const;
+
+const held = (hold: DeliveryHold) => ({ kind: "held", held: hold }) as const;
 
 /**
  * Every line Daedalus hands to a running session without the user sending
@@ -66,14 +83,14 @@ const DELIVERED = { delivered: true } as const;
  * say what to send and when, and get back whether it went in.
  */
 export class SessionChannel {
-  /** Keystrokes per session, and the rule for typing into one. */
-  readonly gate: DeliveryGate;
   /** When a line last went in through the gate, per session. */
   private readonly lastDelivered = new Map<string, number>();
 
   constructor(
     private readonly config: DaedalusConfig,
     private readonly tmux: TmuxClient,
+    /** Keystrokes per session, and the rule for typing into one. */
+    private readonly gate: DeliveryGate,
     private readonly now: () => Date = () => new Date(),
     /** Hands a line to a session's inbox pipe; injected so tests need no pipe. */
     private readonly post: (
@@ -81,41 +98,49 @@ export class SessionChannel {
       line: string,
     ) => Promise<boolean> = (session, line) =>
       postToInbox(config, session.id, line),
-  ) {
-    this.gate = new DeliveryGate(now);
-  }
+  ) {}
 
+  deliver(
+    session: AgentSession,
+    line: DeliveryLine,
+    options: DeliveryOptions & { when: "now" },
+  ): Promise<ImmediateDeliveryResult>;
+  deliver(
+    session: AgentSession,
+    line: DeliveryLine,
+    options: DeliveryOptions,
+  ): Promise<DeliveryResult>;
   async deliver(
     session: AgentSession,
-    line: string,
+    line: DeliveryLine,
     options: DeliveryOptions,
   ): Promise<DeliveryResult> {
     const inbox = usesInbox(session);
     if (inbox && options.when !== "at-prompt") {
-      await leaveInInbox(this.config, session.id, line);
+      await leaveInInbox(this.config, session.id, await resolve(line));
       return DELIVERED;
     }
     if (options.when === "now") return this.type(session, line, options.skill);
     const { activity } = options;
-    if (!this.settled(session.id, activity)) return { settling: true };
+    if (!this.settled(session.id, activity)) return { kind: "settling" };
     const screen = await this.tmux
       .capture(session.tmuxSession, { styled: true })
       .catch(() => "");
     const hold = this.gate.check({ session, activity, screen, untyped: inbox });
-    if (hold) return { held: hold };
-    if (inbox) {
+    if (hold) return held(hold);
+    if (inbox && options.mustArrive) {
+      await leaveInInbox(this.config, session.id, await resolve(line));
+    } else if (inbox) {
       // Claude wakes with this as a system reminder: nothing is typed, so
       // it never shows as the user's message.
-      if (!(await this.post(session, line)))
-        return {
-          held: {
-            reason: "busy",
-            text: "the session is not waiting at its prompt",
-          },
-        };
+      if (!(await this.post(session, await resolve(line))))
+        return held({
+          reason: "busy",
+          text: "the session is not waiting at its prompt",
+        });
     } else {
       const typed = await this.type(session, line, options.skill);
-      if (!("delivered" in typed)) return typed;
+      if (typed.kind !== "delivered") return typed;
     }
     this.lastDelivered.set(session.id, this.now().getTime());
     this.gate.delivered(session.id);
@@ -128,6 +153,15 @@ export class SessionChannel {
    */
   quietUntil(session: AgentSession): Date | null {
     return usesInbox(session) ? null : this.gate.quietUntil(session.id);
+  }
+
+  lastKeystrokeAt(sessionId: string): string | null {
+    return this.gate.lastKeystrokeAt(sessionId);
+  }
+
+  /** Run now: the next line skips the quiet time, and nothing else. */
+  skipQuietOnce(sessionId: string): void {
+    this.gate.skipQuietOnce(sessionId);
   }
 
   /**
@@ -153,15 +187,14 @@ export class SessionChannel {
    */
   private async type(
     session: AgentSession,
-    line: string,
+    line: DeliveryLine,
     skill: DeliveryOptions["skill"],
-  ): Promise<DeliveryResult> {
+  ): Promise<ImmediateDeliveryResult> {
     if (session.status !== "running")
-      return {
-        held: { reason: "stopped", text: "the session is not running" },
-      };
+      return held({ reason: "stopped", text: "the session is not running" });
+    const text = await resolve(line);
     if (!skill) {
-      await this.tmux.send(session.tmuxSession, line);
+      await this.tmux.send(session.tmuxSession, text);
       return DELIVERED;
     }
     let skillName: string;
@@ -169,7 +202,7 @@ export class SessionChannel {
       skillName = await requireSkill(this.config, session, skill.id);
     } catch (error) {
       if (error instanceof DaedalusError && error.code === "CONFLICT")
-        return { held: { reason: "skill-missing", text: error.message } };
+        return held({ reason: "skill-missing", text: error.message });
       throw error;
     }
     const provider = session.provider as "claude" | "codex";
@@ -188,37 +221,5 @@ export class SessionChannel {
   }
 }
 
-/** The skill's installed name for the provider, if it is installed. */
-export async function installedSkill(
-  config: DaedalusConfig,
-  provider: SkillProvider,
-  skillId: string,
-): Promise<string | undefined> {
-  const skillName = channelArtifactName(config, skillId);
-  const installed = skillLinkPaths(config, skillName).find((link) =>
-    link.providers.includes(provider),
-  );
-  return installed && (await pathExists(join(installed.path, "SKILL.md")))
-    ? skillName
-    : undefined;
-}
-
-/** The skill's installed name, or `CONFLICT` when it is not installed. */
-export async function requireSkill(
-  config: DaedalusConfig,
-  session: AgentSession,
-  skillId: string,
-): Promise<string> {
-  if (session.provider !== "claude" && session.provider !== "codex")
-    throw new DaedalusError(
-      "CONFLICT",
-      "Only Claude and Codex sessions can run Daedalus skills",
-    );
-  const skillName = await installedSkill(config, session.provider, skillId);
-  if (!skillName)
-    throw new DaedalusError(
-      "CONFLICT",
-      `The ${skillId} skill is not installed for ${session.provider}. Turn it on in Settings, Skills, or with 'daedal skill enable ${skillId}'.`,
-    );
-  return skillName;
-}
+const resolve = (line: DeliveryLine): Promise<string> =>
+  typeof line === "string" ? Promise.resolve(line) : line();
