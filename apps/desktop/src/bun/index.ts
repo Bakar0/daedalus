@@ -12,7 +12,6 @@ import Electrobun, {
 import {
   channelHome,
   createApplicationContext,
-  sweepProviderActivity,
   WORKSPACE_FILES_CHANGED,
   type WorkspaceFilesChanged,
 } from "@daedalus/core";
@@ -746,13 +745,7 @@ setInterval(async () => {
     // cheap — the rollout read is gated on file mtime and decay only touches
     // rows that are already too old to believe — and neither deserves a timer
     // of its own.
-    await sweepProviderActivity({
-      config: context.config,
-      repositories: context.repositories,
-      activity: context.activity,
-      tmux: context.tmux,
-    }).catch(() => undefined);
-    await context.activity.decay().catch(() => undefined);
+    await context.activity.refresh();
     // Automatic rebirth rides the same tick. Telemetry is cached for five
     // seconds, so this is a map lookup on most ticks.
     await context.telemetry
