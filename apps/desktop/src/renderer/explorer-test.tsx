@@ -260,6 +260,7 @@ createRoot(document.getElementById("root")!).render(
       injectedClient={client}
       initialSnapshot={snapshot}
       initialWorkspaceView="workspace"
+      initialPanelTab="files"
       initialWorkspaceContent={initial.data}
     />
   </StrictMode>,

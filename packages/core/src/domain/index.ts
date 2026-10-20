@@ -378,6 +378,14 @@ export interface WorkspaceFile {
   format: "markdown" | "text";
 }
 
+/** An image in the workspace, for the viewer: its bytes as base64. */
+export interface WorkspaceImage {
+  name: string;
+  path: string;
+  mimeType: string;
+  base64: string;
+}
+
 export interface WorkspaceContent {
   workspaceId: UUID;
   brief: string;

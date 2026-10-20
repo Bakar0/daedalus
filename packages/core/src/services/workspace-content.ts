@@ -49,6 +49,7 @@ import type {
   Workspace,
   WorkspaceContent,
   WorkspaceFile,
+  WorkspaceImage,
   WorkspaceFileEntry,
   WorkspaceRepository,
   WorktreeChanges,
@@ -240,6 +241,20 @@ Workspace context:
 
 const SAFE_SEGMENT = /[^a-z0-9]+/g;
 const MAX_VIEWABLE_FILE_BYTES = 1024 * 1024;
+const MAX_VIEWABLE_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_IMPORTED_FILE_BYTES = 50 * 1024 * 1024;
+/** The image types the viewer shows, by extension. */
+const IMAGE_MIME_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".bmp": "image/bmp",
+  ".ico": "image/x-icon",
+  ".avif": "image/avif",
+};
 
 /**
  * Top-level folders Daedalus creates and keeps pointing at.
@@ -3079,6 +3094,44 @@ export class WorkspaceContentService {
     };
   }
 
+  /** An image's bytes for the viewer, under the same path rules as a file. */
+  async readImage(
+    workspaceReference: string,
+    requestedPath: string,
+  ): Promise<WorkspaceImage> {
+    const workspace = await this.workspaces.get(workspaceReference);
+    const { target, relativePath } = await this.resolveVisiblePath(
+      workspace,
+      requestedPath,
+    );
+    const mimeType = IMAGE_MIME_TYPES[extname(relativePath).toLowerCase()];
+    if (!mimeType)
+      throw new DaedalusError(
+        "VALIDATION",
+        `'${requestedPath}' is not an image the viewer shows`,
+      );
+    const targetStat = await lstat(target);
+    if (targetStat.isSymbolicLink())
+      throw new DaedalusError(
+        "VALIDATION",
+        "Symbolic links cannot be opened in the workspace viewer",
+      );
+    if (!targetStat.isFile())
+      throw new DaedalusError("VALIDATION", `'${requestedPath}' is not a file`);
+    if (targetStat.size > MAX_VIEWABLE_IMAGE_BYTES)
+      throw new DaedalusError(
+        "VALIDATION",
+        "Images larger than 20 MB cannot be opened in the workspace viewer",
+      );
+    const bytes = Buffer.from(await Bun.file(target).arrayBuffer());
+    return {
+      name: basename(relativePath),
+      path: relativePath,
+      mimeType,
+      base64: bytes.toString("base64"),
+    };
+  }
+
   async writeFile(input: {
     workspace: string;
     path: string;
@@ -3165,6 +3218,35 @@ export class WorkspaceContentService {
       throw error;
     }
     return this.describeEntry(workspace.id, target, path);
+  }
+
+  /**
+   * Copies a file in from outside the workspace, such as one dropped from
+   * Finder: any bytes, text or not, under the same rules as a new entry. An
+   * existing name is a conflict, never an overwrite.
+   */
+  async importFile(input: {
+    workspace: string;
+    parentPath?: string;
+    name: string;
+    base64: string;
+  }): Promise<WorkspaceFileEntry> {
+    const bytes = Buffer.from(input.base64, "base64");
+    if (bytes.byteLength > MAX_IMPORTED_FILE_BYTES)
+      throw new DaedalusError(
+        "VALIDATION",
+        "Files larger than 50 MB cannot be copied into the workspace",
+      );
+    const entry = await this.createEntry({
+      workspace: input.workspace,
+      parentPath: input.parentPath,
+      name: input.name,
+      kind: "file",
+    });
+    const workspace = await this.workspaces.getActive(input.workspace);
+    const { target } = await this.resolveMutablePath(workspace, entry.path);
+    await Bun.write(target, bytes);
+    return this.describeEntry(workspace.id, target, entry.path);
   }
 
   /**

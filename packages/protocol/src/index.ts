@@ -372,6 +372,13 @@ export interface WorkspaceFileDto {
   format: "markdown" | "text";
 }
 
+export interface WorkspaceImageDto {
+  name: string;
+  path: string;
+  mimeType: string;
+  base64: string;
+}
+
 export interface ProviderAvailabilityDto {
   name: string;
   executable: string;
@@ -1205,6 +1212,10 @@ export interface DesktopRpcSchema {
         { workspace: string; path: string },
         WorkspaceFileDto
       >;
+      workspaceImageRead: Request<
+        { workspace: string; path: string },
+        WorkspaceImageDto
+      >;
       workspaceFileWrite: Request<
         {
           workspace: string;
@@ -1213,6 +1224,15 @@ export interface DesktopRpcSchema {
           expectedContent: string;
         },
         WorkspaceFileDto
+      >;
+      workspaceFileImport: Request<
+        {
+          workspace: string;
+          parentPath?: string;
+          name: string;
+          base64: string;
+        },
+        WorkspaceFileEntryDto
       >;
       workspaceEntryCreate: Request<
         {

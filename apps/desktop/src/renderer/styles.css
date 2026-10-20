@@ -104,27 +104,6 @@ button:disabled {
   position: relative;
   backdrop-filter: blur(20px);
 }
-.app-mode-switcher {
-  background: var(--raised);
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  display: flex;
-  left: 50%;
-  padding: 3px;
-  position: absolute;
-  transform: translateX(-50%);
-}
-.app-mode-switcher button {
-  background: transparent !important;
-  color: var(--muted) !important;
-  min-width: 78px;
-  padding: 6px 13px !important;
-}
-.app-mode-switcher button.active {
-  background: var(--elevated) !important;
-  box-shadow: 0 2px 9px rgb(0 0 0 / 0.2);
-  color: var(--text) !important;
-}
 .app[data-theme="light"] .topbar {
   background: rgb(244 247 252 / 0.72);
 }
@@ -542,46 +521,6 @@ button:not(
   background: linear-gradient(145deg, #e5edfa, #d7e2f4);
   color: #2d548a;
 }
-/* The row above the workspaces: every workspace at once (#35). One line,
-   quieter than a workspace card, with a rule under it where the list begins.
-   It is not in the reorder list. */
-.all-workspaces-card {
-  border-bottom: 1px solid var(--line);
-  border-radius: 7px 7px 0 0;
-  margin-bottom: 6px;
-  padding-bottom: 4px;
-}
-.all-workspaces-item {
-  gap: 8px;
-  padding: 5px 8px;
-}
-.all-workspaces-item .workspace-card-name {
-  flex: 1;
-  font-size: 11px;
-  font-weight: 560;
-}
-.all-workspaces-icon {
-  color: var(--muted);
-  display: flex;
-  flex: 0 0 auto;
-}
-.all-workspaces-icon svg {
-  height: 13px;
-  width: 13px;
-}
-/* The key to the global secrets, always shown. */
-.all-workspaces-card {
-  align-items: center;
-  display: flex;
-}
-.all-workspaces-card > .all-workspaces-item {
-  flex: 1;
-  min-width: 0;
-}
-.all-workspaces-card.selected .all-workspaces-icon,
-.all-workspaces-card.selected .workspace-card-name {
-  color: inherit;
-}
 .workspace-card-actions {
   display: flex;
   flex: 0 0 30px;
@@ -746,32 +685,15 @@ button:not(
   padding: 2px 10px 6px;
 }
 
-/* The row under All workspaces; its icon box is as wide as a card's arrow,
-   so the two line up. */
-.workspace-fold-all {
-  align-items: center;
-  align-self: flex-start;
-  border: 0 !important;
-  color: var(--muted);
-  display: flex;
-  font-size: 10px !important;
-  gap: 2px;
-  height: 20px;
-  margin: 0 0 2px;
-  padding: 0 6px 0 0 !important;
-}
-.workspace-fold-all:hover {
-  color: var(--secondary);
-}
+/* Folds or unfolds every workspace's session list, from the heading. */
 .workspace-fold-all svg {
-  flex: 0 0 18px;
   fill: none;
-  height: 12px;
+  height: 14px;
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 1.5;
-  width: 18px;
+  width: 14px;
 }
 .workspace-sessions {
   margin: 3px 0 4px 15px;
@@ -1311,18 +1233,6 @@ button:not(
   }
 }
 
-.workspace-attention-badge {
-  background: rgb(255 130 130 / 0.16);
-  border: 1px solid rgb(255 130 130 / 0.45);
-  border-radius: 999px;
-  color: #ff8987;
-  font-size: 10px;
-  font-weight: 650;
-  margin-left: 6px;
-  padding: 1px 6px;
-  white-space: nowrap;
-}
-
 .session-status-label {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -1383,23 +1293,13 @@ button:not(
   pointer-events: none;
   position: fixed;
   right: 16px;
-  /* Aligned with the app header, not with the content below it. The header's
-     right side holds nothing but a transient "Working…", so the deck floats
-     over static chrome instead of over the thing being read — the same reason
-     the deck collapses at all. The brand sits left and the mode switcher is
-     centred, so neither is covered. */
+  /* Aligned with the tab strips at the top of the window, over the side
+     panel's, whose right end is empty: the deck floats over static chrome
+     instead of over the thing being read, the same reason it collapses. */
   top: 10px;
   transition: height 400ms cubic-bezier(0.21, 1.02, 0.73, 1);
   width: 348px;
   z-index: 60;
-}
-/* The mode switcher is centred, so a narrow enough window brings it under a
-   right-aligned deck. Covering navigation is worse than covering a paragraph,
-   so below that width the deck drops back under the header. */
-@media (max-width: 1000px) {
-  .toast-stack {
-    top: 68px;
-  }
 }
 .toast {
   align-items: flex-start;
@@ -1829,7 +1729,7 @@ button:not(
 .agent-terminal-shell {
   /* Match xterm's theme background so no contrasting square shows through
      inside the anti-aliased rounded bottom corners. */
-  background: #11151d;
+  background: #111112;
   border: 1px solid var(--line);
   border-radius: 11px;
   display: flex;
@@ -1883,8 +1783,8 @@ button:not(
 }
 .terminal-status {
   align-items: center;
-  background: #111728;
-  border-bottom: 1px solid rgb(151 164 190 / 0.15);
+  background: #161617;
+  border-bottom: 1px solid rgb(255 255 255 / 0.075);
   color: #dce5f2;
   display: flex;
   font-size: 11px;
@@ -1892,8 +1792,8 @@ button:not(
   padding: 8px 10px;
 }
 .agent-session-status {
-  background: #111728;
-  border-top: 1px solid rgb(151 164 190 / 0.15);
+  background: #161617;
+  border-top: 1px solid rgb(255 255 255 / 0.075);
   color: #aebbd0;
   display: grid;
   flex: 0 0 auto;
@@ -2303,7 +2203,7 @@ dd {
   float: right;
 }
 .terminal {
-  background: #11151d;
+  background: #111112;
   border-radius: 9px;
   height: 210px;
   margin-top: 9px;
@@ -2705,22 +2605,6 @@ dd {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.workspace-browser {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 11px;
-  display: grid;
-  flex: 1;
-  /* The `min()` is the floor under the viewer, not a second opinion on the
-     drag: shrinking the window past what the dragged width assumed must not
-     squeeze the file out of view. */
-  grid-template-columns: min(var(--explorer-width, 255px), 50%) 6px minmax(
-      0,
-      1fr
-    );
-  min-height: 0;
-  overflow: hidden;
-}
 .workspace-explorer {
   background: rgb(8 12 20 / 0.42);
   border-right: 1px solid var(--line);
@@ -2831,15 +2715,6 @@ dd {
 }
 .workspace-tree-menu button.destructive:not(:disabled) {
   color: var(--danger);
-}
-/* The explorer's right border is draggable. The column handle above divides
-   the whole shell; this divides what is inside the explorer, so it answers to
-   the explorer's own minimums rather than the shell's.
-
-   The explorer keeps its right border, so this track carries the viewer's
-   background instead of a second line of its own. */
-.explorer-resize-handle {
-  background: rgb(7 10 17 / 0.28);
 }
 .workspace-tree-menu button {
   align-items: center;
@@ -4093,98 +3968,6 @@ dd {
   padding: 0 !important;
   width: 28px;
 }
-/* Folded, the panel is a rail that still reports: repositories by their
-   initials and state, and a chip per worktree with its changed-file count. */
-.board-detail-column.panel-compact {
-  padding: 12px 0;
-}
-.board-detail-column.panel-compact > .section-heading {
-  display: none;
-}
-.workspace-rail {
-  align-items: center;
-  background: transparent !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-  cursor: pointer;
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 14px;
-  min-height: 0;
-  overflow: hidden;
-  padding: 4px 0 !important;
-  width: 100%;
-}
-.workspace-rail:hover .rail-label {
-  color: var(--text);
-}
-.rail-repository {
-  align-items: center;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-.rail-avatar {
-  align-items: center;
-  background: var(--raised);
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  color: var(--text);
-  display: flex;
-  font-size: 11px;
-  font-weight: 650;
-  height: 30px;
-  justify-content: center;
-  position: relative;
-  text-transform: lowercase;
-  width: 30px;
-}
-.rail-avatar i {
-  background: var(--muted);
-  border: 2px solid var(--overlay);
-  border-radius: 50%;
-  bottom: -3px;
-  height: 9px;
-  position: absolute;
-  right: -3px;
-  width: 9px;
-}
-.rail-avatar.repository-status-clean i {
-  background: var(--success);
-}
-.rail-avatar.repository-status-modified i,
-.rail-avatar.repository-status-behind i,
-.rail-avatar.repository-status-diverged i {
-  background: #eab66f;
-}
-.rail-avatar.repository-status-ahead i {
-  background: var(--accent);
-}
-.rail-worktree {
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  color: var(--muted);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-  min-width: 24px;
-  padding: 1px 6px;
-  text-align: center;
-}
-.rail-worktree.changed {
-  background: rgb(226 192 141 / 0.12);
-  border-color: rgb(226 192 141 / 0.35);
-  color: #e2c08d;
-}
-.rail-label {
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.12em;
-  margin-top: auto;
-  text-transform: uppercase;
-  writing-mode: vertical-rl;
-}
 
 /* The panel's left edge is its control. The tab sits on the divider, faint
    at rest and solid when the edge is hovered; clicking folds or unfolds,
@@ -5433,29 +5216,6 @@ dd {
   padding: 0 4px 8px;
 }
 
-/* The selected task's detail, floating over the workspace column from the
-   right edge. Wide enough that the brief, the timeline and the cost line read
-   without wrapping; no backdrop, so the lanes stay readable beside it. */
-.task-drawer {
-  animation: task-drawer-in 160ms ease-out;
-  background: var(--overlay);
-  border-left: 1px solid var(--line-strong);
-  bottom: 0;
-  box-shadow: -24px 0 60px rgb(0 0 0 / 0.4);
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  padding: 20px 18px 14px;
-  position: absolute;
-  right: 0;
-  top: 0;
-  width: min(560px, 48%);
-  z-index: 15;
-}
-.task-drawer > .task-brief,
-.task-drawer > .brief-editor {
-  flex: 1;
-}
 .task-drawer-close {
   align-items: center;
   display: flex;
@@ -5467,22 +5227,6 @@ dd {
 .task-drawer-close svg {
   height: 14px;
   width: 14px;
-}
-@keyframes task-drawer-in {
-  from {
-    opacity: 0;
-    transform: translateX(24px);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .task-drawer {
-    animation: none;
-  }
-}
-@media (max-width: 820px) {
-  .task-drawer {
-    width: 100%;
-  }
 }
 
 /* Popup menus on <details> (#32): the status and priority pills under the
@@ -7452,7 +7196,7 @@ dd {
   font-size: 12px;
 }
 .accounts-signin-terminal {
-  background: #11151d;
+  background: #111112;
   height: 240px;
   position: relative;
 }
@@ -8045,4 +7789,640 @@ dd {
   font-size: 11px;
   gap: 6px;
   margin: 0;
+}
+
+/* Flat layout after Orca: neutral surfaces with no gradients or glass, a
+   compact workspace list on the left, the open session, file or task in the
+   center, and the workspace's files, repositories and tasks as tabs of one
+   side panel on the right. Later in the file, so it settles the shell over
+   the rules above. */
+.app {
+  --footer: #161617;
+  --panel: #161617;
+  --raised: rgb(255 255 255 / 0.035);
+  --raised-hover: rgb(255 255 255 / 0.06);
+  --elevated: #1e1e20;
+  --overlay: #1f1f22;
+  --line: rgb(255 255 255 / 0.075);
+  --line-strong: rgb(255 255 255 / 0.14);
+  --text: #ececee;
+  --secondary: #c2c2c7;
+  --muted: #8a8a91;
+  --accent-wash: rgb(255 255 255 / 0.07);
+  --center: #111112;
+  background: var(--center);
+  /* No top bar: banners, then the columns, then the footer, whose bar is
+     33px with a 1px border above it. */
+  grid-template-rows: auto minmax(0, 1fr) 34px;
+}
+.app.terminal-panel-open {
+  grid-template-rows:
+    auto minmax(220px, 1fr)
+    clamp(120px, var(--terminal-panel-height, 38vh), calc(100vh - 240px));
+}
+.app > .banner-stack {
+  grid-row: 1;
+}
+.app > .workspace-shell {
+  grid-row: 2;
+}
+.app > .integrated-terminal-panel {
+  grid-row: 3;
+}
+/* The footer follows the theme like the columns above it. */
+.integrated-terminal-panel {
+  background: var(--footer);
+  border-top-color: var(--line);
+}
+.integrated-terminal-tabs {
+  background: var(--panel);
+}
+.integrated-terminal-panel .world-toggle {
+  border: 0 !important;
+}
+.integrated-terminal-panel .world-toggle.active {
+  color: var(--accent) !important;
+}
+.app[data-theme="light"] {
+  --footer: #f4f4f5;
+  --panel: #f4f4f5;
+  --raised: rgb(0 0 0 / 0.03);
+  --raised-hover: rgb(0 0 0 / 0.05);
+  --elevated: #ffffff;
+  --overlay: #ffffff;
+  --line: rgb(0 0 0 / 0.08);
+  --line-strong: rgb(0 0 0 / 0.15);
+  --text: #18181b;
+  --secondary: #3f3f46;
+  --muted: #71717a;
+  --accent-wash: rgb(0 0 0 / 0.055);
+  --center: #fbfbfb;
+  background: var(--center);
+}
+.topbar,
+.app[data-theme="light"] .topbar {
+  backdrop-filter: none;
+  background: var(--panel);
+  padding: 0 10px 0 14px;
+}
+.brand {
+  gap: 8px;
+}
+.brand-mark {
+  height: 20px;
+  width: 20px;
+  border-radius: 5px;
+}
+.brand-copy strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.brand-copy small {
+  display: none;
+}
+
+/* The brand row at the top of the left column, above the Workspaces
+   heading, which sits lower to make room for it. */
+.workspace-column-brand {
+  flex: none;
+  margin: 0 4px 12px;
+  min-height: 24px;
+}
+/* Left: the workspace list, one plain row per workspace and per session. */
+.workspace-column {
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  padding: 10px 8px 8px;
+}
+.workspace-column[data-focus]::after {
+  display: none;
+}
+.workspace-column-heading {
+  padding: 0 4px 0 8px;
+}
+.workspace-column-heading h1 {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+/* Each workspace and its sessions in one bordered box, so it is clear where
+   one workspace ends. */
+.workspace-group,
+.app[data-theme="light"] .workspace-group {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  margin: 0 0 6px;
+  padding: 2px;
+}
+.workspace-card {
+  border-radius: 6px;
+  margin: 0;
+}
+.workspace-card.selected {
+  background: transparent;
+  box-shadow: none;
+}
+.workspace-item {
+  gap: 0;
+  padding: 5px 6px 5px 2px;
+}
+.workspace-folder-icon {
+  align-self: center;
+  color: var(--muted);
+  margin: 0 8px 0 0;
+}
+.workspace-card.selected .workspace-folder-icon {
+  color: var(--accent);
+}
+.workspace-card-content {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+}
+.workspace-item strong,
+.workspace-card-name {
+  font-size: 13px;
+  font-weight: 550;
+}
+.workspace-session-insights {
+  min-width: 0;
+}
+.workspace-insight-copy {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.workspace-disclosure {
+  color: var(--muted);
+  flex-basis: 12px;
+  opacity: 0;
+}
+.workspace-card:hover .workspace-disclosure,
+.workspace-disclosure:focus-visible,
+.workspace-disclosure[aria-expanded="false"] {
+  opacity: 1;
+}
+.workspace-sessions {
+  margin: 1px 0 2px 6px;
+}
+.workspace-sessions .session-grid {
+  gap: 1px;
+}
+.workspace-sessions .session-card,
+.session-card {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+}
+.workspace-sessions .session-card:hover {
+  background: var(--raised-hover);
+}
+.workspace-sessions .session-card.selected,
+.session-card.selected {
+  background: var(--accent-wash);
+  border: 0;
+}
+.workspace-sessions .session-card-main {
+  padding: 5px 8px;
+}
+.workspace-sessions .session-card-main strong {
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.workspace-sessions .session-card-main small {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+/* Center: the open session, file or task, edge to edge. */
+.workspace-main {
+  background: var(--center);
+  padding: 0;
+}
+.terminal-column {
+  background: var(--center);
+  border-left: 0;
+}
+.workspace-viewer {
+  background: var(--center);
+  flex: 1;
+  min-height: 0;
+}
+.task-column {
+  overflow: auto;
+}
+.task-page {
+  display: flex;
+  flex-direction: column;
+  margin: 0 auto;
+  max-width: 820px;
+  padding: 18px 32px 32px;
+  width: 100%;
+}
+.task-page-heading {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.center-empty {
+  align-content: center;
+  flex: 1;
+  gap: 8px;
+}
+.center-empty strong {
+  font-size: 15px;
+}
+.center-empty-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 6px;
+}
+/* Plain outlined buttons, not the accent fill. */
+.center-empty-actions button {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+  font-weight: 500;
+}
+.center-empty-actions button:hover:not(:disabled) {
+  background: var(--raised-hover);
+}
+.center-empty > span:not(.center-empty-actions) {
+  max-width: 420px;
+}
+
+/* Right: the side panel, its tab strip on top. */
+.side-panel {
+  backdrop-filter: none;
+  background: var(--panel);
+  padding: 0;
+}
+.side-panel-tabs {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex: none;
+  gap: 2px;
+  height: 40px;
+  padding: 0 8px;
+}
+.side-panel-tab {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 6px !important;
+  color: var(--muted) !important;
+  display: flex;
+  height: 30px;
+  justify-content: center;
+  padding: 0 !important;
+  position: relative;
+  width: 34px;
+}
+.side-panel-tab:hover {
+  background: var(--raised-hover) !important;
+  color: var(--text) !important;
+}
+.side-panel-tab[aria-selected="true"] {
+  color: var(--text) !important;
+}
+.side-panel-tab[aria-selected="true"]::after {
+  background: var(--text);
+  border-radius: 1px;
+  bottom: -5px;
+  content: "";
+  height: 1.5px;
+  left: 8px;
+  position: absolute;
+  right: 8px;
+}
+.side-panel-tab svg {
+  height: 17px;
+  width: 17px;
+}
+.side-panel-tab-badge {
+  background: #ff8282;
+  border-radius: 50%;
+  height: 6px;
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  width: 6px;
+}
+.side-panel > .section-heading {
+  padding: 12px 12px 4px;
+}
+.side-panel > .section-heading h2 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+}
+.side-panel > .repository-toolbar,
+.side-panel > .workspace-repositories,
+.side-panel > .workspace-repository-invite,
+.side-panel > .empty {
+  margin-left: 12px;
+  margin-right: 12px;
+}
+.side-panel .workspace-explorer {
+  background: transparent;
+  border: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.side-panel .workspace-explorer-heading {
+  border-bottom: 0;
+  padding: 10px 10px 6px 14px;
+  text-transform: none;
+}
+.side-panel .workspace-explorer-heading > div:first-child > span {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.side-panel-board {
+  container-name: board;
+  container-type: inline-size;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0 10px;
+}
+.side-panel-board .board-toolbar {
+  min-height: 46px;
+}
+/* In the panel the cards are rows of one list, a rule between each. */
+.side-panel-board .board-lane-cards {
+  gap: 0;
+}
+.side-panel-board .board-card,
+.app[data-theme="light"] .side-panel-board .board-card {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  box-shadow: none;
+  padding: 10px 6px 11px 14px;
+}
+.side-panel-board .board-card:hover {
+  background: var(--raised);
+}
+.side-panel-board .board-card.selected {
+  background: var(--accent-wash);
+}
+/* Folded, the panel keeps only its tabs, stacked down the rail. */
+.side-panel.panel-compact .side-panel-tabs {
+  border-bottom: 0;
+  flex-direction: column;
+  gap: 4px;
+  height: auto;
+  padding: 8px 0;
+}
+.side-panel.panel-compact .side-panel-tab[aria-selected="true"]::after {
+  display: none;
+}
+/* The session's terminal fills the center under one slim title row. */
+.terminal-column {
+  padding: 0;
+}
+.terminal-heading {
+  border-bottom: 1px solid var(--line);
+  min-height: 40px;
+  padding: 0 14px;
+}
+.terminal-heading h1 {
+  font-size: 13px;
+  font-weight: 600;
+}
+.terminal-column .agent-terminal-shell {
+  border: 0;
+  border-radius: 0;
+}
+
+/* The center is one tab strip shared by the session, files, the task and
+   web pages (Orca's layout); its colours are the center's own. */
+.center-column {
+  min-width: 0;
+}
+.editor-area .dockview-theme-dark {
+  --dv-group-view-background-color: var(--center);
+  --dv-tabs-and-actions-container-background-color: var(--panel);
+  --dv-activegroup-visiblepanel-tab-background-color: var(--center);
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--panel);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--center);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--panel);
+  --dv-tab-divider-color: var(--center);
+  --dv-separator-border: var(--line);
+  --dv-tabs-and-actions-container-height: 36px;
+}
+.editor-area .dv-tabs-and-actions-container {
+  border-bottom: 1px solid var(--line);
+}
+.app-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.session-panel > .terminal-column {
+  flex: 1;
+  min-height: 0;
+}
+.task-panel {
+  overflow: auto;
+}
+.app-tab-icon {
+  color: var(--muted);
+  display: flex;
+}
+.app-tab-icon svg {
+  height: 14px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.3;
+  width: 14px;
+}
+/* The session tab carries its agent's own mark, in the sidebar's colours. */
+.app-tab-tool {
+  display: flex;
+}
+.app-tab-tool svg {
+  height: 14px;
+  width: 14px;
+}
+.app-tab-tool.tool-claude {
+  color: #d97757;
+}
+.app[data-theme="light"] .app-tab-tool.tool-codex {
+  color: #172033;
+}
+.editor-new-terminal svg {
+  height: 14px;
+  stroke-linecap: round;
+  stroke-width: 1.5;
+  width: 14px;
+}
+.terminal-panel > .terminal-surface,
+.terminal-panel > * {
+  flex: 1;
+  min-height: 0;
+}
+.web-panel-bar {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+}
+.web-panel-bar input {
+  flex: 1;
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  min-width: 0;
+  padding: 4px 8px;
+}
+.web-panel-bar button {
+  font-size: 12px;
+  padding: 3px 8px !important;
+}
+.web-panel-frame {
+  background: #fff;
+  border: 0;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+}
+.image-panel {
+  align-items: center;
+  background-color: var(--center);
+  background-image:
+    linear-gradient(45deg, var(--raised-hover) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--raised-hover) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--raised-hover) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--raised-hover) 75%);
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+  background-size: 16px 16px;
+  display: flex;
+  height: 100%;
+  justify-content: center;
+  overflow: auto;
+  padding: 16px;
+}
+.image-panel img {
+  max-height: 100%;
+  max-width: 100%;
+  object-fit: contain;
+}
+
+/* The workspace row keeps its count clear of the + in its corner; the
+   actions that come in on hover take the count's place. */
+.workspace-group > .workspace-card > .workspace-item {
+  padding-right: 28px;
+}
+.workspace-group > .workspace-card:hover .workspace-insight-copy,
+.workspace-group > .workspace-card:focus-within .workspace-insight-copy {
+  visibility: hidden;
+}
+.workspace-card-content {
+  min-width: 0;
+}
+/* The name wins the row; the count gives way to it. */
+.workspace-card-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.workspace-card-content > .workspace-session-insights {
+  flex: 1 1 0;
+  overflow: hidden;
+}
+.workspace-card-content .workspace-insight-copy {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The workspace in focus: an accent edge, a tinted box and a bright name. */
+.workspace-group:has(> .workspace-card.selected) {
+  background: var(--accent-wash);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.workspace-card.selected .workspace-card-name {
+  color: var(--text);
+  font-weight: 650;
+}
+.workspace-group:not(:has(> .workspace-card.selected)) .workspace-card-name {
+  color: var(--secondary);
+}
+
+/* New session: the account, colour and abilities fold under one row. */
+.session-more-settings {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+.session-more-settings > summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  list-style: none;
+  user-select: none;
+}
+.session-more-settings > summary::before {
+  content: "▸ ";
+}
+.session-more-settings[open] > summary::before {
+  content: "▾ ";
+}
+.session-more-settings[open] {
+  display: grid;
+  gap: 12px;
+}
+.terminal-panel .agent-terminal-shell {
+  border: 0;
+  border-radius: 0;
+}
+
+/* A session row is two lines: its name with role, account and routines
+   beside it, then its live status. */
+.session-card-title {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  /* Room for the … menu at the end of the row, not after the name, so the
+     badges sit right beside it. */
+  padding-right: 22px;
+}
+.workspace-sessions .session-card-title > strong {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  padding-right: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-card-title > span {
+  /* A long badge truncates before the name does. */
+  flex: 0 4 auto;
+  font-size: 10px;
+  margin-right: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

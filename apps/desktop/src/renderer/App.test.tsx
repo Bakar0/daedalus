@@ -26,7 +26,6 @@ import {
   launchMatchesSession,
   PANEL_RAIL_WIDTH,
   pendingSessionLaunches,
-  preferredScopeView,
   preferredSessionId,
   preferredWorkspaceView,
   quitDisclosure,
@@ -440,7 +439,7 @@ describe("desktop application shell", () => {
     expect(preferredWorkspaceView()).toBe("board");
   });
 
-  test("renders Board and Workspace as complete workspace modes", () => {
+  test("renders the shell with the World apart and no mode switcher", () => {
     const html = renderToStaticMarkup(
       <App
         injectedClient={client}
@@ -449,29 +448,17 @@ describe("desktop application shell", () => {
       />,
     );
     expect(html).toContain("Workspaces");
-    expect(html).toContain("Board");
-    expect(html).toContain("Workspace");
     expect(html).not.toContain("Activity");
-    expect(html).toContain('aria-label="Workspace mode"');
-    // Board first (#27): the switcher reads Board, Workspace. Sessions are
-    // listed under their workspaces instead of in a tab (#55).
-    const switcherStart = html.indexOf('aria-label="Workspace mode"');
-    const switcher = html.slice(
-      switcherStart,
-      html.indexOf("</nav>", switcherStart),
+    // No mode switcher: the center shows a session, a file or a task, and
+    // the side panel's tabs hold the files, repositories and tasks.
+    expect(html).not.toContain('aria-label="Workspace mode"');
+    expect(html).not.toContain(">Board</button>");
+    // There is no top bar; the World sits in the footer by Terminal.
+    expect(html).not.toContain('class="topbar"');
+    const footer = html.slice(
+      html.indexOf('class="integrated-terminal-header"'),
     );
-    expect(switcher.indexOf(">Board<")).toBeGreaterThan(-1);
-    expect(switcher.indexOf(">Board<")).toBeLessThan(
-      switcher.indexOf(">Workspace<"),
-    );
-    expect(switcher).not.toContain("Sessions");
-    // The World spans every workspace, so it is not one of the modes: its
-    // button sits apart, at the right end of the top bar.
-    expect(switcher).not.toContain("World");
-    const actions = html.slice(html.indexOf('class="top-actions"'));
-    expect(actions).toMatch(
-      /class="world-toggle[^"]*"[^>]*>.*World<\/button>/s,
-    );
+    expect(footer).toMatch(/world-toggle[^"]*"[^>]*>.*World<\/strong>/s);
     expect(html).toContain("mode-board");
     expect(html).not.toContain("No session selected");
     expect(html).toContain("No workspaces yet");
@@ -479,8 +466,6 @@ describe("desktop application shell", () => {
     // A plain + like a workspace's own new-session button (#55).
     expect(html).toContain('class="quiet workspace-heading-create"');
     expect(html).toContain('aria-label="Open settings"');
-    expect(html).toContain('src="/daedalus-app-icon.png"');
-    expect(html).not.toContain('class="brand-mark">D');
     expect(html).not.toContain(">Refresh</button>");
   });
 
@@ -572,7 +557,7 @@ describe("desktop application shell", () => {
       ],
     };
 
-    test("the column offers every workspace above the workspaces", () => {
+    test("the column lists only workspaces, with no all-workspaces row", () => {
       const html = renderToStaticMarkup(
         <App
           injectedClient={client}
@@ -580,67 +565,20 @@ describe("desktop application shell", () => {
           initialWorkspaceView="board"
         />,
       );
-      expect(html).toContain("all-workspaces-card");
-      expect(html).toContain(">All workspaces<");
-      expect(html).toContain('title="2 workspaces · 2 sessions · 2 live');
-      expect(html).not.toContain("every task and session");
-      // Above the first workspace card, and not the selected one.
-      expect(html.indexOf("all-workspaces-card")).toBeLessThan(
-        html.indexOf(">Alpha<"),
-      );
-      expect(html).not.toContain("all-workspaces-card selected");
+      expect(html).not.toContain("All workspaces");
       expect(html).toContain('class="workspace-card selected"');
-      // A single workspace's board keeps its own capture line and column.
+      // The workspace's tasks are in the side panel, with their capture line.
+      expect(html).toContain('class="side-panel-board"');
       expect(html).toContain('class="board-capture"');
-      expect(html).toContain("board-detail-column");
       expect(html).not.toContain("board-card-workspace");
-    });
-
-    test("the board shows every active workspace's tasks, each named", () => {
-      const html = renderToStaticMarkup(
-        <App
-          injectedClient={client}
-          initialSnapshot={two}
-          initialScope="all"
-          initialWorkspaceView="board"
-        />,
-      );
-      expect(html).toContain("<h1>All workspaces</h1>");
-      expect(html).toContain(">2 workspaces<");
-      expect(html).toContain("all-workspaces-card selected");
-      expect(html).toContain('data-workspace-id="alpha"');
-      expect(html).toContain('data-workspace-id="beta"');
-      // Archived workspaces stay out, as their cards do.
-      expect(html).not.toContain('data-workspace-id="gamma"');
-      expect(html).toContain('aria-label="alpha#1 alpha task 1, Running"');
-      expect(html).toContain('aria-label="beta#1 beta task 1, Running"');
-      expect(html).toContain('class="board-card-workspace"');
-      // One workspace's things are gone: capture, settings, New, the column.
-      expect(html).not.toContain('class="board-capture"');
-      expect(html).not.toContain('class="board-settings"');
-      expect(html).not.toContain('aria-label="Create task"');
-      expect(html).not.toContain("board-detail-column");
-      expect(html).toContain("capture and settings are on each workspace");
-      // The Workspace mode needs one workspace.
-      const switcherStart = html.indexOf('aria-label="Workspace mode"');
-      const switcher = html.slice(
-        switcherStart,
-        html.indexOf("</nav>", switcherStart),
-      );
-      expect(switcher).toContain(
-        'title="Pick a workspace to browse its files">Workspace</button>',
-      );
-      expect(switcher).toMatch(/disabled=""[^>]*>Workspace</);
-      expect(switcher).not.toMatch(/disabled=""[^>]*>Board</);
+      // Only the selected workspace's tasks.
+      expect(html).toContain('aria-label="#1 alpha task 1, Running"');
+      expect(html).not.toContain('data-workspace-id="beta"');
     });
 
     test("every workspace lists its own sessions under it (#55)", () => {
       const html = renderToStaticMarkup(
-        <App
-          injectedClient={client}
-          initialSnapshot={two}
-          initialScope="all"
-        />,
+        <App injectedClient={client} initialSnapshot={two} />,
       );
       expect(html).toContain('data-session-id="s-a"');
       expect(html).toContain('data-session-id="s-b"');
@@ -654,7 +592,7 @@ describe("desktop application shell", () => {
       expect(html.indexOf('data-session-id="s-a"')).toBeGreaterThan(alpha);
       expect(html.indexOf('data-session-id="s-a"')).toBeLessThan(beta);
       expect(html.indexOf('data-session-id="s-b"')).toBeGreaterThan(beta);
-      // Each workspace starts its own sessions, whatever the scope.
+      // Each workspace starts its own sessions.
       expect(html).toContain('aria-label="Create session in Alpha"');
       expect(html).toContain('aria-label="Create session in Beta"');
       expect(html).toContain('aria-label="Collapse all session lists"');
@@ -693,37 +631,6 @@ describe("desktop application shell", () => {
       expect(
         html.match(/aria-hidden="true" class="archive-list/g)?.length,
       ).toBe(1);
-      const all = renderToStaticMarkup(
-        <App
-          injectedClient={client}
-          initialScope="all"
-          initialSnapshot={withArchived}
-        />,
-      );
-      expect(all).not.toContain('data-in-focus="true"');
-    });
-
-    test("every workspace at once has no session view", () => {
-      const html = renderToStaticMarkup(
-        <App
-          injectedClient={client}
-          initialSnapshot={two}
-          initialScope="all"
-          initialWorkspaceView="session"
-        />,
-      );
-      expect(html).toContain("mode-board");
-      expect(html).not.toContain("terminal-column");
-    });
-
-    test("the scope's views fall back to Board", () => {
-      expect(preferredScopeView("all", "workspace")).toBe("board");
-      expect(preferredScopeView("all", "session")).toBe("board");
-      expect(preferredScopeView("all", "sessions")).toBe("board");
-      expect(preferredScopeView("workspace", "session")).toBe("session");
-      expect(preferredScopeView("all", "world")).toBe("world");
-      expect(preferredScopeView("workspace", "workspace")).toBe("workspace");
-      expect(preferredScopeView("all", null)).toBe("board");
     });
   });
 
@@ -957,6 +864,7 @@ describe("desktop application shell", () => {
         injectedClient={client}
         initialSnapshot={snapshot}
         initialWorkspaceView="board"
+        initialPanelTab="git"
         initialWorkspaceContent={{
           workspaceId: "w1",
           brief: "# Objective",
@@ -975,8 +883,8 @@ describe("desktop application shell", () => {
       />,
     );
     // An instruction, not a shrug: the empty state names the next action and
-    // carries a control that performs it. It is a chip in the header (#27),
-    // so a new workspace is fixed from wherever the app lands.
+    // carries a control that performs it, in the side panel's
+    // Repositories tab.
     expect(html).toContain("mode-board");
     expect(html).toContain("No repositories yet");
     expect(html).toContain("workspace-repository-invite");
@@ -1066,59 +974,53 @@ describe("desktop application shell", () => {
     ],
   };
 
-  test("renders workspace files and context, with the repositories gone to the board", () => {
+  test("renders the file tree in the side panel and the editor in the center", () => {
     const html = renderToStaticMarkup(
       <App
         injectedClient={client}
         initialSnapshot={demoSnapshot}
         initialWorkspaceView="workspace"
+        initialPanelTab="files"
         initialWorkspaceContent={demoContent}
       />,
     );
     expect(html).toContain("mode-workspace");
-    expect(html).toContain("Explorer");
     expect(html).toContain("workspace-viewer");
     // The tree builds its rows once mounted, and the editor is a lazy chunk
     // (Monaco and dockview need a browser), so a static render shows the
     // explorer's frame and the editor's placeholder. The rows and tabs are
     // `test:explorer-ui`'s to check.
     expect(html).toContain('aria-label="Workspace files"');
-    // The editor itself is a lazy chunk (Monaco and dockview need a
-    // browser), so a static render shows its placeholder.
     expect(html).toContain("Loading the editor");
     expect(html).toContain('aria-label="New file"');
     expect(html).toContain('aria-label="New folder"');
-    // Since #27 the explorer is the file tree alone; the repositories are in
-    // the board's workspace column.
-    const explorer = html.slice(
-      html.indexOf('class="workspace-explorer"'),
-      html.indexOf('class="workspace-viewer'),
+    // The editor is in the center, the tree in the side panel after it.
+    const panel = html.slice(html.indexOf('aria-label="Workspace panel"'));
+    expect(html.indexOf('class="workspace-viewer')).toBeLessThan(
+      html.indexOf('aria-label="Workspace panel"'),
     );
-    expect(explorer).not.toContain("workspace-repository-group");
-    expect(explorer).not.toContain("Repositories");
-    // The explorer's border is grabbable, and carries the size it is
-    // currently set to so a keyboard can move it too.
-    expect(html).toContain('aria-label="Resize explorer"');
-    expect(html).toContain("--explorer-width:");
+    expect(panel).toContain('class="workspace-explorer"');
+    expect(panel).not.toContain("workspace-repository-group");
+    expect(panel).toMatch(/aria-label="Files" aria-selected="true"/);
   });
 
-  test("renders the repositories in the board's workspace column, with no task open", () => {
+  test("renders the repositories in the side panel's tab, with no task open", () => {
     const html = renderToStaticMarkup(
       <App
         injectedClient={client}
         initialSnapshot={demoSnapshot}
         initialWorkspaceView="board"
+        initialPanelTab="git"
         initialWorkspaceContent={demoContent}
       />,
     );
     expect(html).toContain("mode-board");
-    // The right column is the workspace's, and with no task selected there
-    // is no drawer over it.
+    // With no task selected the center offers the next step.
     const column = html.slice(html.indexOf("board-detail-column"));
-    expect(column).toContain(">Workspace<");
     expect(column).toContain(">Repositories<");
-    expect(html).not.toContain("task-drawer");
-    expect(html).not.toContain("Select a task");
+    expect(column).toMatch(/aria-label="Repositories" aria-selected="true"/);
+    expect(html).toContain("center-empty");
+    expect(html).not.toContain("task-page");
     expect(html).toContain("main ·");
     expect(html).toContain("↓2 behind");
     // Fetch only downloads; Pull also moves the checkout to the latest base.
@@ -1137,7 +1039,7 @@ describe("desktop application shell", () => {
     expect(column).toContain("workspace-repository-group");
   });
 
-  test("opens the selected task in a drawer over the workspace column", () => {
+  test("opens the selected task in the center, beside the side panel", () => {
     const html = renderToStaticMarkup(
       <App
         injectedClient={client}
@@ -1165,16 +1067,15 @@ describe("desktop application shell", () => {
         initialWorkspaceContent={demoContent}
       />,
     );
-    const drawer = html.slice(html.indexOf('class="task-drawer"'));
-    expect(html).toContain('class="task-drawer"');
+    const page = html.slice(html.indexOf('class="task-page"'));
+    expect(html).toContain('class="task-page"');
     expect(html).toContain('aria-label="Task #1"');
-    expect(drawer).toContain("<h2>#1 Drawer task</h2>");
-    expect(drawer).toContain('aria-label="Close task"');
-    expect(drawer).toContain("Edit");
-    // The drawer covers the column; the repositories are still rendered
-    // underneath it.
-    expect(html.indexOf("workspace-repository-group")).toBeLessThan(
-      html.indexOf('class="task-drawer"'),
+    expect(page).toContain("<h2>#1 Drawer task</h2>");
+    expect(page).toContain('aria-label="Close task"');
+    expect(page).toContain("Edit");
+    // The task's card is selected in the panel's task list, after the page.
+    expect(html.indexOf('class="task-page"')).toBeLessThan(
+      html.indexOf('class="side-panel-board"'),
     );
   });
   test("renders workspace, task, and session lifecycle state", () => {
@@ -1322,7 +1223,10 @@ describe("desktop application shell", () => {
     expect(html).toContain("task-pill status-in_progress");
     expect(html).toContain(">In progress</span>");
     expect(html).toContain('aria-label="Task priority"');
-    const drawerHtml = html.slice(html.indexOf('class="task-drawer"'));
+    const drawerHtml = html.slice(
+      html.indexOf('class="task-page"'),
+      html.indexOf('aria-label="Workspace panel"'),
+    );
     expect(drawerHtml).toContain('aria-label="Task status"');
     expect(drawerHtml).not.toContain("<select");
     // Edit, Refine and Delete live in the action bar under the pills
@@ -1446,7 +1350,7 @@ describe("desktop application shell", () => {
     // the brief is empty; the overflow menu holds Delete alone.
     expect(html).not.toContain("Refine with agent");
     expect(html).toContain(">Refine</button>");
-    expect(html.slice(html.indexOf('class="task-drawer"'))).toContain(
+    expect(html.slice(html.indexOf('class="task-page"'))).toContain(
       "Refine</button>",
     );
     // The waiting task sinks below the ready ones in Queued.
@@ -1883,9 +1787,10 @@ describe("desktop application shell", () => {
     expect(html.match(/data-lit="true"/g)).toHaveLength(4);
     expect(html).toContain("Terminal for Terminal task 11111111");
     expect(html).toContain("mode-session");
-    // The terminal takes the main column, with the workspace panel (its
-    // repositories and what each worktree changed) beside it (#50).
-    expect(html).not.toContain("workspace-main");
+    // The terminal is the session tab of the center, with the workspace
+    // panel (its repositories and what each worktree changed) beside it.
+    expect(html).toContain("center-column");
+    expect(html).toContain('class="app-panel session-panel"');
     expect(html).toContain("has-workspace-panel");
     expect(html).toContain('aria-label="Workspace panel"');
   });
@@ -1953,16 +1858,18 @@ describe("desktop application shell", () => {
         initialWorkspaceView="session"
       />,
     );
-    expect(html).toContain("Workspace session");
     expect(html).toContain("session-kind-icon tool-terminal");
     // The lifecycle time is in the card's tooltip, not a row (#55).
     expect(html).toMatch(/title="[^"]*· started [^"]*1\/1\/2026/);
     expect(html).toContain('role="radiogroup"');
     expect(html).toContain("Session name");
-    expect(html).toContain("session-tool-icon tool-terminal");
+    // The dialog offers the agents only; terminals open as center tabs.
+    expect(html).not.toContain("session-tool-icon tool-terminal");
+    expect(html).toContain("session-tool-icon tool-codex");
     expect(html).toContain("Codex");
     expect(html).toContain("Claude");
-    expect(html).toContain("Terminal");
+    // Account, colour and abilities fold under More settings.
+    expect(html).toContain('<details class="session-more-settings">');
     expect(html).toContain('viewBox="0 0 24 24"');
     expect(html).not.toContain(">CX<");
     expect(html).not.toContain(">CL<");
@@ -2557,12 +2464,8 @@ describe("session status indicators", () => {
     // The workspace list carries the roll-up, so a blocked session in a
     // background workspace is discoverable without clicking in.
     expect(html).toContain("1 needs you");
-    // The line says it, so the workspace card has no count badge; only All
-    // workspaces, which has no such line, keeps one.
-    expect(html.match(/class="workspace-attention-badge"/g)?.length).toBe(1);
-    expect(html.indexOf("workspace-attention-badge")).toBeLessThan(
-      html.indexOf('class="workspace-group"'),
-    );
+    // The line says it, so the workspace card has no count badge.
+    expect(html).not.toContain('class="workspace-attention-badge"');
     // The row itself is the loud one.
     expect(html).toContain("agent-dot tone-attention");
     expect(html).toContain("needs permission");

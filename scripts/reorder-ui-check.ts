@@ -202,7 +202,7 @@ try {
       shell: document.querySelector('.workspace-shell')?.className ?? null,
       grids: document.querySelectorAll('.session-grid').length,
       cards: document.querySelectorAll('.session-card').length,
-      buttons: [...document.querySelectorAll('.app-mode-switcher button')].map((b) => b.textContent),
+      tabs: [...document.querySelectorAll('.side-panel-tab')].map((b) => b.getAttribute('aria-label')),
     })`);
     throw new Error(
       `Session cards did not render. DOM: ${diagnostics}${rendererErrors.length ? `\nRenderer: ${rendererErrors.slice(0, 2).join("; ")}` : ""}`,

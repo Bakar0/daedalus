@@ -29,6 +29,7 @@ import { AccountPanel, showsPro, useRemoteState } from "./ProPlan";
 import { RemotePanel } from "./RemotePanel";
 import { SkillsPanel } from "./SkillsPanel";
 import { updateMessage } from "./UpdateBanner";
+import { APP_THEMES, type AppTheme } from "./theme";
 
 export const SETTINGS_SECTIONS = [
   { id: "account", label: "Account" },
@@ -166,11 +167,11 @@ export function SettingsModal({
   /** Draws a terminal Settings opened, such as a sign-in, in place. */
   renderTerminal: (terminal: IntegratedTerminalDto) => React.ReactNode;
   onSection: (section: SettingsSection) => void;
-  onTheme: (theme: "dark" | "light") => void;
+  onTheme: (theme: AppTheme) => void;
   perform: <T>(operation: Promise<RpcResult<T>>) => Promise<T | undefined>;
   section: SettingsSection;
   settings: DesktopSettingsDto;
-  theme: "dark" | "light";
+  theme: AppTheme;
   updates?: SettingsUpdateControls;
 }) {
   const updateAvailable = updates?.update?.state === "available";
@@ -222,13 +223,14 @@ export function SettingsModal({
               </span>
               <select
                 aria-label="Theme"
-                onChange={(event) =>
-                  onTheme(event.target.value as "dark" | "light")
-                }
+                onChange={(event) => onTheme(event.target.value as AppTheme)}
                 value={theme}
               >
-                <option value="dark">Dark</option>
-                <option value="light">Light</option>
+                {APP_THEMES.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
               </select>
             </label>
 

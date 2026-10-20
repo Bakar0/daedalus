@@ -32,7 +32,59 @@ import {
 /** The tree's own id for the workspace root, which has the path "". */
 const ROOT = "\u0000root";
 const INDENT = 12;
-const MAX_DROPPED_FILE_BYTES = 1024 * 1024;
+const MAX_DROPPED_FILE_BYTES = 50 * 1024 * 1024;
+
+/** A dropped file's bytes as base64, in chunks the call stack can take. */
+const toBase64 = (bytes: Uint8Array) => {
+  let binary = "";
+  for (let start = 0; start < bytes.length; start += 0x8000)
+    binary += String.fromCharCode(...bytes.subarray(start, start + 0x8000));
+  return btoa(binary);
+};
+
+/** One dropped item: a file, or a folder and what is in it. */
+type DroppedEntry =
+  | { kind: "file"; file: File }
+  | { kind: "directory"; name: string; children: DroppedEntry[] };
+
+/**
+ * What Finder dropped, folders included. The entries must be taken while the
+ * drop event runs; reading them can wait.
+ */
+const droppedEntries = async (
+  dataTransfer: DataTransfer,
+): Promise<DroppedEntry[]> => {
+  const roots = [...dataTransfer.items]
+    .map((item) => item.webkitGetAsEntry?.())
+    .filter((entry): entry is FileSystemEntry => Boolean(entry));
+  if (roots.length === 0)
+    return [...dataTransfer.files].map((file) => ({ kind: "file", file }));
+  const read = async (entry: FileSystemEntry): Promise<DroppedEntry> => {
+    if (entry.isFile)
+      return {
+        kind: "file",
+        file: await new Promise<File>((resolve, reject) =>
+          (entry as FileSystemFileEntry).file(resolve, reject),
+        ),
+      };
+    const reader = (entry as FileSystemDirectoryEntry).createReader();
+    const children: FileSystemEntry[] = [];
+    // A reader hands entries over in batches until one comes back empty.
+    for (;;) {
+      const batch = await new Promise<FileSystemEntry[]>((resolve, reject) =>
+        reader.readEntries(resolve, reject),
+      );
+      if (batch.length === 0) break;
+      children.push(...batch);
+    }
+    return {
+      kind: "directory",
+      name: entry.name,
+      children: await Promise.all(children.map(read)),
+    };
+  };
+  return Promise.all(roots.map(read));
+};
 
 type GitStatus = ChangedFileDto["status"];
 const GIT_LETTER: Record<GitStatus, string> = {
@@ -410,43 +462,46 @@ export function FileTree({
   };
 
   /**
-   * Files dragged in from Finder. Only text the editor could open is copied,
-   * because the file verbs carry text; a binary file is refused by name.
+   * Files and folders dragged in from Finder, any kind of file up to 50 MB.
+   * A name already taken in the folder is reported, never overwritten.
    */
-  const copyIn = async (files: readonly File[], destination: string) => {
+  const copyIn = async (
+    entries: readonly DroppedEntry[],
+    destination: string,
+  ) => {
     const refused: string[] = [];
-    for (const file of files) {
-      if (file.size > MAX_DROPPED_FILE_BYTES) {
-        refused.push(file.name);
-        continue;
+    const place = async (entry: DroppedEntry, parent: string) => {
+      if (entry.kind === "directory") {
+        const created = await client.request.workspaceEntryCreate({
+          workspace: workspaceId,
+          parentPath: parent || undefined,
+          name: entry.name,
+          kind: "directory",
+        });
+        if (!created.ok) {
+          onError(created.error.message);
+          return;
+        }
+        for (const child of entry.children)
+          await place(child, created.data.path);
+        return;
       }
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      if (bytes.subarray(0, 8192).includes(0)) {
-        refused.push(file.name);
-        continue;
+      if (entry.file.size > MAX_DROPPED_FILE_BYTES) {
+        refused.push(entry.file.name);
+        return;
       }
-      const created = await client.request.workspaceEntryCreate({
+      const bytes = new Uint8Array(await entry.file.arrayBuffer());
+      const imported = await client.request.workspaceFileImport({
         workspace: workspaceId,
-        parentPath: destination || undefined,
-        name: file.name,
-        kind: "file",
+        parentPath: parent || undefined,
+        name: entry.file.name,
+        base64: toBase64(bytes),
       });
-      if (!created.ok) {
-        onError(created.error.message);
-        continue;
-      }
-      const written = await client.request.workspaceFileWrite({
-        workspace: workspaceId,
-        path: created.data.path,
-        content: new TextDecoder().decode(bytes),
-        expectedContent: "",
-      });
-      if (!written.ok) onError(written.error.message);
-    }
+      if (!imported.ok) onError(imported.error.message);
+    };
+    for (const entry of entries) await place(entry, destination);
     if (refused.length > 0)
-      onError(
-        `Not copied (binary, a folder, or over 1 MB): ${refused.join(", ")}`,
-      );
+      onError(`Not copied (over 50 MB): ${refused.join(", ")}`);
     await relist([destination]);
   };
 
@@ -577,11 +632,13 @@ export function FileTree({
         target.item.getId() === ROOT ? "" : target.item.getId(),
       ),
     canDropForeignDragObject: (dataTransfer) => dataTransfer.files.length > 0,
-    onDropForeignDragObject: (dataTransfer, target) =>
-      copyIn(
-        [...dataTransfer.files],
-        target.item.getId() === ROOT ? "" : target.item.getId(),
-      ),
+    onDropForeignDragObject: (dataTransfer, target) => {
+      const destination =
+        target.item.getId() === ROOT ? "" : target.item.getId();
+      void droppedEntries(dataTransfer).then((entries) =>
+        copyIn(entries, destination),
+      );
+    },
     hotkeys: {
       // VS Code on macOS: Enter renames, Space opens and keeps focus here.
       // Cmd combinations are handled in `onCommandKey` below.

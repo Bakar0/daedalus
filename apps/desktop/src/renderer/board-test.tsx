@@ -475,6 +475,22 @@ const client = {
             : [{ id: "gpt-5", label: "GPT-5" }],
         source: "aliases",
       }),
+    // A terminal opened from the center's +, so its tab can be looked at.
+    terminalCreate: record("terminalCreate", ({ name }: { name?: string }) => {
+      const terminal = {
+        id: `terminal-${snapshot.terminals.length + 1}`,
+        name: name ?? "Terminal",
+        tmuxSession: `daedalus_terminal_${snapshot.terminals.length + 1}`,
+        workingDirectory: "/tmp/deadalus",
+        status: "running" as const,
+        startedAt: new Date().toISOString(),
+        endedAt: null,
+        revivedAt: null,
+      };
+      snapshot.terminals.push(terminal);
+      announce();
+      return ok(terminal);
+    }),
     workspaceFileRead: async ({ path }: { path: string }) =>
       ok({
         name: path.slice(path.lastIndexOf("/") + 1),
