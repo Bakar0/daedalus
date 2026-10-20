@@ -69,6 +69,40 @@ test("requests reach the handlers and come back", async () => {
   });
 });
 
+test("a request and a reply larger than one socket write arrive whole", async () => {
+  // 6 MiB of base64 each way: far more than a Unix socket takes in one write.
+  const bytes = Buffer.alloc(4 * 1024 * 1024);
+  for (let index = 0; index < bytes.length; index++)
+    bytes[index] = (index * 7) % 251;
+  const base64 = bytes.toString("base64");
+  await client.call("fs.write", { files: [{ path: "big.bin", base64 }] });
+  const read = await client.call("fs.read", { path: "big.bin" });
+  expect(read?.base64.length).toBe(base64.length);
+  expect(read?.base64 === base64).toBe(true);
+});
+
+test("terminal output and input larger than one socket write arrive whole", async () => {
+  backend.tmux.sessions.add("s1");
+  let received = 0;
+  const terminal = await client.openTerminal(
+    "s1",
+    { cols: 80, rows: 24 },
+    (data) => (received += data.byteLength),
+  );
+  const big = 3 * 1024 * 1024;
+  emit!(new Uint8Array(big).fill(120));
+  // Four frames, each under the 1 MiB frame limit, 3 MiB in all.
+  for (let frame = 0; frame < 4; frame++) terminal.write("y".repeat(big / 4));
+  const written = () => terminalWrites.join("").length;
+  for (let tries = 0; tries < 300 && received < big; tries++) await wait(10);
+  for (let tries = 0; tries < 300 && written() < big; tries++) await wait(10);
+  expect(received).toBe(big);
+  expect(written()).toBe(big);
+  const closed = terminal.start();
+  endTerminal!();
+  await closed;
+});
+
 test("handler errors keep their code", async () => {
   await expect(client.call("fs.read", { path: "../x" })).rejects.toMatchObject({
     code: "PATH_OUTSIDE_WORKSPACE",

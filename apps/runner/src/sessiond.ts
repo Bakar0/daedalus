@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, rmSync } from "node:fs";
 import { runCommand } from "@daedalus/platform";
+import { SocketWriter } from "@daedalus/remote-protocol";
 import { RunnerError } from "./errors";
 import type { RunnerHandlers } from "./handlers";
 import {
@@ -24,8 +25,15 @@ export interface SessionDaemonDeps {
   ) => Terminal;
 }
 
+/**
+ * Terminal output waiting for the runner to read it. Past this the runner
+ * is not reading, and the terminal is closed rather than held in memory.
+ */
+const MAX_PENDING_OUTPUT_BYTES = 8 * 1024 * 1024;
+
 interface Connection {
   buffer: Buffer;
+  writer: SocketWriter;
   /** Set once the first line is read. */
   kind?: "request" | "terminal";
   terminal?: Terminal;
@@ -58,9 +66,13 @@ export class SessionDaemon {
       unix: path,
       socket: {
         open: (socket) => {
-          socket.data = { buffer: Buffer.alloc(0) };
+          socket.data = {
+            buffer: Buffer.alloc(0),
+            writer: new SocketWriter(socket),
+          };
         },
         data: (socket, chunk) => void this.#onData(socket, chunk),
+        drain: (socket) => socket.data.writer.flush(),
         close: (socket) => socket.data.terminal?.close(),
         error: (socket) => socket.data?.terminal?.close(),
       },
@@ -111,11 +123,13 @@ export class SessionDaemon {
         return;
       }
       connection.kind = "request";
-      socket.write(await this.#request(message.method, message.params));
-      socket.end();
+      connection.writer.write(
+        await this.#request(message.method, message.params),
+      );
+      connection.writer.end();
     } catch (error) {
-      socket.write(errorLine(error));
-      socket.end();
+      connection.writer.write(errorLine(error));
+      connection.writer.end();
     }
   }
 
@@ -149,14 +163,18 @@ export class SessionDaemon {
       throw new RunnerError("VALIDATION", "Bad terminal header");
     if (!(await this.deps.hasSession(header.session)))
       throw new RunnerError("LOST", "No such session");
+    // A writer of its own, bounded, so a runner that stops reading closes
+    // the terminal instead of filling this container's memory.
+    const writer = new SocketWriter(socket, MAX_PENDING_OUTPUT_BYTES);
+    socket.data.writer = writer;
     const terminal = this.deps.openTerminal(
       header.session,
       { cols: header.cols, rows: header.rows },
-      (output) => socket.write(output),
+      (output) => writer.write(output),
     );
     socket.data.terminal = terminal;
-    socket.write(line({ ok: true }));
-    void terminal.start().then(() => socket.end());
+    writer.write(line({ ok: true }));
+    void terminal.start().then(() => writer.end());
   }
 }
 

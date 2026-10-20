@@ -165,4 +165,34 @@ describe("broker", () => {
     }
     expect(await brokerAvailable(home)).toBe(false);
   });
+
+  test("a request and a reply larger than one socket write arrive whole", async () => {
+    const home = await newHome();
+    // Characters of two and three bytes, so chunks split them.
+    const sent = "é".repeat(2 * 1024 * 1024);
+    const stored = "€".repeat(3 * 1024 * 1024);
+    let received: unknown;
+    const transport: RunnerTransport = {
+      unavailable: async () => undefined,
+      request: async (_workspace, method, params) => {
+        if (method === "fs.write") received = params;
+        return (method === "fs.read" ? { base64: stored } : null) as never;
+      },
+    };
+    const stop = await serveBroker(home, transport);
+    try {
+      const client = new BrokerTransport(home);
+      await client.request("w1", "fs.write", {
+        files: [{ path: "a", base64: sent }],
+      });
+      expect(
+        (received as { files: { base64: string }[] }).files[0]!.base64 === sent,
+      ).toBe(true);
+      const read = await client.request("w1", "fs.read", { path: "a" });
+      expect(read?.base64.length).toBe(stored.length);
+      expect(read?.base64 === stored).toBe(true);
+    } finally {
+      await stop();
+    }
+  });
 });

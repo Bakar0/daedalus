@@ -25,7 +25,7 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 /** Sends raw bytes to the socket and resolves with the reply line. */
 async function send(path: string, payload: Uint8Array | string) {
-  let text = "";
+  const chunks: Buffer[] = [];
   const done = Promise.withResolvers<string>();
   await Bun.connect({
     unix: path,
@@ -34,10 +34,10 @@ async function send(path: string, payload: Uint8Array | string) {
         socket.write(payload);
       },
       data(_socket, chunk) {
-        text += chunk.toString();
+        chunks.push(Buffer.from(chunk));
       },
       close() {
-        done.resolve(text);
+        done.resolve(Buffer.concat(chunks).toString("utf8"));
       },
       error(_socket, error) {
         done.reject(error);
@@ -133,6 +133,26 @@ async function hold(path: string, payload = "") {
   });
   return { socket, closed: closed.promise };
 }
+
+test("a reply larger than one socket write arrives whole", async () => {
+  const path = join(dir, "daedal.sock");
+  const stdout = "€".repeat(2 * 1024 * 1024);
+  const server = listenForShim(path, async () => ({
+    exitCode: 0,
+    stdout,
+    stderr: "",
+  }));
+  try {
+    const result = await send(
+      path,
+      `${JSON.stringify({ argv: ["task", "list"], cwd: ".", env: {} })}\n`,
+    );
+    expect(result.stdout.length).toBe(stdout.length);
+    expect(result.stdout === stdout).toBe(true);
+  } finally {
+    server.stop(true);
+  }
+});
 
 test("a request that never ends is closed after the read timeout", async () => {
   const path = join(dir, "daedal.sock");

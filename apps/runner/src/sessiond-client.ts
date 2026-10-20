@@ -1,5 +1,6 @@
 import { RunnerError } from "./errors";
 import type { SessionBackend, Terminal } from "./backend";
+import { SocketWriter } from "@daedalus/remote-protocol";
 import {
   encodeInputFrame,
   MAX_HEADER_BYTES,
@@ -11,6 +12,9 @@ import {
 } from "./sessiond-protocol";
 
 const MAX_ERROR_MESSAGE = 4096;
+
+/** Terminal input waiting for sessiond to read it; past this the terminal closes. */
+const MAX_PENDING_INPUT_BYTES = 8 * 1024 * 1024;
 
 /**
  * Turns an `{error}` line into a `RunnerError` the runner may pass on. The
@@ -57,6 +61,7 @@ export class SessiondClient implements SessionBackend {
     const reply = Promise.withResolvers<unknown>();
     let buffer = Buffer.alloc(0);
     let done = false;
+    let writer: SocketWriter | undefined;
     const finish = (settle: () => void, socket?: { end(): void }) => {
       if (done) return;
       done = true;
@@ -73,8 +78,10 @@ export class SessiondClient implements SessionBackend {
         unix: this.path,
         socket: {
           open: (socket) => {
-            socket.write(`${JSON.stringify({ method, params })}\n`);
+            writer = new SocketWriter(socket);
+            writer.write(`${JSON.stringify({ method, params })}\n`);
           },
+          drain: () => writer?.flush(),
           data: (socket, chunk) => {
             buffer = Buffer.concat([buffer, chunk]);
             if (buffer.length > MAX_REPLY_BYTES) {
@@ -136,15 +143,18 @@ export class SessiondClient implements SessionBackend {
       socket?.end();
     }, this.requestTimeoutMs);
     let socket: Awaited<ReturnType<Connect>> | undefined;
+    let writer: SocketWriter | undefined;
     try {
       socket = await this.connect({
         unix: this.path,
         socket: {
           open: (s) => {
-            s.write(
+            writer = new SocketWriter(s, MAX_PENDING_INPUT_BYTES);
+            writer.write(
               `${JSON.stringify({ terminal: { session, cols: size.cols, rows: size.rows } })}\n`,
             );
           },
+          drain: () => writer?.flush(),
           data: (s, chunk) => {
             if (live) {
               onOutput(new Uint8Array(chunk));
@@ -196,14 +206,13 @@ export class SessiondClient implements SessionBackend {
     } finally {
       clearTimeout(timer);
     }
-    const open = socket;
+    const input = writer!;
     return {
       start: () => closed.promise,
-      write: (data) =>
-        void open.write(encodeInputFrame({ type: "input", data })),
+      write: (data) => input.write(encodeInputFrame({ type: "input", data })),
       resize: (cols, rows) =>
-        void open.write(encodeInputFrame({ type: "resize", cols, rows })),
-      close: () => open.end(),
+        input.write(encodeInputFrame({ type: "resize", cols, rows })),
+      close: () => input.end(),
     };
   }
 }

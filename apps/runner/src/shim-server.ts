@@ -1,6 +1,10 @@
 import { chmodSync, lstatSync, mkdirSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
-import type { CommandResult, DaedalCall } from "@daedalus/remote-protocol";
+import {
+  SocketWriter,
+  type CommandResult,
+  type DaedalCall,
+} from "@daedalus/remote-protocol";
 import { isQueueable } from "./shim-protocol";
 
 /**
@@ -86,12 +90,9 @@ export const MAX_SHIM_CONNECTIONS = 32;
 /** A request must arrive within this many seconds of connecting. */
 export const SHIM_READ_TIMEOUT_SECONDS = 10;
 
-const reply = (
-  socket: { write(data: string): number; end(): void },
-  result: CommandResult,
-) => {
-  socket.write(`${JSON.stringify(result)}\n`);
-  socket.end();
+const reply = (writer: SocketWriter, result: CommandResult) => {
+  writer.write(`${JSON.stringify(result)}\n`);
+  writer.end();
 };
 
 /** Answers one request per connection, read up to its first newline. */
@@ -112,25 +113,38 @@ export function listenForShim(
     bytes: number;
     done: boolean;
     counted: boolean;
+    writer: SocketWriter;
   }>({
     unix: path,
     socket: {
       open(socket) {
-        socket.data = { chunks: [], bytes: 0, done: false, counted: false };
+        socket.data = {
+          chunks: [],
+          bytes: 0,
+          done: false,
+          counted: false,
+          writer: new SocketWriter(socket),
+        };
         if (open >= connections) {
           socket.data.done = true;
-          reply(socket, refusal("The runner is busy; try again"));
+          reply(socket.data.writer, refusal("The runner is busy; try again"));
           return;
         }
         open += 1;
         socket.data.counted = true;
         socket.timeout(limits.readTimeoutSeconds ?? SHIM_READ_TIMEOUT_SECONDS);
       },
+      drain(socket) {
+        socket.data.writer.flush();
+      },
       timeout(socket) {
         if (socket.data.done) return;
         socket.data.done = true;
         socket.data.chunks = [];
-        reply(socket, refusal("The request did not arrive in time"));
+        reply(
+          socket.data.writer,
+          refusal("The request did not arrive in time"),
+        );
       },
       close(socket) {
         if (socket.data.counted) open -= 1;
@@ -147,7 +161,10 @@ export function listenForShim(
         if (state.bytes > bytes) {
           state.done = true;
           state.chunks = [];
-          reply(socket, refusal(`The request is over ${bytes} bytes`));
+          reply(
+            socket.data.writer,
+            refusal(`The request is over ${bytes} bytes`),
+          );
           return;
         }
         if (newline === -1) return;
@@ -163,7 +180,7 @@ export function listenForShim(
         } catch (error) {
           result = refusal((error as Error).message);
         }
-        reply(socket, result);
+        reply(socket.data.writer, result);
       },
     },
   });

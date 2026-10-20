@@ -1,6 +1,10 @@
 import { chmod, mkdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { RunnerMethod, RunnerMethods } from "@daedalus/remote-protocol";
+import {
+  SocketWriter,
+  type RunnerMethod,
+  type RunnerMethods,
+} from "@daedalus/remote-protocol";
 import { DaedalusError, type ErrorCode } from "../errors";
 import type { RunnerTransport } from "./link";
 
@@ -103,25 +107,45 @@ export async function serveBroker(
   await chmod(join(path, ".."), 0o700);
   // One left by an app that did not shut down cleanly.
   await rm(path, { force: true });
-  const buffers = new WeakMap<object, string>();
-  const listener = Bun.listen({
+  const listener = Bun.listen<{
+    chunks: Buffer[];
+    bytes: number;
+    done: boolean;
+    writer: SocketWriter;
+  }>({
     unix: path,
     socket: {
+      open(socket) {
+        socket.data = {
+          chunks: [],
+          bytes: 0,
+          done: false,
+          writer: new SocketWriter(socket),
+        };
+      },
+      // A reply, such as an `fs.read`, can be more than one write takes.
+      drain(socket) {
+        socket.data.writer.flush();
+      },
       data(socket, chunk) {
-        const buffer = (buffers.get(socket) ?? "") + chunk.toString();
-        if (buffer.length > MAX_REQUEST_BYTES) {
+        const state = socket.data;
+        // One request per connection.
+        if (state.done) return;
+        state.chunks.push(Buffer.from(chunk));
+        state.bytes += chunk.byteLength;
+        if (state.bytes > MAX_REQUEST_BYTES) {
           socket.end();
           return;
         }
+        if (!chunk.includes(10)) return;
+        state.done = true;
+        // Decoded once whole: a chunk can end inside a UTF-8 character.
+        const buffer = Buffer.concat(state.chunks).toString("utf8");
+        state.chunks = [];
         const end = buffer.indexOf("\n");
-        if (end === -1) {
-          buffers.set(socket, buffer);
-          return;
-        }
-        buffers.set(socket, "");
         void handle(transport, buffer.slice(0, end)).then((reply) => {
-          socket.write(`${JSON.stringify(reply)}\n`);
-          socket.end();
+          state.writer.write(`${JSON.stringify(reply)}\n`);
+          state.writer.end();
         });
       },
     },
@@ -140,7 +164,8 @@ async function ask(
   timeoutMs: number,
 ): Promise<BrokerReply | undefined> {
   const reply = Promise.withResolvers<BrokerReply | undefined>();
-  let buffer = "";
+  const chunks: Buffer[] = [];
+  let writer: SocketWriter | undefined;
   const timer = setTimeout(
     () =>
       reply.resolve({
@@ -155,12 +180,17 @@ async function ask(
       unix: brokerSocketPath(home),
       socket: {
         open(socket) {
-          socket.write(`${JSON.stringify(request)}\n`);
+          writer = new SocketWriter(socket);
+          writer.write(`${JSON.stringify(request)}\n`);
+        },
+        drain() {
+          writer?.flush();
         },
         data(_socket, chunk) {
-          buffer += chunk.toString();
+          chunks.push(Buffer.from(chunk));
+          if (!chunk.includes(10)) return;
+          const buffer = Buffer.concat(chunks).toString("utf8");
           const end = buffer.indexOf("\n");
-          if (end === -1) return;
           try {
             reply.resolve(JSON.parse(buffer.slice(0, end)) as BrokerReply);
           } catch {

@@ -1,8 +1,11 @@
 #!/usr/bin/env bun
 // The `daedal` command inside a workspace pod. It turns its arguments into a
 // call to the runner, which forwards it to the Mac.
-import type { CommandResult } from "@daedalus/remote-protocol";
-import { RUNNER_PATHS } from "@daedalus/remote-protocol";
+import {
+  RUNNER_PATHS,
+  SocketWriter,
+  type CommandResult,
+} from "@daedalus/remote-protocol";
 import { toWorkspacePath } from "./paths";
 import {
   FORWARDED_VARIABLES,
@@ -31,20 +34,28 @@ const request: ShimRequest = {
 };
 if (!process.stdin.isTTY) request.stdin = await Bun.stdin.text();
 
-let buffer = "";
+// Bytes, decoded once whole: a chunk can end inside a UTF-8 character.
+const chunks: Buffer[] = [];
+let writer: SocketWriter | undefined;
 const reply = Promise.withResolvers<CommandResult>();
 try {
   await Bun.connect({
     unix: socketPath(),
     socket: {
       open(socket) {
-        socket.write(`${JSON.stringify(request)}\n`);
+        writer = new SocketWriter(socket);
+        writer.write(`${JSON.stringify(request)}\n`);
+      },
+      drain() {
+        writer?.flush();
       },
       data(_socket, chunk) {
-        buffer += chunk.toString();
-        if (!buffer.includes("\n")) return;
+        chunks.push(Buffer.from(chunk));
+        if (!chunk.includes(10)) return;
         try {
-          reply.resolve(JSON.parse(buffer) as CommandResult);
+          reply.resolve(
+            JSON.parse(Buffer.concat(chunks).toString("utf8")) as CommandResult,
+          );
         } catch {
           reply.reject(new Error("The runner sent an unreadable reply"));
         }
@@ -62,6 +73,8 @@ try {
 }
 
 const result = await reply.promise.catch((error: Error) => fail(error.message));
-process.stdout.write(result.stdout);
-process.stderr.write(result.stderr);
+// Written in full before exiting: `process.exit` drops what a slow pipe has
+// not taken yet.
+await Bun.write(Bun.stdout, result.stdout);
+await Bun.write(Bun.stderr, result.stderr);
 process.exit(result.exitCode);
