@@ -10,7 +10,7 @@ import {
   mapCloudDirectory,
   REFUSED_EXIT_CODE,
 } from "./cloud-calls";
-import { CLOUD_CALLER_VARIABLE } from "./cloud-launch";
+import { CLOUD_CALLER_VARIABLE, CLOUD_MARK_VARIABLE } from "./cloud-launch";
 
 const WS = "11111111-1111-4111-8111-111111111111";
 const LOCAL = "cloudy";
@@ -280,6 +280,7 @@ describe("cloud daedal calls", () => {
       DAEDALUS_SESSION_ID: SESSION,
       DAEDALUS_TASK_NUMBER: "7",
       [CLOUD_CALLER_VARIABLE]: HOST,
+      [CLOUD_MARK_VARIABLE]: MARK,
     });
     expect(JSON.parse(options.stdin as string)).toEqual({ session_id: "x" });
   });

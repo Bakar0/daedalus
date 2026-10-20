@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { mkdir, rm } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
+import { readActivityRecord } from "@daedalus/core";
 import { runCommand } from "@daedalus/platform";
 import {
   NO_LOGIN_SHELL,
@@ -757,6 +758,41 @@ describe("daedal CLI contract", () => {
       expect(decision.data.delivered).toEqual([]);
       expect(decision.data.suppressed).toBe("focus_mode");
       expect(decision.data.reason).toBe("focus mode is on");
+    });
+  });
+
+  test("a hook event from a cloud session is stored with the cloud mark (N-5)", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const sessionId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+      const payload = JSON.stringify({
+        session_id: "claude-1",
+        hook_event_name: "Notification",
+        notification_type: "permission_prompt",
+        message: "Claude needs your permission to use Bash",
+      });
+      const local = await cli(
+        home,
+        ["agent", "event", "Notification"],
+        { DAEDALUS_SESSION_ID: sessionId },
+        payload,
+      );
+      expect(local.exitCode).toBe(0);
+      expect((await readActivityRecord(home, sessionId))?.detail).toBe(
+        "Claude needs your permission to use Bash",
+      );
+      await cli(
+        home,
+        ["agent", "event", "Notification"],
+        {
+          DAEDALUS_SESSION_ID: sessionId,
+          DAEDALUS_CLOUD_CALLER: "ws:cloud-1",
+          DAEDALUS_CLOUD_MARK: "[from cloud workspace final]",
+        },
+        payload,
+      );
+      expect((await readActivityRecord(home, sessionId))?.detail).toBe(
+        "[from cloud workspace final] Claude needs your permission to use Bash",
+      );
     });
   });
 

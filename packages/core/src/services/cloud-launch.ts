@@ -111,3 +111,10 @@ export function cloudEnvironment(input: {
  * as a local session whose folder holds the mapped working directory.
  */
 export const CLOUD_CALLER_VARIABLE = "DAEDALUS_CLOUD_CALLER";
+
+/**
+ * Set by the Mac next to `CLOUD_CALLER_VARIABLE`: the mark for text from
+ * that cloud workspace, `[from cloud workspace final]`, which a hook event's
+ * detail carries where the app shows it (N-5).
+ */
+export const CLOUD_MARK_VARIABLE = "DAEDALUS_CLOUD_MARK";

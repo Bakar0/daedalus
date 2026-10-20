@@ -3,7 +3,11 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { runCommand } from "@daedalus/platform";
 import type { CommandResult, DaedalCall } from "@daedalus/remote-protocol";
 import type { SqliteRepositories } from "../repositories";
-import { CLOUD_CALLER_VARIABLE, cloudHostWorkspace } from "./cloud-launch";
+import {
+  CLOUD_CALLER_VARIABLE,
+  CLOUD_MARK_VARIABLE,
+  cloudHostWorkspace,
+} from "./cloud-launch";
 import { cloudMark, markBlock, markOneLine } from "./cloud-mark";
 
 /**
@@ -405,6 +409,7 @@ export class CloudCalls {
           DAEDALUS_HOME: this.options.home,
           DAEDALUS_WORKSPACE_ID: workspaceId,
           [CLOUD_CALLER_VARIABLE]: hostId,
+          [CLOUD_MARK_VARIABLE]: cloudMark(workspace.name),
           ...(session ? { DAEDALUS_SESSION_ID: session.id } : {}),
           ...(task
             ? {

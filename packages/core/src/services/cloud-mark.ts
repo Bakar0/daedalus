@@ -1,4 +1,5 @@
 import type { AgentSession } from "../domain";
+import type { ActivityObservation } from "./hook-events";
 
 /**
  * How text from a cloud session is marked where agents and the user read it,
@@ -63,4 +64,28 @@ export function indentBody(body: string): string {
   return splitLines(body)
     .map((line, index) => (index === 0 || !line ? line : `  ${line}`))
     .join("\n");
+}
+
+/**
+ * A hook event from a cloud session, with the text the app shows for it
+ * marked: what a `Notification` or `PermissionRequest` says, and any detail
+ * of a session waiting on the user (N-5). Details Daedalus writes itself, of
+ * a session working or done, stay as they are.
+ */
+export function markCloudObservation(
+  event: string,
+  observation: ActivityObservation,
+  mark: string,
+): ActivityObservation {
+  if (
+    observation.detail === undefined ||
+    !(
+      event === "Notification" ||
+      event === "PermissionRequest" ||
+      observation.activity === "needs_input" ||
+      observation.activity === "needs_permission"
+    )
+  )
+    return observation;
+  return { ...observation, detail: markOneLine(mark, observation.detail) };
 }

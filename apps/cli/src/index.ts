@@ -1,6 +1,10 @@
 #!/usr/bin/env bun
 import {
+  CLOUD_CALLER_VARIABLE,
+  CLOUD_MARK_VARIABLE,
+  cloudMark,
   createApplicationContext,
+  markCloudObservation,
   DaedalusError,
   normalizeError,
   channelName,
@@ -155,14 +159,22 @@ async function captureAgentEvent(
     // only `Stop` pays for the database read.
     const routines =
       event === "Stop" && (await holdsRoutines(sessionId, migrationsDirectory));
-    const observation =
+    const observed =
       provider === "codex"
         ? observeCodexHook(event, payload, { routines })
         : (observeClaudeHook(event, payload, {
             backgroundAgents: await claudeBackgroundAgents(event, payload),
             routines,
           }) ?? observeCodexHook(event, payload, { routines }));
-    if (!observation) return 0;
+    if (!observed) return 0;
+    // From a cloud session, what it says is marked as the cloud's.
+    const observation = process.env[CLOUD_CALLER_VARIABLE]
+      ? markCloudObservation(
+          event,
+          observed,
+          process.env[CLOUD_MARK_VARIABLE] ?? cloudMark(undefined),
+        )
+      : observed;
     const providerSessionId =
       typeof payload.session_id === "string" ? payload.session_id : undefined;
     await applyObservation({
