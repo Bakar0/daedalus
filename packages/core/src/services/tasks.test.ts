@@ -72,6 +72,15 @@ describe("TaskService", () => {
           })
         ).id,
       ).toBe(task.id);
+      // An empty --workspace counts as none.
+      expect(
+        (
+          await context.tasks.resolve("1", {
+            workspace: "",
+            defaultWorkspace: async () => workspace.id,
+          })
+        ).id,
+      ).toBe(task.id);
       // The fallback is asked only when the reference names no workspace.
       let asked = 0;
       await context.tasks.resolve(`${workspace.slug}#1`, {

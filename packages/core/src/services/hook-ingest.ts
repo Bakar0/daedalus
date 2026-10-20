@@ -2,13 +2,14 @@ import { mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   admitsActivityWrite,
-  HEARTBEAT_INTERVAL_MS,
+  heartbeatDue,
   type ActivityOutcome,
 } from "./activity";
 import {
   deleteActivityRecord,
   readActivityRecord,
   writeActivityRecord,
+  type StoredActivityRecord,
 } from "./activity-store";
 import type { ApplicationContext } from "./context";
 import { recordSessionCost } from "./cost-ledger";
@@ -64,15 +65,24 @@ export interface HookIngestInput {
  */
 export async function ingestHook(input: HookIngestInput): Promise<void> {
   let opened: Promise<ApplicationContext> | undefined;
-  const context = () => (opened ??= input.openContext());
+  // A failed open is forgotten rather than cached, so a database that was
+  // busy for the routines check is tried again for the reading and the flush.
+  const context = () =>
+    (opened ??= Promise.resolve()
+      .then(input.openContext)
+      .catch((error: unknown) => {
+        opened = undefined;
+        throw error;
+      }));
   try {
-    const { home, sessionId } = input;
-    if (!sessionId || !SESSION_ID.test(sessionId) || !home) return;
-    const payload = parsePayload(await input.readPayload());
+    const hook = await readHookInput(input);
+    if (!hook) return;
+    const { home, sessionId } = hook;
+    const payload = parsePayload(hook.text);
     if (!payload) return;
     const provider =
-      // Only Codex carries a turn id, and only Claude carries a prompt id;
-      // either way the hook name tells us which vocabulary to read.
+      // Only Codex payloads carry a turn or thread id. Anything else is read
+      // as Claude, and an event Claude does not know falls back to Codex.
       typeof payload.turn_id === "string" ||
       typeof payload.thread_id === "string"
         ? "codex"
@@ -123,8 +133,24 @@ export async function ingestHook(input: HookIngestInput): Promise<void> {
   }
 }
 
-function parsePayload(text: string): Record<string, unknown> | undefined {
+/**
+ * The checks both sinks make before they read anything: a valid session id
+ * and a home, then a bounded, non-empty payload. stdin is read only once the
+ * session checks out.
+ */
+async function readHookInput(input: {
+  home: string | undefined;
+  sessionId: string | undefined;
+  readPayload: () => Promise<string>;
+}): Promise<{ home: string; sessionId: string; text: string } | undefined> {
+  const { home, sessionId } = input;
+  if (!sessionId || !SESSION_ID.test(sessionId) || !home) return undefined;
+  const text = await input.readPayload();
   if (!text.trim() || text.length > MAX_PAYLOAD_BYTES) return undefined;
+  return { home, sessionId, text };
+}
+
+function parsePayload(text: string): Record<string, unknown> | undefined {
   try {
     const parsed: unknown = JSON.parse(text);
     return parsed && typeof parsed === "object" && !Array.isArray(parsed)
@@ -184,9 +210,9 @@ async function claudeBackgroundAgents(
  * That replay is also why the record takes the index's rule. The record is
  * written only when the rule admits the observation over the record already
  * there, and when the index then rejects it anyway (the two disagreed, after
- * a hook ran with the database down) the write is undone. A record left
- * behind by a concurrent hook is harmless: `restore()` skips any record older
- * than the index.
+ * a hook ran with the database down) the write is undone. The undo happens
+ * only while the record is still the one this hook wrote, so it never puts an
+ * old reading over a newer one from a concurrent hook.
  */
 async function applyObservation(input: {
   home: string;
@@ -196,39 +222,36 @@ async function applyObservation(input: {
   context: () => Promise<ApplicationContext>;
 }): Promise<void> {
   const { home, sessionId, observation } = input;
+  const binding = input.providerSessionId
+    ? { providerSessionId: input.providerSessionId }
+    : {};
   const prior = await readActivityRecord(home, sessionId).catch(
     () => undefined,
   );
-  let written = false;
+  let written: StoredActivityRecord | undefined;
   if (observation.heartbeat) {
     // Subagents fire many hooks a minute. The record file answers "is there
     // anything to refresh?" without opening the database, and a heartbeat
     // must never write the record itself: it carries no reading of its own.
-    if (
-      !prior ||
-      (observation.ifActivity &&
-        !observation.ifActivity.includes(prior.activity)) ||
-      Date.now() - Date.parse(prior.observedAt) < HEARTBEAT_INTERVAL_MS
-    )
+    if (!prior || !heartbeatDue(prior, observation.ifActivity, Date.now()))
       return;
   } else if (
     !observation.clear &&
     admitsActivityWrite(prior, observation, Date.now())
   ) {
     const now = new Date().toISOString();
-    written = await writeActivityRecord(home, {
+    const record: StoredActivityRecord = {
       sessionId,
       activity: observation.activity,
       detail: observation.detail ?? null,
       since: now,
       observedAt: now,
       source: observation.source,
-      ...(input.providerSessionId
-        ? { providerSessionId: input.providerSessionId }
-        : {}),
-    }).then(
-      () => true,
-      () => false,
+      ...binding,
+    };
+    written = await writeActivityRecord(home, record).then(
+      () => record,
+      () => undefined,
     );
   }
   let outcome: ActivityOutcome | undefined;
@@ -237,21 +260,29 @@ async function applyObservation(input: {
     outcome = await context.activity.observe({
       sessionId,
       observation,
-      ...(input.providerSessionId
-        ? { providerSessionId: input.providerSessionId }
-        : {}),
+      ...binding,
     });
   } catch {
     // The record on disk is already correct; the index catches up on restart.
     return;
   }
   if (!written || !outcome || outcome.applied) return;
+  const current = await readActivityRecord(home, sessionId).catch(
+    () => undefined,
+  );
+  if (!current || !sameRecord(current, written)) return;
   await (
     prior
       ? writeActivityRecord(home, prior)
       : deleteActivityRecord(home, sessionId)
   ).catch(() => undefined);
 }
+
+const sameRecord = (left: StoredActivityRecord, right: StoredActivityRecord) =>
+  left.observedAt === right.observedAt &&
+  left.activity === right.activity &&
+  left.source === right.source &&
+  left.detail === right.detail;
 
 /**
  * The sink for Claude's status line, as `daedal agent telemetry`. It writes
@@ -266,11 +297,10 @@ export async function ingestStatusLine(input: {
   readPayload: () => Promise<string>;
 }): Promise<void> {
   try {
-    const { home, sessionId } = input;
-    if (!sessionId || !SESSION_ID.test(sessionId) || !home) return;
-    const text = await input.readPayload();
-    if (text.length > MAX_PAYLOAD_BYTES) return;
-    const payload = JSON.parse(text) as {
+    const hook = await readHookInput(input);
+    if (!hook) return;
+    const { home, sessionId } = hook;
+    const payload = JSON.parse(hook.text) as {
       model?: unknown;
       context_window?: unknown;
       rate_limits?: unknown;

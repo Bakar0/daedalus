@@ -171,6 +171,20 @@ export function admitsActivityWrite(
   return at - Date.parse(stored.observedAt) >= ACTIVITY_STALE_AFTER_MS;
 }
 
+/**
+ * Whether a heartbeat may refresh `stored`: the reading is one the heartbeat
+ * keeps alive, and it has not been refreshed within `HEARTBEAT_INTERVAL_MS`.
+ * The hook asks this of the record before it opens the database at all.
+ */
+export function heartbeatDue(
+  stored: Pick<AgentActivityState, "activity" | "observedAt">,
+  ifActivity: readonly AgentActivity[] | undefined,
+  at: number,
+): boolean {
+  if (ifActivity && !ifActivity.includes(stored.activity)) return false;
+  return at - Date.parse(stored.observedAt) >= HEARTBEAT_INTERVAL_MS;
+}
+
 const ACTIVITY_HEADLINE: Record<AgentActivity, string | null> = {
   unknown: null,
   working: null,
@@ -405,10 +419,8 @@ export class ActivityService {
     ifActivity: readonly AgentActivity[] | undefined,
   ): Promise<ActivityOutcome | undefined> {
     const stored = this.repositories.findAgentActivity(sessionId);
-    if (!stored || (ifActivity && !ifActivity.includes(stored.activity)))
-      return undefined;
     const at = this.now();
-    if (at.getTime() - Date.parse(stored.observedAt) < HEARTBEAT_INTERVAL_MS)
+    if (!stored || !heartbeatDue(stored, ifActivity, at.getTime()))
       return undefined;
     const next: StoredAgentActivity = {
       ...stored,

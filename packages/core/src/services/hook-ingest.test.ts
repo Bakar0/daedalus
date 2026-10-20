@@ -186,6 +186,65 @@ describe("ingestHook", () => {
     });
   });
 
+  test("the undo never puts an old record over a concurrent hook's newer one", async () => {
+    await withSession(async ({ context, sessionId, home, ingest }) => {
+      await ingest("Notification", permissionPrompt);
+      const prior = {
+        sessionId,
+        activity: "idle" as const,
+        detail: null,
+        since: new Date().toISOString(),
+        observedAt: new Date().toISOString(),
+        source: "hook" as const,
+      };
+      await writeActivityRecord(home, prior);
+      // Another hook writes its own record while this one is still opening
+      // the database.
+      const concurrent = {
+        ...prior,
+        activity: "needs_input" as const,
+        detail: "Which branch?",
+        observedAt: new Date(Date.now() + 1_000).toISOString(),
+      };
+      await ingestHook({
+        home,
+        sessionId,
+        event: "PreToolUse",
+        readPayload: async () =>
+          JSON.stringify({ hook_event_name: "PreToolUse", ...bashTool }),
+        openContext: async () => {
+          await writeActivityRecord(home, concurrent);
+          return { ...context, close: () => undefined };
+        },
+      });
+      expect(await readActivityRecord(home, sessionId)).toEqual(concurrent);
+    });
+  });
+
+  test("a failed open is retried by the next step instead of skipping the rest", async () => {
+    await withSession(async ({ context, sessionId, home }) => {
+      let attempts = 0;
+      await ingestHook({
+        home,
+        sessionId,
+        event: "Stop",
+        readPayload: async () =>
+          JSON.stringify({
+            hook_event_name: "Stop",
+            last_assistant_message: "All done.",
+          }),
+        openContext: async () => {
+          attempts += 1;
+          if (attempts === 1) throw new Error("SQLITE_BUSY");
+          return { ...context, close: () => undefined };
+        },
+      });
+      // The routines check failed; the reading and the flush share the retry.
+      expect(attempts).toBe(2);
+      expect(context.activity.get(sessionId)?.activity).toBe("done");
+    });
+  });
+
   test("writes the record when the control plane cannot be opened", async () => {
     await withSession(async ({ sessionId, home }) => {
       await ingestHook({

@@ -145,7 +145,7 @@ export class TaskService {
     if (!scoped && !numeric) return this.get(reference);
     const number = Number(scoped?.[2] ?? numeric?.[1]);
     const workspace =
-      scoped?.[1] ?? options.workspace ?? (await options.defaultWorkspace?.());
+      scoped?.[1] || options.workspace || (await options.defaultWorkspace?.());
     if (!workspace)
       throw new DaedalusError(
         "VALIDATION",
