@@ -105,4 +105,63 @@ describe("ReadModel", () => {
       expect(await model.version()).toBe(withTask);
     });
   });
+
+  test("rows are read after sessions reconcile with tmux", async () => {
+    await withContext(async (context) => {
+      const workspace = await context.workspaces.create({ name: "Update" });
+      const id = crypto.randomUUID();
+      const now = new Date().toISOString();
+      // A Codex session that stopped at its startup question, and whose tmux
+      // session is gone: no FakeTmux session was ever made for it.
+      context.repositories.createAgent({
+        id,
+        workspaceId: workspace.id,
+        taskId: null,
+        name: "Update",
+        provider: "codex",
+        kind: "agent",
+        tmuxSession: `daedalus_${id.replaceAll("-", "")}`,
+        command: "/bin/sh",
+        args: [],
+        workingDirectory: workspace.path,
+        status: "running",
+        exitCode: null,
+        startedAt: now,
+        endedAt: null,
+        providerSessionId: null,
+        archivedAt: null,
+        resumeCount: 0,
+        lostReason: null,
+        rebirthRequestedAt: null,
+        resumeOnStart: false,
+        position: context.repositories.nextAgentPosition(workspace.id),
+        pinnedAt: null,
+        color: null,
+        account: null,
+        teamId: null,
+        teamHandle: null,
+        spawnedBy: null,
+        autoRebirthPercent: null,
+      });
+      context.repositories.saveSessionAttention({
+        sessionId: id,
+        workspaceId: workspace.id,
+        reasons: [
+          {
+            id: crypto.randomUUID(),
+            text: "Codex is asking something before it starts. Answer it in the session's terminal.",
+            raisedAt: now,
+            source: "pane",
+          },
+        ],
+        raisedAt: now,
+        updatedAt: now,
+      });
+
+      const view = await new ReadModel(context).snapshot();
+
+      expect(view.agents.map((agent) => agent.status)).toEqual(["lost"]);
+      expect(view.attention).toEqual([]);
+    });
+  });
 });

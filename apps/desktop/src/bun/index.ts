@@ -317,7 +317,9 @@ const readModel = new ReadModel(context);
  * window's own mutation replaces it at once and the next tick compares against
  * that rather than announcing the same change a second time.
  */
-let fingerprint = readModel.version().catch(() => "");
+let announcedVersion = readModel.version().catch(() => "");
+/** The first tick announces whatever it finds, as the window may predate it. */
+let firstTick = true;
 let dockBadgeCount = 0;
 
 /**
@@ -332,8 +334,11 @@ async function recordAttentionCount(count: number): Promise<void> {
   await context.logger.write("info", "attention_count_changed", { count });
 }
 
-function announce(source: "desktop" | "external"): void {
-  fingerprint = readModel.version().catch(() => "");
+function announce(source: "desktop" | "external", version?: string): void {
+  announcedVersion =
+    version === undefined
+      ? readModel.version().catch(() => "")
+      : Promise.resolve(version);
   // There is no window between closing one and reopening from the Dock, and
   // a repository finishing its clone in that gap must not throw.
   revision += 1;
@@ -840,11 +845,13 @@ setInterval(async () => {
     await recordAttentionCount(
       context.repositories.listSessionAttention().length,
     );
-    const seen = fingerprint;
+    const seen = announcedVersion;
     const next = await readModel.version();
     // A mutation announced while this read ran has already reloaded the
     // windows, and the next tick compares against its version.
-    if (fingerprint === seen && next !== (await seen)) announce("external");
+    if (announcedVersion !== seen) return;
+    if (firstTick || next !== (await seen)) announce("external", next);
+    firstTick = false;
   } catch (error) {
     await context.logger.write("error", "desktop_change_check_failed", {
       message: error instanceof Error ? error.message : String(error),

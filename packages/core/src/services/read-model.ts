@@ -3,23 +3,41 @@ import type { ApplicationContext } from "./context";
 import { largeFiles } from "./context-files";
 
 /**
- * One part of what a window shows: how to read it, and how to tell cheaply
- * that it changed.
+ * How to tell cheaply that a source changed: a function over the rows its
+ * read is built from, never the built value, since a read may stat folders or
+ * ask tmux and the host compares versions every tick. A source that only
+ * changes when something already announces it, such as a window's own
+ * mutation, is `unwatched` and says why.
+ */
+type Version = (() => unknown) | { unwatched: string };
+
+const unwatched = (reason: string): Version => ({ unwatched: reason });
+
+/**
+ * One part of what a window shows: how to read it, and its version.
  *
- * `version` reads the rows `read` is built from, never the built value:
- * `read` may stat folders or ask tmux, and the host compares versions every
- * tick. A source that only changes when something already announces it, such
- * as a window's own mutation, says so with `null` and a comment.
+ * A `live` source asks outside the database, and reading agents or terminals
+ * reconciles them with tmux first: a session whose tmux is gone becomes lost,
+ * and one that ended at a startup question loses its attention. So a snapshot
+ * awaits every `live` read before it reads any `rows` source.
  */
 interface Source<T> {
+  phase: "live" | "rows";
   read(): T | Promise<T>;
-  version: (() => unknown) | null;
+  version: Version;
 }
 
-const source = <T>(
-  read: () => T | Promise<T>,
-  version: (() => unknown) | null,
-): Source<T> => ({ read, version });
+const live = <T>(read: () => T | Promise<T>, version: Version): Source<T> => ({
+  phase: "live",
+  read,
+  version,
+});
+
+const rows = <T>(read: () => T, version: Version): Source<T> => ({
+  phase: "rows",
+  read,
+  version,
+});
 
 function sources(context: ApplicationContext) {
   const { repositories } = context;
@@ -29,7 +47,7 @@ function sources(context: ApplicationContext) {
       context.teams.list().map((team) => team.lead),
     );
   return {
-    workspaces: source(
+    workspaces: live(
       () => context.workspaces.listWithHealth(),
       // A workspace's repositories are read by its view on each reload, so a
       // repository attached outside the window reloads it too.
@@ -38,7 +56,7 @@ function sources(context: ApplicationContext) {
         repositories.listWorkspaceRepositories(),
       ],
     ),
-    tasks: source(
+    tasks: live(
       async () => {
         const tasks = await context.tasks.list({});
         const references = context.tasks.references(tasks);
@@ -49,54 +67,53 @@ function sources(context: ApplicationContext) {
       },
       () => repositories.listTasks({}),
     ),
-    agents: source(
+    agents: live(
       () => context.agents.list({ includeArchived: true }),
       () => repositories.listAgents(),
     ),
-    terminals: source(
+    terminals: live(
       () => context.terminals.list(),
       () => repositories.listIntegratedTerminals(),
     ),
-    repositories: source(
+    repositories: rows(
       () => context.workspaceContent.listRepositoryLibrary(),
       () => repositories.listRepositoryLibrary(),
     ),
     // Usage is read from provider files, not rows, so its version is the read
     // itself. The service caches it, so most ticks cost nothing.
-    telemetry: source(
+    telemetry: live(
       () => context.telemetry.read(),
       () => context.telemetry.read(),
     ),
     // Activity and attention are the point of the indicators: a session that
     // starts waiting on the user has to reach the window on the next tick,
     // exactly like a session that starts or stops.
-    sessionActivity: source(
+    sessionActivity: rows(
       () => context.activity.list(),
       () => repositories.listAgentActivity(),
     ),
-    attention: source(
+    attention: rows(
       () => context.activity.listAttention(),
       () => repositories.listSessionAttention(),
     ),
     // Git status and pull requests are measured in this process, which
     // announces them when they change.
-    worktrees: source(
+    worktrees: rows(
       () => context.workspaceContent.listWorktrees(),
       () => repositories.listSessionWorktrees(),
     ),
-    // Recorded by the same pull request check, which announces it.
-    shipped: source(
+    shipped: rows(
       () => context.workspaceContent.listShippedPullRequests(),
-      null,
+      unwatched("recorded by the pull request check, which announces it"),
     ),
-    toasts: source(
+    toasts: rows(
       () => context.notifications.pending("toast"),
       () => repositories.listPendingNotifications(),
     ),
     // A run starting or ending, or a hold changing, changes what the
     // session's bar says, so it reloads too. A team is its lead's
     // orchestration ability, so this covers `teams` as well.
-    abilities: source(
+    abilities: rows(
       () => repositories.abilities.list(),
       () =>
         repositories.abilities.list().map((ability) => ({
@@ -112,37 +129,36 @@ function sources(context: ApplicationContext) {
             : {}),
         })),
     ),
-    // Covered by `abilities`.
-    routines: source(
+    routines: rows(
       () =>
         context.abilities
           .holders("routines")
           .map((ability) => context.routineDelivery.status(ability)),
-      null,
+      unwatched("covered by abilities"),
     ),
-    // Covered by `abilities`.
-    teams: source(() => context.teams.list(), null),
-    // Covered by `abilities`: a report's task moves with the report.
-    routineReports: source(
+    teams: rows(
+      () => context.teams.list(),
+      unwatched("covered by abilities: a team is its lead's ability"),
+    ),
+    routineReports: rows(
       () => repositories.routines.listReportsWithTasks(),
-      null,
+      unwatched("covered by abilities: a report's task moves with the report"),
     ),
     // A journal or team file crossing its compact size changes a header. To
     // the kilobyte, so each line a session appends does not reload the window.
-    largeFiles: source(currentLargeFiles, () =>
+    largeFiles: rows(currentLargeFiles, () =>
       currentLargeFiles().map(
         (file) =>
           `${file.kind}:${file.sessionId ?? file.workspaceId}:${Math.round(file.bytes / 1000)}`,
       ),
     ),
-    // Settings and accounts change through the window's own requests.
-    settings: source(
+    settings: live(
       async () => ({
         config: context.config,
         capabilities: await context.agents.capabilities(),
         accounts: context.accounts.list(),
       }),
-      null,
+      unwatched("settings and accounts change through the window's requests"),
     ),
   } satisfies Record<string, Source<unknown>>;
 }
@@ -171,19 +187,20 @@ export class ReadModel {
     const entries = Object.entries(this.sources) as Array<
       [keyof Sources, Source<unknown>]
     >;
-    const values = await Promise.all(entries.map(([, part]) => part.read()));
-    return Object.fromEntries(
-      entries.map(([name], index) => [name, values[index]]),
-    ) as ReadModelView;
+    const view: Record<string, unknown> = {};
+    const first = entries.filter(([, part]) => part.phase === "live");
+    const values = await Promise.all(first.map(([, part]) => part.read()));
+    first.forEach(([name], index) => (view[name] = values[index]));
+    for (const [name, part] of entries)
+      if (part.phase === "rows") view[name] = part.read();
+    return view as ReadModelView;
   }
 
   async version(): Promise<string> {
     const parts: Record<string, unknown> = {};
-    for (const [name, part] of Object.entries(this.sources)) {
-      if (!part.version) continue;
-      const value = part.version();
-      parts[name] = value instanceof Promise ? await value : value;
-    }
+    for (const [name, part] of Object.entries(this.sources))
+      if (typeof part.version === "function")
+        parts[name] = await part.version();
     return JSON.stringify(parts);
   }
 }
