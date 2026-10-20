@@ -95,8 +95,8 @@ export interface DaedalCall {
   env: Record<string, string>;
   stdin?: string;
   /**
-   * Set by the shim for hook events (`daedal agent event ...`). The runner
-   * queues these while the Mac is offline, on disk under
+   * Set by the runner, from `argv`, for hook events (`daedal agent event
+   * ...`). The runner queues these while the Mac is offline, on disk under
    * `/workspace/.daedalus-runner/queue.jsonl`, and replays them in order when
    * the Mac reconnects. Any other call fails at once while the Mac is offline,
    * with exit code 75 and "Daedalus on the Mac is offline".
@@ -163,8 +163,12 @@ export const RUNNER_PATHS = {
    * network file systems cannot hold them.
    */
   runtime: "/run/daedalus-runner",
-  /** Where the runner listens for the `daedal` shim. */
-  shimSocket: "/run/daedalus-runner/daedal.sock",
+  /**
+   * Where the runner listens for the `daedal` shim: in a folder the runner
+   * makes and owns (mode 0755), so the session container cannot take the
+   * path first.
+   */
+  shimSocket: "/run/daedalus-runner/runner/daedal.sock",
   /** Where `sessiond` listens for the runner. */
   sessionSocket: "/run/daedalus-runner/session.sock",
 } as const;

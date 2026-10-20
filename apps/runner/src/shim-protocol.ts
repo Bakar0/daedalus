@@ -6,14 +6,16 @@ export interface ShimRequest {
   cwd: string;
   env: Record<string, string>;
   stdin?: string;
-  queueable: boolean;
 }
 
 export const socketPath = (
   environment: NodeJS.ProcessEnv = process.env,
 ): string => environment.DAEDALUS_RUNNER_SOCKET ?? RUNNER_PATHS.shimSocket;
 
-/** `daedal agent event ...` is a hook event and may wait for the Mac. */
+/**
+ * `daedal agent event ...` is a hook event and may wait for the Mac. The
+ * runner decides this from the arguments; the shim does not say (N-4).
+ */
 export const isQueueable = (argv: string[]): boolean =>
   argv[0] === "agent" && argv[1] === "event";
 

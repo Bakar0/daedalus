@@ -6,7 +6,6 @@ import { RUNNER_PATHS } from "@daedalus/remote-protocol";
 import { toWorkspacePath } from "./paths";
 import {
   FORWARDED_VARIABLES,
-  isQueueable,
   socketPath,
   type ShimRequest,
 } from "./shim-protocol";
@@ -29,7 +28,6 @@ const request: ShimRequest = {
         entry[1] !== undefined,
     ),
   ),
-  queueable: isQueueable(argv),
 };
 if (!process.stdin.isTTY) request.stdin = await Bun.stdin.text();
 

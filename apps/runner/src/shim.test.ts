@@ -63,7 +63,8 @@ test("sends argv, DAEDALUS_ variables and stdin; prints the result and exits wit
   expect(run.stdout).toBe("out\n");
   expect(run.stderr).toBe("err\n");
   expect(run.seen.argv).toEqual(["agent", "event", "stop"]);
-  expect(run.seen.queueable).toBe(true);
+  // The runner decides what may wait in its queue, from argv.
+  expect(run.seen).not.toHaveProperty("queueable");
   expect(run.seen.stdin).toBe('{"hook":1}');
   expect(run.seen.env.DAEDALUS_SESSION_ID).toBe("sess-1");
   expect(run.seen.env.SECRET_THING).toBeUndefined();
@@ -71,15 +72,6 @@ test("sends argv, DAEDALUS_ variables and stdin; prints the result and exits wit
   expect(run.seen.env.DAEDALUS_MAC_KEY).toBeUndefined();
   expect(Object.keys(run.seen.env)).toEqual(["DAEDALUS_SESSION_ID"]);
   expect(run.seen.cwd).toBe(".");
-});
-
-test("only agent event calls are queueable", async () => {
-  const run = await runShim(["task", "list"], () => ({
-    exitCode: 0,
-    stdout: "",
-    stderr: "",
-  }));
-  expect(run.seen.queueable).toBe(false);
 });
 
 test("exits 75 when the runner socket is missing", async () => {

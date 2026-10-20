@@ -453,7 +453,7 @@ export class Runner {
             `dropping queued event ${head.callId}: ${(error as Error).message}`,
           );
         }
-        this.#o.queue.shift();
+        this.#o.queue.remove(head.callId);
       }
     } finally {
       this.#draining = false;

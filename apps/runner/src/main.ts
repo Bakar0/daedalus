@@ -1,21 +1,12 @@
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-} from "node:fs";
+import { chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  RUNNER_ENV,
-  RUNNER_PATHS,
-  type CommandResult,
-} from "@daedalus/remote-protocol";
+import { RUNNER_ENV, RUNNER_PATHS } from "@daedalus/remote-protocol";
 import { loadOrCreateIdentity } from "./identity";
 import { EventQueue } from "./queue";
 import { Runner, type ConnectRelay } from "./runner";
 import { SessiondClient } from "./sessiond-client";
-import { socketPath, type ShimRequest } from "./shim-protocol";
+import { socketPath } from "./shim-protocol";
+import { listenForShim, prepareShimSocket } from "./shim-server";
 
 // The entry point of the runner container (uid 1000). It runs no tmux and no
 // workspace command and does not mount /workspace: the session container's
@@ -85,40 +76,8 @@ async function main(): Promise<void> {
   });
 
   const path = socketPath();
-  if (existsSync(path)) rmSync(path);
-  Bun.listen<{ buffer: string }>({
-    unix: path,
-    socket: {
-      open(socket) {
-        socket.data = { buffer: "" };
-      },
-      async data(socket, chunk) {
-        socket.data.buffer += chunk.toString();
-        if (!socket.data.buffer.includes("\n")) return;
-        let result: CommandResult;
-        try {
-          const request = JSON.parse(socket.data.buffer) as ShimRequest;
-          result = await runner.daedalCall({
-            callId: crypto.randomUUID(),
-            argv: request.argv,
-            cwd: request.cwd,
-            env: request.env,
-            ...(request.stdin === undefined ? {} : { stdin: request.stdin }),
-            queueable: request.queueable,
-            at: new Date().toISOString(),
-          });
-        } catch (error) {
-          result = {
-            exitCode: 1,
-            stdout: "",
-            stderr: `${(error as Error).message}\n`,
-          };
-        }
-        socket.write(`${JSON.stringify(result)}\n`);
-        socket.end();
-      },
-    },
-  });
+  prepareShimSocket(path);
+  listenForShim(path, (call) => runner.daedalCall(call));
   // Any uid in the pod may call `daedal`; sessions run as another uid.
   chmodSync(path, 0o666);
 
