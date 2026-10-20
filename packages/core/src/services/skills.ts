@@ -25,7 +25,6 @@ import {
   readdir,
   readlink,
   readFile,
-  rename,
   rm,
   symlink,
   unlink,

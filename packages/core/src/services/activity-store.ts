@@ -1,5 +1,5 @@
 import { writeFileAtomic } from "@daedalus/platform";
-import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { readdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type {
   AgentActivity,

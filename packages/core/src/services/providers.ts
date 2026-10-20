@@ -7,7 +7,7 @@ import {
   standardExecutableFallbacks,
 } from "@daedalus/platform";
 import { runCommand, writeFileAtomic } from "@daedalus/platform";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import {

@@ -296,6 +296,64 @@ export function channelIdentifier(home: string): string {
     : STABLE_APP_IDENTIFIER;
 }
 
+/** The settings `updateSettings` may change; each is a field of the config. */
+export type SettingsPatch = Partial<
+  Pick<
+    DaedalusConfig,
+    | "workspaceInstructionFilesEnabled"
+    | "autoRestoreSessionsEnabled"
+    | "trustSessionFoldersEnabled"
+    | "autoRebirthPercent"
+    | "focusMode"
+    | "remoteEnabled"
+    | "remoteKeepAwake"
+    | "remoteMacName"
+    | "managedSkills"
+    | "skillOverrides"
+    | "claudeOverridesWritten"
+    | "claudeOutputStyleWritten"
+    | "accounts"
+    | "defaultLogins"
+  >
+>;
+
+/** The settings in a stored config, validated, with defaults for the rest. */
+function settingsFromStored(
+  stored: StoredConfig,
+): Required<Omit<SettingsPatch, "claudeOutputStyleWritten">> &
+  Pick<SettingsPatch, "claudeOutputStyleWritten"> {
+  return {
+    workspaceInstructionFilesEnabled:
+      stored.workspaceInstructionFilesEnabled !== false,
+    autoRestoreSessionsEnabled: stored.autoRestoreSessionsEnabled !== false,
+    trustSessionFoldersEnabled: stored.trustSessionFoldersEnabled !== false,
+    autoRebirthPercent:
+      typeof stored.autoRebirthPercent === "number" &&
+      Number.isInteger(stored.autoRebirthPercent) &&
+      stored.autoRebirthPercent >= 10 &&
+      stored.autoRebirthPercent <= 100
+        ? stored.autoRebirthPercent
+        : null,
+    focusMode: stored.focusMode === true,
+    remoteEnabled: stored.remoteEnabled === true,
+    remoteKeepAwake: stored.remoteKeepAwake === true,
+    remoteMacName:
+      typeof stored.remoteMacName === "string" ? stored.remoteMacName : "",
+    managedSkills: stored.managedSkills || {},
+    skillOverrides: stored.skillOverrides || {},
+    claudeOverridesWritten: stored.claudeOverridesWritten || [],
+    ...(stored.claudeOutputStyleWritten
+      ? { claudeOutputStyleWritten: stored.claudeOutputStyleWritten }
+      : {}),
+    accounts: storedAccounts(stored.accounts),
+    defaultLogins:
+      typeof stored.defaultLogins?.claude === "string" &&
+      CLAUDE_LOGINS.includes(stored.defaultLogins.claude)
+        ? { claude: stored.defaultLogins.claude as ClaudeLogin }
+        : {},
+  };
+}
+
 export async function loadConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<DaedalusConfig> {
@@ -340,40 +398,13 @@ export async function loadConfig(
     cursorHome: resolve(
       expandHome(env.DAEDALUS_CURSOR_HOME || join(homedir(), ".cursor")),
     ),
-    workspaceInstructionFilesEnabled:
-      stored.workspaceInstructionFilesEnabled !== false,
-    autoRestoreSessionsEnabled: stored.autoRestoreSessionsEnabled !== false,
-    trustSessionFoldersEnabled: stored.trustSessionFoldersEnabled !== false,
-    autoRebirthPercent:
-      typeof stored.autoRebirthPercent === "number" &&
-      Number.isInteger(stored.autoRebirthPercent) &&
-      stored.autoRebirthPercent >= 10 &&
-      stored.autoRebirthPercent <= 100
-        ? stored.autoRebirthPercent
-        : null,
-    focusMode: stored.focusMode === true,
-    remoteEnabled: stored.remoteEnabled === true,
-    remoteKeepAwake: stored.remoteKeepAwake === true,
-    remoteMacName:
-      typeof stored.remoteMacName === "string" ? stored.remoteMacName : "",
     remoteRelay:
       env.DAEDALUS_REMOTE_RELAY || stored.remoteRelay || DEFAULT_REMOTE_RELAY,
+    ...settingsFromStored(stored),
     agents: stored.agents || {
       codex: { executable: "codex", args: [] },
       claude: { executable: "claude", args: [] },
     },
-    managedSkills: stored.managedSkills || {},
-    skillOverrides: stored.skillOverrides || {},
-    claudeOverridesWritten: stored.claudeOverridesWritten || [],
-    ...(stored.claudeOutputStyleWritten
-      ? { claudeOutputStyleWritten: stored.claudeOutputStyleWritten }
-      : {}),
-    accounts: storedAccounts(stored.accounts),
-    defaultLogins:
-      typeof stored.defaultLogins?.claude === "string" &&
-      CLAUDE_LOGINS.includes(stored.defaultLogins.claude)
-        ? { claude: stored.defaultLogins.claude as ClaudeLogin }
-        : {},
     ...(typeof stored.awsExecutable === "string" && stored.awsExecutable
       ? { awsExecutable: stored.awsExecutable }
       : {}),
@@ -411,38 +442,22 @@ function storedAccounts(value: unknown): AccountProfile[] {
 
 export const isAccountId = (value: string): boolean => ACCOUNT_ID.test(value);
 
-/** The settings `updateSettings` may change; each is a field of the config. */
-export type SettingsPatch = Partial<
-  Pick<
-    DaedalusConfig,
-    | "workspaceInstructionFilesEnabled"
-    | "autoRestoreSessionsEnabled"
-    | "trustSessionFoldersEnabled"
-    | "autoRebirthPercent"
-    | "focusMode"
-    | "remoteEnabled"
-    | "remoteKeepAwake"
-    | "remoteMacName"
-    | "managedSkills"
-    | "skillOverrides"
-    | "claudeOverridesWritten"
-    | "claudeOutputStyleWritten"
-    | "accounts"
-    | "defaultLogins"
-  >
->;
-
 /** The write in flight for each home, so saves run one after another. */
 const settingsQueues = new Map<string, Promise<unknown>>();
 
 /**
- * Changes the stored settings and the live config together. `mutate` receives
- * the config as the previous save left it and returns the fields to change;
- * a field returned as `undefined` is removed. Saves for one home run one at a
- * time, so two callers that each add a key both keep theirs. The file is
- * merged at the top level and replaced atomically, so a crash mid-write can
- * never leave a truncated config behind. The live config changes only after
- * the file was written.
+ * Changes the stored settings and the live config together. Saves for one home
+ * run one at a time. Each reads the file again first and hands `mutate` the
+ * config with the file's settings laid over it, so a key another process
+ * wrote, or a nested entry such as an account the CLI added, survives. `mutate`
+ * returns the fields to change; a field returned as `undefined` is removed
+ * from the file. The file is merged at the top level and replaced atomically,
+ * so a crash mid-write can never leave a truncated config behind. Afterwards
+ * the live config takes every setting from what was written.
+ *
+ * A copy of the config, such as `accountConfig` makes, shares the queue but is
+ * a separate object: its own saves refresh it, and it catches up with the
+ * file on its next one. The file is right either way.
  */
 export function updateSettings(
   config: DaedalusConfig,
@@ -452,23 +467,32 @@ export function updateSettings(
   const run = previous
     .catch(() => undefined)
     .then(async () => {
-      const patch = mutate(config);
       const configPath = join(config.home, "config.json");
       const file = Bun.file(configPath);
       const stored = (await file.exists())
-        ? ((await file.json()) as Record<string, unknown>)
+        ? ((await file.json()) as StoredConfig & Record<string, unknown>)
         : {};
-      const written = Object.fromEntries(
-        Object.entries(patch).map(([key, value]) => [key, value ?? null]),
-      );
-      await writeFileAtomic(
-        configPath,
-        `${JSON.stringify({ ...stored, ...written }, null, 2)}\n`,
-      );
+      const current = settingsFromStored(stored);
+      const patch = mutate({
+        ...config,
+        ...current,
+        claudeOutputStyleWritten: current.claudeOutputStyleWritten,
+      });
+      const next: Record<string, unknown> = { ...stored };
       for (const [key, value] of Object.entries(patch)) {
-        if (value === undefined)
-          delete (config as unknown as Record<string, unknown>)[key];
-        else (config as unknown as Record<string, unknown>)[key] = value;
+        if (value === undefined) delete next[key];
+        else next[key] = value;
+      }
+      await writeFileAtomic(configPath, `${JSON.stringify(next, null, 2)}\n`);
+      const live = config as unknown as Record<string, unknown>;
+      const written = {
+        ...current,
+        claudeOutputStyleWritten: current.claudeOutputStyleWritten,
+        ...patch,
+      };
+      for (const [key, value] of Object.entries(written)) {
+        if (value === undefined) delete live[key];
+        else live[key] = value;
       }
     });
   settingsQueues.set(config.home, run);

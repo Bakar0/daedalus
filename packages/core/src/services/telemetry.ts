@@ -1,6 +1,6 @@
 import { writeFileAtomic } from "@daedalus/platform";
-import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { readdir } from "node:fs/promises";
+import { join } from "node:path";
 import type { DaedalusConfig } from "../config";
 import type { AgentSession } from "../domain";
 import type { SqliteRepositories } from "../repositories";

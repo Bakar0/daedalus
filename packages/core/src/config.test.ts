@@ -61,6 +61,59 @@ describe("loadConfig", () => {
     });
   });
 
+  test("keeps a nested entry another writer added between two saves", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await loadConfig({ DAEDALUS_HOME: home });
+      const profile = (id: string) => ({
+        id,
+        provider: "claude" as const,
+        name: id,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      });
+      await updateSettings(config, (current) => ({
+        accounts: [...current.accounts, profile("app-one")],
+      }));
+      // The CLI is another process: it writes the file, not this config.
+      const stored = await Bun.file(`${home}/config.json`).json();
+      await Bun.write(
+        `${home}/config.json`,
+        JSON.stringify({
+          ...stored,
+          accounts: [...stored.accounts, profile("cli-two")],
+          customSetting: "keep-me",
+        }),
+      );
+      await updateSettings(config, (current) => ({
+        accounts: [...current.accounts, profile("app-three")],
+      }));
+      const ids = (accounts: { id: string }[]) => accounts.map((a) => a.id);
+      const reloaded = await loadConfig({ DAEDALUS_HOME: home });
+      expect(ids(reloaded.accounts)).toEqual([
+        "app-one",
+        "cli-two",
+        "app-three",
+      ]);
+      expect(ids(config.accounts)).toEqual(ids(reloaded.accounts));
+      expect(await Bun.file(`${home}/config.json`).json()).toMatchObject({
+        customSetting: "keep-me",
+      });
+    });
+  });
+
+  test("removes a field returned as undefined from the file", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await loadConfig({ DAEDALUS_HOME: home });
+      await updateSettings(config, () => ({ claudeOutputStyleWritten: "x" }));
+      await updateSettings(config, () => ({
+        claudeOutputStyleWritten: undefined,
+      }));
+      expect(await Bun.file(`${home}/config.json`).json()).not.toHaveProperty(
+        "claudeOutputStyleWritten",
+      );
+      expect(config.claudeOutputStyleWritten).toBeUndefined();
+    });
+  });
+
   test("a failed save does not block the next one", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const config = await loadConfig({ DAEDALUS_HOME: home });
