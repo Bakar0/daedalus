@@ -7,7 +7,7 @@ import {
   saveRemoteKeepAwake,
   saveRemoteMacName,
 } from "@daedalus/core";
-import { runCommand, TmuxPtyBridge } from "@daedalus/platform";
+import type { TmuxClient } from "@daedalus/platform";
 import type {
   DesktopSnapshotDto,
   AdminAccountDto,
@@ -1108,13 +1108,11 @@ export class PhoneWindowSize {
   readonly #yielded = new Set<string>();
 
   constructor(
-    private readonly tmux: { socketName: string; executable: string },
-    private readonly run: typeof runCommand = runCommand,
+    private readonly tmux: Pick<
+      TmuxClient,
+      "pinWindowSize" | "unpinWindowSize"
+    >,
   ) {}
-
-  async #tmux(args: string[]): Promise<void> {
-    await this.run(this.tmux.executable, ["-L", this.tmux.socketName, ...args]);
-  }
 
   async hold(session: string, size: { cols: number; rows: number }) {
     this.#open.set(session, (this.#open.get(session) ?? 0) + 1);
@@ -1127,24 +1125,7 @@ export class PhoneWindowSize {
   ) {
     this.#sizes.set(session, { cols, rows });
     this.#yielded.delete(session);
-    const width = Math.max(20, Math.min(500, Math.floor(cols)));
-    const height = Math.max(5, Math.min(300, Math.floor(rows)));
-    await this.#tmux([
-      "set-option",
-      "-w",
-      "-t",
-      session,
-      "window-size",
-      "manual",
-      ";",
-      "resize-window",
-      "-t",
-      session,
-      "-x",
-      String(width),
-      "-y",
-      String(height),
-    ]);
+    await this.tmux.pinWindowSize(session, { cols, rows });
   }
 
   /**
@@ -1155,7 +1136,7 @@ export class PhoneWindowSize {
   async yieldToMac(session: string) {
     if (!this.#open.has(session) || this.#yielded.has(session)) return;
     this.#yielded.add(session);
-    await this.#tmux(["set-option", "-w", "-u", "-t", session, "window-size"]);
+    await this.tmux.unpinWindowSize(session);
   }
 
   async reclaim(session: string) {
@@ -1172,7 +1153,7 @@ export class PhoneWindowSize {
     this.#open.delete(session);
     this.#sizes.delete(session);
     this.#yielded.delete(session);
-    await this.#tmux(["set-option", "-w", "-u", "-t", session, "window-size"]);
+    await this.tmux.unpinWindowSize(session);
   }
 }
 
@@ -1183,8 +1164,7 @@ export class PhoneWindowSize {
  */
 export function agentTerminalOpener(
   context: ApplicationContext,
-  tmux: { socketName: string; executable: string },
-  sizes = new PhoneWindowSize(tmux),
+  sizes = new PhoneWindowSize(context.tmux),
 ): OpenRemoteTerminal {
   return async (agentId, socket, size) => {
     const agent = await context.agents.get(agentId);
@@ -1211,12 +1191,7 @@ export function agentTerminalOpener(
       },
       status: "reconnected",
       createBridge: (onOutput) =>
-        new TmuxPtyBridge(
-          onOutput,
-          { socketName: tmux.socketName, session },
-          initial,
-          tmux.executable,
-        ),
+        context.tmux.openPty(session, initial, onOutput),
       onInput: (data) => {
         if (isTyping(data)) context.deliveryGate.noteKeystroke(agent.id);
       },
