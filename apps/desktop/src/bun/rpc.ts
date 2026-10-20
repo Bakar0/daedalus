@@ -202,7 +202,7 @@ export async function desktopSnapshot(
   readModel: ReadModel,
 ): Promise<DesktopSnapshotDto> {
   const view = await readModel.snapshot();
-  const { config, capabilities, accounts } = view.settings;
+  const { config, accounts } = view.settings;
   return {
     workspaces: view.workspaces.map(({ workspace, available }) =>
       workspaceDto(workspace, available),
@@ -237,7 +237,7 @@ export async function desktopSnapshot(
       trustSessionFoldersEnabled: config.trustSessionFoldersEnabled,
       autoRebirthPercent: config.autoRebirthPercent,
       focusMode: config.focusMode,
-      ...capabilities,
+      ...view.capabilities,
       accounts: accounts.map((item) => ({ ...item })),
     },
   };

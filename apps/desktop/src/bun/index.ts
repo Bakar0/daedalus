@@ -847,11 +847,12 @@ setInterval(async () => {
     );
     const seen = announcedVersion;
     const next = await readModel.version();
+    const first = firstTick;
+    firstTick = false;
     // A mutation announced while this read ran has already reloaded the
     // windows, and the next tick compares against its version.
     if (announcedVersion !== seen) return;
-    if (firstTick || next !== (await seen)) announce("external", next);
-    firstTick = false;
+    if (first || next !== (await seen)) announce("external", next);
   } catch (error) {
     await context.logger.write("error", "desktop_change_check_failed", {
       message: error instanceof Error ? error.message : String(error),

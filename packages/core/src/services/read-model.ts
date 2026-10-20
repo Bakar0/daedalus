@@ -152,12 +152,12 @@ function sources(context: ApplicationContext) {
           `${file.kind}:${file.sessionId ?? file.workspaceId}:${Math.round(file.bytes / 1000)}`,
       ),
     ),
-    settings: live(
-      async () => ({
-        config: context.config,
-        capabilities: await context.agents.capabilities(),
-        accounts: context.accounts.list(),
-      }),
+    capabilities: live(
+      () => context.agents.capabilities(),
+      unwatched("tmux and the providers are probed when the window asks"),
+    ),
+    settings: rows(
+      () => ({ config: context.config, accounts: context.accounts.list() }),
       unwatched("settings and accounts change through the window's requests"),
     ),
   } satisfies Record<string, Source<unknown>>;
