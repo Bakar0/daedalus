@@ -918,10 +918,23 @@ describe("routine delivery", () => {
       expect(await mailbox.text()).toMatch(
         /^Daedalus: continue your work in a fresh session now\. Run the daedalus-rebirth(-\w+)? skill\.\n$/,
       );
-      expect(
-        context.repositories.findAgent(session.id)?.rebirthRequestedAt,
-      ).not.toBeNull();
+      const requestedAt = context.repositories.findAgent(
+        session.id,
+      )?.rebirthRequestedAt;
+      expect(requestedAt).not.toBeNull();
       expect(tmux.sent).toEqual([]);
+      // The session never carries it out: Daedalus finishes the rebirth.
+      // The request is stamped by the wall clock, so the test clock moves
+      // to 15 minutes after it.
+      harness.clock.now = new Date(Date.parse(requestedAt!) + 15 * 60_000);
+      await tick(harness);
+      const moved = context.repositories.abilities
+        .list()
+        .find((row) => row.id === ability.id);
+      expect(moved?.sessionId).not.toBe(session.id);
+      expect(context.repositories.findAgent(moved!.sessionId)?.status).toBe(
+        "running",
+      );
     });
   });
 

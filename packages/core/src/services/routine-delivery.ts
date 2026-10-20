@@ -297,8 +297,13 @@ export class RoutineDelivery {
       session,
       input.activity(session.id),
     );
-    // Why the rebirth request is not going in, when the gate holds it.
-    this.hold(ability, outcome.kind === "held" ? outcome.held : rebirth);
+    // Still a rebirth on the bar; the gate's reason goes in the text.
+    this.hold(
+      ability,
+      outcome.kind === "held"
+        ? { ...rebirth, text: `rebirth waits: ${outcome.held.text}` }
+        : rebirth,
+    );
   }
 
   /**

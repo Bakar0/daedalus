@@ -5,7 +5,7 @@ import { DaedalusError } from "../errors";
 import type { DeliveryGate, DeliveryHold } from "./delivery";
 import { buildSkillInvocation } from "./providers";
 import { leaveInInbox, postToInbox, usesInbox } from "./session-inbox";
-import { requireSkill } from "./skills";
+import { requireSkill } from "./installed-skills";
 
 /** Between two lines delivered into one session, at least this long. */
 const DELIVERY_GAP_MS = 15_000;
@@ -192,9 +192,8 @@ export class SessionChannel {
   ): Promise<ImmediateDeliveryResult> {
     if (session.status !== "running")
       return held({ reason: "stopped", text: "the session is not running" });
-    const text = await resolve(line);
     if (!skill) {
-      await this.tmux.send(session.tmuxSession, text);
+      await this.tmux.send(session.tmuxSession, await resolve(line));
       return DELIVERED;
     }
     let skillName: string;
@@ -205,6 +204,9 @@ export class SessionChannel {
         return held({ reason: "skill-missing", text: error.message });
       throw error;
     }
+    // Typed as the skill, the line only runs its own checks. The skill is
+    // checked first, so a missing one is a hold rather than a throw.
+    await resolve(line);
     const provider = session.provider as "claude" | "codex";
     await this.tmux.send(
       session.tmuxSession,

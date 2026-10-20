@@ -45,7 +45,7 @@ import {
   sessionLaunchModel,
 } from "./providers";
 import type { DeliveryResult, SessionChannel } from "./session-channel";
-import { installedSkill, requireSkill } from "./skills";
+import { installedSkill, requireSkill } from "./installed-skills";
 import type { AbilityService } from "./abilities";
 import {
   accountConfig,
@@ -1213,9 +1213,14 @@ export class AgentService {
     session: AgentSession,
     activity: AgentActivityState | undefined,
   ): Promise<DeliveryResult> {
+    // The row as it stands once the gate passes, not the tick's snapshot.
+    let current = session;
     const outcome = await this.channel.deliver(
       session,
-      async () => this.rebirthLine(await this.requireContinuable(session.id)),
+      async () => {
+        current = await this.requireContinuable(session.id);
+        return this.rebirthLine(current);
+      },
       {
         when: "at-prompt",
         activity,
@@ -1223,7 +1228,7 @@ export class AgentService {
         mustArrive: true,
       },
     );
-    if (outcome.kind === "delivered") this.markRebirthRequested(session);
+    if (outcome.kind === "delivered") this.markRebirthRequested(current);
     return outcome;
   }
 
