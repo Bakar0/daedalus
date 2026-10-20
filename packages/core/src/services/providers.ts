@@ -272,8 +272,9 @@ export async function removeClaudeSettingsFiles(
  * Applied at spawn and nowhere else. A user who tightens a live session —
  * Claude's shift+tab, Codex's `/permissions` — has made a decision, and
  * re-applying this on restore would silently undo it. A launch with `resume`
- * therefore leaves it out, and that asymmetry is deliberate: a restored session that is stricter than expected is friction,
- * one that is quietly looser is a bug.
+ * therefore leaves it out, and that asymmetry is deliberate: a restored
+ * session that is stricter than expected is friction, one that is quietly
+ * looser is a bug.
  *
  * The same idea needs different arguments and does not have the same reach in
  * each provider. Claude's `auto` weighs every tool call, because nothing but
@@ -916,11 +917,8 @@ class ConfiguredProvider implements AgentProvider {
         );
       return ["--resume", id];
     }
-    if (this.name !== "codex")
-      throw new DaedalusError(
-        "CONFLICT",
-        `Agent configuration '${this.name}' cannot be resumed`,
-      );
+    // Codex from here: only Claude and Codex take a prompt argument, and
+    // `buildLaunch` refuses a resume for any provider that does not.
     if (
       !id ||
       !this.config ||

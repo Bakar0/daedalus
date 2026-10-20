@@ -7,6 +7,7 @@ import { saveSkillOverride } from "../config";
 import {
   catalogOffersModel,
   claudeDaedalusSettingsArgs,
+  CODEX_DAEDALUS_TUI_ARGS,
   codexConfigPath,
   DAEDALUS_STATUS_INSTRUCTIONS,
   daedalusInstructionArgs,
@@ -617,6 +618,38 @@ describe("buildLaunch resume", () => {
           line.startsWith("unarchive"),
         ),
       ).toBe(false);
+    });
+  });
+
+  test("Codex's resume argv in full", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await isolated(home);
+      const codex = await codexRecorder(home);
+      config.agents.codex!.executable = codex.path;
+      await writeRollout(home);
+      const launch = await resolveProvider(config, {
+        provider: "codex",
+      }).adapter.buildLaunch({
+        model: "gpt-5",
+        additionalDirectories: ["/repos/a", "/repos/b"],
+        resume: resume(home),
+      });
+      // The recorder prints no version, so this Codex gets no hook flags.
+      expect(launch.args).toEqual([
+        "--model",
+        "gpt-5",
+        "--add-dir",
+        "/repos/a",
+        "--add-dir",
+        "/repos/b",
+        ...CODEX_DAEDALUS_TUI_ARGS,
+        "--add-dir",
+        config.home,
+        "-c",
+        `developer_instructions=${JSON.stringify(DAEDALUS_STATUS_INSTRUCTIONS)}`,
+        "resume",
+        nativeId,
+      ]);
     });
   });
 

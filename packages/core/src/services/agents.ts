@@ -60,8 +60,6 @@ import type { TaskService } from "./tasks";
 import { autoRebirthPercent, type WorkspaceService } from "./workspaces";
 import type { WorkspaceContentService } from "./workspace-content";
 
-export { hasPersistedCodexSession };
-
 const UUID_FILE =
   /^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.jsonl$/i;
 const CODEX_ROLLOUT_FILE =
@@ -1816,16 +1814,13 @@ export class AgentService {
           "Custom sessions do not define a native resume capability",
         );
     } else if (agent.kind === "agent") {
-      if (!agent.providerSessionId && agent.provider !== "codex")
-        throw new DaedalusError(
-          "CONFLICT",
-          "This session predates native resume support and cannot be resumed safely",
-        );
       if (!this.config.agents[agent.provider])
         throw new DaedalusError(
           "DEPENDENCY",
           `Agent configuration '${agent.provider}' is unavailable`,
         );
+      // Called for its refusals only: a resume keeps the session's own
+      // account, which `previous` hands straight back.
       await this.accounts.forLaunch(agent.provider, {
         previous: agent,
         workspace,

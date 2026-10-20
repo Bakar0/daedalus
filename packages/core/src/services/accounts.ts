@@ -22,7 +22,12 @@ import {
   type DaedalusConfig,
 } from "../config";
 import { DaedalusError } from "../errors";
-import type { AgentSession, IntegratedTerminal, Workspace } from "../domain";
+import type {
+  AgentProviderName,
+  AgentSession,
+  IntegratedTerminal,
+  Workspace,
+} from "../domain";
 import type { SqliteRepositories } from "../repositories";
 import type { IntegratedTerminalService } from "./integrated-terminals";
 import {
@@ -488,6 +493,15 @@ function profileId(name: string, taken: Set<string>): string {
   }
 }
 
+/** What `AccountService.forLaunch` chooses an account from. */
+export interface LaunchAccountInput {
+  /** An account by id or name; `default` or null for the provider's own. */
+  requested?: string | null;
+  /** The session this launch carries on, or the session itself on a resume. */
+  previous?: Pick<AgentSession, "provider" | "account">;
+  workspace: Pick<Workspace, "defaultClaudeAccount" | "defaultCodexAccount">;
+}
+
 /**
  * Account profiles: a provider's CLI pointed at a configuration folder of its
  * own, so one machine can run sessions on more than one account.
@@ -598,17 +612,8 @@ export class AccountService {
    * answer, gets the benefit of the doubt.
    */
   async forLaunch(
-    provider: string,
-    input: {
-      /** An account by id or name; `default` or null for the provider's own. */
-      requested?: string | null;
-      /** The session this launch carries on, or the session itself on a resume. */
-      previous?: Pick<AgentSession, "provider" | "account">;
-      workspace: Pick<
-        Workspace,
-        "defaultClaudeAccount" | "defaultCodexAccount"
-      >;
-    },
+    provider: AgentProviderName,
+    input: LaunchAccountInput,
   ): Promise<string | null> {
     if (provider !== "claude" && provider !== "codex") {
       if (input.requested && input.requested !== DEFAULT_ACCOUNT)
@@ -625,14 +630,7 @@ export class AccountService {
 
   private pickAccount(
     provider: AccountProvider,
-    input: {
-      requested?: string | null;
-      previous?: Pick<AgentSession, "provider" | "account">;
-      workspace: Pick<
-        Workspace,
-        "defaultClaudeAccount" | "defaultCodexAccount"
-      >;
-    },
+    input: LaunchAccountInput,
   ): string | null {
     if (input.requested !== undefined)
       return findAccount(this.config, provider, input.requested)?.id ?? null;
