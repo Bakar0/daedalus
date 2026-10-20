@@ -1,3 +1,4 @@
+import { writeFileAtomic } from "@daedalus/platform";
 import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -80,17 +81,10 @@ export async function recordSessionCost(
   const directory = costLedgerDirectory(home);
   const path = join(directory, `${sessionId}.json`);
   const ledger = addCost(await readLedger(path), totalUsd, now);
-  await mkdir(directory, { recursive: true });
-  const temporary = join(directory, `${sessionId}.${crypto.randomUUID()}.tmp`);
-  try {
-    await writeFile(temporary, JSON.stringify(ledger), {
-      flag: "wx",
-      mode: 0o600,
-    });
-    await rename(temporary, path);
-  } finally {
-    await rm(temporary, { force: true });
-  }
+  await writeFileAtomic(path, JSON.stringify(ledger), {
+    mode: 0o600,
+    ensureDir: true,
+  });
 }
 
 /**

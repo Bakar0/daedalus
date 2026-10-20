@@ -1,7 +1,7 @@
 import { rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  ensureDirectory,
+  writeFileAtomic,
   findExecutable,
   processIsAlive,
   runCommand,
@@ -10,7 +10,7 @@ import {
 } from "@daedalus/platform";
 import {
   channelIdentifier,
-  saveFocusMode,
+  updateSettings,
   type DaedalusConfig,
 } from "../config";
 import type { PresenceState } from "../domain";
@@ -223,17 +223,9 @@ export class PresenceService {
       observedAt: new Date(now).toISOString(),
     };
     const stored: StoredPresence = { ...state, pid: process.pid };
-    await ensureDirectory(this.config.home);
-    const temporaryPath = join(
-      this.config.home,
-      `presence.${crypto.randomUUID()}.tmp`,
-    );
-    try {
-      await writeFile(temporaryPath, JSON.stringify(stored), { flag: "wx" });
-      await rename(temporaryPath, this.path);
-    } finally {
-      await rm(temporaryPath, { force: true });
-    }
+    await writeFileAtomic(this.path, JSON.stringify(stored), {
+      ensureDir: true,
+    });
     return state;
   }
 
@@ -261,17 +253,9 @@ export class PresenceService {
   }
 
   private async parkFocus(request: FocusRequest): Promise<{ raised: boolean }> {
-    await ensureDirectory(this.config.home);
-    const temporaryPath = join(
-      this.config.home,
-      `focus-request.${crypto.randomUUID()}.tmp`,
-    );
-    try {
-      await writeFile(temporaryPath, JSON.stringify(request), { flag: "wx" });
-      await rename(temporaryPath, this.focusRequestPath);
-    } finally {
-      await rm(temporaryPath, { force: true });
-    }
+    await writeFileAtomic(this.focusRequestPath, JSON.stringify(request), {
+      ensureDir: true,
+    });
     const open = findExecutable("open", standardExecutableFallbacks("open"));
     if (!open) return { raised: false };
     // A dev home must raise the dev app: they are separate applications and
@@ -308,7 +292,7 @@ export class PresenceService {
   }
 
   async setFocusMode(enabled: boolean): Promise<boolean> {
-    await saveFocusMode(this.config, enabled);
+    await updateSettings(this.config, () => ({ focusMode: enabled }));
     return enabled;
   }
 }

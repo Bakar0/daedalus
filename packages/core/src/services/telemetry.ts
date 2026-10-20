@@ -1,3 +1,4 @@
+import { writeFileAtomic } from "@daedalus/platform";
 import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { DaedalusConfig } from "../config";
@@ -1059,19 +1060,14 @@ export class TelemetryService {
     readings: Map<string, ProviderUsage>,
   ): Promise<void> {
     const path = this.usageStorePath();
-    const temporary = `${path}.${crypto.randomUUID()}.tmp`;
     try {
-      await mkdir(dirname(path), { recursive: true });
-      await writeFile(
-        temporary,
+      await writeFileAtomic(
+        path,
         `${JSON.stringify(Object.fromEntries(readings), null, 2)}\n`,
-        { flag: "wx", mode: 0o600 },
+        { mode: 0o600, ensureDir: true },
       );
-      await rename(temporary, path);
     } catch {
       // Only a cache of what the providers said; the next reading retries.
-    } finally {
-      await rm(temporary, { force: true }).catch(() => undefined);
     }
   }
 

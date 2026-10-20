@@ -35,7 +35,9 @@ import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import {
   canonicalPath,
+  editJson,
   ensureDirectory,
+  writeFileAtomic,
   findExecutable,
   isPathInside,
   pathExists,
@@ -44,10 +46,7 @@ import {
 } from "@daedalus/platform";
 import {
   channelName,
-  saveClaudeOutputStyleWritten,
-  saveClaudeOverridesWritten,
-  saveManagedSkillSetting,
-  saveSkillOverride,
+  updateSettings,
   type DaedalusConfig,
   type ManagedSkillMode,
   type ManagedSkillSetting,
@@ -502,21 +501,6 @@ async function occupiedByOther(
   }
 }
 
-/**
- * Writes a file atomically, so a crash mid-write cannot leave a provider
- * reading half a skill.
- */
-async function writeFileAtomic(path: string, contents: string): Promise<void> {
-  await ensureDirectory(dirname(path));
-  const temporary = `${path}.${crypto.randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, contents, { encoding: "utf8", flag: "wx" });
-    await rename(temporary, path);
-  } finally {
-    await rm(temporary, { force: true });
-  }
-}
-
 /** Splices a marked block into a file, replacing any previous one in place. */
 export function mergeMarkedBlock(
   existing: string,
@@ -931,7 +915,9 @@ export class SkillService {
     // ships new skill text without the user reinstalling anything. An
     // installed skill has no bundled text and keeps whatever was copied in.
     for (const file of resolved.skillFiles)
-      await writeFileAtomic(join(target, file.path), file.contents);
+      await writeFileAtomic(join(target, file.path), file.contents, {
+        ensureDir: true,
+      });
     if (!(await pathExists(target))) return;
     for (const { path } of skillLinkPaths(this.config, resolved.linkName))
       await ensureSkillLink(path, target);
@@ -939,7 +925,9 @@ export class SkillService {
     const stylePath = managedStylePath(this.config, resolved.style.fileName);
     const styleLink = styleLinkPath(this.config, resolved.style.fileName);
     if (this.styleWanted(definition)) {
-      await writeFileAtomic(stylePath, resolved.style.contents);
+      await writeFileAtomic(stylePath, resolved.style.contents, {
+        ensureDir: true,
+      });
       await ensureSkillLink(styleLink, stylePath);
       await this.writeInstructionsBlock(definition);
     } else {
@@ -993,7 +981,8 @@ export class SkillService {
       ? await readFile(path, "utf8")
       : "";
     const merged = mergeMarkedBlock(existing, block, markers);
-    if (merged !== existing) await writeFileAtomic(path, merged);
+    if (merged !== existing)
+      await writeFileAtomic(path, merged, { ensureDir: true });
   }
 
   private async clearInstructionsBlock(
@@ -1011,7 +1000,7 @@ export class SkillService {
     // Same reasoning as the settings file: an AGENTS.md with nothing in it
     // says nothing to Codex, and it only exists because Daedalus made it.
     if (!cleared.trim()) await rm(path, { force: true });
-    else await writeFileAtomic(path, cleared);
+    else await writeFileAtomic(path, cleared, { ensureDir: true });
   }
 
   /**
@@ -1171,11 +1160,16 @@ export class SkillService {
         `Skill '${id}' has no 'always' mode`,
       );
     const previous = this.settingFor(id);
-    await saveManagedSkillSetting(this.config, id, {
-      ...previous,
-      enabled,
-      mode: mode ?? previous.mode ?? definition.defaultMode,
-    });
+    await updateSettings(this.config, (config) => ({
+      managedSkills: {
+        ...config.managedSkills,
+        [id]: {
+          ...previous,
+          enabled,
+          mode: mode ?? previous.mode ?? definition.defaultMode,
+        },
+      },
+    }));
     await this.sync();
     const status = (await this.managedStatus()).find((one) => one.id === id);
     if (!status)
@@ -1193,7 +1187,12 @@ export class SkillService {
     const discovered = await discoverSkills(this.config);
     if (!discovered.some((one) => one.name === name))
       throw new DaedalusError("NOT_FOUND", `No skill named '${name}'`);
-    await saveSkillOverride(this.config, name, visibility);
+    await updateSettings(this.config, (config) => {
+      const skillOverrides = { ...config.skillOverrides };
+      if (visibility === "on") delete skillOverrides[name];
+      else skillOverrides[name] = visibility;
+      return { skillOverrides };
+    });
     await this.syncClaudeSettings();
     return { name, visibility };
   }
@@ -1228,70 +1227,75 @@ export class SkillService {
       Object.keys(ours).length === 0 &&
       wantedStyle === undefined
     ) {
-      if (written.length) await saveClaudeOverridesWritten(this.config, []);
-      if (writtenStyle !== undefined)
-        await saveClaudeOutputStyleWritten(this.config, undefined);
+      if (written.length || writtenStyle !== undefined)
+        await updateSettings(this.config, () => ({
+          claudeOverridesWritten: [],
+          claudeOutputStyleWritten: undefined,
+        }));
       return;
     }
-    const raw = exists ? await readFile(path, "utf8") : "";
-    let existing: Record<string, unknown>;
-    try {
-      existing = raw.trim() ? (JSON.parse(raw) as Record<string, unknown>) : {};
-    } catch {
-      // A settings file Daedalus cannot parse is the user's to repair. Editing
-      // it would mean replacing something it could not read.
-      return;
-    }
-    const overrides: Record<string, unknown> = {
-      ...((existing.skillOverrides as Record<string, unknown>) ?? {}),
-    };
-    for (const name of written)
-      if (!(name in ours) && overrides[name] === "off") delete overrides[name];
-    for (const [name, visibility] of Object.entries(ours))
-      overrides[name] = visibility;
-    const next = { ...existing };
-    if (Object.keys(overrides).length) next.skillOverrides = overrides;
-    else delete next.skillOverrides;
-
-    // One style is active at a time, so selecting ours means taking whatever
-    // was selected before. A style the user chose is theirs: Daedalus sets its
-    // own only into an empty slot or over its own previous choice, and gives
-    // the slot back the same way.
-    const currentStyle = existing.outputStyle;
     let selectedStyle: string | undefined;
-    if (wantedStyle !== undefined) {
-      if (currentStyle === undefined || currentStyle === writtenStyle) {
-        next.outputStyle = wantedStyle;
-        selectedStyle = wantedStyle;
-      } else if (currentStyle === wantedStyle) selectedStyle = wantedStyle;
-    } else if (writtenStyle !== undefined && currentStyle === writtenStyle)
-      delete next.outputStyle;
+    const edit = await editJson(
+      path,
+      (existing) => {
+        const overrides: Record<string, unknown> = {
+          ...((existing.skillOverrides as Record<string, unknown>) ?? {}),
+        };
+        for (const name of written)
+          if (!(name in ours) && overrides[name] === "off")
+            delete overrides[name];
+        for (const [name, visibility] of Object.entries(ours))
+          overrides[name] = visibility;
+        const next = { ...existing };
+        if (Object.keys(overrides).length) next.skillOverrides = overrides;
+        else delete next.skillOverrides;
 
-    const serialized = `${JSON.stringify(next, null, 2)}\n`;
-    if (serialized !== raw) {
-      await ensureDirectory(dirname(path));
-      // Only before the *first* write, and only over something that was there
-      // to begin with. Keying off the backup's absence alone meant that on a
-      // machine where Daedalus created the file, the first write made no
-      // backup and the second one filed Daedalus's own output as though it
-      // were the user's.
-      const untouched = written.length === 0 && writtenStyle === undefined;
-      const backup = `${path}.daedalus-backup`;
-      if (raw && untouched && !(await pathExists(backup)))
-        await writeFile(backup, raw, { encoding: "utf8", mode: 0o600 });
-      // An empty object is what Claude reads from no file at all, so leaving
-      // one behind is litter rather than a setting.
-      if (Object.keys(next).length === 0) await rm(path, { force: true });
-      else await writeFileAtomic(path, serialized);
-    }
+        // One style is active at a time, so selecting ours means taking
+        // whatever was selected before. A style the user chose is theirs:
+        // Daedalus sets its own only into an empty slot or over its own
+        // previous choice, and gives the slot back the same way.
+        const currentStyle = existing.outputStyle;
+        if (wantedStyle !== undefined) {
+          if (currentStyle === undefined || currentStyle === writtenStyle) {
+            next.outputStyle = wantedStyle;
+            selectedStyle = wantedStyle;
+          } else if (currentStyle === wantedStyle) selectedStyle = wantedStyle;
+        } else if (writtenStyle !== undefined && currentStyle === writtenStyle)
+          delete next.outputStyle;
+        return next;
+      },
+      {
+        // An empty object is what Claude reads from no file at all, so leaving
+        // one behind is litter rather than a setting.
+        removeWhenEmpty: true,
+        beforeReplace: async (raw) => {
+          // Only before the *first* write, and only over something that was
+          // there to begin with. Keying off the backup's absence alone meant
+          // that on a machine where Daedalus created the file, the first
+          // write made no backup and the second one filed Daedalus's own
+          // output as though it were the user's.
+          const untouched = written.length === 0 && writtenStyle === undefined;
+          const backup = `${path}.daedalus-backup`;
+          if (untouched && !(await pathExists(backup)))
+            await writeFile(backup, raw, { encoding: "utf8", mode: 0o600 });
+        },
+      },
+    );
+    // A settings file Daedalus cannot parse is the user's to repair. Editing
+    // it would mean replacing something it could not read.
+    if (edit.status === "invalid") return;
     const names = Object.keys(ours);
     if (
       names.length !== written.length ||
       names.some((name) => !written.includes(name))
     )
-      await saveClaudeOverridesWritten(this.config, names);
+      await updateSettings(this.config, () => ({
+        claudeOverridesWritten: names,
+      }));
     if (selectedStyle !== writtenStyle)
-      await saveClaudeOutputStyleWritten(this.config, selectedStyle);
+      await updateSettings(this.config, () => ({
+        claudeOutputStyleWritten: selectedStyle,
+      }));
   }
 
   /** The style Claude is actually set to use, from the user's own settings. */
@@ -1348,11 +1352,16 @@ export class SkillService {
     await rm(target, { recursive: true, force: true });
     await ensureDirectory(dirname(target));
     await copyTree(from, target);
-    await saveManagedSkillSetting(this.config, resolved, {
-      enabled: true,
-      mode: "on-demand",
-      source: { kind: "path", ref: from },
-    });
+    await updateSettings(this.config, (config) => ({
+      managedSkills: {
+        ...config.managedSkills,
+        [resolved]: {
+          enabled: true,
+          mode: "on-demand",
+          source: { kind: "path", ref: from },
+        },
+      },
+    }));
     await this.sync();
     const status = (await this.managedStatus()).find(
       (one) => one.id === resolved,
@@ -1401,10 +1410,15 @@ export class SkillService {
           "--path must stay inside the repository",
         );
       const status = await this.installFromPath(from, name);
-      await saveManagedSkillSetting(this.config, status.id, {
-        ...this.settingFor(status.id),
-        source: { kind: "git", ref: url, subpath },
-      });
+      await updateSettings(this.config, (config) => ({
+        managedSkills: {
+          ...config.managedSkills,
+          [status.id]: {
+            ...this.settingFor(status.id),
+            source: { kind: "git", ref: url, subpath },
+          },
+        },
+      }));
       return status;
     } finally {
       await rm(scratch, { recursive: true, force: true });
@@ -1428,10 +1442,11 @@ export class SkillService {
     ))
       await removeSkillLink(path, target);
     await rm(target, { recursive: true, force: true });
-    const managedSkills = { ...this.config.managedSkills };
-    delete managedSkills[name];
-    this.config.managedSkills = managedSkills;
-    await persistManagedSkills(this.config);
+    await updateSettings(this.config, (config) => {
+      const managedSkills = { ...config.managedSkills };
+      delete managedSkills[name];
+      return { managedSkills };
+    });
     return { removed: name };
   }
 
@@ -1545,19 +1560,6 @@ export class SkillService {
       )
       .map((skill) => ({ path: skill.skillPath, enabled: false as const }));
   }
-}
-
-/** Rewrites the whole managed-skill map, including deletions. */
-async function persistManagedSkills(config: DaedalusConfig): Promise<void> {
-  const configPath = join(config.home, "config.json");
-  const file = Bun.file(configPath);
-  const stored = (await file.exists())
-    ? ((await file.json()) as Record<string, unknown>)
-    : {};
-  await writeFileAtomic(
-    configPath,
-    `${JSON.stringify({ ...stored, managedSkills: config.managedSkills }, null, 2)}\n`,
-  );
 }
 
 /** A plain recursive copy. Symlinks inside a skill package are not followed. */

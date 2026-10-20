@@ -1,7 +1,6 @@
 import { homedir } from "node:os";
-import { rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { ensureDirectory } from "@daedalus/platform";
+import { ensureDirectory, writeFileAtomic } from "@daedalus/platform";
 
 /**
  * Whether Daedalus puts a freshly spawned session into the provider's own
@@ -412,162 +411,72 @@ function storedAccounts(value: unknown): AccountProfile[] {
 
 export const isAccountId = (value: string): boolean => ACCOUNT_ID.test(value);
 
-/**
- * Merges a patch into the stored settings and republishes it atomically, so a
- * crash mid-write can never leave a truncated config behind.
- */
-async function saveSetting(
-  config: DaedalusConfig,
-  patch: Record<string, unknown>,
-): Promise<void> {
-  const configPath = join(config.home, "config.json");
-  const file = Bun.file(configPath);
-  const stored = (await file.exists())
-    ? ((await file.json()) as Record<string, unknown>)
-    : {};
-  const temporaryPath = join(config.home, `config.${crypto.randomUUID()}.tmp`);
-  try {
-    await writeFile(
-      temporaryPath,
-      `${JSON.stringify({ ...stored, ...patch }, null, 2)}\n`,
-      { flag: "wx" },
-    );
-    await rename(temporaryPath, configPath);
-  } finally {
-    await rm(temporaryPath, { force: true });
-  }
-}
+/** The settings `updateSettings` may change; each is a field of the config. */
+export type SettingsPatch = Partial<
+  Pick<
+    DaedalusConfig,
+    | "workspaceInstructionFilesEnabled"
+    | "autoRestoreSessionsEnabled"
+    | "trustSessionFoldersEnabled"
+    | "autoRebirthPercent"
+    | "focusMode"
+    | "remoteEnabled"
+    | "remoteKeepAwake"
+    | "remoteMacName"
+    | "managedSkills"
+    | "skillOverrides"
+    | "claudeOverridesWritten"
+    | "claudeOutputStyleWritten"
+    | "accounts"
+    | "defaultLogins"
+  >
+>;
 
-export async function saveWorkspaceInstructionFilesEnabled(
-  config: DaedalusConfig,
-  enabled: boolean,
-): Promise<void> {
-  await saveSetting(config, { workspaceInstructionFilesEnabled: enabled });
-  config.workspaceInstructionFilesEnabled = enabled;
-}
-
-export async function saveAutoRestoreSessionsEnabled(
-  config: DaedalusConfig,
-  enabled: boolean,
-): Promise<void> {
-  await saveSetting(config, { autoRestoreSessionsEnabled: enabled });
-  config.autoRestoreSessionsEnabled = enabled;
-}
-
-export async function saveTrustSessionFoldersEnabled(
-  config: DaedalusConfig,
-  enabled: boolean,
-): Promise<void> {
-  await saveSetting(config, { trustSessionFoldersEnabled: enabled });
-  config.trustSessionFoldersEnabled = enabled;
-}
-
-/** The caller validates the percent (see `autoRebirthPercent`). */
-export async function saveAutoRebirthPercent(
-  config: DaedalusConfig,
-  percent: number | null,
-): Promise<void> {
-  await saveSetting(config, { autoRebirthPercent: percent });
-  config.autoRebirthPercent = percent;
-}
-
-export async function saveRemoteEnabled(
-  config: DaedalusConfig,
-  enabled: boolean,
-): Promise<void> {
-  await saveSetting(config, { remoteEnabled: enabled });
-  config.remoteEnabled = enabled;
-}
-
-export async function saveRemoteKeepAwake(
-  config: DaedalusConfig,
-  enabled: boolean,
-): Promise<void> {
-  await saveSetting(config, { remoteKeepAwake: enabled });
-  config.remoteKeepAwake = enabled;
-}
-
-export async function saveRemoteMacName(
-  config: DaedalusConfig,
-  name: string,
-): Promise<void> {
-  await saveSetting(config, { remoteMacName: name });
-  config.remoteMacName = name;
-}
-
-export async function saveFocusMode(
-  config: DaedalusConfig,
-  enabled: boolean,
-): Promise<void> {
-  await saveSetting(config, { focusMode: enabled });
-  config.focusMode = enabled;
-}
+/** The write in flight for each home, so saves run one after another. */
+const settingsQueues = new Map<string, Promise<unknown>>();
 
 /**
- * Stores one capability's state, leaving every other capability's entry alone.
- *
- * The whole map is rewritten rather than patched key by key because
- * `saveSetting` merges at the top level only, so passing a partial map here
- * would drop the capabilities it left out.
+ * Changes the stored settings and the live config together. `mutate` receives
+ * the config as the previous save left it and returns the fields to change;
+ * a field returned as `undefined` is removed. Saves for one home run one at a
+ * time, so two callers that each add a key both keep theirs. The file is
+ * merged at the top level and replaced atomically, so a crash mid-write can
+ * never leave a truncated config behind. The live config changes only after
+ * the file was written.
  */
-export async function saveManagedSkillSetting(
+export function updateSettings(
   config: DaedalusConfig,
-  id: string,
-  setting: ManagedSkillSetting,
+  mutate: (config: Readonly<DaedalusConfig>) => SettingsPatch,
 ): Promise<void> {
-  const managedSkills = { ...config.managedSkills, [id]: setting };
-  await saveSetting(config, { managedSkills });
-  config.managedSkills = managedSkills;
-}
-
-/** Stores one discovered skill's requested visibility, leaving the rest alone. */
-export async function saveSkillOverride(
-  config: DaedalusConfig,
-  name: string,
-  visibility: SkillVisibility | undefined,
-): Promise<void> {
-  const skillOverrides = { ...config.skillOverrides };
-  if (visibility === undefined || visibility === "on")
-    delete skillOverrides[name];
-  else skillOverrides[name] = visibility;
-  await saveSetting(config, { skillOverrides });
-  config.skillOverrides = skillOverrides;
-}
-
-/** Records which override keys now belong to Daedalus in Claude's settings. */
-export async function saveClaudeOverridesWritten(
-  config: DaedalusConfig,
-  names: string[],
-): Promise<void> {
-  await saveSetting(config, { claudeOverridesWritten: names });
-  config.claudeOverridesWritten = names;
-}
-
-/** Stores the whole list of account profiles. */
-export async function saveAccounts(
-  config: DaedalusConfig,
-  accounts: AccountProfile[],
-): Promise<void> {
-  await saveSetting(config, { accounts });
-  config.accounts = accounts;
-}
-
-/** Stores which login the default Claude account signs in with. */
-export async function saveDefaultLogin(
-  config: DaedalusConfig,
-  login: ClaudeLogin,
-): Promise<void> {
-  const defaultLogins = { ...config.defaultLogins, claude: login };
-  await saveSetting(config, { defaultLogins });
-  config.defaultLogins = defaultLogins;
-}
-
-/** Records which output style, if any, is Daedalus's in Claude's settings. */
-export async function saveClaudeOutputStyleWritten(
-  config: DaedalusConfig,
-  style: string | undefined,
-): Promise<void> {
-  await saveSetting(config, { claudeOutputStyleWritten: style ?? null });
-  if (style === undefined) delete config.claudeOutputStyleWritten;
-  else config.claudeOutputStyleWritten = style;
+  const previous = settingsQueues.get(config.home) ?? Promise.resolve();
+  const run = previous
+    .catch(() => undefined)
+    .then(async () => {
+      const patch = mutate(config);
+      const configPath = join(config.home, "config.json");
+      const file = Bun.file(configPath);
+      const stored = (await file.exists())
+        ? ((await file.json()) as Record<string, unknown>)
+        : {};
+      const written = Object.fromEntries(
+        Object.entries(patch).map(([key, value]) => [key, value ?? null]),
+      );
+      await writeFileAtomic(
+        configPath,
+        `${JSON.stringify({ ...stored, ...written }, null, 2)}\n`,
+      );
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === undefined)
+          delete (config as unknown as Record<string, unknown>)[key];
+        else (config as unknown as Record<string, unknown>)[key] = value;
+      }
+    });
+  settingsQueues.set(config.home, run);
+  void run
+    .catch(() => undefined)
+    .finally(() => {
+      if (settingsQueues.get(config.home) === run)
+        settingsQueues.delete(config.home);
+    });
+  return run;
 }

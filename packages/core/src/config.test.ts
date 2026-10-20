@@ -4,8 +4,7 @@ import {
   channelHome,
   DEFAULT_REMOTE_RELAY,
   loadConfig,
-  saveRemoteEnabled,
-  saveWorkspaceInstructionFilesEnabled,
+  updateSettings,
 } from "./config";
 
 describe("loadConfig", () => {
@@ -27,7 +26,9 @@ describe("loadConfig", () => {
         JSON.stringify({ customSetting: "keep-me" }),
       );
       const config = await loadConfig({ DAEDALUS_HOME: home });
-      await saveWorkspaceInstructionFilesEnabled(config, false);
+      await updateSettings(config, () => ({
+        workspaceInstructionFilesEnabled: false,
+      }));
       expect(config.workspaceInstructionFilesEnabled).toBe(false);
       expect(await Bun.file(`${home}/config.json`).json()).toMatchObject({
         customSetting: "keep-me",
@@ -40,12 +41,46 @@ describe("loadConfig", () => {
     });
   });
 
+  test("keeps both keys when two saves run at once", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await loadConfig({ DAEDALUS_HOME: home });
+      await Promise.all([
+        updateSettings(config, () => ({ focusMode: true })),
+        updateSettings(config, (current) => ({
+          skillOverrides: { ...current.skillOverrides, loud: "off" },
+        })),
+        updateSettings(config, (current) => ({
+          skillOverrides: { ...current.skillOverrides, quiet: "off" },
+        })),
+      ]);
+      expect(await Bun.file(`${home}/config.json`).json()).toMatchObject({
+        focusMode: true,
+        skillOverrides: { loud: "off", quiet: "off" },
+      });
+      expect(config.skillOverrides).toEqual({ loud: "off", quiet: "off" });
+    });
+  });
+
+  test("a failed save does not block the next one", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await loadConfig({ DAEDALUS_HOME: home });
+      const failing = updateSettings(config, () => {
+        throw new Error("nope");
+      });
+      await expect(failing).rejects.toThrow("nope");
+      await updateSettings(config, () => ({ focusMode: true }));
+      expect(await Bun.file(`${home}/config.json`).json()).toMatchObject({
+        focusMode: true,
+      });
+    });
+  });
+
   test("keeps phone access off until it is turned on", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const config = await loadConfig({ DAEDALUS_HOME: home });
       expect(config.remoteEnabled).toBe(false);
       expect(config.remoteRelay).toBe(DEFAULT_REMOTE_RELAY);
-      await saveRemoteEnabled(config, true);
+      await updateSettings(config, () => ({ remoteEnabled: true }));
       const reloaded = await loadConfig({
         DAEDALUS_HOME: home,
         DAEDALUS_REMOTE_RELAY: "ws://127.0.0.1:8787",

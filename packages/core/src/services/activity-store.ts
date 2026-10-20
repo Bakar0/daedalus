@@ -1,3 +1,4 @@
+import { writeFileAtomic } from "@daedalus/platform";
 import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
@@ -83,19 +84,10 @@ export async function writeActivityRecord(
 ): Promise<void> {
   const serialized = JSON.stringify(record);
   if (serialized.length > MAX_RECORD_BYTES) return;
-  const directory = activityDirectory(home);
-  await mkdir(directory, { recursive: true });
-  const destination = recordPath(home, record.sessionId);
-  const temporary = join(
-    directory,
-    `${record.sessionId}.${crypto.randomUUID()}.tmp`,
-  );
-  try {
-    await writeFile(temporary, serialized, { flag: "wx", mode: 0o600 });
-    await rename(temporary, destination);
-  } finally {
-    await rm(temporary, { force: true });
-  }
+  await writeFileAtomic(recordPath(home, record.sessionId), serialized, {
+    mode: 0o600,
+    ensureDir: true,
+  });
 }
 
 export async function readActivityRecord(

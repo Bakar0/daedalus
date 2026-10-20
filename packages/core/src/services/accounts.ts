@@ -2,6 +2,7 @@ import { rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   deleteKeychainPassword,
+  editJson,
   ensureDirectory,
   findExecutable,
   keychainReadCommand,
@@ -11,9 +12,8 @@ import {
   writeKeychainPassword,
 } from "@daedalus/platform";
 import {
-  saveAccounts,
+  updateSettings,
   isAwsTarget,
-  saveDefaultLogin,
   type AccountKind,
   type AwsTarget,
   type ClaudeLogin,
@@ -637,7 +637,9 @@ export class AccountService {
       await this.writeClaudeSettings(directory, (settings) =>
         withBedrock(settings, aws),
       );
-    await saveAccounts(this.config, [...this.config.accounts, profile]);
+    await updateSettings(this.config, (config) => ({
+      accounts: [...config.accounts, profile],
+    }));
     await new SkillService(
       accountConfig(this.config, owner, profile.id),
     ).syncArtifacts();
@@ -665,7 +667,9 @@ export class AccountService {
       );
     const profile = findAccount(this.config, owner, reference);
     if (!profile) {
-      await saveDefaultLogin(this.config, login);
+      await updateSettings(this.config, (config) => ({
+        defaultLogins: { ...config.defaultLogins, claude: login },
+      }));
       return { provider: owner, account: DEFAULT_ACCOUNT, login };
     }
     if (profile.kind === "api-key" || profile.kind === "bedrock")
@@ -673,12 +677,11 @@ export class AccountService {
         "VALIDATION",
         `'${profile.name}' uses ${profile.kind === "bedrock" ? "Bedrock" : "an API key"}, not a Claude login`,
       );
-    await saveAccounts(
-      this.config,
-      this.config.accounts.map((entry) =>
+    await updateSettings(this.config, (config) => ({
+      accounts: config.accounts.map((entry) =>
         entry.id === profile.id ? { ...entry, login } : entry,
       ),
-    );
+    }));
     return { provider: owner, account: profile.id, login };
   }
 
@@ -705,12 +708,11 @@ export class AccountService {
       (settings) => withBedrock(settings, target),
     );
     const changed = { ...profile, aws: target };
-    await saveAccounts(
-      this.config,
-      this.config.accounts.map((entry) =>
+    await updateSettings(this.config, (config) => ({
+      accounts: config.accounts.map((entry) =>
         entry.id === profile.id ? changed : entry,
       ),
-    );
+    }));
     return changed;
   }
 
@@ -725,12 +727,11 @@ export class AccountService {
       ...profile,
       name: this.validName(owner, name, profile.id),
     };
-    await saveAccounts(
-      this.config,
-      this.config.accounts.map((entry) =>
+    await updateSettings(this.config, (config) => ({
+      accounts: config.accounts.map((entry) =>
         entry.id === profile.id ? renamed : entry,
       ),
-    );
+    }));
     return renamed;
   }
 
@@ -789,10 +790,9 @@ export class AccountService {
       }).catch(() => undefined);
     }
     this.repositories.clearWorkspaceDefaultAccount(owner, profile.id);
-    await saveAccounts(
-      this.config,
-      this.config.accounts.filter((entry) => entry.id !== profile.id),
-    );
+    await updateSettings(this.config, (config) => ({
+      accounts: config.accounts.filter((entry) => entry.id !== profile.id),
+    }));
     await rm(accountDirectory(this.config, profile), {
       recursive: true,
       force: true,
@@ -1083,30 +1083,12 @@ export class AccountService {
     change: (settings: Record<string, unknown>) => Record<string, unknown>,
   ): Promise<void> {
     const path = join(directory, "settings.json");
-    const file = Bun.file(path);
-    let settings: Record<string, unknown> = {};
-    if (await file.exists()) {
-      try {
-        settings = (await file.json()) as Record<string, unknown>;
-      } catch {
-        throw new DaedalusError(
-          "CONFLICT",
-          `${path} is not valid JSON; fix or delete it first`,
-        );
-      }
-    }
-    const next = change(settings);
-    await ensureDirectory(directory);
-    const temporary = `${path}.${crypto.randomUUID()}.tmp`;
-    try {
-      await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, {
-        flag: "wx",
-        mode: 0o600,
-      });
-      await rename(temporary, path);
-    } finally {
-      await rm(temporary, { force: true });
-    }
+    const result = await editJson(path, change, { mode: 0o600 });
+    if (result.status === "invalid")
+      throw new DaedalusError(
+        "CONFLICT",
+        `${path} is not valid JSON; fix or delete it first`,
+      );
   }
 
   private requireProfile(
