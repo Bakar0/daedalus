@@ -1,7 +1,15 @@
 import { homedir } from "node:os";
-import { realpath, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve, sep } from "node:path";
-import { ensureDirectory } from "@daedalus/platform";
+import {
+  mkdir,
+  realpath,
+  rename,
+  rm,
+  rmdir,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import { basename, dirname, join, resolve, sep } from "node:path";
+import { ensureDirectory, processWorkingDirectories } from "@daedalus/platform";
 import type { DaedalusConfig } from "../config";
 import { accountConfig } from "./account-homes";
 import { codexConfigPath } from "./providers";
@@ -72,13 +80,8 @@ export async function forgetSessionFolders(
   config: DaedalusConfig,
   folder: string,
 ): Promise<void> {
-  // The folder may already be gone, and both spellings may have been stored.
-  const roots = [
-    ...new Set([
-      resolve(folder),
-      await realpath(folder).catch(() => resolve(folder)),
-    ]),
-  ];
+  // Both spellings may have been stored, and the folder may already be gone.
+  const roots = [...new Set([resolve(folder), await canonicalPath(folder)])];
   const configs = [
     config,
     ...config.accounts.map((account) =>
@@ -89,8 +92,83 @@ export async function forgetSessionFolders(
   const claudeFiles = new Set(configs.map((entry) => claudeStatePath(entry)));
   for (const file of codexFiles)
     await forgetCodexFolders(file, roots).catch(() => undefined);
+  // Only an entry that is there can be put back by a Claude on its way out,
+  // and asking the system which processes work where costs a few tenths of
+  // a second.
+  const recorded = await Promise.all(
+    [...claudeFiles].map((file) => holdsFolders(file, roots)),
+  );
+  if (recorded.some(Boolean)) await waitForExits(roots);
   for (const file of claudeFiles)
     await forgetClaudeFolders(file, roots).catch(() => undefined);
+}
+
+/** Whether a `.claude.json` has a project at or inside `roots`. */
+async function holdsFolders(
+  statePath: string,
+  roots: readonly string[],
+): Promise<boolean> {
+  try {
+    const state = (await Bun.file(statePath).json()) as {
+      projects?: Record<string, unknown>;
+    };
+    return Object.keys(state.projects ?? {}).some((path) =>
+      isAtOrInside(roots, path),
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The path the providers record for `folder`: `/private/var/...` for a
+ * `/var/...` one. A folder that is gone has no real path of its own, so the
+ * deepest one above it that still exists stands in for it.
+ */
+async function canonicalPath(folder: string): Promise<string> {
+  const path = resolve(folder);
+  const real = await realpath(path).catch(() => undefined);
+  if (real) return real;
+  const parent = dirname(path);
+  return parent === path
+    ? path
+    : join(await canonicalPath(parent), basename(path));
+}
+
+const EXIT_WAIT_MS = 10_000;
+const EXIT_POLL_MS = 200;
+
+/**
+ * Waits, for a while, until no process works at or inside `roots`.
+ *
+ * Stopping a session closes its terminal, and Claude then saves the
+ * session's last figures to its project in `.claude.json` on its way out,
+ * about a second later, which would put back an entry dropped in the
+ * meantime. Its `sessions/<pid>.json` is no help: Claude deletes that first.
+ * So this asks the system which processes still work in those folders. It
+ * goes by folder, not by name, because Claude's process is `claude` from
+ * Homebrew, `node` from npm and its version number from the native
+ * installer. One still running after the wait is left to run, and so is
+ * everything when the system cannot say.
+ */
+export async function waitForExits(
+  roots: readonly string[],
+  options: {
+    timeoutMs?: number;
+    list?: () => Promise<Map<number, string> | undefined>;
+  } = {},
+): Promise<void> {
+  const list = options.list ?? (() => processWorkingDirectories());
+  const deadline = Date.now() + (options.timeoutMs ?? EXIT_WAIT_MS);
+  for (;;) {
+    const folders = await list();
+    if (!folders) return;
+    const running = [...folders].some(
+      ([pid, cwd]) => pid !== process.pid && isAtOrInside(roots, cwd),
+    );
+    if (!running || Date.now() >= deadline) return;
+    await Bun.sleep(EXIT_POLL_MS);
+  }
 }
 
 const isAtOrInside = (roots: readonly string[], path: string): boolean =>
@@ -189,7 +267,76 @@ export async function forgetCodexFolders(
   await replaceFile(configPath, merged);
 }
 
-type ClaudeState = { projects?: Record<string, Record<string, unknown>> };
+/**
+ * Claude's own lock on `.claude.json`: a `.claude.json.lock` directory, made
+ * with `mkdir` by proper-lockfile, whose mtime the holder refreshes every 5
+ * seconds and which anyone may take over once it is 10 seconds old. Claude
+ * re-reads the file under that lock before every save, so a write made while
+ * holding it is never undone by a session that read the file earlier.
+ */
+const CLAUDE_LOCK_STALE_MS = 10_000;
+const CLAUDE_LOCK_WAIT_MS = 5_000;
+const CLAUDE_LOCK_RETRY_MS = 25;
+
+async function withClaudeLock<T>(
+  statePath: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const lock = `${statePath}.lock`;
+  const deadline = Date.now() + CLAUDE_LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      await mkdir(lock);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const held = await stat(lock).catch(() => undefined);
+      if (held && Date.now() - held.mtimeMs > CLAUDE_LOCK_STALE_MS) {
+        // A holder that stopped refreshing its lock has died; taking it over
+        // is what proper-lockfile does too.
+        await rmdir(lock).catch(() => undefined);
+        continue;
+      }
+      if (Date.now() >= deadline)
+        throw new Error(`${lock} is held by another process`);
+      await Bun.sleep(CLAUDE_LOCK_RETRY_MS);
+    }
+  }
+  try {
+    return await run();
+  } finally {
+    await rmdir(lock).catch(() => undefined);
+  }
+}
+
+type ClaudeProjects = Record<string, Record<string, unknown>>;
+
+/**
+ * Reads, changes and atomically replaces Claude's `.claude.json` under its
+ * own lock. `change` returns false to leave the file as it was. A missing
+ * file starts empty; one that is not a JSON object is left alone. A file kept
+ * as a link, with the user's dotfiles say, is locked and written where it
+ * points, as Claude does, so the link stays a link.
+ */
+async function updateClaudeState(
+  statePath: string,
+  change: (projects: ClaudeProjects, state: Record<string, unknown>) => boolean,
+): Promise<void> {
+  await ensureDirectory(dirname(statePath));
+  const target = await realpath(statePath).catch(() => statePath);
+  await withClaudeLock(target, async () => {
+    const text = await readText(target);
+    const parsed = (text ? JSON.parse(text) : {}) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+    const state = parsed as Record<string, unknown>;
+    const projects =
+      state.projects && typeof state.projects === "object"
+        ? (state.projects as ClaudeProjects)
+        : {};
+    if (!change(projects, state)) return;
+    await replaceFile(target, `${JSON.stringify(state, null, 2)}\n`);
+  });
+}
 
 /**
  * Sets Claude's trust flags on the folder's project entry, creating it if
@@ -199,37 +346,32 @@ export async function trustClaudeFolder(
   statePath: string,
   folder: string,
 ): Promise<void> {
-  const text = await readText(statePath);
-  const state = (text ? JSON.parse(text) : {}) as ClaudeState;
-  if (!state || typeof state !== "object" || Array.isArray(state)) return;
-  const projects = state.projects ?? {};
-  const entry = projects[folder] ?? {};
-  if (
-    Object.entries(CLAUDE_TRUST_FLAGS).every(
-      ([key, value]) => entry[key] === value,
+  await updateClaudeState(statePath, (projects, state) => {
+    const entry = projects[folder] ?? {};
+    if (
+      Object.entries(CLAUDE_TRUST_FLAGS).every(
+        ([key, value]) => entry[key] === value,
+      )
     )
-  )
-    return;
-  state.projects = {
-    ...projects,
-    [folder]: { ...entry, ...CLAUDE_TRUST_FLAGS },
-  };
-  await replaceFile(statePath, `${JSON.stringify(state, null, 2)}\n`);
+      return false;
+    state.projects = {
+      ...projects,
+      [folder]: { ...entry, ...CLAUDE_TRUST_FLAGS },
+    };
+    return true;
+  });
 }
 
 export async function forgetClaudeFolders(
   statePath: string,
   roots: readonly string[],
 ): Promise<void> {
-  const text = await readText(statePath);
-  if (!text) return;
-  const state = JSON.parse(text) as ClaudeState;
-  const projects = state?.projects;
-  if (!projects || typeof projects !== "object") return;
-  const stale = Object.keys(projects).filter((path) =>
-    isAtOrInside(roots, path),
-  );
-  if (stale.length === 0) return;
-  for (const path of stale) delete projects[path];
-  await replaceFile(statePath, `${JSON.stringify(state, null, 2)}\n`);
+  if (!(await Bun.file(statePath).exists())) return;
+  await updateClaudeState(statePath, (projects) => {
+    const stale = Object.keys(projects).filter((path) =>
+      isAtOrInside(roots, path),
+    );
+    for (const path of stale) delete projects[path];
+    return stale.length > 0;
+  });
 }

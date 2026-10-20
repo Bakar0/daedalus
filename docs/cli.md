@@ -410,7 +410,13 @@ when you answer the prompt:
   "Allow external CLAUDE.md file imports?" prompt, which Claude asks per folder
   because the workspace `CLAUDE.md` imports `AGENTS.md` from outside it.
 
-Deleting a session, or a workspace, removes its entries again.
+Deleting a session, or a workspace, removes its entries again. Running Claude
+sessions rewrite `.claude.json` all the time, so Daedalus writes it under
+Claude's own lock (the `.claude.json.lock` directory), and Claude re-reads the
+file before it saves. A Claude that was just stopped saves once more about a
+second later, so before removing entries Daedalus waits, up to 10 seconds,
+until no process works in those folders. A session whose folder a later
+session (a rebirth) still works in leaves its entry to that one.
 
 Daedalus never types into a starting session. With the setting off, or for any
 other startup screen (an update offer, new terms), the session stays open at
