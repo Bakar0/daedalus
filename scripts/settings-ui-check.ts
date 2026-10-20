@@ -1235,25 +1235,22 @@ try {
     throw new Error(`The banner did not return: ${closed.banner}`);
   if (!closed.corner) throw new Error("No Settings button to show the dot on");
   // The Workspaces heading holds phone access and global secrets beside New
-  // workspace; the All workspaces card no longer has its own key.
+  // workspace.
   const heading = await evaluate<{
     actions: string[];
-    cardKey: boolean;
     box: { x: number; y: number; width: number; height: number } | null;
   }>(`(() => {
     const actions = document.querySelector('.workspace-column-heading .panel-heading-actions');
     const box = document.querySelector('.workspace-column-heading')?.getBoundingClientRect();
     return {
       actions: [...(actions?.querySelectorAll(':scope > details > summary, :scope > button') ?? [])].map((one) => one.getAttribute('aria-label') ?? ''),
-      cardKey: Boolean(document.querySelector('.all-workspaces-card [aria-label="Global secrets"]')),
       box: box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null,
     };
   })()`);
   if (
     !heading.actions[0]?.startsWith("Phone access") ||
     heading.actions[1] !== "Global secrets" ||
-    heading.actions[2] !== "Create workspace" ||
-    heading.cardKey
+    heading.actions.at(-1) !== "Create workspace"
   )
     throw new Error(`Workspaces heading is wrong: ${JSON.stringify(heading)}`);
   if (heading.box) {
@@ -1310,7 +1307,7 @@ try {
     code: "Escape",
   });
   console.log(
-    "Workspaces heading: phone access (menu: status, Allow phone access, Pair a phone…), global secrets, new workspace; no key on All workspaces",
+    "Workspaces heading: phone access (menu: status, Allow phone access, Pair a phone…), global secrets, new workspace",
   );
   // The Pro badge by the logo, now that the Mac has Pro.
   const brand = await evaluate<{

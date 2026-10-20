@@ -55,7 +55,11 @@ function selector(raw: string): string | undefined {
   // for the board only.
   if (/^(button:not\(|input\b|textarea\b|select\b)/.test(text))
     return `:where(.mac-board) ${text}`;
-  return WANTED.test(text) && !text.includes("board-detail-column")
+  // The Mac's side panel restyles the board for its own column; the phone
+  // has no side panel.
+  return WANTED.test(text) &&
+    !text.includes("board-detail-column") &&
+    !text.includes("side-panel")
     ? text
     : undefined;
 }

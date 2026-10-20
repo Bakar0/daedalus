@@ -738,9 +738,17 @@ export function createDesktopRequestHandlers(
       result(async () => ({
         ...(await context.workspaceContent.readFile(workspace, path)),
       })),
+    workspaceImageRead: ({ workspace, path }) =>
+      result(async () => ({
+        ...(await context.workspaceContent.readImage(workspace, path)),
+      })),
     workspaceFileWrite: (params) =>
       mutate(async () => ({
         ...(await context.workspaceContent.writeFile(params)),
+      })),
+    workspaceFileImport: (params) =>
+      mutate(async () => ({
+        ...(await context.workspaceContent.importFile(params)),
       })),
     workspaceEntryCreate: (params) =>
       mutate(async () => ({

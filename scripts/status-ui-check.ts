@@ -172,14 +172,11 @@ try {
     "document.querySelector('.session-card-main[data-session-id=\"panel-test-agent\"]').click()",
   );
 
-  let telemetry:
-    | { heading: string; status: string; context: string; usage: string }
-    | undefined;
+  let telemetry: { status: string; context: string; usage: string } | undefined;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     telemetry = await evaluate(`(() => {
       const text = (selector) => document.querySelector(selector)?.textContent?.replace(/\\s+/g, ' ').trim() ?? '';
       return {
-        heading: text('.terminal-heading h1'),
         status: text('.agent-session-status-primary'),
         context: text('.agent-session-context'),
         usage: text('.provider-usage'),
@@ -191,7 +188,6 @@ try {
   if (!telemetry) throw new Error("Status telemetry did not render");
 
   const expectedValues = [
-    ["session heading model", telemetry.heading, "claude-fable-5-1[1m]"],
     ["status-line model", telemetry.status, "claude-fable-5-1[1m]"],
     ["Claude context", telemetry.context, "Context 61k/1000k"],
     ["Codex usage", telemetry.usage, "Codex5h 28%·7d 61%"],

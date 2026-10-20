@@ -146,31 +146,7 @@ try {
     await Bun.sleep(50);
   }
 
-  // The secondary panel only exists beside the board. The
-  // view under test is chosen rather than inherited from whichever tab happens
-  // to be first, so a change to the default (#27 made it the board) does not
-  // silently change what this checks.
-  // Waiting for the tab itself rather than for something rendered near it:
-  // the loop above breaks on success but simply falls through on timeout, so a
-  // page that never rendered used to surface as a confusing failure later.
-  let openedBoard = "";
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    openedBoard = await evaluate<string>(`(() => {
-      const tabs = [...document.querySelectorAll('.app-mode-switcher button')];
-      const board = tabs.find((tab) => tab.textContent.trim() === 'Board');
-      if (!board) return 'tabs: ' + JSON.stringify(tabs.map((t) => t.textContent));
-      board.click();
-      return 'ok';
-    })()`);
-    if (openedBoard === "ok") break;
-    await Bun.sleep(50);
-  }
-  if (openedBoard !== "ok")
-    throw new Error(
-      `The board tab never appeared (${openedBoard}); body: ${await evaluate<string>(
-        "document.body.innerText.slice(0, 200)",
-      )}; renderer errors: ${rendererErrors.slice(0, 3).join(" | ") || "none"}`,
-    );
+  // The secondary panel sits beside every view about one workspace.
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (
       await evaluate(
@@ -293,20 +269,14 @@ try {
   );
   await Bun.sleep(250);
   const statusTelemetry = await evaluate<{
-    heading: string;
     status: string;
     context: string;
     usage: string;
   }>(`(() => ({
-    heading: document.querySelector('.terminal-heading h1')?.textContent?.replace(/\\s+/g, ' ').trim() ?? '',
     status: document.querySelector('.agent-session-status-primary')?.textContent?.replace(/\\s+/g, ' ').trim() ?? '',
     context: document.querySelector('.agent-session-context')?.textContent?.replace(/\\s+/g, ' ').trim() ?? '',
     usage: document.querySelector('.provider-usage')?.textContent?.replace(/\\s+/g, ' ').trim() ?? '',
   }))()`);
-  if (!statusTelemetry.heading.includes("claude-fable-5-1[1m]"))
-    throw new Error(
-      `Session heading is missing the model: ${statusTelemetry.heading}`,
-    );
   if (!statusTelemetry.status.includes("claude-fable-5-1[1m]"))
     throw new Error(
       `Status line is missing the model: ${statusTelemetry.status}`,

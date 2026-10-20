@@ -291,6 +291,53 @@ describe("WorkspaceContentService", () => {
           ".daedalus/workspace.json",
         ),
       ).rejects.toMatchObject({ code: "VALIDATION" });
+      // Images come back as base64 for the viewer; anything else is refused.
+      const pixel = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]);
+      await Bun.write(join(workspace.path, "notes", "dot.png"), pixel);
+      expect(
+        await context.workspaceContent.readImage(
+          workspace.id,
+          join("notes", "dot.png"),
+        ),
+      ).toEqual({
+        name: "dot.png",
+        path: join("notes", "dot.png"),
+        mimeType: "image/png",
+        base64: Buffer.from(pixel).toString("base64"),
+      });
+      await expect(
+        context.workspaceContent.readImage(
+          workspace.id,
+          join("notes", "idea.txt"),
+        ),
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+      await expect(
+        context.workspaceContent.readImage(workspace.id, "../outside.png"),
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+      // A file dropped from Finder comes in byte for byte, binary or not,
+      // and never over a name already there.
+      const imported = await context.workspaceContent.importFile({
+        workspace: workspace.id,
+        parentPath: "notes",
+        name: "logo.png",
+        base64: Buffer.from(pixel).toString("base64"),
+      });
+      expect(imported.path).toBe(join("notes", "logo.png"));
+      expect(
+        new Uint8Array(
+          await Bun.file(
+            join(workspace.path, "notes", "logo.png"),
+          ).arrayBuffer(),
+        ),
+      ).toEqual(pixel);
+      await expect(
+        context.workspaceContent.importFile({
+          workspace: workspace.id,
+          parentPath: "notes",
+          name: "logo.png",
+          base64: "",
+        }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
       context.close();
     });
   });

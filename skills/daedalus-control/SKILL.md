@@ -110,7 +110,7 @@ The command gets `GH_TOKEN` in its environment and its piped output shows the
 value as `***`. A variable used inside a shell command needs a shell to expand
 it: `exec --secret API_KEY -- sh -c 'curl -H "Authorization: Bearer $API_KEY" …'`.
 If the secret is missing, `exec` exits 3; ask the user to add it in the
-app (the key on the All workspaces card for everywhere, the key on the
+app (the key in the Workspaces heading for everywhere, the key on the
 workspace's card for this workspace) or with `daedal secret set`. Do not
 print, encode or copy a secret's value.
 
