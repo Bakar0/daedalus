@@ -3,7 +3,8 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import { runCommand } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
-import { createApplicationContext, parseGitHubRepositoryPages } from "../index";
+import { createApplicationContext } from "../index";
+import { parseGitHubRepositoryPages } from "./repository-library";
 import {
   contextWithStubbedAgent,
   createRepository,
@@ -65,7 +66,7 @@ describe("RepositoryLibrary", () => {
         title: "Try two models",
       });
       const libraryRepository =
-        await context.workspaceContent.library.addRepositoryToLibrary({
+        await context.workspaceContent.addRepositoryToLibrary({
           remoteUrl: source,
         });
       await Bun.write(join(source, "README.md"), "# Latest remote state\n");
@@ -87,11 +88,10 @@ describe("RepositoryLibrary", () => {
           ])
         ).exitCode,
       ).toBe(0);
-      const repository =
-        await context.workspaceContent.library.attachRepository({
-          workspace: workspace.id,
-          libraryRepositoryId: libraryRepository.id,
-        });
+      const repository = await context.workspaceContent.attachRepository({
+        workspace: workspace.id,
+        libraryRepositoryId: libraryRepository.id,
+      });
       const latestCommit = (
         await runCommand("git", ["-C", source, "rev-parse", "HEAD"])
       ).stdout.trim();
@@ -167,8 +167,9 @@ describe("RepositoryLibrary", () => {
           ])
         ).exitCode,
       ).toBe(0);
-      const synchronized =
-        await context.workspaceContent.library.syncRepository(repository.id);
+      const synchronized = await context.workspaceContent.syncRepository(
+        repository.id,
+      );
       expect(synchronized.gitStatus).toMatchObject({
         state: "clean",
         ahead: 0,
@@ -178,7 +179,7 @@ describe("RepositoryLibrary", () => {
         await readFile(join(repository.referencePath!, "README.md"), "utf8"),
       ).toBe("# Synced remote state\n");
       expect(
-        context.workspaceContent.library
+        context.workspaceContent
           .listRepositoryLibrary()
           .find((item) => item.id === libraryRepository.id)?.lastFetchedAt,
       ).toBe(synchronized.fetchedAt);
@@ -193,7 +194,7 @@ describe("RepositoryLibrary", () => {
           ?.gitStatus,
       ).toMatchObject({ state: "modified", changedFiles: 1 });
       await expect(
-        context.workspaceContent.library.syncRepository(repository.id),
+        context.workspaceContent.syncRepository(repository.id),
       ).rejects.toMatchObject({ code: "CONFLICT" });
       await Bun.write(
         join(repository.referencePath!, "README.md"),
@@ -224,9 +225,7 @@ describe("RepositoryLibrary", () => {
       expect(first.references).toEqual([
         expect.objectContaining({ id: repository.id, name: repository.name }),
       ]);
-      expect(
-        context.workspaceContent.library.listRepositoryLibrary(),
-      ).toHaveLength(1);
+      expect(context.workspaceContent.listRepositoryLibrary()).toHaveLength(1);
       expect(
         (await context.workspaceContent.get(workspace.id)).worktrees,
       ).toEqual([]);
@@ -246,7 +245,7 @@ describe("RepositoryLibrary", () => {
           reconcile: false,
         });
         const repository =
-          await context.workspaceContent.library.addRepositoryToLibrary({
+          await context.workspaceContent.addRepositoryToLibrary({
             remoteUrl: source,
           });
         expect(repository.defaultBranch).toBe("trunk");
@@ -289,7 +288,7 @@ describe("RepositoryLibrary", () => {
         });
         const workspace = await context.workspaces.create({ name: "Combined" });
         const repository =
-          await context.workspaceContent.library.addAndAttachRepository({
+          await context.workspaceContent.addAndAttachRepository({
             workspace: workspace.id,
             remoteUrl: source,
           });
@@ -318,7 +317,7 @@ describe("RepositoryLibrary", () => {
         await createRepository(source, "trunk");
         const context = await contextWithStubbedAgent(home);
         const workspace = await context.workspaces.create({ name: "Combined" });
-        await context.workspaceContent.library.addAndAttachRepository({
+        await context.workspaceContent.addAndAttachRepository({
           workspace: workspace.id,
           remoteUrl: source,
         });
@@ -382,7 +381,7 @@ describe("RepositoryLibrary", () => {
         const attached = [];
         for (const remoteUrl of [moving, quiet, held])
           attached.push(
-            await context.workspaceContent.library.addAndAttachRepository({
+            await context.workspaceContent.addAndAttachRepository({
               workspace: workspace.id,
               remoteUrl,
             }),
@@ -395,10 +394,9 @@ describe("RepositoryLibrary", () => {
           "mine\n",
         );
 
-        const outcomes =
-          await context.workspaceContent.library.fetchRepositories({
-            workspace: workspace.id,
-          });
+        const outcomes = await context.workspaceContent.fetchRepositories({
+          workspace: workspace.id,
+        });
         const byName = new Map(outcomes.map((item) => [item.name, item]));
         expect(byName.get("moving")).toMatchObject({
           newCommits: 2,
@@ -419,7 +417,7 @@ describe("RepositoryLibrary", () => {
         expect(byName.get("held")?.from).toBe(byName.get("held")?.to);
 
         // Naming one fetches only that one.
-        const one = await context.workspaceContent.library.fetchRepositories({
+        const one = await context.workspaceContent.fetchRepositories({
           workspace: workspace.id,
           ids: [attached[1]!.id],
         });
@@ -434,7 +432,7 @@ describe("RepositoryLibrary", () => {
         await createRepository(source);
         const context = await contextWithStubbedAgent(home);
         const workspace = await context.workspaces.create({ name: "Push" });
-        await context.workspaceContent.library.addAndAttachRepository({
+        await context.workspaceContent.addAndAttachRepository({
           workspace: workspace.id,
           remoteUrl: source,
         });
@@ -479,7 +477,7 @@ describe("RepositoryLibrary", () => {
         const workspace = await context.workspaces.create({ name: "Async" });
 
         const pending =
-          await context.workspaceContent.library.beginAddAndAttachRepository({
+          await context.workspaceContent.beginAddAndAttachRepository({
             workspace: workspace.id,
             remoteUrl: source,
           });
@@ -493,10 +491,10 @@ describe("RepositoryLibrary", () => {
 
         // Nothing can be done to it while it is still arriving.
         await expect(
-          context.workspaceContent.library.fetchRepository(pending.id),
+          context.workspaceContent.fetchRepository(pending.id),
         ).rejects.toMatchObject({ code: "CONFLICT" });
 
-        await context.workspaceContent.library.settlePreparations();
+        await context.workspaceContent.settlePreparations();
         const ready = (await context.workspaceContent.get(workspace.id))
           .repositories[0];
         // Asserted as a pair so a failure prints why it failed rather than
@@ -522,18 +520,18 @@ describe("RepositoryLibrary", () => {
         });
         const workspace = await context.workspaces.create({ name: "Async" });
         const pending =
-          await context.workspaceContent.library.beginAddAndAttachRepository({
+          await context.workspaceContent.beginAddAndAttachRepository({
             workspace: workspace.id,
             remoteUrl: join(home, "source", "missing"),
           });
-        await context.workspaceContent.library.settlePreparations();
+        await context.workspaceContent.settlePreparations();
 
         const failed = (await context.workspaceContent.get(workspace.id))
           .repositories[0];
         expect(failed?.status).toBe("failed");
         expect(failed?.statusError ?? "").not.toBe("");
         // A failure is a row the user can clear, not a permanent resident.
-        await context.workspaceContent.library.detachRepository(pending.id);
+        await context.workspaceContent.detachRepository(pending.id);
         expect(
           (await context.workspaceContent.get(workspace.id)).repositories,
         ).toHaveLength(0);

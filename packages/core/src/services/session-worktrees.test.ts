@@ -5,7 +5,7 @@ import { describe, expect, test } from "vitest";
 import { pathExists, runCommand } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { createApplicationContext } from "../index";
-import { pullRequestAnswerHoldsHead } from "./workspace-content";
+import { pullRequestAnswerHoldsHead } from "./git-status-monitor";
 import {
   FakeTmux,
   contextWithStubbedAgent,
@@ -66,18 +66,17 @@ describe("SessionWorktrees", () => {
         (await context.workspaceContent.get(workspace.id)).worktrees,
       ).toEqual([]);
 
-      const worktree =
-        await context.workspaceContent.worktrees.createSessionWorktree({
-          session: session.id,
-          repository: "app",
-          branch: `work-${session.id.slice(0, 8)}`,
-        });
+      const worktree = await context.workspaceContent.createSessionWorktree({
+        session: session.id,
+        repository: "app",
+        branch: `work-${session.id.slice(0, 8)}`,
+      });
       expect(worktree.path).toBe(join(session.workingDirectory, "app"));
       expect(await readFile(join(worktree.path, "README.md"), "utf8")).toBe(
         "# Source\n",
       );
       expect(
-        await context.workspaceContent.worktrees.createSessionWorktree({
+        await context.workspaceContent.createSessionWorktree({
           session: session.id,
           repository: "app",
         }),
@@ -144,12 +143,11 @@ describe("SessionWorktrees", () => {
         workspace: workspace.id,
         command: "shell",
       });
-      const worktree =
-        await context.workspaceContent.worktrees.createSessionWorktree({
-          session: session.id,
-          repository: "app",
-          branch: `work-${session.id.slice(0, 8)}`,
-        });
+      const worktree = await context.workspaceContent.createSessionWorktree({
+        session: session.id,
+        repository: "app",
+        branch: `work-${session.id.slice(0, 8)}`,
+      });
 
       // The session starts from what is on the base branch now, so the later
       // commit is already in its history and needs no rebase.
@@ -212,12 +210,11 @@ describe("SessionWorktrees", () => {
         workspace: workspace.id,
         provider: "claude",
       });
-      const worktree =
-        await context.workspaceContent.worktrees.createSessionWorktree({
-          session: session.id,
-          repository: "product",
-          branch: `work-${session.id.slice(0, 8)}`,
-        });
+      const worktree = await context.workspaceContent.createSessionWorktree({
+        session: session.id,
+        repository: "product",
+        branch: `work-${session.id.slice(0, 8)}`,
+      });
       return { context, workspace, repository, session, worktree };
     };
 
@@ -231,7 +228,7 @@ describe("SessionWorktrees", () => {
           context.workspaceContent.detachRepository(repository.id),
         ).rejects.toMatchObject({ code: "CONFLICT" });
 
-        await context.workspaceContent.worktrees.removeSessionWorktree({
+        await context.workspaceContent.removeSessionWorktree({
           session: session.id,
           repository: "product",
         });
@@ -356,7 +353,7 @@ describe("SessionWorktrees", () => {
 
         await Bun.write(join(worktree.path, "SCRATCH.md"), "# scratch\n");
         await expect(
-          context.workspaceContent.worktrees.removeSessionWorktree({
+          context.workspaceContent.removeSessionWorktree({
             session: session.id,
             repository: "product",
           }),
@@ -378,7 +375,7 @@ describe("SessionWorktrees", () => {
           ).stdout.trim(),
         ).toBe("");
         await expect(
-          context.workspaceContent.worktrees.removeSessionWorktree({
+          context.workspaceContent.removeSessionWorktree({
             session: session.id,
             repository: "product",
           }),
@@ -388,11 +385,11 @@ describe("SessionWorktrees", () => {
         // Pushing is what the message tells the user to do, so pushing has to
         // be what clears it. Measuring this against the base branch instead
         // produced a guard that refused just the same after a push.
-        await context.workspaceContent.worktrees.pushSessionWorktree({
+        await context.workspaceContent.pushSessionWorktree({
           session: session.id,
           repository: "product",
         });
-        await context.workspaceContent.worktrees.removeSessionWorktree({
+        await context.workspaceContent.removeSessionWorktree({
           session: session.id,
           repository: "product",
         });
@@ -433,12 +430,11 @@ describe("SessionWorktrees", () => {
           workspace: workspace.id,
           provider: "claude",
         });
-        const kept =
-          await context.workspaceContent.worktrees.createSessionWorktree({
-            session: keeper.id,
-            repository: "product",
-            branch: `work-${keeper.id.slice(0, 8)}`,
-          });
+        const kept = await context.workspaceContent.createSessionWorktree({
+          session: keeper.id,
+          repository: "product",
+          branch: `work-${keeper.id.slice(0, 8)}`,
+        });
         await commitIn(kept.path, "UNPUSHED.md");
 
         await context.agents.archive(session.id);
@@ -581,22 +577,20 @@ describe("SessionWorktrees", () => {
           provider: "claude",
           taskId: task.id,
         });
-        const worktree =
-          await context.workspaceContent.worktrees.createSessionWorktree({
-            session: session.id,
-            repository: "product",
-            branch: `work-${session.id.slice(0, 8)}`,
-          });
+        const worktree = await context.workspaceContent.createSessionWorktree({
+          session: session.id,
+          repository: "product",
+          branch: `work-${session.id.slice(0, 8)}`,
+        });
         expect(worktree.branchName).toBe(`work-${session.id.slice(0, 8)}`);
 
         // The agent moves its work to a branch of its own.
         await git(["-C", worktree.path, "checkout", "-q", "-b", "topic"]);
         await commitIn(worktree.path, "WORK.md");
-        const pushed =
-          await context.workspaceContent.worktrees.pushSessionWorktree({
-            session: session.id,
-            repository: "product",
-          });
+        const pushed = await context.workspaceContent.pushSessionWorktree({
+          session: session.id,
+          repository: "product",
+        });
         expect(pushed.worktree.branchName).toBe("topic");
         expect(await git(["-C", source, "rev-parse", "topic"])).toBe(
           await git(["-C", worktree.path, "rev-parse", "HEAD"]),
@@ -608,7 +602,7 @@ describe("SessionWorktrees", () => {
         ).toBe("topic");
 
         // Pushed, so removable; and both branches the tree carried go with it.
-        await context.workspaceContent.worktrees.removeSessionWorktree({
+        await context.workspaceContent.removeSessionWorktree({
           session: session.id,
           repository: "product",
         });
@@ -634,12 +628,11 @@ describe("SessionWorktrees", () => {
           context.agents.spawn({ workspace: workspace.id, provider: "claude" });
 
         const first = await spawn();
-        const worktree =
-          await context.workspaceContent.worktrees.createSessionWorktree({
-            session: first.id,
-            repository: "product",
-            branch: "feat/ABC-123-status",
-          });
+        const worktree = await context.workspaceContent.createSessionWorktree({
+          session: first.id,
+          repository: "product",
+          branch: "feat/ABC-123-status",
+        });
         expect(worktree.branchName).toBe("feat/ABC-123-status");
         expect(
           await git(["-C", worktree.path, "branch", "--show-current"]),
@@ -650,27 +643,27 @@ describe("SessionWorktrees", () => {
 
         const second = await spawn();
         await expect(
-          context.workspaceContent.worktrees.createSessionWorktree({
+          context.workspaceContent.createSessionWorktree({
             session: second.id,
             repository: "product",
             branch: "feat/ABC-123-status",
           }),
         ).rejects.toThrow("already exists");
         await expect(
-          context.workspaceContent.worktrees.createSessionWorktree({
+          context.workspaceContent.createSessionWorktree({
             session: second.id,
             repository: "product",
             branch: "bad..name",
           }),
         ).rejects.toThrow("not a valid branch name");
         await expect(
-          context.workspaceContent.worktrees.createSessionWorktree({
+          context.workspaceContent.createSessionWorktree({
             session: second.id,
             repository: "product",
           }),
         ).rejects.toThrow("--branch <name> is required");
         await expect(
-          context.workspaceContent.worktrees.createSessionWorktree({
+          context.workspaceContent.createSessionWorktree({
             session: second.id,
             repository: "product",
             branch: "@{-1}",
@@ -680,7 +673,7 @@ describe("SessionWorktrees", () => {
         // A teammate's branch on origin is taken too.
         await git(["-C", source, "branch", "fix/teammate"]);
         await expect(
-          context.workspaceContent.worktrees.createSessionWorktree({
+          context.workspaceContent.createSessionWorktree({
             session: second.id,
             repository: "product",
             branch: "fix/teammate",
@@ -689,13 +682,13 @@ describe("SessionWorktrees", () => {
 
         // A repeat call returns the worktree, but not under another name.
         expect(
-          await context.workspaceContent.worktrees.createSessionWorktree({
+          await context.workspaceContent.createSessionWorktree({
             session: first.id,
             repository: "product",
           }),
         ).toEqual(worktree);
         await expect(
-          context.workspaceContent.worktrees.createSessionWorktree({
+          context.workspaceContent.createSessionWorktree({
             session: first.id,
             repository: "product",
             branch: "feat/other",
@@ -719,15 +712,14 @@ describe("SessionWorktrees", () => {
           workspace: workspace.id,
           provider: "claude",
         });
-        const worktree =
-          await context.workspaceContent.worktrees.createSessionWorktree({
-            session: session.id,
-            repository: "product",
-            branch: `work-${session.id.slice(0, 8)}`,
-          });
+        const worktree = await context.workspaceContent.createSessionWorktree({
+          session: session.id,
+          repository: "product",
+          branch: `work-${session.id.slice(0, 8)}`,
+        });
         await commitIn(worktree.path, "ONE.md");
         await commitIn(worktree.path, "TWO.md");
-        await context.workspaceContent.worktrees.pushSessionWorktree({
+        await context.workspaceContent.pushSessionWorktree({
           session: session.id,
           repository: "product",
         });
@@ -752,7 +744,7 @@ describe("SessionWorktrees", () => {
 
         // No pull request: the commits are only here, so the guard holds.
         await expect(
-          context.workspaceContent.worktrees.removeSessionWorktree({
+          context.workspaceContent.removeSessionWorktree({
             session: session.id,
             repository: "product",
           }),

@@ -16,7 +16,7 @@ import type {
   WorktreeChanges,
 } from "../domain";
 import type { SqliteRepositories } from "../repositories";
-import { GH_EXECUTABLE_FALLBACKS } from "./repository-library";
+import { GH_EXECUTABLE_FALLBACKS } from "./git-commands";
 import type { WorkspaceService } from "./workspaces";
 
 // The branch a working tree is on now, or `null` on a detached HEAD. Daedalus
@@ -449,8 +449,6 @@ const samePullRequest = (
     left.url === right.url &&
     left.state === right.state &&
     left.isDraft === right.isDraft);
-
-/** How long a removed entry can still be restored. */
 
 /** What `git status` lists in one tree, with paths relative to the tree. */
 export interface TreeChanges {

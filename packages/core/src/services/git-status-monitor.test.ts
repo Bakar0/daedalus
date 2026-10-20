@@ -4,11 +4,8 @@ import { describe, expect, test } from "vitest";
 import { runCommand } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { createApplicationContext } from "../index";
-import {
-  GitStatusMonitor,
-  gitMeasure,
-  type GitMeasure,
-} from "./git-status-monitor";
+import { gitMeasure, type GitMeasure } from "./git-status-monitor";
+import { WorkspaceContentService } from "./workspace-content";
 import {
   contextWithStubbedAgent,
   createRepository,
@@ -55,7 +52,7 @@ describe("GitStatusMonitor", () => {
             Date.now() < deadline
           ) {
             await Bun.sleep(100);
-            await content.gitStatus.settle();
+            await content.settleGitStatus();
           }
           return status();
         },
@@ -67,9 +64,9 @@ describe("GitStatusMonitor", () => {
         const { context, content, session, workspace, worktree, relativeRoot } =
           await lazyFixture(home);
         // Whatever creating the worktree started on the context's own
-        // monitor has finished; this test measures through a monitor of its
+        // service has finished; this test measures through a service of its
         // own, whose git calls it counts.
-        await content.gitStatus.settle();
+        await content.settleGitStatus();
         const counts = { status: 0, changes: 0 };
         const counting: GitMeasure = {
           status: (path, baseBranch) => {
@@ -81,18 +78,16 @@ describe("GitStatusMonitor", () => {
             return gitMeasure.changes(path);
           },
         };
-        const monitor = new GitStatusMonitor(
+        const counted = new WorkspaceContentService(
           context.repositories,
           context.workspaces,
+          context.config,
           () => {},
+          async () => {},
           counting,
         );
-        const status = async () => {
-          const [row] = context.repositories.listSessionWorktrees({
-            workspaceId: workspace.id,
-          });
-          return row && monitor.withMeasurements(row).gitStatus;
-        };
+        const status = async () =>
+          (await counted.get(workspace.id)).worktrees[0]?.gitStatus;
         // A report reaches the status on its own, a moment later.
         const statusBecomes = async (changedFiles: number) => {
           const deadline = Date.now() + 5_000;
@@ -101,7 +96,7 @@ describe("GitStatusMonitor", () => {
             Date.now() < deadline
           ) {
             await Bun.sleep(100);
-            await monitor.settle();
+            await counted.settleGitStatus();
           }
           return status();
         };
@@ -112,8 +107,8 @@ describe("GitStatusMonitor", () => {
         // ordinary pass once the rate limit allows, then wait for it.
         const ordinaryPass = async () => {
           await Bun.sleep(1_100);
-          monitor.scheduleRefresh(workspace.id);
-          await monitor.settle();
+          await counted.get(workspace.id);
+          await counted.settleGitStatus();
         };
         // How many trees `run` measured with git, for status and for changes.
         const measured = async (run: () => Promise<unknown>) => {
@@ -129,17 +124,17 @@ describe("GitStatusMonitor", () => {
         // worktree, so every zero below is a tree left alone.
         expect(
           await measured(async () => {
-            monitor.remeasureWorkspace(workspace.id);
-            await monitor.settle();
+            counted.remeasureWorkspace(workspace.id);
+            await counted.settleGitStatus();
           }),
         ).toMatchObject({ status: 2 });
         expect(await status()).toMatchObject({ state: "clean", ahead: 0 });
 
         // Nothing moved: an ordinary pass and a changes listing run no git.
-        await monitor.worktreeChanges(workspace.id);
+        await counted.worktreeChanges(workspace.id);
         expect(await measured(ordinaryPass)).toEqual({ status: 0, changes: 0 });
         expect(
-          await measured(() => monitor.worktreeChanges(workspace.id)),
+          await measured(() => counted.worktreeChanges(workspace.id)),
         ).toEqual({ status: 0, changes: 0 });
 
         // A commit moves HEAD, which the cheap check sees on its own.
@@ -165,7 +160,7 @@ describe("GitStatusMonitor", () => {
         // An edit moves no git metadata; the watcher's report is what says
         // the tree changed, and its pass follows without being asked.
         await Bun.write(join(worktree.path, "SCRATCH.md"), "# Scratch\n");
-        monitor.noteFilesChanged(
+        counted.noteFilesChanged(
           workspace.id,
           [{ path: `${relativeRoot}/SCRATCH.md` }],
           false,
@@ -175,27 +170,27 @@ describe("GitStatusMonitor", () => {
           changedFiles: 1,
         });
         expect(
-          (await monitor.worktreeChanges(workspace.id))[0]?.files.map(
+          (await counted.worktreeChanges(workspace.id))[0]?.files.map(
             (file) => file.repositoryPath,
           ),
         ).toEqual(["SCRATCH.md"]);
 
         // A change outside every tree marks none of them.
-        monitor.noteFilesChanged(workspace.id, [{ path: "BRIEF.md" }], false);
+        counted.noteFilesChanged(workspace.id, [{ path: "BRIEF.md" }], false);
         expect(
-          await measured(() => monitor.worktreeChanges(workspace.id)),
+          await measured(() => counted.worktreeChanges(workspace.id)),
         ).toEqual({ status: 0, changes: 0 });
 
         // Fetch is the user saying something changed: everything is measured
         // again, whatever the cheap checks say.
         await unlink(join(worktree.path, "SCRATCH.md"));
-        monitor.remeasureWorkspace(workspace.id);
-        await monitor.settle();
+        counted.remeasureWorkspace(workspace.id);
+        await counted.settleGitStatus();
         expect(await status()).toMatchObject({
           state: "ahead",
           changedFiles: 0,
         });
-        monitor.close();
+        counted.close();
         context.close();
       });
       // It waits out the rate limit and the file-change settle on purpose.
@@ -205,7 +200,7 @@ describe("GitStatusMonitor", () => {
       await withTemporaryDaedalusHome(async (home) => {
         const { context, content, worktree, statusBecomes } =
           await lazyFixture(home);
-        await content.gitStatus.settle();
+        await content.settleGitStatus();
         // As in a workspace that is not open: no workspace watcher, nobody
         // calls noteFilesChanged. The live session's own worktree watcher is
         // what sees it.
@@ -241,7 +236,7 @@ describe("GitStatusMonitor", () => {
         // The listing deliberately does not wait for git, so the measurement
         // is asked for rather than assumed to have happened.
         await context.workspaceContent.get(workspace.id);
-        await context.workspaceContent.gitStatus.settle(workspace.id);
+        await context.workspaceContent.settleGitStatus(workspace.id);
 
         // A clean worktree sitting exactly on the base branch.
         const clean = (await context.workspaceContent.get(workspace.id))
@@ -276,7 +271,7 @@ describe("GitStatusMonitor", () => {
         ).toBe(0);
         await Bun.write(join(worktree.path, "SCRATCH.md"), "# Not committed\n");
 
-        await context.workspaceContent.gitStatus.settle(workspace.id);
+        await context.workspaceContent.settleGitStatus(workspace.id);
         const moved = (await context.workspaceContent.get(workspace.id))
           .worktrees[0];
         expect(moved?.gitStatus).toEqual({
@@ -294,7 +289,7 @@ describe("GitStatusMonitor", () => {
         // The board reads the same measurement for every workspace at once,
         // without the workspace view having been opened.
         context.workspaceContent.listWorktrees();
-        await context.workspaceContent.gitStatus.settle(null);
+        await context.workspaceContent.settleGitStatus(null);
         expect(context.workspaceContent.listWorktrees()).toMatchObject([
           {
             sessionId: session.id,
@@ -304,7 +299,7 @@ describe("GitStatusMonitor", () => {
         ]);
 
         // The read-only planning checkout is unaffected by the agent's work.
-        await context.workspaceContent.gitStatus.settle(workspace.id);
+        await context.workspaceContent.settleGitStatus(workspace.id);
         expect(
           (await context.workspaceContent.get(workspace.id)).repositories[0]
             ?.gitStatus?.state,
@@ -519,7 +514,7 @@ describe("GitStatusMonitor", () => {
       // enough to stay under any threshold worth setting.
       expect(immediate.repositories[0]?.gitStatus).toBeUndefined();
 
-      await context.workspaceContent.gitStatus.settle(workspace.id);
+      await context.workspaceContent.settleGitStatus(workspace.id);
       expect(
         (await context.workspaceContent.get(workspace.id)).repositories[0]
           ?.gitStatus?.state,
@@ -575,7 +570,7 @@ describe("GitStatusMonitor", () => {
       for (const entry of entries)
         if (entry !== ".git") await utimes(join(checkout, entry), now, now);
 
-      await context.workspaceContent.gitStatus.settle(workspace.id);
+      await context.workspaceContent.settleGitStatus(workspace.id);
       expect(
         (await context.workspaceContent.get(workspace.id)).repositories[0]
           ?.gitStatus?.state,

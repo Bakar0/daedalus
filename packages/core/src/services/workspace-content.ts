@@ -38,21 +38,11 @@ import { WorkspaceFiles } from "./workspace-files";
 import type { WorkspaceService } from "./workspaces";
 
 export {
-  GitStatusMonitor,
-  gitMeasure,
   parseChangedFiles,
   parsePullRequestView,
   pullRequestAnswerHoldsHead,
-  type GitMeasure,
-  type TreeChanges,
 } from "./git-status-monitor";
-export {
-  RepositoryLibrary,
-  parseGitHubRepositoryPages,
-  pathSegment,
-} from "./repository-library";
-export { SessionWorktrees } from "./session-worktrees";
-export { WorkspaceFiles } from "./workspace-files";
+export { parseGitHubRepositoryPages, pathSegment } from "./repository-library";
 
 const LEGACY_BRIEF_TEMPLATE = `# Brief
 
@@ -413,15 +403,14 @@ export async function ensureWorkspaceContentFiles(
 /**
  * A workspace's content as one service: its context files (brief, journal,
  * instruction files), its file tree, its repositories and the agents'
- * worktrees in it. The work is done by four modules, reachable here for
- * callers that want one directly; every method below forwards to one of them
- * except the context files, which live here.
+ * worktrees in it. The work is done by four modules; every method below
+ * forwards to one of them except the context files, which live here.
  */
 export class WorkspaceContentService {
-  readonly files: WorkspaceFiles;
-  readonly gitStatus: GitStatusMonitor;
-  readonly library: RepositoryLibrary;
-  readonly worktrees: SessionWorktrees;
+  private readonly files: WorkspaceFiles;
+  private readonly gitStatus: GitStatusMonitor;
+  private readonly library: RepositoryLibrary;
+  private readonly worktrees: SessionWorktrees;
 
   constructor(
     private readonly repositories: SqliteRepositories,

@@ -6,7 +6,6 @@ import {
   pathExists,
   removeDirectory,
   runCommand,
-  standardExecutableFallbacks,
 } from "@daedalus/platform";
 import type {
   RepositoryFetchOutcome,
@@ -17,10 +16,12 @@ import type {
 import type { DaedalusConfig } from "../config";
 import { DaedalusError, normalizeError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
+import {
+  GH_EXECUTABLE_FALLBACKS,
+  GIT_NETWORK_ENVIRONMENT,
+} from "./git-commands";
 import type { GitStatusMonitor } from "./git-status-monitor";
 import type { WorkspaceService } from "./workspaces";
-
-export const GH_EXECUTABLE_FALLBACKS = standardExecutableFallbacks("gh");
 
 type GitHubRepositoryResponse = {
   name?: string;
@@ -81,11 +82,6 @@ function remoteRepositoryName(remoteUrl: string): string {
 }
 
 const REMOTE_TRACKING_REFSPEC = "+refs/heads/*:refs/remotes/origin/*";
-
-export const GIT_NETWORK_ENVIRONMENT = {
-  GIT_TERMINAL_PROMPT: "0",
-  GIT_SSH_COMMAND: "ssh -oBatchMode=yes",
-};
 
 // A bare clone already carries every branch under `refs/heads/*`, but nothing
 // under `refs/remotes/origin/*` — which is what worktree creation and status

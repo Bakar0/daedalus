@@ -111,6 +111,7 @@ function assertEntryName(value: string): string {
   return name;
 }
 
+/** How long a removed entry can still be restored. */
 const TRASH_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 const TRASH_ORIGIN = "origin.json";
 const TRASH_ENTRY = "entry";

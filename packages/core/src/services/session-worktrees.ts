@@ -28,9 +28,8 @@ import {
 import {
   GH_EXECUTABLE_FALLBACKS,
   GIT_NETWORK_ENVIRONMENT,
-  requireReady,
-  type RepositoryLibrary,
-} from "./repository-library";
+} from "./git-commands";
+import { requireReady, type RepositoryLibrary } from "./repository-library";
 import type { WorkspaceFiles } from "./workspace-files";
 import type { WorkspaceService } from "./workspaces";
 

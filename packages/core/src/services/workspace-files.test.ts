@@ -4,12 +4,14 @@ import { describe, expect, test } from "vitest";
 import { pathExists } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { createApplicationContext } from "../index";
+import { WorkspaceFiles } from "./workspace-files";
 
 describe("WorkspaceFiles", () => {
   describe("renaming, moving and removing entries", () => {
     const withWorkspace = async (
       body: (input: {
         context: Awaited<ReturnType<typeof createApplicationContext>>;
+        files: WorkspaceFiles;
         workspaceId: string;
         workspacePath: string;
       }) => Promise<void>,
@@ -23,6 +25,11 @@ describe("WorkspaceFiles", () => {
         try {
           await body({
             context,
+            files: new WorkspaceFiles(
+              context.repositories,
+              context.workspaces,
+              context.config,
+            ),
             workspaceId: workspace.id,
             workspacePath: workspace.path,
           });
@@ -32,20 +39,20 @@ describe("WorkspaceFiles", () => {
       });
 
     test("renames a file in place and leaves its contents alone", async () => {
-      await withWorkspace(async ({ context, workspaceId }) => {
-        await context.workspaceContent.files.createEntry({
+      await withWorkspace(async ({ context, files, workspaceId }) => {
+        await files.createEntry({
           workspace: workspaceId,
           name: "notes.md",
           kind: "file",
         });
-        await context.workspaceContent.files.writeFile({
+        await files.writeFile({
           workspace: workspaceId,
           path: "notes.md",
           content: "# Notes\n",
           expectedContent: "",
         });
         expect(
-          await context.workspaceContent.files.renameEntry({
+          await files.renameEntry({
             workspace: workspaceId,
             path: "notes.md",
             name: "ideas.md",
@@ -56,12 +63,9 @@ describe("WorkspaceFiles", () => {
           kind: "file",
           mutable: true,
         });
-        expect(
-          await context.workspaceContent.files.readFile(
-            workspaceId,
-            "ideas.md",
-          ),
-        ).toMatchObject({ content: "# Notes\n" });
+        expect(await files.readFile(workspaceId, "ideas.md")).toMatchObject({
+          content: "# Notes\n",
+        });
         expect(
           await pathExists(
             join((await context.workspaces.get(workspaceId)).path, "notes.md"),
@@ -71,30 +75,27 @@ describe("WorkspaceFiles", () => {
     });
 
     test("renames a folder with everything inside it", async () => {
-      await withWorkspace(async ({ context, workspaceId }) => {
-        await context.workspaceContent.files.createEntry({
+      await withWorkspace(async ({ files, workspaceId }) => {
+        await files.createEntry({
           workspace: workspaceId,
           name: "draft",
           kind: "directory",
         });
-        await context.workspaceContent.files.createEntry({
+        await files.createEntry({
           workspace: workspaceId,
           parentPath: "draft",
           name: "plan.md",
           kind: "file",
         });
-        await context.workspaceContent.files.renameEntry({
+        await files.renameEntry({
           workspace: workspaceId,
           path: "draft",
           name: "final",
         });
         expect(
-          (
-            await context.workspaceContent.files.listDirectory(
-              workspaceId,
-              "final",
-            )
-          ).map((entry) => entry.path),
+          (await files.listDirectory(workspaceId, "final")).map(
+            (entry) => entry.path,
+          ),
         ).toEqual(["final/plan.md"]);
       });
     });
@@ -105,14 +106,14 @@ describe("WorkspaceFiles", () => {
      * already-exists check makes fixing a file's capitalisation impossible.
      */
     test("allows a rename that only changes case", async () => {
-      await withWorkspace(async ({ context, workspaceId, workspacePath }) => {
-        await context.workspaceContent.files.createEntry({
+      await withWorkspace(async ({ files, workspaceId, workspacePath }) => {
+        await files.createEntry({
           workspace: workspaceId,
           name: "Readme.md",
           kind: "file",
         });
         expect(
-          await context.workspaceContent.files.renameEntry({
+          await files.renameEntry({
             workspace: workspaceId,
             path: "Readme.md",
             name: "README.md",
@@ -128,42 +129,42 @@ describe("WorkspaceFiles", () => {
      * without an explicit check this destroys the target and says nothing.
      */
     test("refuses to rename onto a different existing entry", async () => {
-      await withWorkspace(async ({ context, workspaceId }) => {
+      await withWorkspace(async ({ files, workspaceId }) => {
         for (const name of ["one.md", "two.md"])
-          await context.workspaceContent.files.createEntry({
+          await files.createEntry({
             workspace: workspaceId,
             name,
             kind: "file",
           });
-        await context.workspaceContent.files.writeFile({
+        await files.writeFile({
           workspace: workspaceId,
           path: "two.md",
           content: "keep me\n",
           expectedContent: "",
         });
         await expect(
-          context.workspaceContent.files.renameEntry({
+          files.renameEntry({
             workspace: workspaceId,
             path: "one.md",
             name: "two.md",
           }),
         ).rejects.toMatchObject({ code: "CONFLICT" });
-        expect(
-          await context.workspaceContent.files.readFile(workspaceId, "two.md"),
-        ).toMatchObject({ content: "keep me\n" });
+        expect(await files.readFile(workspaceId, "two.md")).toMatchObject({
+          content: "keep me\n",
+        });
       });
     });
 
     test("refuses a name that is not one path segment", async () => {
-      await withWorkspace(async ({ context, workspaceId }) => {
-        await context.workspaceContent.files.createEntry({
+      await withWorkspace(async ({ files, workspaceId }) => {
+        await files.createEntry({
           workspace: workspaceId,
           name: "notes.md",
           kind: "file",
         });
         for (const name of ["../escape.md", "nested/name.md", "..", ""])
           await expect(
-            context.workspaceContent.files.renameEntry({
+            files.renameEntry({
               workspace: workspaceId,
               path: "notes.md",
               name,
@@ -173,19 +174,19 @@ describe("WorkspaceFiles", () => {
     });
 
     test("moves an entry into another folder and back to the root", async () => {
-      await withWorkspace(async ({ context, workspaceId }) => {
-        await context.workspaceContent.files.createEntry({
+      await withWorkspace(async ({ files, workspaceId }) => {
+        await files.createEntry({
           workspace: workspaceId,
           name: "inbox",
           kind: "directory",
         });
-        await context.workspaceContent.files.createEntry({
+        await files.createEntry({
           workspace: workspaceId,
           name: "note.md",
           kind: "file",
         });
         expect(
-          await context.workspaceContent.files.moveEntry({
+          await files.moveEntry({
             workspace: workspaceId,
             path: "note.md",
             destinationPath: "inbox",
@@ -197,7 +198,7 @@ describe("WorkspaceFiles", () => {
           mutable: true,
         });
         expect(
-          await context.workspaceContent.files.moveEntry({
+          await files.moveEntry({
             workspace: workspaceId,
             path: "inbox/note.md",
             destinationPath: "",
@@ -212,13 +213,13 @@ describe("WorkspaceFiles", () => {
     });
 
     test("refuses to move a folder inside itself", async () => {
-      await withWorkspace(async ({ context, workspaceId }) => {
-        await context.workspaceContent.files.createEntry({
+      await withWorkspace(async ({ files, workspaceId }) => {
+        await files.createEntry({
           workspace: workspaceId,
           name: "outer",
           kind: "directory",
         });
-        await context.workspaceContent.files.createEntry({
+        await files.createEntry({
           workspace: workspaceId,
           parentPath: "outer",
           name: "inner",
@@ -226,7 +227,7 @@ describe("WorkspaceFiles", () => {
         });
         for (const destinationPath of ["outer", "outer/inner"])
           await expect(
-            context.workspaceContent.files.moveEntry({
+            files.moveEntry({
               workspace: workspaceId,
               path: "outer",
               destinationPath,
@@ -236,20 +237,20 @@ describe("WorkspaceFiles", () => {
     });
 
     test("copies entries in with a VS Code copy suffix when the name is taken", async () => {
-      await withWorkspace(async ({ context, workspaceId, workspacePath }) => {
-        await context.workspaceContent.files.createEntry({
+      await withWorkspace(async ({ files, workspaceId, workspacePath }) => {
+        await files.createEntry({
           workspace: workspaceId,
           name: "inbox",
           kind: "directory",
         });
-        await context.workspaceContent.files.createEntry({
+        await files.createEntry({
           workspace: workspaceId,
           parentPath: "inbox",
           name: "note.md",
           kind: "file",
         });
         const copy = () =>
-          context.workspaceContent.files.copyEntries({
+          files.copyEntries({
             workspace: workspaceId,
             sources: [join(workspacePath, "inbox/note.md")],
             destinationPath: "inbox",
@@ -262,7 +263,7 @@ describe("WorkspaceFiles", () => {
         ]);
         // A folder, recursively, into the root.
         expect(
-          await context.workspaceContent.files.copyEntries({
+          await files.copyEntries({
             workspace: workspaceId,
             sources: [join(workspacePath, "inbox")],
             destinationPath: "",
@@ -285,28 +286,28 @@ describe("WorkspaceFiles", () => {
     });
 
     test("refuses to copy into repos/, inside itself, or from a relative path", async () => {
-      await withWorkspace(async ({ context, workspaceId, workspacePath }) => {
-        await context.workspaceContent.files.createEntry({
+      await withWorkspace(async ({ files, workspaceId, workspacePath }) => {
+        await files.createEntry({
           workspace: workspaceId,
           name: "outer",
           kind: "directory",
         });
         await expect(
-          context.workspaceContent.files.copyEntries({
+          files.copyEntries({
             workspace: workspaceId,
             sources: [join(workspacePath, "outer")],
             destinationPath: "outer",
           }),
         ).rejects.toMatchObject({ code: "VALIDATION" });
         await expect(
-          context.workspaceContent.files.copyEntries({
+          files.copyEntries({
             workspace: workspaceId,
             sources: ["outer"],
             destinationPath: "",
           }),
         ).rejects.toMatchObject({ code: "VALIDATION" });
         await expect(
-          context.workspaceContent.files.copyEntries({
+          files.copyEntries({
             workspace: workspaceId,
             sources: [join(workspacePath, "outer")],
             destinationPath: "repos",
@@ -316,20 +317,20 @@ describe("WorkspaceFiles", () => {
     });
 
     test("resolves a terminal path to a workspace file, and nothing else", async () => {
-      await withWorkspace(async ({ context, workspaceId, workspacePath }) => {
-        await context.workspaceContent.files.createEntry({
+      await withWorkspace(async ({ files, workspaceId, workspacePath }) => {
+        await files.createEntry({
           workspace: workspaceId,
           name: "notes",
           kind: "directory",
         });
-        await context.workspaceContent.files.createEntry({
+        await files.createEntry({
           workspace: workspaceId,
           parentPath: "notes",
           name: "a.md",
           kind: "file",
         });
         const resolveLink = (path: string, baseDirectories: string[]) =>
-          context.workspaceContent.files.resolveFileLink({
+          files.resolveFileLink({
             path,
             baseDirectories,
           });
@@ -361,20 +362,20 @@ describe("WorkspaceFiles", () => {
     });
 
     test("removes a file, and a folder with everything under it", async () => {
-      await withWorkspace(async ({ context, workspaceId, workspacePath }) => {
-        await context.workspaceContent.files.createEntry({
+      await withWorkspace(async ({ files, workspaceId, workspacePath }) => {
+        await files.createEntry({
           workspace: workspaceId,
           name: "scratch",
           kind: "directory",
         });
-        await context.workspaceContent.files.createEntry({
+        await files.createEntry({
           workspace: workspaceId,
           parentPath: "scratch",
           name: "a.md",
           kind: "file",
         });
         expect(
-          await context.workspaceContent.files.removeEntry({
+          await files.removeEntry({
             workspace: workspaceId,
             path: "scratch",
           }),
@@ -389,25 +390,25 @@ describe("WorkspaceFiles", () => {
     });
 
     test("restores a removed folder, with what was in it, where it was", async () => {
-      await withWorkspace(async ({ context, workspaceId, workspacePath }) => {
-        await context.workspaceContent.files.createEntry({
+      await withWorkspace(async ({ files, workspaceId, workspacePath }) => {
+        await files.createEntry({
           workspace: workspaceId,
           name: "scratch",
           kind: "directory",
         });
-        await context.workspaceContent.files.createEntry({
+        await files.createEntry({
           workspace: workspaceId,
           parentPath: "scratch",
           name: "a.md",
           kind: "file",
         });
         await Bun.write(join(workspacePath, "scratch", "a.md"), "kept");
-        const { trashId } = await context.workspaceContent.files.removeEntry({
+        const { trashId } = await files.removeEntry({
           workspace: workspaceId,
           path: "scratch",
         });
         expect(
-          await context.workspaceContent.files.restoreEntry({
+          await files.restoreEntry({
             workspace: workspaceId,
             trashId,
           }),
@@ -417,7 +418,7 @@ describe("WorkspaceFiles", () => {
         ).toBe("kept");
         // Restored once, it is gone from the trash.
         await expect(
-          context.workspaceContent.files.restoreEntry({
+          files.restoreEntry({
             workspace: workspaceId,
             trashId,
           }),
@@ -426,19 +427,19 @@ describe("WorkspaceFiles", () => {
     });
 
     test("does not restore over an entry that took the removed one's place", async () => {
-      await withWorkspace(async ({ context, workspaceId, workspacePath }) => {
-        await context.workspaceContent.files.createEntry({
+      await withWorkspace(async ({ files, workspaceId, workspacePath }) => {
+        await files.createEntry({
           workspace: workspaceId,
           name: "a.md",
           kind: "file",
         });
-        const { trashId } = await context.workspaceContent.files.removeEntry({
+        const { trashId } = await files.removeEntry({
           workspace: workspaceId,
           path: "a.md",
         });
         await Bun.write(join(workspacePath, "a.md"), "new");
         await expect(
-          context.workspaceContent.files.restoreEntry({
+          files.restoreEntry({
             workspace: workspaceId,
             trashId,
           }),
@@ -448,21 +449,21 @@ describe("WorkspaceFiles", () => {
     });
 
     test("empties what has been in the trash for over a week", async () => {
-      await withWorkspace(async ({ context, workspaceId }) => {
+      await withWorkspace(async ({ context, files, workspaceId }) => {
         for (const name of ["old.md", "new.md"])
-          await context.workspaceContent.files.createEntry({
+          await files.createEntry({
             workspace: workspaceId,
             name,
             kind: "file",
           });
-        const old = await context.workspaceContent.files.removeEntry({
+        const old = await files.removeEntry({
           workspace: workspaceId,
           path: "old.md",
         });
         const trash = join(context.config.home, "trash");
         const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
         await utimes(join(trash, old.trashId), eightDaysAgo, eightDaysAgo);
-        const recent = await context.workspaceContent.files.removeEntry({
+        const recent = await files.removeEntry({
           workspace: workspaceId,
           path: "new.md",
         });
@@ -476,7 +477,7 @@ describe("WorkspaceFiles", () => {
     });
 
     test("refuses every verb on a read-only repository checkout", async () => {
-      await withWorkspace(async ({ context, workspaceId, workspacePath }) => {
+      await withWorkspace(async ({ files, workspaceId, workspacePath }) => {
         // `repos/` is populated by the repository library, not by these verbs,
         // so the fixture is written directly.
         await mkdir(join(workspacePath, "repos", "daedalus"), {
@@ -491,18 +492,18 @@ describe("WorkspaceFiles", () => {
         // rejection in whichever test happened to run next.
         for (const attempt of [
           () =>
-            context.workspaceContent.files.renameEntry({
+            files.renameEntry({
               workspace: workspaceId,
               path: "repos/daedalus/README.md",
               name: "OTHER.md",
             }),
           () =>
-            context.workspaceContent.files.removeEntry({
+            files.removeEntry({
               workspace: workspaceId,
               path: "repos/daedalus/README.md",
             }),
           () =>
-            context.workspaceContent.files.moveEntry({
+            files.moveEntry({
               workspace: workspaceId,
               path: "repos/daedalus/README.md",
               destinationPath: "",
@@ -511,13 +512,13 @@ describe("WorkspaceFiles", () => {
           await expect(attempt()).rejects.toMatchObject({ code: "CONFLICT" });
         // And refuses to move something *into* it, which is the direction the
         // read-only check on the source path does not cover.
-        await context.workspaceContent.files.createEntry({
+        await files.createEntry({
           workspace: workspaceId,
           name: "note.md",
           kind: "file",
         });
         await expect(
-          context.workspaceContent.files.moveEntry({
+          files.moveEntry({
             workspace: workspaceId,
             path: "note.md",
             destinationPath: "repos/daedalus",
@@ -527,16 +528,16 @@ describe("WorkspaceFiles", () => {
     });
 
     test("refuses to touch the workspace root or the folders Daedalus manages", async () => {
-      await withWorkspace(async ({ context, workspaceId }) => {
+      await withWorkspace(async ({ files, workspaceId }) => {
         await expect(
-          context.workspaceContent.files.removeEntry({
+          files.removeEntry({
             workspace: workspaceId,
             path: "",
           }),
         ).rejects.toMatchObject({ code: "VALIDATION" });
         for (const path of ["worktrees", "artifacts"])
           await expect(
-            context.workspaceContent.files.renameEntry({
+            files.renameEntry({
               workspace: workspaceId,
               path,
               name: "renamed",
@@ -552,7 +553,7 @@ describe("WorkspaceFiles", () => {
      * service did exactly what it was told.
      */
     test("refuses the files Daedalus regenerates, rather than deleting them twice", async () => {
-      await withWorkspace(async ({ context, workspaceId, workspacePath }) => {
+      await withWorkspace(async ({ files, workspaceId, workspacePath }) => {
         for (const path of [
           "BRIEF.md",
           "JOURNAL.md",
@@ -560,7 +561,7 @@ describe("WorkspaceFiles", () => {
           "CLAUDE.md",
         ]) {
           await expect(
-            context.workspaceContent.files.removeEntry({
+            files.removeEntry({
               workspace: workspaceId,
               path,
             }),
@@ -568,7 +569,7 @@ describe("WorkspaceFiles", () => {
           // Renaming is the worse half: it also succeeded, and the original
           // then regenerated beside it, silently leaving two files.
           await expect(
-            context.workspaceContent.files.renameEntry({
+            files.renameEntry({
               workspace: workspaceId,
               path,
               name: `renamed-${path}`,
@@ -582,20 +583,20 @@ describe("WorkspaceFiles", () => {
     test("leaves a same-named file inside a folder alone", async () => {
       // Only the workspace root regenerates; a BRIEF.md in a folder is an
       // ordinary file and refusing it would be a guard that overreached.
-      await withWorkspace(async ({ context, workspaceId }) => {
-        await context.workspaceContent.files.createEntry({
+      await withWorkspace(async ({ files, workspaceId }) => {
+        await files.createEntry({
           workspace: workspaceId,
           name: "notes",
           kind: "directory",
         });
-        await context.workspaceContent.files.createEntry({
+        await files.createEntry({
           workspace: workspaceId,
           parentPath: "notes",
           name: "BRIEF.md",
           kind: "file",
         });
         expect(
-          await context.workspaceContent.files.removeEntry({
+          await files.removeEntry({
             workspace: workspaceId,
             path: "notes/BRIEF.md",
           }),
@@ -609,16 +610,17 @@ describe("WorkspaceFiles", () => {
      * with the service — which is how Delete came to be offered on BRIEF.md.
      */
     test("tells the caller which listed entries can be changed", async () => {
-      await withWorkspace(async ({ context, workspaceId }) => {
-        await context.workspaceContent.files.createEntry({
+      await withWorkspace(async ({ files, workspaceId }) => {
+        await files.createEntry({
           workspace: workspaceId,
           name: "notes.md",
           kind: "file",
         });
         const byPath = new Map(
-          (await context.workspaceContent.files.listDirectory(workspaceId)).map(
-            (entry) => [entry.path, entry.mutable],
-          ),
+          (await files.listDirectory(workspaceId)).map((entry) => [
+            entry.path,
+            entry.mutable,
+          ]),
         );
         for (const path of [
           "repos",
@@ -637,13 +639,13 @@ describe("WorkspaceFiles", () => {
     test("marks a same-named file inside a folder as changeable", async () => {
       // Only the workspace root regenerates; a BRIEF.md in a folder is an
       // ordinary file, and a guard that caught it would be overreaching.
-      await withWorkspace(async ({ context, workspaceId }) => {
-        await context.workspaceContent.files.createEntry({
+      await withWorkspace(async ({ files, workspaceId }) => {
+        await files.createEntry({
           workspace: workspaceId,
           name: "notes",
           kind: "directory",
         });
-        const created = await context.workspaceContent.files.createEntry({
+        const created = await files.createEntry({
           workspace: workspaceId,
           parentPath: "notes",
           name: "BRIEF.md",
@@ -651,37 +653,32 @@ describe("WorkspaceFiles", () => {
         });
         expect(created.mutable).toBe(true);
         expect(
-          (
-            await context.workspaceContent.files.listDirectory(
-              workspaceId,
-              "notes",
-            )
-          )[0]?.mutable,
+          (await files.listDirectory(workspaceId, "notes"))[0]?.mutable,
         ).toBe(true);
       });
     });
 
     test("keeps every verb inside the workspace and away from its metadata", async () => {
-      await withWorkspace(async ({ context, workspaceId }) => {
+      await withWorkspace(async ({ files, workspaceId }) => {
         await expect(
-          context.workspaceContent.files.removeEntry({
+          files.removeEntry({
             workspace: workspaceId,
             path: "../outside.md",
           }),
         ).rejects.toMatchObject({ code: "VALIDATION" });
         await expect(
-          context.workspaceContent.files.removeEntry({
+          files.removeEntry({
             workspace: workspaceId,
             path: ".daedalus/workspace.json",
           }),
         ).rejects.toMatchObject({ code: "VALIDATION" });
-        await context.workspaceContent.files.createEntry({
+        await files.createEntry({
           workspace: workspaceId,
           name: "note.md",
           kind: "file",
         });
         await expect(
-          context.workspaceContent.files.moveEntry({
+          files.moveEntry({
             workspace: workspaceId,
             path: "note.md",
             destinationPath: "..",
