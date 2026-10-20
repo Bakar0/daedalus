@@ -94,7 +94,7 @@ test("a request over the limit is refused before it is read into a call", async 
       calls.push(call);
       return { exitCode: 0, stdout: "ok", stderr: "" };
     },
-    1024,
+    { bytes: 1024 },
   );
   try {
     const big = await send(path, "x".repeat(4096));
@@ -108,6 +108,71 @@ test("a request over the limit is refused before it is read into a call", async 
     expect(small.stdout).toBe("ok");
     expect(calls).toHaveLength(1);
     expect(calls[0]!.queueable).toBe(true);
+  } finally {
+    server.stop(true);
+  }
+});
+
+/** Opens a connection that sends `payload` and waits; resolves on close. */
+async function hold(path: string, payload = "") {
+  let text = "";
+  const closed = Promise.withResolvers<string>();
+  const socket = await Bun.connect({
+    unix: path,
+    socket: {
+      open(socket) {
+        if (payload) socket.write(payload);
+      },
+      data(_socket, chunk) {
+        text += chunk.toString();
+      },
+      close() {
+        closed.resolve(text);
+      },
+    },
+  });
+  return { socket, closed: closed.promise };
+}
+
+test("a request that never ends is closed after the read timeout", async () => {
+  const path = join(dir, "daedal.sock");
+  const server = listenForShim(
+    path,
+    async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+    { readTimeoutSeconds: 1 },
+  );
+  try {
+    const { closed } = await hold(path, '{"argv":');
+    const result = JSON.parse(await closed) as CommandResult;
+    expect(result.stderr).toContain("did not arrive in time");
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("connections past the limit are refused until one closes", async () => {
+  const path = join(dir, "daedal.sock");
+  const server = listenForShim(
+    path,
+    async () => ({ exitCode: 0, stdout: "ok", stderr: "" }),
+    { connections: 2 },
+  );
+  try {
+    const first = await hold(path);
+    const second = await hold(path);
+    const third = await send(
+      path,
+      `${JSON.stringify({ argv: ["task", "list"], cwd: ".", env: {} })}\n`,
+    );
+    expect(third.stderr).toContain("busy");
+    first.socket.end();
+    await first.closed;
+    const fourth = await send(
+      path,
+      `${JSON.stringify({ argv: ["task", "list"], cwd: ".", env: {} })}\n`,
+    );
+    expect(fourth.stdout).toBe("ok");
+    second.socket.end();
   } finally {
     server.stop(true);
   }

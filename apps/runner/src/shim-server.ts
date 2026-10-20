@@ -77,17 +77,65 @@ const refusal = (message: string): CommandResult => ({
   stderr: `${message}\n`,
 });
 
+/**
+ * At most this many connections are open at once, so requests that never
+ * end hold at most 32 MiB of the runner's 256 MiB between them.
+ */
+export const MAX_SHIM_CONNECTIONS = 32;
+
+/** A request must arrive within this many seconds of connecting. */
+export const SHIM_READ_TIMEOUT_SECONDS = 10;
+
+const reply = (
+  socket: { write(data: string): number; end(): void },
+  result: CommandResult,
+) => {
+  socket.write(`${JSON.stringify(result)}\n`);
+  socket.end();
+};
+
 /** Answers one request per connection, read up to its first newline. */
 export function listenForShim(
   path: string,
   call: (call: DaedalCall) => Promise<CommandResult>,
-  limit = MAX_SHIM_REQUEST_BYTES,
+  limits: {
+    bytes?: number;
+    connections?: number;
+    readTimeoutSeconds?: number;
+  } = {},
 ) {
-  return Bun.listen<{ chunks: Buffer[]; bytes: number; done: boolean }>({
+  const bytes = limits.bytes ?? MAX_SHIM_REQUEST_BYTES;
+  const connections = limits.connections ?? MAX_SHIM_CONNECTIONS;
+  let open = 0;
+  return Bun.listen<{
+    chunks: Buffer[];
+    bytes: number;
+    done: boolean;
+    counted: boolean;
+  }>({
     unix: path,
     socket: {
       open(socket) {
-        socket.data = { chunks: [], bytes: 0, done: false };
+        socket.data = { chunks: [], bytes: 0, done: false, counted: false };
+        if (open >= connections) {
+          socket.data.done = true;
+          reply(socket, refusal("The runner is busy; try again"));
+          return;
+        }
+        open += 1;
+        socket.data.counted = true;
+        socket.timeout(limits.readTimeoutSeconds ?? SHIM_READ_TIMEOUT_SECONDS);
+      },
+      timeout(socket) {
+        if (socket.data.done) return;
+        socket.data.done = true;
+        socket.data.chunks = [];
+        reply(socket, refusal("The request did not arrive in time"));
+      },
+      close(socket) {
+        if (socket.data.counted) open -= 1;
+        socket.data.counted = false;
+        socket.data.chunks = [];
       },
       async data(socket, chunk) {
         const state = socket.data;
@@ -96,17 +144,16 @@ export function listenForShim(
         const kept = newline === -1 ? chunk : chunk.subarray(0, newline);
         state.chunks.push(Buffer.from(kept));
         state.bytes += kept.byteLength;
-        if (state.bytes > limit) {
+        if (state.bytes > bytes) {
           state.done = true;
           state.chunks = [];
-          socket.write(
-            `${JSON.stringify(refusal(`The request is over ${limit} bytes`))}\n`,
-          );
-          socket.end();
+          reply(socket, refusal(`The request is over ${bytes} bytes`));
           return;
         }
         if (newline === -1) return;
         state.done = true;
+        // The call itself may wait on the Mac for a minute.
+        socket.timeout(0);
         const line = Buffer.concat(state.chunks).toString("utf8");
         state.chunks = [];
         const made = callFromRequest(line, new Date());
@@ -116,8 +163,7 @@ export function listenForShim(
         } catch (error) {
           result = refusal((error as Error).message);
         }
-        socket.write(`${JSON.stringify(result)}\n`);
-        socket.end();
+        reply(socket, result);
       },
     },
   });
