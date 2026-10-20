@@ -122,6 +122,16 @@ async function main(): Promise<void> {
   // Any uid in the pod may call `daedal`; sessions run as another uid.
   chmodSync(path, 0o666);
 
+  // Both daemons are PID 1 in their container, and the kernel drops signals for
+  // PID 1 unless it has a handler, so without these a sleep waits out the grace
+  // period and then kills the pod.
+  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+    process.on(signal, () => {
+      log(`${signal} received, exiting`);
+      process.exit(0);
+    });
+  }
+
   runner.start();
   setInterval(() => void runner.tick(), 2000);
   log(`runner ${VERSION} for workspace ${workspaceId} started`);

@@ -48,3 +48,13 @@ const daemon = new SessionDaemon({
 });
 daemon.listen(RUNNER_PATHS.sessionSocket);
 console.log(`[sessiond] ${VERSION} listening on ${RUNNER_PATHS.sessionSocket}`);
+
+// Both daemons are PID 1 in their container, and the kernel drops signals for
+// PID 1 unless it has a handler, so without these a sleep waits out the grace
+// period and then kills the pod.
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.on(signal, () => {
+    console.log(`[sessiond] ${signal} received, exiting`);
+    process.exit(0);
+  });
+}
