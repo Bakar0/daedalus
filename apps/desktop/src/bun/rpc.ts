@@ -836,12 +836,12 @@ export function createDesktopRequestHandlers(
       }),
     cloudWorkspaceSleep: ({ workspace }) =>
       mutate(async () => {
-        await context.cloud.sleep(workspace);
+        await context.cloud.sleep(await context.cloud.linkedCloudId(workspace));
         return cloudStateDto(await context.cloud.overview());
       }),
     cloudWorkspaceWake: ({ workspace }) =>
       mutate(async () => {
-        await context.cloud.wake(workspace);
+        await context.cloud.wake(await context.cloud.linkedCloudId(workspace));
         return cloudStateDto(await context.cloud.overview());
       }),
     cloudWorkspaceDelete: ({ workspace, force }) =>
@@ -851,7 +851,9 @@ export function createDesktopRequestHandlers(
             "VALIDATION",
             "Deleting a cloud workspace removes its pod and its volume; confirm it",
           );
-        await context.cloud.delete(workspace);
+        await context.cloud.delete(
+          await context.cloud.linkedCloudId(workspace),
+        );
         return cloudStateDto(await context.cloud.overview());
       }),
     cloudSessionWake: ({ sessionId }) =>

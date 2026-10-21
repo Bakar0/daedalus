@@ -406,7 +406,23 @@ export class CloudService {
   async hostId(workspaceReference: string): Promise<string> {
     const workspace =
       await this.options.workspaces.getActive(workspaceReference);
-    return cloudHostId(await this.#workspaceId(workspace.id));
+    return cloudHostId(await this.linkedCloudId(workspace.id));
+  }
+
+  /**
+   * The cloud id linked to a local workspace for the signed-in account. Unlike
+   * the commands, a cloud id is not taken as it is: the app acts only on
+   * workspaces this Mac links.
+   */
+  async linkedCloudId(workspaceReference: string): Promise<string> {
+    const workspace = await this.options.workspaces.get(workspaceReference);
+    const cloudId = this.options.repositories.cloudWorkspaceId(workspace.id);
+    if (!cloudId)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Workspace '${workspace.name}' has no cloud workspace; run 'daedal cloud create'`,
+      );
+    return cloudId;
   }
 
   /** The cloud id of a local workspace, or a cloud id given as it is. */
@@ -418,14 +434,7 @@ export class CloudService {
       )
     )
       return reference.toLowerCase();
-    const workspace = await this.options.workspaces.get(reference);
-    const cloudId = this.options.repositories.cloudWorkspaceId(workspace.id);
-    if (!cloudId)
-      throw new DaedalusError(
-        "NOT_FOUND",
-        `Workspace '${workspace.name}' has no cloud workspace; run 'daedal cloud create'`,
-      );
-    return cloudId;
+    return this.linkedCloudId(reference);
   }
 
   /**

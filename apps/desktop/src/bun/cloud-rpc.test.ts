@@ -573,4 +573,30 @@ describe("cloud RPC", () => {
       }
     });
   });
+
+  test("the app acts only on cloud workspaces linked to a local one", async () => {
+    await withCloud(async (rpc, _context, gateway) => {
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://localhost:8080",
+        email: "dev@example.com",
+      });
+      const stray = "00000000-0000-4000-8000-000000000001";
+      gateway.workspaces.set(stray, {
+        workspaceId: stray,
+        name: "Elsewhere",
+        status: "running",
+        reason: null,
+        runnerOnline: true,
+        runnerKey: RUNNER_KEY,
+        createdAt: new Date().toISOString(),
+      });
+      for (const response of [
+        await rpc.cloudWorkspaceSleep({ workspace: stray }),
+        await rpc.cloudWorkspaceWake({ workspace: stray }),
+        await rpc.cloudWorkspaceDelete({ workspace: stray, force: true }),
+      ])
+        expect(response.ok).toBe(false);
+      expect(gateway.calls.some((call) => call.includes(stray))).toBe(false);
+    });
+  });
 });
