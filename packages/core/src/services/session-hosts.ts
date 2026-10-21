@@ -1,4 +1,3 @@
-import type { TmuxClient } from "@daedalus/platform";
 import { DaedalusError } from "../errors";
 import type { LocalSessionHost, SessionHost } from "./session-host";
 
@@ -10,14 +9,7 @@ export class SessionHosts {
   readonly #cloud = new Map<string, SessionHost>();
   #resolve: ((hostId: string) => SessionHost | undefined) | undefined;
 
-  constructor(
-    readonly local: LocalSessionHost,
-    /**
-     * This Mac's tmux, for what only makes sense here: an interactive
-     * `tmux attach` in the user's own terminal, and the version it reports.
-     */
-    readonly localTmux: TmuxClient,
-  ) {}
+  constructor(readonly local: LocalSessionHost) {}
 
   register(host: SessionHost): void {
     if (host.kind === "local")

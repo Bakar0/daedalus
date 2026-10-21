@@ -149,7 +149,7 @@ export async function createApplicationContext(
       config.home,
       options.env ?? process.env,
     );
-  const hosts = new SessionHosts(new LocalSessionHost(tmux), tmux);
+  const hosts = new SessionHosts(new LocalSessionHost(tmux));
   let agents!: AgentService;
   let teams: TeamService | undefined;
   const endedNoted = new Map<string, number>();
@@ -202,6 +202,7 @@ export async function createApplicationContext(
     workspaceContent,
     tasks,
     hosts,
+    tmux,
     config,
     abilities,
     accounts,

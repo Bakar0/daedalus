@@ -16,6 +16,7 @@ import {
   loginShellPath,
   pathExists,
   runCommand,
+  type TmuxClient,
 } from "@daedalus/platform";
 import type { DaedalusConfig } from "../config";
 import {
@@ -419,6 +420,11 @@ export class AgentService {
     private readonly workspaceContent: WorkspaceContentService,
     private readonly tasks: TaskService,
     private readonly hosts: SessionHosts,
+    /**
+     * This Mac's tmux, for what only makes sense here: an interactive
+     * `tmux attach` in the user's own terminal, and the version it reports.
+     */
+    private readonly tmux: TmuxClient,
     private readonly config: DaedalusConfig,
     private readonly abilities: AbilityService,
     private readonly accounts: AccountService,
@@ -625,7 +631,7 @@ export class AgentService {
       available: boolean;
     }>;
   }> {
-    const tmuxVersion = await this.hosts.localTmux.probe();
+    const tmuxVersion = await this.tmux.probe();
     return {
       tmuxAvailable: Boolean(tmuxVersion),
       tmuxVersion,
@@ -1757,7 +1763,7 @@ export class AgentService {
         "CONFLICT",
         "A cloud session has no local tmux to attach to; open it in the app",
       );
-    return this.hosts.localTmux.attach(agent.tmuxSession);
+    return this.tmux.attach(agent.tmuxSession);
   }
 
   /**
