@@ -41,7 +41,7 @@ import {
 } from "./providers";
 import type { DeliveryResult, SessionChannel } from "./session-channel";
 import { installedSkill, requireSkill } from "./installed-skills";
-import type { AbilityService } from "./abilities";
+import { abilityDefinition, type AbilityService } from "./abilities";
 import {
   accountConfig,
   accountEnvironment,
@@ -783,6 +783,12 @@ export class AgentService {
         "VALIDATION",
         "Task does not belong to the selected workspace",
       );
+    // A misspelt ability or colour is the caller's to fix whatever is
+    // installed, so it is refused before tmux or the agent is looked for.
+    // Whether the session may hold the abilities is decided further down.
+    for (const ability of input.abilities ?? []) abilityDefinition(ability);
+    const color =
+      input.color === undefined ? undefined : sessionColor(input.color);
     if (!(await this.tmux.probe()))
       throw new DaedalusError("DEPENDENCY", "tmux is not available on PATH");
     if (input.terminal && (input.provider || input.command))
@@ -832,8 +838,6 @@ export class AgentService {
             input,
           )
         : chosen;
-    const color =
-      input.color === undefined ? undefined : sessionColor(input.color);
     // Checked before anything is prepared, so a session that cannot hold an
     // ability is refused without leaving a worktree behind. A successor
     // holds what its predecessor held.

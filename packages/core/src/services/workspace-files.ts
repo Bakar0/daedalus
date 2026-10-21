@@ -45,6 +45,18 @@ const IMAGE_MIME_TYPES: Record<string, string> = {
   ".avif": "image/avif",
 };
 
+/** Whether `readFile` or `readImage` would show the file, by their limits. */
+async function isViewableFile(path: string): Promise<boolean> {
+  const info = await lstat(path);
+  if (IMAGE_MIME_TYPES[extname(path).toLowerCase()])
+    return info.size <= MAX_VIEWABLE_IMAGE_BYTES;
+  if (info.size > MAX_VIEWABLE_FILE_BYTES) return false;
+  const head = new Uint8Array(
+    await Bun.file(path).slice(0, 8192).arrayBuffer(),
+  );
+  return !head.includes(0);
+}
+
 /**
  * Top-level folders Daedalus creates and keeps pointing at.
  * `ensureWorkspaceContentFiles` recreates them, so losing one is survivable,
@@ -214,7 +226,7 @@ export class WorkspaceFiles {
     requestedPath: string,
   ): Promise<WorkspaceFile> {
     const workspace = await this.workspaces.get(workspaceReference);
-    const { target, relativePath } = await this.resolveVisiblePath(
+    const { target, relativePath } = await this.resolveOpenablePath(
       workspace,
       requestedPath,
     );
@@ -255,7 +267,7 @@ export class WorkspaceFiles {
     requestedPath: string,
   ): Promise<WorkspaceImage> {
     const workspace = await this.workspaces.get(workspaceReference);
-    const { target, relativePath } = await this.resolveVisiblePath(
+    const { target, relativePath } = await this.resolveOpenablePath(
       workspace,
       requestedPath,
     );
@@ -294,7 +306,7 @@ export class WorkspaceFiles {
     expectedContent: string;
   }): Promise<WorkspaceFile> {
     const workspace = await this.workspaces.getActive(input.workspace);
-    const { target, relativePath } = await this.resolveVisiblePath(
+    const { target, relativePath } = await this.resolveOpenablePath(
       workspace,
       input.path,
     );
@@ -581,9 +593,10 @@ export class WorkspaceFiles {
    * against each base directory in turn (the session's folder, then its
    * worktrees), then against the root of the workspace each one is in, since
    * agents also name workspace files like `artifacts/notes.md` from a
-   * worktree; the first existing file wins. Only files inside an active
-   * workspace are links: the editor shows workspace files, and anything else
-   * would be a link that opens nothing.
+   * worktree; the first existing file wins. A file outside every active
+   * workspace is still a link, by its real absolute path, which the editor
+   * opens where it is (see `resolveOpenablePath`). Git and Daedalus internals
+   * inside a workspace are not links.
    */
   async resolveFileLink(input: {
     path: string;
@@ -634,7 +647,12 @@ export class WorkspaceFiles {
       const owner = roots.find(
         (root) => root.canonical && isPathInside(root.canonical, real),
       );
-      if (!owner?.canonical) continue;
+      if (!owner?.canonical)
+        return {
+          workspaceId: null,
+          path: real,
+          viewable: await isViewableFile(real),
+        };
       const path = relative(owner.canonical, real);
       if (
         path
@@ -876,6 +894,23 @@ export class WorkspaceFiles {
       "CONFLICT",
       `Workspace path '${relativePath}' already exists`,
     );
+  }
+
+  /**
+   * Where a file the editor reads or saves lives. A workspace path goes
+   * through every check `resolveVisiblePath` makes. An absolute path is a file
+   * outside the workspace that a terminal link opened, which the user chose
+   * by clicking it, so it is used where it is; the callers still refuse
+   * symbolic links, folders, and files too large or binary to show.
+   */
+  private async resolveOpenablePath(
+    workspace: Workspace,
+    requestedPath: string,
+  ): Promise<{ target: string; relativePath: string }> {
+    if (!isAbsolute(requestedPath))
+      return this.resolveVisiblePath(workspace, requestedPath);
+    const target = resolve(requestedPath);
+    return { target, relativePath: target };
   }
 
   /**

@@ -432,6 +432,8 @@ const createRpc = (role: DesktopWindowRole = "main") =>
       requests: createDesktopRequestHandlers(context, {
         onMutation: () => announce("desktop"),
         openExternal: Utils.openExternal,
+        openPath: Utils.openPath,
+        revealPath: Utils.showItemInFolder,
         terminalEndpoint,
         quit: {
           dialogShown: () => quitController.dialogShown(),

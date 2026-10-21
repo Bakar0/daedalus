@@ -325,10 +325,13 @@ export interface WorktreeCommitDto {
   pushed?: boolean;
 }
 
-export interface FileLinkTargetDto {
-  workspaceId: string;
-  path: string;
-}
+/**
+ * A null workspace means a file outside every workspace, at an absolute path;
+ * `viewable` says whether the editor can show it.
+ */
+export type FileLinkTargetDto =
+  | { workspaceId: string; path: string }
+  | { workspaceId: null; path: string; viewable: boolean };
 
 export interface WorkspaceContentDto {
   workspaceId: string;
@@ -1208,6 +1211,10 @@ export interface DesktopRpcSchema {
         { workspace: string; path?: string },
         WorkspaceFileEntryDto[]
       >;
+      /**
+       * `path` is relative to the workspace, or absolute for a file outside
+       * every workspace that a terminal link opened.
+       */
       workspaceFileRead: Request<
         { workspace: string; path: string },
         WorkspaceFileDto
@@ -1293,7 +1300,7 @@ export interface DesktopRpcSchema {
         { workspace: string; root: string; sha: string },
         ChangedFileDto[]
       >;
-      /** Where a path printed in a terminal points, if it is a workspace file. */
+      /** Where a path printed in a terminal points, if it is a file. */
       fileLinkResolve: Request<
         { path: string; baseDirectories: string[] },
         FileLinkTargetDto | null
@@ -1679,6 +1686,8 @@ export interface DesktopRpcSchema {
       >;
       terminalClose: Request<{ id: string }, IntegratedTerminalDto>;
       openExternal: Request<{ url: string }, { opened: boolean }>;
+      /** Opens a file in the Mac's default app for it. */
+      openPath: Request<{ path: string }, { opened: boolean }>;
       /**
        * Puts text on the system clipboard. A terminal program copies by
        * sending OSC 52, and the webview's own clipboard API refuses a write
