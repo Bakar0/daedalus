@@ -16,6 +16,7 @@ import {
   EXPLORER_MAX_WIDTH,
   EXPLORER_MIN_WIDTH,
   lifecycleTone,
+  lineJumpSequence,
   parseCollapsedWorkspaces,
   parseRememberedDirectories,
   planExplorerRefresh,
@@ -173,6 +174,23 @@ describe("desktop application shell", () => {
     expect(
       agentMultilineSequence({ ...shiftEnter, type: "keyup" }, "agent"),
     ).toBeUndefined();
+  });
+
+  test("maps Cmd+Left and Cmd+Right to the start and end of the line", () => {
+    const cmdLeft = {
+      altKey: false,
+      ctrlKey: false,
+      key: "ArrowLeft",
+      metaKey: true,
+      shiftKey: false,
+      type: "keydown",
+    };
+    expect(lineJumpSequence(cmdLeft)).toBe("\x01");
+    expect(lineJumpSequence({ ...cmdLeft, key: "ArrowRight" })).toBe("\x05");
+    expect(lineJumpSequence({ ...cmdLeft, metaKey: false })).toBeUndefined();
+    expect(lineJumpSequence({ ...cmdLeft, shiftKey: true })).toBeUndefined();
+    expect(lineJumpSequence({ ...cmdLeft, type: "keyup" })).toBeUndefined();
+    expect(lineJumpSequence({ ...cmdLeft, key: "ArrowUp" })).toBeUndefined();
   });
 
   test("keeps resized panels as narrow visible rails", () => {
