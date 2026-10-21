@@ -57,7 +57,7 @@ function laneOf(snapshot: DesktopSnapshotDto, task: TaskDto) {
   ).find((group) => group.tasks.some((item) => item.id === task.id))?.lane;
 }
 
-async function call<T>(
+export async function call<T>(
   connection: PhoneConnection,
   method: string,
   params: unknown,

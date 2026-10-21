@@ -7,6 +7,7 @@ import {
   workspaceInsight,
 } from "./sessions";
 import { MacBoard, NewTaskScreen, TaskScreen } from "./Board";
+import { NewSessionScreen } from "./NewSession";
 import { PushControl } from "./PushControl";
 import { Shell } from "./Shell";
 import { useMac } from "./useMac";
@@ -38,7 +39,8 @@ type Screen =
   | { kind: "session"; id: string }
   | { kind: "board"; workspaceId: string }
   | { kind: "task"; id: string }
-  | { kind: "new"; workspaceId: string };
+  | { kind: "new"; workspaceId: string }
+  | { kind: "new-session"; workspaceId: string };
 
 export function Home({
   mac,
@@ -117,6 +119,32 @@ export function Home({
         />
       </Shell>
     );
+  if (top?.kind === "new-session" && snapshot) {
+    const workspace = snapshot.workspaces.find(
+      (item) => item.id === top.workspaceId,
+    );
+    return (
+      <Shell
+        onBack={() => history.back()}
+        subtitle={workspace?.name}
+        title="New session"
+      >
+        <NewSessionScreen
+          connection={connection}
+          onStarted={(id) => {
+            // The form's entry becomes the session's, so back goes home.
+            history.replaceState({ screen: { kind: "session", id } }, "");
+            setScreens((list) => [
+              ...list.slice(0, -1),
+              { kind: "session", id },
+            ]);
+          }}
+          snapshot={snapshot}
+          workspaceId={top.workspaceId}
+        />
+      </Shell>
+    );
+  }
   if (top?.kind === "board" && snapshot) {
     const workspace = snapshot.workspaces.find(
       (item) => item.id === top.workspaceId,
@@ -204,33 +232,50 @@ export function Home({
                   <FolderIcon />
                 </span>
                 <strong>{group.workspace.name}</strong>
-                <button
-                  className="workspace-board-button"
-                  onClick={() =>
-                    push({ kind: "board", workspaceId: group.workspace.id })
-                  }
-                >
-                  Board
-                </button>
+                <span className="workspace-head-actions">
+                  <button
+                    className="workspace-board-button"
+                    onClick={() =>
+                      push({ kind: "board", workspaceId: group.workspace.id })
+                    }
+                  >
+                    Board
+                  </button>
+                  <button
+                    aria-label={`New session in ${group.workspace.name}`}
+                    className="workspace-new-session"
+                    disabled={!group.workspace.available}
+                    onClick={() =>
+                      push({
+                        kind: "new-session",
+                        workspaceId: group.workspace.id,
+                      })
+                    }
+                  >
+                    +
+                  </button>
+                </span>
                 <small
                   className={group.needsYou > 0 ? "needs-attention" : undefined}
                 >
                   {workspaceInsight(group)}
                 </small>
               </header>
-              <ul className="session-rows workspace-sessions">
-                {group.rows.map((row) => (
-                  <SessionRowView
-                    key={row.session.id}
-                    onOpen={openSession}
-                    row={row}
-                  />
-                ))}
-              </ul>
+              {group.rows.length > 0 ? (
+                <ul className="session-rows workspace-sessions">
+                  {group.rows.map((row) => (
+                    <SessionRowView
+                      key={row.session.id}
+                      onOpen={openSession}
+                      row={row}
+                    />
+                  ))}
+                </ul>
+              ) : undefined}
             </section>
           ))}
-          {all.length === 0 ? (
-            <p className="quiet-line">No sessions on this Mac.</p>
+          {rows.groups.length === 0 ? (
+            <p className="quiet-line">No workspaces on this Mac.</p>
           ) : undefined}
         </>
       ) : state.kind === "connecting" ? (

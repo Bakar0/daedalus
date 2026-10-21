@@ -42,12 +42,22 @@ const FLING_STOP = 0.002;
 /** Ctrl+End, which Claude's fullscreen view reads as "scroll to the bottom". */
 const CTRL_END = "\u001b[1;5F";
 
-const DARK = {
-  background: "#0b0f17",
+/** The terminal's colours, on the theme's terminal background. */
+const terminalTheme = () => ({
+  background:
+    getComputedStyle(document.documentElement)
+      .getPropertyValue("--terminal-bg")
+      .trim() || "#111112",
   foreground: "#e6e9ef",
   cursor: "#e6e9ef",
   selectionBackground: "#2a3a55",
-};
+});
+
+/**
+ * Answers an agent asks for most, one tap each: the words, then Enter. They
+ * replace whatever is in the message box.
+ */
+const QUICK_REPLIES = ["Continue", "Yes", "No"];
 
 export function SessionScreen({
   connection,
@@ -75,7 +85,7 @@ export function SessionScreen({
         '"Daedalus Terminal Symbols", ui-monospace, Menlo, "Roboto Mono", monospace',
       fontSize: 11,
       scrollback: 2_000,
-      theme: DARK,
+      theme: terminalTheme(),
     });
     const fit = new FitAddon();
     xterm.loadAddon(fit);
@@ -259,6 +269,10 @@ export function SessionScreen({
     setText("");
   };
   const clear = () => type("");
+  const reply = (words: string) => {
+    type("");
+    terminal.current?.write(`${words}\r`);
+  };
   const press = (data: string) => {
     // Backspace from the keys row deletes from the box too, so the two stay
     // the same; any other key edits only the terminal.
@@ -307,6 +321,23 @@ export function SessionScreen({
           ) : undefined}
         </div>
         {ended ? <p className="ended">{ended}</p> : undefined}
+        <div
+          className="quick-replies"
+          role="toolbar"
+          aria-label="Quick replies"
+        >
+          {QUICK_REPLIES.map((words) => (
+            <button
+              key={words}
+              // No focus change on press, so the phone keyboard stays open.
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => reply(words)}
+              type="button"
+            >
+              {words}
+            </button>
+          ))}
+        </div>
         <div className="keys" role="toolbar" aria-label="Keys">
           {KEYS.map((key) => (
             <button

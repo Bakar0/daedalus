@@ -574,7 +574,7 @@ try {
       insight: string;
       rows: Array<{
         name: string;
-        second: string;
+        badge: string;
         tool: string;
         color: string | null;
         edge: string;
@@ -593,7 +593,7 @@ try {
         insight: group.querySelector('.workspace-head small').textContent,
         rows: [...group.querySelectorAll('.session-row')].map((row) => ({
           name: row.querySelector('strong').textContent,
-          second: row.querySelector('small').textContent,
+          badge: row.querySelector('.session-team-badge')?.textContent ?? '',
           tool: row.querySelector('.session-kind-icon').className,
           color: row.dataset.color ?? null,
           edge: getComputedStyle(row).boxShadow,
@@ -613,8 +613,8 @@ try {
     homeView.workspace.name !== "Phone check" ||
     homeView.workspace.insight !== "1 needs you" ||
     names.indexOf("Builder") !== names.indexOf("Lead") + 1 ||
-    rowsByName.Lead?.second !== "Team leadWorkspace session" ||
-    rowsByName.Builder?.second !== "@builderWorkspace session" ||
+    rowsByName.Lead?.badge !== "Team lead" ||
+    rowsByName.Builder?.badge !== "@builder" ||
     (rowsByName.Builder?.indent ?? 0) < 12 ||
     rowsByName.Lead?.indent !== 0 ||
     rowsByName.Lead?.color !== "blue" ||
@@ -757,6 +757,25 @@ try {
 
   await send("Runtime.evaluate", { expression: "history.back()" });
   await waitFor("home again", byText(".bar h1", "Studio Mac"));
+
+  // A workspace's + opens New session: the tools, a name, a model and a
+  // first message. Back returns home without starting anything.
+  await tap(
+    `document.querySelector('button[aria-label="New session in Phone check"]')`,
+  );
+  await waitFor("new session", byText(".bar h1", "New session"));
+  const tools = await evaluate<string[]>(
+    "[...document.querySelectorAll('.tool-picker button strong')].map((one) => one.textContent)",
+  );
+  if (tools.join(",") !== "Claude,Codex")
+    throw new Error(`New session tools: ${JSON.stringify(tools)}`);
+  await screenshot("new-session");
+  await evaluate("history.back()");
+  await waitFor("home after new session", byText(".bar h1", "Studio Mac"));
+  console.log(
+    "PASS a workspace's + opens New session with Claude and Codex, and back returns home",
+  );
+
   await tap(`document.querySelector('button[aria-label="Account"]')`);
   await waitFor("account", byText(".card strong", "phone@example.com"));
   await waitFor("the plan", byText(".card small", "Pro plan ·"));
@@ -768,6 +787,26 @@ try {
   await screenshot("account");
   console.log(
     `PASS Account shows the email, plan and both devices (${devices.join(", ")})`,
+  );
+
+  // The theme: Dark by default, Light and Midnight from Account, kept
+  // across a reload.
+  const theme = () =>
+    evaluate<string>("document.documentElement.dataset.theme ?? ''");
+  if ((await theme()) !== "dark")
+    throw new Error(`The default theme is ${await theme()}, not dark`);
+  for (const [label, value] of [
+    ["Light", "light"],
+    ["Midnight", "midnight"],
+  ] as const) {
+    await tap(byText('[aria-label="Theme"] button', label));
+    if ((await theme()) !== value)
+      throw new Error(`${label} set the theme to ${await theme()}`);
+    await screenshot(`account-${value}`);
+  }
+  await tap(byText('[aria-label="Theme"] button', "Dark"));
+  console.log(
+    "PASS Account switches the theme between Dark, Light and Midnight",
   );
 
   // The app lock, with a virtual passkey that has PRF, as a phone's does.
