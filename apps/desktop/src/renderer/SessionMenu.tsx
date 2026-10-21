@@ -1,7 +1,8 @@
 /**
  * The menu on a session card: rename, pin, color, rebirth and abilities.
  * Every session has the first three; rebirth and abilities are offered on
- * Claude and Codex agents.
+ * Claude and Codex agents. A workspace card has a shorter one: rename and
+ * the rebirth its sessions default to.
  */
 import {
   customSessionColor,
@@ -132,42 +133,61 @@ export function ColorSwatches({
   );
 }
 
+const REBIRTH_WORDS = {
+  session: {
+    source: "the workspace's setting",
+    off: "Never rebirth this session on its own",
+    on: "Rebirth this session at a context percent of its own",
+    percent: "Context percent that triggers this session's rebirth",
+  },
+  workspace: {
+    source: "the global setting",
+    off: "Never rebirth this workspace's sessions on their own",
+    on: "Rebirth this workspace's sessions at a context percent of its own",
+    percent: "Context percent that triggers a rebirth in this workspace",
+  },
+};
+
 /**
- * The session's own rebirth threshold: Default (its workspace's, named in the
- * heading), Off, or On at a percent of its own, typed in the field that On
- * shows.
+ * A session's or workspace's own rebirth threshold: Default (the workspace's
+ * or the global one, named in the heading), Off, or On at a percent of its
+ * own, typed in the field that On shows.
  */
 function RebirthChoices({
   value,
   inherited,
+  subject = "session",
   onChange,
 }: {
   value: AutoRebirthDto;
   /** What Default comes to: the workspace's or the global threshold. */
   inherited: number | null;
+  /** Whose threshold this is; a workspace's Default is the global one. */
+  subject?: "session" | "workspace";
   onChange: (value: AutoRebirthDto) => void;
 }) {
   const mode = value === null ? "default" : value === "off" ? "off" : "on";
+  const words = REBIRTH_WORDS[subject];
   const choices = [
     {
       mode: "default",
       label: "Default",
       title:
         inherited === null
-          ? "Use the workspace's setting, which is off"
-          : `Use the workspace's setting: rebirth at ${inherited}% context`,
+          ? `Use ${words.source}, which is off`
+          : `Use ${words.source}: rebirth at ${inherited}% context`,
       pick: () => onChange(null),
     },
     {
       mode: "off",
       label: "Off",
-      title: "Never rebirth this session on its own",
+      title: words.off,
       pick: () => onChange("off"),
     },
     {
       mode: "on",
       label: "On",
-      title: "Rebirth this session at a context percent of its own",
+      title: words.on,
       pick: () => onChange(inherited ?? DEFAULT_AUTO_REBIRTH_PERCENT),
     },
   ];
@@ -195,11 +215,7 @@ function RebirthChoices({
         </button>
       ))}
       {typeof value === "number" && (
-        <PercentInput
-          label="Context percent that triggers this session's rebirth"
-          onCommit={onChange}
-          value={value}
-        />
+        <PercentInput label={words.percent} onCommit={onChange} value={value} />
       )}
     </span>
   );
@@ -338,6 +354,61 @@ export function SessionMenu({
           )}
         </>
       )}
+    </Menu>
+  );
+}
+
+export function WorkspaceMenu({
+  name,
+  autoRebirth,
+  inheritedRebirth,
+  onRename,
+  onAutoRebirth,
+}: {
+  name: string;
+  /** The workspace's own rebirth threshold; null takes the global one. */
+  autoRebirth: AutoRebirthDto;
+  /** The global threshold Default comes to, or null for off. */
+  inheritedRebirth: number | null;
+  onRename: () => void;
+  onAutoRebirth: (value: AutoRebirthDto) => void;
+}) {
+  return (
+    <Menu
+      align="end"
+      className="session-card-menu workspace-card-menu"
+      label={`Settings of ${name}`}
+      menuLabel={`Settings of ${name}`}
+      placement="left"
+      summary={<MenuDots />}
+      summaryClassName="session-card-action"
+      title="Rename and rebirth"
+    >
+      <button
+        className="quiet menu-item"
+        onClick={onRename}
+        role="menuitem"
+        type="button"
+      >
+        <span className="menu-item-label">Rename…</span>
+      </button>
+      <hr className="menu-separator" />
+      <span className="menu-heading">
+        Rebirth
+        <span className="menu-heading-note">
+          {autoRebirth === null
+            ? inheritedRebirth === null
+              ? "global: off"
+              : `global: ${inheritedRebirth}%`
+            : "own setting"}
+        </span>
+      </span>
+      <RebirthChoices
+        inherited={inheritedRebirth}
+        onChange={onAutoRebirth}
+        subject="workspace"
+        value={autoRebirth}
+      />
     </Menu>
   );
 }

@@ -103,7 +103,7 @@ import type { DiffTarget } from "./files/EditorArea";
 import { MarkdownPreview } from "./markdown-preview";
 import { buildWorldModel, worldInputFromSnapshot } from "./world/world-model";
 import { TaskPriorityMenu, TaskStatusMenu } from "./TaskStatusMenu";
-import { ColorSwatches, SessionMenu } from "./SessionMenu";
+import { ColorSwatches, SessionMenu, WorkspaceMenu } from "./SessionMenu";
 import { RoutineBar } from "./routines/RoutineBar";
 import { TeamBar, TeamPanel } from "./teams/TeamPanel";
 import { RoutinesPanel } from "./routines/RoutinesPanel";
@@ -303,6 +303,30 @@ export function agentMultilineSequence(
     !event.metaKey
     ? "\n"
     : undefined;
+}
+
+/**
+ * Cmd+Left and Cmd+Right move the caret to the start and end of the line, the
+ * way Terminal.app and iTerm2 send them: Ctrl+A and Ctrl+E, which readline
+ * shells, Claude Code and Codex all read as Home and End.
+ */
+export function lineJumpSequence(
+  event: Pick<
+    KeyboardEvent,
+    "altKey" | "ctrlKey" | "key" | "metaKey" | "shiftKey" | "type"
+  >,
+): string | undefined {
+  if (
+    event.type !== "keydown" ||
+    !event.metaKey ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.shiftKey
+  )
+    return undefined;
+  if (event.key === "ArrowLeft") return "\x01";
+  if (event.key === "ArrowRight") return "\x05";
+  return undefined;
 }
 
 const errorMessage = (error: unknown) =>
@@ -1166,8 +1190,12 @@ function TerminalSurface({
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(timer);
   }, [session]);
-  const captureAgentShortcut = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    const sequence = agentMultilineSequence(event.nativeEvent, target);
+  const captureTerminalShortcut = (
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ) => {
+    const sequence =
+      agentMultilineSequence(event.nativeEvent, target) ??
+      lineJumpSequence(event.nativeEvent);
     if (!sequence) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1585,7 +1613,7 @@ function TerminalSurface({
       <div
         aria-label={`Terminal for ${label} ${id.slice(0, 8)}`}
         className="terminal"
-        onKeyDownCapture={captureAgentShortcut}
+        onKeyDownCapture={captureTerminalShortcut}
         ref={containerRef}
       />
       {target === "agent" && session && view && (
@@ -4028,6 +4056,28 @@ export function WorkspaceApp({
     if (revived) openSession(revived.id);
   }
 
+  async function updateWorkspace(
+    item: WorkspaceDto,
+    change: { name?: string; autoRebirthPercent?: AutoRebirthDto },
+  ) {
+    await perform(
+      client.request.workspaceUpdate({ reference: item.id, ...change }),
+    );
+  }
+
+  async function renameWorkspace(item: WorkspaceDto) {
+    const name = await askText({
+      title: "Rename workspace",
+      message:
+        "The name shows in the list and on the board. The folder keeps its name.",
+      initial: item.name,
+      confirmLabel: "Rename",
+    });
+    const trimmed = name?.trim();
+    if (trimmed && trimmed !== item.name)
+      await updateWorkspace(item, { name: trimmed });
+  }
+
   async function archiveWorkspace(item: WorkspaceDto) {
     const wasSelected = workspaceId === item.id;
     setArchivingWorkspaceIds((current) => new Set(current).add(item.id));
@@ -5967,6 +6017,17 @@ export function WorkspaceApp({
                         >
                           <ArchiveIcon />
                         </ConfirmButton>
+                        <WorkspaceMenu
+                          autoRebirth={item.autoRebirthPercent}
+                          inheritedRebirth={
+                            snapshot?.settings.autoRebirthPercent ?? null
+                          }
+                          name={item.name}
+                          onAutoRebirth={(autoRebirthPercent) =>
+                            void updateWorkspace(item, { autoRebirthPercent })
+                          }
+                          onRename={() => void renameWorkspace(item)}
+                        />
                         {/* Last, so the ones that come in on hover open to its
                           left and it never moves. */}
                         <button

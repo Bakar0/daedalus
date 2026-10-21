@@ -742,7 +742,9 @@ button:not(
 }
 .workspace-group .workspace-card-actions .session-card-action,
 .workspace-sessions .workspace-card-actions > .session-card-menu,
-.workspace-sessions .session-card-menu > summary.session-card-action {
+.workspace-sessions .session-card-menu > summary.session-card-action,
+.workspace-group .workspace-card-actions > .workspace-card-menu,
+.workspace-card-menu > summary.session-card-action {
   align-items: center;
   border-radius: 5px !important;
   display: flex;
@@ -777,10 +779,12 @@ button:not(
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Terminal, secrets and archive come in on hover, to the left of the +. */
+/* Terminal, secrets, archive and settings come in on hover, to the left of
+   the +. */
 .workspace-group .workspace-terminal-action,
 .workspace-group .workspace-secrets-action,
-.workspace-group .workspace-card-archive {
+.workspace-group .workspace-card-archive,
+.workspace-group .workspace-card-menu {
   display: none !important;
 }
 .workspace-group
@@ -788,8 +792,13 @@ button:not(
   :is(
     .workspace-terminal-action,
     .workspace-secrets-action,
-    .workspace-card-archive
+    .workspace-card-archive,
+    .workspace-card-menu
   ) {
+  display: flex !important;
+}
+/* An open menu stays put while the pointer is over its popover. */
+.workspace-group .workspace-card-menu[open] {
   display: flex !important;
 }
 .workspace-group
