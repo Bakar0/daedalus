@@ -361,11 +361,15 @@ export interface WorktreeCommit {
   pushed?: boolean;
 }
 
-/** Where a path printed in a terminal points, when it is a workspace file. */
-export interface FileLinkTarget {
-  workspaceId: string;
-  path: string;
-}
+/**
+ * Where a path printed in a terminal points. A workspace file has its
+ * workspace and a path relative to it. Any other file has a null workspace and
+ * an absolute path; it opens in an editor tab too when `viewable` (text or an
+ * image within the viewer's limits), and in the Mac's default app otherwise.
+ */
+export type FileLinkTarget =
+  | { workspaceId: string; path: string }
+  | { workspaceId: null; path: string; viewable: boolean };
 
 export interface WorkspaceFileEntry {
   name: string;

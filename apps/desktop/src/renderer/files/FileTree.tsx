@@ -678,9 +678,10 @@ export function FileTree({
   }, [expanded, listings, tree]);
 
   // Follow the editor: open the active file's folders and select its row,
-  // without taking focus from the editor.
+  // without taking focus from the editor. A file outside the workspace, open
+  // by its absolute path from a terminal link, has no row to follow.
   useEffect(() => {
-    if (!activePath) return;
+    if (!activePath || activePath.startsWith("/")) return;
     const ancestors: string[] = [];
     for (
       let parent = workspaceParentPath(activePath);

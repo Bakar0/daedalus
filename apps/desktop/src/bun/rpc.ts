@@ -1,4 +1,5 @@
-import { isAbsolute } from "node:path";
+import { stat } from "node:fs/promises";
+import { extname, isAbsolute } from "node:path";
 import packageJson from "../../../../package.json";
 import { readPasteboardFiles, writePasteboardFiles } from "@daedalus/platform";
 import {
@@ -468,6 +469,10 @@ export interface DesktopHost {
   /** Told after every mutation that succeeded, so the windows reload. */
   onMutation(): void;
   openExternal(url: string): boolean;
+  /** Opens a file in its default app. */
+  openPath(path: string): boolean;
+  /** Selects a file in a Finder window. */
+  revealPath(path: string): void;
   terminalEndpoint: string;
   quit: DesktopQuitHost;
   updates: DesktopUpdateHost;
@@ -476,6 +481,23 @@ export interface DesktopHost {
   remote: DesktopRemoteHost;
 }
 
+/** Files macOS runs, rather than shows, when they are opened. */
+const RUNNABLE_EXTENSIONS = new Set([
+  ".app",
+  ".command",
+  ".tool",
+  ".terminal",
+  ".workflow",
+  ".pkg",
+  ".mpkg",
+  ".scpt",
+  ".applescript",
+  ".jar",
+  ".fileloc",
+  ".webloc",
+  ".inetloc",
+]);
+
 export function createDesktopRequestHandlers(
   context: ApplicationContext,
   host: Partial<DesktopHost> = {},
@@ -483,6 +505,8 @@ export function createDesktopRequestHandlers(
   const {
     onMutation = () => {},
     openExternal = () => false,
+    openPath = () => false,
+    revealPath = () => {},
     terminalEndpoint = "",
     quit = { dialogShown: () => {}, decide: async () => {} },
     updates = NO_UPDATES,
@@ -608,6 +632,24 @@ export function createDesktopRequestHandlers(
             "Only HTTP and HTTPS links can be opened",
           );
         return { opened: openExternal(parsed.href) };
+      }),
+    openPath: ({ path }) =>
+      result(async () => {
+        if (!isAbsolute(path))
+          throw new DaedalusError("VALIDATION", "The path must be absolute");
+        const info = await stat(path).catch(() => undefined);
+        if (!info?.isFile())
+          throw new DaedalusError("NOT_FOUND", `No file at ${path}`);
+        // Opening a program runs it, and a path in a terminal is whatever an
+        // agent or a command printed. Those are shown in Finder instead.
+        if (
+          info.mode & 0o111 ||
+          RUNNABLE_EXTENSIONS.has(extname(path).toLowerCase())
+        ) {
+          revealPath(path);
+          return { opened: true };
+        }
+        return { opened: openPath(path) };
       }),
     clipboardFilesRead: () =>
       result(async () => ({ paths: await readPasteboardFiles() })),

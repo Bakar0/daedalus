@@ -201,8 +201,11 @@ interface FocusRequest {
 let pendingFocus: FocusRequest | undefined;
 const focusListeners = new Set<(request: FocusRequest) => void>();
 const requestFocus = (panel: string, line?: number, column?: number) => {
-  pendingFocus = { panel, line, column };
-  for (const listener of focusListeners) listener(pendingFocus);
+  // Held locally: the editor it names clears `pendingFocus`, and every editor
+  // after it in the loop must still be handed the request, not undefined.
+  const request = { panel, line, column };
+  pendingFocus = request;
+  for (const listener of focusListeners) listener(request);
 };
 
 /**

@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { mkdir, readFile, readdir, utimes } from "node:fs/promises";
+import { mkdir, readFile, readdir, utimes, writeFile } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import { pathExists } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
@@ -316,7 +316,7 @@ describe("WorkspaceFiles", () => {
       });
     });
 
-    test("resolves a terminal path to a workspace file, and nothing else", async () => {
+    test("resolves a terminal path to a workspace file, or to any other file", async () => {
       await withWorkspace(async ({ files, workspaceId, workspacePath }) => {
         await files.createEntry({
           workspace: workspaceId,
@@ -354,10 +354,47 @@ describe("WorkspaceFiles", () => {
             join(workspacePath, "worktrees", "task", "session"),
           ]),
         ).toEqual({ workspaceId, path: "notes/a.md" });
-        // A folder, a missing file and a file outside every workspace are not links.
+        // A folder and a missing file are not links.
         expect(await resolveLink("notes", [workspacePath])).toBeNull();
         expect(await resolveLink("missing.md", [workspacePath])).toBeNull();
-        expect(await resolveLink("/etc/hosts", [])).toBeNull();
+        // A file outside every workspace is, by its real absolute path, and
+        // says whether the editor can show it.
+        expect(await resolveLink("/etc/hosts", [])).toEqual({
+          workspaceId: null,
+          path: "/private/etc/hosts",
+          viewable: true,
+        });
+        const outside = join(workspacePath, "..", "outside.bin");
+        await writeFile(outside, new Uint8Array([1, 0, 2]));
+        expect(await resolveLink(outside, [])).toMatchObject({
+          workspaceId: null,
+          viewable: false,
+        });
+      });
+    });
+
+    test("opens and saves a file outside the workspace by its absolute path", async () => {
+      await withWorkspace(async ({ files, workspaceId, workspacePath }) => {
+        const outside = join(workspacePath, "..", "outside.md");
+        await writeFile(outside, "# outside\n");
+        const file = await files.readFile(workspaceId, outside);
+        expect(file).toMatchObject({
+          name: "outside.md",
+          path: outside,
+          content: "# outside\n",
+          format: "markdown",
+        });
+        await files.writeFile({
+          workspace: workspaceId,
+          path: outside,
+          content: "# changed\n",
+          expectedContent: "# outside\n",
+        });
+        expect(await readFile(outside, "utf8")).toBe("# changed\n");
+        // A relative path still cannot leave the workspace.
+        await expect(
+          files.readFile(workspaceId, "../outside.md"),
+        ).rejects.toMatchObject({ code: "VALIDATION" });
       });
     });
 

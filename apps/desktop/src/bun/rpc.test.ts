@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { createApplicationContext, ReadModel } from "@daedalus/core";
@@ -241,6 +241,53 @@ describe("desktop RPC handlers", () => {
             message: "Only HTTP and HTTPS links can be opened",
             details: undefined,
           },
+        });
+        expect(opened).toHaveLength(1);
+      } finally {
+        context.close();
+      }
+    });
+  });
+
+  test("opens a file in its default app, and shows a program in Finder", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const context = await createApplicationContext({
+        env: { ...process.env, DAEDALUS_HOME: home },
+        tmux: new FakeTmux(),
+      });
+      const opened: string[] = [];
+      const revealed: string[] = [];
+      const rpc = createDesktopRequestHandlers(context, {
+        openPath: (path) => {
+          opened.push(path);
+          return true;
+        },
+        revealPath: (path) => {
+          revealed.push(path);
+        },
+      });
+      try {
+        const notes = join(home, "notes.md");
+        const script = join(home, "run.sh");
+        const command = join(home, "go.command");
+        await writeFile(notes, "# notes\n");
+        await writeFile(script, "echo hi\n");
+        await chmod(script, 0o755);
+        await writeFile(command, "echo hi\n");
+        for (const path of [notes, script, command])
+          expect(await rpc.openPath({ path })).toEqual({
+            ok: true,
+            data: { opened: true },
+          });
+        expect(opened).toEqual([notes]);
+        expect(revealed).toEqual([script, command]);
+        expect(await rpc.openPath({ path: "notes.md" })).toMatchObject({
+          ok: false,
+          error: { code: "VALIDATION" },
+        });
+        expect(await rpc.openPath({ path: home })).toMatchObject({
+          ok: false,
+          error: { code: "NOT_FOUND" },
         });
         expect(opened).toHaveLength(1);
       } finally {
