@@ -599,4 +599,23 @@ describe("cloud RPC", () => {
       expect(gateway.calls.some((call) => call.includes(stray))).toBe(false);
     });
   });
+
+  test("in the app, a host waits for the held link instead of opening its own", async () => {
+    await withCloud(async (rpc, context, _gateway, relay) => {
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://localhost:8080",
+        email: "dev@example.com",
+      });
+      const workspace = await context.workspaces.create({ name: "Pods" });
+      await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
+      const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
+      const host = context.hosts.find(cloudHostId(cloudId))!;
+      const holding = context.cloud.hold();
+      // The runner never answers here, so this only reports it unreachable.
+      const probed = host.probe();
+      expect(await holding).toBe(true);
+      expect(typeof (await probed)).toBe("string");
+      expect(relay.sockets).toHaveLength(1);
+    });
+  });
 });
