@@ -4,6 +4,7 @@ import {
   cloudHostId,
   createApplicationContext,
   type ApplicationContext,
+  type ConnectRelay,
   type SessionCheckpoint,
   type SessionHost,
   type SessionHostLaunch,
@@ -101,6 +102,24 @@ const memoryVault = (): TokenVault => {
   };
 };
 
+/** Relay sockets that never connect, so a test sees which ones are open. */
+class FakeRelay {
+  readonly sockets: Array<{ token: string; closed: boolean }> = [];
+  readonly connect: ConnectRelay = (_url, token) => {
+    const socket = { token, closed: false };
+    this.sockets.push(socket);
+    return {
+      send() {},
+      close() {
+        socket.closed = true;
+      },
+    };
+  };
+  open() {
+    return this.sockets.filter((socket) => !socket.closed);
+  }
+}
+
 /** The gateway's routes, in memory, for one user. */
 class FakeGateway {
   readonly workspaces = new Map<string, CloudWorkspace>();
@@ -119,10 +138,13 @@ class FakeGateway {
       });
     if (url.pathname === "/v1/dev/login") {
       const { email } = JSON.parse(String(init?.body)) as { email: string };
-      return json(200, { user: { id: "u1", email }, token: TOKEN });
+      return json(200, {
+        user: { id: "u1", email },
+        token: `${TOKEN}-${email}`,
+      });
     }
     const auth = new Headers(init?.headers).get("authorization");
-    if (auth !== `Bearer ${TOKEN}` || this.refuse)
+    if (!auth?.startsWith(`Bearer ${TOKEN}`) || this.refuse)
       return json(this.refuse ?? 401, {
         error: { code: "UNAUTHORIZED", message: "Not signed in" },
       });
@@ -174,15 +196,18 @@ async function withCloud(
     rpc: ReturnType<typeof createDesktopRequestHandlers>,
     context: ApplicationContext,
     gateway: FakeGateway,
+    relay: FakeRelay,
   ) => Promise<void>,
 ): Promise<void> {
   await withTemporaryDaedalusHome(async (home) => {
     const gateway = new FakeGateway();
+    const relay = new FakeRelay();
     const context = await createApplicationContext({
       env: { ...process.env, DAEDALUS_HOME: home },
       tmux: new NoTmux(),
       cloud: {
         fetch: gateway.fetch,
+        connect: relay.connect,
         account: new CloudAccount(home, memoryVault()),
         identity: async () => ({
           id: "mac-1",
@@ -192,7 +217,7 @@ async function withCloud(
       },
     });
     try {
-      await run(createDesktopRequestHandlers(context), context, gateway);
+      await run(createDesktopRequestHandlers(context), context, gateway, relay);
     } finally {
       context.close();
     }
@@ -467,6 +492,22 @@ describe("cloud RPC", () => {
       expect(
         context.repositories.cloudWorkspaceId(workspace.id),
       ).toBeUndefined();
+    });
+  });
+
+  test("a sign-out during the launch hold leaves no link running", async () => {
+    await withCloud(async (rpc, context, _gateway, relay) => {
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://localhost:8080",
+        email: "dev@example.com",
+      });
+      const holding = context.cloud.hold();
+      const out = rpc.cloudSignOut({});
+      expect(await holding).toBe(true);
+      expect((await out).ok).toBe(true);
+      expect(context.cloud.holding).toBe(false);
+      expect(relay.sockets.length).toBeGreaterThan(0);
+      expect(relay.open()).toEqual([]);
     });
   });
 });

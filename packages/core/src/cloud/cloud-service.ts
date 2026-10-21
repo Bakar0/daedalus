@@ -89,6 +89,17 @@ export class CloudService {
   #identity: Promise<DeviceIdentity> | undefined;
   /** Set once `hold` was called: this process is the app. */
   #holder = false;
+  /**
+   * Sign-in, sign-out and holding the link run one at a time, so a link one
+   * of them opens cannot outlive a sign-out that ran alongside it.
+   */
+  #queue: Promise<unknown> = Promise.resolve();
+
+  #serial<T>(run: () => Promise<T>): Promise<T> {
+    const next = this.#queue.then(run, run);
+    this.#queue = next.catch(() => undefined);
+    return next;
+  }
 
   constructor(private readonly options: CloudServiceOptions) {
     this.account = options.account ?? new CloudAccount(options.config.home);
@@ -124,7 +135,11 @@ export class CloudService {
   }
 
   /** Signs in with the gateway's dev login, which only a dev chart enables. */
-  async devLogin(gatewayUrl: string, email: string): Promise<GatewayUser> {
+  devLogin(gatewayUrl: string, email: string): Promise<GatewayUser> {
+    return this.#serial(() => this.#devLogin(gatewayUrl, email));
+  }
+
+  async #devLogin(gatewayUrl: string, email: string): Promise<GatewayUser> {
     const client = new GatewayClient(gatewayUrl, undefined, this.options.fetch);
     const { user, token } = await client.devLogin(email);
     const previous = await this.account.signIn();
@@ -159,13 +174,15 @@ export class CloudService {
    * The app's sign-in: the dev login, then the link opened again for the
    * new account, which the app holds for every process.
    */
-  async signIn(gatewayUrl: string, email: string): Promise<GatewayUser> {
-    const user = await this.devLogin(gatewayUrl, email);
-    if (this.#holder) {
-      this.close();
-      await this.hold();
-    }
-    return user;
+  signIn(gatewayUrl: string, email: string): Promise<GatewayUser> {
+    return this.#serial(async () => {
+      const user = await this.#devLogin(gatewayUrl, email);
+      if (this.#holder) {
+        await this.#closeLink();
+        await this.#hold();
+      }
+      return user;
+    });
   }
 
   /**
@@ -251,8 +268,12 @@ export class CloudService {
     }
   }
 
-  async logout(): Promise<void> {
-    this.close();
+  logout(): Promise<void> {
+    return this.#serial(() => this.#logout());
+  }
+
+  async #logout(): Promise<void> {
+    await this.#closeLink();
     await this.account.forget();
     this.options.repositories.setCloudOwner(undefined);
     for (const host of this.options.hosts.cloud())
@@ -447,8 +468,12 @@ export class CloudService {
    * Holds the link for every process on this Mac: the app's job. Registers a
    * host for each cloud workspace so reconcile and revive cover them.
    */
-  async hold(): Promise<boolean> {
+  hold(): Promise<boolean> {
     this.#holder = true;
+    return this.#serial(() => this.#hold());
+  }
+
+  async #hold(): Promise<boolean> {
     const signIn = await this.account.signIn();
     if (!signIn) return false;
     // A sign-in from before links had an account, or from a CLI that
@@ -520,6 +545,14 @@ export class CloudService {
         return this.#link.openTerminal(workspaceId, session, size, events);
       },
     };
+  }
+
+  /** Stops the link and waits for the broker's socket to go. */
+  async #closeLink(): Promise<void> {
+    const stopBroker = this.#stopBroker;
+    this.#stopBroker = undefined;
+    this.close();
+    await stopBroker?.();
   }
 
   close(): void {
