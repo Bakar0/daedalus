@@ -8472,3 +8472,67 @@ dd {
 .app[data-palette="midnight"] .agent-session-status {
   background: #111728;
 }
+.cloud-panel {
+  display: grid;
+  gap: 12px;
+}
+.cloud-panel .settings-note {
+  margin: 0;
+}
+.cloud-sign-in {
+  display: grid;
+  gap: 10px;
+}
+.cloud-sign-in .settings-choice > span {
+  display: grid;
+  gap: 2px;
+}
+.cloud-sign-in small,
+.cloud-actions small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.cloud-sign-in input {
+  font-size: 12px;
+  min-height: 28px;
+  padding: 4px 8px;
+  width: 260px;
+}
+.cloud-account {
+  display: grid;
+  font-size: 12px;
+  gap: 4px;
+}
+.cloud-account code {
+  color: var(--muted);
+  font-size: 11px;
+}
+.cloud-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+/* A session that runs in its workspace's cloud pod. */
+.session-cloud-badge {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--secondary);
+  font-size: 10px;
+  font-style: normal;
+  margin-right: 6px;
+  padding: 0 6px;
+}
+.session-card[data-cloud-state="sleeping"] .session-card-main,
+.session-card[data-cloud-state="waking"] .session-card-main {
+  opacity: 0.72;
+}
+.session-card[data-cloud-state="waking"] .session-status-label {
+  font-style: italic;
+}
+.cloud-first-run-bar .routine-bar-text {
+  white-space: normal;
+}
+.session-card[data-cloud-state="unavailable"] .session-card-main {
+  opacity: 0.6;
+}

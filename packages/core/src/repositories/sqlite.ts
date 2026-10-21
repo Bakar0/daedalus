@@ -25,9 +25,16 @@ import type {
   WorkspaceRepositoryAccess,
 } from "../domain";
 import { accountModelKey, derivedDefaultModel } from "../domain";
+import { DaedalusError } from "../errors";
 import { AbilityRepository, RoutineRepository } from "./abilities";
 import { SecretRepository } from "./secrets";
 import { TeamRepository } from "./teams";
+
+/** A gateway account: the gateway's origin and the user's id on it. */
+export interface CloudOwner {
+  gatewayUrl: string;
+  userId: string;
+}
 
 interface WorkspaceRow {
   id: string;
@@ -1043,39 +1050,92 @@ export class SqliteRepositories {
     this.database.query("DELETE FROM agent_sessions WHERE id = ?").run(id);
   }
 
-  /** The cloud id of a local workspace's twin on a gateway, if it has one. */
-  cloudWorkspaceId(workspaceId: string): string | undefined {
-    return (
-      this.database
-        .query<{ cloud_id: string }, [string]>(
-          "SELECT cloud_id FROM cloud_workspaces WHERE workspace_id = ?",
-        )
-        .get(workspaceId)?.cloud_id ?? undefined
-    );
+  /** The gateway account this Mac is signed in to, as cloud links name it. */
+  cloudOwner(): CloudOwner | undefined {
+    const row = this.database
+      .query<{ gateway_url: string; user_id: string }, []>(
+        "SELECT gateway_url, user_id FROM cloud_owner WHERE id = 1",
+      )
+      .get();
+    return row
+      ? { gatewayUrl: row.gateway_url, userId: row.user_id }
+      : undefined;
   }
 
-  /** The local workspace a cloud workspace was made from. */
-  workspaceForCloud(cloudId: string): string | undefined {
-    return (
-      this.database
-        .query<{ workspace_id: string }, [string]>(
-          "SELECT workspace_id FROM cloud_workspaces WHERE cloud_id = ?",
-        )
-        .get(cloudId)?.workspace_id ?? undefined
-    );
-  }
-
-  linkCloudWorkspace(workspaceId: string, cloudId: string): void {
+  /** Sets the signed-in account, or none; only its links are visible. */
+  setCloudOwner(owner: CloudOwner | undefined): void {
+    if (!owner) {
+      this.database.query("DELETE FROM cloud_owner").run();
+      return;
+    }
     this.database
       .query(
-        "INSERT INTO cloud_workspaces (workspace_id, cloud_id) VALUES (?, ?)",
+        `INSERT INTO cloud_owner (id, gateway_url, user_id) VALUES (1, ?, ?)
+         ON CONFLICT (id) DO UPDATE SET gateway_url = excluded.gateway_url,
+           user_id = excluded.user_id`,
       )
-      .run(workspaceId, cloudId);
+      .run(owner.gatewayUrl, owner.userId);
+  }
+
+  /** Gives the links made before links had an account to the current one. */
+  claimUnownedCloudLinks(): void {
+    const owner = this.cloudOwner();
+    if (!owner) return;
+    this.database
+      .query(
+        `UPDATE OR IGNORE cloud_workspace_links SET gateway_url = ?, user_id = ?
+         WHERE gateway_url = '' AND user_id = ''`,
+      )
+      .run(owner.gatewayUrl, owner.userId);
+  }
+
+  /**
+   * The cloud id of a local workspace's twin on the signed-in account's
+   * gateway, if it has one. Another account's links do not count.
+   */
+  cloudWorkspaceId(workspaceId: string): string | undefined {
+    const owner = this.cloudOwner();
+    if (!owner) return undefined;
+    return (
+      this.database
+        .query<{ cloud_id: string }, [string, string, string]>(
+          `SELECT cloud_id FROM cloud_workspace_links
+           WHERE workspace_id = ? AND gateway_url = ? AND user_id = ?`,
+        )
+        .get(workspaceId, owner.gatewayUrl, owner.userId)?.cloud_id ?? undefined
+    );
+  }
+
+  /** The local workspace a cloud workspace of the signed-in account was made from. */
+  workspaceForCloud(cloudId: string): string | undefined {
+    const owner = this.cloudOwner();
+    if (!owner) return undefined;
+    return (
+      this.database
+        .query<{ workspace_id: string }, [string, string, string]>(
+          `SELECT workspace_id FROM cloud_workspace_links
+           WHERE cloud_id = ? AND gateway_url = ? AND user_id = ?`,
+        )
+        .get(cloudId, owner.gatewayUrl, owner.userId)?.workspace_id ?? undefined
+    );
+  }
+
+  /** Links a local workspace to a cloud id of the signed-in account. */
+  linkCloudWorkspace(workspaceId: string, cloudId: string): void {
+    const owner = this.cloudOwner();
+    if (!owner)
+      throw new DaedalusError("DEPENDENCY", "This Mac is not signed in");
+    this.database
+      .query(
+        `INSERT INTO cloud_workspace_links
+           (workspace_id, cloud_id, gateway_url, user_id) VALUES (?, ?, ?, ?)`,
+      )
+      .run(workspaceId, cloudId, owner.gatewayUrl, owner.userId);
   }
 
   unlinkCloudWorkspace(cloudId: string): void {
     this.database
-      .query("DELETE FROM cloud_workspaces WHERE cloud_id = ?")
+      .query("DELETE FROM cloud_workspace_links WHERE cloud_id = ?")
       .run(cloudId);
   }
 

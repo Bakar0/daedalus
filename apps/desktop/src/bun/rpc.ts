@@ -6,6 +6,7 @@ import {
   accountDirectory,
   autoRebirthPercent,
   channelName,
+  cloudHostWorkspace,
   DaedalusError,
   INSTALL_COMMANDS,
   normalizeError,
@@ -15,6 +16,7 @@ import {
   type AgentActivityState,
   type AgentSession,
   type ApplicationContext,
+  type CloudOverview,
   type IntegratedTerminal,
   type PendingNotification,
   type PresenceState,
@@ -39,6 +41,7 @@ import type {
   AppUpdateDto,
   QuitChoice,
   AgentSessionDto,
+  CloudStateDto,
   DesktopRpcSchema,
   DesktopSnapshotDto,
   DesktopWindowRole,
@@ -125,6 +128,21 @@ const taskDto = (task: Task): TaskDto => ({ ...task });
 const agentDto = (agent: AgentSession): AgentSessionDto => ({
   ...agent,
   args: [...agent.args],
+});
+/** Field by field, so nothing else the host knows can come along. */
+const cloudStateDto = (overview: CloudOverview): CloudStateDto => ({
+  signedIn: overview.connection !== "signed-out",
+  gatewayUrl: overview.gatewayUrl,
+  email: overview.email,
+  connection: overview.connection,
+  error: overview.error,
+  workspaces: overview.workspaces.map((workspace) => ({
+    workspaceId: workspace.workspaceId,
+    cloudId: workspace.cloudId,
+    status: workspace.status,
+    runnerOnline: workspace.runnerOnline,
+    reason: workspace.reason,
+  })),
 });
 const accountDto = (
   context: ApplicationContext,
@@ -799,6 +817,68 @@ export function createDesktopRequestHandlers(
         await context.workspaceContent.setInstructionFilesEnabled(enabled);
         return { enabled };
       }),
+    cloudState: () =>
+      result(async () => cloudStateDto(await context.cloud.overview())),
+    cloudSignIn: ({ gatewayUrl, email }) =>
+      mutate(async () => {
+        await context.cloud.signIn(gatewayUrl.trim(), email.trim());
+        return cloudStateDto(await context.cloud.overview());
+      }),
+    cloudSignOut: () =>
+      mutate(async () => {
+        await context.cloud.logout();
+        return cloudStateDto(await context.cloud.overview());
+      }),
+    cloudWorkspaceCreate: ({ workspace }) =>
+      mutate(async () => {
+        await context.cloud.create(workspace);
+        return cloudStateDto(await context.cloud.overview());
+      }),
+    cloudWorkspaceSleep: ({ workspace }) =>
+      mutate(async () => {
+        await context.cloud.sleep(await context.cloud.linkedCloudId(workspace));
+        return cloudStateDto(await context.cloud.overview());
+      }),
+    cloudWorkspaceWake: ({ workspace }) =>
+      mutate(async () => {
+        await context.cloud.wake(await context.cloud.linkedCloudId(workspace));
+        return cloudStateDto(await context.cloud.overview());
+      }),
+    cloudWorkspaceDelete: ({ workspace, force }) =>
+      mutate(async () => {
+        if (force !== true)
+          throw new DaedalusError(
+            "VALIDATION",
+            "Deleting a cloud workspace removes its pod and its volume; confirm it",
+          );
+        await context.cloud.delete(
+          await context.cloud.linkedCloudId(workspace),
+        );
+        return cloudStateDto(await context.cloud.overview());
+      }),
+    cloudSessionWake: ({ sessionId }) =>
+      mutate(async () => {
+        const session = await context.agents.get(sessionId);
+        const cloudId = session.hostId
+          ? cloudHostWorkspace(session.hostId)
+          : undefined;
+        if (!cloudId)
+          throw new DaedalusError(
+            "VALIDATION",
+            "This session runs on this Mac, not in a cloud workspace",
+          );
+        if (!context.repositories.workspaceForCloud(cloudId))
+          throw new DaedalusError(
+            "DEPENDENCY",
+            "This session's cloud workspace is not in the cloud account this Mac is signed in to",
+          );
+        if ((await context.cloud.get(cloudId)).status === "sleeping")
+          await context.cloud.wakeForSessions(cloudId);
+        // A session the pod's idle sleep ended may still read as running.
+        if ((await context.agents.get(sessionId)).status !== "lost")
+          await context.agents.reconcile();
+        return agentDto(await context.agents.reviveLost(sessionId));
+      }),
     remoteGet: () => result(() => remote.state()),
     remoteSetEnabled: ({ enabled }) => mutate(() => remote.setEnabled(enabled)),
     remoteSetKeepAwake: ({ enabled }) =>
@@ -1093,14 +1173,22 @@ export function createDesktopRequestHandlers(
       ),
     accountSignOut: ({ provider, account }) =>
       mutate(() => context.accounts.signOut(provider, account)),
-    agentSpawn: ({ teamId, ...params }) =>
-      mutate(async () =>
-        agentDto(
+    agentSpawn: ({ teamId, cloud, ...params }) =>
+      mutate(async () => {
+        const host = cloud
+          ? await context.cloud.hostId(
+              teamId
+                ? context.teams.get(teamId).lead.workspaceId
+                : params.workspace,
+            )
+          : undefined;
+        return agentDto(
           teamId
             ? (
                 await context.teams.spawnMember({
                   team: teamId,
                   addedBy: "user",
+                  ...(host ? { host } : {}),
                   instructions: params.message ?? "",
                   ...(params.name ? { name: params.name } : {}),
                   ...(params.taskId ? { taskId: params.taskId } : {}),
@@ -1111,9 +1199,12 @@ export function createDesktopRequestHandlers(
                     : {}),
                 })
               ).session
-            : await context.agents.spawn(params),
-        ),
-      ),
+            : await context.agents.spawn({
+                ...params,
+                ...(host ? { host } : {}),
+              }),
+        );
+      }),
     agentSend: ({ id, text }) =>
       mutate(async () => agentDto(await context.agents.send(id, text))),
     agentStop: ({ id, force }) =>

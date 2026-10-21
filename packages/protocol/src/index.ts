@@ -914,6 +914,36 @@ export interface RemoteStateDto {
   };
 }
 
+export type CloudConnectionDto =
+  "signed-out" | "connecting" | "online" | "error";
+
+/** A cloud workspace made from a local one. */
+export interface CloudWorkspaceDto {
+  /** The local workspace. */
+  workspaceId: string;
+  /** The gateway's id for it; sessions run on host `ws:<cloudId>`. */
+  cloudId: string;
+  status: "starting" | "running" | "sleeping" | "failed";
+  runnerOnline: boolean;
+  /** Why it failed; null otherwise. */
+  reason: string | null;
+}
+
+/**
+ * This Mac's cloud sign-in as a window sees it: the gateway, the email and
+ * the state. The token and the runner keys stay in the host.
+ */
+export interface CloudStateDto {
+  signedIn: boolean;
+  gatewayUrl: string | null;
+  email: string | null;
+  connection: CloudConnectionDto;
+  /** Why the gateway could not be read, in words for the user. */
+  error: string | null;
+  /** Only the ones linked to a local workspace. */
+  workspaces: CloudWorkspaceDto[];
+}
+
 /** A Pro key (an invite code), as an admin sees it. */
 export interface AdminKeyDto {
   code: string;
@@ -1121,6 +1151,29 @@ export interface DesktopRpcSchema {
        * to load — so it is fetched over RPC rather than passed in the URL.
        */
       terminalEndpoint: Request<Record<string, never>, { endpoint: string }>;
+      /** The cloud sign-in and workspaces; asks the gateway once. */
+      cloudState: Request<Record<string, never>, CloudStateDto>;
+      /** The gateway's dev login, the same as `daedal cloud login`. */
+      cloudSignIn: Request<
+        { gatewayUrl: string; email: string },
+        CloudStateDto
+      >;
+      cloudSignOut: Request<Record<string, never>, CloudStateDto>;
+      /** Run in cloud: the pod for a local workspace (`daedal cloud create`). */
+      cloudWorkspaceCreate: Request<{ workspace: string }, CloudStateDto>;
+      /** Removes the pod and keeps the volume; its sessions end. */
+      cloudWorkspaceSleep: Request<{ workspace: string }, CloudStateDto>;
+      cloudWorkspaceWake: Request<{ workspace: string }, CloudStateDto>;
+      /** Removes the pod, its volume and its token; the local workspace stays. */
+      cloudWorkspaceDelete: Request<
+        { workspace: string; force: true },
+        CloudStateDto
+      >;
+      /**
+       * Opening a cloud session whose workspace sleeps: wakes the workspace,
+       * waits for its runner, then revives the session.
+       */
+      cloudSessionWake: Request<{ sessionId: string }, AgentSessionDto>;
       remoteGet: Request<Record<string, never>, RemoteStateDto>;
       remoteSetEnabled: Request<{ enabled: boolean }, RemoteStateDto>;
       remoteSetKeepAwake: Request<{ enabled: boolean }, RemoteStateDto>;
@@ -1562,6 +1615,11 @@ export interface DesktopRpcSchema {
            * are the lead's.
            */
           teamId?: string;
+          /**
+           * Runs in the workspace's cloud pod (`daedal cloud spawn`): Claude
+           * or a terminal, with no account profile and no abilities.
+           */
+          cloud?: boolean;
         },
         AgentSessionDto
       >;

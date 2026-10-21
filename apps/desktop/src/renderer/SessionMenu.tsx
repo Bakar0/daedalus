@@ -1,17 +1,20 @@
 /**
  * The menu on a session card: rename, pin, color, rebirth and abilities.
  * Every session has the first three; rebirth and abilities are offered on
- * Claude and Codex agents. A workspace card has a shorter one: rename and
- * the rebirth its sessions default to.
+ * Claude and Codex agents. A workspace card has a shorter one: rename,
+ * the rebirth its sessions default to, and its cloud workspace once this Mac
+ * is signed in to a gateway.
  */
 import {
   customSessionColor,
   DEFAULT_AUTO_REBIRTH_PERCENT,
   type AutoRebirthDto,
+  type CloudWorkspaceDto,
   type NamedSessionColorDto,
   type SessionColorDto,
 } from "@daedalus/protocol";
 import { useState } from "react";
+import { ConfirmButton } from "./ConfirmButton";
 import { Menu, MenuDots } from "./Menu";
 import { PercentInput } from "./PercentInput";
 import { sessionColorStyle } from "./session-color-style";
@@ -358,12 +361,32 @@ export function SessionMenu({
   );
 }
 
+const CLOUD_STATUS_LABEL: Record<CloudWorkspaceDto["status"], string> = {
+  starting: "starting",
+  running: "running",
+  sleeping: "sleeping",
+  failed: "failed",
+};
+
+/** What the workspace menu offers for the workspace's cloud twin. */
+export interface WorkspaceCloudControls {
+  /** Its cloud workspace, or undefined when it has none yet. */
+  workspace?: CloudWorkspaceDto;
+  /** A create, sleep, wake or delete is on its way. */
+  pending: boolean;
+  onCreate: () => void;
+  onSleep: () => void;
+  onWake: () => void;
+  onDelete: () => void;
+}
+
 export function WorkspaceMenu({
   name,
   autoRebirth,
   inheritedRebirth,
   onRename,
   onAutoRebirth,
+  cloud,
 }: {
   name: string;
   /** The workspace's own rebirth threshold; null takes the global one. */
@@ -372,6 +395,8 @@ export function WorkspaceMenu({
   inheritedRebirth: number | null;
   onRename: () => void;
   onAutoRebirth: (value: AutoRebirthDto) => void;
+  /** Absent while this Mac is not signed in to a cloud gateway. */
+  cloud?: WorkspaceCloudControls;
 }) {
   return (
     <Menu
@@ -409,6 +434,96 @@ export function WorkspaceMenu({
         subject="workspace"
         value={autoRebirth}
       />
+      {cloud && <WorkspaceCloudItems cloud={cloud} />}
     </Menu>
+  );
+}
+
+export function WorkspaceCloudItems({
+  cloud,
+}: {
+  cloud: WorkspaceCloudControls;
+}) {
+  const workspace = cloud.workspace;
+  if (!workspace)
+    return (
+      <>
+        <hr className="menu-separator" />
+        <button
+          className="quiet menu-item"
+          data-testid="cloud-run"
+          disabled={cloud.pending}
+          onClick={cloud.onCreate}
+          role="menuitem"
+          title="Make a pod for this workspace on the cloud gateway, so new sessions can run there. The board and the journal stay on this Mac."
+          type="button"
+        >
+          <span className="menu-item-label">
+            {cloud.pending ? "Starting in cloud…" : "Run in cloud"}
+          </span>
+        </button>
+      </>
+    );
+  const asleep = workspace.status === "sleeping";
+  return (
+    <>
+      <hr className="menu-separator" />
+      <span
+        className="menu-heading"
+        data-status={workspace.status}
+        data-testid="cloud-status"
+        title={workspace.reason ?? undefined}
+      >
+        Cloud
+        <span className="menu-heading-note">
+          {cloud.pending
+            ? "working…"
+            : `${CLOUD_STATUS_LABEL[workspace.status]}${
+                workspace.status === "running" && !workspace.runnerOnline
+                  ? ", runner offline"
+                  : ""
+              }`}
+        </span>
+      </span>
+      {asleep ? (
+        <button
+          className="quiet menu-item"
+          data-testid="cloud-wake"
+          disabled={cloud.pending}
+          onClick={cloud.onWake}
+          role="menuitem"
+          title="Start its pod again. Sessions that ended when it slept come back with Revive."
+          type="button"
+        >
+          <span className="menu-item-label">Wake</span>
+        </button>
+      ) : (
+        <button
+          className="quiet menu-item"
+          data-testid="cloud-sleep"
+          disabled={cloud.pending || workspace.status === "failed"}
+          onClick={cloud.onSleep}
+          role="menuitem"
+          title="Remove its pod and keep its volume. The sessions running there end; Wake and Revive bring them back."
+          type="button"
+        >
+          <span className="menu-item-label">Sleep</span>
+        </button>
+      )}
+      {/* Not a menuitem: choosing one closes the menu, and this needs its
+          second click. */}
+      <ConfirmButton
+        armedLabel="Delete"
+        armedTitle="Delete the cloud workspace: its pod, its volume and its token. This workspace stays on this Mac."
+        className="quiet menu-item menu-item-danger"
+        data-testid="cloud-delete"
+        disabled={cloud.pending}
+        onConfirm={cloud.onDelete}
+        title="Delete the cloud workspace. Asks once more."
+        type="button"
+      >
+        <span className="menu-item-label">Delete cloud workspace…</span>
+      </ConfirmButton>
+    </>
   );
 }

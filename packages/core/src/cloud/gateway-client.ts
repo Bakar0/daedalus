@@ -140,7 +140,7 @@ export class GatewayClient {
       throw new DaedalusError(
         code ?? (response.status === 404 ? "NOT_FOUND" : "INTERNAL"),
         response.status === 401
-          ? "The gateway did not accept the sign-in; run 'daedal cloud login' again"
+          ? "The gateway did not accept the sign-in; sign in again in Settings › Cloud or with 'daedal cloud login'"
           : (error?.message ?? `The gateway answered ${response.status}`),
         error?.code ? { gatewayCode: error.code } : undefined,
       );

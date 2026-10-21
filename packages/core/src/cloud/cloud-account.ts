@@ -101,7 +101,7 @@ export class CloudAccount {
     if (!signIn)
       throw new DaedalusError(
         "DEPENDENCY",
-        "This Mac is not signed in to a cloud gateway; run 'daedal cloud login'",
+        "This Mac is not signed in to a cloud gateway; sign in in Settings › Cloud or run 'daedal cloud login'",
       );
     return signIn;
   }
@@ -120,8 +120,20 @@ export class CloudAccount {
     });
   }
 
+  /**
+   * Removes the sign-in. A token the Keychain would not remove is an error,
+   * and the account file stays, so the Mac does not read as signed out while
+   * the token is still stored.
+   */
   async forget(): Promise<void> {
-    await this.vault?.remove().catch(() => undefined);
+    try {
+      await this.vault?.remove();
+    } catch (error) {
+      throw new DaedalusError(
+        "DEPENDENCY",
+        `The cloud token could not be removed from the Keychain: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     await rm(this.#path, { force: true });
   }
 

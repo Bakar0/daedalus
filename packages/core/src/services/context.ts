@@ -31,7 +31,7 @@ import { IntegratedTerminalService } from "./integrated-terminals";
 import { NotificationService } from "./notifications";
 import { PresenceService } from "./presence";
 import { ShutdownService } from "./shutdown";
-import { CloudService } from "../cloud/cloud-service";
+import { CloudService, type CloudServiceOptions } from "../cloud/cloud-service";
 import { CLOUD_LAUNCH_SECRETS } from "./cloud-launch";
 import { LocalSessionHost } from "./session-host";
 import { SessionHosts } from "./session-hosts";
@@ -118,6 +118,11 @@ export interface ApplicationContextOptions {
   sessionInbox?: (session: AgentSession, line: string) => Promise<boolean>;
   /** Injected so staleness decay is testable without waiting ten minutes. */
   now?: () => Date;
+  /** Injected so tests reach a fake gateway, with no Keychain. */
+  cloud?: Pick<
+    CloudServiceOptions,
+    "fetch" | "account" | "identity" | "connect"
+  >;
   /** Injected so tests never reach the real Notification Center. */
   sendNativeNotification?: (
     notification: NativeNotification,
@@ -246,6 +251,7 @@ export async function createApplicationContext(
     repositories,
     workspaces,
     hosts,
+    ...options.cloud,
   });
   const events = new EventBus();
   const logger = new JsonLogger(config.logsDirectory);

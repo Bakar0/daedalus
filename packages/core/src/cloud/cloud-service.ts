@@ -1,5 +1,6 @@
 import type {
   CloudWorkspace,
+  CloudWorkspaceStatus,
   DeviceIdentity,
   GatewayUser,
   RunnerMethod,
@@ -7,14 +8,14 @@ import type {
 } from "@daedalus/remote-protocol";
 import type { DaedalusConfig } from "../config";
 import { DaedalusError } from "../errors";
-import type { SqliteRepositories } from "../repositories";
+import type { CloudOwner, SqliteRepositories } from "../repositories";
 import { CloudCalls, cloudDaedal } from "../services/cloud-calls";
 import { cloudHostId, cloudHostWorkspace } from "../services/cloud-launch";
 import { defaultVault, RemoteStore } from "../services/remote-store";
 import type { SessionHosts } from "../services/session-hosts";
 import type { WorkspaceService } from "../services/workspaces";
 import { BrokerTransport, brokerAvailable, serveBroker } from "./broker";
-import { CloudAccount } from "./cloud-account";
+import { CloudAccount, type CloudSignIn } from "./cloud-account";
 import { GatewayClient } from "./gateway-client";
 import {
   CloudLink,
@@ -29,6 +30,34 @@ import { RemoteSessionHost } from "./remote-session-host";
 const RUNNER_WAIT_MS = 20_000;
 /** How long a wake keeps trying while the old pod is still going. */
 const WAKE_RETRY_MS = 30_000;
+
+/** How long a wake for a session waits for the new pod's runner. */
+const WAKE_RUNNER_MS = 180_000;
+
+export type CloudConnection = "signed-out" | "connecting" | "online" | "error";
+
+/** A cloud workspace made from a local one, without its runner key. */
+export interface LinkedCloudWorkspace {
+  /** The local workspace. */
+  workspaceId: string;
+  cloudId: string;
+  status: CloudWorkspaceStatus;
+  runnerOnline: boolean;
+  reason: string | null;
+}
+
+/**
+ * What a window shows of the sign-in: never the token, the runner keys or
+ * the pins.
+ */
+export interface CloudOverview {
+  gatewayUrl: string | null;
+  email: string | null;
+  connection: CloudConnection;
+  /** Why the gateway could not be read, in words for the user. */
+  error: string | null;
+  workspaces: LinkedCloudWorkspace[];
+}
 
 export interface CloudServiceOptions {
   config: DaedalusConfig;
@@ -58,12 +87,27 @@ export class CloudService {
   #transport: Promise<RunnerTransport> | undefined;
   #stopBroker: (() => Promise<void>) | undefined;
   #identity: Promise<DeviceIdentity> | undefined;
+  /** Set once `hold` was called: this process is the app. */
+  #holder = false;
+  /**
+   * Sign-in, sign-out and holding the link run one at a time, so a link one
+   * of them opens cannot outlive a sign-out that ran alongside it.
+   */
+  #queue: Promise<unknown> = Promise.resolve();
+
+  #serial<T>(run: () => Promise<T>): Promise<T> {
+    const next = this.#queue.then(run, run);
+    this.#queue = next.catch(() => undefined);
+    return next;
+  }
 
   constructor(private readonly options: CloudServiceOptions) {
     this.account = options.account ?? new CloudAccount(options.config.home);
     options.hosts.resolveWith((hostId) => {
       const workspaceId = cloudHostWorkspace(hostId);
-      return workspaceId
+      // Only the signed-in account's workspaces: a session left from another
+      // account must not start in this account's pod.
+      return workspaceId && options.repositories.workspaceForCloud(workspaceId)
         ? new RemoteSessionHost(workspaceId, this.#lazyTransport())
         : undefined;
     });
@@ -82,6 +126,7 @@ export class CloudService {
 
   async #client(): Promise<GatewayClient> {
     const signIn = await this.account.requireSignIn();
+    this.#own({ gatewayUrl: signIn.gatewayUrl, userId: signIn.user.id }, true);
     return new GatewayClient(
       signIn.gatewayUrl,
       signIn.token,
@@ -90,16 +135,151 @@ export class CloudService {
   }
 
   /** Signs in with the gateway's dev login, which only a dev chart enables. */
-  async devLogin(gatewayUrl: string, email: string): Promise<GatewayUser> {
+  devLogin(gatewayUrl: string, email: string): Promise<GatewayUser> {
+    return this.#serial(() => this.#devLogin(gatewayUrl, email));
+  }
+
+  async #devLogin(gatewayUrl: string, email: string): Promise<GatewayUser> {
     const client = new GatewayClient(gatewayUrl, undefined, this.options.fetch);
     const { user, token } = await client.devLogin(email);
+    // The old link goes before the new account is saved: until then it
+    // would read the new account's pins and token.
+    await this.#closeLink();
+    const previous = await this.account.signIn();
     await this.account.save({ gatewayUrl: client.url, user, token });
+    this.#own(
+      { gatewayUrl: client.url, userId: user.id },
+      previous?.gatewayUrl === client.url && previous.user.id === user.id,
+    );
     return user;
   }
 
-  async logout(): Promise<void> {
-    this.close();
+  /**
+   * Makes an account the one whose cloud links count. Another account's
+   * links stay in the database, unused, and come back when it signs in
+   * again. Links from before links had an account go to the account this Mac
+   * was already signed in to.
+   */
+  #own(owner: CloudOwner, sameAccount: boolean): void {
+    const { repositories, hosts } = this.options;
+    const current = repositories.cloudOwner();
+    if (
+      current?.gatewayUrl === owner.gatewayUrl &&
+      current.userId === owner.userId
+    )
+      return;
+    for (const host of hosts.cloud()) hosts.unregister(host.id);
+    repositories.setCloudOwner(owner);
+    if (!current && sameAccount) repositories.claimUnownedCloudLinks();
+  }
+
+  /**
+   * The app's sign-in: the dev login, then the link opened again for the
+   * new account, which the app holds for every process.
+   */
+  signIn(gatewayUrl: string, email: string): Promise<GatewayUser> {
+    return this.#serial(async () => {
+      const user = await this.#devLogin(gatewayUrl, email);
+      if (this.#holder) await this.#hold();
+      return user;
+    });
+  }
+
+  /**
+   * The sign-in, the link's state and the cloud workspaces made from local
+   * ones. One gateway request; a failed one is reported, not thrown.
+   */
+  async overview(): Promise<CloudOverview> {
+    const signIn = await this.account.signIn();
+    if (!signIn)
+      return {
+        gatewayUrl: null,
+        email: null,
+        connection: "signed-out",
+        error: null,
+        workspaces: [],
+      };
+    const base = { gatewayUrl: signIn.gatewayUrl, email: signIn.user.email };
+    let listed: CloudWorkspace[];
+    try {
+      listed = await this.list();
+    } catch (error) {
+      return {
+        ...base,
+        connection: "error",
+        error: error instanceof Error ? error.message : String(error),
+        workspaces: [],
+      };
+    }
+    const workspaces: LinkedCloudWorkspace[] = [];
+    for (const item of listed) {
+      const workspaceId = this.options.repositories.workspaceForCloud(
+        item.workspaceId,
+      );
+      if (!workspaceId) continue;
+      workspaces.push({
+        workspaceId,
+        cloudId: item.workspaceId,
+        status: item.status,
+        runnerOnline: item.runnerOnline,
+        reason: item.reason,
+      });
+    }
+    return {
+      ...base,
+      // Without a link of its own (the CLI), an answer is as online as it gets.
+      connection: this.#link && !this.#link.connected ? "connecting" : "online",
+      error: null,
+      workspaces,
+    };
+  }
+
+  /**
+   * Wakes a workspace and waits until its runner is linked to this Mac, so a
+   * session can be revived in it right away.
+   */
+  async wakeForSessions(workspaceReference: string): Promise<CloudWorkspace> {
+    const woken = await this.wake(workspaceReference);
+    const workspaceId = woken.workspaceId;
+    if (this.#link) {
+      if (!(await this.#link.waitForRunner(workspaceId, WAKE_RUNNER_MS)))
+        throw new DaedalusError(
+          "DEPENDENCY",
+          "The cloud workspace woke, but its runner did not connect in time; try again in a minute",
+        );
+      return woken;
+    }
+    const client = await this.#client();
+    const deadline = Date.now() + WAKE_RUNNER_MS;
+    for (let current = woken; ;) {
+      if (current.runnerOnline) return current;
+      if (current.status === "failed")
+        throw new DaedalusError(
+          "DEPENDENCY",
+          current.reason ?? "The cloud workspace failed to start",
+        );
+      if (Date.now() > deadline)
+        throw new DaedalusError(
+          "DEPENDENCY",
+          "The cloud workspace woke, but its runner did not connect in time; try again in a minute",
+        );
+      await Bun.sleep(1_000);
+      current = await client.getWorkspace(workspaceId);
+    }
+  }
+
+  logout(): Promise<void> {
+    return this.#serial(() => this.#logout());
+  }
+
+  async #logout(): Promise<void> {
+    // The token goes first: if the Keychain keeps it, the Mac stays signed
+    // in, link and all, rather than reading as signed out.
     await this.account.forget();
+    await this.#closeLink();
+    this.options.repositories.setCloudOwner(undefined);
+    for (const host of this.options.hosts.cloud())
+      this.options.hosts.unregister(host.id);
   }
 
   async status(): Promise<{ gatewayUrl: string; user: GatewayUser } | null> {
@@ -222,16 +402,20 @@ export class CloudService {
     });
   }
 
-  /** The cloud id of a local workspace, or a cloud id given as it is. */
-  async #workspaceId(reference: string): Promise<string> {
-    // A workspace removed on this Mac can still be deleted in the cloud.
-    if (
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-        reference,
-      )
-    )
-      return reference.toLowerCase();
-    const workspace = await this.options.workspaces.get(reference);
+  /** The host a local workspace's cloud sessions run on. */
+  async hostId(workspaceReference: string): Promise<string> {
+    const workspace =
+      await this.options.workspaces.getActive(workspaceReference);
+    return cloudHostId(await this.linkedCloudId(workspace.id));
+  }
+
+  /**
+   * The cloud id linked to a local workspace for the signed-in account. Unlike
+   * the commands, a cloud id is not taken as it is: the app acts only on
+   * workspaces this Mac links.
+   */
+  async linkedCloudId(workspaceReference: string): Promise<string> {
+    const workspace = await this.options.workspaces.get(workspaceReference);
     const cloudId = this.options.repositories.cloudWorkspaceId(workspace.id);
     if (!cloudId)
       throw new DaedalusError(
@@ -241,15 +425,36 @@ export class CloudService {
     return cloudId;
   }
 
+  /** The cloud id of a local workspace, or a cloud id given as it is. */
+  async #workspaceId(reference: string): Promise<string> {
+    // A workspace removed on this Mac can still be deleted in the cloud.
+    if (
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        reference,
+      )
+    )
+      return reference.toLowerCase();
+    return this.linkedCloudId(reference);
+  }
+
   /**
    * The runner key this Mac accepts a workspace's runner with: the pinned
    * one, else the one the gateway reports, which is pinned from then on.
    */
-  async #runnerKey(workspaceId: string): Promise<string | undefined> {
+  async #runnerKey(
+    workspaceId: string,
+    signIn: CloudSignIn,
+  ): Promise<string | undefined> {
+    // A link answers for the account it was opened with, and pins nothing
+    // once another account (or none) is signed in.
+    const current = await this.account.signIn();
+    if (current?.token !== signIn.token) return undefined;
     const pinned = await this.account.pinned(workspaceId);
     if (pinned) return pinned;
-    const workspace = await (
-      await this.#client()
+    const workspace = await new GatewayClient(
+      signIn.gatewayUrl,
+      signIn.token,
+      this.options.fetch,
     )
       .getWorkspace(workspaceId)
       .catch(() => undefined);
@@ -269,7 +474,7 @@ export class CloudService {
       gatewayUrl: signIn.gatewayUrl,
       token: signIn.token,
       identity: await this.identity(),
-      runnerKey: (workspaceId) => this.#runnerKey(workspaceId),
+      runnerKey: (workspaceId) => this.#runnerKey(workspaceId, signIn),
       answer: (hostId, call) => calls.answer(hostId, call),
       ...(this.options.connect ? { connect: this.options.connect } : {}),
       ...(this.options.log ? { log: this.options.log } : {}),
@@ -283,8 +488,17 @@ export class CloudService {
    * Holds the link for every process on this Mac: the app's job. Registers a
    * host for each cloud workspace so reconcile and revive cover them.
    */
-  async hold(): Promise<boolean> {
-    if (!(await this.account.signIn())) return false;
+  hold(): Promise<boolean> {
+    this.#holder = true;
+    return this.#serial(() => this.#hold());
+  }
+
+  async #hold(): Promise<boolean> {
+    const signIn = await this.account.signIn();
+    if (!signIn) return false;
+    // A sign-in from before links had an account, or from a CLI that
+    // predates it, names the account here.
+    this.#own({ gatewayUrl: signIn.gatewayUrl, userId: signIn.user.id }, true);
     const link = this.#link ?? (await this.#openLink());
     this.#transport = Promise.resolve(link);
     this.#stopBroker ??= await serveBroker(this.options.config.home, link);
@@ -351,6 +565,14 @@ export class CloudService {
         return this.#link.openTerminal(workspaceId, session, size, events);
       },
     };
+  }
+
+  /** Stops the link and waits for the broker's socket to go. */
+  async #closeLink(): Promise<void> {
+    const stopBroker = this.#stopBroker;
+    this.#stopBroker = undefined;
+    this.close();
+    await stopBroker?.();
   }
 
   close(): void {
