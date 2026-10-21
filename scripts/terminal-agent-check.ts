@@ -1,15 +1,10 @@
-import {
-  captureTmuxPane,
-  CommandTmuxClient,
-  TmuxPtyBridge,
-} from "@daedalus/platform";
+import { CommandTmuxClient } from "@daedalus/platform";
 
 const sleep = (milliseconds: number) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 12);
 const tmux = new CommandTmuxClient(`daedalus-terminal-test-${suffix}`);
 const session = `daedalus_${suffix}`;
-const target = { socketName: tmux.socketName, session };
 const decoder = new TextDecoder();
 
 await tmux.createSession({
@@ -22,15 +17,11 @@ await tmux.createSession({
 try {
   const firstOutput: string[] = [];
   let observedBytes = 0;
-  const firstBridge = new TmuxPtyBridge(
-    (bytes) => {
-      observedBytes += bytes.byteLength;
-      if (firstOutput.join("").length < 1_000_000)
-        firstOutput.push(decoder.decode(bytes));
-    },
-    target,
-    { cols: 93, rows: 31 },
-  );
+  const firstBridge = tmux.openPty(session, { cols: 93, rows: 31 }, (bytes) => {
+    observedBytes += bytes.byteLength;
+    if (firstOutput.join("").length < 1_000_000)
+      firstOutput.push(decoder.decode(bytes));
+  });
   void firstBridge.start();
   await sleep(150);
   firstBridge.resize(93, 31);
@@ -63,14 +54,13 @@ try {
   if (!live.includes("NOISE_DONE"))
     throw new Error(`Large output was incomplete (${observedBytes} bytes)`);
 
-  const capture = decoder.decode(await captureTmuxPane(target));
+  const capture = await tmux.capture(session);
   if (!capture.includes("NOISE_DONE"))
-    throw new Error("Bounded reconnect capture missed recent output");
+    throw new Error("Reconnect capture missed recent output");
 
   const secondOutput: string[] = [];
-  const secondBridge = new TmuxPtyBridge(
-    (bytes) => secondOutput.push(decoder.decode(bytes)),
-    target,
+  const secondBridge = tmux.openPty(session, { cols: 80, rows: 24 }, (bytes) =>
+    secondOutput.push(decoder.decode(bytes)),
   );
   void secondBridge.start();
   await sleep(150);
@@ -85,7 +75,7 @@ try {
   console.log("PASS resize (31 rows x 93 columns)");
   console.log("PASS Shift+Tab escape sequence");
   console.log(`PASS noisy redraw (${observedBytes} PTY bytes observed)`);
-  console.log("PASS bounded capture and reconnect");
+  console.log("PASS capture and reconnect");
   console.log("PASS tmux remains authoritative across bridge cleanup");
 } finally {
   await tmux.stop(session, true);

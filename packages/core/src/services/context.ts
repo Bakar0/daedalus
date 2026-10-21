@@ -174,6 +174,9 @@ export async function createApplicationContext(
     () => options.onRepositoriesChanged?.(),
     (folder) => terminals.closeInside(folder),
   );
+  const accounts = new AccountService(config, repositories, undefined, (id) =>
+    agents.archive(id, true),
+  );
   const deliveryGate = new DeliveryGate(options.now);
   const sessionChannel = new SessionChannel(
     config,
@@ -190,6 +193,7 @@ export async function createApplicationContext(
     tmux,
     config,
     abilities,
+    accounts,
     sessionChannel,
     (sessionId) => {
       activity.forget(sessionId);
@@ -318,9 +322,7 @@ export async function createApplicationContext(
     notifications,
     activity,
     skills: new SkillService(config),
-    accounts: new AccountService(config, repositories, undefined, (id) =>
-      agents.archive(id, true),
-    ),
+    accounts,
     secrets,
     abilities,
     routines,

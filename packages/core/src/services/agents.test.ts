@@ -32,6 +32,16 @@ const CODEX_INSTRUCTIONS = [
 ];
 
 class FakeTmux implements TmuxClient {
+  openPty() {
+    return {
+      start: async () => {},
+      write() {},
+      resize() {},
+      close() {},
+    };
+  }
+  async pinWindowSize() {}
+  async unpinWindowSize() {}
   readonly sessions = new Set<string>();
   readonly launches: TmuxLaunch[] = [];
   readonly sent: Array<{ session: string; text: string }> = [];
@@ -549,11 +559,11 @@ describe("AgentService", () => {
       // undo that. Adding it to this list would be the regression.
       expect(tmux.launches[1]?.args).toEqual([
         "run",
-        "--settings",
-        settingsFile(session.id),
-        ...CLAUDE_INSTRUCTIONS,
         "--model",
         "claude-fable-5-1[1m]",
+        ...CLAUDE_INSTRUCTIONS,
+        "--settings",
+        settingsFile(session.id),
         "--resume",
         session.id,
       ]);
@@ -609,11 +619,11 @@ describe("AgentService", () => {
       // restore repeats the launch model as it does for an explicit one.
       expect(tmux.launches[1]?.args).toEqual([
         "run",
-        "--settings",
-        settingsFile(session.id),
-        ...CLAUDE_INSTRUCTIONS,
         "--model",
         "default",
+        ...CLAUDE_INSTRUCTIONS,
+        "--settings",
+        settingsFile(session.id),
         "--resume",
         recoveredId,
       ]);
@@ -661,6 +671,9 @@ describe("AgentService", () => {
         "tui.disable_mouse_capture=true",
         "-c",
         "check_for_update_on_startup=false",
+        // A restore can write the Daedalus home as a spawn can.
+        "--add-dir",
+        home,
         ...CODEX_INSTRUCTIONS,
       ]);
       context.close();
@@ -710,6 +723,9 @@ describe("AgentService", () => {
         "tui.disable_mouse_capture=true",
         "-c",
         "check_for_update_on_startup=false",
+        // A restore can write the Daedalus home as a spawn can.
+        "--add-dir",
+        home,
         ...CODEX_INSTRUCTIONS,
       ]);
       context.close();
