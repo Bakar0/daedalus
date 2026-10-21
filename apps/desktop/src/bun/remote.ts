@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
   type ApplicationContext,
+  confirmAnsweredWait,
   DaedalusError,
   type PhoneAlert,
   updateSettings,
@@ -1206,7 +1207,14 @@ export function agentTerminalOpener(
       status: "reconnected",
       createBridge,
       onInput: (data) => {
-        if (isTyping(data)) context.deliveryGate.noteKeystroke(agent.id);
+        if (!isTyping(data)) return;
+        context.deliveryGate.noteKeystroke(agent.id);
+        // Answering a dialog from the phone ends the wait the same way.
+        void confirmAnsweredWait({
+          tmux: context.tmux,
+          activity: context.activity,
+          agent,
+        }).catch(() => undefined);
       },
     });
     await connection.start();

@@ -4607,6 +4607,7 @@ export function WorkspaceApp({
                     <WorktreeCommits
                       client={client}
                       count={commitsAhead}
+                      landed={worktree.landed === true}
                       onOpenDiff={(target, options) =>
                         openFromPanel({ ...options, diff: target })
                       }

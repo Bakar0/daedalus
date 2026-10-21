@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import {
   admitsActivityWrite,
   heartbeatDue,
+  nextToolUseId,
   type ActivityOutcome,
 } from "./activity";
 import {
@@ -257,14 +258,17 @@ async function applyObservation(input: {
     admitsActivityWrite(prior, observation, Date.now())
   ) {
     const now = new Date().toISOString();
+    const detail = observation.detail ?? null;
+    const toolUseId = nextToolUseId(prior, { ...observation, detail });
     const record: StoredActivityRecord = {
       sessionId,
       activity: observation.activity,
-      detail: observation.detail ?? null,
+      detail,
       since: now,
       observedAt: now,
       source: observation.source,
       ...binding,
+      ...(toolUseId ? { toolUseId } : {}),
     };
     written = await writeActivityRecord(home, record).then(
       () => record,

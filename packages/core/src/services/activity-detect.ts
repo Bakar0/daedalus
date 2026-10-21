@@ -1,11 +1,12 @@
 import type { DaedalusConfig } from "../config";
 import { accountConfig } from "./account-homes";
-import type { AgentSession } from "../domain";
+import { isAttentionActivity, type AgentSession } from "../domain";
 import type { TmuxClient } from "@daedalus/platform";
 import type { SqliteRepositories } from "../repositories";
 import type { ActivityService } from "./activity";
 import { recoverCodexSessionId } from "./agents";
 import {
+  observeAnsweredDialog,
   observeClaudePane,
   observeClaudeTranscript,
   observeCodexRollout,
@@ -122,6 +123,66 @@ export async function detectClaudePaneActivity(
     return observeClaudePane(await tmux.capture(agent.tmuxSession));
   } catch {
     return undefined;
+  }
+}
+
+/** Sessions whose screen is being read for an answer; one read at a time. */
+const answering = new Set<string>();
+
+/**
+ * When to read the screen after a keystroke, in milliseconds from the last
+ * read. Claude redraws within a frame or two; the later reads cover a loaded
+ * machine.
+ */
+const ANSWER_READS_MS = [300, 700, 1_500];
+
+/**
+ * Called on the user's keystroke in a Claude session's terminal. While a hook
+ * has the session waiting on the user, it reads the screen and ends the wait
+ * once the dialog is gone.
+ *
+ * Approving a permission fires no hook until the approved call finishes, so
+ * without this a long command kept "needs permission" up the whole time it
+ * ran. The keystroke is only what prompts the read; the screen decides, since
+ * a digit means "Yes" in one dialog and "No" in another, and an arrow key
+ * answers nothing. A reading the agent raised itself is left to the agent.
+ */
+export async function confirmAnsweredWait(input: {
+  tmux: Pick<TmuxClient, "capture">;
+  activity: ActivityService;
+  agent: AgentSession;
+  readsMs?: readonly number[];
+}): Promise<boolean> {
+  const { agent } = input;
+  if (agent.kind !== "agent" || agent.provider !== "claude") return false;
+  const waiting = input.activity.get(agent.id);
+  if (
+    !waiting ||
+    !isAttentionActivity(waiting.activity) ||
+    waiting.source !== "hook" ||
+    answering.has(agent.id)
+  )
+    return false;
+  answering.add(agent.id);
+  try {
+    for (const delay of input.readsMs ?? ANSWER_READS_MS) {
+      await Bun.sleep(delay);
+      const screen = await input.tmux
+        .capture(agent.tmuxSession)
+        .catch(() => undefined);
+      if (screen === undefined) return false;
+      const answered = observeAnsweredDialog(screen);
+      if (!answered) continue;
+      return await input.activity.resolveWait({
+        sessionId: agent.id,
+        since: waiting.since,
+        activity: answered.activity === "idle" ? "idle" : "working",
+        ...(answered.detail ? { detail: answered.detail } : {}),
+      });
+    }
+    return false;
+  } finally {
+    answering.delete(agent.id);
   }
 }
 
