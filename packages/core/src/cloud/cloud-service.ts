@@ -464,6 +464,7 @@ export class CloudService {
   }
 
   async #openLink(): Promise<CloudLink> {
+    const before = this.#link;
     const signIn = await this.account.requireSignIn();
     const calls = new CloudCalls({
       repositories: this.options.repositories,
@@ -480,6 +481,17 @@ export class CloudService {
       ...(this.options.log ? { log: this.options.log } : {}),
     });
     await link.start();
+    // A sign-out, another sign-in or the app's hold may have run during the
+    // awaits above. This link is then the wrong one, and must not stay up.
+    const current = await this.account.signIn();
+    if (current?.token !== signIn.token || this.#link !== before) {
+      link.stop();
+      if (current?.token === signIn.token && this.#link) return this.#link;
+      throw new DaedalusError(
+        "DEPENDENCY",
+        "The cloud sign-in changed while connecting; try again",
+      );
+    }
     this.#link = link;
     return link;
   }
@@ -513,7 +525,17 @@ export class CloudService {
   }
 
   #lazyTransport(): RunnerTransport {
-    const transport = () => {
+    const transport = async (): Promise<RunnerTransport> => {
+      // In the app, the link is the one hold opens: wait for that rather
+      // than open a second one beside it.
+      if (this.#holder) {
+        await this.#queue;
+        if (this.#link) return this.#link;
+        throw new DaedalusError(
+          "DEPENDENCY",
+          "This Mac is not connected to a cloud gateway; sign in in Settings › Cloud",
+        );
+      }
       this.#transport ??= (async () =>
         (await brokerAvailable(this.options.config.home))
           ? new BrokerTransport(this.options.config.home)
