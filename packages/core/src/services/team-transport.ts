@@ -3,8 +3,9 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { runCommand, type CommandResult } from "@daedalus/platform";
 import type { DaedalusConfig } from "../config";
-import type { AgentSession } from "../domain";
+import type { AgentActivityState, AgentSession } from "../domain";
 import { accountConfig, accountEnvironment } from "./account-homes";
+import type { SessionChannel } from "./session-channel";
 
 /** One delivery of team chat messages into a member's or the lead's session. */
 export interface TeamDelivery {
@@ -20,6 +21,37 @@ export interface TeamDelivery {
  */
 export interface TeamTransport {
   deliver(delivery: TeamDelivery): Promise<void>;
+}
+
+/**
+ * A session on a cloud host has no inbox on this Mac: its Claude runs in a
+ * pod. Its messages are typed into its pane through its host, only while it
+ * waits at its prompt with an empty input box. A held delivery throws, so the
+ * cursor moves back and the next flush, from the session's own hooks, tries
+ * again. Every other session goes through `local`.
+ */
+export class HostTeamTransport implements TeamTransport {
+  constructor(
+    private readonly local: TeamTransport,
+    private readonly channel: SessionChannel,
+    private readonly activity: (
+      sessionId: string,
+    ) => AgentActivityState | undefined,
+  ) {}
+
+  async deliver(delivery: TeamDelivery): Promise<void> {
+    const { session } = delivery;
+    if (!session.hostId) return this.local.deliver(delivery);
+    const outcome = await this.channel.deliver(session, delivery.text, {
+      when: "at-prompt",
+      activity: this.activity(session.id),
+    });
+    if (outcome.kind === "held") throw new Error(outcome.held.text);
+    if (outcome.kind === "settling")
+      throw new Error(
+        "the last line typed into the session has not landed yet",
+      );
+  }
 }
 
 /** How long a socket write or `codex queue` may take before it counts as failed. */

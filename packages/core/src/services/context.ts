@@ -38,7 +38,11 @@ import { SessionHosts } from "./session-hosts";
 import { TaskHistoryService } from "./task-history";
 import { forgetSessionFolders } from "./folder-trust";
 import { TaskService } from "./tasks";
-import { ProviderTeamTransport, type TeamTransport } from "./team-transport";
+import {
+  HostTeamTransport,
+  ProviderTeamTransport,
+  type TeamTransport,
+} from "./team-transport";
 import { TeamService } from "./teams";
 import { TelemetryService } from "./telemetry";
 import { WorkspaceService } from "./workspaces";
@@ -295,10 +299,14 @@ export async function createApplicationContext(
     repositories,
     abilities,
     agents,
-    options.teamTransport ??
-      new ProviderTeamTransport(config, (session) =>
-        agents.codexExecutable(session),
-      ),
+    new HostTeamTransport(
+      options.teamTransport ??
+        new ProviderTeamTransport(config, (session) =>
+          agents.codexExecutable(session),
+        ),
+      sessionChannel,
+      (sessionId) => activity.get(sessionId),
+    ),
     options.now,
     activity,
   );

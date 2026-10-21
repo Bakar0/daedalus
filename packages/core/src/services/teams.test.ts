@@ -8,6 +8,7 @@ import type { TmuxClient, TmuxLaunch } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
   claudeInboxLine,
+  cloudHostId,
   codexQueueArgs,
   createApplicationContext,
   findClaudeInbox,
@@ -17,6 +18,10 @@ import {
   teamHandleBase,
   type AgentSession,
   type ApplicationContext,
+  type SessionCheckpoint,
+  type SessionHost,
+  type SessionHostLaunch,
+  type SessionTerminal,
   type TeamDelivery,
   type TeamTransport,
 } from "../index";
@@ -63,6 +68,49 @@ class FakeTmux implements TmuxClient {
   async killServer() {
     this.sessions.clear();
     return true;
+  }
+}
+
+/** A workspace's pod, with Claude waiting at an empty prompt. */
+class FakeCloudHost implements SessionHost {
+  readonly kind = "cloud" as const;
+  readonly sessions = new Set<string>();
+  readonly sent: string[] = [];
+  screen =
+    "Claude Code v2.1.251\n────────────────\n❯ \n  ⏵⏵ auto mode on (shift+tab to cycle)";
+
+  constructor(readonly id: string) {}
+
+  async probe() {
+    return undefined;
+  }
+  async start(launch: SessionHostLaunch) {
+    this.sessions.add(launch.session);
+  }
+  async isLive(session: string) {
+    return this.sessions.has(session);
+  }
+  async listLive() {
+    return [...this.sessions];
+  }
+  async capture() {
+    return this.screen;
+  }
+  async sendKeys() {}
+  async send(_session: string, text: string) {
+    this.sent.push(text);
+  }
+  async stop(session: string) {
+    this.sessions.delete(session);
+  }
+  async openTerminal(): Promise<SessionTerminal> {
+    throw new Error("not in this test");
+  }
+  async exportCheckpoint(): Promise<SessionCheckpoint> {
+    throw new Error("not in this test");
+  }
+  async importCheckpoint(): Promise<{ workingDirectory: string }> {
+    throw new Error("not in this test");
   }
 }
 
@@ -148,6 +196,42 @@ async function lead(context: ApplicationContext) {
 }
 
 describe("teams", () => {
+  test("a member in a cloud workspace's pod gets team messages typed in through its host", async () => {
+    await withTeams(async ({ context, transport }) => {
+      const { team } = await lead(context);
+      const cloudId = crypto.randomUUID();
+      context.repositories.linkCloudWorkspace("shop", cloudId);
+      const host = new FakeCloudHost(cloudHostId(cloudId));
+      context.hosts.register(host);
+      const { session, handle } = await context.teams.spawnMember({
+        team: team.id,
+        addedBy: "user",
+        name: "pod worker",
+        host: host.id,
+      });
+      expect(session.hostId).toBe(host.id);
+      // Busy: nothing is typed, and the message waits for the next flush.
+      host.screen = "✻ Working… (esc to interrupt)";
+      const busy = await context.teams.say({
+        team: team.id,
+        author: "user",
+        body: `@${handle} first`,
+      });
+      expect(busy.deliveries).toEqual([
+        expect.objectContaining({ handle, delivered: false }),
+      ]);
+      expect(host.sent).toEqual([]);
+      host.screen = new FakeCloudHost("x").screen;
+      await context.teams.flushSession(session.id);
+      expect(host.sent).toHaveLength(1);
+      expect(host.sent[0]).toContain(
+        `[team "Checkout API"] user: @${handle} first`,
+      );
+      // Nothing went to this Mac's inbox for it.
+      expect(transport.to(session)).toEqual([]);
+    });
+  });
+
   test("a lead is told at launch and accepts messages from other sessions", async () => {
     await withTeams(async ({ context, tmux }) => {
       const { session, team } = await lead(context);

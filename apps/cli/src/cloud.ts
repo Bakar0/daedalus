@@ -18,6 +18,7 @@ export const cloudHelp = `Cloud workspace commands:
   daedal cloud wake <workspace>
   daedal cloud delete <workspace> --force
   daedal cloud spawn <workspace> [--terminal] [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>]
+  daedal cloud spawn <workspace> --team <lead> [--task <task-ref>] [--name <name>] [--model <model>] [--message <instructions>]
 
 A cloud workspace is a local workspace with a pod of its own on a Daedalus
 gateway: sessions run there, and this Mac keeps the board, the database and
@@ -26,6 +27,8 @@ gateway installed with gateway.devLogin offers.
 
 'create' makes the pod for a local workspace, under the same id. 'spawn'
 starts Claude in the workspace root of the pod, or a shell with --terminal.
+With --team it starts Claude as a member of that lead's team, which must lead
+from the same workspace; team messages are typed into it at its prompt.
 Its hooks and its 'daedal' calls come back to this Mac, which runs only the
 commands a session needs to report on itself and work its own workspace's
 tasks.
@@ -176,14 +179,19 @@ export async function cloudCommand(
   if (action === "spawn") {
     const parsed = parseArguments(
       args,
-      ["task", "name", "model", "message"],
+      ["task", "name", "model", "message", "team"],
       ["terminal"],
     );
     expectPositionals(
       parsed.positionals,
       1,
-      "daedal cloud spawn <workspace> [--terminal] [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>]",
+      "daedal cloud spawn <workspace> [--terminal | --team <lead>] [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>]",
     );
+    if (parsed.values.team && parsed.flags.has("terminal"))
+      throw new DaedalusError(
+        "VALIDATION",
+        "A team member runs Claude; leave out --terminal",
+      );
     const workspace = await context.workspaces.getActive(
       parsed.positionals[0]!,
     );
@@ -196,6 +204,31 @@ export async function cloudCommand(
     const task = parsed.values.task
       ? context.tasks.get(parsed.values.task)
       : undefined;
+    if (parsed.values.team) {
+      const team = context.teams.get(parsed.values.team);
+      if (team.lead.workspaceId !== workspace.id)
+        throw new DaedalusError(
+          "VALIDATION",
+          `Members start in the lead's workspace, '${team.lead.workspaceId}'`,
+        );
+      const result = await context.teams.spawnMember({
+        team: team.id,
+        addedBy: "user",
+        host: cloudHostId(cloudId),
+        ...(task ? { taskId: task.id } : {}),
+        ...(parsed.values.name ? { name: parsed.values.name } : {}),
+        ...(parsed.values.model ? { model: parsed.values.model } : {}),
+        ...(parsed.values.message
+          ? { instructions: parsed.values.message }
+          : {}),
+      });
+      printResult({ ...result.session, teamHandle: result.handle }, json, () =>
+        console.log(
+          `${result.session.id}\t${result.session.name}\t${result.session.status}\t@${result.handle}`,
+        ),
+      );
+      return 0;
+    }
     const session = await context.agents.spawn({
       workspace: workspace.id,
       host: cloudHostId(cloudId),
