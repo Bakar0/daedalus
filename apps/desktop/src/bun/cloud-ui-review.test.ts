@@ -145,3 +145,62 @@ test("R-1: another gateway does not inherit the old account's cloud workspace li
     }
   });
 });
+
+/**
+ * Re-check of R-2: a link the lazy transport opens (a revive or a reconcile
+ * reaching a cloud host before the app's hold) runs outside the queue, so a
+ * sign-out while it opens leaves it running with the old token.
+ */
+test("R-2b: a link the lazy transport is opening does not outlive sign-out", async () => {
+  await withTemporaryDaedalusHome(async (home) => {
+    const opened: Array<{ token: string; closed: boolean }> = [];
+    const identityReady = Promise.withResolvers<void>();
+    const context = await createApplicationContext({
+      env: { ...process.env, DAEDALUS_HOME: home },
+      tmux: new NoTmux(),
+      cloud: {
+        fetch: fakeFetch,
+        account: new CloudAccount(home, memoryVault()),
+        identity: async () => {
+          await identityReady.promise;
+          return {
+            id: "mac-1",
+            publicKey: "mac-public",
+            secretKey: "mac-secret",
+          };
+        },
+        connect: (_url, token) => {
+          const socket = { token, closed: false };
+          opened.push(socket);
+          return {
+            send() {},
+            close() {
+              socket.closed = true;
+            },
+          };
+        },
+      },
+    });
+    try {
+      const rpc = createDesktopRequestHandlers(context);
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://localhost:8080",
+        email: "alice@example.com",
+      });
+      const workspace = await context.workspaces.create({ name: "Pods" });
+      const cloudId = crypto.randomUUID();
+      context.repositories.linkCloudWorkspace(workspace.id, cloudId);
+      const host = context.hosts.find(`ws:${cloudId}`);
+      expect(host).toBeDefined();
+      // A revive asks the host; the lazy transport starts opening a link.
+      void host!.listLive().catch(() => undefined);
+      await Bun.sleep(50);
+      expect((await rpc.cloudSignOut({})).ok).toBe(true);
+      identityReady.resolve();
+      await Bun.sleep(200);
+      expect(opened.filter((socket) => !socket.closed)).toEqual([]);
+    } finally {
+      context.close();
+    }
+  });
+});
