@@ -1,4 +1,5 @@
-import { mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { writeFileAtomic } from "@daedalus/platform";
+import { realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   admitsActivityWrite,
@@ -313,31 +314,19 @@ export async function ingestStatusLine(input: {
       cost?: { total_cost_usd?: unknown };
     };
     const costUsd = payload.cost?.total_cost_usd;
-    const directory = join(home, "telemetry");
-    await mkdir(directory, { recursive: true });
-    const destination = join(directory, `${sessionId}.json`);
-    const temporary = join(
-      directory,
-      `${sessionId}.${crypto.randomUUID()}.tmp`,
+    await writeFileAtomic(
+      join(home, "telemetry", `${sessionId}.json`),
+      JSON.stringify({
+        observedAt: new Date().toISOString(),
+        model: payload.model,
+        context_window: payload.context_window,
+        rate_limits: payload.rate_limits,
+        ...(typeof costUsd === "number"
+          ? { cost: { total_cost_usd: costUsd } }
+          : {}),
+      }),
+      { mode: 0o600, ensureDir: true },
     );
-    try {
-      await writeFile(
-        temporary,
-        JSON.stringify({
-          observedAt: new Date().toISOString(),
-          model: payload.model,
-          context_window: payload.context_window,
-          rate_limits: payload.rate_limits,
-          ...(typeof costUsd === "number"
-            ? { cost: { total_cost_usd: costUsd } }
-            : {}),
-        }),
-        { flag: "wx", mode: 0o600 },
-      );
-      await rename(temporary, destination);
-    } finally {
-      await rm(temporary, { force: true });
-    }
     if (typeof costUsd === "number")
       await recordSessionCost(home, sessionId, costUsd);
   } catch {
