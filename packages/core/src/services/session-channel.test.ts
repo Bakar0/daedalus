@@ -22,6 +22,16 @@ const IDLE_SCREEN = [
 ].join("\n");
 
 class FakeTmux implements TmuxClient {
+  openPty() {
+    return {
+      start: async () => {},
+      write() {},
+      resize() {},
+      close() {},
+    };
+  }
+  async pinWindowSize() {}
+  async unpinWindowSize() {}
   readonly sessions = new Set<string>();
   readonly sent: Array<{ session: string; text: string }> = [];
   readonly keys: Array<{ session: string; keys: string[] }> = [];
