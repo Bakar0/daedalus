@@ -190,11 +190,10 @@ export async function createApplicationContext(
   const deliveryGate = new DeliveryGate(options.now);
   const sessionChannel = new SessionChannel(
     config,
-    tmux,
+    hosts,
     deliveryGate,
     options.now,
     options.sessionInbox,
-    (session) => hosts.get(session.hostId),
   );
   agents = new AgentService(
     repositories,

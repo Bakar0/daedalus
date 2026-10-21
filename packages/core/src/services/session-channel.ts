@@ -1,4 +1,3 @@
-import type { TmuxClient } from "@daedalus/platform";
 import type { DaedalusConfig } from "../config";
 import type { AgentActivityState, AgentSession } from "../domain";
 import { DaedalusError } from "../errors";
@@ -6,9 +5,7 @@ import type { DeliveryGate, DeliveryHold } from "./delivery";
 import { buildSkillInvocation } from "./providers";
 import { leaveInInbox, postToInbox, usesInbox } from "./session-inbox";
 import { requireSkill } from "./installed-skills";
-
-/** What the channel needs of the pane it types in. */
-export type SessionPane = Pick<TmuxClient, "capture" | "send" | "sendKeys">;
+import type { SessionHosts } from "./session-hosts";
 
 /** Between two lines delivered into one session, at least this long. */
 const DELIVERY_GAP_MS = 15_000;
@@ -91,7 +88,8 @@ export class SessionChannel {
 
   constructor(
     private readonly config: DaedalusConfig,
-    private readonly tmux: TmuxClient,
+    /** Where each session runs: its host reads and types in its pane. */
+    private readonly hosts: SessionHosts,
     /** Keystrokes per session, and the rule for typing into one. */
     private readonly gate: DeliveryGate,
     private readonly now: () => Date = () => new Date(),
@@ -101,12 +99,6 @@ export class SessionChannel {
       line: string,
     ) => Promise<boolean> = (session, line) =>
       postToInbox(config, session.id, line),
-    /**
-     * The pane a session is read and typed in. This Mac's tmux, unless the
-     * session runs on another host, such as a cloud workspace's pod.
-     */
-    private readonly paneOf: (session: AgentSession) => SessionPane = () =>
-      tmux,
   ) {}
 
   deliver(
@@ -132,9 +124,7 @@ export class SessionChannel {
     if (options.when === "now") return this.type(session, line, options.skill);
     const { activity } = options;
     if (!this.settled(session.id, activity)) return { kind: "settling" };
-    const screen = await this.paneOf(session)
-      .capture(session.tmuxSession, { styled: true })
-      .catch(() => "");
+    const screen = await this.screen(session);
     const hold = this.gate.check({ session, activity, screen, untyped: inbox });
     if (hold) return held(hold);
     if (inbox && options.mustArrive) {
@@ -154,6 +144,17 @@ export class SessionChannel {
     this.lastDelivered.set(session.id, this.now().getTime());
     this.gate.delivered(session.id);
     return DELIVERED;
+  }
+
+  /** The pane as the gate reads it; one that cannot be read is empty. */
+  private async screen(session: AgentSession): Promise<string> {
+    try {
+      return await this.hosts
+        .get(session.hostId)
+        .capture(session.tmuxSession, { styled: true });
+    } catch {
+      return "";
+    }
   }
 
   /**
@@ -202,7 +203,9 @@ export class SessionChannel {
     if (session.status !== "running")
       return held({ reason: "stopped", text: "the session is not running" });
     if (!skill) {
-      await this.paneOf(session).send(session.tmuxSession, await resolve(line));
+      await this.hosts
+        .get(session.hostId)
+        .send(session.tmuxSession, await resolve(line));
       return DELIVERED;
     }
     let skillName: string;
@@ -217,16 +220,20 @@ export class SessionChannel {
     // checked first, so a missing one is a hold rather than a throw.
     await resolve(line);
     const provider = session.provider as "claude" | "codex";
-    await this.paneOf(session).send(
-      session.tmuxSession,
-      buildSkillInvocation(provider, skillName, skill.args ?? ""),
-    );
+    await this.hosts
+      .get(session.hostId)
+      .send(
+        session.tmuxSession,
+        buildSkillInvocation(provider, skillName, skill.args ?? ""),
+      );
     // In Codex, `$name` opens the skill mention popup, and the first Enter
     // only picks the skill from it. The second one submits. On an empty
     // composer an Enter does nothing, so this is safe if the popup changes.
     if (provider === "codex") {
       await Bun.sleep(CODEX_MENTION_SETTLE_MS);
-      await this.paneOf(session).sendKeys(session.tmuxSession, ["Enter"]);
+      await this.hosts
+        .get(session.hostId)
+        .sendKeys(session.tmuxSession, ["Enter"]);
     }
     return DELIVERED;
   }
