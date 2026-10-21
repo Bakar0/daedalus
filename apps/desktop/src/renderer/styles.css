@@ -819,11 +819,20 @@ button:not(
   /* Room for the … menu, the one action always showing. */
   padding-right: 26px;
 }
+/* With the revive button too, the whole title row keeps clear of both, so
+   a badge after the name (Cloud, an account) cannot run under them. */
 .workspace-sessions
   .session-card:has([aria-label^="Revive"])
   .session-card-main
-  strong {
+  .session-card-title {
   padding-right: 50px;
+}
+.workspace-sessions
+  .session-card:has([aria-label^="Revive"])
+  .session-card-main
+  .session-card-title
+  > strong {
+  padding-right: 0;
 }
 /* Clear sits on the status row where its dot was: the dot, then "Clear",
    in one pill. The row's own dot steps aside and its text starts after. */
