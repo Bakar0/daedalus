@@ -43,19 +43,30 @@ export async function writeKeychainPassword(
     );
 }
 
-/** Removes a password from the login Keychain; a missing item is not an error. */
+/** `security`'s exit code for an item that is not there. */
+const ITEM_NOT_FOUND = 44;
+
+/**
+ * Removes a password from the login Keychain; a missing item is not an
+ * error. Any other failure (a locked Keychain, a denied prompt) throws, so a
+ * caller never reports a secret gone that is still there.
+ */
 export async function deleteKeychainPassword(
   service: string,
   account: string,
   run: typeof runCommand = runCommand,
 ): Promise<void> {
-  await run(
+  const result = await run(
     SECURITY,
     ["delete-generic-password", "-s", service, "-a", account],
     {
       timeoutMs: 10_000,
     },
   );
+  if (result.exitCode !== 0 && result.exitCode !== ITEM_NOT_FOUND)
+    throw new Error(
+      result.stderr.trim() || "The Keychain did not remove the password",
+    );
 }
 
 /** Whether the login Keychain holds a password for this service and account. */

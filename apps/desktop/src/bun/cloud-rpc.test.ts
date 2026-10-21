@@ -538,4 +538,39 @@ describe("cloud RPC", () => {
       expect(relay.open()).toEqual([]);
     });
   });
+
+  test("a token the Keychain keeps makes sign-out an error, still signed in", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const gateway = new FakeGateway();
+      const vault = memoryVault();
+      const context = await createApplicationContext({
+        env: { ...process.env, DAEDALUS_HOME: home },
+        tmux: new NoTmux(),
+        cloud: {
+          fetch: gateway.fetch,
+          account: new CloudAccount(home, {
+            ...vault,
+            remove: async () => {
+              throw new Error("User interaction is not allowed.");
+            },
+          }),
+        },
+      });
+      try {
+        const rpc = createDesktopRequestHandlers(context);
+        await rpc.cloudSignIn({
+          gatewayUrl: "http://localhost:8080",
+          email: "dev@example.com",
+        });
+        const out = await rpc.cloudSignOut({});
+        expect(!out.ok && out.error.message).toBe(
+          "The cloud token could not be removed from the Keychain: User interaction is not allowed.",
+        );
+        const state = await rpc.cloudState({});
+        expect(state.ok && state.data.signedIn).toBe(true);
+      } finally {
+        context.close();
+      }
+    });
+  });
 });

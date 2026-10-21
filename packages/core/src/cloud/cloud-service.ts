@@ -273,8 +273,10 @@ export class CloudService {
   }
 
   async #logout(): Promise<void> {
-    await this.#closeLink();
+    // The token goes first: if the Keychain keeps it, the Mac stays signed
+    // in, link and all, rather than reading as signed out.
     await this.account.forget();
+    await this.#closeLink();
     this.options.repositories.setCloudOwner(undefined);
     for (const host of this.options.hosts.cloud())
       this.options.hosts.unregister(host.id);
