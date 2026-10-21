@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { join } from "node:path";
+import { homedir } from "node:os";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { loadConfig, updateSettings } from "../config";
 import { chmod, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
@@ -12,6 +13,7 @@ import {
   daedalusInstructionArgs,
   ensureCodexHooks,
   isValidModelName,
+  type LaunchInput,
   modelArgument,
   parseClaudeModelCatalog,
   permissionModeArgs,
@@ -848,6 +850,97 @@ describe("ensureCodexHooks and the user's skill settings", () => {
       expect(await Bun.file(join(home, "codex", "config.toml")).exists()).toBe(
         false,
       );
+    });
+  });
+});
+
+describe("buildLaunch on a cloud host", () => {
+  const cloud = async (home: string, input: Partial<LaunchInput> = {}) => {
+    const config = await loadConfig({
+      DAEDALUS_HOME: home,
+      CLAUDE_CONFIG_DIR: join(home, "claude"),
+    });
+    return resolveProvider(config, { provider: "claude" }).adapter.buildLaunch({
+      target: "cloud",
+      sessionId: "s1",
+      sessionName: "Build",
+      prompt: "Hello",
+      ...input,
+    });
+  };
+  const settingsOf = (args: string[]) =>
+    JSON.parse(args[args.indexOf("--settings") + 1]!) as {
+      statusLine?: unknown;
+      tui?: string;
+      hooks: Record<string, unknown>;
+    };
+
+  test("runs the pod's claude with its settings inline", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const launch = await cloud(home);
+      expect(launch.executable).toBe("claude");
+      expect(launch.providerSessionId).toBe("s1");
+      expect(launch.args).toContain("--append-system-prompt");
+      expect(launch.args.slice(-5)).toEqual([
+        "--session-id",
+        "s1",
+        "--name",
+        "Build",
+        "Hello",
+      ]);
+      expect(launch.args[launch.args.indexOf("--permission-mode") + 1]).toBe(
+        "auto",
+      );
+      const settings = settingsOf(launch.args);
+      expect(settings.tui).toBe("fullscreen");
+      // The status line reads files in the pod by their names, and the inbox
+      // is a pipe on this Mac.
+      expect(settings.statusLine).toBeUndefined();
+      expect(JSON.stringify(settings.hooks)).not.toContain("daedalus-inbox");
+      expect(JSON.stringify(settings.hooks)).toContain('"command":"daedal"');
+    });
+  });
+
+  test("names no path on this Mac", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { args } = await cloud(home, { acceptPeerMessages: true });
+      expect(args.join(" ")).not.toContain(home);
+      expect(args.join(" ")).not.toContain(homedir());
+    });
+  });
+
+  test("a resume carries on the conversation and keeps the session's permission mode", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const resume = {
+        nativeId: "c1",
+        startedAt: new Date().toISOString(),
+        archived: false,
+        workingDirectory: ".",
+        env: {},
+      };
+      const launch = await cloud(home, { resume });
+      expect(launch.args.slice(-2)).toEqual(["--resume", "c1"]);
+      expect(launch.args).not.toContain("--session-id");
+      expect(launch.args).not.toContain("Hello");
+      expect(launch.args).not.toContain("--permission-mode");
+      expect(launch.providerSessionId).toBe("c1");
+      await expect(
+        cloud(home, { resume: { ...resume, nativeId: undefined } }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+  });
+
+  test("runs nothing but Claude", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await loadConfig({
+        DAEDALUS_HOME: home,
+        CODEX_HOME: join(home, "codex"),
+      });
+      await expect(
+        resolveProvider(config, { provider: "codex" }).adapter.buildLaunch({
+          target: "cloud",
+        }),
+      ).rejects.toMatchObject({ code: "VALIDATION" });
     });
   });
 });

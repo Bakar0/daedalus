@@ -28,6 +28,14 @@ import {
   parseClaudeSettingsArgument,
   renderCodexHookBlock,
 } from "./hook-install";
+import { CLOUD_CLAUDE, CLOUD_DAEDAL } from "./cloud-launch";
+
+/**
+ * Where a session runs: on this Mac, or in its workspace's pod. Every path a
+ * local launch puts in the arguments is a path on this Mac, which the pod
+ * does not have, so a cloud launch builds its own.
+ */
+export type LaunchTarget = "local" | "cloud";
 
 export interface LaunchInput {
   prompt?: string;
@@ -40,6 +48,8 @@ export interface LaunchInput {
   acceptPeerMessages?: boolean;
   /** Carry on an existing conversation rather than start a new one. */
   resume?: ResumeInput;
+  /** Where the session runs. A launch is local unless it says otherwise. */
+  target?: LaunchTarget;
 }
 
 /** The conversation a relaunched session carries on. */
@@ -804,6 +814,7 @@ class ConfiguredProvider implements AgentProvider {
   }
 
   async buildLaunch(input: LaunchInput): Promise<ProviderLaunch> {
+    if (input.target === "cloud") return this.cloudLaunch(input);
     const args = [...this.definition.args];
     const env: Record<string, string> = {};
     let providerSessionId: string | undefined;
@@ -885,6 +896,56 @@ class ConfiguredProvider implements AgentProvider {
       args,
       env,
       providerSessionId,
+    };
+  }
+
+  /**
+   * Claude in a workspace's pod. Stage 0 runs nothing else there. Nothing
+   * here reads this Mac's provider folders or writes a file for the session,
+   * and the configured arguments and executable are this Mac's: the pod runs
+   * the `claude` on its PATH with the settings inline.
+   */
+  private cloudLaunch(input: LaunchInput): ProviderLaunch {
+    if (this.name !== "claude" || !this.promptArgument)
+      throw new DaedalusError("VALIDATION", "A cloud session runs Claude");
+    const model = input.model?.trim();
+    if (model && !isValidModelName(model))
+      throw new DaedalusError("VALIDATION", "Model name is invalid");
+    if (input.resume && !input.resume.nativeId)
+      throw new DaedalusError(
+        "CONFLICT",
+        "This session predates native resume support and cannot be resumed safely",
+      );
+    // The status line runs `daedal agent telemetry`, which reads files named
+    // in its input. Those names are paths in the pod, so it is left out, and
+    // no inbox hook either: the inbox is a pipe on this Mac.
+    const { statusLine: _statusLine, ...settings } = daedalusClaudeSettings(
+      CLOUD_DAEDAL,
+      input.sessionId,
+      { acceptPeerMessages: input.acceptPeerMessages },
+    );
+    const args = [
+      "--settings",
+      JSON.stringify({ ...settings, tui: CLAUDE_DEFAULT_RENDERER }),
+      "--append-system-prompt",
+      DAEDALUS_STATUS_INSTRUCTIONS,
+      // Never on a resume: see `permissionModeArgs`.
+      ...(input.resume
+        ? []
+        : permissionModeArgs(this.name, this.definition.permissionMode)),
+      ...(model ? ["--model", model] : []),
+    ];
+    if (input.resume) args.push("--resume", input.resume.nativeId!);
+    else if (input.sessionId) {
+      args.push("--session-id", input.sessionId);
+      if (input.sessionName) args.push("--name", input.sessionName);
+    }
+    if (input.prompt && !input.resume) args.push(input.prompt);
+    return {
+      executable: CLOUD_CLAUDE,
+      args,
+      env: {},
+      providerSessionId: input.resume?.nativeId ?? input.sessionId,
     };
   }
 

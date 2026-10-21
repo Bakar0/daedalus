@@ -1,13 +1,3 @@
-import type { DaedalusConfig } from "../config";
-import { DaedalusError } from "../errors";
-import { daedalusClaudeSettings } from "./hook-install";
-import {
-  CLAUDE_DEFAULT_RENDERER,
-  DAEDALUS_STATUS_INSTRUCTIONS,
-  isValidModelName,
-  permissionModeArgs,
-} from "./providers";
-
 /**
  * How a session on a cloud host is launched. Stage 0 runs Claude or a login
  * shell in the root of the workspace's pod. Nothing here reads this Mac's
@@ -37,48 +27,6 @@ export const CLOUD_SHELL = "bash";
  * session's terminal, and the login stays on the workspace volume.
  */
 export const CLOUD_LAUNCH_SECRETS = ["ANTHROPIC_API_KEY"] as const;
-
-export function cloudClaudeArgs(
-  config: DaedalusConfig,
-  input: {
-    sessionId: string;
-    sessionName: string;
-    model?: string;
-    prompt?: string;
-    acceptPeerMessages?: boolean;
-    /** The conversation to resume instead of starting one. */
-    resume?: string;
-  },
-): string[] {
-  // The status line runs `daedal agent telemetry`, which reads files named
-  // in its input. Those names are paths in the pod, so it is left out, and
-  // no inbox hook either: the inbox is a pipe on this Mac.
-  const { statusLine: _statusLine, ...settings } = daedalusClaudeSettings(
-    CLOUD_DAEDAL,
-    input.sessionId,
-    { acceptPeerMessages: input.acceptPeerMessages },
-  );
-  const model = input.model?.trim();
-  if (model && !isValidModelName(model))
-    throw new DaedalusError("VALIDATION", "Model name is invalid");
-  return [
-    "--settings",
-    JSON.stringify({ ...settings, tui: CLAUDE_DEFAULT_RENDERER }),
-    "--append-system-prompt",
-    DAEDALUS_STATUS_INSTRUCTIONS,
-    ...permissionModeArgs("claude", config.agents.claude?.permissionMode),
-    ...(model ? ["--model", model] : []),
-    ...(input.resume
-      ? ["--resume", input.resume]
-      : [
-          "--session-id",
-          input.sessionId,
-          "--name",
-          input.sessionName,
-          ...(input.prompt ? [input.prompt] : []),
-        ]),
-  ];
-}
 
 /**
  * The environment of a cloud session. The runner sets PATH, HOME and the

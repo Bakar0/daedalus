@@ -1,10 +1,8 @@
 import type { SessionHost } from "./session-host";
 import type { SessionHosts } from "./session-hosts";
 import {
-  cloudClaudeArgs,
   cloudEnvironment,
   cloudHostId,
-  CLOUD_CLAUDE,
   CLOUD_SHELL,
   CLOUD_WORKING_DIRECTORY,
 } from "./cloud-launch";
@@ -837,10 +835,12 @@ export class AgentService {
       mode: "execute",
       note: input.note,
     });
-    const executable = input.terminal ? CLOUD_SHELL : CLOUD_CLAUDE;
-    const args = input.terminal
-      ? ["-l"]
-      : cloudClaudeArgs(this.config, {
+    const { executable, args } = input.terminal
+      ? { executable: CLOUD_SHELL, args: ["-l"] }
+      : await resolveProvider(this.config, {
+          provider: "claude",
+        }).adapter.buildLaunch({
+          target: "cloud",
           sessionId: id,
           sessionName: name,
           model: input.model,
@@ -957,15 +957,26 @@ export class AgentService {
       ...agent,
       args:
         agent.kind === "agent"
-          ? cloudClaudeArgs(this.config, {
-              sessionId: agent.id,
-              sessionName: agent.name,
-              model: modelArgument(agent.args),
-              acceptPeerMessages:
-                Boolean(agent.teamId) ||
-                Boolean(this.abilities.held(agent.id, "orchestration")),
-              resume: agent.providerSessionId!,
-            })
+          ? (
+              await resolveProvider(this.config, {
+                provider: "claude",
+              }).adapter.buildLaunch({
+                target: "cloud",
+                sessionId: agent.id,
+                sessionName: agent.name,
+                model: modelArgument(agent.args),
+                acceptPeerMessages:
+                  Boolean(agent.teamId) ||
+                  Boolean(this.abilities.held(agent.id, "orchestration")),
+                resume: {
+                  nativeId: agent.providerSessionId!,
+                  startedAt: agent.startedAt,
+                  archived: Boolean(agent.archivedAt),
+                  workingDirectory: agent.workingDirectory,
+                  env: {},
+                },
+              })
+            ).args
           : agent.args,
       status: "starting",
       startedAt: new Date().toISOString(),
