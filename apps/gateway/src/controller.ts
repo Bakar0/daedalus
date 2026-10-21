@@ -150,11 +150,21 @@ export function workspaceStatus(
   return { status: "starting", reason: null };
 }
 
+/**
+ * How long to wait before each retry of the first object after a new
+ * RoleBinding: five tries over five seconds. The API server can refuse with
+ * 403 until its authorizer has seen the binding, which kind showed right
+ * after a namespace was made.
+ */
+const BINDING_RETRY_MS = [500, 1000, 1500, 2000] as const;
+
 export class Controller {
   constructor(
     private readonly kube: KubeApi,
     private readonly config: GatewayConfig,
     private readonly tenant: KubeObject[],
+    private readonly wait: (ms: number) => Promise<void> = (ms) =>
+      Bun.sleep(ms),
   ) {}
 
   /** POSTs; with `existing: "ok"`, "already exists" counts as done. */
@@ -163,8 +173,15 @@ export class Controller {
     body: KubeObject,
     what: string,
     existing: "ok" | "error" = "ok",
+    retryForbidden = false,
   ): Promise<void> {
-    const response = await this.kube.request("POST", path, body);
+    let response = await this.kube.request("POST", path, body);
+    if (retryForbidden)
+      for (const ms of BINDING_RETRY_MS) {
+        if (response.status !== 403) break;
+        await this.wait(ms);
+        response = await this.kube.request("POST", path, body);
+      }
     if (response.status === 409 && existing === "ok") return;
     if (response.status >= 300) throw KubeError.from(response, what);
   }
@@ -222,7 +239,7 @@ export class Controller {
       },
       "Granting the gateway access to the user's namespace",
     );
-    for (const object of this.tenant) {
+    for (const [index, object] of this.tenant.entries()) {
       const kind = String(object.kind);
       const metadata = isObject(object.metadata) ? object.metadata : {};
       const labels = isObject(metadata.labels) ? metadata.labels : {};
@@ -237,6 +254,9 @@ export class Controller {
           },
         },
         `Creating the user's ${kind}`,
+        "ok",
+        // Only the first needs to wait for the binding to take effect.
+        index === 0,
       );
     }
   }

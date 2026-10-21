@@ -16,6 +16,12 @@ export class FakeKube implements KubeApi {
   readonly calls: string[] = [];
   /** Pods a namespace may hold before the quota refuses more. */
   podQuota = Infinity;
+  /**
+   * How many namespaced calls are still refused with 403 after the
+   * gateway's RoleBinding is made, as a real API server does until its
+   * authorizer has seen the binding.
+   */
+  bindingLag = 0;
   /** When set, a deleted pod stays, terminating, until `finishDeletes`. */
   slowPodDeletes = false;
   #terminating = new Set<string>();
@@ -36,6 +42,10 @@ export class FakeKube implements KubeApi {
       );
       if (plural !== "rolebindings" && !bound)
         return fail(403, `${plural} is forbidden: no access in ${namespace}`);
+      if (plural !== "rolebindings" && this.bindingLag > 0) {
+        this.bindingLag--;
+        return fail(403, `${plural} is forbidden: no access in ${namespace}`);
+      }
       if (method === "POST" && this.#terminating.has(namespace!))
         return fail(
           403,

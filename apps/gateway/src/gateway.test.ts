@@ -48,6 +48,8 @@ let base: string;
 /** The runner listener, which only the in-cluster Service exposes. */
 let runnerBase: string;
 let logs: string[];
+/** The controller's backoff waits, which pass at once here. */
+let waits: number[];
 const sockets: WebSocket[] = [];
 
 function start(overrides: Record<string, string> = {}) {
@@ -64,7 +66,9 @@ function start(overrides: Record<string, string> = {}) {
   const gateway = createGateway({
     config,
     store,
-    controller: new Controller(kube, config, TENANT),
+    controller: new Controller(kube, config, TENANT, async (ms) => {
+      waits.push(ms);
+    }),
     relay: new Relay(),
     log: (message) => logs.push(message),
   });
@@ -88,6 +92,7 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "gateway-test-"));
   kube = new FakeKube();
   logs = [];
+  waits = [];
   start();
 });
 
@@ -571,6 +576,40 @@ describe("controller", () => {
     );
     expect(status).toBe(409);
     expect(json.error?.code).toBe("CONFLICT");
+  });
+
+  test("waits for a new RoleBinding to take effect before giving up", async () => {
+    const { user, token } = await login("a@example.com");
+    kube.bindingLag = 3;
+    const created = await api(token, "POST", "/v1/workspaces", createBody());
+    expect(created.status).toBe(201);
+    expect(waits).toEqual([500, 1000, 1500]);
+    const ns = `u-${user.id}`;
+    expect(
+      kube.calls.filter(
+        (call) => call === `POST /api/v1/namespaces/${ns}/serviceaccounts`,
+      ),
+    ).toHaveLength(4);
+  });
+
+  test("a binding that never takes effect fails after five tries", async () => {
+    const { token } = await login("a@example.com");
+    kube.bindingLag = 100;
+    const { status, json } = await api(
+      token,
+      "POST",
+      "/v1/workspaces",
+      createBody(),
+    );
+    expect(status).toBe(500);
+    expect(json.error?.message).toBe("The cluster refused the request");
+    expect(logs.join("\n")).toContain(
+      "ServiceAccount: serviceaccounts is forbidden",
+    );
+    expect(waits).toEqual([500, 1000, 1500, 2000]);
+    expect(
+      kube.calls.filter((call) => call.endsWith("/serviceaccounts")),
+    ).toHaveLength(5);
   });
 
   test("turns a quota refusal into QUOTA and leaves nothing behind", async () => {
