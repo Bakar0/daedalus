@@ -514,6 +514,46 @@ describe("AgentService", () => {
     });
   });
 
+  test("a session still launching is not lost while tmux catches up", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { shell: { executable: process.execPath, args: [] } },
+        }),
+      );
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Launch" });
+      const agent = await context.agents.spawn({
+        workspace: workspace.id,
+        command: "shell",
+      });
+      // The row the launcher writes before tmux has a session for it.
+      const launching = {
+        ...(await context.agents.get(agent.id)),
+        status: "starting" as const,
+        startedAt: new Date().toISOString(),
+      };
+      context.repositories.updateAgent(launching);
+      tmux.sessions.clear();
+      await context.agents.reconcile();
+      expect((await context.agents.get(agent.id)).status).toBe("starting");
+
+      // A launcher that died never comes back for its row.
+      context.repositories.updateAgent({
+        ...launching,
+        startedAt: new Date(Date.now() - 3 * 60_000).toISOString(),
+      });
+      await context.agents.reconcile();
+      expect((await context.agents.get(agent.id)).status).toBe("lost");
+      context.close();
+    });
+  });
+
   test("starts a durable free terminal without an agent provider", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const tmux = new FakeTmux();

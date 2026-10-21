@@ -16,6 +16,8 @@ export const CLAUDE_HOOK_EVENTS = [
   "UserPromptSubmit",
   "PreToolUse",
   "PostToolUse",
+  "PostToolUseFailure",
+  "PermissionDenied",
   "PermissionRequest",
   "Notification",
   "Stop",

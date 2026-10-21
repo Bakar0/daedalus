@@ -81,6 +81,10 @@ export interface RecordActivityInput {
   authoritative?: boolean;
   /** The provider's own session id, when the detector knows it. */
   providerSessionId?: string;
+  /** See `ActivityObservation.toolUseId`. */
+  toolUseId?: string;
+  /** See `ActivityObservation.settles`. */
+  settles?: boolean;
 }
 
 export interface ActivityOutcome {
@@ -151,24 +155,71 @@ export function accumulateReasons(
  * the same turn" but "is the state I am about to overwrite more meaningful
  * than the one I carry". Comparing against the current state answers that
  * directly.
+ *
+ * A wait tied to one tool call is ended only by that call ending. Claude runs
+ * tools side by side, so another call finishing while a dialog is up is not
+ * the user answering it. A write or a wait with no id falls through to the
+ * rules above, as before ids were read.
  */
 export function admitsActivityWrite(
   stored:
-    Pick<AgentActivityState, "activity" | "source" | "observedAt"> | undefined,
+    | (Pick<AgentActivityState, "activity" | "source" | "observedAt"> & {
+        toolUseId?: string | null;
+      })
+    | undefined,
   write: Pick<
     RecordActivityInput,
-    "source" | "ifActivity" | "ifNotActivity" | "authoritative"
+    | "source"
+    | "ifActivity"
+    | "ifNotActivity"
+    | "authoritative"
+    | "toolUseId"
+    | "settles"
   >,
   at: number,
 ): boolean {
   const current = stored?.activity ?? "unknown";
   if (write.ifActivity && !write.ifActivity.includes(current)) return false;
   if (write.ifNotActivity?.includes(current)) return false;
+  if (
+    write.settles &&
+    write.toolUseId &&
+    stored?.toolUseId &&
+    isAttentionActivity(current) &&
+    write.toolUseId !== stored.toolUseId
+  )
+    return false;
   if (!stored || write.authoritative) return true;
   const rank = (value: AgentActivitySource) =>
     value === "pane" ? 1 : value === "transcript" ? 2 : 3;
   if (rank(write.source) >= rank(stored.source)) return true;
   return at - Date.parse(stored.observedAt) >= ACTIVITY_STALE_AFTER_MS;
+}
+
+/**
+ * The tool call id a new reading stores. A wait often arrives without one:
+ * Claude's `PermissionRequest` carries none, and the `Notification` for the
+ * same dialog carries no tool at all. The first takes the id of the call it is
+ * about, which is the `PreToolUse` just before it describing the same tool;
+ * the second keeps the wait's. When no reading says which call it is, there
+ * is none, and the wait ends the way it always did.
+ */
+export function nextToolUseId(
+  previous:
+    | (Pick<AgentActivityState, "activity" | "detail"> & {
+        toolUseId?: string | null;
+      })
+    | undefined,
+  write: Pick<RecordActivityInput, "activity" | "toolUseId"> & {
+    detail: string | null;
+  },
+): string | null {
+  if (write.toolUseId) return write.toolUseId;
+  if (!isAttentionActivity(write.activity) || !previous?.toolUseId) return null;
+  if (isAttentionActivity(previous.activity)) return previous.toolUseId;
+  return previous.activity === "working" && previous.detail === write.detail
+    ? previous.toolUseId
+    : null;
 }
 
 /**
@@ -329,6 +380,7 @@ export class ActivityService {
       source: input.source,
       notifiedActivity: previous?.notifiedActivity ?? null,
       notifiedAt: previous?.notifiedAt ?? null,
+      toolUseId: nextToolUseId(previous, { ...input, detail }),
     };
 
     let attention = this.repositories.findSessionAttention(input.sessionId);
@@ -367,6 +419,7 @@ export class ActivityService {
       ...(input.providerSessionId
         ? { providerSessionId: input.providerSessionId }
         : {}),
+      ...(stored.toolUseId ? { toolUseId: stored.toolUseId } : {}),
     }).catch(() => undefined);
     return {
       state,
@@ -408,6 +461,8 @@ export class ActivityService {
       ...(input.providerSessionId
         ? { providerSessionId: input.providerSessionId }
         : {}),
+      ...(observation.toolUseId ? { toolUseId: observation.toolUseId } : {}),
+      ...(observation.settles ? { settles: true } : {}),
     });
   }
 
@@ -430,7 +485,10 @@ export class ActivityService {
     };
     this.repositories.saveAgentActivity(next);
     const state = publicState(next);
-    await writeActivityRecord(this.home, state).catch(() => undefined);
+    await writeActivityRecord(this.home, {
+      ...state,
+      ...(next.toolUseId ? { toolUseId: next.toolUseId } : {}),
+    }).catch(() => undefined);
     return { state, applied: true, transitioned: false };
   }
 
@@ -527,6 +585,7 @@ export class ActivityService {
         // replay cannot re-arm an alert that already fired.
         notifiedActivity: stored?.notifiedActivity ?? null,
         notifiedAt: stored?.notifiedAt ?? null,
+        toolUseId: record.toolUseId ?? null,
       });
       // A blocked session has to come back blocked. Writing the index without
       // the badge would restore the state and lose the only part of it the
@@ -678,6 +737,46 @@ export class ActivityService {
       );
     }
     return { cleared: existing?.reasons.length ?? 0 };
+  }
+
+  /**
+   * Ends a hook's wait that the user answered at the terminal, read off the
+   * screen right after their keystroke (`confirmAnsweredWait`). `since` is the
+   * wait as it stood at that keystroke: a hook that landed in between already
+   * said what happened, and a new wait is not the one the user answered.
+   *
+   * The reading keeps the hook as its source. It is the hook's wait that
+   * ended, and the call's own `PostToolUse` follows to say the same.
+   */
+  async resolveWait(input: {
+    sessionId: string;
+    since: string;
+    activity: "working" | "idle";
+    detail?: string;
+  }): Promise<boolean> {
+    const stored = this.repositories.findAgentActivity(input.sessionId);
+    if (
+      !stored ||
+      !isAttentionActivity(stored.activity) ||
+      stored.source !== "hook" ||
+      stored.since !== input.since
+    )
+      return false;
+    this.clearAttentionRecords(input.sessionId);
+    const now = this.now().toISOString();
+    const next: StoredAgentActivity = {
+      ...stored,
+      activity: input.activity,
+      detail: input.detail ?? null,
+      since: now,
+      observedAt: now,
+    };
+    this.repositories.saveAgentActivity(next);
+    await writeActivityRecord(this.home, {
+      ...publicState(next),
+      ...(next.toolUseId ? { toolUseId: next.toolUseId } : {}),
+    }).catch(() => undefined);
+    return true;
   }
 
   /**

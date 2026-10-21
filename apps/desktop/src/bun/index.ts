@@ -11,6 +11,7 @@ import Electrobun, {
 } from "electrobun/bun";
 import {
   channelHome,
+  confirmAnsweredWait,
   createApplicationContext,
   ReadModel,
   WORKSPACE_FILES_CHANGED,
@@ -254,6 +255,13 @@ const server = Bun.serve<SocketData>({
             // session for a while, so a routine never lands in a draft.
             if (socket.data.targetKind === "agent" && isTyping(data)) {
               context.deliveryGate.noteKeystroke(target.id);
+              const agent = context.repositories.findAgent(target.id);
+              if (agent)
+                void confirmAnsweredWait({
+                  tmux: context.tmux,
+                  activity: context.activity,
+                  agent,
+                }).catch(() => undefined);
               // Back at the Mac: a session a phone has open goes back to
               // the Mac's size.
               void phoneSizes.yieldToMac(target.tmuxSession).catch(() => {});
