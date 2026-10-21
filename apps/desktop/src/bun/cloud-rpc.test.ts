@@ -1,8 +1,13 @@
 import { describe, expect, test } from "vitest";
 import {
   CloudAccount,
+  cloudHostId,
   createApplicationContext,
   type ApplicationContext,
+  type SessionCheckpoint,
+  type SessionHost,
+  type SessionHostLaunch,
+  type SessionTerminal,
   type TokenVault,
 } from "@daedalus/core";
 import type { TmuxClient } from "@daedalus/platform";
@@ -40,6 +45,46 @@ class NoTmux implements TmuxClient {
   async stop() {}
   async killServer() {
     return false;
+  }
+}
+
+/** A pod's sessions, in memory. */
+class FakeCloudHost implements SessionHost {
+  readonly kind = "cloud" as const;
+  readonly sessions = new Set<string>();
+  readonly launches: SessionHostLaunch[] = [];
+
+  constructor(readonly id: string) {}
+
+  async probe() {
+    return undefined;
+  }
+  async start(launch: SessionHostLaunch) {
+    this.launches.push(launch);
+    this.sessions.add(launch.session);
+  }
+  async isLive(session: string) {
+    return this.sessions.has(session);
+  }
+  async listLive() {
+    return [...this.sessions];
+  }
+  async capture() {
+    return "Claude Code v2.1.251\nshift+tab to cycle";
+  }
+  async sendKeys() {}
+  async send() {}
+  async stop(session: string) {
+    this.sessions.delete(session);
+  }
+  async openTerminal(): Promise<SessionTerminal> {
+    throw new Error("not in this test");
+  }
+  async exportCheckpoint(): Promise<SessionCheckpoint> {
+    throw new Error("not in this test");
+  }
+  async importCheckpoint(): Promise<{ workingDirectory: string }> {
+    throw new Error("not in this test");
   }
 }
 
@@ -314,6 +359,58 @@ describe("cloud RPC", () => {
       expect(
         context.repositories.listAgents({ workspaceId: workspace.id }),
       ).toEqual([]);
+    });
+  });
+
+  test("opening a session whose cloud workspace sleeps wakes it and revives the session", async () => {
+    await withCloud(async (rpc, context, gateway) => {
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://localhost:8080",
+        email: "dev@example.com",
+      });
+      const workspace = await context.workspaces.create({ name: "Pods" });
+      await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
+      const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
+      const host = new FakeCloudHost(cloudHostId(cloudId));
+      context.hosts.register(host);
+
+      const spawned = await rpc.agentSpawn({
+        workspace: workspace.id,
+        cloud: true,
+      });
+      expect(spawned.ok).toBe(true);
+      if (!spawned.ok) return;
+      expect(spawned.data.hostId).toBe(host.id);
+      expect(host.launches).toHaveLength(1);
+
+      await rpc.cloudWorkspaceSleep({ workspace: workspace.id });
+      host.sessions.clear();
+      expect((await context.agents.get(spawned.data.id)).status).toBe("lost");
+
+      const woken = await rpc.cloudSessionWake({ sessionId: spawned.data.id });
+      expect(woken.ok).toBe(true);
+      if (!woken.ok) return;
+      expect(woken.data.status).toBe("running");
+      expect(gateway.calls).toContain(`POST /v1/workspaces/${cloudId}/wake`);
+      expect(host.launches).toHaveLength(2);
+      expect(host.launches[1]!.args).toContain("--resume");
+    });
+  });
+
+  test("a session on this Mac is not woken as a cloud one", async () => {
+    await withCloud(async (rpc, context) => {
+      const workspace = await context.workspaces.create({ name: "Here" });
+      const session = await rpc.agentSpawn({
+        workspace: workspace.id,
+        terminal: true,
+      });
+      if (!session.ok) return;
+      const response = await rpc.cloudSessionWake({
+        sessionId: session.data.id,
+      });
+      expect(!response.ok && response.error.message).toBe(
+        "This session runs on this Mac, not in a cloud workspace",
+      );
     });
   });
 });

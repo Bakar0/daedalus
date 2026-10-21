@@ -1169,6 +1169,11 @@ export interface DesktopRpcSchema {
         { workspace: string; force: true },
         CloudStateDto
       >;
+      /**
+       * Opening a cloud session whose workspace sleeps: wakes the workspace,
+       * waits for its runner, then revives the session.
+       */
+      cloudSessionWake: Request<{ sessionId: string }, AgentSessionDto>;
       remoteGet: Request<Record<string, never>, RemoteStateDto>;
       remoteSetEnabled: Request<{ enabled: boolean }, RemoteStateDto>;
       remoteSetKeepAwake: Request<{ enabled: boolean }, RemoteStateDto>;

@@ -6,6 +6,7 @@ import {
   accountDirectory,
   autoRebirthPercent,
   channelName,
+  cloudHostWorkspace,
   DaedalusError,
   INSTALL_COMMANDS,
   normalizeError,
@@ -852,6 +853,24 @@ export function createDesktopRequestHandlers(
           );
         await context.cloud.delete(workspace);
         return cloudStateDto(await context.cloud.overview());
+      }),
+    cloudSessionWake: ({ sessionId }) =>
+      mutate(async () => {
+        const session = await context.agents.get(sessionId);
+        const cloudId = session.hostId
+          ? cloudHostWorkspace(session.hostId)
+          : undefined;
+        if (!cloudId)
+          throw new DaedalusError(
+            "VALIDATION",
+            "This session runs on this Mac, not in a cloud workspace",
+          );
+        if ((await context.cloud.get(cloudId)).status === "sleeping")
+          await context.cloud.wakeForSessions(cloudId);
+        // A session the pod's idle sleep ended may still read as running.
+        if ((await context.agents.get(sessionId)).status !== "lost")
+          await context.agents.reconcile();
+        return agentDto(await context.agents.reviveLost(sessionId));
       }),
     remoteGet: () => result(() => remote.state()),
     remoteSetEnabled: ({ enabled }) => mutate(() => remote.setEnabled(enabled)),

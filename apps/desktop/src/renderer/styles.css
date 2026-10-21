@@ -8513,3 +8513,20 @@ dd {
   flex-wrap: wrap;
   gap: 10px;
 }
+/* A session that runs in its workspace's cloud pod. */
+.session-cloud-badge {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--secondary);
+  font-size: 10px;
+  font-style: normal;
+  margin-right: 6px;
+  padding: 0 6px;
+}
+.session-card[data-cloud-state="sleeping"] .session-card-main,
+.session-card[data-cloud-state="waking"] .session-card-main {
+  opacity: 0.72;
+}
+.session-card[data-cloud-state="waking"] .session-status-label {
+  font-style: italic;
+}

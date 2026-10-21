@@ -2019,6 +2019,16 @@ export function WorkspaceApp({
       ),
     [cloudState.data],
   );
+  const cloudByHost = useMemo(
+    () =>
+      new Map(
+        (cloudState.data?.workspaces ?? []).map((item) => [
+          `ws:${item.cloudId}`,
+          item,
+        ]),
+      ),
+    [cloudState.data],
+  );
   // Keyed by local workspace id; a create can take a minute.
   const cloudActions = useMutation({
     onStart: () => setError(undefined),
@@ -2869,12 +2879,52 @@ export function WorkspaceApp({
   const telemetryById = new Map(
     (snapshot?.sessionTelemetry ?? []).map((item) => [item.sessionId, item]),
   );
-  const statusViewFor = (session: AgentSessionDto) =>
-    sessionStatusView(
+  /**
+   * Whether a cloud session is asleep with its workspace, or waking: opening
+   * one wakes the workspace and revives it.
+   */
+  const cloudSleep = (
+    session: AgentSessionDto,
+  ): "sleeping" | "waking" | undefined => {
+    if (!session.hostId || session.archivedAt || session.status === "exited")
+      return undefined;
+    if (sessionActions.pending(`wake:${session.id}`)) return "waking";
+    return cloudByHost.get(session.hostId)?.status === "sleeping"
+      ? "sleeping"
+      : undefined;
+  };
+  const statusViewFor = (session: AgentSessionDto): SessionStatusView => {
+    const view = sessionStatusView(
       session,
       activityById.get(session.id),
       attentionById.get(session.id),
     );
+    const sleep = cloudSleep(session);
+    // Quiet, unlike a lost session: nothing is wrong, and opening it is
+    // enough to bring it back.
+    return sleep
+      ? {
+          ...view,
+          tone: "ended",
+          label: sleep,
+          detail:
+            sleep === "waking"
+              ? "Waking the cloud workspace, then resuming this session"
+              : "The cloud workspace is asleep. Open the session to wake it.",
+          attention: false,
+          reasons: [],
+        }
+      : view;
+  };
+
+  async function wakeCloudSession(session: AgentSessionDto) {
+    const revived = await sessionActions.run(
+      client.request.cloudSessionWake({ sessionId: session.id }),
+      `wake:${session.id}`,
+    );
+    await cloudState.refresh();
+    if (revived) openSession(revived.id);
+  }
 
   const activeWorkspaces = (snapshot?.workspaces ?? []).filter(
     (item) => !item.archivedAt && !archivingWorkspaceIds.has(item.id),
@@ -4800,6 +4850,8 @@ export function WorkspaceApp({
           team?.role === "member" && !leadArchived ? "true" : undefined
         }
         className={`session-card tone-${statusView.tone} ${view === "session" && session.id === highlightedSessionId ? "selected" : ""}`}
+        data-cloud={session.hostId ? "true" : undefined}
+        data-cloud-state={cloudSleep(session)}
         data-color={session.color ?? undefined}
         style={sessionColorStyle(session.color)}
         data-pinned={session.pinnedAt ? "true" : undefined}
@@ -4813,7 +4865,11 @@ export function WorkspaceApp({
           className="session-card-main"
           data-provider={session.provider}
           data-session-id={session.id}
-          onClick={() => showSession(session.id, session.workspaceId)}
+          onClick={() => {
+            showSession(session.id, session.workspaceId);
+            if (cloudSleep(session) === "sleeping")
+              void wakeCloudSession(session);
+          }}
           // What the three rows leave out, or cut short.
           title={[
             sessionName(session),
@@ -4846,6 +4902,15 @@ export function WorkspaceApp({
                 the live status. What the agent last said is in the tooltip. */}
             <span className="session-card-title">
               <strong>{sessionName(session)}</strong>
+              {session.hostId && (
+                <span
+                  className="session-cloud-badge"
+                  data-testid="session-cloud-badge"
+                  title="Runs in this workspace's cloud pod"
+                >
+                  Cloud
+                </span>
+              )}
               {session.account && (
                 // Only a non-default account is named; Default is the norm.
                 <span
@@ -4952,8 +5017,16 @@ export function WorkspaceApp({
               aria-label={`Revive ${sessionName(session)} session`}
               className="session-card-action"
               disabled={sessionActions.pending(session.id)}
-              onClick={() => void reviveSession(session)}
-              title="Resume this conversation in a new terminal"
+              onClick={() =>
+                void (cloudSleep(session) === "sleeping"
+                  ? wakeCloudSession(session)
+                  : reviveSession(session))
+              }
+              title={
+                cloudSleep(session) === "sleeping"
+                  ? "Wake the cloud workspace and resume this conversation"
+                  : "Resume this conversation in a new terminal"
+              }
             >
               ↻
             </button>
