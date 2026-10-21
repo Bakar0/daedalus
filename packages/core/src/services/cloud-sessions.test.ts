@@ -100,6 +100,10 @@ const setUp = async (home: string) => {
   });
   const workspace = await context.workspaces.create({ name: "Cloud" });
   const cloudId = crypto.randomUUID();
+  context.repositories.setCloudOwner({
+    gatewayUrl: "https://gateway.test",
+    userId: "u1",
+  });
   context.repositories.linkCloudWorkspace(workspace.id, cloudId);
   const host = new FakeCloudHost(cloudHostId(cloudId));
   context.hosts.register(host);

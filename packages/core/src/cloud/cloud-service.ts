@@ -8,7 +8,7 @@ import type {
 } from "@daedalus/remote-protocol";
 import type { DaedalusConfig } from "../config";
 import { DaedalusError } from "../errors";
-import type { SqliteRepositories } from "../repositories";
+import type { CloudOwner, SqliteRepositories } from "../repositories";
 import { CloudCalls, cloudDaedal } from "../services/cloud-calls";
 import { cloudHostId, cloudHostWorkspace } from "../services/cloud-launch";
 import { defaultVault, RemoteStore } from "../services/remote-store";
@@ -94,7 +94,9 @@ export class CloudService {
     this.account = options.account ?? new CloudAccount(options.config.home);
     options.hosts.resolveWith((hostId) => {
       const workspaceId = cloudHostWorkspace(hostId);
-      return workspaceId
+      // Only the signed-in account's workspaces: a session left from another
+      // account must not start in this account's pod.
+      return workspaceId && options.repositories.workspaceForCloud(workspaceId)
         ? new RemoteSessionHost(workspaceId, this.#lazyTransport())
         : undefined;
     });
@@ -113,6 +115,7 @@ export class CloudService {
 
   async #client(): Promise<GatewayClient> {
     const signIn = await this.account.requireSignIn();
+    this.#own({ gatewayUrl: signIn.gatewayUrl, userId: signIn.user.id }, true);
     return new GatewayClient(
       signIn.gatewayUrl,
       signIn.token,
@@ -124,8 +127,32 @@ export class CloudService {
   async devLogin(gatewayUrl: string, email: string): Promise<GatewayUser> {
     const client = new GatewayClient(gatewayUrl, undefined, this.options.fetch);
     const { user, token } = await client.devLogin(email);
+    const previous = await this.account.signIn();
     await this.account.save({ gatewayUrl: client.url, user, token });
+    this.#own(
+      { gatewayUrl: client.url, userId: user.id },
+      previous?.gatewayUrl === client.url && previous.user.id === user.id,
+    );
     return user;
+  }
+
+  /**
+   * Makes an account the one whose cloud links count. Another account's
+   * links stay in the database, unused, and come back when it signs in
+   * again. Links from before links had an account go to the account this Mac
+   * was already signed in to.
+   */
+  #own(owner: CloudOwner, sameAccount: boolean): void {
+    const { repositories, hosts } = this.options;
+    const current = repositories.cloudOwner();
+    if (
+      current?.gatewayUrl === owner.gatewayUrl &&
+      current.userId === owner.userId
+    )
+      return;
+    for (const host of hosts.cloud()) hosts.unregister(host.id);
+    repositories.setCloudOwner(owner);
+    if (!current && sameAccount) repositories.claimUnownedCloudLinks();
   }
 
   /**
@@ -227,6 +254,9 @@ export class CloudService {
   async logout(): Promise<void> {
     this.close();
     await this.account.forget();
+    this.options.repositories.setCloudOwner(undefined);
+    for (const host of this.options.hosts.cloud())
+      this.options.hosts.unregister(host.id);
   }
 
   async status(): Promise<{ gatewayUrl: string; user: GatewayUser } | null> {
@@ -419,7 +449,11 @@ export class CloudService {
    */
   async hold(): Promise<boolean> {
     this.#holder = true;
-    if (!(await this.account.signIn())) return false;
+    const signIn = await this.account.signIn();
+    if (!signIn) return false;
+    // A sign-in from before links had an account, or from a CLI that
+    // predates it, names the account here.
+    this.#own({ gatewayUrl: signIn.gatewayUrl, userId: signIn.user.id }, true);
     const link = this.#link ?? (await this.#openLink());
     this.#transport = Promise.resolve(link);
     this.#stopBroker ??= await serveBroker(this.options.config.home, link);

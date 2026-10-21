@@ -865,6 +865,11 @@ export function createDesktopRequestHandlers(
             "VALIDATION",
             "This session runs on this Mac, not in a cloud workspace",
           );
+        if (!context.repositories.workspaceForCloud(cloudId))
+          throw new DaedalusError(
+            "DEPENDENCY",
+            "This session's cloud workspace is not in the cloud account this Mac is signed in to",
+          );
         if ((await context.cloud.get(cloudId)).status === "sleeping")
           await context.cloud.wakeForSessions(cloudId);
         // A session the pod's idle sleep ended may still read as running.

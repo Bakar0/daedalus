@@ -413,4 +413,60 @@ describe("cloud RPC", () => {
       );
     });
   });
+
+  test("another account's links stay unused until it signs in again", async () => {
+    await withCloud(async (rpc, context, gateway) => {
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://localhost:8080",
+        email: "dev@example.com",
+      });
+      const workspace = await context.workspaces.create({ name: "Pods" });
+      await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
+      const first = context.repositories.cloudWorkspaceId(workspace.id)!;
+      const host = new FakeCloudHost(cloudHostId(first));
+      context.hosts.register(host);
+      const spawned = await rpc.agentSpawn({
+        workspace: workspace.id,
+        cloud: true,
+      });
+      if (!spawned.ok) throw new Error(spawned.error.message);
+      await rpc.cloudWorkspaceSleep({ workspace: workspace.id });
+
+      // The fake gateway names every user u1, so another gateway it is.
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://127.0.0.1:9090",
+        email: "other@example.com",
+      });
+      expect(
+        context.repositories.cloudWorkspaceId(workspace.id),
+      ).toBeUndefined();
+      expect(context.hosts.find(cloudHostId(first))).toBeUndefined();
+      const woken = await rpc.cloudSessionWake({ sessionId: spawned.data.id });
+      expect(!woken.ok && woken.error.message).toBe(
+        "This session's cloud workspace is not in the cloud account this Mac is signed in to",
+      );
+      expect(gateway.calls).not.toContain(`POST /v1/workspaces/${first}/wake`);
+
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://localhost:8080",
+        email: "dev@example.com",
+      });
+      expect(context.repositories.cloudWorkspaceId(workspace.id)).toBe(first);
+    });
+  });
+
+  test("signing out hides every link", async () => {
+    await withCloud(async (rpc, context) => {
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://localhost:8080",
+        email: "dev@example.com",
+      });
+      const workspace = await context.workspaces.create({ name: "Pods" });
+      await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
+      await rpc.cloudSignOut({});
+      expect(
+        context.repositories.cloudWorkspaceId(workspace.id),
+      ).toBeUndefined();
+    });
+  });
 });

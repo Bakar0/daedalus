@@ -2886,13 +2886,16 @@ export function WorkspaceApp({
    */
   const cloudSleep = (
     session: AgentSessionDto,
-  ): "sleeping" | "waking" | undefined => {
+  ): "sleeping" | "waking" | "unavailable" | undefined => {
     if (!session.hostId || session.archivedAt || session.status === "exited")
       return undefined;
     if (sessionActions.pending(`wake:${session.id}`)) return "waking";
-    return cloudByHost.get(session.hostId)?.status === "sleeping"
-      ? "sleeping"
-      : undefined;
+    const cloud = cloudState.data;
+    const linked = cloudByHost.get(session.hostId);
+    if (linked) return linked.status === "sleeping" ? "sleeping" : undefined;
+    // Signed out, or signed in to an account this workspace is not in. A
+    // gateway that did not answer says nothing about which.
+    return cloud && cloud.connection !== "error" ? "unavailable" : undefined;
   };
   const statusViewFor = (session: AgentSessionDto): SessionStatusView => {
     const view = sessionStatusView(
@@ -2901,8 +2904,8 @@ export function WorkspaceApp({
       attentionById.get(session.id),
     );
     const sleep = cloudSleep(session);
-    // Quiet, unlike a lost session: nothing is wrong, and opening it is
-    // enough to bring it back.
+    // Quiet, unlike a lost session: nothing is wrong here that opening the
+    // session or signing in does not fix.
     return sleep
       ? {
           ...view,
@@ -2911,7 +2914,11 @@ export function WorkspaceApp({
           detail:
             sleep === "waking"
               ? "Waking the cloud workspace, then resuming this session"
-              : "The cloud workspace is asleep. Open the session to wake it.",
+              : sleep === "sleeping"
+                ? "The cloud workspace is asleep. Open the session to wake it."
+                : cloudState.data?.signedIn
+                  ? "Its cloud workspace is not in the cloud account this Mac is signed in to, or was deleted."
+                  : "Sign in to its cloud account in Settings › Cloud to reach it.",
           attention: false,
           reasons: [],
         }
@@ -5013,25 +5020,26 @@ export function WorkspaceApp({
           </button>
         )}
         <span className="workspace-card-actions" data-no-drag>
-          {session.status === "lost" && (
-            <button
-              aria-label={`Revive ${sessionName(session)} session`}
-              className="session-card-action"
-              disabled={sessionActions.pending(session.id)}
-              onClick={() =>
-                void (cloudSleep(session) === "sleeping"
-                  ? wakeCloudSession(session)
-                  : reviveSession(session))
-              }
-              title={
-                cloudSleep(session) === "sleeping"
-                  ? "Wake the cloud workspace and resume this conversation"
-                  : "Resume this conversation in a new terminal"
-              }
-            >
-              ↻
-            </button>
-          )}
+          {session.status === "lost" &&
+            cloudSleep(session) !== "unavailable" && (
+              <button
+                aria-label={`Revive ${sessionName(session)} session`}
+                className="session-card-action"
+                disabled={sessionActions.pending(session.id)}
+                onClick={() =>
+                  void (cloudSleep(session) === "sleeping"
+                    ? wakeCloudSession(session)
+                    : reviveSession(session))
+                }
+                title={
+                  cloudSleep(session) === "sleeping"
+                    ? "Wake the cloud workspace and resume this conversation"
+                    : "Resume this conversation in a new terminal"
+                }
+              >
+                ↻
+              </button>
+            )}
           {team?.role === "lead" && session.status === "running" && (
             <button
               aria-label={`Add a member to ${team.team.name}`}

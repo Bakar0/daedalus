@@ -200,6 +200,10 @@ describe("teams", () => {
     await withTeams(async ({ context, transport }) => {
       const { team } = await lead(context);
       const cloudId = crypto.randomUUID();
+      context.repositories.setCloudOwner({
+        gatewayUrl: "https://gateway.test",
+        userId: "u1",
+      });
       context.repositories.linkCloudWorkspace("shop", cloudId);
       const host = new FakeCloudHost(cloudHostId(cloudId));
       context.hosts.register(host);
