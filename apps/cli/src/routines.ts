@@ -4,6 +4,7 @@ import {
   ABILITY_IDS,
   DaedalusError,
   formatDuration,
+  localTime,
   parseDuration,
   SESSION_COLORS,
   type AgentSession,
@@ -104,39 +105,13 @@ counts as useful. 'reports --since 7d --state all' is what a weekly review
 reads.`,
 };
 
-/**
- * A session by id, or by name when exactly one live session has it. Names
- * are what people use; ids are what agents pass.
- */
-export async function resolveSession(
-  context: ApplicationContext,
-  reference: string,
-): Promise<AgentSession> {
-  const byId = context.repositories.findAgent(reference);
-  if (byId) return byId;
-  const matches = context.repositories
-    .listAgents()
-    .filter(
-      (session) =>
-        !session.archivedAt &&
-        session.name.toLowerCase() === reference.trim().toLowerCase(),
-    );
-  if (matches.length === 1) return matches[0]!;
-  throw new DaedalusError(
-    matches.length ? "VALIDATION" : "NOT_FOUND",
-    matches.length
-      ? `More than one session is called '${reference}'; pass its id`
-      : `Session '${reference}' was not found`,
-  );
-}
-
 /** The routines ability of the session named, or of the one running this. */
 async function routinesFor(
   context: ApplicationContext,
   values: Record<string, string>,
 ): Promise<{ session: AgentSession; ability: SessionAbility }> {
   const session = values.session
-    ? await resolveSession(context, values.session)
+    ? context.agents.resolve(values.session)
     : await callerSession(context);
   if (!session)
     throw new DaedalusError(
@@ -214,13 +189,6 @@ function takeVars(args: string[]): {
   return { rest, vars };
 }
 
-const localTime = (iso: string | null | undefined): string => {
-  if (!iso) return "—";
-  const date = new Date(iso);
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-};
-
 const sessionLine = (session: AgentSession) =>
   `${session.id}\t${session.name}\t${session.pinnedAt ? "pinned" : "—"}\t${session.color ?? "—"}`;
 
@@ -262,7 +230,7 @@ export async function sessionCommand(
     const usage = "daedal session rename <session> <name>";
     expectPositionals(parsed.positionals, 2, usage);
     const session = await context.agents.rename(
-      (await resolveSession(context, reference!)).id,
+      context.agents.resolve(reference!).id,
       parsed.positionals[1]!,
     );
     printResult({ session }, json, () => console.log(sessionLine(session)));
@@ -275,7 +243,7 @@ export async function sessionCommand(
       `daedal session ${action} <session>`,
     );
     const session = await context.agents.setPinned(
-      (await resolveSession(context, reference!)).id,
+      context.agents.resolve(reference!).id,
       action === "pin",
     );
     printResult({ session }, json, () => console.log(sessionLine(session)));
@@ -286,7 +254,7 @@ export async function sessionCommand(
     expectPositionals(parsed.positionals, 2, usage);
     const value = parsed.positionals[1]!;
     const session = await context.agents.setColor(
-      (await resolveSession(context, reference!)).id,
+      context.agents.resolve(reference!).id,
       value === "none" ? null : value,
     );
     printResult({ session }, json, () => console.log(sessionLine(session)));
@@ -302,7 +270,7 @@ export async function sessionCommand(
         "The rebirth threshold must be a percent from 10 to 100, 'off' or 'default'",
       );
     const session = await context.agents.setAutoRebirth(
-      (await resolveSession(context, reference!)).id,
+      context.agents.resolve(reference!).id,
       value === "default" ? null : value === "off" ? "off" : Number(value),
     );
     printResult({ session }, json, () => console.log(sessionLine(session)));
@@ -314,7 +282,7 @@ export async function sessionCommand(
       1,
       "daedal session abilities <session>",
     );
-    const session = await resolveSession(context, reference!);
+    const session = context.agents.resolve(reference!);
     const abilities = context.abilities.list(session.id);
     printResult({ abilities }, json, () => {
       if (!abilities.length) console.log("No abilities.");
@@ -325,7 +293,7 @@ export async function sessionCommand(
   if (action === "grant" || action === "revoke") {
     const usage = `daedal session ${action} <session> <ability>`;
     expectPositionals(parsed.positionals, 2, usage);
-    const session = await resolveSession(context, reference!);
+    const session = context.agents.resolve(reference!);
     const ability =
       action === "grant"
         ? context.abilities.grant(session.id, parsed.positionals[1]!, {

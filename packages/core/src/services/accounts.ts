@@ -1,7 +1,8 @@
-import { rename, rm, writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   deleteKeychainPassword,
+  editJson,
   ensureDirectory,
   findExecutable,
   keychainReadCommand,
@@ -11,9 +12,8 @@ import {
   writeKeychainPassword,
 } from "@daedalus/platform";
 import {
-  saveAccounts,
+  updateSettings,
   isAwsTarget,
-  saveDefaultLogin,
   type AccountKind,
   type AwsTarget,
   type ClaudeLogin,
@@ -22,13 +22,19 @@ import {
   type DaedalusConfig,
 } from "../config";
 import { DaedalusError } from "../errors";
-import type { IntegratedTerminal } from "../domain";
+import type {
+  AgentProviderName,
+  AgentSession,
+  IntegratedTerminal,
+  Workspace,
+} from "../domain";
 import type { SqliteRepositories } from "../repositories";
 import type { IntegratedTerminalService } from "./integrated-terminals";
 import {
   accountConfig,
   accountDirectory,
   accountEnvironment,
+  accountName,
   accountProfile,
   DEFAULT_ACCOUNT,
   findAccount,
@@ -487,6 +493,15 @@ function profileId(name: string, taken: Set<string>): string {
   }
 }
 
+/** What `AccountService.forLaunch` chooses an account from. */
+export interface LaunchAccountInput {
+  /** An account by id or name; `default` or null for the provider's own. */
+  requested?: string | null;
+  /** The session this launch carries on, or the session itself on a resume. */
+  previous?: Pick<AgentSession, "provider" | "account">;
+  workspace: Pick<Workspace, "defaultClaudeAccount" | "defaultCodexAccount">;
+}
+
 /**
  * Account profiles: a provider's CLI pointed at a configuration folder of its
  * own, so one machine can run sessions on more than one account.
@@ -581,6 +596,87 @@ export class AccountService {
   }
 
   /**
+   * The account a session launches on: the one asked for, else its
+   * predecessor's when it carries on one on the same provider, else the
+   * workspace's default for that provider, else the provider's own. Null is
+   * the provider's own account.
+   *
+   * A workspace default whose profile was removed falls back to the default
+   * account, because removing a profile already clears those. A predecessor's
+   * account that is gone is refused instead: the conversation the session is
+   * meant to carry on lived in that folder.
+   *
+   * Then refuses an account its provider says is signed out, which would
+   * otherwise open a terminal that fails on its first turn. Only a definite
+   * "signed out" stops it: a provider too old to say, or one that did not
+   * answer, gets the benefit of the doubt.
+   */
+  async forLaunch(
+    provider: AgentProviderName,
+    input: LaunchAccountInput,
+  ): Promise<string | null> {
+    if (provider !== "claude" && provider !== "codex") {
+      if (input.requested && input.requested !== DEFAULT_ACCOUNT)
+        throw new DaedalusError(
+          "VALIDATION",
+          "A custom command has no accounts; choose --provider to pick one",
+        );
+      return null;
+    }
+    const account = this.pickAccount(provider, input);
+    await this.requireSignedIn(provider, account);
+    return account;
+  }
+
+  private pickAccount(
+    provider: AccountProvider,
+    input: LaunchAccountInput,
+  ): string | null {
+    if (input.requested !== undefined)
+      return findAccount(this.config, provider, input.requested)?.id ?? null;
+    const previous = input.previous;
+    if (previous && previous.provider === provider) {
+      if (
+        previous.account &&
+        !accountProfile(this.config, provider, previous.account)
+      )
+        throw new DaedalusError(
+          "CONFLICT",
+          `This session ran on the ${providerLabel(provider)} account '${previous.account}', which was removed`,
+        );
+      return previous.account;
+    }
+    const preferred =
+      provider === "claude"
+        ? input.workspace.defaultClaudeAccount
+        : input.workspace.defaultCodexAccount;
+    return accountProfile(this.config, provider, preferred) ? preferred : null;
+  }
+
+  private async requireSignedIn(
+    provider: AccountProvider,
+    account: string | null,
+  ): Promise<void> {
+    const signIn = await checkSignIn(this.config, provider, account);
+    if (signIn.state !== "signed-out") return;
+    const name = accountName(this.config, provider, account);
+    if (accountProfile(this.config, provider, account)?.kind === "api-key")
+      throw new DaedalusError(
+        "DEPENDENCY",
+        `The ${name} account has no API key. Set it in Settings → Agents, or pipe it to 'daedal account key claude ${JSON.stringify(name)}'.`,
+        { provider, account, reason: "signed-out" },
+      );
+    const reference = account
+      ? ` ${JSON.stringify(accountProfile(this.config, provider, account)?.name ?? account)}`
+      : "";
+    throw new DaedalusError(
+      "DEPENDENCY",
+      `${providerLabel(provider)} is not signed in on the ${name} account. Sign in from Settings → Agents, or run 'daedal account login ${provider}${reference}'.`,
+      { provider, account: account ?? DEFAULT_ACCOUNT, reason: "signed-out" },
+    );
+  }
+
+  /**
    * Creates a profile and its folder, and puts Daedalus's skills and writing
    * style where that folder's sessions will look for them. The folder starts
    * empty otherwise: a profile shares no settings with the default account.
@@ -637,7 +733,9 @@ export class AccountService {
       await this.writeClaudeSettings(directory, (settings) =>
         withBedrock(settings, aws),
       );
-    await saveAccounts(this.config, [...this.config.accounts, profile]);
+    await updateSettings(this.config, (config) => ({
+      accounts: [...config.accounts, profile],
+    }));
     await new SkillService(
       accountConfig(this.config, owner, profile.id),
     ).syncArtifacts();
@@ -665,7 +763,9 @@ export class AccountService {
       );
     const profile = findAccount(this.config, owner, reference);
     if (!profile) {
-      await saveDefaultLogin(this.config, login);
+      await updateSettings(this.config, (config) => ({
+        defaultLogins: { ...config.defaultLogins, claude: login },
+      }));
       return { provider: owner, account: DEFAULT_ACCOUNT, login };
     }
     if (profile.kind === "api-key" || profile.kind === "bedrock")
@@ -673,12 +773,11 @@ export class AccountService {
         "VALIDATION",
         `'${profile.name}' uses ${profile.kind === "bedrock" ? "Bedrock" : "an API key"}, not a Claude login`,
       );
-    await saveAccounts(
-      this.config,
-      this.config.accounts.map((entry) =>
+    await updateSettings(this.config, (config) => ({
+      accounts: config.accounts.map((entry) =>
         entry.id === profile.id ? { ...entry, login } : entry,
       ),
-    );
+    }));
     return { provider: owner, account: profile.id, login };
   }
 
@@ -705,12 +804,11 @@ export class AccountService {
       (settings) => withBedrock(settings, target),
     );
     const changed = { ...profile, aws: target };
-    await saveAccounts(
-      this.config,
-      this.config.accounts.map((entry) =>
+    await updateSettings(this.config, (config) => ({
+      accounts: config.accounts.map((entry) =>
         entry.id === profile.id ? changed : entry,
       ),
-    );
+    }));
     return changed;
   }
 
@@ -725,12 +823,11 @@ export class AccountService {
       ...profile,
       name: this.validName(owner, name, profile.id),
     };
-    await saveAccounts(
-      this.config,
-      this.config.accounts.map((entry) =>
+    await updateSettings(this.config, (config) => ({
+      accounts: config.accounts.map((entry) =>
         entry.id === profile.id ? renamed : entry,
       ),
-    );
+    }));
     return renamed;
   }
 
@@ -789,10 +886,9 @@ export class AccountService {
       }).catch(() => undefined);
     }
     this.repositories.clearWorkspaceDefaultAccount(owner, profile.id);
-    await saveAccounts(
-      this.config,
-      this.config.accounts.filter((entry) => entry.id !== profile.id),
-    );
+    await updateSettings(this.config, (config) => ({
+      accounts: config.accounts.filter((entry) => entry.id !== profile.id),
+    }));
     await rm(accountDirectory(this.config, profile), {
       recursive: true,
       force: true,
@@ -1083,30 +1179,12 @@ export class AccountService {
     change: (settings: Record<string, unknown>) => Record<string, unknown>,
   ): Promise<void> {
     const path = join(directory, "settings.json");
-    const file = Bun.file(path);
-    let settings: Record<string, unknown> = {};
-    if (await file.exists()) {
-      try {
-        settings = (await file.json()) as Record<string, unknown>;
-      } catch {
-        throw new DaedalusError(
-          "CONFLICT",
-          `${path} is not valid JSON; fix or delete it first`,
-        );
-      }
-    }
-    const next = change(settings);
-    await ensureDirectory(directory);
-    const temporary = `${path}.${crypto.randomUUID()}.tmp`;
-    try {
-      await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, {
-        flag: "wx",
-        mode: 0o600,
-      });
-      await rename(temporary, path);
-    } finally {
-      await rm(temporary, { force: true });
-    }
+    const result = await editJson(path, change, { mode: 0o600 });
+    if (result.status === "invalid")
+      throw new DaedalusError(
+        "CONFLICT",
+        `${path} is not valid JSON; fix or delete it first`,
+      );
   }
 
   private requireProfile(

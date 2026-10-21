@@ -69,7 +69,51 @@ export interface TmuxClient {
    * there was nothing to stop, which is the same goal state reached sooner.
    */
   killServer(): Promise<boolean>;
+  /**
+   * Attaches to `session` through a real pseudo-terminal and streams what
+   * tmux draws to `onOutput`. The size, 80 by 24 when absent, is clamped (see
+   * `clampTerminalSize`). The caller starts it with `start()` and ends it
+   * with `close()`.
+   */
+  openPty(
+    session: string,
+    size: TerminalSize | undefined,
+    onOutput: (output: Uint8Array) => void,
+  ): TmuxPty;
+  /**
+   * Fixes the session's window at `size` regardless of which client attached
+   * last (`window-size manual`), clamped like `openPty`. Undone by
+   * `unpinWindowSize`.
+   */
+  pinWindowSize(session: string, size: TerminalSize): Promise<void>;
+  /** Hands the window's size back to tmux, which sizes it from its clients. */
+  unpinWindowSize(session: string): Promise<void>;
 }
+
+export interface TerminalSize {
+  cols: number;
+  rows: number;
+}
+
+/** A tmux client attached through a pseudo-terminal: see `TmuxClient.openPty`. */
+export interface TmuxPty {
+  start(): Promise<void>;
+  write(data: string): void;
+  resize(cols: number, rows: number): void;
+  close(): void;
+}
+
+/**
+ * The one place a terminal size is bounded: whole numbers, 20 to 500 columns
+ * and 5 to 300 rows. Callers pass whatever a window or a phone reports.
+ */
+export const clampTerminalSize = ({
+  cols,
+  rows,
+}: TerminalSize): TerminalSize => ({
+  cols: Math.max(20, Math.min(500, Math.floor(cols))),
+  rows: Math.max(5, Math.min(300, Math.floor(rows))),
+});
 
 export interface TmuxTerminalTarget {
   socketName: string;
@@ -443,6 +487,43 @@ export class CommandTmuxClient implements TmuxClient {
     }
   }
 
+  openPty(
+    session: string,
+    size: TerminalSize | undefined,
+    onOutput: (output: Uint8Array) => void,
+  ): TmuxPty {
+    return new TmuxPtyBridge(
+      onOutput,
+      { socketName: this.socketName, session },
+      size,
+      this.executable,
+    );
+  }
+
+  async pinWindowSize(session: string, size: TerminalSize): Promise<void> {
+    const { cols, rows } = clampTerminalSize(size);
+    await this.run([
+      "set-option",
+      "-w",
+      "-t",
+      session,
+      "window-size",
+      "manual",
+      ";",
+      "resize-window",
+      "-t",
+      session,
+      "-x",
+      String(cols),
+      "-y",
+      String(rows),
+    ]);
+  }
+
+  async unpinWindowSize(session: string): Promise<void> {
+    await this.run(["set-option", "-w", "-u", "-t", session, "window-size"]);
+  }
+
   async killServer(): Promise<boolean> {
     const result = await this.run(["kill-server"]);
     if (result.exitCode === 0) return true;
@@ -458,28 +539,6 @@ export class CommandTmuxClient implements TmuxClient {
 }
 
 export const SEND_ENTER_DELAY_MS = 300;
-export const SPIKE_SOCKET = "daedalus-spike";
-export const SPIKE_SESSION = "daedalus_spike";
-
-export const TERMINAL_CAPTURE_LINES = 10_000;
-export const TERMINAL_CAPTURE_BYTES = 1024 * 1024;
-
-export function boundTerminalCapture(
-  screen: string,
-  limit = TERMINAL_CAPTURE_BYTES,
-): Uint8Array {
-  const encoded = new TextEncoder().encode(screen.replace(/\r?\n/g, "\r\n"));
-  let body =
-    encoded.byteLength > limit
-      ? encoded.slice(encoded.byteLength - limit)
-      : encoded;
-  while (body.length > 0 && (body[0]! & 0xc0) === 0x80) body = body.slice(1);
-  const reset = new TextEncoder().encode("\u001b[H\u001b[2J");
-  const output = new Uint8Array(reset.byteLength + body.byteLength);
-  output.set(reset);
-  output.set(body, reset.byteLength);
-  return output;
-}
 
 const terminalArgs = (socketName: string, ...args: string[]) => [
   "-u",
@@ -488,70 +547,6 @@ const terminalArgs = (socketName: string, ...args: string[]) => [
   ...args,
 ];
 
-const tmuxArgs = (...args: string[]) => ["-L", SPIKE_SOCKET, ...args];
-
-export async function ensureSpikeSession(cwd: string): Promise<boolean> {
-  const executable = resolveTmuxExecutable();
-  const exists = await runCommand(
-    executable,
-    tmuxArgs("has-session", "-t", SPIKE_SESSION),
-  );
-  if (exists.exitCode === 0) return false;
-  const created = await runCommand(
-    executable,
-    tmuxArgs(
-      "new-session",
-      "-d",
-      "-s",
-      SPIKE_SESSION,
-      "-c",
-      cwd,
-      "-x",
-      "100",
-      "-y",
-      "30",
-    ),
-  );
-  if (created.exitCode !== 0)
-    throw new Error(created.stderr || "tmux session creation failed");
-  return true;
-}
-
-export async function captureSpikePane(): Promise<Uint8Array> {
-  return captureTmuxPane({
-    socketName: SPIKE_SOCKET,
-    session: SPIKE_SESSION,
-  });
-}
-
-export async function captureTmuxPane(
-  target: TmuxTerminalTarget,
-  historyLines = TERMINAL_CAPTURE_LINES,
-  executable = resolveTmuxExecutable(),
-): Promise<Uint8Array> {
-  const safeHistory = Math.max(
-    0,
-    Math.min(TERMINAL_CAPTURE_LINES, historyLines),
-  );
-  const captured = await runCommand(
-    executable,
-    terminalArgs(
-      target.socketName,
-      "capture-pane",
-      "-p",
-      "-e",
-      "-J",
-      "-S",
-      `-${safeHistory}`,
-      "-t",
-      target.session,
-    ),
-  );
-  if (captured.exitCode !== 0)
-    throw new Error(captured.stderr || "tmux capture failed");
-  return boundTerminalCapture(captured.stdout);
-}
-
 /**
  * Attaches to a durable tmux session through a real pseudo-terminal.
  *
@@ -559,18 +554,17 @@ export async function captureTmuxPane(
  * redraws. This avoids reconstructing a screen from capture-pane and replaying
  * a second control-mode stream on top of it.
  */
-export class TmuxPtyBridge {
+export class TmuxPtyBridge implements TmuxPty {
   readonly process: Bun.Subprocess;
   #closed = false;
 
   constructor(
     onOutput: (output: Uint8Array) => void,
     target: TmuxTerminalTarget,
-    initialSize: { cols: number; rows: number } = { cols: 80, rows: 24 },
+    initialSize: TerminalSize = { cols: 80, rows: 24 },
     executable = resolveTmuxExecutable(),
   ) {
-    const cols = Math.max(20, Math.min(500, Math.floor(initialSize.cols)));
-    const rows = Math.max(5, Math.min(300, Math.floor(initialSize.rows)));
+    const { cols, rows } = clampTerminalSize(initialSize);
     this.process = Bun.spawn([executable, ...tmuxPtyArguments(target)], {
       env: tmuxPtyEnvironment(),
       terminal: {
@@ -591,9 +585,8 @@ export class TmuxPtyBridge {
 
   resize(cols: number, rows: number): void {
     if (this.#closed) return;
-    const safeCols = Math.max(20, Math.min(500, Math.floor(cols)));
-    const safeRows = Math.max(5, Math.min(300, Math.floor(rows)));
-    this.process.terminal?.resize(safeCols, safeRows);
+    const size = clampTerminalSize({ cols, rows });
+    this.process.terminal?.resize(size.cols, size.rows);
   }
 
   close(): void {

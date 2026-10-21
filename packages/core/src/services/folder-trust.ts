@@ -1,15 +1,11 @@
 import { homedir } from "node:os";
-import {
-  mkdir,
-  realpath,
-  rename,
-  rm,
-  rmdir,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, realpath, rmdir, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { ensureDirectory, processWorkingDirectories } from "@daedalus/platform";
+import {
+  ensureDirectory,
+  processWorkingDirectories,
+  writeFileAtomic,
+} from "@daedalus/platform";
 import type { DaedalusConfig } from "../config";
 import { accountConfig } from "./account-homes";
 import { codexConfigPath } from "./providers";
@@ -179,14 +175,7 @@ const isAtOrInside = (roots: readonly string[], path: string): boolean =>
  * time, so a reader must never see half a file.
  */
 async function replaceFile(path: string, text: string): Promise<void> {
-  await ensureDirectory(dirname(path));
-  const temporary = `${path}.${crypto.randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, text, { flag: "wx", mode: 0o600 });
-    await rename(temporary, path);
-  } finally {
-    await rm(temporary, { force: true });
-  }
+  await writeFileAtomic(path, text, { mode: 0o600, ensureDir: true });
 }
 
 const readText = async (path: string): Promise<string | undefined> => {

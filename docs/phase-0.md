@@ -32,7 +32,7 @@ All are exact direct pins. `bun.lock` records the full resolution. Electrobun's 
 
 Bun's native `Terminal` API provides the PTY attachment required by the desktop bridge. tmux remains the durable session owner, while the attached PTY preserves its exact redraw, cursor, keyboard, Unicode, and resize semantics.
 
-The automated real-tmux spike (`bun run test:terminal-spike`) proved:
+The automated real-tmux spike (its script, `terminal-spike-check.ts`, has since been removed; `bun run test:terminal-agent` covers the same ground) proved:
 
 1. Interactive input reached a login shell and output returned through control mode.
 2. ANSI SGR red and mixed Hebrew, CJK, and emoji bytes survived the bridge.

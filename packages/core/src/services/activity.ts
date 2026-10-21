@@ -136,6 +136,57 @@ export function accumulateReasons(
   return [...kept, incoming].slice(-limit);
 }
 
+/**
+ * Whether a write may overwrite what `stored` says. Both the index and the
+ * durable record follow this one rule, so a write the index would reject
+ * never lands in the record that `restore()` replays on startup.
+ *
+ * Two checks make it up. The source rank: provider fidelity is wildly
+ * asymmetric, so a pane guess must never be able to overwrite a hook fact, or
+ * the display quietly degrades to the confidence of its worst detector. A
+ * stale reading is fair game for anyone, because by then nobody is claiming
+ * it is true. And the guarded compare-and-set from dev-3.0, which is the
+ * reason there is no turn id anywhere in this file. Hooks fire concurrently
+ * and arrive out of order, and what actually needs protecting is not "is this
+ * the same turn" but "is the state I am about to overwrite more meaningful
+ * than the one I carry". Comparing against the current state answers that
+ * directly.
+ */
+export function admitsActivityWrite(
+  stored:
+    Pick<AgentActivityState, "activity" | "source" | "observedAt"> | undefined,
+  write: Pick<
+    RecordActivityInput,
+    "source" | "ifActivity" | "ifNotActivity" | "authoritative"
+  >,
+  at: number,
+): boolean {
+  const current = stored?.activity ?? "unknown";
+  if (write.ifActivity && !write.ifActivity.includes(current)) return false;
+  if (write.ifNotActivity?.includes(current)) return false;
+  if (!stored || write.authoritative) return true;
+  const rank = (value: AgentActivitySource) =>
+    value === "pane" ? 1 : value === "transcript" ? 2 : 3;
+  if (rank(write.source) >= rank(stored.source)) return true;
+  return at - Date.parse(stored.observedAt) >= ACTIVITY_STALE_AFTER_MS;
+}
+
+/**
+ * Whether a heartbeat may refresh `stored`: the reading is one the heartbeat
+ * keeps alive, and it has not been refreshed within `HEARTBEAT_INTERVAL_MS`.
+ * The hook asks this of the record before it opens the database at all.
+ */
+export function heartbeatDue(
+  stored: Pick<AgentActivityState, "activity" | "observedAt">,
+  ifActivity: readonly AgentActivity[] | undefined,
+  at: number,
+): boolean {
+  if (ifActivity && !ifActivity.includes(stored.activity)) return false;
+  // Written as "not recent" so an unparseable `observedAt` lets the
+  // heartbeat through, which repairs it.
+  return !(at - Date.parse(stored.observedAt) < HEARTBEAT_INTERVAL_MS);
+}
+
 const ACTIVITY_HEADLINE: Record<AgentActivity, string | null> = {
   unknown: null,
   working: null,
@@ -155,6 +206,7 @@ const ACTIVITY_HEADLINE: Record<AgentActivity, string | null> = {
 export class ActivityService {
   private readonly home: string;
   private readonly now: () => Date;
+  private readonly sweep: () => Promise<unknown>;
 
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -164,10 +216,13 @@ export class ActivityService {
       home: string;
       /** Injected so staleness decay is testable without waiting ten minutes. */
       now?: () => Date;
+      /** The polled detectors, run first by `refresh`. */
+      sweep?: () => Promise<unknown>;
     },
   ) {
     this.home = options.home;
     this.now = options.now ?? (() => new Date());
+    this.sweep = options.sweep ?? (async () => undefined);
   }
 
   private attentionListener: (
@@ -188,43 +243,6 @@ export class ActivityService {
     ) => Promise<unknown>,
   ): void {
     this.attentionListener = listener;
-  }
-
-  /**
-   * Whether an observation from `source` may overwrite what `stored` says.
-   *
-   * Provider fidelity is wildly asymmetric, so the source is not decoration:
-   * a pane guess must never be able to overwrite a hook fact, or the display
-   * quietly degrades to the confidence of its worst detector. A stale reading
-   * is fair game for anyone, because by then nobody is claiming it is true.
-   */
-  private outranked(
-    stored: StoredAgentActivity | undefined,
-    source: AgentActivitySource,
-    at: number,
-  ): boolean {
-    if (!stored) return false;
-    const rank = (value: AgentActivitySource) =>
-      value === "pane" ? 1 : value === "transcript" ? 2 : 3;
-    if (rank(source) >= rank(stored.source)) return false;
-    return at - Date.parse(stored.observedAt) < ACTIVITY_STALE_AFTER_MS;
-  }
-
-  /**
-   * The guarded compare-and-set from dev-3.0, and the reason there is no turn
-   * id anywhere in this file. Hooks fire concurrently and arrive out of order,
-   * and what actually needs protecting is not "is this the same turn" but "is
-   * the state I am about to overwrite more meaningful than the one I carry".
-   * Comparing against the current state answers that directly.
-   */
-  private guarded(
-    stored: StoredAgentActivity | undefined,
-    input: RecordActivityInput,
-  ): boolean {
-    const current = stored?.activity ?? "unknown";
-    if (input.ifActivity && !input.ifActivity.includes(current)) return false;
-    if (input.ifNotActivity?.includes(current)) return false;
-    return true;
   }
 
   list(): AgentActivityState[] {
@@ -282,11 +300,7 @@ export class ActivityService {
     const session = this.session(input.sessionId);
     const previous = this.repositories.findAgentActivity(input.sessionId);
     const at = this.now();
-    if (
-      !this.guarded(previous, input) ||
-      (!input.authoritative &&
-        this.outranked(previous, input.source, at.getTime()))
-    )
+    if (!admitsActivityWrite(previous, input, at.getTime()))
       return {
         state: previous
           ? publicState(previous)
@@ -407,10 +421,8 @@ export class ActivityService {
     ifActivity: readonly AgentActivity[] | undefined,
   ): Promise<ActivityOutcome | undefined> {
     const stored = this.repositories.findAgentActivity(sessionId);
-    if (!stored || (ifActivity && !ifActivity.includes(stored.activity)))
-      return undefined;
     const at = this.now();
-    if (at.getTime() - Date.parse(stored.observedAt) < HEARTBEAT_INTERVAL_MS)
+    if (!stored || !heartbeatDue(stored, ifActivity, at.getTime()))
       return undefined;
     const next: StoredAgentActivity = {
       ...stored,
@@ -449,6 +461,17 @@ export class ActivityService {
       decayed.push(state);
     }
     return decayed;
+  }
+
+  /**
+   * Brings every reading up to date without waiting for a hook: the polled
+   * detectors run, then stale readings decay. The app runs it on its reconcile
+   * tick and the CLI before it reports activity, so both report the same
+   * thing whether or not the app is running. Never throws.
+   */
+  async refresh(): Promise<void> {
+    await this.sweep().catch(() => undefined);
+    await this.decay().catch(() => undefined);
   }
 
   /**

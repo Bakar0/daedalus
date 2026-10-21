@@ -32,6 +32,16 @@ const CODEX_INSTRUCTIONS = [
 ];
 
 class FakeTmux implements TmuxClient {
+  openPty() {
+    return {
+      start: async () => {},
+      write() {},
+      resize() {},
+      close() {},
+    };
+  }
+  async pinWindowSize() {}
+  async unpinWindowSize() {}
   readonly sessions = new Set<string>();
   readonly launches: TmuxLaunch[] = [];
   readonly sent: Array<{ session: string; text: string }> = [];
@@ -244,6 +254,40 @@ describe("AgentService", () => {
       ) as { projects: Record<string, { trust_level: string }> };
       expect(codexConfig.projects[codexFolder]?.trust_level).toBe("trusted");
       expect(tmux.keys).toEqual([]);
+      context.close();
+    });
+  });
+
+  test("resolves a session by id or by a name only one live session has", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { claude: { executable: process.execPath, args: [] } },
+        }),
+      );
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home, CLAUDE_CONFIG_DIR: join(home, "claude") },
+        tmux: new FakeTmux(),
+      });
+      const workspace = await context.workspaces.create({ name: "Names" });
+      const spawn = (name: string) =>
+        context.agents.spawn({
+          workspace: workspace.id,
+          provider: "claude",
+          name,
+        });
+      const review = await spawn("Review");
+      await spawn("Twin");
+      await spawn("Twin");
+      expect(context.agents.resolve(review.id).id).toBe(review.id);
+      expect(context.agents.resolve(" review ").id).toBe(review.id);
+      expect(() => context.agents.resolve("Twin")).toThrow(
+        expect.objectContaining({ code: "VALIDATION" }),
+      );
+      expect(() => context.agents.resolve("Nobody")).toThrow(
+        expect.objectContaining({ code: "NOT_FOUND" }),
+      );
       context.close();
     });
   });
@@ -549,11 +593,11 @@ describe("AgentService", () => {
       // undo that. Adding it to this list would be the regression.
       expect(tmux.launches[1]?.args).toEqual([
         "run",
-        "--settings",
-        settingsFile(session.id),
-        ...CLAUDE_INSTRUCTIONS,
         "--model",
         "claude-fable-5-1[1m]",
+        ...CLAUDE_INSTRUCTIONS,
+        "--settings",
+        settingsFile(session.id),
         "--resume",
         session.id,
       ]);
@@ -609,11 +653,11 @@ describe("AgentService", () => {
       // restore repeats the launch model as it does for an explicit one.
       expect(tmux.launches[1]?.args).toEqual([
         "run",
-        "--settings",
-        settingsFile(session.id),
-        ...CLAUDE_INSTRUCTIONS,
         "--model",
         "default",
+        ...CLAUDE_INSTRUCTIONS,
+        "--settings",
+        settingsFile(session.id),
         "--resume",
         recoveredId,
       ]);
@@ -661,6 +705,9 @@ describe("AgentService", () => {
         "tui.disable_mouse_capture=true",
         "-c",
         "check_for_update_on_startup=false",
+        // A restore can write the Daedalus home as a spawn can.
+        "--add-dir",
+        home,
         ...CODEX_INSTRUCTIONS,
       ]);
       context.close();
@@ -710,6 +757,9 @@ describe("AgentService", () => {
         "tui.disable_mouse_capture=true",
         "-c",
         "check_for_update_on_startup=false",
+        // A restore can write the Daedalus home as a spawn can.
+        "--add-dir",
+        home,
         ...CODEX_INSTRUCTIONS,
       ]);
       context.close();

@@ -11,7 +11,6 @@ import {
 } from "@daedalus/core";
 import { callerSession } from "./caller";
 import { parseArguments, printResult } from "./arguments";
-import { resolveSession } from "./routines";
 
 export const teamHelp = `Team commands:
   daedal team say "<text>" [--team <lead>] [--user]
@@ -64,7 +63,7 @@ async function teamFor(
   caller: AgentSession | undefined,
 ): Promise<Team> {
   if (values.team !== undefined) {
-    const lead = await resolveSession(context, values.team);
+    const lead = context.agents.resolve(values.team);
     return context.teams.get(lead.id);
   }
   if (caller) {
@@ -311,7 +310,7 @@ export async function spawnTeamMember(
       );
     team = membership.team;
   } else {
-    team = context.teams.get((await resolveSession(context, input.lead)).id);
+    team = context.teams.get(context.agents.resolve(input.lead).id);
   }
   const callerRole =
     caller && !input.asUser ? context.teams.membership(caller.id) : undefined;
