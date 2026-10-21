@@ -1,7 +1,6 @@
 import { leaveInInbox, postToInbox, usesInbox } from "./session-inbox";
 import { readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { Database } from "bun:sqlite";
 import {
   findExecutable,
   isPathInside,
@@ -28,10 +27,6 @@ import {
   buildSkillInvocation,
   catalogOffersModel,
   CLAUDE_DEFAULT_MODEL,
-  claudeDaedalusSettingsArgs,
-  daedalusInstructionArgs,
-  ensureCodexHooks,
-  CODEX_DAEDALUS_TUI_ARGS,
   discoverProviderModels,
   REBIRTH_FILE,
   REBIRTH_SKILL,
@@ -53,13 +48,12 @@ import type { AbilityService } from "./abilities";
 import {
   accountConfig,
   accountEnvironment,
-  accountName,
-  accountProfile,
   DEFAULT_ACCOUNT,
   findAccount,
   providerLabel,
 } from "./account-homes";
-import { checkSignIn } from "./accounts";
+import type { AccountService } from "./accounts";
+import { hasPersistedCodexSession } from "./codex-sessions";
 import { forgetSessionFolders, trustSessionFolder } from "./folder-trust";
 import { applyManualOrder } from "./ordering";
 import type { TaskService } from "./tasks";
@@ -72,8 +66,6 @@ const CODEX_ROLLOUT_FILE =
   /([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.jsonl$/i;
 const CODEX_WRITER_LOCK =
   /^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.lock$/i;
-const UUID_VALUE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SESSION_RECOVERY_WINDOW_MS = 60_000;
 const SESSION_RECOVERY_UNIQUENESS_MS = 2_000;
 const PROVIDER_STARTUP_TIMEOUT_MS = 30_000;
@@ -388,83 +380,6 @@ export async function recoverCodexSessionId(input: {
   return closest.id;
 }
 
-export async function hasPersistedCodexSession(input: {
-  sessionsDirectory: string;
-  id: string;
-  startedAt: string;
-}): Promise<boolean> {
-  // Legacy Codex sessions may be addressed by their user-visible name.
-  if (!UUID_VALUE.test(input.id)) return true;
-  const codexHome = dirname(input.sessionsDirectory);
-  try {
-    const entries = await readdir(codexHome, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isFile() || !/^state_\d+\.sqlite$/.test(entry.name)) continue;
-      let database: Database | undefined;
-      try {
-        database = new Database(join(codexHome, entry.name), {
-          readonly: true,
-        });
-        const found = database
-          .query<{ found: number }, [string]>(
-            "SELECT 1 AS found FROM threads WHERE id = ? LIMIT 1",
-          )
-          .get(input.id);
-        if (found) return true;
-      } catch {
-        // Fall through to rollout files for older or incompatible schemas.
-      } finally {
-        database?.close();
-      }
-    }
-  } catch {
-    // The Codex home may predate the SQLite state store.
-  }
-
-  const startedAt = Date.parse(input.startedAt);
-  if (Number.isFinite(startedAt)) {
-    for (const offset of [-1, 0, 1]) {
-      const [year, month, day] = new Date(
-        startedAt + offset * 24 * 60 * 60 * 1_000,
-      )
-        .toISOString()
-        .slice(0, 10)
-        .split("-");
-      if (
-        await hasCodexRollout(
-          join(input.sessionsDirectory, year!, month!, day!),
-          input.id,
-        )
-      )
-        return true;
-    }
-  }
-  return hasCodexRollout(join(codexHome, "archived_sessions"), input.id);
-}
-
-/**
- * An empty rollout is a conversation Codex opened and never wrote to. Codex
- * keeps no thread for it, so `codex archive` fails with "failed to archive
- * session", and there is nothing in it to resume.
- */
-async function hasCodexRollout(directory: string, id: string) {
-  let entries: string[];
-  try {
-    entries = await readdir(directory);
-  } catch {
-    // Missing date directories are expected.
-    return false;
-  }
-  for (const entry of entries) {
-    if (!entry.endsWith(`${id}.jsonl`)) continue;
-    const size = await stat(join(directory, entry))
-      .then((file) => file.size)
-      .catch(() => 0);
-    if (size > 0) return true;
-  }
-  return false;
-}
-
 /**
  * Claude's footer once it is ready for input. The relaxed modes print
  * "shift+tab to cycle"; the default mode prints
@@ -503,6 +418,7 @@ export class AgentService {
     private readonly tmux: TmuxClient,
     private readonly config: DaedalusConfig,
     private readonly abilities: AbilityService,
+    private readonly accounts: AccountService,
     /**
      * Called when a session is *over* — stopped, archived, removed. An
      * attention badge on a session that is over is the purest form of a badge
@@ -823,79 +739,6 @@ export class AgentService {
     return undefined;
   }
 
-  /**
-   * The account a new session runs on: the one asked for, else its
-   * predecessor's when it continues one on the same provider, else the
-   * workspace's default for that provider, else the provider's own.
-   *
-   * A workspace default whose profile was removed falls back to the default
-   * account, because removing a profile already clears those. A predecessor's
-   * account that is gone is refused instead: the conversation the successor
-   * is meant to carry on lived in that folder.
-   */
-  private launchAccount(
-    workspace: Workspace,
-    provider: "claude" | "codex" | "custom",
-    input: { account?: string | null; continueFrom?: AgentSession },
-  ): string | null {
-    if (provider === "custom") {
-      if (input.account && input.account !== DEFAULT_ACCOUNT)
-        throw new DaedalusError(
-          "VALIDATION",
-          "A custom command has no accounts; choose --provider to pick one",
-        );
-      return null;
-    }
-    if (input.account !== undefined)
-      return findAccount(this.config, provider, input.account)?.id ?? null;
-    const previous = input.continueFrom;
-    if (previous && previous.provider === provider) {
-      if (
-        previous.account &&
-        !accountProfile(this.config, provider, previous.account)
-      )
-        throw new DaedalusError(
-          "CONFLICT",
-          `This session ran on the ${providerLabel(provider)} account '${previous.account}', which was removed`,
-        );
-      return previous.account;
-    }
-    const preferred =
-      provider === "claude"
-        ? workspace.defaultClaudeAccount
-        : workspace.defaultCodexAccount;
-    return accountProfile(this.config, provider, preferred) ? preferred : null;
-  }
-
-  /**
-   * Refuses a launch on an account its provider says is signed out, which
-   * would otherwise open a terminal that fails on its first turn. Only a
-   * definite "signed out" stops it: a provider too old to say, or one that
-   * did not answer, gets the benefit of the doubt.
-   */
-  private async requireSignedIn(
-    provider: "claude" | "codex",
-    account: string | null,
-  ): Promise<void> {
-    const signIn = await checkSignIn(this.config, provider, account);
-    if (signIn.state !== "signed-out") return;
-    const name = accountName(this.config, provider, account);
-    if (accountProfile(this.config, provider, account)?.kind === "api-key")
-      throw new DaedalusError(
-        "DEPENDENCY",
-        `The ${name} account has no API key. Set it in Settings → Agents, or pipe it to 'daedal account key claude ${JSON.stringify(name)}'.`,
-        { provider, account, reason: "signed-out" },
-      );
-    const reference = account
-      ? ` ${JSON.stringify(accountProfile(this.config, provider, account)?.name ?? account)}`
-      : "";
-    throw new DaedalusError(
-      "DEPENDENCY",
-      `${providerLabel(provider)} is not signed in on the ${name} account. Sign in from Settings → Agents, or run 'daedal account login ${provider}${reference}'.`,
-      { provider, account: account ?? DEFAULT_ACCOUNT, reason: "signed-out" },
-    );
-  }
-
   async spawn(input: {
     workspace: string;
     taskId?: string;
@@ -967,8 +810,22 @@ export class AgentService {
         "VALIDATION",
         "A terminal session has no account",
       );
+    // Probed first: it is what finds a provider installed only on the login
+    // shell's PATH, and the sign-in check needs to find it too.
+    if (chosen) {
+      const availability = await chosen.adapter.probe();
+      if (!availability.available)
+        throw new DaedalusError(
+          "DEPENDENCY",
+          `Agent executable '${availability.executable}' is not available on PATH`,
+        );
+    }
     const account = chosen
-      ? this.launchAccount(workspace, chosen.name, input)
+      ? await this.accounts.forLaunch(chosen.name, {
+          requested: input.account,
+          previous: input.continueFrom,
+          workspace,
+        })
       : null;
     // The launch reads the account's own folders: its Codex config for hooks
     // and instructions, its Claude folder for skills.
@@ -996,16 +853,6 @@ export class AgentService {
           },
           input.abilities ?? [],
         );
-    if (provider) {
-      const availability = await provider.adapter.probe();
-      if (!availability.available)
-        throw new DaedalusError(
-          "DEPENDENCY",
-          `Agent executable '${availability.executable}' is not available on PATH`,
-        );
-      if (provider.name !== "custom")
-        await this.requireSignedIn(provider.name, account);
-    }
     // Resolved before anything is prepared on disk, so a default the
     // provider no longer offers refuses here and leaves no worktree behind.
     const model = provider
@@ -1972,128 +1819,45 @@ export class AgentService {
           "Custom sessions do not define a native resume capability",
         );
     } else if (agent.kind === "agent") {
-      const nativeSessionId = agent.providerSessionId;
-      if (!nativeSessionId && agent.provider !== "codex")
-        throw new DaedalusError(
-          "CONFLICT",
-          "This session predates native resume support and cannot be resumed safely",
-        );
-      const definition = this.config.agents[agent.provider];
-      if (!definition)
+      if (!this.config.agents[agent.provider])
         throw new DaedalusError(
           "DEPENDENCY",
           `Agent configuration '${agent.provider}' is unavailable`,
         );
-      executable =
-        resolveAgentExecutable(agent.provider, definition.executable) ??
-        definition.executable;
-      if (
-        agent.account &&
-        !accountProfile(this.config, agent.provider, agent.account)
-      )
-        throw new DaedalusError(
-          "CONFLICT",
-          `This session ran on the ${providerLabel(agent.provider)} account '${agent.account}', which was removed`,
-        );
-      if (agent.provider === "claude" || agent.provider === "codex")
-        await this.requireSignedIn(agent.provider, agent.account);
-      const additionalDirectories = sessionDirectories(
-        workspace.path,
-        this.repositories
-          .listWorkspaceRepositories(workspace.id)
-          .map(
-            (repository) =>
-              repository.referencePath ?? repository.canonicalPath,
-          ),
-      ).flatMap((directory) => ["--add-dir", directory]);
-      const selectedModel = modelArgument(agent.args);
-      const modelArgs = selectedModel ? ["--model", selectedModel] : [];
-      if (agent.provider === "codex") {
-        const hasNativeConversation = nativeSessionId
-          ? await hasPersistedCodexSession({
-              sessionsDirectory: scoped.codexSessionsDirectory,
-              id: nativeSessionId,
-              startedAt: agent.startedAt,
-            })
-          : false;
-        if (hasNativeConversation && nativeSessionId) {
-          // Only a conversation Daedalus archived needs unarchiving. A session
-          // that merely lost its tmux server never left Codex's active list,
-          // and `codex unarchive` on one fails with wording that has nothing
-          // to do with the single message `isMissingCodexConversationError`
-          // forgives — which would abort a revive that was about to work.
-          if (agent.archivedAt) {
-            const unarchive = await runCommand(
-              executable,
-              ["unarchive", nativeSessionId],
-              { cwd: agent.workingDirectory, env: accountEnv },
-            );
-            const unarchiveError =
-              unarchive.stderr.trim() || unarchive.stdout.trim();
-            if (unarchive.exitCode !== 0)
-              throw new DaedalusError(
-                "CONFLICT",
-                unarchiveError || "Codex could not restore the conversation",
-              );
-          }
-          args = [
-            ...(await daedalusInstructionArgs(scoped, "codex", [
-              ...definition.args,
-              ...CODEX_DAEDALUS_TUI_ARGS,
-              ...(await ensureCodexHooks(scoped, executable)),
-            ])),
-            ...modelArgs,
-            ...additionalDirectories,
-            "resume",
-            nativeSessionId,
-          ];
-        } else {
-          // Codex allocates a thread UUID before the first user event but does
-          // not persist an empty conversation. Restoring such an archived
-          // session correctly starts a new empty native session.
-          args = [
-            ...(await daedalusInstructionArgs(scoped, "codex", [
-              ...definition.args,
-              ...CODEX_DAEDALUS_TUI_ARGS,
-              ...(await ensureCodexHooks(scoped, executable)),
-            ])),
-            ...modelArgs,
-            ...additionalDirectories,
-          ];
-          providerSessionId = null;
-        }
-      } else if (agent.provider === "claude") {
-        if (!nativeSessionId)
-          throw new DaedalusError(
-            "CONFLICT",
-            "This session predates native resume support and cannot be resumed safely",
-          );
-        args = [
-          ...(await daedalusInstructionArgs(
-            scoped,
-            "claude",
-            await claudeDaedalusSettingsArgs(
-              scoped,
-              definition.args,
-              agent.id,
-              {
-                acceptPeerMessages:
-                  Boolean(agent.teamId) ||
-                  Boolean(this.abilities.held(agent.id, "orchestration")),
-              },
+      // Called for its refusals only: a resume keeps the session's own
+      // account, which `previous` hands straight back.
+      await this.accounts.forLaunch(agent.provider, {
+        previous: agent,
+        workspace,
+      });
+      const launch = await resolveProvider(scoped, {
+        provider: agent.provider,
+      }).adapter.buildLaunch({
+        sessionId: agent.id,
+        model: modelArgument(agent.args),
+        acceptPeerMessages:
+          Boolean(agent.teamId) ||
+          Boolean(this.abilities.held(agent.id, "orchestration")),
+        additionalDirectories: sessionDirectories(
+          workspace.path,
+          this.repositories
+            .listWorkspaceRepositories(workspace.id)
+            .map(
+              (repository) =>
+                repository.referencePath ?? repository.canonicalPath,
             ),
-          )),
-          ...modelArgs,
-          ...additionalDirectories,
-          "--resume",
-          nativeSessionId,
-        ];
-      } else {
-        throw new DaedalusError(
-          "CONFLICT",
-          `Agent configuration '${agent.provider}' cannot be resumed`,
-        );
-      }
+        ),
+        resume: {
+          nativeId: agent.providerSessionId ?? undefined,
+          startedAt: agent.startedAt,
+          archived: Boolean(agent.archivedAt),
+          workingDirectory: agent.workingDirectory,
+          env: accountEnv,
+        },
+      });
+      executable = launch.executable;
+      args = launch.args;
+      providerSessionId = launch.providerSessionId ?? null;
     }
 
     const restoring: AgentSession = {

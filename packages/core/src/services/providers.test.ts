@@ -2,10 +2,11 @@ import { describe, expect, test, vi } from "vitest";
 import { join } from "node:path";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { loadConfig, updateSettings } from "../config";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import {
   catalogOffersModel,
   claudeDaedalusSettingsArgs,
+  CODEX_DAEDALUS_TUI_ARGS,
   codexConfigPath,
   DAEDALUS_STATUS_INSTRUCTIONS,
   daedalusInstructionArgs,
@@ -506,6 +507,214 @@ describe("buildLaunch permission mode", () => {
         provider: "codex",
       }).adapter.buildLaunch({});
       expect(codex.args).not.toContain('approvals_reviewer="auto_review"');
+    });
+  });
+});
+
+describe("buildLaunch resume", () => {
+  const nativeId = "8ceaa092-b66b-4dc9-8b5d-a2e7cd40ae7b";
+  const startedAt = "2026-10-20T09:00:00.000Z";
+  const isolated = async (home: string) =>
+    loadConfig({ DAEDALUS_HOME: home, CODEX_HOME: join(home, "codex") });
+
+  /** A `codex` that logs every invocation and succeeds, or fails `unarchive`. */
+  const codexRecorder = async (home: string, failUnarchive = false) => {
+    const path = join(home, "codex-recorder");
+    const log = join(home, "codex-invocations.log");
+    await writeFile(
+      path,
+      `#!/bin/sh\nprintf '%s|%s|%s\\n' "$*" "$PWD" "$CODEX_HOME" >> ${JSON.stringify(log)}\n${
+        failUnarchive
+          ? `[ "$1" = "unarchive" ] && { echo "no such thread" >&2; exit 1; }\n`
+          : ""
+      }exit 0\n`,
+    );
+    await chmod(path, 0o755);
+    return {
+      path,
+      invocations: async () =>
+        (await readFile(log, "utf8").catch(() => ""))
+          .split("\n")
+          .filter(Boolean),
+    };
+  };
+
+  const writeRollout = async (home: string) => {
+    const directory = join(home, "codex", "sessions", "2026", "10", "20");
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      join(directory, `rollout-${nativeId}.jsonl`),
+      `${JSON.stringify({ type: "session_meta", payload: { id: nativeId } })}\n`,
+    );
+  };
+
+  const resume = (home: string, overrides: { archived?: boolean } = {}) => ({
+    nativeId,
+    startedAt,
+    archived: overrides.archived ?? false,
+    workingDirectory: home,
+    env: { CODEX_HOME: join(home, "account") },
+  });
+
+  test("Claude resumes its conversation instead of naming a new one", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await isolated(home);
+      const { adapter } = resolveProvider(config, { provider: "claude" });
+      const launch = await adapter.buildLaunch({
+        sessionId: "daedalus-session",
+        sessionName: "Name",
+        model: "opus",
+        resume: resume(home),
+      });
+      expect(launch.args.slice(-2)).toEqual(["--resume", nativeId]);
+      expect(launch.providerSessionId).toBe(nativeId);
+      expect(launch.args).not.toContain("--session-id");
+      expect(launch.args).not.toContain("--name");
+      expect(launch.args).toContain("--settings");
+      expect(launch.args).toContain(DAEDALUS_STATUS_INSTRUCTIONS);
+      expect(modelArgument(launch.args)).toBe("opus");
+      // Applied at spawn only: a user who tightened the session keeps it.
+      expect(launch.args).not.toContain("--permission-mode");
+    });
+  });
+
+  test("Claude refuses to resume a session with no conversation id", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await isolated(home);
+      const { adapter } = resolveProvider(config, { provider: "claude" });
+      await expect(
+        adapter.buildLaunch({
+          resume: { ...resume(home), nativeId: undefined },
+        }),
+      ).rejects.toThrow("predates native resume support");
+    });
+  });
+
+  test("Codex resumes a kept conversation with the same reach as a spawn", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await isolated(home);
+      const codex = await codexRecorder(home);
+      config.agents.codex!.executable = codex.path;
+      await writeRollout(home);
+      const launch = await resolveProvider(config, {
+        provider: "codex",
+      }).adapter.buildLaunch({
+        additionalDirectories: ["/repos/a"],
+        resume: resume(home),
+      });
+      expect(launch.args.slice(-2)).toEqual(["resume", nativeId]);
+      expect(launch.providerSessionId).toBe(nativeId);
+      expect(launch.args).toContain("/repos/a");
+      // The sandbox would otherwise refuse every `daedal` write.
+      expect(launch.args[launch.args.indexOf(config.home) - 1]).toBe(
+        "--add-dir",
+      );
+      expect(launch.args).toContain("--no-alt-screen");
+      expect(launch.args).not.toContain('approvals_reviewer="auto_review"');
+      // Never archived, so not unarchived either.
+      expect(
+        (await codex.invocations()).some((line) =>
+          line.startsWith("unarchive"),
+        ),
+      ).toBe(false);
+    });
+  });
+
+  test("Codex's resume argv in full", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await isolated(home);
+      const codex = await codexRecorder(home);
+      config.agents.codex!.executable = codex.path;
+      await writeRollout(home);
+      const launch = await resolveProvider(config, {
+        provider: "codex",
+      }).adapter.buildLaunch({
+        model: "gpt-5",
+        additionalDirectories: ["/repos/a", "/repos/b"],
+        resume: resume(home),
+      });
+      // The recorder prints no version, so this Codex gets no hook flags.
+      expect(launch.args).toEqual([
+        "--model",
+        "gpt-5",
+        "--add-dir",
+        "/repos/a",
+        "--add-dir",
+        "/repos/b",
+        ...CODEX_DAEDALUS_TUI_ARGS,
+        "--add-dir",
+        config.home,
+        "-c",
+        `developer_instructions=${JSON.stringify(DAEDALUS_STATUS_INSTRUCTIONS)}`,
+        "resume",
+        nativeId,
+      ]);
+    });
+  });
+
+  test("Codex unarchives an archived conversation on the session's account", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await isolated(home);
+      const codex = await codexRecorder(home);
+      config.agents.codex!.executable = codex.path;
+      await writeRollout(home);
+      await resolveProvider(config, { provider: "codex" }).adapter.buildLaunch({
+        resume: resume(home, { archived: true }),
+      });
+      expect(await codex.invocations()).toContain(
+        `unarchive ${nativeId}|${await realpath(home)}|${join(home, "account")}`,
+      );
+    });
+  });
+
+  test("Codex refuses a resume it could not unarchive", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await isolated(home);
+      const codex = await codexRecorder(home, true);
+      config.agents.codex!.executable = codex.path;
+      await writeRollout(home);
+      await expect(
+        resolveProvider(config, { provider: "codex" }).adapter.buildLaunch({
+          resume: resume(home, { archived: true }),
+        }),
+      ).rejects.toThrow("no such thread");
+    });
+  });
+
+  test("Codex starts a new conversation when none was kept", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await isolated(home);
+      const codex = await codexRecorder(home);
+      config.agents.codex!.executable = codex.path;
+      for (const nativeIdOverride of [nativeId, undefined]) {
+        const launch = await resolveProvider(config, {
+          provider: "codex",
+        }).adapter.buildLaunch({
+          resume: {
+            ...resume(home, { archived: true }),
+            nativeId: nativeIdOverride,
+          },
+        });
+        expect(launch.args).not.toContain("resume");
+        expect(launch.providerSessionId).toBeUndefined();
+      }
+      expect(
+        (await codex.invocations()).some((line) =>
+          line.startsWith("unarchive"),
+        ),
+      ).toBe(false);
+    });
+  });
+
+  test("a custom command cannot be resumed", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await isolated(home);
+      config.agents.shell = { executable: "/bin/sh", args: [] };
+      await expect(
+        resolveProvider(config, { command: "shell" }).adapter.buildLaunch({
+          resume: resume(home),
+        }),
+      ).rejects.toThrow("native resume capability");
     });
   });
 });

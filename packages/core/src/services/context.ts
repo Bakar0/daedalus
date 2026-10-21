@@ -171,6 +171,9 @@ export async function createApplicationContext(
     () => options.onRepositoriesChanged?.(),
     (folder) => terminals.closeInside(folder),
   );
+  const accounts = new AccountService(config, repositories, undefined, (id) =>
+    agents.archive(id, true),
+  );
   agents = new AgentService(
     repositories,
     workspaces,
@@ -179,6 +182,7 @@ export async function createApplicationContext(
     tmux,
     config,
     abilities,
+    accounts,
     (sessionId) => {
       activity.forget(sessionId);
       // Archiving a running session stops it first, which ends it twice.
@@ -308,9 +312,7 @@ export async function createApplicationContext(
     notifications,
     activity,
     skills: new SkillService(config),
-    accounts: new AccountService(config, repositories, undefined, (id) =>
-      agents.archive(id, true),
-    ),
+    accounts,
     secrets,
     abilities,
     routines,
