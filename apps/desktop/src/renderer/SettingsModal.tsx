@@ -24,6 +24,7 @@ import {
   type RpcResult,
 } from "@daedalus/protocol";
 import { AccountsPanel } from "./AccountsPanel";
+import { CloudPanel } from "./CloudPanel";
 import type { DesktopClient } from "./client-types";
 import { AccountPanel, showsPro, useRemoteState } from "./ProPlan";
 import { RemotePanel } from "./RemotePanel";
@@ -39,6 +40,7 @@ export const SETTINGS_SECTIONS = [
   { id: "sessions", label: "Sessions" },
   { id: "notifications", label: "Notifications" },
   { id: "remote", label: "Remote" },
+  { id: "cloud", label: "Cloud" },
   { id: "about", label: "About" },
 ] as const;
 
@@ -341,6 +343,12 @@ export function SettingsModal({
               onOpenAccount={() => onSection("account")}
               perform={perform}
             />
+          </section>
+        ) : undefined}
+
+        {section === "cloud" ? (
+          <section className="settings-section">
+            <CloudPanel busy={busy} client={client} perform={perform} />
           </section>
         ) : undefined}
 

@@ -190,6 +190,11 @@ export class CloudLink implements RunnerTransport {
     this.#socket = undefined;
   }
 
+  /** Whether the relay connection is open right now. */
+  get connected(): boolean {
+    return this.#connected;
+  }
+
   /** Whether the runner's secure channel is up. */
   linked(workspaceId: string): boolean {
     return Boolean(this.#runners.get(workspaceId)?.channel);

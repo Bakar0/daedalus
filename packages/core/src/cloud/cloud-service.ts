@@ -1,5 +1,6 @@
 import type {
   CloudWorkspace,
+  CloudWorkspaceStatus,
   DeviceIdentity,
   GatewayUser,
   RunnerMethod,
@@ -30,6 +31,34 @@ const RUNNER_WAIT_MS = 20_000;
 /** How long a wake keeps trying while the old pod is still going. */
 const WAKE_RETRY_MS = 30_000;
 
+/** How long a wake for a session waits for the new pod's runner. */
+const WAKE_RUNNER_MS = 180_000;
+
+export type CloudConnection = "signed-out" | "connecting" | "online" | "error";
+
+/** A cloud workspace made from a local one, without its runner key. */
+export interface LinkedCloudWorkspace {
+  /** The local workspace. */
+  workspaceId: string;
+  cloudId: string;
+  status: CloudWorkspaceStatus;
+  runnerOnline: boolean;
+  reason: string | null;
+}
+
+/**
+ * What a window shows of the sign-in: never the token, the runner keys or
+ * the pins.
+ */
+export interface CloudOverview {
+  gatewayUrl: string | null;
+  email: string | null;
+  connection: CloudConnection;
+  /** Why the gateway could not be read, in words for the user. */
+  error: string | null;
+  workspaces: LinkedCloudWorkspace[];
+}
+
 export interface CloudServiceOptions {
   config: DaedalusConfig;
   repositories: SqliteRepositories;
@@ -58,6 +87,8 @@ export class CloudService {
   #transport: Promise<RunnerTransport> | undefined;
   #stopBroker: (() => Promise<void>) | undefined;
   #identity: Promise<DeviceIdentity> | undefined;
+  /** Set once `hold` was called: this process is the app. */
+  #holder = false;
 
   constructor(private readonly options: CloudServiceOptions) {
     this.account = options.account ?? new CloudAccount(options.config.home);
@@ -95,6 +126,102 @@ export class CloudService {
     const { user, token } = await client.devLogin(email);
     await this.account.save({ gatewayUrl: client.url, user, token });
     return user;
+  }
+
+  /**
+   * The app's sign-in: the dev login, then the link opened again for the
+   * new account, which the app holds for every process.
+   */
+  async signIn(gatewayUrl: string, email: string): Promise<GatewayUser> {
+    const user = await this.devLogin(gatewayUrl, email);
+    if (this.#holder) {
+      this.close();
+      await this.hold();
+    }
+    return user;
+  }
+
+  /**
+   * The sign-in, the link's state and the cloud workspaces made from local
+   * ones. One gateway request; a failed one is reported, not thrown.
+   */
+  async overview(): Promise<CloudOverview> {
+    const signIn = await this.account.signIn();
+    if (!signIn)
+      return {
+        gatewayUrl: null,
+        email: null,
+        connection: "signed-out",
+        error: null,
+        workspaces: [],
+      };
+    const base = { gatewayUrl: signIn.gatewayUrl, email: signIn.user.email };
+    let listed: CloudWorkspace[];
+    try {
+      listed = await this.list();
+    } catch (error) {
+      return {
+        ...base,
+        connection: "error",
+        error: error instanceof Error ? error.message : String(error),
+        workspaces: [],
+      };
+    }
+    const workspaces: LinkedCloudWorkspace[] = [];
+    for (const item of listed) {
+      const workspaceId = this.options.repositories.workspaceForCloud(
+        item.workspaceId,
+      );
+      if (!workspaceId) continue;
+      workspaces.push({
+        workspaceId,
+        cloudId: item.workspaceId,
+        status: item.status,
+        runnerOnline: item.runnerOnline,
+        reason: item.reason,
+      });
+    }
+    return {
+      ...base,
+      // Without a link of its own (the CLI), an answer is as online as it gets.
+      connection: this.#link && !this.#link.connected ? "connecting" : "online",
+      error: null,
+      workspaces,
+    };
+  }
+
+  /**
+   * Wakes a workspace and waits until its runner is linked to this Mac, so a
+   * session can be revived in it right away.
+   */
+  async wakeForSessions(workspaceReference: string): Promise<CloudWorkspace> {
+    const woken = await this.wake(workspaceReference);
+    const workspaceId = woken.workspaceId;
+    if (this.#link) {
+      if (!(await this.#link.waitForRunner(workspaceId, WAKE_RUNNER_MS)))
+        throw new DaedalusError(
+          "DEPENDENCY",
+          "The cloud workspace woke, but its runner did not connect in time; try again in a minute",
+        );
+      return woken;
+    }
+    const client = await this.#client();
+    const deadline = Date.now() + WAKE_RUNNER_MS;
+    for (let current = woken; ;) {
+      if (current.runnerOnline) return current;
+      if (current.status === "failed")
+        throw new DaedalusError(
+          "DEPENDENCY",
+          current.reason ?? "The cloud workspace failed to start",
+        );
+      if (Date.now() > deadline)
+        throw new DaedalusError(
+          "DEPENDENCY",
+          "The cloud workspace woke, but its runner did not connect in time; try again in a minute",
+        );
+      await Bun.sleep(1_000);
+      current = await client.getWorkspace(workspaceId);
+    }
   }
 
   async logout(): Promise<void> {
@@ -284,6 +411,7 @@ export class CloudService {
    * host for each cloud workspace so reconcile and revive cover them.
    */
   async hold(): Promise<boolean> {
+    this.#holder = true;
     if (!(await this.account.signIn())) return false;
     const link = this.#link ?? (await this.#openLink());
     this.#transport = Promise.resolve(link);

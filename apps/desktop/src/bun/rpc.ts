@@ -15,6 +15,7 @@ import {
   type AgentActivityState,
   type AgentSession,
   type ApplicationContext,
+  type CloudOverview,
   type IntegratedTerminal,
   type PendingNotification,
   type PresenceState,
@@ -39,6 +40,7 @@ import type {
   AppUpdateDto,
   QuitChoice,
   AgentSessionDto,
+  CloudStateDto,
   DesktopRpcSchema,
   DesktopSnapshotDto,
   DesktopWindowRole,
@@ -125,6 +127,21 @@ const taskDto = (task: Task): TaskDto => ({ ...task });
 const agentDto = (agent: AgentSession): AgentSessionDto => ({
   ...agent,
   args: [...agent.args],
+});
+/** Field by field, so nothing else the host knows can come along. */
+const cloudStateDto = (overview: CloudOverview): CloudStateDto => ({
+  signedIn: overview.connection !== "signed-out",
+  gatewayUrl: overview.gatewayUrl,
+  email: overview.email,
+  connection: overview.connection,
+  error: overview.error,
+  workspaces: overview.workspaces.map((workspace) => ({
+    workspaceId: workspace.workspaceId,
+    cloudId: workspace.cloudId,
+    status: workspace.status,
+    runnerOnline: workspace.runnerOnline,
+    reason: workspace.reason,
+  })),
 });
 const accountDto = (
   context: ApplicationContext,
@@ -798,6 +815,18 @@ export function createDesktopRequestHandlers(
       mutate(async () => {
         await context.workspaceContent.setInstructionFilesEnabled(enabled);
         return { enabled };
+      }),
+    cloudState: () =>
+      result(async () => cloudStateDto(await context.cloud.overview())),
+    cloudSignIn: ({ gatewayUrl, email }) =>
+      mutate(async () => {
+        await context.cloud.signIn(gatewayUrl.trim(), email.trim());
+        return cloudStateDto(await context.cloud.overview());
+      }),
+    cloudSignOut: () =>
+      mutate(async () => {
+        await context.cloud.logout();
+        return cloudStateDto(await context.cloud.overview());
       }),
     remoteGet: () => result(() => remote.state()),
     remoteSetEnabled: ({ enabled }) => mutate(() => remote.setEnabled(enabled)),

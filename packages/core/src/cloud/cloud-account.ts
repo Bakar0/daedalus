@@ -101,7 +101,7 @@ export class CloudAccount {
     if (!signIn)
       throw new DaedalusError(
         "DEPENDENCY",
-        "This Mac is not signed in to a cloud gateway; run 'daedal cloud login'",
+        "This Mac is not signed in to a cloud gateway; sign in in Settings › Cloud or run 'daedal cloud login'",
       );
     return signIn;
   }
