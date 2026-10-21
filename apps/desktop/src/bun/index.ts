@@ -12,13 +12,12 @@ import Electrobun, {
 import {
   channelHome,
   createApplicationContext,
-  sweepProviderActivity,
+  ReadModel,
   WORKSPACE_FILES_CHANGED,
   type WorkspaceFilesChanged,
 } from "@daedalus/core";
 import {
   BUNDLED_TMUX_VARIABLE,
-  CommandTmuxClient,
   isInheritedSessionVariable,
   pathExists,
 } from "@daedalus/platform";
@@ -41,7 +40,7 @@ import { installCliShim } from "./cli-shim";
 import { QuitController } from "./quit";
 import { UpdateController } from "./updates";
 import { agentTerminalOpener, PhoneWindowSize, RemoteHost } from "./remote";
-import { createDesktopRequestHandlers, desktopDataFingerprint } from "./rpc";
+import { createDesktopRequestHandlers } from "./rpc";
 import {
   authorizeTerminalRequest,
   isTyping,
@@ -180,10 +179,7 @@ await context.skills.sync().catch(async (error: unknown) => {
   });
 });
 
-const terminalTmux = context.tmux;
-if (!(terminalTmux instanceof CommandTmuxClient))
-  throw new Error("Desktop terminal requires the command tmux adapter");
-const phoneSizes = new PhoneWindowSize(terminalTmux);
+const phoneSizes = new PhoneWindowSize(context.tmux);
 const preexistingLiveIds = new Set([
   ...context.repositories
     .listAgents()
@@ -311,8 +307,15 @@ const rendererUrl = `views://mainview/index.html`;
 ApplicationMenu.setApplicationMenu(APPLICATION_MENU);
 
 let revision = 0;
-let fingerprint = desktopDataFingerprint(context);
-let telemetryFingerprint = "";
+const readModel = new ReadModel(context);
+/**
+ * The read model's version as of the last announcement. A promise, so a
+ * window's own mutation replaces it at once and the next tick compares against
+ * that rather than announcing the same change a second time.
+ */
+let announcedVersion = readModel.version().catch(() => "");
+/** The first tick announces whatever it finds, as the window may predate it. */
+let firstTick = true;
 let dockBadgeCount = 0;
 
 /**
@@ -327,8 +330,11 @@ async function recordAttentionCount(count: number): Promise<void> {
   await context.logger.write("info", "attention_count_changed", { count });
 }
 
-function announce(source: "desktop" | "external"): void {
-  fingerprint = desktopDataFingerprint(context);
+function announce(source: "desktop" | "external", version?: string): void {
+  announcedVersion =
+    version === undefined
+      ? readModel.version().catch(() => "")
+      : Promise.resolve(version);
   // There is no window between closing one and reopening from the Dock, and
   // a repository finishing its clone in that gap must not throw.
   revision += 1;
@@ -412,8 +418,10 @@ const remote = new RemoteHost({
   context,
   macName: hostname().replace(/\.local$/, ""),
   handlers: () =>
-    createDesktopRequestHandlers(context, () => announce("desktop")),
-  openTerminal: agentTerminalOpener(context, terminalTmux, phoneSizes),
+    createDesktopRequestHandlers(context, {
+      onMutation: () => announce("desktop"),
+    }),
+  openTerminal: agentTerminalOpener(context, phoneSizes),
   log: (event, fields) => void context.logger.write("info", event, fields),
 });
 announceRemote = () => remote.announce();
@@ -440,32 +448,31 @@ const createRpc = (role: DesktopWindowRole = "main") =>
     // minutes for large histories or slower remotes.
     maxRequestTime: 10 * 60_000,
     handlers: {
-      requests: createDesktopRequestHandlers(
-        context,
-        () => announce("desktop"),
-        Utils.openExternal,
+      requests: createDesktopRequestHandlers(context, {
+        onMutation: () => announce("desktop"),
+        openExternal: Utils.openExternal,
         terminalEndpoint,
-        {
+        quit: {
           dialogShown: () => quitController.dialogShown(),
           decide: (choice) => quitController.decide(choice),
         },
-        {
+        updates: {
           current: () => updates.update,
           check: () => updates.check({ manual: true }),
           install: () => updates.install(),
           dismiss: (version) => updates.dismiss(version),
         },
-        {
+        windows: {
           role,
           openWorld: openWorldWindow,
           focusSession: focusMainSession,
         },
-        (text) => {
+        clipboardWrite: (text) => {
           Utils.clipboardWriteText(text);
           return true;
         },
         remote,
-      ),
+      }),
     },
   });
 
@@ -733,8 +740,8 @@ setInterval(async () => {
   if (checkingForExternalChanges) return;
   checkingForExternalChanges = true;
   try {
-    // Reconciliation updates stale sessions; SQLite fingerprinting also catches
-    // mutations performed by another process such as the CLI.
+    // Reconciliation updates stale sessions; the read model's version also
+    // catches mutations performed by another process such as the CLI.
     //
     // Every child launched here blocks this thread inside `posix_spawn` until
     // the child has started, and on a loaded machine that was observed taking
@@ -758,13 +765,7 @@ setInterval(async () => {
     // cheap — the rollout read is gated on file mtime and decay only touches
     // rows that are already too old to believe — and neither deserves a timer
     // of its own.
-    await sweepProviderActivity({
-      config: context.config,
-      repositories: context.repositories,
-      activity: context.activity,
-      tmux: context.tmux,
-    }).catch(() => undefined);
-    await context.activity.decay().catch(() => undefined);
+    await context.activity.refresh();
     // Automatic rebirth rides the same tick. Telemetry is cached for five
     // seconds, so this is a map lookup on most ticks.
     await context.telemetry
@@ -845,17 +846,14 @@ setInterval(async () => {
     await recordAttentionCount(
       context.repositories.listSessionAttention().length,
     );
-    const next = desktopDataFingerprint(context);
-    const nextTelemetryFingerprint = JSON.stringify(
-      await context.telemetry.read(),
-    );
-    if (
-      next !== fingerprint ||
-      nextTelemetryFingerprint !== telemetryFingerprint
-    ) {
-      telemetryFingerprint = nextTelemetryFingerprint;
-      announce("external");
-    }
+    const seen = announcedVersion;
+    const next = await readModel.version();
+    const first = firstTick;
+    firstTick = false;
+    // A mutation announced while this read ran has already reloaded the
+    // windows, and the next tick compares against its version.
+    if (announcedVersion !== seen) return;
+    if (first || next !== (await seen)) announce("external", next);
   } catch (error) {
     await context.logger.write("error", "desktop_change_check_failed", {
       message: error instanceof Error ? error.message : String(error),

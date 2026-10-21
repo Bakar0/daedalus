@@ -100,6 +100,34 @@ export function processIsAlive(pid: number): boolean {
   }
 }
 
+/**
+ * The working folder of every running process the user can see, by pid, from
+ * `lsof`, which every macOS has. Undefined when `lsof` could not answer, which
+ * is not the same as no processes.
+ */
+export async function processWorkingDirectories(
+  run: typeof runCommand = runCommand,
+): Promise<Map<number, string> | undefined> {
+  let result: CommandResult;
+  try {
+    result = await run("/usr/sbin/lsof", ["-a", "-d", "cwd", "-F", "pn"], {
+      timeoutMs: 5_000,
+    });
+  } catch {
+    return undefined;
+  }
+  // 1 is what lsof exits with when it found none, or could not read some.
+  if (result.exitCode !== 0 && result.exitCode !== 1) return undefined;
+  const folders = new Map<number, string>();
+  let pid: number | undefined;
+  for (const line of result.stdout.split("\n")) {
+    if (line.startsWith("p")) pid = Number(line.slice(1));
+    else if (line.startsWith("n") && pid !== undefined)
+      folders.set(pid, line.slice(1));
+  }
+  return folders;
+}
+
 // A packaged macOS app is launched by Launch Services, not by a login shell, so
 // it inherits `/usr/bin:/bin:/usr/sbin:/sbin` and nothing a package manager
 // installed. Probing the standard install directories by absolute path is what

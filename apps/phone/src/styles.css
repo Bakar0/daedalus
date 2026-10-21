@@ -11,54 +11,70 @@
 }
 
 :root {
-  color-scheme: light dark;
-  --bg: #f3f6fc;
-  --surface: #f9fbfe;
-  --raised: rgb(255 255 255 / 0.64);
-  --line: rgb(80 99 130 / 0.15);
-  --text: #111a2f;
-  --secondary: #445167;
-  --muted: #71809a;
-  --accent: #0c75e6;
+  /* Dark, the default: the Mac's flat neutral greys (apps/desktop
+     styles.css). Light and Midnight below; theme.ts sets data-theme. */
+  color-scheme: dark;
+  --bg: #111112;
+  --surface: #161617;
+  --raised: rgb(255 255 255 / 0.035);
+  --line: rgb(255 255 255 / 0.075);
+  --text: #ececee;
+  --secondary: #c2c2c7;
+  --muted: #8a8a91;
+  --accent: #4596fe;
   --accent-text: #ffffff;
-  --success: #16815b;
-  --warning: #b26b00;
-  --danger: #d61133;
+  --success: #58c79a;
+  --warning: #f0b45a;
+  --danger: #ff8987;
+  --terminal-bg: #111112;
   /* The Mac's other tokens, for its board (mac-board.css). */
-  --panel: rgb(243 246 252 / 0.9);
-  --raised-hover: rgb(255 255 255 / 0.9);
-  --elevated: #f9fbfe;
-  --overlay: #fcfdff;
-  --line-strong: rgb(80 99 130 / 0.3);
-  --accent-hover: #085dc7;
-  --accent-wash: rgb(12 117 230 / 0.1);
-  --session-gold: #b4740b;
+  --panel: #161617;
+  --raised-hover: rgb(255 255 255 / 0.06);
+  --elevated: #1e1e20;
+  --overlay: #1f1f22;
+  --line-strong: rgb(255 255 255 / 0.14);
+  --accent-hover: #1c77f1;
+  --accent-wash: rgb(255 255 255 / 0.07);
   --radius: 12px;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0e1321;
-    --surface: #151b2b;
-    --raised: rgb(255 255 255 / 0.045);
-    --line: rgb(151 164 190 / 0.16);
-    --text: #eff4fc;
-    --secondary: #c8d3e7;
-    --muted: #8491a9;
-    --accent: #4596fe;
-    --accent-text: #ffffff;
-    --success: #58c79a;
-    --warning: #f0b45a;
-    --danger: #ff8987;
-    --panel: rgb(14 19 33 / 0.88);
-    --raised-hover: rgb(255 255 255 / 0.075);
-    --elevated: #151b2b;
-    --overlay: #1b2130;
-    --line-strong: rgb(151 164 190 / 0.3);
-    --accent-hover: #1c77f1;
-    --accent-wash: rgb(69 150 254 / 0.13);
-    --session-gold: #f0b44c;
-  }
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #fbfbfb;
+  --surface: #ffffff;
+  --raised: rgb(0 0 0 / 0.03);
+  --line: rgb(0 0 0 / 0.08);
+  --text: #18181b;
+  --secondary: #3f3f46;
+  --muted: #71717a;
+  --accent: #0c75e6;
+  --success: #16815b;
+  --warning: #b26b00;
+  --danger: #d61133;
+  --panel: #f4f4f5;
+  --raised-hover: rgb(0 0 0 / 0.05);
+  --elevated: #ffffff;
+  --overlay: #ffffff;
+  --line-strong: rgb(0 0 0 / 0.15);
+  --accent-hover: #085dc7;
+  --accent-wash: rgb(0 0 0 / 0.055);
+}
+/* Midnight: Daedalus's original navy, as on the Mac. */
+:root[data-theme="midnight"] {
+  --bg: #0e1321;
+  --surface: #151b2b;
+  --raised: rgb(255 255 255 / 0.045);
+  --line: rgb(151 164 190 / 0.16);
+  --text: #eff4fc;
+  --secondary: #c8d3e7;
+  --muted: #8491a9;
+  --terminal-bg: #0b0f17;
+  --panel: rgb(14 19 33 / 0.88);
+  --raised-hover: rgb(255 255 255 / 0.075);
+  --elevated: #151b2b;
+  --overlay: #1b2130;
+  --line-strong: rgb(151 164 190 / 0.3);
+  --accent-wash: rgb(69 150 254 / 0.13);
 }
 
 * {
@@ -179,10 +195,11 @@ main {
   padding: 0 18px;
   text-decoration: none;
 }
+/* The main action is outlined, not filled: the Mac's flat look. */
 .button.primary {
-  background: var(--accent);
-  border-color: transparent;
-  color: var(--accent-text);
+  background: var(--raised);
+  border-color: var(--line-strong);
+  color: var(--text);
 }
 .button:disabled {
   opacity: 0.45;
@@ -514,7 +531,7 @@ main {
   position: relative;
 }
 .terminal {
-  background: #0b0f17;
+  background: var(--terminal-bg);
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -583,6 +600,16 @@ main {
 /* Sessions, as the Mac's left column draws them (apps/desktop styles.css:
    .workspace-group, .session-card, .agent-dot, the session palette). */
 :root {
+  --session-red: #e5675f;
+  --session-orange: #e8894a;
+  --session-gold: #f0b44c;
+  --session-green: #5fb878;
+  --session-teal: #4cb5ad;
+  --session-blue: #5b9be6;
+  --session-purple: #a07ee0;
+  --session-pink: #e076b0;
+}
+:root[data-theme="light"] {
   --session-red: #c2413a;
   --session-orange: #bf5f1d;
   --session-gold: #b4740b;
@@ -591,18 +618,6 @@ main {
   --session-blue: #2f6fc0;
   --session-purple: #7651c0;
   --session-pink: #b8448a;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --session-red: #e5675f;
-    --session-orange: #e8894a;
-    --session-gold: #f0b44c;
-    --session-green: #5fb878;
-    --session-teal: #4cb5ad;
-    --session-blue: #5b9be6;
-    --session-purple: #a07ee0;
-    --session-pink: #e076b0;
-  }
 }
 [data-color="red"] {
   --session-color: var(--session-red);
@@ -637,10 +652,8 @@ main {
   gap: 6px;
   padding: 8px 8px 10px;
 }
-@media (prefers-color-scheme: light) {
-  .workspace-group {
-    background: rgb(255 255 255 / 0.45);
-  }
+:root[data-theme="light"] .workspace-group {
+  background: rgb(255 255 255 / 0.45);
 }
 .workspace-head {
   align-items: center;
@@ -720,13 +733,11 @@ li:has(> .session-row[data-team-member="true"]) {
 .session-kind-icon.tool-terminal {
   color: #75dfb5;
 }
-@media (prefers-color-scheme: light) {
-  .session-kind-icon.tool-codex {
-    color: #172033;
-  }
-  .session-kind-icon.tool-terminal {
-    color: #187a59;
-  }
+:root[data-theme="light"] .session-kind-icon.tool-codex {
+  color: #172033;
+}
+:root[data-theme="light"] .session-kind-icon.tool-terminal {
+  color: #187a59;
 }
 .session-row-main {
   display: grid;
@@ -1088,4 +1099,166 @@ li:has(> .session-row[data-team-member="true"]) {
   padding: 4px 7px;
   text-transform: uppercase;
   vertical-align: 3px;
+}
+
+/* The Mac's flat look (#132): no blue fills, quieter chrome. */
+.workspace-folder-icon {
+  color: var(--muted);
+}
+.workspace-head-actions {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  grid-column: 3;
+  grid-row: 1 / span 2;
+}
+.workspace-board-button,
+.workspace-new-session {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  min-height: 32px;
+  padding: 0 12px;
+}
+.workspace-new-session {
+  font-size: 18px;
+  line-height: 1;
+  padding: 0;
+  width: 32px;
+}
+.workspace-new-session:disabled {
+  opacity: 0.4;
+}
+.push-prompt {
+  background: var(--surface);
+  border-color: var(--line);
+}
+/* A session row is two lines, as on the Mac: the name with its role
+   beside it, then the status. */
+.session-row-title {
+  align-items: baseline;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+.session-row-title strong {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.session-row-title .session-team-badge {
+  flex: 0 4 auto;
+  font-size: 12px;
+  margin-right: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The board's buttons are the Mac's, filled blue there; outlined here.
+   The same selector as the Mac's fill (mac-board.css), which this file
+   follows in the page, so lanes and rows keep their own looks. */
+:where(.mac-board)
+  button:not(
+    .workspace-item,
+    .quiet,
+    .danger-link,
+    .skills-group-head,
+    .skills-row-head
+  ) {
+  background: var(--raised);
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+}
+:where(.mac-board)
+  button:not(
+    .workspace-item,
+    .quiet,
+    .danger-link,
+    .skills-group-head,
+    .skills-row-head
+  ):hover:not(:disabled) {
+  background: var(--raised-hover);
+}
+.mac-board .create-button {
+  background: var(--raised) !important;
+  border: 1px solid var(--line-strong) !important;
+  box-shadow: none;
+  color: var(--text);
+}
+
+/* Forms on a task or new-session screen: plain text, phone-sized fields. */
+.task-screen .field input {
+  letter-spacing: normal;
+  text-transform: none;
+}
+.task-screen .field select,
+.task-screen .field textarea,
+.task-screen .field input {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 16px;
+  min-height: 44px;
+  padding: 0 12px;
+}
+.task-screen .field textarea {
+  padding: 10px 12px;
+}
+.tool-picker {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr 1fr;
+}
+.tool-picker button {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: grid;
+  gap: 2px 10px;
+  grid-template-columns: 24px minmax(0, 1fr);
+  padding: 10px 12px;
+  text-align: left;
+}
+.tool-picker button .session-kind-icon {
+  grid-row: 1 / span 2;
+}
+.tool-picker button small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.tool-picker button[aria-checked="true"] {
+  border-color: var(--line-strong);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  background: var(--raised-hover);
+}
+.tool-picker button:disabled {
+  opacity: 0.45;
+}
+
+/* One-tap answers above the keys: the words, then Enter. */
+.quick-replies {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 0 16px;
+  scrollbar-width: none;
+}
+.quick-replies button {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  flex: none;
+  font-size: 14px;
+  min-height: 34px;
+  padding: 0 14px;
+  touch-action: manipulation;
+}
+/* The chosen Mac or theme stands out in every theme, Midnight included. */
+.mac-picker button[aria-selected="true"] {
+  background: var(--raised-hover);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
 }

@@ -1,8 +1,4 @@
-import {
-  TmuxPtyBridge,
-  type TmuxClient,
-  type TmuxLaunch,
-} from "@daedalus/platform";
+import type { TmuxClient, TmuxLaunch } from "@daedalus/platform";
 import type { AgentProviderName, AgentSession } from "../domain";
 import { DaedalusError } from "../errors";
 
@@ -138,10 +134,7 @@ export class LocalSessionHost implements SessionHost {
   readonly id = "local";
   readonly kind = "local" as const;
 
-  constructor(
-    private readonly tmux: TmuxClient,
-    private readonly terminal: { socketName: string; executable: string },
-  ) {}
+  constructor(private readonly tmux: TmuxClient) {}
 
   async probe(): Promise<string | undefined> {
     return (await this.tmux.probe()) ? undefined : "tmux is not available";
@@ -183,12 +176,7 @@ export class LocalSessionHost implements SessionHost {
     size: TerminalSize,
     onOutput: (output: Uint8Array) => void,
   ): Promise<SessionTerminal> {
-    return new TmuxPtyBridge(
-      onOutput,
-      { socketName: this.terminal.socketName, session },
-      size,
-      this.terminal.executable,
-    );
+    return this.tmux.openPty(session, size, onOutput);
   }
 
   async exportCheckpoint(): Promise<SessionCheckpoint> {

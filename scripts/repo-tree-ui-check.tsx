@@ -202,6 +202,7 @@ body{margin:0;background:#060916}
     injectedClient={client}
     initialSnapshot={snapshot}
     initialWorkspaceView="board"
+    initialPanelTab="git"
     initialWorkspaceContent={populated}
   />,
 )}</div></body></html>`;

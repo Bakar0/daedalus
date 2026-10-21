@@ -41,6 +41,14 @@ export function parseDuration(value: string): number {
   return Number(match[1]) * unit;
 }
 
+/** A timestamp as local `YYYY-MM-DD HH:MM`, or a dash when there is none. */
+export function localTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const date = new Date(iso);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 export function formatDuration(milliseconds: number): string {
   const minutes = Math.round(milliseconds / 60_000);
   if (minutes < 60) return `${minutes}m`;

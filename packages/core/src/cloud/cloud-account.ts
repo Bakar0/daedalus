@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdir, open, rename, rm } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
   deleteKeychainPassword,
   readKeychainPassword,
+  writeFileAtomic,
   writeKeychainPassword,
 } from "@daedalus/platform";
 import type { GatewayUser } from "@daedalus/remote-protocol";
@@ -58,18 +59,8 @@ export function defaultTokenVault(home: string): TokenVault | undefined {
     : undefined;
 }
 
-async function writeAtomic(path: string, text: string): Promise<void> {
-  const temporary = `${path}.${process.pid}.tmp`;
-  const handle = await open(temporary, "w", 0o600);
-  try {
-    await handle.writeFile(text);
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  await chmod(temporary, 0o600);
-  await rename(temporary, path);
-}
+const writeAtomic = (path: string, text: string): Promise<void> =>
+  writeFileAtomic(path, text, { mode: 0o600, sync: true });
 
 export class CloudAccount {
   readonly #path: string;

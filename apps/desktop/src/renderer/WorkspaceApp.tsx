@@ -7,6 +7,7 @@ import {
   Fragment,
   Suspense,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -78,7 +79,20 @@ import { TaskActionBar } from "./TaskActionBar";
 import { ConfirmButton } from "./ConfirmButton";
 import { askConfirm, askText, DialogHost } from "./dialogs";
 import { TaskActionIcon } from "./task-action-icons";
-import { type FileOpenRequest, FilesView } from "./files/FilesView";
+import {
+  type FileOpenRequest,
+  FilesEditor,
+  FilesExplorer,
+  useFilesController,
+} from "./files/FilesView";
+import type { CenterPanelKind } from "./files/EditorArea";
+import {
+  type AppTheme,
+  AppThemeContext,
+  appearanceOf,
+  isAppTheme,
+  terminalThemeFor,
+} from "./theme";
 import {
   ChangedFileList,
   useWorktreeChanges,
@@ -89,21 +103,20 @@ import type { DiffTarget } from "./files/EditorArea";
 import { MarkdownPreview } from "./markdown-preview";
 import { buildWorldModel, worldInputFromSnapshot } from "./world/world-model";
 import { TaskPriorityMenu, TaskStatusMenu } from "./TaskStatusMenu";
-import { ColorSwatches, SessionMenu } from "./SessionMenu";
+import { ColorSwatches, SessionMenu, WorkspaceMenu } from "./SessionMenu";
 import { RoutineBar } from "./routines/RoutineBar";
 import { TeamBar, TeamPanel } from "./teams/TeamPanel";
 import { RoutinesPanel } from "./routines/RoutinesPanel";
 import { ProBadge } from "./ProPlan";
+import { useMutation, useRpcQuery } from "./use-rpc";
 import { RemoteMenu } from "./RemoteMenu";
 import { SecretsPanel } from "./SecretsPanel";
 import {
-  sessionStatusLine,
   AgentStatusDot,
   compactTokenLabel,
   lifecycleTone,
   providerLabel,
   SessionLaunchIcon,
-  sessionConfiguredModel,
   sessionIsLive,
   sessionName,
   sessionStatusView,
@@ -223,34 +236,6 @@ const lastViewStorageKey = (workspaceId: string) =>
  */
 export type WorkspaceView = "board" | "session" | "workspace" | "world";
 
-/**
- * What the main column shows: one workspace, or every active workspace at
- * once (#35). The board and the Sessions list read the same snapshot either
- * way; "all" only stops filtering it. Files, repositories and settings stay
- * per workspace, because none of them has a meaning across several.
- */
-export type WorkspaceScope = "workspace" | "all";
-
-/**
- * The key remembered views and sessions are filed under when every workspace
- * is showing. A real id can never collide with it: ids are UUIDs.
- */
-export const ALL_WORKSPACES_SCOPE_KEY = "all";
-
-/** The views that exist when every workspace is showing. */
-export function preferredScopeView(
-  scope: WorkspaceScope,
-  rememberedView?: string | null,
-): WorkspaceView {
-  const preferred = preferredWorkspaceView(rememberedView);
-  // Files and a session's terminal belong to one workspace; every workspace
-  // at once is the board and the World only.
-  return scope === "all" &&
-    (preferred === "workspace" || preferred === "session")
-    ? "board"
-    : preferred;
-}
-
 export function preferredWorkspaceView(
   rememberedView?: string | null,
 ): WorkspaceView {
@@ -319,6 +304,30 @@ export function agentMultilineSequence(
     !event.metaKey
     ? "\n"
     : undefined;
+}
+
+/**
+ * Cmd+Left and Cmd+Right move the caret to the start and end of the line, the
+ * way Terminal.app and iTerm2 send them: Ctrl+A and Ctrl+E, which readline
+ * shells, Claude Code and Codex all read as Home and End.
+ */
+export function lineJumpSequence(
+  event: Pick<
+    KeyboardEvent,
+    "altKey" | "ctrlKey" | "key" | "metaKey" | "shiftKey" | "type"
+  >,
+): string | undefined {
+  if (
+    event.type !== "keydown" ||
+    !event.metaKey ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.shiftKey
+  )
+    return undefined;
+  if (event.key === "ArrowLeft") return "\x01";
+  if (event.key === "ArrowRight") return "\x05";
+  return undefined;
 }
 
 const errorMessage = (error: unknown) =>
@@ -487,6 +496,61 @@ function RebirthIcon() {
 }
 
 /** A folder: one workspace, beside its name in the left column (#55). */
+/** A page served from this Mac, such as a dev server, for a web tab. */
+export const isLocalWebUrl = (url: string) => {
+  try {
+    const { protocol, hostname } = new URL(url);
+    return (
+      (protocol === "http:" || protocol === "https:") &&
+      ["localhost", "127.0.0.1", "0.0.0.0", "[::1]"].includes(hostname)
+    );
+  } catch {
+    return false;
+  }
+};
+
+/** What the side panel can show, each a tab in its strip. */
+export type SidePanelTab = "files" | "git" | "tasks";
+const SIDE_PANEL_TAB_KEY = "daedalus.panel.tab";
+const storedSidePanelTab = (): SidePanelTab => {
+  try {
+    const stored = window.localStorage.getItem(SIDE_PANEL_TAB_KEY);
+    return stored === "files" || stored === "git" || stored === "tasks"
+      ? stored
+      : "tasks";
+  } catch {
+    return "tasks";
+  }
+};
+
+function SidePanelTabIcon({ tab }: { tab: SidePanelTab }) {
+  return (
+    <svg
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.3"
+      viewBox="0 0 16 16"
+    >
+      {tab === "files" ? (
+        <path d="M5.5 1.5h5l3 3v7h-8zM10.5 1.5v3h3M3.5 4.5v10h7" />
+      ) : tab === "git" ? (
+        // VS Code's Source Control mark: three commits and a branch.
+        <>
+          <circle cx="4.5" cy="3.5" r="1.6" />
+          <circle cx="4.5" cy="12.5" r="1.6" />
+          <circle cx="11.5" cy="4.5" r="1.6" />
+          <path d="M4.5 5.1v5.8M11.5 6.1c0 3-7 2.1-7 4.8" />
+        </>
+      ) : (
+        <path d="M2.5 3.5l1 1 2-2M2.5 8l1 1 2-2M2.5 12.5l1 1 2-2M7.5 3.5h6M7.5 8h6M7.5 12.5h6" />
+      )}
+    </svg>
+  );
+}
+
 function WorkspaceFolderIcon() {
   return (
     <svg
@@ -499,26 +563,6 @@ function WorkspaceFolderIcon() {
       viewBox="0 0 24 24"
     >
       <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z" />
-    </svg>
-  );
-}
-
-/** Four tiles: every workspace at once. */
-function AllWorkspacesIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      fill="none"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="1.8"
-      viewBox="0 0 24 24"
-    >
-      <rect height="7" rx="1.5" width="7" x="3" y="3" />
-      <rect height="7" rx="1.5" width="7" x="14" y="3" />
-      <rect height="7" rx="1.5" width="7" x="3" y="14" />
-      <rect height="7" rx="1.5" width="7" x="14" y="14" />
     </svg>
   );
 }
@@ -1128,6 +1172,12 @@ function TerminalSurface({
   const fitRef = useRef<() => void>(() => undefined);
   const focusRef = useRef<() => void>(() => undefined);
   const inputRef = useRef<(data: string) => void>(() => undefined);
+  // The terminal follows the theme without reconnecting.
+  const appTheme = useContext(AppThemeContext);
+  const appThemeRef = useRef(appTheme);
+  appThemeRef.current = appTheme;
+  const retheme = useRef<(theme: AppTheme) => void>(() => undefined);
+  useEffect(() => retheme.current(appTheme), [appTheme]);
   const [connection, setConnection] = useState("connecting");
   // A cloud session's output is untrusted; see `TerminalClipboardGate`.
   const cloudRef = useRef(false);
@@ -1144,8 +1194,12 @@ function TerminalSurface({
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(timer);
   }, [session]);
-  const captureAgentShortcut = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    const sequence = agentMultilineSequence(event.nativeEvent, target);
+  const captureTerminalShortcut = (
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ) => {
+    const sequence =
+      agentMultilineSequence(event.nativeEvent, target) ??
+      lineJumpSequence(event.nativeEvent);
     if (!sequence) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1309,12 +1363,7 @@ function TerminalSurface({
         scrollback: 10_000,
         scrollSensitivity: 2.5,
         smoothScrollDuration: 90,
-        theme: {
-          background: "#11151d",
-          foreground: "#dce5f2",
-          cursor: "#8ed6c3",
-          selectionBackground: "#38546b",
-        },
+        theme: terminalThemeFor(appThemeRef.current),
       });
       const fitAddon = new FitAddon();
       terminal.loadAddon(fitAddon);
@@ -1403,6 +1452,9 @@ function TerminalSurface({
         if (hoveredLink) drawLink();
       });
       focusRef.current = () => terminal?.focus();
+      retheme.current = (theme) => {
+        if (terminal) terminal.options.theme = terminalThemeFor(theme);
+      };
       inputRef.current = (data) => {
         if (socket?.readyState === WebSocket.OPEN)
           socket.send(JSON.stringify({ type: "input", data }));
@@ -1549,6 +1601,7 @@ function TerminalSurface({
       window.removeEventListener("mouseup", noteRelease, true);
       fitRef.current = () => undefined;
       focusRef.current = () => undefined;
+      retheme.current = () => undefined;
       inputRef.current = () => undefined;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (frame !== undefined) cancelAnimationFrame(frame);
@@ -1587,7 +1640,7 @@ function TerminalSurface({
       <div
         aria-label={`Terminal for ${label} ${id.slice(0, 8)}`}
         className="terminal"
-        onKeyDownCapture={captureAgentShortcut}
+        onKeyDownCapture={captureTerminalShortcut}
         ref={containerRef}
       />
       {target === "agent" && session && view && (
@@ -1618,14 +1671,6 @@ function TerminalSurface({
             {view.attention && view.since && (
               <span className="agent-session-activity-waiting">
                 waiting {waitingLabel(view.since, now)}
-              </span>
-            )}
-            {view.detail && (
-              <span
-                className="agent-session-activity-detail"
-                title={view.detail}
-              >
-                {view.detail}
               </span>
             )}
             {view.attention && onClearAttention && (
@@ -1767,7 +1812,7 @@ export function WorkspaceApp({
   initialWorkspaceContent,
   initialModal,
   initialSessionLaunches = [],
-  initialScope = "workspace",
+  initialPanelTab,
 }: {
   injectedClient?: DesktopClient;
   initialSnapshot?: DesktopSnapshotDto;
@@ -1777,10 +1822,10 @@ export function WorkspaceApp({
   initialTerminalPanelOpen?: boolean;
   initialDetailView?: "brief" | "terminal";
   initialWorkspaceView?: WorkspaceView;
-  initialScope?: WorkspaceScope;
   initialWorkspaceContent?: WorkspaceContentDto;
   initialModal?: "workspace" | "task" | "session" | "repository" | "settings";
   initialSessionLaunches?: SessionLaunchState[];
+  initialPanelTab?: SidePanelTab;
 } = {}) {
   const clientRef = useRef(injectedClient);
   if (!clientRef.current)
@@ -1809,15 +1854,7 @@ export function WorkspaceApp({
   const [workspaceId, setWorkspaceId] = useState(
     initialSnapshot?.workspaces.find((item) => !item.archivedAt)?.id,
   );
-  // "all" shows every workspace's tasks and sessions in the main column.
-  // `workspaceId` stays set underneath it: it is the workspace the session
-  // dialog, the terminal heading and the content loaders fall back to, and
-  // the one the column returns to when a card is clicked.
-  const [scope, setScope] = useState<WorkspaceScope>(initialScope);
-  const showingAll = scope === "all";
-  // Remembered views and sessions are filed per workspace, and once more for
-  // the all-workspaces scope, so leaving it and coming back restores it.
-  const scopeKey = showingAll ? ALL_WORKSPACES_SCOPE_KEY : workspaceId;
+  const scopeKey = workspaceId;
   const [selectedTaskId, setSelectedTaskId] = useState(initialSelectedTaskId);
   const [activeSessionId, setActiveSessionId] = useState(initialActiveAgentId);
   // Keyboard focus follows explicit intent, never mere selection. Only a
@@ -1858,8 +1895,7 @@ export function WorkspaceApp({
     [],
   );
   const [view, setView] = useState<WorkspaceView>(() =>
-    preferredScopeView(
-      scope,
+    preferredWorkspaceView(
       initialWorkspaceView ?? rememberedWorkspaceView(scopeKey),
     ),
   );
@@ -1900,9 +1936,40 @@ export function WorkspaceApp({
   // "checking" state of its own, and without one the button looks dead.
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [quitting, setQuitting] = useState<QuitChoice>();
-  const [busy, setBusy] = useState(false);
+  // Every change goes through one of three runners, which report a failure
+  // and read the snapshot again after a success. They differ in what they
+  // disable. `perform` sets `busy`, which disables buttons everywhere.
+  // Session lifecycle changes (archive, restore, revive, continue) start or
+  // stop an agent and can take seconds, so they are keyed by session id and
+  // mark only that session. Fetch, pull, push and the like are keyed by
+  // action and also read the workspace content, so every status in the tree
+  // reflects what just happened.
+  const refreshOnSuccess = {
+    onStart: () => setError(undefined),
+    onError: (message: string) => setError(message),
+    onSettled: async ({ ok }: { ok: boolean }) => {
+      if (ok) await refresh();
+    },
+  };
+  const appActions = useMutation(refreshOnSuccess);
+  const perform = appActions.run;
+  const busy = appActions.pending();
+  const sessionActions = useMutation(refreshOnSuccess);
+  const repositoryActions = useMutation({
+    onStart: () => setError(undefined),
+    onError: (message) => setError(message),
+    onSettled: async ({ ok }) => {
+      if (!ok || !workspace) return;
+      const content = await client.request.workspaceContentGet({
+        workspace: workspace.id,
+      });
+      if (!content.ok) throw new Error(content.error.message);
+      setWorkspaceContent(content.data);
+      await refresh();
+    },
+  });
   const [error, setError] = useState<string>();
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [theme, setTheme] = useState<AppTheme>("dark");
   const [workspaceForm, setWorkspaceForm] = useState({
     name: "",
     // "default" is the provider's own account.
@@ -1963,9 +2030,6 @@ export function WorkspaceApp({
     useState<RepositoryDiscoveryDto>();
   const [repositoryDiscoveryLoading, setRepositoryDiscoveryLoading] =
     useState(false);
-  const [pendingRepositoryActions, setPendingRepositoryActions] = useState<
-    ReadonlySet<string>
-  >(() => new Set());
   // What each checkout's last fetch did, shown on its row for a while so a
   // fetch that brought something in says so, and what.
   const [fetchOutcomes, setFetchOutcomes] = useState<
@@ -1989,10 +2053,6 @@ export function WorkspaceApp({
     ReadonlySet<string>
   >(() => new Set());
   const archivingStartedAt = useRef(new Date().toISOString());
-  // Sessions with an archive, restore, revive or continue in flight.
-  const [pendingSessionIds, setPendingSessionIds] = useState<
-    ReadonlySet<string>
-  >(() => new Set());
   // Repositories confirmed in the picker whose rows have not arrived yet.
   // Attaching and reloading the workspace's git status takes seconds; these
   // rows say something is happening until the real ones replace them.
@@ -2051,6 +2111,33 @@ export function WorkspaceApp({
     (id: string) => setWorkspaceCollapsed(id, false),
     [setWorkspaceCollapsed],
   );
+  const files = useFilesController();
+  // The tab in front of the center decides which view the rest of the app
+  // sees: a session's, a task's, or the files'. No tab at all is the board's
+  // empty center.
+  const followCenterTab = useCallback((kind?: CenterPanelKind) => {
+    setView((current) =>
+      current === "world"
+        ? current
+        : kind === "session"
+          ? "session"
+          : kind === "task"
+            ? "board"
+            : kind
+              ? "workspace"
+              : "board",
+    );
+  }, []);
+  const [panelTab, setPanelTab] = useState<SidePanelTab>(
+    () => initialPanelTab ?? storedSidePanelTab(),
+  );
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SIDE_PANEL_TAB_KEY, panelTab);
+    } catch {
+      // The tab is a convenience.
+    }
+  }, [panelTab]);
   const [boardDetailPanelWidth, setBoardDetailPanelWidth] = useState(() =>
     storedPanelSize("daedalus.panel.board-detail-width", 340),
   );
@@ -2058,7 +2145,6 @@ export function WorkspaceApp({
   // on the right of every view about one workspace: board, files, session.
   const workspacePanelVisible =
     Boolean(workspaceId) &&
-    !showingAll &&
     (view === "board" || view === "workspace" || view === "session");
   const workspacePanelCollapsed =
     boardDetailPanelWidth < PANEL_COMPACT_THRESHOLD;
@@ -2137,6 +2223,16 @@ export function WorkspaceApp({
     [openFileTarget, resolveFileLink],
   );
 
+  const openExternalLink = useCallback(
+    (url: string) => {
+      void client.request.openExternal({ url }).then((response) => {
+        if (!response.ok) setError(response.error.message);
+        else if (!response.data.opened)
+          setError("The link could not be opened in the default browser");
+      });
+    },
+    [client],
+  );
   const openTerminalLink = useCallback(
     (url: string) => {
       // `file://` links, which Claude Code prints for the files it touches,
@@ -2154,13 +2250,14 @@ export function WorkspaceApp({
         });
         return;
       }
-      void client.request.openExternal({ url }).then((response) => {
-        if (!response.ok) setError(response.error.message);
-        else if (!response.data.opened)
-          setError("The link could not be opened in the default browser");
-      });
+      // A dev server on this Mac opens in a web tab beside the session.
+      if (isLocalWebUrl(url)) {
+        files.withEditor((handle) => handle.openWeb(url));
+        return;
+      }
+      openExternalLink(url);
     },
-    [client, openFileTarget, resolveFileLink],
+    [files, openExternalLink, openFileTarget, resolveFileLink],
   );
 
   const copyTerminalText = useCallback(
@@ -2312,41 +2409,35 @@ export function WorkspaceApp({
 
   const [dataRevision, setDataRevision] = useState(0);
 
-  const refresh = useCallback(async () => {
-    try {
-      const response = await client.request.snapshot({});
-      if (!response.ok) throw new Error(response.error.message);
-      setSnapshot(response.data);
+  const snapshotQuery = useRpcQuery(() => client.request.snapshot({}), {
+    onDataChanged: (listener) =>
+      client.subscribe(() => {
+        setDataRevision((current) => current + 1);
+        listener();
+      }),
+    // Applied before `refresh` resolves, so awaiting it means the snapshot
+    // and the selections that depend on it are in place.
+    onData: (latest) => {
+      setSnapshot(latest);
       setError(undefined);
       setWorkspaceId((current) =>
-        response.data.workspaces.some(
+        latest.workspaces.some(
           (item) => item.id === current && !item.archivedAt,
         )
           ? current
-          : response.data.workspaces.find((item) => !item.archivedAt)?.id,
+          : latest.workspaces.find((item) => !item.archivedAt)?.id,
       );
       setSelectedTaskId((current) =>
-        response.data.tasks.some((item) => item.id === current)
-          ? current
-          : undefined,
+        latest.tasks.some((item) => item.id === current) ? current : undefined,
       );
       setActiveSessionId((current) =>
-        response.data.agents.some((item) => item.id === current)
-          ? current
-          : undefined,
+        latest.agents.some((item) => item.id === current) ? current : undefined,
       );
-    } catch (cause) {
-      setError(errorMessage(cause));
-    }
-  }, [client]);
-
-  useEffect(() => {
-    void refresh();
-    return client.subscribe(() => {
-      void refresh();
-      setDataRevision((current) => current + 1);
-    });
-  }, [client, refresh]);
+    },
+    onError: (message) => setError(message),
+    deps: [client],
+  });
+  const refresh = snapshotQuery.refresh;
 
   // Repositories live in the workspace content, not in the snapshot, so
   // refreshing the snapshot alone left a repository that finished preparing in
@@ -2386,10 +2477,8 @@ export function WorkspaceApp({
     };
   }, [client, dataRevision, view, workspaceId]);
 
-  // Escape, or a press anywhere outside the drawer, closes the task drawer,
-  // unless it is being edited (an unsaved brief is not lost to a stray click)
-  // or a dialog is on top of it. A press on a card leaves it open, because
-  // the card's own click swaps the drawer to that task.
+  // Escape closes the open task, unless it is being edited (an unsaved brief
+  // is not lost to a stray key) or a dialog is on top of it.
   useEffect(() => {
     if (view !== "board" || !selectedTaskId || editingTask || modal) return;
     const onKey = (event: KeyboardEvent) => {
@@ -2398,19 +2487,8 @@ export function WorkspaceApp({
       if (target?.closest("input, textarea, select, [contenteditable]")) return;
       setSelectedTaskId(undefined);
     };
-    const onPointerDown = (event: PointerEvent) => {
-      if (event.button !== 0) return;
-      const target = event.target as Element | null;
-      if (!target?.isConnected) return;
-      if (target.closest(".task-drawer, .board-card, .modal-backdrop")) return;
-      setSelectedTaskId(undefined);
-    };
     window.addEventListener("keydown", onKey);
-    window.addEventListener("pointerdown", onPointerDown);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("pointerdown", onPointerDown);
-    };
+    return () => window.removeEventListener("keydown", onKey);
   }, [editingTask, modal, selectedTaskId, view]);
 
   const clearAttention = useCallback(
@@ -2481,9 +2559,7 @@ export function WorkspaceApp({
         void client.request.presencePublish?.({
           appForeground:
             document.visibilityState === "visible" && document.hasFocus(),
-          // With every workspace showing, no single one is "the one on
-          // screen". Routing only reads the session anyway.
-          workspaceId: showingAll ? null : (workspaceId ?? null),
+          workspaceId: workspaceId ?? null,
           sessionId: activeSessionId ?? null,
         });
       } catch {
@@ -2502,7 +2578,7 @@ export function WorkspaceApp({
       window.removeEventListener("blur", publish);
       document.removeEventListener("visibilitychange", publish);
     };
-  }, [activeSessionId, client, showingAll, workspaceId]);
+  }, [activeSessionId, client, workspaceId]);
   const runDesktopCommand = useCallback(
     (command: DesktopCommand) => {
       if (command === "view-board") setView("board");
@@ -2510,14 +2586,13 @@ export function WorkspaceApp({
         setView((current) =>
           current === "world" ? lastWorkspaceView.current : "world",
         );
-      else if (command === "view-session" && workspaceId && !showingAll)
-        setView("session");
-      else if (command === "view-workspace" && workspaceId && !showingAll)
+      else if (command === "view-session" && workspaceId) setView("session");
+      else if (command === "view-workspace" && workspaceId)
         setView("workspace");
       else if (command === "toggle-terminal")
         setTerminalPanelOpen((current) => !current);
     },
-    [showingAll, workspaceId],
+    [workspaceId],
   );
   useEffect(
     () => client.subscribeCommands(runDesktopCommand),
@@ -2650,7 +2725,7 @@ export function WorkspaceApp({
   // nothing when it is showing something else. A watcher is a kernel resource
   // and a tree nobody is looking at does not need to be fresh.
   useEffect(() => {
-    if (view === "world" || scope === "all" || !workspaceId) {
+    if (view === "world" || !workspaceId) {
       void client.request.workspaceWatchSet({ workspaces: [] });
       return;
     }
@@ -2658,11 +2733,11 @@ export function WorkspaceApp({
     return () => {
       void client.request.workspaceWatchSet({ workspaces: [] });
     };
-  }, [client, scope, view, workspaceId]);
+  }, [client, view, workspaceId]);
 
   useEffect(() => {
     const stored = window.localStorage.getItem("daedalus.theme");
-    if (stored === "dark" || stored === "light") setTheme(stored);
+    if (isAppTheme(stored)) setTheme(stored);
   }, []);
   useEffect(() => {
     window.localStorage.setItem(
@@ -2705,55 +2780,6 @@ export function WorkspaceApp({
     void client.request.quitDecision?.({ choice }).catch(() => {
       // The app is on its way out; there is nobody left to tell.
     });
-  }
-
-  /**
-   * `perform` for one session's own lifecycle: archive, restore, revive and
-   * continue. These start or stop an agent and can take seconds, so they mark
-   * only that session as pending instead of setting `busy`, which disables
-   * buttons across every workspace until the request returns.
-   */
-  async function performForSession<T>(
-    sessionId: string,
-    operation: Promise<RpcResult<T>>,
-  ) {
-    setPendingSessionIds((current) => new Set(current).add(sessionId));
-    setError(undefined);
-    try {
-      const response = await operation;
-      if (!response.ok) {
-        setError(response.error.message);
-        return;
-      }
-      await refresh();
-      return response.data;
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setPendingSessionIds((current) => {
-        const next = new Set(current);
-        next.delete(sessionId);
-        return next;
-      });
-    }
-  }
-
-  async function perform<T>(operation: Promise<RpcResult<T>>) {
-    setBusy(true);
-    setError(undefined);
-    try {
-      const response = await operation;
-      if (!response.ok) {
-        setError(response.error.message);
-        return;
-      }
-      await refresh();
-      return response.data;
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
   }
 
   // Activity and attention arrive as flat arrays on the snapshot, exactly like
@@ -2828,27 +2854,17 @@ export function WorkspaceApp({
       ? { ...session, archivedAt: archivingStartedAt.current }
       : session,
   );
-  // The scope's workspaces: the selected one, or every active one. An
-  // archived workspace's tasks and sessions stay out of the all-workspaces
-  // view the same way its card stays out of the column.
-  const inScope = (id: string) =>
-    showingAll
-      ? activeWorkspaces.some((item) => item.id === id)
-      : id === workspaceId;
+  const inScope = (id: string) => id === workspaceId;
   const allTasks = (snapshot?.tasks ?? []).filter((item) =>
     inScope(item.workspaceId),
   );
   // Order is the user's, kept in the database and applied by the query that
   // built this snapshot. The renderer filters it but never re-sorts it: a list
   // the user arranged by hand is the one thing an adapter has no business
-  // second-guessing. Across every workspace the order is the column's: each
-  // workspace's sessions together, in that workspace's own order, because the
-  // snapshot's positions are only meaningful within one workspace.
-  const workspaceSessions = showingAll
-    ? orderedWorkspaces.flatMap((item) =>
-        agents.filter((session) => session.workspaceId === item.id),
-      )
-    : agents.filter((item) => item.workspaceId === workspaceId);
+  // second-guessing.
+  const workspaceSessions = agents.filter(
+    (item) => item.workspaceId === workspaceId,
+  );
   // Blocked sessions used to float to the top here. They no longer do: once
   // the order is something the user placed, moving a card out from under them
   // is the bug, not the feature. The card tone and the workspace roll-up
@@ -2869,8 +2885,7 @@ export function WorkspaceApp({
   const workspaceSessionLaunches = sessionLaunches.filter((item) =>
     inScope(item.workspaceId),
   );
-  // Every workspace's list is in the left column whatever the scope, so the
-  // launch errors are read across all of them.
+  // Every workspace's list is in the left column, so the launch errors are read across all of them.
   const sessionStartupErrors = new Map(
     sessionLaunches.flatMap((launch) =>
       launch.sessionId && launch.error
@@ -2992,8 +3007,6 @@ export function WorkspaceApp({
   const activeSessionWorkspace = activeSession
     ? workspaceById.get(activeSession.workspaceId)
     : undefined;
-  const activeSessionModel =
-    activeSessionTelemetry?.model ?? sessionConfiguredModel(activeSession);
   // The session dialog's workspace. A dialog opened from a task belongs to
   // that task's workspace, and one opened from a workspace card's + to that
   // workspace; with every workspace showing, neither need be the selected one.
@@ -3005,7 +3018,7 @@ export function WorkspaceApp({
     (sessionForm.workspaceId
       ? workspaceById.get(sessionForm.workspaceId)
       : undefined) ??
-    (showingAll ? undefined : workspace);
+    workspace;
   // Set when the dialog adds a member from its lead's card.
   const memberTeam = sessionForm.teamId
     ? teamsById.get(sessionForm.teamId)
@@ -3130,12 +3143,12 @@ export function WorkspaceApp({
   useEffect(() => {
     if (viewWorkspaceId.current !== scopeKey) {
       viewWorkspaceId.current = scopeKey;
-      setView(preferredScopeView(scope, rememberedWorkspaceView(scopeKey)));
+      setView(preferredWorkspaceView(rememberedWorkspaceView(scopeKey)));
       return;
     }
     if (scopeKey)
       window.localStorage.setItem(lastViewStorageKey(scopeKey), view);
-  }, [scope, scopeKey, view]);
+  }, [scopeKey, view]);
 
   useEffect(() => {
     if (view !== "session" || !scopeKey) return;
@@ -3510,7 +3523,6 @@ export function WorkspaceApp({
       }),
     );
     if (created) {
-      setScope("workspace");
       setWorkspaceId(created.id);
       setWorkspaceForm({
         name: "",
@@ -3526,9 +3538,7 @@ export function WorkspaceApp({
    * a workspace start as a line typed fast, and a modal is a reason not to.
    */
   async function quickCaptureTask(title: string): Promise<boolean> {
-    // A task belongs to one workspace, and the board hides the capture line
-    // while every workspace is showing; this is the guard behind it.
-    if (!workspace || showingAll) return false;
+    if (!workspace) return false;
     const created = await perform(
       client.request.taskCreate({ workspace: workspace.id, title }),
     );
@@ -3537,7 +3547,7 @@ export function WorkspaceApp({
 
   async function createTask(event: React.FormEvent) {
     event.preventDefault();
-    if (!workspace || showingAll) return;
+    if (!workspace) return;
     const created = await perform(
       client.request.taskCreate({
         workspace: workspace.id,
@@ -3754,41 +3764,11 @@ export function WorkspaceApp({
     );
   }
 
-  // Fetch, pull and push are the same shape: run one request, then re-read the
-  // workspace so every status in the tree reflects what just happened.
-  async function runRepositoryAction<T>(
-    key: string,
-    request: () => Promise<RpcResult<T>>,
-  ): Promise<T | undefined> {
-    if (!workspace || pendingRepositoryActions.has(key)) return undefined;
-    setPendingRepositoryActions((current) => new Set(current).add(key));
-    setError(undefined);
-    let data: T | undefined;
-    try {
-      const response = await request();
-      if (!response.ok) throw new Error(response.error.message);
-      data = response.data;
-      const content = await client.request.workspaceContentGet({
-        workspace: workspace.id,
-      });
-      if (!content.ok) throw new Error(content.error.message);
-      setWorkspaceContent(content.data);
-      await refresh();
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setPendingRepositoryActions((current) => {
-        const next = new Set(current);
-        next.delete(key);
-        return next;
-      });
-    }
-    return data;
-  }
-
   async function detachWorkspaceRepository(repositoryId: string) {
-    await runRepositoryAction(`detach:${repositoryId}`, () =>
-      client.request.workspaceRepositoryDetach({ id: repositoryId }),
+    if (!workspace) return;
+    await repositoryActions.run(
+      () => client.request.workspaceRepositoryDetach({ id: repositoryId }),
+      `detach:${repositoryId}`,
     );
   }
 
@@ -3803,14 +3783,14 @@ export function WorkspaceApp({
     repositoryId?: string,
   ) {
     if (!workspace) return;
-    const outcomes = await runRepositoryAction(
-      `${mode}:${repositoryId ?? "all"}`,
+    const outcomes = await repositoryActions.run(
       () =>
         client.request.workspaceRepositoriesFetch({
           workspace: workspace.id,
           pull: mode === "pull",
           ...(repositoryId ? { ids: [repositoryId] } : {}),
         }),
+      `${mode}:${repositoryId ?? "all"}`,
     );
     if (!outcomes) return;
     setFetchOutcomes((current) => {
@@ -3895,9 +3875,9 @@ export function WorkspaceApp({
     archivingStartedAt.current = new Date().toISOString();
     setArchivingSessionIds((current) => new Set(current).add(session.id));
     if (wasActive) setActiveSessionId(undefined);
-    const archived = await performForSession(
-      session.id,
+    const archived = await sessionActions.run(
       client.request.agentArchive({ id: session.id, force: false }),
+      session.id,
     );
     setArchivingSessionIds((current) => {
       const next = new Set(current);
@@ -3912,15 +3892,15 @@ export function WorkspaceApp({
   // answer gets its successor straight away, working from brief and git.
   async function continueInNewAgent(session: AgentSessionDto) {
     if (session.status === "running") {
-      await performForSession(
-        session.id,
+      await sessionActions.run(
         client.request.agentRequestRebirth({ id: session.id }),
+        session.id,
       );
       return;
     }
-    const successor = await performForSession(
-      session.id,
+    const successor = await sessionActions.run(
       client.request.agentContinue({ id: session.id }),
+      session.id,
     );
     if (successor) openSession(successor.id);
   }
@@ -4062,9 +4042,9 @@ export function WorkspaceApp({
   }
 
   async function restoreSession(session: AgentSessionDto) {
-    const restored = await performForSession(
-      session.id,
+    const restored = await sessionActions.run(
       client.request.agentRestore({ id: session.id }),
+      session.id,
     );
     if (restored) openSession(restored.id);
   }
@@ -4084,9 +4064,9 @@ export function WorkspaceApp({
 
   async function deleteSession(session: AgentSessionDto) {
     setDeletingSessionIds((current) => new Set(current).add(session.id));
-    await performForSession(
-      session.id,
+    await sessionActions.run(
       client.request.agentDelete({ id: session.id }),
+      session.id,
     );
     setDeletingSessionIds((current) => {
       const next = new Set(current);
@@ -4096,11 +4076,33 @@ export function WorkspaceApp({
   }
 
   async function reviveSession(session: AgentSessionDto) {
-    const revived = await performForSession(
-      session.id,
+    const revived = await sessionActions.run(
       client.request.agentRevive({ id: session.id }),
+      session.id,
     );
     if (revived) openSession(revived.id);
+  }
+
+  async function updateWorkspace(
+    item: WorkspaceDto,
+    change: { name?: string; autoRebirthPercent?: AutoRebirthDto },
+  ) {
+    await perform(
+      client.request.workspaceUpdate({ reference: item.id, ...change }),
+    );
+  }
+
+  async function renameWorkspace(item: WorkspaceDto) {
+    const name = await askText({
+      title: "Rename workspace",
+      message:
+        "The name shows in the list and on the board. The folder keeps its name.",
+      initial: item.name,
+      confirmLabel: "Rename",
+    });
+    const trimmed = name?.trim();
+    if (trimmed && trimmed !== item.name)
+      await updateWorkspace(item, { name: trimmed });
   }
 
   async function archiveWorkspace(item: WorkspaceDto) {
@@ -4128,10 +4130,7 @@ export function WorkspaceApp({
     const restored = await perform(
       client.request.workspaceRestore({ reference: item.id }),
     );
-    if (restored) {
-      setScope("workspace");
-      setWorkspaceId(restored.id);
-    }
+    if (restored) setWorkspaceId(restored.id);
   }
 
   // What deleting an archived workspace takes with it, as the armed delete
@@ -4177,18 +4176,33 @@ export function WorkspaceApp({
     if (created) setActiveTerminalId(created.id);
   }
 
+  /** A terminal in the workspace's folder, in a center tab of its own. */
+  async function createTerminalTab(workspaceItem: WorkspaceDto) {
+    const created = await perform(
+      client.request.terminalCreate({
+        workspace: workspaceItem.id,
+        name: workspaceItem.name,
+      }),
+    );
+    if (created)
+      files.withEditor((handle) =>
+        handle.openTerminal(created.id, created.name),
+      );
+  }
+
   async function removeSessionWorktree(
     worktree: SessionWorktreeDto,
     force: boolean,
   ) {
-    await runRepositoryAction(
-      `remove:${worktree.sessionId}:${worktree.repositoryId}`,
+    if (!workspace) return;
+    await repositoryActions.run(
       () =>
         client.request.sessionWorktreeRemove({
           session: worktree.sessionId,
           repository: worktree.repositoryId,
           force,
         }),
+      `remove:${worktree.sessionId}:${worktree.repositoryId}`,
     );
   }
 
@@ -4206,7 +4220,6 @@ export function WorkspaceApp({
   }
 
   function selectWorkspace(id: string) {
-    setScope("workspace");
     setWorkspaceId(id);
     setSelectedTaskId(undefined);
     setActiveSessionId(undefined);
@@ -4215,36 +4228,16 @@ export function WorkspaceApp({
     // satisfied by a session the user never opened. Switching workspaces is
     // not an intent to type into whatever is restored.
     clearSessionFocusRequest();
-    // A workspace's card opens its board; its sessions are listed right
-    // under the card (#55). The ref moves first, as in `enterWorkspace`, or
-    // the scope effect restores the workspace's remembered view (often its
-    // last session) over the board.
-    viewWorkspaceId.current = id;
-    setView("board");
-  }
-
-  /** The card above the workspaces: every workspace's board and sessions. */
-  function selectAllWorkspaces() {
-    setScope("all");
-    setSelectedTaskId(undefined);
-    setActiveSessionId(undefined);
-    clearSessionFocusRequest();
-    setView(
-      preferredScopeView(
-        "all",
-        rememberedWorkspaceView(ALL_WORKSPACES_SCOPE_KEY),
-      ),
-    );
+    // The scope effect restores the workspace's remembered view, most often
+    // its last session; the side panel holds its tasks, files and repositories.
   }
 
   /**
-   * Leaves the all-workspaces scope for one workspace and lands on a view of
-   * it. The scope effect restores that workspace's remembered view when the
-   * scope key changes, so the ref is moved first: this is a deliberate
-   * destination, not a return visit.
+   * Lands on a view of one workspace. The scope effect restores that
+   * workspace's remembered view when the workspace changes, so the ref is
+   * moved first: this is a deliberate destination, not a return visit.
    */
   function enterWorkspace(id: string, nextView: WorkspaceView) {
-    setScope("workspace");
     setWorkspaceId(id);
     viewWorkspaceId.current = id;
     setView(nextView);
@@ -4252,9 +4245,8 @@ export function WorkspaceApp({
 
   /**
    * Every way to a session ends here: a card in the left column, a board
-   * card, the World, a toast or a notification. A session's terminal is one
-   * workspace's view, so this leaves the all-workspaces scope, and it opens
-   * the session's list in case it was collapsed (#55).
+   * card, the World, a toast or a notification. It opens the session's
+   * list in case it was collapsed (#55).
    */
   function showSession(sessionId: string, sessionWorkspaceId: string) {
     expandWorkspace(sessionWorkspaceId);
@@ -4357,12 +4349,12 @@ export function WorkspaceApp({
             {(["fetch", "pull"] as const).map((mode) => {
               const busy = ["all", repository.id].some((target) =>
                 ["fetch", "pull"].some((kind) =>
-                  pendingRepositoryActions.has(`${kind}:${target}`),
+                  repositoryActions.pending(`${kind}:${target}`),
                 ),
               );
               const running =
-                pendingRepositoryActions.has(`${mode}:${repository.id}`) ||
-                pendingRepositoryActions.has(`${mode}:all`);
+                repositoryActions.pending(`${mode}:${repository.id}`) ||
+                repositoryActions.pending(`${mode}:all`);
               return (
                 <button
                   aria-label={`${mode === "fetch" ? "Fetch" : "Pull"} ${repository.name}`}
@@ -4391,11 +4383,11 @@ export function WorkspaceApp({
               <ConfirmButton
                 aria-label={`Remove ${repository.name}`}
                 armedTitle="Its read-only checkout under repos/ is deleted. The shared clone stays in the library, so it can be added again."
-                className={`quiet repository-action ${pendingRepositoryActions.has(`detach:${repository.id}`) ? "syncing" : ""}`}
+                className={`quiet repository-action ${repositoryActions.pending(`detach:${repository.id}`) ? "syncing" : ""}`}
                 disabled={
                   preparing ||
                   worktrees.length > 0 ||
-                  pendingRepositoryActions.has(`detach:${repository.id}`)
+                  repositoryActions.pending(`detach:${repository.id}`)
                 }
                 onConfirm={() => void detachWorkspaceRepository(repository.id)}
                 title={
@@ -4534,8 +4526,8 @@ export function WorkspaceApp({
                               ? "Removing it discards that work permanently. Push first to keep it."
                               : "Nothing is uncommitted or unpushed, so the directory and its branch go without losing anything."
                           }
-                          className={`quiet repository-action ${pendingRepositoryActions.has(`remove:${worktree.sessionId}:${worktree.repositoryId}`) ? "syncing" : ""}`}
-                          disabled={pendingRepositoryActions.has(
+                          className={`quiet repository-action ${repositoryActions.pending(`remove:${worktree.sessionId}:${worktree.repositoryId}`) ? "syncing" : ""}`}
+                          disabled={repositoryActions.pending(
                             `remove:${worktree.sessionId}:${worktree.repositoryId}`,
                           )}
                           onConfirm={() =>
@@ -4607,9 +4599,6 @@ export function WorkspaceApp({
         Attach one and Daedalus keeps a read-only checkout here for planning,
         then gives each agent its own working tree off the latest base branch.
       </span>
-      <button onClick={() => openRepositoryModal()} type="button">
-        Add a repository
-      </button>
     </div>
   ) : (
     <div className="workspace-repositories workspace-resource-list">
@@ -4634,54 +4623,6 @@ export function WorkspaceApp({
       ))}
     </div>
   );
-
-  // The panel folded to a rail still says something: each repository by its
-  // initials and state, and under it one chip per worktree with how many
-  // files it changed. Any of it opens the panel.
-  const workspaceRail = repositoriesReady ? (
-    <button
-      aria-label="Expand workspace panel"
-      className="workspace-rail"
-      onClick={toggleBoardDetailPanel}
-      type="button"
-    >
-      {workspaceContent.repositories.map((repository) => (
-        <span className="rail-repository" key={repository.id}>
-          <span
-            className={`rail-avatar repository-status-${repository.gitStatus?.state ?? "unavailable"}`}
-            title={`${repository.name} · ${repositoryStatusText(repository.gitStatus)}`}
-          >
-            {repository.name.slice(0, 2)}
-            <i aria-hidden="true" />
-          </span>
-          {workspaceContent.worktrees
-            .filter((item) => item.repositoryId === repository.id)
-            .map((worktree) => {
-              const count =
-                worktreeChanges.get(
-                  worktreeKey(worktree.sessionId, worktree.repositoryId),
-                )?.files.length ?? 0;
-              const session = workspaceSessions.find(
-                (item) => item.id === worktree.sessionId,
-              );
-              const label = session
-                ? sessionName(session)
-                : worktree.branchName;
-              return (
-                <span
-                  className={`rail-worktree ${count > 0 ? "changed" : ""}`}
-                  key={`${worktree.sessionId}:${worktree.repositoryId}`}
-                  title={`${label} · ${count} ${count === 1 ? "file" : "files"} changed`}
-                >
-                  {count > 0 ? count : "·"}
-                </span>
-              );
-            })}
-        </span>
-      ))}
-      <span className="rail-label">Workspace</span>
-    </button>
-  ) : null;
 
   /** A file or a diff from the panel opens in the Workspace view's editor. */
   function openFromPanel(request: {
@@ -4714,6 +4655,11 @@ export function WorkspaceApp({
     attention: attentionById,
     worktrees: workspaceWorktrees,
   };
+  // The Tasks tab carries a dot while any task waits on the user, since the
+  // panel may be showing files or repositories instead.
+  const taskAttentionCount = allTasks.filter(
+    (task) => laneFor(task, laneInputs) === "needs_me",
+  ).length;
   const selectedTaskActions = selectedTask
     ? taskActions(selectedTask, laneFor(selectedTask, laneInputs), {
         ...laneInputs,
@@ -4781,6 +4727,7 @@ export function WorkspaceApp({
           // What the three rows leave out, or cut short.
           title={[
             sessionName(session),
+            task?.title,
             `${session.id.slice(0, 8)} · ${session.endedAt ? "ended" : "started"} ${new Date(timestamp).toLocaleString()}`,
             startupError ?? statusView.detail,
             statusView.unconfirmed
@@ -4805,8 +4752,10 @@ export function WorkspaceApp({
             <ToolIcon tool={tool} />
           </span>
           <span>
-            <strong>{sessionName(session)}</strong>
-            <small>
+            {/* Two rows: the name with its role and account beside it, then
+                the live status. What the agent last said is in the tooltip. */}
+            <span className="session-card-title">
+              <strong>{sessionName(session)}</strong>
               {session.account && (
                 // Only a non-default account is named; Default is the norm.
                 <span
@@ -4832,7 +4781,7 @@ export function WorkspaceApp({
                     : `@${team.handle}${leadArchived ? " · lead archived" : ""}`}
                 </span>
               )}
-              {holdsRoutines ? (
+              {holdsRoutines && (
                 <span className="session-routines-badge">
                   Routines
                   {waitingRuns > 0 && (
@@ -4844,13 +4793,9 @@ export function WorkspaceApp({
                     </span>
                   )}
                 </span>
-              ) : (
-                (task?.title ?? "Workspace session")
               )}
-            </small>
-            {/* Always three rows: name, what it is for, and one line of
-                live status with what the agent is doing, so every card is
-                the same height (#55). A failed start takes the status line. */}
+            </span>
+            {/* A failed start takes the status line. */}
             <em
               className="session-card-status"
               data-clearable={
@@ -4871,7 +4816,9 @@ export function WorkspaceApp({
               >
                 {startupError
                   ? `failed to start · ${startupError}`
-                  : sessionStatusLine(statusView, now)}
+                  : statusView.attention && statusView.since
+                    ? `${statusView.label} ${waitingLabel(statusView.since, now)}`
+                    : statusView.label}
               </span>
               {context?.usedPercent !== undefined && !startupError && (
                 <ContextPill
@@ -4914,7 +4861,7 @@ export function WorkspaceApp({
             <button
               aria-label={`Revive ${sessionName(session)} session`}
               className="session-card-action"
-              disabled={pendingSessionIds.has(session.id)}
+              disabled={sessionActions.pending(session.id)}
               onClick={() => void reviveSession(session)}
               title="Resume this conversation in a new terminal"
             >
@@ -4940,7 +4887,7 @@ export function WorkspaceApp({
                 data-rebirth-requested={
                   session.rebirthRequestedAt ? "true" : undefined
                 }
-                disabled={pendingSessionIds.has(session.id)}
+                disabled={sessionActions.pending(session.id)}
                 onClick={() => void continueInNewAgent(session)}
                 title={
                   session.rebirthRequestedAt
@@ -5109,7 +5056,7 @@ export function WorkspaceApp({
     // Offered only for the workspace in focus, but its row's space is kept
     // under every workspace that has some, so focus moving never shifts the
     // list (#55).
-    const archiveInFocus = !showingAll && item.id === workspaceId;
+    const archiveInFocus = item.id === workspaceId;
     const launches = pendingSessionLaunches(
       sessionLaunches.filter((launch) => launch.workspaceId === item.id),
       itemSessions,
@@ -5166,7 +5113,7 @@ export function WorkspaceApp({
                         detail: session.provider,
                         archivedAt: session.archivedAt!,
                         restoreLabel: "Restore and resume",
-                        disabled: pendingSessionIds.has(session.id),
+                        disabled: sessionActions.pending(session.id),
                         onRestore: () => void restoreSession(session),
                         onDelete: () => void deleteSession(session),
                         deleteDisclosure: sessionDeleteDisclosure(session),
@@ -5231,47 +5178,6 @@ export function WorkspaceApp({
 
   const anyWorkspaceExpanded = activeWorkspaces.some(
     (item) => !collapsedWorkspaceIds.has(item.id),
-  );
-
-  // The card above the workspaces (#35). Its roll-up is the workspace cards'
-  // summed: what a dispatcher wants to know before choosing where to look.
-  const everySession = agents.filter(
-    (session) =>
-      !session.archivedAt &&
-      activeWorkspaces.some((item) => item.id === session.workspaceId),
-  );
-  const everyLiveCount = everySession.filter(sessionIsLive).length;
-  const everyAttentionCount = everySession.filter((session) =>
-    sessionNeedsAttention(statusViewFor(session)),
-  ).length;
-  const everySessionLabel = `${everySession.length} ${everySession.length === 1 ? "session" : "sessions"}`;
-  const allWorkspacesCard = activeWorkspaces.length > 0 && (
-    <div
-      className={`workspace-card all-workspaces-card ${showingAll ? "selected" : ""}`}
-    >
-      <button
-        aria-current={showingAll ? "true" : undefined}
-        aria-label={`All workspaces: ${everySessionLabel}, ${everyLiveCount} live, ${everyAttentionCount} need you`}
-        className="workspace-item all-workspaces-item"
-        onClick={selectAllWorkspaces}
-        title={`${activeWorkspaces.length} ${activeWorkspaces.length === 1 ? "workspace" : "workspaces"} · ${everySessionLabel} · ${everyLiveCount} live · ${everyAttentionCount} need you`}
-      >
-        <span aria-hidden="true" className="all-workspaces-icon">
-          <AllWorkspacesIcon />
-        </span>
-        <strong className="workspace-card-name">
-          <span>All workspaces</span>
-          {everyAttentionCount > 0 && (
-            <span
-              className="workspace-attention-badge"
-              title={`${everyAttentionCount} ${everyAttentionCount === 1 ? "session needs" : "sessions need"} you`}
-            >
-              {everyAttentionCount}
-            </span>
-          )}
-        </strong>
-      </button>
-    </div>
   );
 
   const taskInspector = !selectedTask ? (
@@ -5406,8 +5312,7 @@ export function WorkspaceApp({
           setJournalTarget(heading);
           // The journal is a file of the task's workspace, and the Workspace
           // view shows one workspace's files.
-          if (showingAll) enterWorkspace(selectedTask.workspaceId, "workspace");
-          else setView("workspace");
+          setView("workspace");
         }}
         timeline={
           taskTimeline?.taskId === selectedTask.id ? taskTimeline : undefined
@@ -5499,6 +5404,7 @@ export function WorkspaceApp({
       onSelectTask={(task) => {
         setSelectedTaskId(task.id);
         setEditingTask(false);
+        setView("board");
       }}
       onSetInProgress={(task) =>
         void perform(
@@ -5523,516 +5429,717 @@ export function WorkspaceApp({
       tasks={allTasks}
       telemetry={telemetryById}
       tmuxAvailable={Boolean(snapshot?.settings.tmuxAvailable)}
-      workspace={showingAll ? undefined : workspace}
+      workspace={workspace}
       workspaces={activeWorkspaces}
       worktrees={workspaceWorktrees}
     />
   ) : null;
 
-  return (
-    <main
-      className={`app ${terminalPanelOpen ? "terminal-panel-open" : ""}`}
-      data-theme={theme}
-      style={
-        {
-          "--terminal-panel-height": `${terminalPanelHeight}px`,
-          "--workspace-panel-width": `${workspacePanelWidth}px`,
-          "--board-detail-panel-width": `${boardDetailPanelWidth}px`,
-        } as CSSProperties
-      }
-    >
-      <ToastStack
-        onDismiss={(ids) => void dismissToasts(ids)}
-        onOpen={(toast) => {
-          // Without the deep link people learn to ignore these.
-          const sessionWorkspaceId =
-            toast.workspaceId ??
-            snapshot?.agents.find((item) => item.id === toast.sessionId)
-              ?.workspaceId;
-          if (toast.sessionId && sessionWorkspaceId)
-            showSession(toast.sessionId, sessionWorkspaceId);
-          else if (toast.workspaceId) selectWorkspace(toast.workspaceId);
-        }}
-        toasts={snapshot?.toasts ?? []}
-      />
-      <header className="topbar">
-        <div className="brand">
-          <img
-            alt=""
-            aria-hidden="true"
-            className="brand-mark"
-            src="/daedalus-app-icon.png"
-          />
-          <span className="brand-copy">
-            <strong>Daedalus</strong>
-            <small>Agent workspace</small>
-          </span>
-          <ProBadge
-            client={client}
-            onOpen={() => {
-              setSettingsSection("account");
-              setModal("settings");
-            }}
-          />
-        </div>
-        <nav className="app-mode-switcher" aria-label="Workspace mode">
-          <button
-            aria-current={view === "board" ? "page" : undefined}
-            className={view === "board" ? "active" : ""}
-            disabled={!workspace}
-            onClick={() => setView("board")}
-          >
-            Board
-          </button>
-          <button
-            aria-current={view === "workspace" ? "page" : undefined}
-            className={view === "workspace" ? "active" : ""}
-            disabled={!workspace || showingAll}
-            onClick={() => setView("workspace")}
-            title={
-              showingAll ? "Pick a workspace to browse its files" : undefined
-            }
-          >
-            Workspace
-          </button>
-        </nav>
-        <div className="top-actions">
-          {busy && <span className="syncing">Working…</span>}
-          {/* Apart from the tabs: the World is every workspace at once. */}
-          <button
-            aria-pressed={view === "world"}
-            className={`world-toggle ${view === "world" ? "active" : ""}`}
-            disabled={!workspace}
-            onClick={() =>
-              setView(view === "world" ? lastWorkspaceView.current : "world")
-            }
-            title={
-              view === "world"
-                ? "Back to the workspace (⌘4)"
-                : "Every workspace's agents at once (⌘4)"
-            }
-          >
-            <svg aria-hidden="true" viewBox="0 0 16 16">
-              <path d="M8 1.5h6.5v13h-13v-13H5M5 4.5h6.5v7h-7v-7M8 7.5h1v1" />
-            </svg>
-            World
-          </button>
-        </div>
-      </header>
-      {/* One grid row holds every banner, so two at once stack in it. */}
-      <div className="banner-stack">
-        {/* Settings shows the same state in About, so the bar would only
-            repeat it behind the dialog. */}
-        {appUpdate && modal !== "settings" && (
-          <UpdateBanner
-            onDismiss={dismissUpdate}
-            onInstall={installUpdate}
-            update={appUpdate}
-          />
-        )}
-        {error && (
-          <div className="error-banner" role="alert">
-            <span>{error}</span>
-            <button onClick={() => setError(undefined)}>Dismiss</button>
-          </div>
-        )}
-      </div>
+  // The other way round: a view the app asks for brings its tab to the
+  // front. Opening a session from anywhere shows the session tab; a selected
+  // task shows the task tab, and none closes it. With no session open there
+  // is nothing to show, so the center keeps its empty screen rather than an
+  // empty session tab.
+  const centerWorkspaceId = workspace?.id;
+  const centerHasSession = Boolean(activeSession || openingLaunch);
+  useEffect(() => {
+    if (!centerWorkspaceId || view !== "session" || !centerHasSession) return;
+    files.withEditor((handle) => handle.showSession());
+  }, [
+    activeSessionId,
+    centerHasSession,
+    centerWorkspaceId,
+    files,
+    openingLaunchKey,
+    view,
+  ]);
+  useEffect(() => {
+    if (!centerWorkspaceId) return;
+    if (!selectedTaskId) files.withEditor((handle) => handle.closeTask());
+    else if (view === "board") files.withEditor((handle) => handle.showTask());
+  }, [centerWorkspaceId, files, selectedTaskId, view]);
 
-      <div
-        className={`workspace-shell mode-${view} ${workspacePanelVisible ? "has-workspace-panel" : ""}`}
+  // A terminal closed anywhere else, the bottom panel or the CLI, takes its
+  // tab with it.
+  const terminalIds = integratedTerminals.map((item) => item.id).join(" ");
+  const knownTerminalIds = useRef<string[]>([]);
+  useEffect(() => {
+    const current = terminalIds ? terminalIds.split(" ") : [];
+    for (const id of knownTerminalIds.current)
+      if (!current.includes(id))
+        files.withEditor((handle) => handle.closeTerminal(id));
+    knownTerminalIds.current = current;
+  }, [files, terminalIds]);
+
+  // The session tab shows whichever session the left column has open.
+  const sessionPane = workspace ? (
+    <section className="terminal-column">
+      {activeSessionRoutines && activeSession && (
+        <RoutineBar
+          busy={busy}
+          color={activeSession.color}
+          onOpenPanel={() =>
+            routinesPanel?.sessionId === activeSession.id
+              ? setRoutinesPanel(undefined)
+              : openRoutinesPanel(activeSession.id)
+          }
+          onRunNow={() =>
+            void routinesAction(
+              activeSession.id,
+              client.request.routineRunNow({
+                sessionId: activeSession.id,
+              }),
+            )
+          }
+          onTogglePause={() =>
+            void routinesAction(
+              activeSession.id,
+              client.request.routinesControl({
+                sessionId: activeSession.id,
+                action: activeSessionRoutines.paused ? "resume" : "pause",
+              }),
+            )
+          }
+          status={activeSessionRoutines}
+        />
+      )}
+      {activeSessionTeam && activeSession && (
+        <TeamBar
+          color={activeSession.color}
+          handle={activeSessionTeam.handle}
+          leadArchived={Boolean(
+            sessionsById.get(activeSessionTeam.team.leadId)?.archivedAt,
+          )}
+          members={
+            agents.filter(
+              (item) =>
+                item.teamId === activeSessionTeam.team.id && !item.archivedAt,
+            ).length
+          }
+          onOpenPanel={() =>
+            teamPanel?.teamId === activeSessionTeam.team.id
+              ? setTeamPanel(undefined)
+              : openTeamPanel(activeSessionTeam.team.id)
+          }
+          role={activeSessionTeam.role}
+          team={activeSessionTeam.team}
+        />
+      )}
+      {activeSession &&
+        activeSessionTeam?.role !== "member" &&
+        (snapshot?.largeFiles ?? [])
+          .filter((file) =>
+            file.kind === "journal"
+              ? file.workspaceId === activeSession.workspaceId
+              : file.sessionId === activeSession.id,
+          )
+          .map((file) => (
+            <LargeFileBar
+              color={activeSession.color}
+              file={file}
+              key={file.kind}
+              onCopy={copyCommandText}
+            />
+          ))}
+      {activeSession ? (
+        // The drawer sits over the terminal, below the routine bar, so
+        // the bar's buttons stay in reach while it is open.
+        <div className="terminal-stage">
+          {activeSessionRoutines &&
+            routinesPanel?.sessionId === activeSession.id && (
+              <RoutinesPanel
+                busy={busy}
+                detail={routinesPanel.detail}
+                error={routinesPanel.error}
+                now={now}
+                onClose={() => setRoutinesPanel(undefined)}
+                onRunNow={(name) =>
+                  void routinesAction(
+                    activeSession.id,
+                    client.request.routineRunNow({
+                      sessionId: activeSession.id,
+                      name,
+                    }),
+                  )
+                }
+                onSavePurpose={(purpose) =>
+                  void routinesAction(
+                    activeSession.id,
+                    client.request.routinesPurpose({
+                      sessionId: activeSession.id,
+                      purpose,
+                    }),
+                  )
+                }
+                onSetEnabled={(name, enabled) =>
+                  void routinesAction(
+                    activeSession.id,
+                    client.request.routineSetEnabled({
+                      sessionId: activeSession.id,
+                      name,
+                      enabled,
+                    }),
+                  )
+                }
+                sessionName={sessionName(activeSession)}
+              />
+            )}
+          {activeSessionTeam &&
+            teamPanel?.teamId === activeSessionTeam.team.id && (
+              <TeamPanel
+                busy={busy}
+                detail={teamPanel.detail}
+                error={teamPanel.error}
+                now={now}
+                onClose={() => setTeamPanel(undefined)}
+                onOpenSession={(sessionId) => {
+                  const target = sessionsById.get(sessionId);
+                  if (target) showSession(target.id, target.workspaceId);
+                }}
+                onPost={async (body) => {
+                  const said = await perform(
+                    client.request.teamSay({
+                      teamId: activeSessionTeam.team.id,
+                      body,
+                    }),
+                  );
+                  await loadTeamDetail(activeSessionTeam.team.id);
+                  return said?.warnings;
+                }}
+                onSetGoal={(goal) =>
+                  void perform(
+                    client.request.teamGoal({
+                      teamId: activeSessionTeam.team.id,
+                      goal,
+                    }),
+                  ).then(() => loadTeamDetail(activeSessionTeam.team.id))
+                }
+              />
+            )}
+          <TerminalSurface
+            activity={activityById.get(activeSession.id)}
+            attention={attentionById.get(activeSession.id)}
+            terminalEndpoint={terminalEndpoint}
+            focused={shouldFocusSession(focusedSessionId, activeSession.id)}
+            fitRevision={terminalFitRevision}
+            id={activeSession.id}
+            key={`${activeSession.id}:${terminalMountRevision}`}
+            label={sessionName(activeSession)}
+            locationLabel={
+              activeSessionRepository?.name ??
+              activeSessionWorkspace?.name ??
+              workspace.name
+            }
+            onClearAttention={() => void clearAttention(activeSession.id)}
+            onCopy={copyTerminalText}
+            onFocused={clearSessionFocusRequest}
+            onOpenLink={openTerminalLink}
+            fileLinks={fileLinksFrom([
+              activeSession.workingDirectory,
+              ...(snapshot?.worktrees ?? [])
+                .filter((item) => item.sessionId === activeSession.id)
+                .map((item) => item.path),
+            ])}
+            session={activeSession}
+            status={activeSession.status}
+            target="agent"
+            telemetry={activeSessionTelemetry}
+            worktree={activeSessionWorktree}
+          />
+        </div>
+      ) : openingLaunch ? (
+        <div aria-busy="true" className="terminal-empty">
+          <span aria-hidden="true" className="session-launch-spinner" />
+          <strong>Starting {openingLaunch.tool}…</strong>
+          <span>The terminal opens here as soon as it is ready.</span>
+        </div>
+      ) : (
+        <div className="terminal-empty">
+          <strong>Select a session</strong>
+          <span>
+            Choose one under its workspace, or start one with the
+            workspace&apos;s +.
+          </span>
+        </div>
+      )}
+    </section>
+  ) : null;
+
+  const taskPage =
+    workspace && selectedTask ? (
+      <div aria-label={`Task #${selectedTask.number}`} className="task-page">
+        <div className="task-page-heading">
+          <span className="eyebrow">
+            {workspace.name} · Task #{selectedTask.number}
+          </span>
+          <button
+            aria-label="Close task"
+            className="quiet task-drawer-close"
+            onClick={closeTaskDrawer}
+            title="Close (Esc)"
+            type="button"
+          >
+            <DismissIcon />
+          </button>
+        </div>
+        {taskInspector}
+      </div>
+    ) : (
+      <div className="empty large">
+        <strong>No task open</strong>
+        <span>Pick one in the side panel&apos;s Tasks tab.</span>
+      </div>
+    );
+
+  // The center with no tab open, still a way to start. A workspace with no
+  // repositories yet is pointed at adding one first.
+  const noRepositories =
+    repositoriesReady && workspaceContent.repositories.length === 0;
+  const centerEmpty = workspace ? (
+    <div className="empty large center-empty">
+      <strong>{workspace.name}</strong>
+      <span>
+        {noRepositories
+          ? "Add a repository and each agent gets its own working tree off the latest base branch. Then start a session."
+          : "Start a session, or open one from the left."}
+      </span>
+      <span className="center-empty-actions">
+        <button
+          disabled={!workspace.available || !snapshot?.settings.tmuxAvailable}
+          onClick={() => openSessionModal(undefined, workspace)}
+          type="button"
+        >
+          New session
+        </button>
+        <button onClick={() => openRepositoryModal()} type="button">
+          Add repository
+        </button>
+      </span>
+    </div>
+  ) : null;
+
+  return (
+    <AppThemeContext.Provider value={theme}>
+      <main
+        className={`app ${terminalPanelOpen ? "terminal-panel-open" : ""}`}
+        data-palette={theme === "midnight" ? "midnight" : undefined}
+        data-theme={appearanceOf(theme)}
+        style={
+          {
+            "--terminal-panel-height": `${terminalPanelHeight}px`,
+            "--workspace-panel-width": `${workspacePanelWidth}px`,
+            "--board-detail-panel-width": `${boardDetailPanelWidth}px`,
+          } as CSSProperties
+        }
       >
-        <aside className="workspace-column" ref={workspaceColumnRef}>
-          <div className="section-heading workspace-column-heading">
-            <div className="workspace-column-title">
-              <h1>Workspaces</h1>
+        <ToastStack
+          onDismiss={(ids) => void dismissToasts(ids)}
+          onOpen={(toast) => {
+            // Without the deep link people learn to ignore these.
+            const sessionWorkspaceId =
+              toast.workspaceId ??
+              snapshot?.agents.find((item) => item.id === toast.sessionId)
+                ?.workspaceId;
+            if (toast.sessionId && sessionWorkspaceId)
+              showSession(toast.sessionId, sessionWorkspaceId);
+            else if (toast.workspaceId) selectWorkspace(toast.workspaceId);
+          }}
+          toasts={snapshot?.toasts ?? []}
+        />
+        {/* One grid row holds every banner, so two at once stack in it. */}
+        <div className="banner-stack">
+          {/* Settings shows the same state in About, so the bar would only
+            repeat it behind the dialog. */}
+          {appUpdate && modal !== "settings" && (
+            <UpdateBanner
+              onDismiss={dismissUpdate}
+              onInstall={installUpdate}
+              update={appUpdate}
+            />
+          )}
+          {error && (
+            <div className="error-banner" role="alert">
+              <span>{error}</span>
+              <button onClick={() => setError(undefined)}>Dismiss</button>
             </div>
-            <div className="panel-heading-actions">
-              <RemoteMenu
+          )}
+        </div>
+
+        <div
+          className={`workspace-shell mode-${view} ${workspacePanelVisible ? "has-workspace-panel" : ""}`}
+        >
+          <aside className="workspace-column" ref={workspaceColumnRef}>
+            {/* The brand heads the left column, as the top bar it came from
+              is gone. */}
+            <div className="brand workspace-column-brand">
+              <img
+                alt=""
+                aria-hidden="true"
+                className="brand-mark"
+                src="/daedalus-app-icon.png"
+              />
+              <span className="brand-copy">
+                <strong>Daedalus</strong>
+              </span>
+              <ProBadge
                 client={client}
-                onGetPro={() => {
+                onOpen={() => {
                   setSettingsSection("account");
                   setModal("settings");
                 }}
-                onPair={() => {
-                  setSettingsSection("remote");
-                  setModal("settings");
-                }}
-                perform={perform}
               />
-              <button
-                aria-label="Global secrets"
-                className="quiet workspace-heading-action"
-                onClick={() => setSecretsWorkspace("global")}
-                title="Global secrets"
-                type="button"
-              >
-                <KeyIcon />
-              </button>
-              <button
-                aria-label="Create workspace"
-                className="quiet workspace-heading-create"
-                onClick={() => setModal("workspace")}
-                title="New workspace"
-                type="button"
-              >
-                +
-              </button>
             </div>
-          </div>
-          <nav
-            aria-label="Workspaces"
-            className="item-list"
-            data-reordering={workspaceReorder.draggingId ? "true" : undefined}
-          >
-            {!snapshot && !error && (
-              <div className="empty">Loading workspaces…</div>
-            )}
-            {activeWorkspaces.length === 0 &&
-              archivedWorkspaces.length === 0 && (
-                <div className="empty large">
-                  <strong>No workspaces yet</strong>
-                  <span>Use + to create one.</span>
-                </div>
-              )}
-            {allWorkspacesCard}
-            {/* Under All workspaces, its arrow in line with each
-                workspace's own. */}
-            {activeWorkspaces.length > 0 && (
-              <button
-                aria-label={
-                  anyWorkspaceExpanded
-                    ? "Collapse all session lists"
-                    : "Expand all session lists"
-                }
-                className="quiet workspace-fold-all"
-                onClick={() =>
-                  setCollapsedWorkspaceIds(
-                    anyWorkspaceExpanded
-                      ? new Set(activeWorkspaces.map((item) => item.id))
-                      : new Set(),
-                  )
-                }
-                type="button"
-              >
-                <svg aria-hidden="true" viewBox="0 0 16 16">
-                  {anyWorkspaceExpanded ? (
-                    <path d="M5 2.5l3 3 3-3M5 13.5l3-3 3 3" />
-                  ) : (
-                    <path d="M5 5.5l3-3 3 3M5 10.5l3 3 3-3" />
-                  )}
-                </svg>
-                {anyWorkspaceExpanded ? "Collapse all" : "Expand all"}
-              </button>
-            )}
-            {orderedWorkspaces.map((item) => {
-              const itemSessions = agents.filter(
-                (session) =>
-                  session.workspaceId === item.id && !session.archivedAt,
-              );
-              const liveCount = itemSessions.filter(sessionIsLive).length;
-              // Blocked sessions come first so the five-icon truncation can
-              // never be the reason a blocked session goes unnoticed.
-              const itemViews = itemSessions
-                .map((session) => ({ session, view: statusViewFor(session) }))
-                .sort(
-                  (left, right) =>
-                    Number(right.view.attention) - Number(left.view.attention),
-                );
-              const attentionCount = itemViews.filter((item) =>
-                sessionNeedsAttention(item.view),
-              ).length;
-              const sessionLabel = `${itemSessions.length} ${itemSessions.length === 1 ? "session" : "sessions"}`;
-              const insightLabel = `${sessionLabel} in ${item.name}: ${liveCount} live, ${attentionCount} need you`;
-              const sessionList = renderWorkspaceSessions(item);
-              const expanded = !collapsedWorkspaceIds.has(item.id);
-
-              return (
-                // The group, not the card, is what a workspace drag measures:
-                // its sessions travel with it.
-                <div
-                  className="workspace-group"
-                  data-expanded={expanded ? "true" : undefined}
-                  key={item.id}
-                  ref={workspaceReorder.registerCard(item.id)}
+            <div className="section-heading workspace-column-heading">
+              <div className="workspace-column-title">
+                <h1>Workspaces</h1>
+              </div>
+              <div className="panel-heading-actions">
+                <RemoteMenu
+                  client={client}
+                  onGetPro={() => {
+                    setSettingsSection("account");
+                    setModal("settings");
+                  }}
+                  onPair={() => {
+                    setSettingsSection("remote");
+                    setModal("settings");
+                  }}
+                  perform={perform}
+                />
+                <button
+                  aria-label="Global secrets"
+                  className="quiet workspace-heading-action"
+                  onClick={() => setSecretsWorkspace("global")}
+                  title="Global secrets"
+                  type="button"
                 >
-                  <div
-                    className={`workspace-card ${!showingAll && item.id === workspaceId ? "selected" : ""}`}
-                    data-dragging={
-                      workspaceReorder.draggingId === item.id
-                        ? "true"
-                        : undefined
+                  <KeyIcon />
+                </button>
+                {activeWorkspaces.length > 0 && (
+                  <button
+                    aria-label={
+                      anyWorkspaceExpanded
+                        ? "Collapse all session lists"
+                        : "Expand all session lists"
                     }
-                    onPointerDown={workspaceReorder.onPointerDown(item.id)}
+                    className="quiet workspace-heading-action workspace-fold-all"
+                    onClick={() =>
+                      setCollapsedWorkspaceIds(
+                        anyWorkspaceExpanded
+                          ? new Set(activeWorkspaces.map((item) => item.id))
+                          : new Set(),
+                      )
+                    }
+                    title={
+                      anyWorkspaceExpanded
+                        ? "Collapse all session lists"
+                        : "Expand all session lists"
+                    }
+                    type="button"
                   >
-                    <button
-                      aria-controls={`workspace-sessions-${item.id}`}
-                      aria-expanded={expanded}
-                      aria-label={`${expanded ? "Collapse" : "Expand"} ${item.name} sessions`}
-                      className="quiet workspace-disclosure"
-                      data-no-drag
-                      disabled={!sessionList}
-                      onClick={() => setWorkspaceCollapsed(item.id, expanded)}
-                      title={
-                        sessionList
-                          ? `${expanded ? "Hide" : "Show"} sessions`
-                          : "No sessions"
-                      }
-                      type="button"
-                    >
-                      <svg aria-hidden="true" viewBox="0 0 16 16">
-                        <path d="M6 4l4 4-4 4" />
-                      </svg>
-                    </button>
-                    <button
-                      className="workspace-item"
-                      onClick={() => selectWorkspace(item.id)}
-                      onKeyDown={(event) => {
-                        if (!event.altKey) return;
-                        const direction =
-                          event.key === "ArrowUp"
-                            ? "up"
-                            : event.key === "ArrowDown"
-                              ? "down"
-                              : undefined;
-                        if (
-                          direction &&
-                          workspaceReorder.moveByKeyboard(item.id, direction)
-                        )
-                          event.preventDefault();
-                      }}
-                    >
-                      <span className="workspace-folder-icon">
-                        <WorkspaceFolderIcon />
-                      </span>
-                      <span className="workspace-card-content">
-                        <strong className="workspace-card-name">
-                          <span>{item.name}</span>
-                        </strong>
-                        {/* The card only speaks up when the folder is gone. */}
-                        {!item.available && <small>folder missing</small>}
-                        <span
-                          aria-label={insightLabel}
-                          className="workspace-session-insights"
-                        >
-                          {/* An open list shows each session itself. */}
-                          {!(expanded && sessionList) &&
-                            itemViews.length > 0 && (
-                              <span className="workspace-session-icons">
-                                {itemViews
-                                  .slice(0, 5)
-                                  .map(({ session, view }) => {
-                                    const tool = sessionTool(session);
-                                    return (
-                                      <span
-                                        className={`workspace-session-indicator tool-${tool}`}
-                                        data-attention={
-                                          view.attention ? "true" : undefined
-                                        }
-                                        key={session.id}
-                                        title={statusAriaLabel(
-                                          session,
-                                          view,
-                                          now,
-                                        )}
-                                      >
-                                        <ToolIcon tool={tool} />
-                                        <AgentStatusDot
-                                          count={view.reasons.length}
-                                          view={view}
-                                        />
-                                      </span>
-                                    );
-                                  })}
-                                {itemSessions.length > 5 && (
-                                  <small>+{itemSessions.length - 5}</small>
-                                )}
-                              </span>
-                            )}
-                          <small
-                            className={
-                              attentionCount > 0
-                                ? "workspace-insight-copy needs-attention"
-                                : "workspace-insight-copy"
-                            }
-                          >
-                            {attentionCount > 0
-                              ? `${attentionCount} need${attentionCount === 1 ? "s" : ""} you`
-                              : itemSessions.length > 0
-                                ? `${liveCount} live · ${sessionLabel}`
-                                : "No sessions"}
-                          </small>
-                        </span>
-                      </span>
-                    </button>
-                    <span className="workspace-card-actions" data-no-drag>
-                      <button
-                        aria-label={`Open ${item.name} in integrated terminal`}
-                        className="session-card-action workspace-terminal-action"
-                        disabled={!item.available || busy}
-                        onClick={() => void createIntegratedTerminal(item)}
-                        title="Open in integrated terminal"
-                        type="button"
-                      >
-                        <SessionLaunchIcon />
-                      </button>
-                      <button
-                        aria-label={`Secrets of ${item.name}`}
-                        className="session-card-action workspace-secrets-action"
-                        disabled={busy}
-                        onClick={() => setSecretsWorkspace(item)}
-                        title="Secrets"
-                        type="button"
-                      >
-                        <KeyIcon />
-                      </button>
-                      <ConfirmButton
-                        aria-label={`Archive ${item.name} workspace`}
-                        armedTitle="All its sessions stop and move to their archived list. The workspace and its sessions can be restored later."
-                        className="session-card-action workspace-card-archive"
-                        disabled={busy}
-                        onConfirm={() => void archiveWorkspace(item)}
-                        title="Archive workspace"
-                      >
-                        <ArchiveIcon />
-                      </ConfirmButton>
-                      {/* Last, so the ones that come in on hover open to its
-                          left and it never moves. */}
-                      <button
-                        aria-label={`Create session in ${item.name}`}
-                        className="session-card-action workspace-session-create"
-                        disabled={
-                          !item.available || !snapshot?.settings.tmuxAvailable
-                        }
-                        onClick={() => openSessionModal(undefined, item)}
-                        title="New session"
-                        type="button"
-                      >
-                        +
-                      </button>
-                    </span>
-                  </div>
-                  {expanded && sessionList && (
-                    <div id={`workspace-sessions-${item.id}`}>
-                      {sessionList}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </nav>
-          {archivedWorkspaces.length > 0 && (
-            <details className="archive-list workspace-archive-list">
-              <summary>
-                Archived workspaces ({archivedWorkspaces.length})
-              </summary>
-              <div className="item-list">
-                {archivedWorkspaces.map((item) =>
-                  renderArchivedRow({
-                    id: item.id,
-                    name: item.name,
-                    archivedAt: item.archivedAt!,
-                    restoreLabel: "Restore",
-                    onRestore: () => void restoreWorkspace(item),
-                    onDelete: () => void deleteWorkspace(item),
-                    deleteDisclosure: workspaceDeleteDisclosure(item),
-                  }),
+                    <svg aria-hidden="true" viewBox="0 0 16 16">
+                      {anyWorkspaceExpanded ? (
+                        <path d="M5 2.5l3 3 3-3M5 13.5l3-3 3 3" />
+                      ) : (
+                        <path d="M5 5.5l3-3 3 3M5 10.5l3 3 3-3" />
+                      )}
+                    </svg>
+                  </button>
                 )}
-              </div>
-            </details>
-          )}
-        </aside>
-
-        <div
-          aria-label="Resize workspace panel"
-          aria-orientation="vertical"
-          aria-valuemax={480}
-          aria-valuemin={WORKSPACE_PANEL_MIN_WIDTH}
-          aria-valuenow={workspacePanelWidth}
-          className="column-resize-handle workspace-panel-resize-handle"
-          onKeyDown={(event) => {
-            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-            event.preventDefault();
-            setWorkspacePanelWidth((width) =>
-              clampWorkspacePanelSize(
-                width + (event.key === "ArrowRight" ? PANEL_STEP : -PANEL_STEP),
-                480,
-              ),
-            );
-          }}
-          onPointerDown={(event) => startColumnResize(event, "workspace")}
-          role="separator"
-          tabIndex={0}
-        />
-
-        {view !== "session" && (
-          <section
-            className={`workspace-main ${view === "board" ? "board-column" : view === "world" ? "workspace-content-column world-column" : "workspace-content-column"}`}
-          >
-            <div className="workspace-main-header">
-              <div>
-                <span className="eyebrow">
-                  {(showingAll || view === "world") && workspace
-                    ? `${activeWorkspaces.length} ${activeWorkspaces.length === 1 ? "workspace" : "workspaces"}`
-                    : workspace
-                      ? "Workspace"
-                      : "Select a workspace"}
-                </span>
-                <h1>
-                  {(showingAll || view === "world") && workspace
-                    ? "All workspaces"
-                    : (workspace?.name ?? "Workspace")}
-                </h1>
+                <button
+                  aria-label="Create workspace"
+                  className="quiet workspace-heading-create"
+                  onClick={() => setModal("workspace")}
+                  title="New workspace"
+                  type="button"
+                >
+                  +
+                </button>
               </div>
             </div>
+            <nav
+              aria-label="Workspaces"
+              className="item-list"
+              data-reordering={workspaceReorder.draggingId ? "true" : undefined}
+            >
+              {!snapshot && !error && (
+                <div className="empty">Loading workspaces…</div>
+              )}
+              {activeWorkspaces.length === 0 &&
+                archivedWorkspaces.length === 0 && (
+                  <div className="empty large">
+                    <strong>No workspaces yet</strong>
+                    <span>Use + to create one.</span>
+                  </div>
+                )}
+              {orderedWorkspaces.map((item) => {
+                const itemSessions = agents.filter(
+                  (session) =>
+                    session.workspaceId === item.id && !session.archivedAt,
+                );
+                const liveCount = itemSessions.filter(sessionIsLive).length;
+                // Blocked sessions come first so the five-icon truncation can
+                // never be the reason a blocked session goes unnoticed.
+                const itemViews = itemSessions
+                  .map((session) => ({ session, view: statusViewFor(session) }))
+                  .sort(
+                    (left, right) =>
+                      Number(right.view.attention) -
+                      Number(left.view.attention),
+                  );
+                const attentionCount = itemViews.filter((item) =>
+                  sessionNeedsAttention(item.view),
+                ).length;
+                const sessionLabel = `${itemSessions.length} ${itemSessions.length === 1 ? "session" : "sessions"}`;
+                const insightLabel = `${sessionLabel} in ${item.name}: ${liveCount} live, ${attentionCount} need you`;
+                const sessionList = renderWorkspaceSessions(item);
+                const expanded = !collapsedWorkspaceIds.has(item.id);
+
+                return (
+                  // The group, not the card, is what a workspace drag measures:
+                  // its sessions travel with it.
+                  <div
+                    className="workspace-group"
+                    data-expanded={expanded ? "true" : undefined}
+                    key={item.id}
+                    ref={workspaceReorder.registerCard(item.id)}
+                  >
+                    <div
+                      className={`workspace-card ${item.id === workspaceId ? "selected" : ""}`}
+                      data-dragging={
+                        workspaceReorder.draggingId === item.id
+                          ? "true"
+                          : undefined
+                      }
+                      onPointerDown={workspaceReorder.onPointerDown(item.id)}
+                    >
+                      <button
+                        aria-controls={`workspace-sessions-${item.id}`}
+                        aria-expanded={expanded}
+                        aria-label={`${expanded ? "Collapse" : "Expand"} ${item.name} sessions`}
+                        className="quiet workspace-disclosure"
+                        data-no-drag
+                        disabled={!sessionList}
+                        onClick={() => setWorkspaceCollapsed(item.id, expanded)}
+                        title={
+                          sessionList
+                            ? `${expanded ? "Hide" : "Show"} sessions`
+                            : "No sessions"
+                        }
+                        type="button"
+                      >
+                        <svg aria-hidden="true" viewBox="0 0 16 16">
+                          <path d="M6 4l4 4-4 4" />
+                        </svg>
+                      </button>
+                      <button
+                        className="workspace-item"
+                        onClick={() => selectWorkspace(item.id)}
+                        onKeyDown={(event) => {
+                          if (!event.altKey) return;
+                          const direction =
+                            event.key === "ArrowUp"
+                              ? "up"
+                              : event.key === "ArrowDown"
+                                ? "down"
+                                : undefined;
+                          if (
+                            direction &&
+                            workspaceReorder.moveByKeyboard(item.id, direction)
+                          )
+                            event.preventDefault();
+                        }}
+                      >
+                        <span className="workspace-folder-icon">
+                          <WorkspaceFolderIcon />
+                        </span>
+                        <span className="workspace-card-content">
+                          <strong className="workspace-card-name">
+                            <span>{item.name}</span>
+                          </strong>
+                          {/* The card only speaks up when the folder is gone. */}
+                          {!item.available && <small>folder missing</small>}
+                          <span
+                            aria-label={insightLabel}
+                            className="workspace-session-insights"
+                          >
+                            {/* An open list shows each session itself. */}
+                            {!(expanded && sessionList) &&
+                              itemViews.length > 0 && (
+                                <span className="workspace-session-icons">
+                                  {itemViews
+                                    .slice(0, 5)
+                                    .map(({ session, view }) => {
+                                      const tool = sessionTool(session);
+                                      return (
+                                        <span
+                                          className={`workspace-session-indicator tool-${tool}`}
+                                          data-attention={
+                                            view.attention ? "true" : undefined
+                                          }
+                                          key={session.id}
+                                          title={statusAriaLabel(
+                                            session,
+                                            view,
+                                            now,
+                                          )}
+                                        >
+                                          <ToolIcon tool={tool} />
+                                          <AgentStatusDot
+                                            count={view.reasons.length}
+                                            view={view}
+                                          />
+                                        </span>
+                                      );
+                                    })}
+                                  {itemSessions.length > 5 && (
+                                    <small>+{itemSessions.length - 5}</small>
+                                  )}
+                                </span>
+                              )}
+                            <small
+                              className={
+                                attentionCount > 0
+                                  ? "workspace-insight-copy needs-attention"
+                                  : "workspace-insight-copy"
+                              }
+                            >
+                              {attentionCount > 0
+                                ? `${attentionCount} need${attentionCount === 1 ? "s" : ""} you`
+                                : itemSessions.length > 0
+                                  ? sessionLabel
+                                  : "No sessions"}
+                            </small>
+                          </span>
+                        </span>
+                      </button>
+                      <span className="workspace-card-actions" data-no-drag>
+                        <button
+                          aria-label={`Open ${item.name} in integrated terminal`}
+                          className="session-card-action workspace-terminal-action"
+                          disabled={!item.available || busy}
+                          onClick={() => void createIntegratedTerminal(item)}
+                          title="Open in integrated terminal"
+                          type="button"
+                        >
+                          <SessionLaunchIcon />
+                        </button>
+                        <button
+                          aria-label={`Secrets of ${item.name}`}
+                          className="session-card-action workspace-secrets-action"
+                          disabled={busy}
+                          onClick={() => setSecretsWorkspace(item)}
+                          title="Secrets"
+                          type="button"
+                        >
+                          <KeyIcon />
+                        </button>
+                        <ConfirmButton
+                          aria-label={`Archive ${item.name} workspace`}
+                          armedTitle="All its sessions stop and move to their archived list. The workspace and its sessions can be restored later."
+                          className="session-card-action workspace-card-archive"
+                          disabled={busy}
+                          onConfirm={() => void archiveWorkspace(item)}
+                          title="Archive workspace"
+                        >
+                          <ArchiveIcon />
+                        </ConfirmButton>
+                        <WorkspaceMenu
+                          autoRebirth={item.autoRebirthPercent}
+                          inheritedRebirth={
+                            snapshot?.settings.autoRebirthPercent ?? null
+                          }
+                          name={item.name}
+                          onAutoRebirth={(autoRebirthPercent) =>
+                            void updateWorkspace(item, { autoRebirthPercent })
+                          }
+                          onRename={() => void renameWorkspace(item)}
+                        />
+                        {/* Last, so the ones that come in on hover open to its
+                          left and it never moves. */}
+                        <button
+                          aria-label={`Create session in ${item.name}`}
+                          className="session-card-action workspace-session-create"
+                          disabled={
+                            !item.available || !snapshot?.settings.tmuxAvailable
+                          }
+                          onClick={() => openSessionModal(undefined, item)}
+                          title="New session"
+                          type="button"
+                        >
+                          +
+                        </button>
+                      </span>
+                    </div>
+                    {expanded && sessionList && (
+                      <div id={`workspace-sessions-${item.id}`}>
+                        {sessionList}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </nav>
+            {archivedWorkspaces.length > 0 && (
+              <details className="archive-list workspace-archive-list">
+                <summary>
+                  Archived workspaces ({archivedWorkspaces.length})
+                </summary>
+                <div className="item-list">
+                  {archivedWorkspaces.map((item) =>
+                    renderArchivedRow({
+                      id: item.id,
+                      name: item.name,
+                      archivedAt: item.archivedAt!,
+                      restoreLabel: "Restore",
+                      onRestore: () => void restoreWorkspace(item),
+                      onDelete: () => void deleteWorkspace(item),
+                      deleteDisclosure: workspaceDeleteDisclosure(item),
+                    }),
+                  )}
+                </div>
+              </details>
+            )}
+          </aside>
+
+          <div
+            aria-label="Resize workspace panel"
+            aria-orientation="vertical"
+            aria-valuemax={480}
+            aria-valuemin={WORKSPACE_PANEL_MIN_WIDTH}
+            aria-valuenow={workspacePanelWidth}
+            className="column-resize-handle workspace-panel-resize-handle"
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowLeft" && event.key !== "ArrowRight")
+                return;
+              event.preventDefault();
+              setWorkspacePanelWidth((width) =>
+                clampWorkspacePanelSize(
+                  width +
+                    (event.key === "ArrowRight" ? PANEL_STEP : -PANEL_STEP),
+                  480,
+                ),
+              );
+            }}
+            onPointerDown={(event) => startColumnResize(event, "workspace")}
+            role="separator"
+            tabIndex={0}
+          />
+
+          <section
+            className={`workspace-main workspace-content-column ${view === "world" ? "world-column" : "center-column"}`}
+          >
             {!workspace ? (
               <div className="empty large">
                 <strong>Choose a workspace</strong>
-                <span>Its board, sessions, and files will appear here.</span>
+                <span>Its sessions, tasks and files will appear here.</span>
               </div>
-            ) : view === "workspace" ? (
-              <>
-                <div className="workspace-content-toolbar">
-                  <div>
-                    <strong>Workspace files</strong>
-                    <small>{workspace.path}</small>
-                  </div>
-                </div>
-                {!workspaceContent ||
-                workspaceContent.workspaceId !== workspace.id ? (
-                  <div className="empty large">Loading workspace content…</div>
-                ) : (
-                  <FilesView
-                    client={client}
-                    gitStatus={changedPaths}
-                    worktreeBases={worktreeBases}
-                    // A request belongs to the workspace it was made for, and
-                    // is cleared once shown, so a remount of this view (another
-                    // workspace, or a return to it) does not replay it.
-                    openRequest={
-                      fileOpenRequest?.workspaceId === workspace.id
-                        ? fileOpenRequest
-                        : undefined
-                    }
-                    onOpenRequestShown={() => setFileOpenRequest(undefined)}
-                    initialRoot={workspaceContent.files}
-                    key={workspace.id}
-                    onError={setError}
-                    onJournalTargetShown={() => setJournalTarget(undefined)}
-                    onWorkspaceDocumentSaved={() =>
-                      void refreshWorkspaceContent()
-                    }
-                    journalTarget={journalTarget}
-                    theme={theme}
-                    workspace={workspace}
-                  />
-                )}
-              </>
             ) : view === "world" ? (
               <Suspense
                 fallback={<div className="empty large">Opening the World…</div>}
               >
                 <WorldView
-                  appearance={theme}
+                  appearance={appearanceOf(theme)}
                   preview={!!snapshot && snapshot.settings.channel !== "stable"}
                   // The World is every workspace at once, whatever the sidebar
                   // has selected: it is the one view of everything running.
@@ -6047,992 +6154,919 @@ export function WorkspaceApp({
                   onOpenSession={showSession}
                 />
               </Suspense>
-            ) : view === "board" ? (
-              boardView
-            ) : null}
-          </section>
-        )}
-
-        {workspace && workspacePanelVisible && (
-          <div
-            aria-label="Resize repositories panel"
-            aria-orientation="vertical"
-            aria-valuemax={720}
-            aria-valuemin={PANEL_RAIL_WIDTH}
-            aria-valuenow={boardDetailPanelWidth}
-            className="column-resize-handle secondary-panel-resize-handle"
-            onDoubleClick={toggleBoardDetailPanel}
-            onKeyDown={(event) => {
-              if (event.key !== "ArrowLeft" && event.key !== "ArrowRight")
-                return;
-              event.preventDefault();
-              const movement =
-                event.key === "ArrowRight" ? PANEL_STEP : -PANEL_STEP;
-              setBoardDetailPanelWidth((width) =>
-                clampPanelSize(width - movement, 720),
-              );
-            }}
-            onPointerDown={(event) => startColumnResize(event, "secondary")}
-            role="separator"
-            tabIndex={0}
-          >
-            {/* The panel's edge is its handle: drag to resize, click the tab
-                to fold it to a rail and back. */}
-            <button
-              aria-expanded={!workspacePanelCollapsed}
-              aria-label={
-                workspacePanelCollapsed
-                  ? "Expand workspace panel"
-                  : "Collapse workspace panel"
-              }
-              className="panel-edge-toggle"
-              onClick={toggleBoardDetailPanel}
-              onDoubleClick={(event) => event.stopPropagation()}
-              onPointerDown={(event) => event.stopPropagation()}
-              title={`${workspacePanelCollapsed ? "Expand" : "Collapse"} workspace panel (⌥⌘B)`}
-              type="button"
-            >
-              <svg aria-hidden="true" viewBox="0 0 8 14">
-                <path
-                  d={workspacePanelCollapsed ? "M6 1 1 7l5 6" : "M2 1l5 6-5 6"}
-                />
-              </svg>
-            </button>
-          </div>
-        )}
-
-        {/* The column is one workspace's repositories, so with every
-            workspace showing there is none; the board takes the width. */}
-        {workspacePanelVisible && workspace && (
-          <aside
-            aria-label="Workspace panel"
-            className={`board-detail-column ${workspacePanelCollapsed ? "panel-compact" : ""}`}
-          >
-            <div className="section-heading">
-              <div>
-                <span className="eyebrow">Workspace</span>
-                <h1>Repositories</h1>
-              </div>
-              <div className="panel-heading-actions">
-                {repositoriesReady && (
-                  <small className="count-badge">
-                    {workspaceContent.repositories.length}
-                  </small>
-                )}
-                <button
-                  aria-label="Add repository"
-                  className="quiet"
-                  onClick={() => openRepositoryModal()}
-                  title="Add repository"
-                  type="button"
-                >
-                  + Add
-                </button>
-              </div>
-            </div>
-            {/* Fetch and pull for every repository at once, a row of their
-                own so the heading stays the panel's name and Add. */}
-            {!workspacePanelCollapsed &&
-            workspaceContent?.repositories.length ? (
-              <div className="repository-toolbar">
-                {(["fetch", "pull"] as const).map((mode) => {
-                  const anyRunning = ["fetch", "pull"].some((kind) =>
-                    [...pendingRepositoryActions].some((action) =>
-                      action.startsWith(`${kind}:`),
-                    ),
-                  );
-                  return (
-                    <button
-                      aria-label={`${mode === "fetch" ? "Fetch" : "Pull"} all repositories`}
-                      className={`quiet repository-header-action ${pendingRepositoryActions.has(`${mode}:all`) ? "syncing" : ""}`}
-                      disabled={
-                        !workspaceContent?.repositories.some(
-                          (item) => item.status === "ready",
-                        ) || anyRunning
-                      }
-                      key={mode}
-                      onClick={() => void fetchWorkspaceRepositories(mode)}
-                      title={
-                        mode === "fetch"
-                          ? "Fetch every repository, and re-check every working tree in this workspace. No checkout moves."
-                          : "Pull every repository: fetch, and move each checkout to the latest default branch"
-                      }
-                      type="button"
-                    >
-                      {mode === "fetch" ? (
-                        <RepositoryFetchIcon />
-                      ) : (
-                        <RepositoryPullIcon />
-                      )}
-                      {mode === "fetch" ? "Fetch all" : "Pull all"}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : null}
-            {workspacePanelCollapsed ? workspaceRail : workspaceRepositories}
-          </aside>
-        )}
-
-        {view === "board" && workspace && selectedTask && (
-          <section
-            aria-label={`Task #${selectedTask.number}`}
-            className="task-drawer"
-            role="dialog"
-          >
-            <div className="section-heading">
-              <div>
-                <span className="eyebrow">Task #{selectedTask.number}</span>
-                <h1>Task brief</h1>
-              </div>
-              <div className="panel-heading-actions">
-                <button
-                  aria-label="Close task"
-                  className="quiet task-drawer-close"
-                  onClick={closeTaskDrawer}
-                  title="Close (Esc)"
-                  type="button"
-                >
-                  <DismissIcon />
-                </button>
-              </div>
-            </div>
-            {taskInspector}
-          </section>
-        )}
-
-        {view === "session" && workspace && (
-          <section className="terminal-column">
-            <div className="terminal-heading">
-              <div>
-                <span className="eyebrow">Terminal</span>
-                <h1>
-                  {activeSession ? (
-                    <>
-                      {sessionName(activeSession)}
-                      {activeSessionModel && (
-                        <small className="terminal-heading-model">
-                          {activeSessionModel}
-                        </small>
-                      )}
-                      {activeSession.account && (
-                        <small
-                          className="terminal-heading-model"
-                          title="The account this session runs on"
-                        >
-                          {accountName(
-                            activeSession.provider,
-                            activeSession.account,
-                          )}
-                        </small>
-                      )}
-                    </>
-                  ) : openingLaunch ? (
-                    openingLaunch.name || "New session"
-                  ) : (
-                    "No session selected"
-                  )}
-                </h1>
-              </div>
-              {activeSession ? (
-                <small>{activeSession.status}</small>
-              ) : (
-                openingLaunch && <small>starting</small>
-              )}
-            </div>
-            {activeSessionRoutines && activeSession && (
-              <RoutineBar
-                busy={busy}
-                color={activeSession.color}
-                onOpenPanel={() =>
-                  routinesPanel?.sessionId === activeSession.id
-                    ? setRoutinesPanel(undefined)
-                    : openRoutinesPanel(activeSession.id)
-                }
-                onRunNow={() =>
-                  void routinesAction(
-                    activeSession.id,
-                    client.request.routineRunNow({
-                      sessionId: activeSession.id,
-                    }),
-                  )
-                }
-                onTogglePause={() =>
-                  void routinesAction(
-                    activeSession.id,
-                    client.request.routinesControl({
-                      sessionId: activeSession.id,
-                      action: activeSessionRoutines.paused ? "resume" : "pause",
-                    }),
-                  )
-                }
-                status={activeSessionRoutines}
-              />
-            )}
-            {activeSessionTeam && activeSession && (
-              <TeamBar
-                color={activeSession.color}
-                handle={activeSessionTeam.handle}
-                leadArchived={Boolean(
-                  sessionsById.get(activeSessionTeam.team.leadId)?.archivedAt,
-                )}
-                members={
-                  agents.filter(
-                    (item) =>
-                      item.teamId === activeSessionTeam.team.id &&
-                      !item.archivedAt,
-                  ).length
-                }
-                onOpenPanel={() =>
-                  teamPanel?.teamId === activeSessionTeam.team.id
-                    ? setTeamPanel(undefined)
-                    : openTeamPanel(activeSessionTeam.team.id)
-                }
-                role={activeSessionTeam.role}
-                team={activeSessionTeam.team}
-              />
-            )}
-            {activeSession &&
-              activeSessionTeam?.role !== "member" &&
-              (snapshot?.largeFiles ?? [])
-                .filter((file) =>
-                  file.kind === "journal"
-                    ? file.workspaceId === activeSession.workspaceId
-                    : file.sessionId === activeSession.id,
-                )
-                .map((file) => (
-                  <LargeFileBar
-                    color={activeSession.color}
-                    file={file}
-                    key={file.kind}
-                    onCopy={copyCommandText}
-                  />
-                ))}
-            {activeSession ? (
-              // The drawer sits over the terminal, below the routine bar, so
-              // the bar's buttons stay in reach while it is open.
-              <div className="terminal-stage">
-                {activeSessionRoutines &&
-                  routinesPanel?.sessionId === activeSession.id && (
-                    <RoutinesPanel
-                      busy={busy}
-                      detail={routinesPanel.detail}
-                      error={routinesPanel.error}
-                      now={now}
-                      onClose={() => setRoutinesPanel(undefined)}
-                      onRunNow={(name) =>
-                        void routinesAction(
-                          activeSession.id,
-                          client.request.routineRunNow({
-                            sessionId: activeSession.id,
-                            name,
-                          }),
-                        )
-                      }
-                      onSavePurpose={(purpose) =>
-                        void routinesAction(
-                          activeSession.id,
-                          client.request.routinesPurpose({
-                            sessionId: activeSession.id,
-                            purpose,
-                          }),
-                        )
-                      }
-                      onSetEnabled={(name, enabled) =>
-                        void routinesAction(
-                          activeSession.id,
-                          client.request.routineSetEnabled({
-                            sessionId: activeSession.id,
-                            name,
-                            enabled,
-                          }),
-                        )
-                      }
-                      sessionName={sessionName(activeSession)}
-                    />
-                  )}
-                {activeSessionTeam &&
-                  teamPanel?.teamId === activeSessionTeam.team.id && (
-                    <TeamPanel
-                      busy={busy}
-                      detail={teamPanel.detail}
-                      error={teamPanel.error}
-                      now={now}
-                      onClose={() => setTeamPanel(undefined)}
-                      onOpenSession={(sessionId) => {
-                        const target = sessionsById.get(sessionId);
-                        if (target) showSession(target.id, target.workspaceId);
-                      }}
-                      onPost={async (body) => {
-                        const said = await perform(
-                          client.request.teamSay({
-                            teamId: activeSessionTeam.team.id,
-                            body,
-                          }),
-                        );
-                        await loadTeamDetail(activeSessionTeam.team.id);
-                        return said?.warnings;
-                      }}
-                      onSetGoal={(goal) =>
-                        void perform(
-                          client.request.teamGoal({
-                            teamId: activeSessionTeam.team.id,
-                            goal,
-                          }),
-                        ).then(() => loadTeamDetail(activeSessionTeam.team.id))
-                      }
-                    />
-                  )}
-                <TerminalSurface
-                  activity={activityById.get(activeSession.id)}
-                  attention={attentionById.get(activeSession.id)}
-                  terminalEndpoint={terminalEndpoint}
-                  focused={shouldFocusSession(
-                    focusedSessionId,
-                    activeSession.id,
-                  )}
-                  fitRevision={terminalFitRevision}
-                  id={activeSession.id}
-                  key={`${activeSession.id}:${terminalMountRevision}`}
-                  label={sessionName(activeSession)}
-                  locationLabel={
-                    activeSessionRepository?.name ??
-                    activeSessionWorkspace?.name ??
-                    workspace.name
-                  }
-                  onClearAttention={() => void clearAttention(activeSession.id)}
-                  onCopy={copyTerminalText}
-                  onFocused={clearSessionFocusRequest}
-                  onOpenLink={openTerminalLink}
-                  fileLinks={fileLinksFrom([
-                    activeSession.workingDirectory,
-                    ...(snapshot?.worktrees ?? [])
-                      .filter((item) => item.sessionId === activeSession.id)
-                      .map((item) => item.path),
-                  ])}
-                  session={activeSession}
-                  status={activeSession.status}
-                  target="agent"
-                  telemetry={activeSessionTelemetry}
-                  worktree={activeSessionWorktree}
-                />
-              </div>
-            ) : openingLaunch ? (
-              <div aria-busy="true" className="terminal-empty">
-                <span aria-hidden="true" className="session-launch-spinner" />
-                <strong>Starting {openingLaunch.tool}…</strong>
-                <span>The terminal opens here as soon as it is ready.</span>
-              </div>
             ) : (
-              <div className="terminal-empty">
-                <strong>Select a session</strong>
-                <span>
-                  Choose one under its workspace, or start one with the
-                  workspace&apos;s +.
-                </span>
-              </div>
+              // Sessions, files, tasks and web pages share one tab strip, so
+              // opening a file leaves the session one tab away (Orca's layout).
+              <FilesEditor
+                client={client}
+                controller={files}
+                // A request belongs to the workspace it was made for, and is
+                // cleared once shown, so a remount of the editor (another
+                // workspace, or a return to it) does not replay it.
+                openRequest={
+                  fileOpenRequest?.workspaceId === workspace.id
+                    ? fileOpenRequest
+                    : undefined
+                }
+                onOpenRequestShown={() => setFileOpenRequest(undefined)}
+                key={workspace.id}
+                onError={setError}
+                onJournalTargetShown={() => setJournalTarget(undefined)}
+                onWorkspaceDocumentSaved={() => void refreshWorkspaceContent()}
+                journalTarget={journalTarget}
+                theme={theme}
+                workspace={workspace}
+                worktreeBases={worktreeBases}
+                onActivePanel={followCenterTab}
+                onAppPanelClosed={(kind) => {
+                  if (kind === "task") closeTaskDrawer();
+                }}
+                renderSession={() => sessionPane}
+                sessionTitle={
+                  activeSession
+                    ? sessionName(activeSession)
+                    : openingLaunch
+                      ? openingLaunch.name || "New session"
+                      : "Session"
+                }
+                renderTask={() => taskPage}
+                taskTitle={
+                  selectedTask
+                    ? `#${selectedTask.number} ${selectedTask.title}`
+                    : "Task"
+                }
+                renderEmpty={() => centerEmpty}
+                sessionIcon={
+                  activeSession ? (
+                    <span
+                      className={`app-tab-tool tool-${sessionTool(activeSession)}`}
+                    >
+                      <ToolIcon tool={sessionTool(activeSession)} />
+                    </span>
+                  ) : undefined
+                }
+                renderTerminal={(terminalId) => {
+                  const terminal = integratedTerminals.find(
+                    (item) => item.id === terminalId,
+                  );
+                  return terminal ? (
+                    <TerminalSurface
+                      terminalEndpoint={terminalEndpoint}
+                      focused
+                      fitRevision={terminalFitRevision}
+                      id={terminal.id}
+                      key={`${terminal.id}:${terminalMountRevision}`}
+                      label={terminal.name}
+                      onCopy={copyTerminalText}
+                      onOpenLink={openTerminalLink}
+                      fileLinks={fileLinksFrom([terminal.workingDirectory])}
+                      status={terminal.status}
+                      target="integrated"
+                    />
+                  ) : (
+                    <div className="terminal-empty">
+                      <strong>This terminal is closed</strong>
+                    </div>
+                  );
+                }}
+                onNewTerminal={() => void createTerminalTab(workspace)}
+                onTerminalTabClosed={(terminalId) => {
+                  const terminal = integratedTerminals.find(
+                    (item) => item.id === terminalId,
+                  );
+                  if (terminal) void closeIntegratedTerminal(terminal);
+                }}
+                onOpenExternal={openExternalLink}
+                loadingContent={
+                  view === "session" ? (
+                    <div className="app-panel session-panel">{sessionPane}</div>
+                  ) : view === "board" && selectedTask ? (
+                    <div className="app-panel task-panel">{taskPage}</div>
+                  ) : view === "board" ? (
+                    centerEmpty
+                  ) : undefined
+                }
+              />
             )}
           </section>
-        )}
-      </div>
 
-      <section
-        aria-label="Integrated terminal"
-        className={`integrated-terminal-panel ${terminalPanelOpen ? "open" : "collapsed"}`}
-      >
-        {terminalPanelOpen && (
-          <div
-            aria-label="Resize integrated terminal"
-            aria-orientation="horizontal"
-            aria-valuemax={
-              typeof window === "undefined"
-                ? 720
-                : Math.max(TERMINAL_PANEL_MIN_HEIGHT, window.innerHeight - 280)
-            }
-            aria-valuemin={TERMINAL_PANEL_MIN_HEIGHT}
-            aria-valuenow={terminalPanelHeight}
-            className="integrated-terminal-resize-handle"
-            onKeyDown={(event) => {
-              if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
-              event.preventDefault();
-              setTerminalPanelHeight((height) =>
-                clampTerminalPanelHeight(
-                  height + (event.key === "ArrowUp" ? 24 : -24),
-                ),
-              );
-            }}
-            onPointerDown={startTerminalPanelResize}
-            role="separator"
-            tabIndex={0}
-          />
-        )}
-        <div className="integrated-terminal-header">
-          <button
-            aria-label={
-              appUpdate?.state === "available"
-                ? `Open settings. Daedalus ${appUpdate.version} is available`
-                : "Open settings"
-            }
-            className="quiet settings-corner-button"
-            onClick={() => {
-              // An offer opens Settings on About, where its button is.
-              if (appUpdate?.state === "available") setSettingsSection("about");
-              setModal("settings");
-            }}
-            title={
-              appUpdate?.state === "available"
-                ? `Settings · Daedalus ${appUpdate.version} is available`
-                : "Settings"
-            }
-            type="button"
-          >
-            <SettingsIcon />
-            {appUpdate?.state === "available" ? (
-              <span aria-hidden="true" className="update-dot" />
-            ) : undefined}
-          </button>
-          <button
-            aria-expanded={terminalPanelOpen}
-            className="integrated-terminal-toggle"
-            onClick={() => setTerminalPanelOpen((current) => !current)}
-            type="button"
-          >
-            <SessionLaunchIcon />
-            <strong>Terminal</strong>
-            <span className="count-badge">{integratedTerminals.length}</span>
-          </button>
-          {(snapshot?.providerUsage.length ?? 0) > 0 && (
-            <div className="provider-usage" aria-label="Provider usage">
-              {snapshot!.providerUsage.map((usage) => (
-                <span
-                  className="provider-usage-item"
-                  data-provider={usage.provider}
-                  key={`${usage.provider}:${usage.account ?? "default"}`}
-                >
-                  <strong>
-                    {providerLabel(usage.provider)}
-                    {usage.account
-                      ? ` · ${accountName(usage.provider, usage.account)}`
-                      : ""}
-                  </strong>
-                  {usage.billing && usage.windows.length === 0 && (
-                    <span
-                      className={
-                        usage.cost
-                          ? "provider-usage-cost"
-                          : "provider-usage-none"
-                      }
-                      title={accountCostTitle(usage.billing, usage.cost)}
-                    >
-                      {accountCostLabel(usage.billing, usage.cost)}
-                    </span>
-                  )}
-                  {!usage.billing && usage.windows.length === 0 && (
-                    <span
-                      className="provider-usage-none"
-                      title={
-                        usage.provider === "claude"
-                          ? "No reading yet. Claude reports its limits once a session on this account has replied."
-                          : "No reading yet."
-                      }
-                    >
-                      –
-                    </span>
-                  )}
-                  {usage.windows.map((window, index) => (
-                    <span
-                      key={window.label}
-                      title={
-                        window.resetsAt
-                          ? `Resets ${new Date(window.resetsAt).toLocaleString()}`
-                          : undefined
-                      }
-                    >
-                      {index > 0 && (
-                        <span className="provider-usage-dot">·</span>
-                      )}
-                      {window.label} {Math.round(window.usedPercent)}%
-                      {window.usedUsd !== undefined &&
-                        window.limitUsd !== undefined &&
-                        ` · ${spendOfLimit(window.usedUsd, window.limitUsd)}`}
-                    </span>
-                  ))}
-                </span>
-              ))}
-            </div>
-          )}
-          <div className="integrated-terminal-actions">
-            <button
-              aria-label="New terminal in Daedalus home"
-              className="quiet"
-              disabled={busy || !snapshot?.settings.tmuxAvailable}
-              onClick={() => void createIntegratedTerminal()}
-              title={`New terminal in ${snapshot?.settings.home ?? "Daedalus home"}`}
-              type="button"
-            >
-              +
-            </button>
-            {terminalPanelOpen && (
-              <button
-                aria-label="Collapse integrated terminal"
-                className="quiet"
-                onClick={() => setTerminalPanelOpen(false)}
-                title="Collapse terminal"
-                type="button"
-              >
-                ⌄
-              </button>
-            )}
-          </div>
-        </div>
-        <div className="integrated-terminal-body">
-          <div className="integrated-terminal-stage">
-            {activeIntegratedTerminal
-              ? integratedTerminals.map((terminal) => (
-                  <IntegratedTerminalSurface
-                    terminalEndpoint={terminalEndpoint}
-                    active={
-                      terminalPanelOpen &&
-                      terminal.id === activeIntegratedTerminal.id
-                    }
-                    fitRevision={terminalFitRevision}
-                    key={terminal.id}
-                    mountRevision={terminalMountRevision}
-                    onCopy={copyTerminalText}
-                    onOpenLink={openTerminalLink}
-                    fileLinks={fileLinksFrom([terminal.workingDirectory])}
-                    terminal={terminal}
-                  />
-                ))
-              : terminalPanelOpen && (
-                  <div className="terminal-empty integrated-terminal-empty">
-                    <strong>No terminals open</strong>
-                    <span>
-                      Create one in the Daedalus home or from a workspace card.
-                    </span>
-                  </div>
-                )}
-          </div>
-          {terminalPanelOpen && integratedTerminals.length > 0 && (
+          {workspace && workspacePanelVisible && (
             <div
-              aria-label="Terminal tabs"
-              className="integrated-terminal-tabs"
-              role="tablist"
-            >
-              {integratedTerminals.map((terminal) => (
-                <div
-                  className={`integrated-terminal-tab ${terminal.id === activeIntegratedTerminal?.id ? "active" : ""}`}
-                  key={terminal.id}
-                >
-                  <button
-                    aria-label={`${terminal.name}, ${terminal.workingDirectory}`}
-                    aria-selected={terminal.id === activeIntegratedTerminal?.id}
-                    onClick={() => setActiveTerminalId(terminal.id)}
-                    role="tab"
-                    title={
-                      terminal.revivedAt
-                        ? `${terminal.workingDirectory} — reopened after a restart, scrollback not restored`
-                        : terminal.workingDirectory
-                    }
-                    type="button"
-                  >
-                    <span
-                      className={`agent-dot tone-${lifecycleTone(terminal.status)}`}
-                    />
-                    <span className="integrated-terminal-tab-copy">
-                      <strong>
-                        {terminal.name}
-                        {terminal.revivedAt && (
-                          <span
-                            aria-label="reopened after a restart, scrollback not restored"
-                            className="integrated-terminal-revived"
-                          >
-                            ↻
-                          </span>
-                        )}
-                      </strong>
-                      <small>
-                        {terminalPathHint(
-                          terminal.workingDirectory,
-                          snapshot?.settings.home,
-                        )}
-                      </small>
-                    </span>
-                  </button>
-                  <button
-                    aria-label={`Close ${terminal.name} terminal`}
-                    className="integrated-terminal-close"
-                    disabled={busy}
-                    onClick={() => void closeIntegratedTerminal(terminal)}
-                    title="Close terminal"
-                    type="button"
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </section>
-
-      {modal === "workspace" && (
-        <Modal onClose={() => setModal(undefined)} title="Create workspace">
-          <form className="modal-form" onSubmit={createWorkspace}>
-            <label>
-              Name
-              <input
-                autoFocus
-                required
-                value={workspaceForm.name}
-                onChange={(event) =>
-                  setWorkspaceForm({
-                    ...workspaceForm,
-                    name: event.target.value,
-                  })
-                }
-                placeholder="My project"
-              />
-            </label>
-            {(["claude", "codex"] as const).map((provider) => {
-              // Asked only once a provider has an account besides Default.
-              const accounts = (snapshot?.settings.accounts ?? []).filter(
-                (item) => item.provider === provider,
-              );
-              if (accounts.length < 2) return undefined;
-              const field =
-                provider === "claude" ? "claudeAccount" : "codexAccount";
-              return (
-                <label key={provider}>
-                  {providerLabel(provider)} account
-                  <select
-                    aria-label={`Default ${providerLabel(provider)} account`}
-                    onChange={(event) =>
-                      setWorkspaceForm({
-                        ...workspaceForm,
-                        [field]: event.target.value,
-                      })
-                    }
-                    value={workspaceForm[field]}
-                  >
-                    {accounts.map((item) => (
-                      <option key={item.account} value={item.account}>
-                        {item.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              );
-            })}
-            <div className="modal-actions">
-              <button
-                className="quiet"
-                onClick={() => setModal(undefined)}
-                type="button"
-              >
-                Cancel
-              </button>
-              <button disabled={busy} type="submit">
-                Create workspace
-              </button>
-            </div>
-          </form>
-        </Modal>
-      )}
-
-      {modal === "task" && workspace && (
-        <Modal onClose={() => setModal(undefined)} title="Create task">
-          <form className="modal-form" onSubmit={createTask}>
-            <label>
-              Title
-              <input
-                autoFocus
-                required
-                value={taskForm.title}
-                onChange={(event) =>
-                  setTaskForm({ ...taskForm, title: event.target.value })
-                }
-                placeholder="What needs to be done?"
-              />
-            </label>
-            <label>
-              Task brief <small>Markdown</small>
-              <textarea
-                value={taskForm.description}
-                onChange={(event) =>
-                  setTaskForm({ ...taskForm, description: event.target.value })
-                }
-                rows={7}
-              />
-            </label>
-            <div className="modal-actions">
-              <button
-                className="quiet"
-                onClick={() => setModal(undefined)}
-                type="button"
-              >
-                Cancel
-              </button>
-              <button disabled={busy} type="submit">
-                Create task
-              </button>
-            </div>
-          </form>
-        </Modal>
-      )}
-
-      {modal === "repository" && workspace && (
-        <Modal
-          dismissible={!busy}
-          onClose={closeRepositoryModal}
-          title="Add repositories"
-          wide
-        >
-          <form className="repository-picker" onSubmit={submitRepositoryPicker}>
-            <p className="repository-picker-intro">
-              Select repositories already in Daedalus, discover them through
-              GitHub, or clone from a URL or full local path.
-            </p>
-            <label className="repository-unified-search">
-              Repository
-              <div className="repository-clone-row">
-                <input
-                  autoFocus
-                  aria-label="Search repositories or enter a Git URL or absolute local repository path"
-                  placeholder="Search repositories, paste a Git URL, or enter /full/path"
-                  value={repositoryForm.search}
-                  onChange={(event) =>
-                    setRepositoryForm({
-                      remoteUrl: event.target.value,
-                      search: event.target.value,
-                    })
-                  }
-                  onKeyDown={(event) => {
-                    // Down enters the list. Enter is left alone: it submits
-                    // the form, which is what it should do from here.
-                    if (event.key !== "ArrowDown") return;
-                    event.preventDefault();
-                    moveRepositoryFocus(event.currentTarget, 1);
-                  }}
-                />
-                <button
-                  className="quiet"
-                  disabled={
-                    busy || !looksLikeRepositorySource(repositoryForm.search)
-                  }
-                  onClick={() => void submitRepositoryPicker()}
-                  type="button"
-                >
-                  Clone URL/path
-                </button>
-              </div>
-            </label>
-
-            <div
-              className="repository-picker-results repository-unified-results"
+              aria-label="Resize repositories panel"
+              aria-orientation="vertical"
+              aria-valuemax={720}
+              aria-valuemin={PANEL_RAIL_WIDTH}
+              aria-valuenow={boardDetailPanelWidth}
+              className="column-resize-handle secondary-panel-resize-handle"
+              onDoubleClick={toggleBoardDetailPanel}
               onKeyDown={(event) => {
-                const delta =
-                  event.key === "ArrowDown"
-                    ? 1
-                    : event.key === "ArrowUp"
-                      ? -1
-                      : 0;
-                if (!delta) return;
+                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight")
+                  return;
                 event.preventDefault();
-                moveRepositoryFocus(event.target as HTMLElement, delta);
-              }}
-            >
-              <div className="repository-result-summary">
-                <span>
-                  {repositorySearch ? "Best matches" : "All repositories"}
-                </span>
-                <small>
-                  {repositoryCandidates.length}
-                  {repositoryDiscoveryLoading ? " + discovering GitHub…" : ""}
-                </small>
-              </div>
-              {repositoryCandidates.map((candidate) => {
-                const option =
-                  candidate.kind === "library"
-                    ? {
-                        key: candidate.repository.id,
-                        name: candidate.repository.name,
-                        detail: candidate.repository.remoteUrl,
-                        trailing: candidate.repository.defaultBranch,
-                        source: "Local",
-                        attached: attachedLibraryRepositoryIds.has(
-                          candidate.repository.id,
-                        ),
-                        selected: selectedRepositoryIds.has(
-                          candidate.repository.id,
-                        ),
-                      }
-                    : {
-                        key: `github:${candidate.repository.nameWithOwner}`,
-                        name: candidate.repository.name,
-                        detail: candidate.repository.nameWithOwner,
-                        trailing: "GitHub",
-                        source: "Clone",
-                        attached: false,
-                        selected: selectedGitHubRepositories.has(
-                          candidate.repository.nameWithOwner,
-                        ),
-                      };
-                const checked = option.attached || option.selected;
-                return (
-                  <label
-                    className={`${option.selected ? "selected" : ""} ${option.attached ? "attached" : ""}`}
-                    key={option.key}
-                  >
-                    {/* A real checkbox inside the form, so Space toggles it
-                            and Enter submits, with neither wired up here. */}
-                    <input
-                      checked={checked}
-                      data-repository-option="true"
-                      disabled={busy || option.attached}
-                      onChange={() => toggleRepositoryCandidate(option.key)}
-                      type="checkbox"
-                    />
-                    <span
-                      aria-hidden="true"
-                      className="repository-picker-check"
-                    >
-                      {checked ? "✓" : ""}
-                    </span>
-                    <span>
-                      <strong>{option.name}</strong>
-                      <small>{option.detail}</small>
-                    </span>
-                    <span>
-                      <strong>
-                        {option.attached ? "Added" : option.trailing}
-                      </strong>
-                      <small>{option.source}</small>
-                    </span>
-                  </label>
+                const movement =
+                  event.key === "ArrowRight" ? PANEL_STEP : -PANEL_STEP;
+                setBoardDetailPanelWidth((width) =>
+                  clampPanelSize(width - movement, 720),
                 );
-              })}
-              {repositoryDiscoveryLoading ? (
-                <div className="empty">Discovering repositories…</div>
-              ) : repositoryDiscovery?.authenticated &&
-                !repositoryDiscovery.error ? (
-                repositoryCandidates.length === 0 ? (
-                  <div className="empty">
-                    {repositorySearch
-                      ? "No matching repositories"
-                      : "No repositories available"}
-                  </div>
-                ) : null
-              ) : (
-                <div className="repository-discovery-message">
-                  {repositoryDiscovery?.error &&
-                  repositoryDiscovery.authenticated ? (
-                    <>
-                      <strong>GitHub discovery unavailable</strong>
-                      <span>{repositoryDiscovery.error}</span>
-                    </>
-                  ) : !repositoryDiscovery?.githubCliAvailable ? (
-                    <>
-                      <strong>GitHub CLI not found</strong>
-                      <span>
-                        Install `gh` to discover repositories you can access
-                        automatically.
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <strong>GitHub sign-in required</strong>
-                      <span>Run `gh auth login`, then reopen this picker.</span>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <small className="repository-clone-destination">
-              New clones are stored once in {snapshot?.settings.repositoryRoot}.
-            </small>
-            <div className="modal-actions">
-              <span className="repository-selection-count">
-                {selectedRepositoryCount
-                  ? `${selectedRepositoryCount} selected`
-                  : "Select one or more repositories"}
-              </span>
+              }}
+              onPointerDown={(event) => startColumnResize(event, "secondary")}
+              role="separator"
+              tabIndex={0}
+            >
+              {/* The panel's edge is its handle: drag to resize, click the tab
+                to fold it to a rail and back. */}
               <button
-                className="quiet"
-                onClick={closeRepositoryModal}
+                aria-expanded={!workspacePanelCollapsed}
+                aria-label={
+                  workspacePanelCollapsed
+                    ? "Expand workspace panel"
+                    : "Collapse workspace panel"
+                }
+                className="panel-edge-toggle"
+                onClick={toggleBoardDetailPanel}
+                onDoubleClick={(event) => event.stopPropagation()}
+                onPointerDown={(event) => event.stopPropagation()}
+                title={`${workspacePanelCollapsed ? "Expand" : "Collapse"} workspace panel (⌥⌘B)`}
                 type="button"
               >
-                Cancel
-              </button>
-              <button
-                disabled={busy || !canSubmitRepositoryPicker}
-                type="submit"
-              >
-                {selectedRepositoryCount === 1
-                  ? "Add repository"
-                  : selectedRepositoryCount > 1
-                    ? `Add ${selectedRepositoryCount} repositories`
-                    : looksLikeRepositorySource(repositoryForm.search)
-                      ? "Clone and add"
-                      : "Add selected"}
+                <svg aria-hidden="true" viewBox="0 0 8 14">
+                  <path
+                    d={
+                      workspacePanelCollapsed ? "M6 1 1 7l5 6" : "M2 1l5 6-5 6"
+                    }
+                  />
+                </svg>
               </button>
             </div>
-          </form>
-        </Modal>
-      )}
+          )}
 
-      {modal === "session" && sessionWorkspace && snapshot && (
-        <Modal
-          dismissible
-          onClose={closeSessionModal}
-          title={
-            memberTeam ? `Add a member to ${memberTeam.name}` : "Create session"
-          }
-        >
-          <form className="modal-form" onSubmit={createSession}>
-            <label>
-              {memberTeam ? "Member name" : "Session name"}
-              <input
-                autoFocus
-                maxLength={240}
-                onChange={(event) =>
-                  setSessionForm({ ...sessionForm, name: event.target.value })
-                }
-                placeholder={
-                  memberTeam
-                    ? "What it owns; also its @handle, such as server"
-                    : "What is this session for?"
-                }
-                required
-                value={sessionForm.name}
-              />
-            </label>
-            {/* A member picks Claude or Codex whatever its lead runs on, and
-                the picker starts on the lead's. It cannot be a terminal. */}
-            <fieldset className="session-tool-picker">
-              <legend>Choose a tool</legend>
+          {/* The side panel: one workspace's files, repositories and tasks,
+            a tab each, as Orca and VS Code keep them. */}
+          {workspacePanelVisible && workspace && (
+            <aside
+              aria-label="Workspace panel"
+              className={`board-detail-column side-panel ${workspacePanelCollapsed ? "panel-compact" : ""}`}
+            >
               <div
-                aria-label="Session tool"
-                className="session-tool-row"
-                role="radiogroup"
+                aria-label="Workspace panel"
+                className="side-panel-tabs"
+                role="tablist"
               >
                 {(
                   [
-                    { id: "claude", label: "Claude" },
-                    { id: "codex", label: "Codex" },
-                    { id: "terminal", label: "Terminal" },
+                    ["files", "Files"],
+                    ["git", "Repositories"],
+                    ["tasks", "Tasks"],
                   ] as const
+                ).map(([tab, label]) => (
+                  <button
+                    aria-label={label}
+                    aria-selected={!workspacePanelCollapsed && panelTab === tab}
+                    className="side-panel-tab"
+                    key={tab}
+                    onClick={() => {
+                      if (workspacePanelCollapsed) toggleBoardDetailPanel();
+                      else if (panelTab === tab) {
+                        toggleBoardDetailPanel();
+                        return;
+                      }
+                      setPanelTab(tab);
+                    }}
+                    role="tab"
+                    title={label}
+                    type="button"
+                  >
+                    <SidePanelTabIcon tab={tab} />
+                    {tab === "tasks" && taskAttentionCount > 0 && (
+                      <i aria-hidden="true" className="side-panel-tab-badge" />
+                    )}
+                  </button>
+                ))}
+              </div>
+              {workspacePanelCollapsed ? null : panelTab === "files" ? (
+                !workspaceContent ||
+                workspaceContent.workspaceId !== workspace.id ? (
+                  <div className="empty">Loading files…</div>
+                ) : (
+                  <FilesExplorer
+                    client={client}
+                    controller={files}
+                    gitStatus={changedPaths}
+                    initialRoot={workspaceContent.files}
+                    key={workspace.id}
+                    onError={setError}
+                    onOpenFile={() => {
+                      if (view !== "workspace") setView("workspace");
+                    }}
+                    workspace={workspace}
+                  />
                 )
-                  .filter((tool) => !memberTeam || tool.id !== "terminal")
-                  .map((tool) => {
-                    const available =
-                      tool.id === "terminal" ||
-                      Boolean(
-                        snapshot.settings.providers.find(
-                          (item) => item.name === tool.id,
-                        )?.available,
-                      );
+              ) : panelTab === "git" ? (
+                <>
+                  <div className="section-heading">
+                    <h2>Repositories</h2>
+                    <div className="panel-heading-actions">
+                      {repositoriesReady && (
+                        <small className="count-badge">
+                          {workspaceContent.repositories.length}
+                        </small>
+                      )}
+                      <button
+                        aria-label="Add repository"
+                        className="quiet"
+                        onClick={() => openRepositoryModal()}
+                        title="Add repository"
+                        type="button"
+                      >
+                        + Add
+                      </button>
+                    </div>
+                  </div>
+                  {/* Fetch and pull for every repository at once, a row of their
+                    own so the heading stays the panel's name and Add. */}
+                  {workspaceContent?.repositories.length ? (
+                    <div className="repository-toolbar">
+                      {(["fetch", "pull"] as const).map((mode) => {
+                        const anyRunning = ["fetch", "pull"].some(
+                          (kind) =>
+                            repositoryActions.pending(`${kind}:all`) ||
+                            workspaceContent.repositories.some((item) =>
+                              repositoryActions.pending(`${kind}:${item.id}`),
+                            ),
+                        );
+                        return (
+                          <button
+                            aria-label={`${mode === "fetch" ? "Fetch" : "Pull"} all repositories`}
+                            className={`quiet repository-header-action ${repositoryActions.pending(`${mode}:all`) ? "syncing" : ""}`}
+                            disabled={
+                              !workspaceContent?.repositories.some(
+                                (item) => item.status === "ready",
+                              ) || anyRunning
+                            }
+                            key={mode}
+                            onClick={() =>
+                              void fetchWorkspaceRepositories(mode)
+                            }
+                            title={
+                              mode === "fetch"
+                                ? "Fetch every repository, and re-check every working tree in this workspace. No checkout moves."
+                                : "Pull every repository: fetch, and move each checkout to the latest default branch"
+                            }
+                            type="button"
+                          >
+                            {mode === "fetch" ? (
+                              <RepositoryFetchIcon />
+                            ) : (
+                              <RepositoryPullIcon />
+                            )}
+                            {mode === "fetch" ? "Fetch all" : "Pull all"}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                  {workspaceRepositories}
+                </>
+              ) : (
+                <div className="side-panel-board">{boardView}</div>
+              )}
+            </aside>
+          )}
+        </div>
+
+        <section
+          aria-label="Integrated terminal"
+          className={`integrated-terminal-panel ${terminalPanelOpen ? "open" : "collapsed"}`}
+        >
+          {terminalPanelOpen && (
+            <div
+              aria-label="Resize integrated terminal"
+              aria-orientation="horizontal"
+              aria-valuemax={
+                typeof window === "undefined"
+                  ? 720
+                  : Math.max(
+                      TERMINAL_PANEL_MIN_HEIGHT,
+                      window.innerHeight - 280,
+                    )
+              }
+              aria-valuemin={TERMINAL_PANEL_MIN_HEIGHT}
+              aria-valuenow={terminalPanelHeight}
+              className="integrated-terminal-resize-handle"
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowUp" && event.key !== "ArrowDown")
+                  return;
+                event.preventDefault();
+                setTerminalPanelHeight((height) =>
+                  clampTerminalPanelHeight(
+                    height + (event.key === "ArrowUp" ? 24 : -24),
+                  ),
+                );
+              }}
+              onPointerDown={startTerminalPanelResize}
+              role="separator"
+              tabIndex={0}
+            />
+          )}
+          <div className="integrated-terminal-header">
+            <button
+              aria-label={
+                appUpdate?.state === "available"
+                  ? `Open settings. Daedalus ${appUpdate.version} is available`
+                  : "Open settings"
+              }
+              className="quiet settings-corner-button"
+              onClick={() => {
+                // An offer opens Settings on About, where its button is.
+                if (appUpdate?.state === "available")
+                  setSettingsSection("about");
+                setModal("settings");
+              }}
+              title={
+                appUpdate?.state === "available"
+                  ? `Settings · Daedalus ${appUpdate.version} is available`
+                  : "Settings"
+              }
+              type="button"
+            >
+              <SettingsIcon />
+              {appUpdate?.state === "available" ? (
+                <span aria-hidden="true" className="update-dot" />
+              ) : undefined}
+            </button>
+            <button
+              aria-expanded={terminalPanelOpen}
+              className="integrated-terminal-toggle"
+              onClick={() => setTerminalPanelOpen((current) => !current)}
+              type="button"
+            >
+              <SessionLaunchIcon />
+              <strong>Terminal</strong>
+              <span className="count-badge">{integratedTerminals.length}</span>
+            </button>
+            {/* The bar the app had at the top is gone (Orca has none); the
+                World, every workspace at once, lives here beside Terminal. */}
+            <button
+              aria-pressed={view === "world"}
+              className={`integrated-terminal-toggle world-toggle ${view === "world" ? "active" : ""}`}
+              disabled={!workspace}
+              onClick={() =>
+                setView(view === "world" ? lastWorkspaceView.current : "world")
+              }
+              title={
+                view === "world"
+                  ? "Back to the workspace (⌘4)"
+                  : "Every workspace's agents at once (⌘4)"
+              }
+              type="button"
+            >
+              <svg aria-hidden="true" viewBox="0 0 16 16">
+                <path d="M8 1.5h6.5v13h-13v-13H5M5 4.5h6.5v7h-7v-7M8 7.5h1v1" />
+              </svg>
+              <strong>World</strong>
+            </button>
+            {busy && <span className="syncing">Working…</span>}
+            {(snapshot?.providerUsage.length ?? 0) > 0 && (
+              <div className="provider-usage" aria-label="Provider usage">
+                {snapshot!.providerUsage.map((usage) => (
+                  <span
+                    className="provider-usage-item"
+                    data-provider={usage.provider}
+                    key={`${usage.provider}:${usage.account ?? "default"}`}
+                  >
+                    <strong>
+                      {providerLabel(usage.provider)}
+                      {usage.account
+                        ? ` · ${accountName(usage.provider, usage.account)}`
+                        : ""}
+                    </strong>
+                    {usage.billing && usage.windows.length === 0 && (
+                      <span
+                        className={
+                          usage.cost
+                            ? "provider-usage-cost"
+                            : "provider-usage-none"
+                        }
+                        title={accountCostTitle(usage.billing, usage.cost)}
+                      >
+                        {accountCostLabel(usage.billing, usage.cost)}
+                      </span>
+                    )}
+                    {!usage.billing && usage.windows.length === 0 && (
+                      <span
+                        className="provider-usage-none"
+                        title={
+                          usage.provider === "claude"
+                            ? "No reading yet. Claude reports its limits once a session on this account has replied."
+                            : "No reading yet."
+                        }
+                      >
+                        –
+                      </span>
+                    )}
+                    {usage.windows.map((window, index) => (
+                      <span
+                        key={window.label}
+                        title={
+                          window.resetsAt
+                            ? `Resets ${new Date(window.resetsAt).toLocaleString()}`
+                            : undefined
+                        }
+                      >
+                        {index > 0 && (
+                          <span className="provider-usage-dot">·</span>
+                        )}
+                        {window.label} {Math.round(window.usedPercent)}%
+                        {window.usedUsd !== undefined &&
+                          window.limitUsd !== undefined &&
+                          ` · ${spendOfLimit(window.usedUsd, window.limitUsd)}`}
+                      </span>
+                    ))}
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="integrated-terminal-actions">
+              <button
+                aria-label="New terminal in Daedalus home"
+                className="quiet"
+                disabled={busy || !snapshot?.settings.tmuxAvailable}
+                onClick={() => void createIntegratedTerminal()}
+                title={`New terminal in ${snapshot?.settings.home ?? "Daedalus home"}`}
+                type="button"
+              >
+                +
+              </button>
+              {terminalPanelOpen && (
+                <button
+                  aria-label="Collapse integrated terminal"
+                  className="quiet"
+                  onClick={() => setTerminalPanelOpen(false)}
+                  title="Collapse terminal"
+                  type="button"
+                >
+                  ⌄
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="integrated-terminal-body">
+            <div className="integrated-terminal-stage">
+              {activeIntegratedTerminal
+                ? integratedTerminals.map((terminal) => (
+                    <IntegratedTerminalSurface
+                      terminalEndpoint={terminalEndpoint}
+                      active={
+                        terminalPanelOpen &&
+                        terminal.id === activeIntegratedTerminal.id
+                      }
+                      fitRevision={terminalFitRevision}
+                      key={terminal.id}
+                      mountRevision={terminalMountRevision}
+                      onCopy={copyTerminalText}
+                      onOpenLink={openTerminalLink}
+                      fileLinks={fileLinksFrom([terminal.workingDirectory])}
+                      terminal={terminal}
+                    />
+                  ))
+                : terminalPanelOpen && (
+                    <div className="terminal-empty integrated-terminal-empty">
+                      <strong>No terminals open</strong>
+                      <span>
+                        Create one in the Daedalus home or from a workspace
+                        card.
+                      </span>
+                    </div>
+                  )}
+            </div>
+            {terminalPanelOpen && integratedTerminals.length > 0 && (
+              <div
+                aria-label="Terminal tabs"
+                className="integrated-terminal-tabs"
+                role="tablist"
+              >
+                {integratedTerminals.map((terminal) => (
+                  <div
+                    className={`integrated-terminal-tab ${terminal.id === activeIntegratedTerminal?.id ? "active" : ""}`}
+                    key={terminal.id}
+                  >
+                    <button
+                      aria-label={`${terminal.name}, ${terminal.workingDirectory}`}
+                      aria-selected={
+                        terminal.id === activeIntegratedTerminal?.id
+                      }
+                      onClick={() => setActiveTerminalId(terminal.id)}
+                      role="tab"
+                      title={
+                        terminal.revivedAt
+                          ? `${terminal.workingDirectory} — reopened after a restart, scrollback not restored`
+                          : terminal.workingDirectory
+                      }
+                      type="button"
+                    >
+                      <span
+                        className={`agent-dot tone-${lifecycleTone(terminal.status)}`}
+                      />
+                      <span className="integrated-terminal-tab-copy">
+                        <strong>
+                          {terminal.name}
+                          {terminal.revivedAt && (
+                            <span
+                              aria-label="reopened after a restart, scrollback not restored"
+                              className="integrated-terminal-revived"
+                            >
+                              ↻
+                            </span>
+                          )}
+                        </strong>
+                        <small>
+                          {terminalPathHint(
+                            terminal.workingDirectory,
+                            snapshot?.settings.home,
+                          )}
+                        </small>
+                      </span>
+                    </button>
+                    <button
+                      aria-label={`Close ${terminal.name} terminal`}
+                      className="integrated-terminal-close"
+                      disabled={busy}
+                      onClick={() => void closeIntegratedTerminal(terminal)}
+                      title="Close terminal"
+                      type="button"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+
+        {modal === "workspace" && (
+          <Modal onClose={() => setModal(undefined)} title="Create workspace">
+            <form className="modal-form" onSubmit={createWorkspace}>
+              <label>
+                Name
+                <input
+                  autoFocus
+                  required
+                  value={workspaceForm.name}
+                  onChange={(event) =>
+                    setWorkspaceForm({
+                      ...workspaceForm,
+                      name: event.target.value,
+                    })
+                  }
+                  placeholder="My project"
+                />
+              </label>
+              {(["claude", "codex"] as const).map((provider) => {
+                // Asked only once a provider has an account besides Default.
+                const accounts = (snapshot?.settings.accounts ?? []).filter(
+                  (item) => item.provider === provider,
+                );
+                if (accounts.length < 2) return undefined;
+                const field =
+                  provider === "claude" ? "claudeAccount" : "codexAccount";
+                return (
+                  <label key={provider}>
+                    {providerLabel(provider)} account
+                    <select
+                      aria-label={`Default ${providerLabel(provider)} account`}
+                      onChange={(event) =>
+                        setWorkspaceForm({
+                          ...workspaceForm,
+                          [field]: event.target.value,
+                        })
+                      }
+                      value={workspaceForm[field]}
+                    >
+                      {accounts.map((item) => (
+                        <option key={item.account} value={item.account}>
+                          {item.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                );
+              })}
+              <div className="modal-actions">
+                <button
+                  className="quiet"
+                  onClick={() => setModal(undefined)}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button disabled={busy} type="submit">
+                  Create workspace
+                </button>
+              </div>
+            </form>
+          </Modal>
+        )}
+
+        {modal === "task" && workspace && (
+          <Modal onClose={() => setModal(undefined)} title="Create task">
+            <form className="modal-form" onSubmit={createTask}>
+              <label>
+                Title
+                <input
+                  autoFocus
+                  required
+                  value={taskForm.title}
+                  onChange={(event) =>
+                    setTaskForm({ ...taskForm, title: event.target.value })
+                  }
+                  placeholder="What needs to be done?"
+                />
+              </label>
+              <label>
+                Task brief <small>Markdown</small>
+                <textarea
+                  value={taskForm.description}
+                  onChange={(event) =>
+                    setTaskForm({
+                      ...taskForm,
+                      description: event.target.value,
+                    })
+                  }
+                  rows={7}
+                />
+              </label>
+              <div className="modal-actions">
+                <button
+                  className="quiet"
+                  onClick={() => setModal(undefined)}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button disabled={busy} type="submit">
+                  Create task
+                </button>
+              </div>
+            </form>
+          </Modal>
+        )}
+
+        {modal === "repository" && workspace && (
+          <Modal
+            dismissible={!busy}
+            onClose={closeRepositoryModal}
+            title="Add repositories"
+            wide
+          >
+            <form
+              className="repository-picker"
+              onSubmit={submitRepositoryPicker}
+            >
+              <p className="repository-picker-intro">
+                Select repositories already in Daedalus, discover them through
+                GitHub, or clone from a URL or full local path.
+              </p>
+              <label className="repository-unified-search">
+                Repository
+                <div className="repository-clone-row">
+                  <input
+                    autoFocus
+                    aria-label="Search repositories or enter a Git URL or absolute local repository path"
+                    placeholder="Search repositories, paste a Git URL, or enter /full/path"
+                    value={repositoryForm.search}
+                    onChange={(event) =>
+                      setRepositoryForm({
+                        remoteUrl: event.target.value,
+                        search: event.target.value,
+                      })
+                    }
+                    onKeyDown={(event) => {
+                      // Down enters the list. Enter is left alone: it submits
+                      // the form, which is what it should do from here.
+                      if (event.key !== "ArrowDown") return;
+                      event.preventDefault();
+                      moveRepositoryFocus(event.currentTarget, 1);
+                    }}
+                  />
+                  <button
+                    className="quiet"
+                    disabled={
+                      busy || !looksLikeRepositorySource(repositoryForm.search)
+                    }
+                    onClick={() => void submitRepositoryPicker()}
+                    type="button"
+                  >
+                    Clone URL/path
+                  </button>
+                </div>
+              </label>
+
+              <div
+                className="repository-picker-results repository-unified-results"
+                onKeyDown={(event) => {
+                  const delta =
+                    event.key === "ArrowDown"
+                      ? 1
+                      : event.key === "ArrowUp"
+                        ? -1
+                        : 0;
+                  if (!delta) return;
+                  event.preventDefault();
+                  moveRepositoryFocus(event.target as HTMLElement, delta);
+                }}
+              >
+                <div className="repository-result-summary">
+                  <span>
+                    {repositorySearch ? "Best matches" : "All repositories"}
+                  </span>
+                  <small>
+                    {repositoryCandidates.length}
+                    {repositoryDiscoveryLoading ? " + discovering GitHub…" : ""}
+                  </small>
+                </div>
+                {repositoryCandidates.map((candidate) => {
+                  const option =
+                    candidate.kind === "library"
+                      ? {
+                          key: candidate.repository.id,
+                          name: candidate.repository.name,
+                          detail: candidate.repository.remoteUrl,
+                          trailing: candidate.repository.defaultBranch,
+                          source: "Local",
+                          attached: attachedLibraryRepositoryIds.has(
+                            candidate.repository.id,
+                          ),
+                          selected: selectedRepositoryIds.has(
+                            candidate.repository.id,
+                          ),
+                        }
+                      : {
+                          key: `github:${candidate.repository.nameWithOwner}`,
+                          name: candidate.repository.name,
+                          detail: candidate.repository.nameWithOwner,
+                          trailing: "GitHub",
+                          source: "Clone",
+                          attached: false,
+                          selected: selectedGitHubRepositories.has(
+                            candidate.repository.nameWithOwner,
+                          ),
+                        };
+                  const checked = option.attached || option.selected;
+                  return (
+                    <label
+                      className={`${option.selected ? "selected" : ""} ${option.attached ? "attached" : ""}`}
+                      key={option.key}
+                    >
+                      {/* A real checkbox inside the form, so Space toggles it
+                            and Enter submits, with neither wired up here. */}
+                      <input
+                        checked={checked}
+                        data-repository-option="true"
+                        disabled={busy || option.attached}
+                        onChange={() => toggleRepositoryCandidate(option.key)}
+                        type="checkbox"
+                      />
+                      <span
+                        aria-hidden="true"
+                        className="repository-picker-check"
+                      >
+                        {checked ? "✓" : ""}
+                      </span>
+                      <span>
+                        <strong>{option.name}</strong>
+                        <small>{option.detail}</small>
+                      </span>
+                      <span>
+                        <strong>
+                          {option.attached ? "Added" : option.trailing}
+                        </strong>
+                        <small>{option.source}</small>
+                      </span>
+                    </label>
+                  );
+                })}
+                {repositoryDiscoveryLoading ? (
+                  <div className="empty">Discovering repositories…</div>
+                ) : repositoryDiscovery?.authenticated &&
+                  !repositoryDiscovery.error ? (
+                  repositoryCandidates.length === 0 ? (
+                    <div className="empty">
+                      {repositorySearch
+                        ? "No matching repositories"
+                        : "No repositories available"}
+                    </div>
+                  ) : null
+                ) : (
+                  <div className="repository-discovery-message">
+                    {repositoryDiscovery?.error &&
+                    repositoryDiscovery.authenticated ? (
+                      <>
+                        <strong>GitHub discovery unavailable</strong>
+                        <span>{repositoryDiscovery.error}</span>
+                      </>
+                    ) : !repositoryDiscovery?.githubCliAvailable ? (
+                      <>
+                        <strong>GitHub CLI not found</strong>
+                        <span>
+                          Install `gh` to discover repositories you can access
+                          automatically.
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <strong>GitHub sign-in required</strong>
+                        <span>
+                          Run `gh auth login`, then reopen this picker.
+                        </span>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <small className="repository-clone-destination">
+                New clones are stored once in{" "}
+                {snapshot?.settings.repositoryRoot}.
+              </small>
+              <div className="modal-actions">
+                <span className="repository-selection-count">
+                  {selectedRepositoryCount
+                    ? `${selectedRepositoryCount} selected`
+                    : "Select one or more repositories"}
+                </span>
+                <button
+                  className="quiet"
+                  onClick={closeRepositoryModal}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  disabled={busy || !canSubmitRepositoryPicker}
+                  type="submit"
+                >
+                  {selectedRepositoryCount === 1
+                    ? "Add repository"
+                    : selectedRepositoryCount > 1
+                      ? `Add ${selectedRepositoryCount} repositories`
+                      : looksLikeRepositorySource(repositoryForm.search)
+                        ? "Clone and add"
+                        : "Add selected"}
+                </button>
+              </div>
+            </form>
+          </Modal>
+        )}
+
+        {modal === "session" && sessionWorkspace && snapshot && (
+          <Modal
+            dismissible
+            onClose={closeSessionModal}
+            title={
+              memberTeam
+                ? `Add a member to ${memberTeam.name}`
+                : "Create session"
+            }
+          >
+            <form className="modal-form" onSubmit={createSession}>
+              <label>
+                {memberTeam ? "Member name" : "Session name"}
+                <input
+                  autoFocus
+                  maxLength={240}
+                  onChange={(event) =>
+                    setSessionForm({ ...sessionForm, name: event.target.value })
+                  }
+                  placeholder={
+                    memberTeam
+                      ? "What it owns; also its @handle, such as server"
+                      : "What is this session for?"
+                  }
+                  required
+                  value={sessionForm.name}
+                />
+              </label>
+              {/* Claude or Codex; a member's picker starts on its lead's.
+                Plain terminals open as tabs from the center's +. */}
+              <fieldset className="session-tool-picker">
+                <legend>Choose a tool</legend>
+                <div
+                  aria-label="Session tool"
+                  className="session-tool-row"
+                  role="radiogroup"
+                >
+                  {(
+                    [
+                      { id: "claude", label: "Claude" },
+                      { id: "codex", label: "Codex" },
+                    ] as const
+                  ).map((tool) => {
+                    const available = Boolean(
+                      snapshot.settings.providers.find(
+                        (item) => item.name === tool.id,
+                      )?.available,
+                    );
                     return (
                       <button
                         aria-checked={sessionType === tool.id}
@@ -7061,301 +7095,319 @@ export function WorkspaceApp({
                       </button>
                     );
                   })}
-              </div>
-            </fieldset>
-            {sessionType !== "terminal" && sessionAccounts.length > 1 && (
-              // Right under the tool it belongs to, and the same field as
-              // Create workspace's.
-              <label>
-                {providerLabel(sessionType)} account
-                <select
-                  aria-label={`${providerLabel(sessionType)} account`}
-                  onChange={(event) => {
-                    setSessionAccount(event.target.value);
-                    // Another account offers other models; its own
-                    // remembered one is what the first option now means.
-                    setSessionModel("");
-                  }}
-                  value={chosenSessionAccount}
-                >
-                  {sessionAccounts.map((item) => (
-                    <option key={item.account} value={item.account}>
-                      {item.name}
-                      {item.account === workspaceDefaultAccount &&
-                      sessionWorkspace
-                        ? " · workspace default"
-                        : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            {sessionType !== "terminal" && (
-              <div className="session-model-picker">
-                <span>
-                  <strong>Model</strong>
-                </span>
-                <select
-                  aria-label="Model"
-                  disabled={sessionModelCatalogPending || modelCatalogLoading}
-                  onChange={(event) => setSessionModel(event.target.value)}
-                  value={sessionModel}
-                >
-                  {sessionModelCatalogPending || modelCatalogLoading ? (
-                    <option value="">Loading models…</option>
-                  ) : (
-                    <option value="">
-                      {workspaceDefaultModel
-                        ? `Workspace default · ${workspaceDefaultModelEntry?.label ?? workspaceDefaultModel}${workspaceDefaultModelStale ? " (not offered any more)" : ""}`
-                        : `Provider default${
-                            sessionModelCatalog?.defaultModel
-                              ? ` · ${sessionDefaultModel?.label ?? sessionModelCatalog.defaultModel}`
-                              : " · Automatic"
-                          }`}
-                    </option>
-                  )}
-                  {sessionModelCatalog?.models.map((model) => (
-                    <option key={model.id} value={model.id}>
-                      {model.label}
-                      {model.resolvedModel ? ` · ${model.resolvedModel}` : ""}
-                    </option>
-                  ))}
-                </select>
-                {workspaceDefaultModelStale && !sessionModel && (
-                  <small className="session-model-error">
-                    {providerLabel(sessionType)} no longer offers{" "}
-                    {workspaceDefaultModel}. Pick another model.
-                  </small>
-                )}
-                {modelCatalogError && (
-                  <small className="session-model-error">
-                    Model list unavailable: {modelCatalogError}
-                  </small>
-                )}
-                {!sessionChoiceIsWorkspaceDefault && !memberTeam && (
-                  <label className="session-model-remember">
-                    <input
-                      checked={rememberSessionModel}
-                      onChange={(event) =>
-                        setRememberSessionModel(event.target.checked)
-                      }
-                      type="checkbox"
-                    />
-                    <span>Remember for this workspace</span>
-                  </label>
-                )}
-              </div>
-            )}
-            {!memberTeam && (
-              <div className="session-color-picker">
-                <span>
-                  <strong>Color</strong>
-                </span>
-                <ColorSwatches
-                  onChange={(color) =>
-                    setSessionForm({
-                      ...sessionForm,
-                      color: color ?? undefined,
-                    })
-                  }
-                  value={sessionForm.color ?? null}
-                />
-              </div>
-            )}
-            {memberTeam && (
-              <label className="session-team-instructions">
-                <strong>Instructions (optional)</strong>
-                <small>
-                  It starts knowing its team, its lead and the goal. Leave this
-                  empty to tell it what to do in its own session. The lead is
-                  told it joined, and manages it from then on.
-                </small>
-                <textarea
-                  onChange={(event) =>
-                    setSessionForm({
-                      ...sessionForm,
-                      instructions: event.target.value,
-                    })
-                  }
-                  placeholder={`You are @${teamHandlePreview(sessionForm.name)}, a member of the Daedalus team "${memberTeam.name}". Its lead is the session '${memberTeam.name}' (@lead), which plans the work and may change your instructions.`}
-                  rows={4}
-                  value={sessionForm.instructions ?? ""}
-                />
-              </label>
-            )}
-            {sessionType !== "terminal" && !sessionForm.teamId && (
-              // One row per ability the agent can be given at launch.
-              <fieldset className="session-tool-picker session-abilities">
-                <legend>Agent abilities</legend>
-                {(
-                  [
-                    {
-                      key: "routines",
-                      label: "Routines",
-                      description: "Give the agent the ability to run routines",
-                    },
-                    {
-                      key: "orchestration",
-                      label: "Orchestration",
-                      description: "Lead a team of sessions toward one goal",
-                    },
-                  ] as const
-                ).map((ability) => (
-                  <label className="session-ability-option" key={ability.key}>
-                    <span>
-                      <strong>{ability.label}</strong>
-                      <small>{ability.description}</small>
-                    </span>
-                    <input
-                      checked={Boolean(sessionForm[ability.key])}
-                      className="switch"
-                      onChange={(event) =>
-                        setSessionForm({
-                          ...sessionForm,
-                          [ability.key]: event.target.checked,
-                        })
-                      }
-                      type="checkbox"
-                    />
-                  </label>
-                ))}
+                </div>
               </fieldset>
-            )}
-            <div className="modal-actions">
-              <button
-                className="quiet"
-                onClick={closeSessionModal}
-                type="button"
-              >
-                Cancel
-              </button>
-              <button disabled={busy} type="submit">
-                {memberTeam ? "Add member" : "Create session"}
-              </button>
-            </div>
-          </form>
-        </Modal>
-      )}
+              {sessionType !== "terminal" && (
+                <div className="session-model-picker">
+                  <span>
+                    <strong>Model</strong>
+                  </span>
+                  <select
+                    aria-label="Model"
+                    disabled={sessionModelCatalogPending || modelCatalogLoading}
+                    onChange={(event) => setSessionModel(event.target.value)}
+                    value={sessionModel}
+                  >
+                    {sessionModelCatalogPending || modelCatalogLoading ? (
+                      <option value="">Loading models…</option>
+                    ) : (
+                      <option value="">
+                        {workspaceDefaultModel
+                          ? `Workspace default · ${workspaceDefaultModelEntry?.label ?? workspaceDefaultModel}${workspaceDefaultModelStale ? " (not offered any more)" : ""}`
+                          : `Provider default${
+                              sessionModelCatalog?.defaultModel
+                                ? ` · ${sessionDefaultModel?.label ?? sessionModelCatalog.defaultModel}`
+                                : " · Automatic"
+                            }`}
+                      </option>
+                    )}
+                    {sessionModelCatalog?.models.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.label}
+                        {model.resolvedModel ? ` · ${model.resolvedModel}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {workspaceDefaultModelStale && !sessionModel && (
+                    <small className="session-model-error">
+                      {providerLabel(sessionType)} no longer offers{" "}
+                      {workspaceDefaultModel}. Pick another model.
+                    </small>
+                  )}
+                  {modelCatalogError && (
+                    <small className="session-model-error">
+                      Model list unavailable: {modelCatalogError}
+                    </small>
+                  )}
+                  {!sessionChoiceIsWorkspaceDefault && !memberTeam && (
+                    <label className="session-model-remember">
+                      <input
+                        checked={rememberSessionModel}
+                        onChange={(event) =>
+                          setRememberSessionModel(event.target.checked)
+                        }
+                        type="checkbox"
+                      />
+                      <span>Remember for this workspace</span>
+                    </label>
+                  )}
+                </div>
+              )}
+              {memberTeam && (
+                <label className="session-team-instructions">
+                  <strong>Instructions (optional)</strong>
+                  <small>
+                    It starts knowing its team, its lead and the goal. Leave
+                    this empty to tell it what to do in its own session. The
+                    lead is told it joined, and manages it from then on.
+                  </small>
+                  <textarea
+                    onChange={(event) =>
+                      setSessionForm({
+                        ...sessionForm,
+                        instructions: event.target.value,
+                      })
+                    }
+                    placeholder={`You are @${teamHandlePreview(sessionForm.name)}, a member of the Daedalus team "${memberTeam.name}". Its lead is the session '${memberTeam.name}' (@lead), which plans the work and may change your instructions.`}
+                    rows={4}
+                    value={sessionForm.instructions ?? ""}
+                  />
+                </label>
+              )}
+              {/* What most sessions leave alone: the account, the colour and
+                  the abilities, folded under one row. */}
+              {(!memberTeam || sessionAccounts.length > 1) && (
+                <details className="session-more-settings">
+                  <summary>More settings</summary>
+                  {sessionType !== "terminal" && sessionAccounts.length > 1 && (
+                    // Right under the tool it belongs to, and the same field as
+                    // Create workspace's.
+                    <label>
+                      {providerLabel(sessionType)} account
+                      <select
+                        aria-label={`${providerLabel(sessionType)} account`}
+                        onChange={(event) => {
+                          setSessionAccount(event.target.value);
+                          // Another account offers other models; its own
+                          // remembered one is what the first option now means.
+                          setSessionModel("");
+                        }}
+                        value={chosenSessionAccount}
+                      >
+                        {sessionAccounts.map((item) => (
+                          <option key={item.account} value={item.account}>
+                            {item.name}
+                            {item.account === workspaceDefaultAccount &&
+                            sessionWorkspace
+                              ? " · workspace default"
+                              : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  {!memberTeam && (
+                    <div className="session-color-picker">
+                      <span>
+                        <strong>Color</strong>
+                      </span>
+                      <ColorSwatches
+                        onChange={(color) =>
+                          setSessionForm({
+                            ...sessionForm,
+                            color: color ?? undefined,
+                          })
+                        }
+                        value={sessionForm.color ?? null}
+                      />
+                    </div>
+                  )}
+                  {sessionType !== "terminal" && !sessionForm.teamId && (
+                    // One row per ability the agent can be given at launch.
+                    <fieldset className="session-tool-picker session-abilities">
+                      <legend>Agent abilities</legend>
+                      {(
+                        [
+                          {
+                            key: "routines",
+                            label: "Routines",
+                            description:
+                              "Give the agent the ability to run routines",
+                          },
+                          {
+                            key: "orchestration",
+                            label: "Orchestration",
+                            description:
+                              "Lead a team of sessions toward one goal",
+                          },
+                        ] as const
+                      ).map((ability) => (
+                        <label
+                          className="session-ability-option"
+                          key={ability.key}
+                        >
+                          <span>
+                            <strong>{ability.label}</strong>
+                            <small>{ability.description}</small>
+                          </span>
+                          <input
+                            checked={Boolean(sessionForm[ability.key])}
+                            className="switch"
+                            onChange={(event) =>
+                              setSessionForm({
+                                ...sessionForm,
+                                [ability.key]: event.target.checked,
+                              })
+                            }
+                            type="checkbox"
+                          />
+                        </label>
+                      ))}
+                    </fieldset>
+                  )}
+                </details>
+              )}
+              <div className="modal-actions">
+                <button
+                  className="quiet"
+                  onClick={closeSessionModal}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button disabled={busy} type="submit">
+                  {memberTeam ? "Add member" : "Create session"}
+                </button>
+              </div>
+            </form>
+          </Modal>
+        )}
 
-      {secretsWorkspace && (
-        <Modal
-          closeButton
-          onClose={() => setSecretsWorkspace(undefined)}
-          title={
-            secretsWorkspace === "global"
-              ? "Global secrets"
-              : `Secrets · ${secretsWorkspace.name}`
-          }
-        >
-          <SecretsPanel
-            client={client}
-            key={secretsWorkspace === "global" ? "global" : secretsWorkspace.id}
-            onError={setError}
-            onOpenGlobal={() => setSecretsWorkspace("global")}
-            {...(secretsWorkspace === "global"
-              ? {}
-              : { workspace: secretsWorkspace })}
-          />
-        </Modal>
-      )}
+        {secretsWorkspace && (
+          <Modal
+            closeButton
+            onClose={() => setSecretsWorkspace(undefined)}
+            title={
+              secretsWorkspace === "global"
+                ? "Global secrets"
+                : `Secrets · ${secretsWorkspace.name}`
+            }
+          >
+            <SecretsPanel
+              client={client}
+              key={
+                secretsWorkspace === "global" ? "global" : secretsWorkspace.id
+              }
+              onError={setError}
+              onOpenGlobal={() => setSecretsWorkspace("global")}
+              {...(secretsWorkspace === "global"
+                ? {}
+                : { workspace: secretsWorkspace })}
+            />
+          </Modal>
+        )}
 
-      {modal === "settings" && snapshot && (
-        <Modal
-          onClose={() => {
-            setModal(undefined);
-            // "Up to date" and a failed check were answers to the button in
-            // About, already read there. Kept, they would reappear as a bar.
-            if (appUpdate?.state === "current" || appUpdate?.state === "error")
-              dismissUpdate();
-          }}
-          closeButton
-          title="Settings"
-          wide
-        >
-          <SettingsModal
-            busy={busy}
-            client={client}
-            onError={setError}
-            onFocusMode={(enabled) => void setFocusMode(enabled)}
-            renderTerminal={(terminal) => (
-              // A sign-in runs where it was started, inside Settings, so its
-              // result is read in place.
-              <TerminalSurface
-                fitRevision={terminalFitRevision}
-                focused
-                id={terminal.id}
-                label={terminal.name}
-                onCopy={copyTerminalText}
-                onOpenLink={openTerminalLink}
-                status={terminal.status}
-                target="integrated"
-                terminalEndpoint={terminalEndpoint}
-              />
-            )}
-            onSection={setSettingsSection}
-            onTheme={(value) => {
-              setTheme(value);
-              window.localStorage.setItem("daedalus.theme", value);
+        {modal === "settings" && snapshot && (
+          <Modal
+            onClose={() => {
+              setModal(undefined);
+              // "Up to date" and a failed check were answers to the button in
+              // About, already read there. Kept, they would reappear as a bar.
+              if (
+                appUpdate?.state === "current" ||
+                appUpdate?.state === "error"
+              )
+                dismissUpdate();
             }}
-            perform={perform}
-            section={settingsSection}
-            settings={snapshot.settings}
-            theme={theme}
-            updates={{
-              update: appUpdate,
-              checking: checkingUpdate,
-              onCheck: checkForUpdate,
-              onInstall: installUpdate,
-            }}
-          />
-        </Modal>
-      )}
+            closeButton
+            title="Settings"
+            wide
+          >
+            <SettingsModal
+              busy={busy}
+              client={client}
+              onError={setError}
+              onFocusMode={(enabled) => void setFocusMode(enabled)}
+              renderTerminal={(terminal) => (
+                // A sign-in runs where it was started, inside Settings, so its
+                // result is read in place.
+                <TerminalSurface
+                  fitRevision={terminalFitRevision}
+                  focused
+                  id={terminal.id}
+                  label={terminal.name}
+                  onCopy={copyTerminalText}
+                  onOpenLink={openTerminalLink}
+                  status={terminal.status}
+                  target="integrated"
+                  terminalEndpoint={terminalEndpoint}
+                />
+              )}
+              onSection={setSettingsSection}
+              onTheme={(value) => {
+                setTheme(value);
+                window.localStorage.setItem("daedalus.theme", value);
+              }}
+              perform={perform}
+              section={settingsSection}
+              settings={snapshot.settings}
+              theme={theme}
+              updates={{
+                update: appUpdate,
+                checking: checkingUpdate,
+                onCheck: checkForUpdate,
+                onInstall: installUpdate,
+              }}
+            />
+          </Modal>
+        )}
 
-      {quitRequest && (
-        <Modal
-          dismissible={!quitting}
-          onClose={() => answerQuit("cancel")}
-          title="Quit Daedalus"
-        >
-          <div className="confirmation-content">
-            <p>
-              {quitDisclosure(quitRequest)} Reopening Daedalus reconnects to
-              them. Stopping them instead resumes them when you reopen.
-            </p>
-            <div className="modal-actions">
-              <button
-                className="quiet"
-                disabled={Boolean(quitting)}
-                onClick={() => answerQuit("cancel")}
-                type="button"
-              >
-                Cancel
-              </button>
-              {/* Never the focused button: it is the only one that ends
+        {quitRequest && (
+          <Modal
+            dismissible={!quitting}
+            onClose={() => answerQuit("cancel")}
+            title="Quit Daedalus"
+          >
+            <div className="confirmation-content">
+              <p>
+                {quitDisclosure(quitRequest)} Reopening Daedalus reconnects to
+                them. Stopping them instead resumes them when you reopen.
+              </p>
+              <div className="modal-actions">
+                <button
+                  className="quiet"
+                  disabled={Boolean(quitting)}
+                  onClick={() => answerQuit("cancel")}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                {/* Never the focused button: it is the only one that ends
                   anything, and Enter must not reach it by accident. */}
-              <button
-                className="danger-action"
-                disabled={Boolean(quitting)}
-                onClick={() => answerQuit("shutdown")}
-                type="button"
-              >
-                {quitting === "shutdown"
-                  ? "Stopping\u2026"
-                  : "Quit and stop sessions"}
-              </button>
-              <button
-                autoFocus
-                disabled={Boolean(quitting)}
-                onClick={() => answerQuit("keep")}
-                type="button"
-              >
-                Quit
-              </button>
+                <button
+                  className="danger-action"
+                  disabled={Boolean(quitting)}
+                  onClick={() => answerQuit("shutdown")}
+                  type="button"
+                >
+                  {quitting === "shutdown"
+                    ? "Stopping\u2026"
+                    : "Quit and stop sessions"}
+                </button>
+                <button
+                  autoFocus
+                  disabled={Boolean(quitting)}
+                  onClick={() => answerQuit("keep")}
+                  type="button"
+                >
+                  Quit
+                </button>
+              </div>
             </div>
-          </div>
-        </Modal>
-      )}
-      <DialogHost />
-    </main>
+          </Modal>
+        )}
+        <DialogHost />
+      </main>
+    </AppThemeContext.Provider>
   );
 }

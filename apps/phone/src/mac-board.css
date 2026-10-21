@@ -791,24 +791,24 @@
   font-size: 12px;
   padding: 0;
 }
-@media (prefers-color-scheme: light) {
-  :where(.mac-board) input, :where(.mac-board) textarea, :where(.mac-board) select {
+:root[data-theme="light"] :where(.mac-board) input,
+:root[data-theme="light"] :where(.mac-board) textarea,
+:root[data-theme="light"] :where(.mac-board) select {
   background: rgb(255 255 255 / 0.72);
 }
-  .board-card {
+:root[data-theme="light"] .board-card {
   border-color: rgb(75 95 128 / 0.08);
   box-shadow: 0 8px 25px -12px rgb(75 95 128 / 0.26);
 }
-  .board-card-priority.priority-high {
+:root[data-theme="light"] .board-card-priority.priority-high {
   color: #9a5b00;
 }
-  .board-session-row[data-attention="true"] .board-session-activity {
+:root[data-theme="light"] .board-session-row[data-attention="true"] .board-session-activity {
   color: #b3182b;
 }
-  .board-pr-link {
+:root[data-theme="light"] .board-pr-link {
   color: var(--accent) !important;
 }
-  .board-start.waiting {
+:root[data-theme="light"] .board-start.waiting {
   color: #8a5100 !important;
-}
 }

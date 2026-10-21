@@ -1,4 +1,3 @@
-import { leaveInInbox, postToInbox, usesInbox } from "./session-inbox";
 import type { SessionHost } from "./session-host";
 import type { SessionHosts } from "./session-hosts";
 import {
@@ -11,7 +10,6 @@ import {
 } from "./cloud-launch";
 import { readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { Database } from "bun:sqlite";
 import {
   findExecutable,
   isPathInside,
@@ -24,6 +22,7 @@ import {
   accountModelKey,
   resolveAutoRebirth,
   SESSION_COLORS,
+  type AgentActivityState,
   type AgentSession,
   type AutoRebirth,
   type SessionColor,
@@ -37,10 +36,6 @@ import {
   buildSkillInvocation,
   catalogOffersModel,
   CLAUDE_DEFAULT_MODEL,
-  claudeDaedalusSettingsArgs,
-  daedalusInstructionArgs,
-  ensureCodexHooks,
-  CODEX_DAEDALUS_TUI_ARGS,
   discoverProviderModels,
   REBIRTH_FILE,
   REBIRTH_SKILL,
@@ -53,22 +48,18 @@ import {
   resolveProvider,
   sessionLaunchModel,
 } from "./providers";
-import {
-  channelArtifactName,
-  skillLinkPaths,
-  type SkillProvider,
-} from "./skills";
+import type { DeliveryResult, SessionChannel } from "./session-channel";
+import { installedSkill, requireSkill } from "./installed-skills";
 import type { AbilityService } from "./abilities";
 import {
   accountConfig,
   accountEnvironment,
-  accountName,
-  accountProfile,
   DEFAULT_ACCOUNT,
   findAccount,
   providerLabel,
 } from "./account-homes";
-import { checkSignIn } from "./accounts";
+import type { AccountService } from "./accounts";
+import { hasPersistedCodexSession } from "./codex-sessions";
 import { forgetSessionFolders, trustSessionFolder } from "./folder-trust";
 import { applyManualOrder } from "./ordering";
 import type { TaskService } from "./tasks";
@@ -81,15 +72,10 @@ const CODEX_ROLLOUT_FILE =
   /([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.jsonl$/i;
 const CODEX_WRITER_LOCK =
   /^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.lock$/i;
-const UUID_VALUE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SESSION_RECOVERY_WINDOW_MS = 60_000;
 const SESSION_RECOVERY_UNIQUENESS_MS = 2_000;
 const PROVIDER_STARTUP_TIMEOUT_MS = 30_000;
 const PROVIDER_STARTUP_POLL_MS = 150;
-// How long Codex takes to turn a picked `$skill` mention into a chip before
-// a second Enter can submit it.
-const CODEX_MENTION_SETTLE_MS = 400;
 // How long a startup question must stay on screen before startup hands it to
 // the user rather than treating it as a frame on the way to the prompt.
 const STARTUP_QUESTION_SETTLE_MS = 2_000;
@@ -397,83 +383,6 @@ export async function recoverCodexSessionId(input: {
   return closest.id;
 }
 
-export async function hasPersistedCodexSession(input: {
-  sessionsDirectory: string;
-  id: string;
-  startedAt: string;
-}): Promise<boolean> {
-  // Legacy Codex sessions may be addressed by their user-visible name.
-  if (!UUID_VALUE.test(input.id)) return true;
-  const codexHome = dirname(input.sessionsDirectory);
-  try {
-    const entries = await readdir(codexHome, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isFile() || !/^state_\d+\.sqlite$/.test(entry.name)) continue;
-      let database: Database | undefined;
-      try {
-        database = new Database(join(codexHome, entry.name), {
-          readonly: true,
-        });
-        const found = database
-          .query<{ found: number }, [string]>(
-            "SELECT 1 AS found FROM threads WHERE id = ? LIMIT 1",
-          )
-          .get(input.id);
-        if (found) return true;
-      } catch {
-        // Fall through to rollout files for older or incompatible schemas.
-      } finally {
-        database?.close();
-      }
-    }
-  } catch {
-    // The Codex home may predate the SQLite state store.
-  }
-
-  const startedAt = Date.parse(input.startedAt);
-  if (Number.isFinite(startedAt)) {
-    for (const offset of [-1, 0, 1]) {
-      const [year, month, day] = new Date(
-        startedAt + offset * 24 * 60 * 60 * 1_000,
-      )
-        .toISOString()
-        .slice(0, 10)
-        .split("-");
-      if (
-        await hasCodexRollout(
-          join(input.sessionsDirectory, year!, month!, day!),
-          input.id,
-        )
-      )
-        return true;
-    }
-  }
-  return hasCodexRollout(join(codexHome, "archived_sessions"), input.id);
-}
-
-/**
- * An empty rollout is a conversation Codex opened and never wrote to. Codex
- * keeps no thread for it, so `codex archive` fails with "failed to archive
- * session", and there is nothing in it to resume.
- */
-async function hasCodexRollout(directory: string, id: string) {
-  let entries: string[];
-  try {
-    entries = await readdir(directory);
-  } catch {
-    // Missing date directories are expected.
-    return false;
-  }
-  for (const entry of entries) {
-    if (!entry.endsWith(`${id}.jsonl`)) continue;
-    const size = await stat(join(directory, entry))
-      .then((file) => file.size)
-      .catch(() => 0);
-    if (size > 0) return true;
-  }
-  return false;
-}
-
 /**
  * Claude's footer once it is ready for input. The relaxed modes print
  * "shift+tab to cycle"; the default mode prints
@@ -512,6 +421,9 @@ export class AgentService {
     private readonly hosts: SessionHosts,
     private readonly config: DaedalusConfig,
     private readonly abilities: AbilityService,
+    private readonly accounts: AccountService,
+    /** How Daedalus hands a rebirth request to a running session. */
+    private readonly channel: SessionChannel,
     /**
      * Called when a session is *over* — stopped, archived, removed. An
      * attention badge on a session that is over is the purest form of a badge
@@ -831,79 +743,6 @@ export class AgentService {
     )
       return CLAUDE_DEFAULT_MODEL;
     return undefined;
-  }
-
-  /**
-   * The account a new session runs on: the one asked for, else its
-   * predecessor's when it continues one on the same provider, else the
-   * workspace's default for that provider, else the provider's own.
-   *
-   * A workspace default whose profile was removed falls back to the default
-   * account, because removing a profile already clears those. A predecessor's
-   * account that is gone is refused instead: the conversation the successor
-   * is meant to carry on lived in that folder.
-   */
-  private launchAccount(
-    workspace: Workspace,
-    provider: "claude" | "codex" | "custom",
-    input: { account?: string | null; continueFrom?: AgentSession },
-  ): string | null {
-    if (provider === "custom") {
-      if (input.account && input.account !== DEFAULT_ACCOUNT)
-        throw new DaedalusError(
-          "VALIDATION",
-          "A custom command has no accounts; choose --provider to pick one",
-        );
-      return null;
-    }
-    if (input.account !== undefined)
-      return findAccount(this.config, provider, input.account)?.id ?? null;
-    const previous = input.continueFrom;
-    if (previous && previous.provider === provider) {
-      if (
-        previous.account &&
-        !accountProfile(this.config, provider, previous.account)
-      )
-        throw new DaedalusError(
-          "CONFLICT",
-          `This session ran on the ${providerLabel(provider)} account '${previous.account}', which was removed`,
-        );
-      return previous.account;
-    }
-    const preferred =
-      provider === "claude"
-        ? workspace.defaultClaudeAccount
-        : workspace.defaultCodexAccount;
-    return accountProfile(this.config, provider, preferred) ? preferred : null;
-  }
-
-  /**
-   * Refuses a launch on an account its provider says is signed out, which
-   * would otherwise open a terminal that fails on its first turn. Only a
-   * definite "signed out" stops it: a provider too old to say, or one that
-   * did not answer, gets the benefit of the doubt.
-   */
-  private async requireSignedIn(
-    provider: "claude" | "codex",
-    account: string | null,
-  ): Promise<void> {
-    const signIn = await checkSignIn(this.config, provider, account);
-    if (signIn.state !== "signed-out") return;
-    const name = accountName(this.config, provider, account);
-    if (accountProfile(this.config, provider, account)?.kind === "api-key")
-      throw new DaedalusError(
-        "DEPENDENCY",
-        `The ${name} account has no API key. Set it in Settings → Agents, or pipe it to 'daedal account key claude ${JSON.stringify(name)}'.`,
-        { provider, account, reason: "signed-out" },
-      );
-    const reference = account
-      ? ` ${JSON.stringify(accountProfile(this.config, provider, account)?.name ?? account)}`
-      : "";
-    throw new DaedalusError(
-      "DEPENDENCY",
-      `${providerLabel(provider)} is not signed in on the ${name} account. Sign in from Settings → Agents, or run 'daedal account login ${provider}${reference}'.`,
-      { provider, account: account ?? DEFAULT_ACCOUNT, reason: "signed-out" },
-    );
   }
 
   private cloudSecrets: (
@@ -1238,8 +1077,22 @@ export class AgentService {
         "VALIDATION",
         "A terminal session has no account",
       );
+    // Probed first: it is what finds a provider installed only on the login
+    // shell's PATH, and the sign-in check needs to find it too.
+    if (chosen) {
+      const availability = await chosen.adapter.probe();
+      if (!availability.available)
+        throw new DaedalusError(
+          "DEPENDENCY",
+          `Agent executable '${availability.executable}' is not available on PATH`,
+        );
+    }
     const account = chosen
-      ? this.launchAccount(workspace, chosen.name, input)
+      ? await this.accounts.forLaunch(chosen.name, {
+          requested: input.account,
+          previous: input.continueFrom,
+          workspace,
+        })
       : null;
     // The launch reads the account's own folders: its Codex config for hooks
     // and instructions, its Claude folder for skills.
@@ -1267,16 +1120,6 @@ export class AgentService {
           },
           input.abilities ?? [],
         );
-    if (provider) {
-      const availability = await provider.adapter.probe();
-      if (!availability.available)
-        throw new DaedalusError(
-          "DEPENDENCY",
-          `Agent executable '${availability.executable}' is not available on PATH`,
-        );
-      if (provider.name !== "custom")
-        await this.requireSignedIn(provider.name, account);
-    }
     // Resolved before anything is prepared on disk, so a default the
     // provider no longer offers refuses here and leaves no worktree behind.
     const model = provider
@@ -1461,48 +1304,68 @@ export class AgentService {
 
   /**
    * The one-click half of a rebirth: asks a running agent to write a note for
-   * its successor and then run `daedal agent continue` itself.
+   * its successor and then run `daedal agent continue` itself. A Claude
+   * session with an inbox gets it in its mailbox, so it arrives even
+   * mid-turn and never shows as something the user typed.
    */
   async requestRebirth(id: string): Promise<AgentSession> {
     const agent = await this.requireContinuable(id);
-    if (usesInbox(agent)) {
-      // Left in the mailbox, so it arrives even mid-turn, and never shows
-      // as something the user typed.
-      const skill = await this.requireSkill(agent, REBIRTH_SKILL);
-      await leaveInInbox(
-        this.config,
-        agent.id,
-        `Daedalus: continue your work in a fresh session now. Run the ${skill} skill.`,
+    const outcome = await this.channel.deliver(
+      agent,
+      () => this.rebirthLine(agent),
+      { when: "now", skill: { id: REBIRTH_SKILL } },
+    );
+    if (outcome.kind === "held")
+      throw new DaedalusError(
+        "CONFLICT",
+        outcome.held.reason === "stopped"
+          ? `Agent session '${id}' is not running`
+          : outcome.held.text,
       );
-    } else await this.invokeSkill(agent.id, REBIRTH_SKILL);
+    return this.markRebirthRequested(agent);
+  }
+
+  /**
+   * A rebirth request under the delivery rule, for the routines clock: it
+   * goes in only while the session waits at its prompt, and an inbox keeps
+   * it in the mailbox so it is never lost.
+   */
+  async requestRebirthAtPrompt(
+    session: AgentSession,
+    activity: AgentActivityState | undefined,
+  ): Promise<DeliveryResult> {
+    // The row as it stands once the gate passes, not the tick's snapshot.
+    let current = session;
+    const outcome = await this.channel.deliver(
+      session,
+      async () => {
+        current = await this.requireContinuable(session.id);
+        return this.rebirthLine(current);
+      },
+      {
+        when: "at-prompt",
+        activity,
+        skill: { id: REBIRTH_SKILL },
+        mustArrive: true,
+      },
+    );
+    if (outcome.kind === "delivered") this.markRebirthRequested(current);
+    return outcome;
+  }
+
+  /** The rebirth request an inbox takes; it needs the skill installed. */
+  private async rebirthLine(agent: AgentSession): Promise<string> {
+    const skill = await requireSkill(this.config, agent, REBIRTH_SKILL);
+    return `Daedalus: continue your work in a fresh session now. Run the ${skill} skill.`;
+  }
+
+  private markRebirthRequested(agent: AgentSession): AgentSession {
     const requested = {
       ...agent,
       rebirthRequestedAt: new Date().toISOString(),
     };
     this.repositories.updateAgent(requested);
     return requested;
-  }
-
-  /**
-   * Hands a line to a running Claude session through its inbox, without
-   * typing. False when the session has no inbox or is not waiting on it.
-   */
-  async postToInbox(id: string, line: string): Promise<boolean> {
-    const agent = await this.requireRunning(id);
-    if (!usesInbox(agent)) return false;
-    return postToInbox(this.config, agent.id, line);
-  }
-
-  /**
-   * Leaves a note in a running Claude session's inbox mailbox: it arrives
-   * now if the session waits at its prompt, else when its turn ends. False
-   * when the session has no inbox.
-   */
-  async leaveNote(id: string, line: string): Promise<boolean> {
-    const agent = await this.requireRunning(id);
-    if (!usesInbox(agent)) return false;
-    await leaveInInbox(this.config, agent.id, line);
-    return true;
   }
 
   /**
@@ -1514,74 +1377,12 @@ export class AgentService {
     provider: string | undefined,
   ): Promise<string | undefined> {
     if (provider !== "claude" && provider !== "codex") return undefined;
-    const skillName = await this.installedSkill(provider, REFINEMENT_SKILL);
+    const skillName = await installedSkill(
+      this.config,
+      provider,
+      REFINEMENT_SKILL,
+    );
     return skillName ? buildSkillInvocation(provider, skillName) : undefined;
-  }
-
-  /** The skill's installed name for the provider, if it is installed. */
-  private async installedSkill(
-    provider: SkillProvider,
-    skillId: string,
-  ): Promise<string | undefined> {
-    const skillName = channelArtifactName(this.config, skillId);
-    const installed = skillLinkPaths(this.config, skillName).find((link) =>
-      link.providers.includes(provider),
-    );
-    return installed && (await pathExists(join(installed.path, "SKILL.md")))
-      ? skillName
-      : undefined;
-  }
-
-  /** The skill's installed name, or `CONFLICT` when it is not installed. */
-  private async requireSkill(
-    agent: AgentSession,
-    skillId: string,
-  ): Promise<string> {
-    if (agent.provider !== "claude" && agent.provider !== "codex")
-      throw new DaedalusError(
-        "CONFLICT",
-        "Only Claude and Codex sessions can run Daedalus skills",
-      );
-    const skillName = await this.installedSkill(
-      agent.provider as SkillProvider,
-      skillId,
-    );
-    if (!skillName)
-      throw new DaedalusError(
-        "CONFLICT",
-        `The ${skillId} skill is not installed for ${agent.provider}. Turn it on in Settings, Skills, or with 'daedal skill enable ${skillId}'.`,
-      );
-    return skillName;
-  }
-
-  /**
-   * Types a Daedalus managed skill into a Claude or Codex session, with its
-   * arguments: `/name args` for Claude, `$name args` for Codex. Refuses with
-   * `CONFLICT` when the skill is not installed for the session's provider.
-   */
-  async invokeSkill(
-    id: string,
-    skillId: string,
-    args = "",
-  ): Promise<AgentSession> {
-    const agent = await this.requireRunning(id);
-    const skillName = await this.requireSkill(agent, skillId);
-    await this.send(
-      agent.id,
-      buildSkillInvocation(
-        agent.provider as "claude" | "codex",
-        skillName,
-        args,
-      ),
-    );
-    // In Codex, `$name` opens the skill mention popup, and the first Enter
-    // only picks the skill from it. The second one submits. On an empty
-    // composer an Enter does nothing, so this is safe if the popup changes.
-    if (agent.provider === "codex") {
-      await Bun.sleep(CODEX_MENTION_SETTLE_MS);
-      await this.sessionHost(agent).sendKeys(agent.tmuxSession, ["Enter"]);
-    }
-    return agent;
   }
 
   /**
@@ -1926,6 +1727,29 @@ export class AgentService {
     return this.hosts.get(agent.hostId);
   }
 
+  /**
+   * A session by id, or by name when exactly one live session has it. Names
+   * are what people use; ids are what agents pass.
+   */
+  resolve(reference: string): AgentSession {
+    const byId = this.repositories.findAgent(reference);
+    if (byId) return byId;
+    const matches = this.repositories
+      .listAgents()
+      .filter(
+        (session) =>
+          !session.archivedAt &&
+          session.name.toLowerCase() === reference.trim().toLowerCase(),
+      );
+    if (matches.length === 1) return matches[0]!;
+    throw new DaedalusError(
+      matches.length ? "VALIDATION" : "NOT_FOUND",
+      matches.length
+        ? `More than one session is called '${reference}'; pass its id`
+        : `Session '${reference}' was not found`,
+    );
+  }
+
   async attach(id: string): Promise<number> {
     const agent = await this.requireRunning(id);
     if (agent.hostId)
@@ -2044,14 +1868,23 @@ export class AgentService {
     await this.workspaceContent.discardSessionFiles(agent);
     // Only a folder Daedalus made for the session goes with it. A session
     // that ran in the workspace folder itself leaves the workspace's trust
-    // for the workspace's own deletion.
+    // for the workspace's own deletion, and one whose folder a successor
+    // still works in leaves it to that one.
     const workspace = await this.workspaces
       .get(agent.workspaceId)
       .catch(() => undefined);
+    const folder = resolve(agent.workingDirectory);
+    const shared = this.repositories
+      .listAgents({ workspaceId: agent.workspaceId })
+      .some(
+        (other) =>
+          other.id !== agent.id && resolve(other.workingDirectory) === folder,
+      );
     if (
       workspace &&
       !agent.hostId &&
-      resolve(agent.workingDirectory) !== resolve(workspace.path)
+      folder !== resolve(workspace.path) &&
+      !shared
     )
       await forgetSessionFolders(this.config, agent.workingDirectory);
     await removeClaudeSettingsFiles(this.config, id).catch(() => undefined);
@@ -2274,128 +2107,45 @@ export class AgentService {
           "Custom sessions do not define a native resume capability",
         );
     } else if (agent.kind === "agent") {
-      const nativeSessionId = agent.providerSessionId;
-      if (!nativeSessionId && agent.provider !== "codex")
-        throw new DaedalusError(
-          "CONFLICT",
-          "This session predates native resume support and cannot be resumed safely",
-        );
-      const definition = this.config.agents[agent.provider];
-      if (!definition)
+      if (!this.config.agents[agent.provider])
         throw new DaedalusError(
           "DEPENDENCY",
           `Agent configuration '${agent.provider}' is unavailable`,
         );
-      executable =
-        resolveAgentExecutable(agent.provider, definition.executable) ??
-        definition.executable;
-      if (
-        agent.account &&
-        !accountProfile(this.config, agent.provider, agent.account)
-      )
-        throw new DaedalusError(
-          "CONFLICT",
-          `This session ran on the ${providerLabel(agent.provider)} account '${agent.account}', which was removed`,
-        );
-      if (agent.provider === "claude" || agent.provider === "codex")
-        await this.requireSignedIn(agent.provider, agent.account);
-      const additionalDirectories = sessionDirectories(
-        workspace.path,
-        this.repositories
-          .listWorkspaceRepositories(workspace.id)
-          .map(
-            (repository) =>
-              repository.referencePath ?? repository.canonicalPath,
-          ),
-      ).flatMap((directory) => ["--add-dir", directory]);
-      const selectedModel = modelArgument(agent.args);
-      const modelArgs = selectedModel ? ["--model", selectedModel] : [];
-      if (agent.provider === "codex") {
-        const hasNativeConversation = nativeSessionId
-          ? await hasPersistedCodexSession({
-              sessionsDirectory: scoped.codexSessionsDirectory,
-              id: nativeSessionId,
-              startedAt: agent.startedAt,
-            })
-          : false;
-        if (hasNativeConversation && nativeSessionId) {
-          // Only a conversation Daedalus archived needs unarchiving. A session
-          // that merely lost its tmux server never left Codex's active list,
-          // and `codex unarchive` on one fails with wording that has nothing
-          // to do with the single message `isMissingCodexConversationError`
-          // forgives — which would abort a revive that was about to work.
-          if (agent.archivedAt) {
-            const unarchive = await runCommand(
-              executable,
-              ["unarchive", nativeSessionId],
-              { cwd: agent.workingDirectory, env: accountEnv },
-            );
-            const unarchiveError =
-              unarchive.stderr.trim() || unarchive.stdout.trim();
-            if (unarchive.exitCode !== 0)
-              throw new DaedalusError(
-                "CONFLICT",
-                unarchiveError || "Codex could not restore the conversation",
-              );
-          }
-          args = [
-            ...(await daedalusInstructionArgs(scoped, "codex", [
-              ...definition.args,
-              ...CODEX_DAEDALUS_TUI_ARGS,
-              ...(await ensureCodexHooks(scoped, executable)),
-            ])),
-            ...modelArgs,
-            ...additionalDirectories,
-            "resume",
-            nativeSessionId,
-          ];
-        } else {
-          // Codex allocates a thread UUID before the first user event but does
-          // not persist an empty conversation. Restoring such an archived
-          // session correctly starts a new empty native session.
-          args = [
-            ...(await daedalusInstructionArgs(scoped, "codex", [
-              ...definition.args,
-              ...CODEX_DAEDALUS_TUI_ARGS,
-              ...(await ensureCodexHooks(scoped, executable)),
-            ])),
-            ...modelArgs,
-            ...additionalDirectories,
-          ];
-          providerSessionId = null;
-        }
-      } else if (agent.provider === "claude") {
-        if (!nativeSessionId)
-          throw new DaedalusError(
-            "CONFLICT",
-            "This session predates native resume support and cannot be resumed safely",
-          );
-        args = [
-          ...(await daedalusInstructionArgs(
-            scoped,
-            "claude",
-            await claudeDaedalusSettingsArgs(
-              scoped,
-              definition.args,
-              agent.id,
-              {
-                acceptPeerMessages:
-                  Boolean(agent.teamId) ||
-                  Boolean(this.abilities.held(agent.id, "orchestration")),
-              },
+      // Called for its refusals only: a resume keeps the session's own
+      // account, which `previous` hands straight back.
+      await this.accounts.forLaunch(agent.provider, {
+        previous: agent,
+        workspace,
+      });
+      const launch = await resolveProvider(scoped, {
+        provider: agent.provider,
+      }).adapter.buildLaunch({
+        sessionId: agent.id,
+        model: modelArgument(agent.args),
+        acceptPeerMessages:
+          Boolean(agent.teamId) ||
+          Boolean(this.abilities.held(agent.id, "orchestration")),
+        additionalDirectories: sessionDirectories(
+          workspace.path,
+          this.repositories
+            .listWorkspaceRepositories(workspace.id)
+            .map(
+              (repository) =>
+                repository.referencePath ?? repository.canonicalPath,
             ),
-          )),
-          ...modelArgs,
-          ...additionalDirectories,
-          "--resume",
-          nativeSessionId,
-        ];
-      } else {
-        throw new DaedalusError(
-          "CONFLICT",
-          `Agent configuration '${agent.provider}' cannot be resumed`,
-        );
-      }
+        ),
+        resume: {
+          nativeId: agent.providerSessionId ?? undefined,
+          startedAt: agent.startedAt,
+          archived: Boolean(agent.archivedAt),
+          workingDirectory: agent.workingDirectory,
+          env: accountEnv,
+        },
+      });
+      executable = launch.executable;
+      args = launch.args;
+      providerSessionId = launch.providerSessionId ?? null;
     }
 
     const restoring: AgentSession = {

@@ -20,6 +20,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import type { DesktopClient } from "../client-types";
+import { type AppTheme, appearanceOf } from "../theme";
 import { askConfirm } from "../dialogs";
 import { MarkdownPreview } from "../markdown-preview";
 import {
@@ -68,13 +69,48 @@ export interface EditorAreaHandle {
   /** An entry moved from the tree. Open documents under it follow. */
   moved(from: string, to: string): void;
   removed(path: string): void;
+  /** Shows the session tab, adding it first if it was closed. */
+  showSession(): void;
+  /** Shows the task tab, or closes it when no task is selected. */
+  showTask(): void;
+  closeTask(): void;
+  /** Opens a web page in a tab of its own. */
+  openWeb(url: string): void;
+  /** Opens a terminal in a tab of its own. */
+  openTerminal(terminalId: string, name: string): void;
+  /** Closes a terminal's tab, once the terminal itself is gone. */
+  closeTerminal(terminalId: string): void;
 }
+
+/** What a center tab holds, for the app to follow which one is in front. */
+export type CenterPanelKind = "session" | "task" | "file" | "web" | "terminal";
 
 export interface EditorAreaProps {
   client: DesktopClient;
   workspaceId: string;
-  theme: "dark" | "light";
+  theme: AppTheme;
   onActiveChange(path: string | undefined): void;
+  /** The kind of the tab in front changed, or the last tab closed. */
+  onActivePanel?(kind: CenterPanelKind | undefined): void;
+  /** The session or task tab was closed by the user. */
+  onAppPanelClosed?(kind: "session" | "task"): void;
+  /** The session and task tabs are the app's; it draws their content. */
+  renderSession?(): React.ReactNode;
+  sessionTitle?: string;
+  renderTask?(): React.ReactNode;
+  taskTitle?: string;
+  /** What the center shows with no tab open. */
+  renderEmpty?(): React.ReactNode;
+  /** The agent's icon, for the session tab. */
+  sessionIcon?: React.ReactNode;
+  /** A terminal tab's content, drawn by the app. */
+  renderTerminal?(terminalId: string): React.ReactNode;
+  /** The + in the tab strip: a new terminal in a tab. */
+  onNewTerminal?(): void;
+  /** A terminal tab was closed by the user, so its shell should end. */
+  onTerminalTabClosed?(terminalId: string): void;
+  /** Hands a web tab's address to the default browser. */
+  onOpenExternal?(url: string): void;
   onError(message: string): void;
   /** BRIEF.md or JOURNAL.md was written; other views show their content. */
   onWorkspaceDocumentSaved(): void;
@@ -84,7 +120,15 @@ export interface EditorAreaProps {
 }
 
 interface FilePanelParams {
+  /** Empty on the session, task and web tabs. */
   path: string;
+  /** Set on the session, task, web and terminal tabs. */
+  kind?: "session" | "task" | "web" | "terminal";
+  /** The page a web tab shows. */
+  url?: string;
+  /** The integrated terminal a terminal tab shows, and its name. */
+  terminalId?: string;
+  title?: string;
   preview?: boolean;
   mode?: "edit" | "preview";
   /** A journal heading to scroll to once, then forgotten. */
@@ -94,18 +138,38 @@ interface FilePanelParams {
 }
 
 const panelId = (path: string) => `file:${path}`;
+/** Whether a path is this one or inside it, when it is a folder. */
+const within = (path: string, target: string) =>
+  path === target || path.startsWith(`${target}/`);
 const diffPanelId = (path: string, commit?: string) =>
   commit ? `commit:${commit}:${path}` : `diff:${path}`;
 const layoutKey = (workspaceId: string) =>
   `daedalus.editor.layout.${workspaceId}`;
 
 const isMarkdown = (path: string) => /\.(md|markdown|mdx)$/i.test(path);
+const isHtml = (path: string) => /\.html?$/i.test(path);
+/** Files the image viewer shows instead of the editor. */
+export const isImage = (path: string) =>
+  /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i.test(path);
+const SESSION_PANEL = "session";
+const TASK_PANEL = "task";
+const panelKind = (params?: FilePanelParams): CenterPanelKind | undefined =>
+  !params ? undefined : (params.kind ?? "file");
 const isReadOnlyPath = (path: string) => path.startsWith("repos/");
 
 interface EditorContextValue {
   client: DesktopClient;
   workspaceId: string;
-  theme: "dark" | "light";
+  theme: AppTheme;
+  renderSession?(): React.ReactNode;
+  sessionTitle?: string;
+  renderTask?(): React.ReactNode;
+  taskTitle?: string;
+  renderEmpty?(): React.ReactNode;
+  sessionIcon?: React.ReactNode;
+  renderTerminal?(terminalId: string): React.ReactNode;
+  onNewTerminal?(): void;
+  onOpenExternal?(url: string): void;
   load(path: string): Promise<OpenDocument | undefined>;
   save(doc: OpenDocument): Promise<void>;
   close(panel: IDockviewPanel): Promise<void>;
@@ -182,6 +246,18 @@ export default function EditorArea({
   workspaceId,
   theme,
   onActiveChange,
+  onActivePanel,
+  onAppPanelClosed,
+  renderSession,
+  sessionTitle,
+  renderTask,
+  taskTitle,
+  renderEmpty,
+  sessionIcon,
+  renderTerminal,
+  onNewTerminal,
+  onTerminalTabClosed,
+  onOpenExternal,
   onError,
   onWorkspaceDocumentSaved,
   handleRef,
@@ -220,10 +296,20 @@ export default function EditorArea({
   const loading = useRef(new Map<string, Promise<OpenDocument | undefined>>());
   const callbacks = useRef({
     onActiveChange,
+    onActivePanel,
+    onAppPanelClosed,
+    onTerminalTabClosed,
     onError,
     onWorkspaceDocumentSaved,
   });
-  callbacks.current = { onActiveChange, onError, onWorkspaceDocumentSaved };
+  callbacks.current = {
+    onActiveChange,
+    onActivePanel,
+    onAppPanelClosed,
+    onTerminalTabClosed,
+    onError,
+    onWorkspaceDocumentSaved,
+  };
 
   const load = useCallback(
     (path: string) => {
@@ -303,7 +389,7 @@ export default function EditorArea({
   const place = useCallback(
     (
       id: string,
-      component: "file" | "diff",
+      component: "file" | "diff" | "image",
       params: FilePanelParams,
       pinned: boolean,
     ) => {
@@ -344,6 +430,33 @@ export default function EditorArea({
     [workspaceId],
   );
 
+  /** Image tabs at or under these paths, which hold no document. */
+  const closeImages = useCallback((paths: readonly string[]) => {
+    const api = apiRef.current;
+    if (!api || paths.length === 0) return;
+    for (const panel of [...api.panels]) {
+      const params = panel.params as FilePanelParams | undefined;
+      if (panel.id !== panelId(params?.path ?? "")) continue;
+      if (!params?.path || !isImage(params.path)) continue;
+      if (paths.some((path) => within(params.path, path))) panel.api.close();
+    }
+  }, []);
+
+  /** Every tab at or under these paths, after the tree deleted them. */
+  const closeRemoved = useCallback(
+    (paths: readonly string[]) => {
+      const api = apiRef.current;
+      closeImages(paths);
+      for (const doc of documentsIn(workspaceId)) {
+        if (!paths.some((path) => within(doc.path, path))) continue;
+        api?.getPanel(panelId(doc.path))?.api.close();
+        api?.getPanel(diffPanelId(doc.path))?.api.close();
+        closeDocument(doc);
+      }
+    },
+    [closeImages, workspaceId],
+  );
+
   const openDiff = useCallback(
     (target: DiffTarget, options: { pinned: boolean }) => {
       const id = diffPanelId(target.path, target.commit?.sha);
@@ -359,7 +472,7 @@ export default function EditorArea({
       const current = existing?.params as FilePanelParams | undefined;
       place(
         panelId(path),
-        "file",
+        isImage(path) ? "image" : "file",
         {
           path,
           mode: options.mode ?? current?.mode ?? "edit",
@@ -371,6 +484,47 @@ export default function EditorArea({
         requestFocus(panelId(path), options.line, options.column);
     },
     [place],
+  );
+
+  /** The session, task and web tabs: one each for session and task. */
+  const placeApp = useCallback(
+    (id: string, params: FilePanelParams, title: string) => {
+      const api = apiRef.current;
+      if (!api) return;
+      const existing = api.getPanel(id);
+      if (existing) {
+        existing.api.updateParameters({ ...existing.params, ...params });
+        existing.api.setActive();
+        return;
+      }
+      // The session tab leads the strip; the others open beside the tab in
+      // front, as files do.
+      const first = api.groups[0];
+      api.addPanel({
+        id,
+        component: params.kind ?? "session",
+        tabComponent: "app",
+        title,
+        params,
+        ...(params.kind === "session" && first
+          ? {
+              position: {
+                referenceGroup: first.id,
+                direction: "within",
+                index: 0,
+              },
+            }
+          : api.activeGroup
+            ? {
+                position: {
+                  referenceGroup: api.activeGroup.id,
+                  direction: "within",
+                },
+              }
+            : {}),
+      });
+    },
+    [],
   );
 
   // A request that arrives before dockview is ready (the editor chunk has
@@ -417,30 +571,57 @@ export default function EditorArea({
             });
         }
       },
+      showSession: () =>
+        whenReady(() =>
+          placeApp(SESSION_PANEL, { path: "", kind: "session" }, "Session"),
+        ),
+      showTask: () =>
+        whenReady(() =>
+          placeApp(TASK_PANEL, { path: "", kind: "task" }, "Task"),
+        ),
+      closeTask: () =>
+        whenReady(() => apiRef.current?.getPanel(TASK_PANEL)?.api.close()),
+      openWeb: (url) =>
+        whenReady(() =>
+          placeApp(`web:${url}`, { path: "", kind: "web", url }, url),
+        ),
+      openTerminal: (terminalId, name) =>
+        whenReady(() =>
+          placeApp(
+            `terminal:${terminalId}`,
+            { path: "", kind: "terminal", terminalId, title: name },
+            name,
+          ),
+        ),
+      closeTerminal: (terminalId) =>
+        whenReady(() =>
+          apiRef.current?.getPanel(`terminal:${terminalId}`)?.api.close(),
+        ),
       removed(path) {
-        const api = apiRef.current;
-        for (const doc of documentsIn(workspaceId)) {
-          if (doc.path !== path && !doc.path.startsWith(`${path}/`)) continue;
-          api?.getPanel(panelId(doc.path))?.api.close();
-          api?.getPanel(diffPanelId(doc.path))?.api.close();
-          closeDocument(doc);
-        }
+        closeRemoved([path]);
       },
     }),
-    [client, open, openDiff, whenReady, workspaceId],
+    [client, closeRemoved, open, openDiff, placeApp, whenReady, workspaceId],
   );
 
   // Files changed on disk: a clean document takes the new content, a deleted
   // one closes. A dirty document is never touched; the save reports the
-  // conflict instead of anything being lost here.
+  // conflict instead of anything being lost here. A deleted folder is
+  // reported as the folder alone, so a change also counts for every file
+  // under it.
   useEffect(
     () =>
       client.subscribeWorkspaceFiles(
         ({ workspaceId: changed, changes, overflow }) => {
           if (changed !== workspaceId) return;
+          closeImages(
+            changes
+              .filter((item) => item.kind === "deleted")
+              .map((item) => item.path),
+          );
           for (const doc of documentsIn(workspaceId)) {
             if (isDirty(doc)) continue;
-            const change = changes.find((item) => item.path === doc.path);
+            const change = changes.find((item) => within(doc.path, item.path));
             if (!overflow && !change) continue;
             void client.request
               .workspaceFileRead({ workspace: workspaceId, path: doc.path })
@@ -459,7 +640,7 @@ export default function EditorArea({
           }
         },
       ),
-    [client, workspaceId],
+    [client, closeImages, workspaceId],
   );
 
   // Cmd+S saves and Cmd+W closes the active tab; Cmd+Shift+[ and ] move
@@ -475,7 +656,9 @@ export default function EditorArea({
       if (event.key === "s" && !event.shiftKey) {
         event.preventDefault();
         const params = api.activePanel?.params as FilePanelParams | undefined;
-        const doc = params && getDocument(workspaceId, params.path);
+        const doc = params?.path
+          ? getDocument(workspaceId, params.path)
+          : undefined;
         if (doc) void save(doc);
       } else if (event.key === "w" && !event.shiftKey) {
         event.preventDefault();
@@ -508,7 +691,6 @@ export default function EditorArea({
       const queued = pending.current.splice(0);
       const waiting = queued.length > 0 ? queued : delivered.current;
       delivered.current = waiting;
-      if (!restored && waiting.length === 0) open("BRIEF.md", { pinned: true });
       for (const request of waiting) request();
       const persist = () => {
         try {
@@ -523,11 +705,29 @@ export default function EditorArea({
       api.onDidLayoutChange(persist);
       api.onDidActivePanelChange((event) => {
         const params = event.panel?.params as FilePanelParams | undefined;
-        callbacks.current.onActiveChange(params?.path);
+        callbacks.current.onActiveChange(params?.path || undefined);
+        callbacks.current.onActivePanel?.(panelKind(params));
       });
       api.onDidRemovePanel((panel) => {
         const params = panel.params as FilePanelParams | undefined;
         if (!params) return;
+        if (params.kind === "terminal" && params.terminalId) {
+          const terminalId = params.terminalId;
+          queueMicrotask(() => {
+            if (!api.getPanel(panel.id))
+              callbacks.current.onTerminalTabClosed?.(terminalId);
+          });
+          return;
+        }
+        if (params.kind === "session" || params.kind === "task") {
+          const kind = params.kind;
+          queueMicrotask(() => {
+            if (!api.getPanel(panel.id))
+              callbacks.current.onAppPanelClosed?.(kind);
+          });
+          return;
+        }
+        if (!params.path) return;
         // A tab dragged to another group is removed and added; only a real
         // close leaves no panel for the path.
         queueMicrotask(() => {
@@ -541,15 +741,25 @@ export default function EditorArea({
         });
       });
       const active = api.activePanel?.params as FilePanelParams | undefined;
-      callbacks.current.onActiveChange(active?.path);
+      callbacks.current.onActiveChange(active?.path || undefined);
+      callbacks.current.onActivePanel?.(panelKind(active));
     },
-    [open, workspaceId],
+    [workspaceId],
   );
 
   const context: EditorContextValue = {
     client,
     workspaceId,
     theme,
+    renderSession,
+    sessionTitle,
+    renderTask,
+    taskTitle,
+    renderEmpty,
+    sessionIcon,
+    renderTerminal,
+    onNewTerminal,
+    onOpenExternal,
     load,
     save,
     close,
@@ -565,16 +775,26 @@ export default function EditorArea({
       <div className="editor-area">
         <DockviewReact
           className={
-            theme === "dark" ? "dockview-theme-dark" : "dockview-theme-light"
+            appearanceOf(theme) === "dark"
+              ? "dockview-theme-dark"
+              : "dockview-theme-light"
           }
-          components={{ file: FilePanel, diff: DiffPanel }}
+          components={{
+            file: FilePanel,
+            diff: DiffPanel,
+            image: ImagePanel,
+            session: SessionPanel,
+            task: TaskPanel,
+            web: WebPanel,
+            terminal: TerminalPanel,
+          }}
           dndStrategy="pointer"
           getTabContextMenuItems={({ panel, group, api }) =>
             tabMenu(panel, group.panels, api, close, pin)
           }
           onReady={onReady}
           rightHeaderActionsComponent={HeaderActions}
-          tabComponents={{ file: FileTab }}
+          tabComponents={{ file: FileTab, app: AppTab }}
           watermarkComponent={Watermark}
         />
       </div>
@@ -693,14 +913,34 @@ function HeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
     return () => disposable.dispose();
   }, [activePanel]);
   const params = activePanel?.params as FilePanelParams | undefined;
-  if (!activePanel || !params) return null;
+  const focus = context.onNewTerminal && (
+    <button
+      aria-label="New terminal"
+      className="editor-new-terminal"
+      onClick={context.onNewTerminal}
+      title="New terminal in a tab"
+      type="button"
+    >
+      <svg
+        aria-hidden="true"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 16 16"
+      >
+        <path d="M8 3v10M3 8h10" />
+      </svg>
+    </button>
+  );
+  if (!activePanel || !params || !params.path)
+    return focus ? <div className="editor-header-actions">{focus}</div> : null;
   const doc = getDocument(context.workspaceId, params.path);
+  const previewable = isMarkdown(params.path) || isHtml(params.path);
   return (
     <div className="editor-header-actions">
       {isReadOnlyPath(params.path) && (
         <span className="editor-header-note">Read-only</span>
       )}
-      {isMarkdown(params.path) && (
+      {previewable && (
         <button
           aria-pressed={params.mode === "preview"}
           className={params.mode === "preview" ? "active" : ""}
@@ -711,7 +951,11 @@ function HeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
               mode: params.mode === "preview" ? "edit" : "preview",
             })
           }
-          title="Toggle Markdown preview"
+          title={
+            isHtml(params.path)
+              ? "Toggle HTML preview"
+              : "Toggle Markdown preview"
+          }
           type="button"
         >
           {params.mode === "preview" ? "Edit" : "Preview"}
@@ -726,16 +970,216 @@ function HeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
           Save
         </button>
       )}
+      {focus}
     </div>
   );
 }
 
 function Watermark() {
+  const context = useEditorContext();
   return (
-    <div className="editor-watermark">
-      <strong>No file open</strong>
-      <span>Open a file from the explorer.</span>
+    context.renderEmpty?.() ?? (
+      <div className="editor-watermark">
+        <strong>No file open</strong>
+        <span>Open a file from the explorer.</span>
+      </div>
+    )
+  );
+}
+
+/** The tab of a session, task or web page. */
+function AppTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
+  const context = useEditorContext();
+  const panel = api.group.panels.find((item) => item.api === api);
+  const title =
+    params.kind === "session"
+      ? (context.sessionTitle ?? "Session")
+      : params.kind === "task"
+        ? (context.taskTitle ?? "Task")
+        : params.kind === "terminal"
+          ? (params.title ?? "Terminal")
+          : (params.url ?? "Web");
+  return (
+    <div
+      className={`file-tab app-tab app-tab-${params.kind ?? "web"}`}
+      onAuxClick={(event) => {
+        if (event.button === 1) api.close();
+      }}
+      title={title}
+    >
+      <span aria-hidden="true" className="app-tab-icon">
+        {params.kind === "session" && context.sessionIcon ? (
+          context.sessionIcon
+        ) : (
+          <AppTabIcon kind={params.kind ?? "web"} />
+        )}
+      </span>
+      <span className="file-tab-name">{title}</span>
+      <button
+        aria-label={`Close ${title}`}
+        className="file-tab-close"
+        onClick={(event) => {
+          event.stopPropagation();
+          if (panel) panel.api.close();
+        }}
+        onPointerDown={(event) => event.stopPropagation()}
+        type="button"
+      >
+        <span aria-hidden="true" className="file-tab-x">
+          ×
+        </span>
+      </button>
     </div>
+  );
+}
+
+function AppTabIcon({
+  kind,
+}: {
+  kind: "session" | "task" | "web" | "terminal";
+}) {
+  return (
+    <svg
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 16 16"
+    >
+      {kind === "session" || kind === "terminal" ? (
+        <path d="M2.5 3.5h11v9h-11zM4.5 6.5l2 1.5-2 1.5M8 10h3" />
+      ) : kind === "task" ? (
+        <path d="M3 3.5l1 1 2-2M3 8l1 1 2-2M3 12.5l1 1 2-2M8 3.5h5M8 8h5M8 12.5h5" />
+      ) : (
+        <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM1.5 8h13M8 1.5c2 2 2 11 0 13M8 1.5c-2 2-2 11 0 13" />
+      )}
+    </svg>
+  );
+}
+
+function SessionPanel() {
+  const context = useEditorContext();
+  return (
+    <div className="app-panel session-panel">{context.renderSession?.()}</div>
+  );
+}
+
+function TerminalPanel({ params }: IDockviewPanelProps<FilePanelParams>) {
+  const context = useEditorContext();
+  return (
+    <div className="app-panel terminal-panel">
+      {params.terminalId && context.renderTerminal?.(params.terminalId)}
+    </div>
+  );
+}
+
+function TaskPanel() {
+  const context = useEditorContext();
+  return <div className="app-panel task-panel">{context.renderTask?.()}</div>;
+}
+
+/**
+ * A web page, such as a dev server, in a frame with its own address bar.
+ * Sites that refuse to be framed show their refusal; Open outside hands the
+ * address to the default browser.
+ */
+function WebPanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
+  const context = useEditorContext();
+  const [address, setAddress] = useState(params.url ?? "");
+  const [reload, setReload] = useState(0);
+  const url = params.url ?? "";
+  useEffect(() => setAddress(url), [url]);
+  return (
+    <div className="app-panel web-panel">
+      <form
+        className="web-panel-bar"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const next = /^[a-z]+:\/\//i.test(address.trim())
+            ? address.trim()
+            : `http://${address.trim()}`;
+          api.updateParameters({ ...params, url: next });
+          api.setTitle(next);
+          setReload((value) => value + 1);
+        }}
+      >
+        <button
+          aria-label="Reload"
+          className="quiet"
+          onClick={() => setReload((value) => value + 1)}
+          title="Reload"
+          type="button"
+        >
+          ↻
+        </button>
+        <input
+          aria-label="Address"
+          onChange={(event) => setAddress(event.target.value)}
+          spellCheck={false}
+          value={address}
+        />
+        {context.onOpenExternal && (
+          <button
+            className="quiet web-panel-outside"
+            onClick={() => context.onOpenExternal?.(url)}
+            type="button"
+          >
+            Open outside
+          </button>
+        )}
+      </form>
+      <iframe
+        className="web-panel-frame"
+        key={`${url}:${reload}`}
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+        src={url}
+        title={url}
+      />
+    </div>
+  );
+}
+
+/** An image file, shown on a checkerboard so transparency reads. */
+function ImagePanel({ params }: IDockviewPanelProps<FilePanelParams>) {
+  const context = useEditorContext();
+  const [image, setImage] = useState<{ src?: string; error?: string }>({});
+  useEffect(() => {
+    let cancelled = false;
+    setImage({});
+    void context.client.request
+      .workspaceImageRead({ workspace: context.workspaceId, path: params.path })
+      .then((response) => {
+        if (cancelled) return;
+        setImage(
+          response.ok
+            ? {
+                src: `data:${response.data.mimeType};base64,${response.data.base64}`,
+              }
+            : { error: response.error.message },
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [context.client, context.workspaceId, params.path]);
+  if (image.error) return <div className="editor-loading">{image.error}</div>;
+  if (!image.src) return <div className="editor-loading">Opening…</div>;
+  return (
+    <div className="image-panel">
+      <img alt={workspaceBaseName(params.path)} src={image.src} />
+    </div>
+  );
+}
+
+/** An HTML file rendered in a sandbox, without scripts reaching the app. */
+function HtmlPanel({ doc }: { doc: OpenDocument }) {
+  useDocumentsRevision();
+  return (
+    <iframe
+      className="web-panel-frame html-preview"
+      sandbox="allow-scripts"
+      srcDoc={doc.model.getValue()}
+      title={workspaceBaseName(doc.path)}
+    />
   );
 }
 
@@ -765,6 +1209,8 @@ function FilePanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
   );
 
   if (!doc) return <div className="editor-loading">Opening…</div>;
+  if (params.mode === "preview" && isHtml(params.path))
+    return <HtmlPanel doc={doc} />;
   if (params.mode === "preview" && isMarkdown(params.path))
     return (
       <MarkdownPanel
@@ -800,7 +1246,7 @@ function MonacoPanel({ doc, onEdit }: { doc: OpenDocument; onEdit(): void }) {
       model: doc.model,
       automaticLayout: true,
       readOnly: isReadOnlyPath(doc.path),
-      theme: context.theme === "dark" ? "daedalus-dark" : "daedalus-light",
+      theme: `daedalus-${context.theme}`,
       fontFamily: '"SF Mono", Menlo, monospace',
       fontSize: 13,
       minimap: { enabled: true },
@@ -986,7 +1432,7 @@ function DiffPanel({ params }: IDockviewPanelProps<FilePanelParams>) {
       originalEditable: false,
       readOnly: Boolean(fixed) || isReadOnlyPath(diff.path),
       renderSideBySide: true,
-      theme: context.theme === "dark" ? "daedalus-dark" : "daedalus-light",
+      theme: `daedalus-${context.theme}`,
       fontFamily: '"SF Mono", Menlo, monospace',
       fontSize: 13,
       scrollBeyondLastLine: false,

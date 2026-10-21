@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { DesktopSnapshotDto } from "@daedalus/protocol";
 import type { DesktopClient } from "../client-types";
+import { useRpcQuery } from "../use-rpc";
 import WorldView from "./WorldView";
 import { buildWorldModel, worldInputFromSnapshot } from "./world-model";
 
@@ -13,7 +13,10 @@ import { buildWorldModel, worldInputFromSnapshot } from "./world-model";
  */
 export function WorldWindow(props: { client: DesktopClient }) {
   const { client } = props;
-  const [snapshot, setSnapshot] = useState<DesktopSnapshotDto | null>(null);
+  const { data: snapshot = null } = useRpcQuery(
+    () => client.request.snapshot({}),
+    { onDataChanged: (listener) => client.subscribe(listener), deps: [client] },
+  );
   const [now, setNow] = useState(Date.now());
   const [theme] = useState<"dark" | "light">(() => {
     try {
@@ -26,20 +29,9 @@ export function WorldWindow(props: { client: DesktopClient }) {
   });
 
   useEffect(() => {
-    let cancelled = false;
-    const refresh = async () => {
-      const response = await client.request.snapshot({});
-      if (!cancelled && response.ok) setSnapshot(response.data);
-    };
-    void refresh();
-    const unsubscribe = client.subscribe(() => void refresh());
     const timer = setInterval(() => setNow(Date.now()), 15_000);
-    return () => {
-      cancelled = true;
-      unsubscribe();
-      clearInterval(timer);
-    };
-  }, [client]);
+    return () => clearInterval(timer);
+  }, []);
 
   // Active workspaces in the order the sidebar keeps them.
   const workspaces = (snapshot?.workspaces ?? [])

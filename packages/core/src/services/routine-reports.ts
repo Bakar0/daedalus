@@ -9,6 +9,7 @@ import type {
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import type { NotificationService } from "./notifications";
+import { localTime } from "./routine-files";
 
 /** A key that comes back within this long reopens its old task. */
 export const REOPEN_WINDOW_MS = 14 * 86_400_000;
@@ -29,12 +30,6 @@ export function reportKey(value: string): string {
     );
   return key;
 }
-
-const localTime = (iso: string): string => {
-  const date = new Date(iso);
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-};
 
 /**
  * Appends a section to a task brief without ever passing the task limit.

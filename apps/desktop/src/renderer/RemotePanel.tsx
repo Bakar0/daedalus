@@ -16,8 +16,9 @@ import type {
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { ConfirmButton } from "./ConfirmButton";
-import { hasPlan, planText, ProTag } from "./ProPlan";
+import { hasPlan, planText, ProTag, useRemoteState } from "./ProPlan";
 import { SettingRow } from "./SettingsModal";
+import { useRpcQuery } from "./use-rpc";
 
 const POLL_MS = 2_000;
 
@@ -307,26 +308,18 @@ export function RemotePanel({
   onOpenAccount: () => void;
   perform: <T>(operation: Promise<RpcResult<T>>) => Promise<T | undefined>;
 }) {
-  const [state, setState] = useState<RemoteStateDto>();
+  const stateQuery = useRemoteState(client, POLL_MS);
+  const activityQuery = useRpcQuery(() => client.request.remoteActivity({}), {
+    pollMs: POLL_MS,
+    deps: [client],
+  });
+  const state = stateQuery.data;
+  const activity: RemoteActivityDto[] = activityQuery.data ?? [];
+  const refresh = () =>
+    Promise.all([stateQuery.refresh(), activityQuery.refresh()]);
   const [pairing, setPairing] = useState<RemotePairingDto>();
-  const [activity, setActivity] = useState<RemoteActivityDto[]>([]);
   const [error, setError] = useState<string>();
   const left = useCountdown(pairing?.expiresAt);
-
-  const refresh = useCallback(async () => {
-    const [result, recent] = await Promise.all([
-      client.request.remoteGet({}),
-      client.request.remoteActivity({}),
-    ]);
-    if (result.ok) setState(result.data);
-    if (recent.ok) setActivity(recent.data);
-  }, [client]);
-
-  useEffect(() => {
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
 
   // A phone that pairs shows up in the list; the code it used is spent.
   const phoneCount = state?.phones.length ?? 0;
@@ -399,7 +392,7 @@ export function RemotePanel({
             const next = await perform(
               client.request.remoteSetEnabled({ enabled }),
             );
-            if (next) setState(next);
+            if (next) await refresh();
           }}
           title="Allow phone access"
         />
@@ -418,7 +411,7 @@ export function RemotePanel({
             disabled={busy}
             onClick={async () => {
               const next = await perform(client.request.remoteStartOver({}));
-              if (next) setState(next);
+              if (next) await refresh();
             }}
             type="button"
           >
@@ -443,7 +436,7 @@ export function RemotePanel({
             const next = await perform(
               client.request.remoteSetMacName({ name }),
             );
-            if (next) setState(next);
+            if (next) await refresh();
           }}
         />
       ) : undefined}
@@ -456,7 +449,7 @@ export function RemotePanel({
             const next = await perform(
               client.request.remoteSetKeepAwake({ enabled }),
             );
-            if (next) setState(next);
+            if (next) await refresh();
           }}
           title="Keep the Mac awake while away"
         />
@@ -473,7 +466,7 @@ export function RemotePanel({
                 const next = await perform(
                   client.request.remoteConfirmPairing({ allow }),
                 );
-                if (next) setState(next);
+                if (next) await refresh();
               }}
               request={request}
             />
@@ -547,7 +540,7 @@ export function RemotePanel({
                         const next = await perform(
                           client.request.remotePhoneRemove({ id: phone.id }),
                         );
-                        if (next) setState(next);
+                        if (next) await refresh();
                       }}
                       type="button"
                     >

@@ -11,6 +11,16 @@ import {
 } from "../index";
 
 class NoTmux implements TmuxClient {
+  openPty() {
+    return {
+      start: async () => {},
+      write() {},
+      resize() {},
+      close() {},
+    };
+  }
+  async pinWindowSize() {}
+  async unpinWindowSize() {}
   readonly launches: TmuxLaunch[] = [];
   async probe() {
     return "tmux 3.7c";

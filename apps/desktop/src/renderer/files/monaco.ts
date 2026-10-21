@@ -28,6 +28,20 @@ monaco.editor.defineTheme("daedalus-dark", {
   inherit: true,
   rules: [],
   colors: {
+    "editor.background": "#111112",
+    "editorGutter.background": "#111112",
+    "minimap.background": "#111112",
+    "editor.lineHighlightBackground": "#ffffff08",
+    "editor.lineHighlightBorder": "#00000000",
+    "editorOverviewRuler.border": "#00000000",
+  },
+});
+// Midnight: the original navy editor, from before the flat layout.
+monaco.editor.defineTheme("daedalus-midnight", {
+  base: "vs-dark",
+  inherit: true,
+  rules: [],
+  colors: {
     "editor.background": "#0d121c",
     "editorGutter.background": "#0d121c",
     "minimap.background": "#0d121c",

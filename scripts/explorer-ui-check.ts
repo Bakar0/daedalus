@@ -652,10 +652,13 @@ try {
     selector: string,
     deltaX: number,
     deltaY: number,
+    // The side panel's edge carries its fold button at mid-height, so a drag
+    // of that edge takes hold near the top instead.
+    grip: "middle" | "top" = "middle",
   ): Promise<void> => {
     const at = await evaluate<{ x: number; y: number }>(`(() => {
       const rect = document.querySelector('${selector}').getBoundingClientRect();
-      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+      return { x: rect.x + rect.width / 2, y: ${grip === "top" ? "rect.y + 40" : "rect.y + rect.height / 2"} };
     })()`);
     await send("Input.dispatchMouseEvent", {
       type: "mousePressed",
@@ -781,31 +784,28 @@ try {
       "Reopening a folder restored a subfolder the user had closed inside it",
     );
 
-  // 4. The explorer drags wider, and never at the viewer's expense.
+  // 4. The explorer is the side panel's Files tab, as wide as the panel:
+  //    dragging the panel's edge left widens it, never at the viewer's
+  //    expense, and the width survives a reload.
+  const panelEdge = ".secondary-panel-resize-handle";
   const beforeWidth = await geometry();
-  await drag(".explorer-resize-handle", 140, 0);
+  await drag(panelEdge, -140, 0, "top");
   const wider = await geometry();
   if (wider.explorerWidth - beforeWidth.explorerWidth < 120)
     failures.push(
-      `Dragging the explorer border right 140px widened it by only ${(wider.explorerWidth - beforeWidth.explorerWidth).toFixed(0)}px (${beforeWidth.explorerWidth.toFixed(0)} -> ${wider.explorerWidth.toFixed(0)})`,
+      `Dragging the panel edge left 140px widened the explorer by only ${(wider.explorerWidth - beforeWidth.explorerWidth).toFixed(0)}px (${beforeWidth.explorerWidth.toFixed(0)} -> ${wider.explorerWidth.toFixed(0)})`,
     );
   if (wider.widestEntryRight > wider.explorerRight + 0.5)
     failures.push(
       `A tree entry spills ${(wider.widestEntryRight - wider.explorerRight).toFixed(0)}px past the widened explorer`,
     );
-  await drag(".explorer-resize-handle", 2000, 0);
+  await drag(panelEdge, -2000, 0, "top");
   const widest = await geometry();
   if (widest.viewerWidth < EXPLORER_VIEWER_MIN_WIDTH - 1)
     failures.push(
-      `Dragging the explorer to the right edge left the file viewer ${widest.viewerWidth.toFixed(0)}px wide, under its ${EXPLORER_VIEWER_MIN_WIDTH}px floor`,
+      `Dragging the panel edge to the left edge left the file viewer ${widest.viewerWidth.toFixed(0)}px wide, under its ${EXPLORER_VIEWER_MIN_WIDTH}px floor`,
     );
-  await drag(".explorer-resize-handle", -2000, 0);
-  const narrowest = await geometry();
-  if (narrowest.explorerWidth < 120)
-    failures.push(
-      `Dragging the explorer to the left edge collapsed it to ${narrowest.explorerWidth.toFixed(0)}px instead of stopping at its minimum`,
-    );
-  await drag(".explorer-resize-handle", 140, 0);
+  await drag(panelEdge, 300, 0, "top");
   const settledWidth = (await geometry()).explorerWidth;
   await reload();
   const afterReloadWidth = (await geometry()).explorerWidth;

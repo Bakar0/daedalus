@@ -6,8 +6,8 @@ import {
   loginShellPath,
   standardExecutableFallbacks,
 } from "@daedalus/platform";
-import { runCommand } from "@daedalus/platform";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { runCommand, writeFileAtomic } from "@daedalus/platform";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import {
@@ -17,6 +17,7 @@ import {
   type DaedalusConfig,
 } from "../config";
 import { DaedalusError } from "../errors";
+import { hasPersistedCodexSession } from "./codex-sessions";
 import { claudeSettingsPath, SkillService } from "./skills";
 import {
   codexSupportsHooks,
@@ -37,6 +38,25 @@ export interface LaunchInput {
   model?: string;
   /** A team lead or member: Claude accepts messages from other sessions. */
   acceptPeerMessages?: boolean;
+  /** Carry on an existing conversation rather than start a new one. */
+  resume?: ResumeInput;
+}
+
+/** The conversation a relaunched session carries on. */
+export interface ResumeInput {
+  /**
+   * The provider's own id for it. Claude cannot resume without one; a Codex
+   * session that never recorded one starts a new conversation.
+   */
+  nativeId?: string;
+  /** When the session last started, which dates the Codex rollout to find. */
+  startedAt: string;
+  /** Daedalus archived the conversation, so Codex has to unarchive it first. */
+  archived: boolean;
+  /** Where the provider's own commands, such as `codex unarchive`, run. */
+  workingDirectory: string;
+  /** The account's environment for those commands. */
+  env: Record<string, string>;
 }
 
 export interface ProviderLaunch {
@@ -218,13 +238,11 @@ async function writeClaudeSettingsFile(
 ): Promise<string> {
   const path = sessionClaudeSettingsPath(config, sessionId, options);
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  // Written beside and renamed, so a session starting from the old file
-  // never reads half of the new one.
-  const temporary = `${path}.${process.pid}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(settings, null, 2)}\n`, {
+  // Replaced atomically, so a session starting from the old file never reads
+  // half of the new one.
+  await writeFileAtomic(path, `${JSON.stringify(settings, null, 2)}\n`, {
     mode: 0o600,
   });
-  await rename(temporary, path);
   return path;
 }
 
@@ -251,10 +269,10 @@ export async function removeClaudeSettingsFiles(
  *
  * Applied at spawn and nowhere else. A user who tightens a live session —
  * Claude's shift+tab, Codex's `/permissions` — has made a decision, and
- * re-applying this on restore would silently undo it. `relaunch` therefore
- * rebuilds its arguments without calling this, and that asymmetry is
- * deliberate: a restored session that is stricter than expected is friction,
- * one that is quietly looser is a bug.
+ * re-applying this on restore would silently undo it. A launch with `resume`
+ * therefore leaves it out, and that asymmetry is deliberate: a restored
+ * session that is stricter than expected is friction, one that is quietly
+ * looser is a bug.
  *
  * The same idea needs different arguments and does not have the same reach in
  * each provider. Claude's `auto` weighs every tool call, because nothing but
@@ -305,7 +323,7 @@ export const DAEDALUS_STATUS_INSTRUCTIONS = `You are running inside Daedalus, wh
 - When you need the user to decide, answer, or approve something before you can continue, run \`daedal attention "<what you need from them>"\`. If you have a tool for asking the user a question (AskUserQuestion), you may use that instead. A question written only in your reply is shown as done, not as waiting on the user.
 - Run \`daedal attention --clear\` as soon as that is resolved.
 - When you finish what you were asked, just end your turn. Daedalus marks it done.
-- When a command needs an API key, token or password, do not ask the user to paste it. Run \`daedal secret list\` and use one with \`daedal exec --secret NAME -- <command>\`. If it is not there, ask the user to add it from the key icon on the workspace's card in Daedalus (on All workspaces for every workspace).`;
+- When a command needs an API key, token or password, do not ask the user to paste it. Run \`daedal secret list\` and use one with \`daedal exec --secret NAME -- <command>\`. If it is not there, ask the user to add it from the key icon on the workspace's card in Daedalus (the key in the Workspaces heading for every workspace).`;
 
 const CLAUDE_APPEND_PROMPT = "--append-system-prompt";
 
@@ -422,13 +440,7 @@ export async function ensureCodexHooks(
       const backup = `${configPath}.daedalus-backup`;
       if (existing && !(await Bun.file(backup).exists()))
         await writeFile(backup, existing, { mode: 0o600 });
-      const temporary = `${configPath}.${crypto.randomUUID()}.tmp`;
-      try {
-        await writeFile(temporary, merged, { flag: "wx", mode: 0o600 });
-        await rename(temporary, configPath);
-      } finally {
-        await rm(temporary, { force: true });
-      }
+      await writeFileAtomic(configPath, merged, { mode: 0o600 });
     }
   } catch {
     // A configuration Daedalus cannot read or write is the user's to own.
@@ -804,7 +816,13 @@ class ConfiguredProvider implements AgentProvider {
     if (this.promptArgument)
       for (const directory of input.additionalDirectories ?? [])
         args.push("--add-dir", directory);
-    if (this.promptArgument)
+    if (input.resume && !this.promptArgument)
+      throw new DaedalusError(
+        "CONFLICT",
+        "Custom sessions do not define a native resume capability",
+      );
+    // Never on a resume: see `permissionModeArgs`.
+    if (this.promptArgument && !input.resume)
       args.push(
         ...permissionModeArgs(this.name, this.definition.permissionMode),
       );
@@ -842,7 +860,15 @@ class ConfiguredProvider implements AgentProvider {
           { acceptPeerMessages: input.acceptPeerMessages },
         )),
       );
-    if (this.promptArgument && this.name === "claude" && input.sessionId) {
+    if (input.resume) {
+      const resumed = await this.resumeArgs(input.resume);
+      args.push(...resumed);
+      providerSessionId = resumed.length ? input.resume.nativeId : undefined;
+    } else if (
+      this.promptArgument &&
+      this.name === "claude" &&
+      input.sessionId
+    ) {
       providerSessionId = input.sessionId;
       args.push("--session-id", input.sessionId);
       if (input.sessionName) args.push("--name", input.sessionName);
@@ -860,6 +886,56 @@ class ConfiguredProvider implements AgentProvider {
       env,
       providerSessionId,
     };
+  }
+
+  /**
+   * The arguments that carry on a conversation, or none when there is no
+   * conversation to carry on and the session starts a new one.
+   *
+   * Codex allocates a thread id before the first user event but keeps no
+   * empty conversation, so an id with nothing behind it starts afresh. Only a
+   * conversation Daedalus archived needs unarchiving: one that merely lost
+   * its tmux server never left Codex's active list, and `codex unarchive` on
+   * it fails with wording that has nothing to do with the single message
+   * `isMissingCodexConversationError` forgives.
+   */
+  private async resumeArgs(resume: ResumeInput): Promise<string[]> {
+    const id = resume.nativeId;
+    if (this.name === "claude") {
+      if (!id)
+        throw new DaedalusError(
+          "CONFLICT",
+          "This session predates native resume support and cannot be resumed safely",
+        );
+      return ["--resume", id];
+    }
+    // Codex from here: only Claude and Codex take a prompt argument, and
+    // `buildLaunch` refuses a resume for any provider that does not.
+    if (
+      !id ||
+      !this.config ||
+      !(await hasPersistedCodexSession({
+        sessionsDirectory: this.config.codexSessionsDirectory,
+        id,
+        startedAt: resume.startedAt,
+      }))
+    )
+      return [];
+    if (resume.archived) {
+      const unarchive = await runCommand(
+        resolveAgentExecutable(this.name, this.definition.executable) ??
+          this.definition.executable,
+        ["unarchive", id],
+        { cwd: resume.workingDirectory, env: resume.env },
+      );
+      const unarchiveError = unarchive.stderr.trim() || unarchive.stdout.trim();
+      if (unarchive.exitCode !== 0)
+        throw new DaedalusError(
+          "CONFLICT",
+          unarchiveError || "Codex could not restore the conversation",
+        );
+    }
+    return ["resume", id];
   }
 }
 
