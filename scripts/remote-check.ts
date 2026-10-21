@@ -531,7 +531,7 @@ try {
       string,
       (params: never) => unknown
     >,
-    openTerminal: agentTerminalOpener(context, context.tmux, phoneSizes),
+    openTerminal: agentTerminalOpener(context, phoneSizes),
     tap,
     lockedRetryMs: 1_000,
     audit,
@@ -1010,7 +1010,7 @@ try {
     context: hostContext,
     macName: "Second Mac",
     handlers: () => createDesktopRequestHandlers(hostContext),
-    openTerminal: agentTerminalOpener(context, context.tmux),
+    openTerminal: agentTerminalOpener(context),
     lockedRetryMs: 1_000,
   });
   await host.start();
@@ -1360,7 +1360,7 @@ try {
     context: signInContext,
     macName: "Dave's Mac",
     handlers: () => createDesktopRequestHandlers(signInContext),
-    openTerminal: agentTerminalOpener(context, context.tmux),
+    openTerminal: agentTerminalOpener(context),
     lockedRetryMs: 60_000,
   });
   await signInHost.start();

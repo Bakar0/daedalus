@@ -63,6 +63,16 @@ export async function contextWithStubbedAgent(home: string) {
 }
 
 export class FakeTmux implements TmuxClient {
+  openPty() {
+    return {
+      start: async () => {},
+      write() {},
+      resize() {},
+      close() {},
+    };
+  }
+  async pinWindowSize() {}
+  async unpinWindowSize() {}
   sessions = new Set<string>();
   launches: TmuxLaunch[] = [];
   async probe() {

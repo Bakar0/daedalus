@@ -294,7 +294,7 @@ try {
       lead.id,
       member.id,
     ),
-    openTerminal: agentTerminalOpener(context, context.tmux),
+    openTerminal: agentTerminalOpener(context),
     lockedRetryMs: 1_000,
   });
   await connector.start();

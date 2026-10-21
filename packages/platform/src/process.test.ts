@@ -5,6 +5,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
   findExecutable,
   processIsAlive,
+  processWorkingDirectories,
   readLoginShellPath,
   runCommand,
   standardExecutableFallbacks,
@@ -144,5 +145,42 @@ describe("keychainReadCommand", () => {
     ).toBe(
       "/usr/bin/security find-generic-password -s 'Daedalus Claude API key' -a '/Users/a b/it'\\''s $HOME' -w",
     );
+  });
+});
+
+describe("processWorkingDirectories", () => {
+  const answer = (exitCode: number, stdout: string) => async () => ({
+    exitCode,
+    stdout,
+    stderr: "",
+    timedOut: false,
+  });
+
+  test("reads lsof's fields, and none found is an empty answer", async () => {
+    expect(
+      await processWorkingDirectories(
+        answer(0, "p12\nfcwd\nn/w/a\np34\nfcwd\nn/w/b c\n"),
+      ),
+    ).toEqual(
+      new Map([
+        [12, "/w/a"],
+        [34, "/w/b c"],
+      ]),
+    );
+    expect(await processWorkingDirectories(answer(1, ""))).toEqual(new Map());
+  });
+
+  test("is undefined when lsof cannot answer", async () => {
+    expect(await processWorkingDirectories(answer(2, ""))).toBeUndefined();
+    expect(
+      await processWorkingDirectories(async () => {
+        throw new Error("spawn failed");
+      }),
+    ).toBeUndefined();
+  });
+
+  test("finds this test's own process", async () => {
+    const folders = await processWorkingDirectories();
+    expect(folders?.get(process.pid)).toBe(process.cwd());
   });
 });

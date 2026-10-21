@@ -15,6 +15,7 @@ import {
   parseRoutineFile,
   parseSchedule,
   parseUntil,
+  localTime,
   renderRoutineFile,
   routineName,
 } from "./routine-files";
@@ -51,12 +52,6 @@ export type RoutineAddInput =
       schedule?: string;
       enabled?: boolean;
     };
-
-const localTime = (iso: string): string => {
-  const date = new Date(iso);
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-};
 
 /**
  * The routines a session holds and the runs they make. Everything lives in

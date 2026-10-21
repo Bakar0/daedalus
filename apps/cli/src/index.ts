@@ -2,24 +2,14 @@
 import {
   createApplicationContext,
   DaedalusError,
+  ingestHook,
+  ingestStatusLine,
   normalizeError,
   channelName,
   codexActivityTier,
-  codexHookInSession,
   codexConfigPath,
-  HEARTBEAT_INTERVAL_MS,
-  observeClaudeHook,
-  observeCodexHook,
-  pendingBackgroundAgents,
   resolveAgentExecutable,
   sessionColor,
-  sweepProviderActivity,
-  readActivityRecord,
-  recordSessionCost,
-  writeActivityRecord,
-  type ActivityObservation,
-  type AgentActivityState,
-  type AgentSession,
   type ApplicationContext,
   type TaskCost,
   type ManagedSkillStatus,
@@ -41,8 +31,7 @@ import {
   secretHelp,
 } from "./secrets";
 import { findTmuxExecutable, probeVersion } from "@daedalus/platform";
-import { mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import type { DoctorCheck } from "@daedalus/protocol";
 import packageJson from "../../../package.json";
 
@@ -56,8 +45,6 @@ const VERIFIED_BUN = "1.4.2";
  */
 const BUNDLED_BUN = "1.3.13";
 const VERIFIED_BUN_RUNTIMES = [VERIFIED_BUN, BUNDLED_BUN];
-const SESSION_ID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
  * The session a hook reports for: `--session <id>` on its command when
@@ -67,265 +54,6 @@ const SESSION_ID =
 function hookSession(args: string[]): string | undefined {
   const index = args.indexOf("--session");
   return index === -1 ? undefined : args[index + 1];
-}
-
-async function captureClaudeTelemetry(session?: string): Promise<number> {
-  try {
-    const sessionId = session ?? process.env.DAEDALUS_SESSION_ID;
-    const home = process.env.DAEDALUS_HOME;
-    if (!sessionId || !SESSION_ID.test(sessionId) || !home) return 0;
-    const input = await Bun.stdin.text();
-    if (input.length > 1024 * 1024) return 0;
-    const payload = JSON.parse(input) as {
-      model?: unknown;
-      context_window?: unknown;
-      rate_limits?: unknown;
-      cost?: { total_cost_usd?: unknown };
-    };
-    const costUsd = payload.cost?.total_cost_usd;
-    const directory = join(home, "telemetry");
-    await mkdir(directory, { recursive: true });
-    const destination = join(directory, `${sessionId}.json`);
-    const temporary = join(
-      directory,
-      `${sessionId}.${crypto.randomUUID()}.tmp`,
-    );
-    try {
-      await writeFile(
-        temporary,
-        JSON.stringify({
-          observedAt: new Date().toISOString(),
-          model: payload.model,
-          context_window: payload.context_window,
-          rate_limits: payload.rate_limits,
-          ...(typeof costUsd === "number"
-            ? { cost: { total_cost_usd: costUsd } }
-            : {}),
-        }),
-        { flag: "wx", mode: 0o600 },
-      );
-      await rename(temporary, destination);
-    } finally {
-      await rm(temporary, { force: true });
-    }
-    // Booked by day as it happens, so the spend outlives the session.
-    if (typeof costUsd === "number")
-      await recordSessionCost(home, sessionId, costUsd);
-  } catch {
-    // A status-line hook must never interfere with the provider session.
-  }
-  return 0;
-}
-
-/**
- * The sink every provider activity hook calls, as `daedal agent event <Event>`.
- *
- * Three rules shape all of it, and they are the same three that govern the
- * status-line sink next door. It must never block or slow a turn, so it reads
- * a bounded payload and returns 0 on absolutely every path. It must work when
- * the Daedalus app is not running, so the durable record under
- * `DAEDALUS_HOME/activity` is written before the database is touched at all.
- * And it must never surface a failure inside the agent's session, so every
- * error is swallowed — a broken control plane is Daedalus's problem, not
- * something to interrupt the user's work with.
- */
-async function captureAgentEvent(
-  event: string,
-  migrationsDirectory?: string,
-  session?: string,
-): Promise<number> {
-  try {
-    const sessionId = session ?? process.env.DAEDALUS_SESSION_ID;
-    const home = process.env.DAEDALUS_HOME;
-    if (!sessionId || !SESSION_ID.test(sessionId) || !home) return 0;
-    const input = await Bun.stdin.text();
-    if (!input.trim() || input.length > 1024 * 1024) return 0;
-    const payload = JSON.parse(input) as Record<string, unknown>;
-    const provider =
-      // Only Codex carries a turn id, and only Claude carries a prompt id;
-      // either way the hook name tells us which vocabulary to read.
-      typeof payload.turn_id === "string" ||
-      typeof payload.thread_id === "string"
-        ? "codex"
-        : "claude";
-    if (provider === "codex" && !(await codexHookIsOwn(payload))) return 0;
-    // A session with routines sits at its prompt after every run, so its
-    // turns end `idle` rather than `done`. Only `Stop` depends on it, and
-    // only `Stop` pays for the database read.
-    const routines =
-      event === "Stop" && (await holdsRoutines(sessionId, migrationsDirectory));
-    const observation =
-      provider === "codex"
-        ? observeCodexHook(event, payload, { routines })
-        : (observeClaudeHook(event, payload, {
-            backgroundAgents: await claudeBackgroundAgents(event, payload),
-            routines,
-          }) ?? observeCodexHook(event, payload, { routines }));
-    if (!observation) return 0;
-    const providerSessionId =
-      typeof payload.session_id === "string" ? payload.session_id : undefined;
-    await applyObservation({
-      sessionId,
-      home,
-      observation,
-      ...(providerSessionId ? { providerSessionId } : {}),
-      ...(migrationsDirectory ? { migrationsDirectory } : {}),
-    });
-    if (event === "SessionStart" || event === "Stop")
-      await deliverTeamMessages(sessionId, migrationsDirectory);
-  } catch {
-    // An activity hook must never interfere with the provider session.
-  }
-  return 0;
-}
-
-/** `codexHookInSession` for this hook process, with both paths resolved. */
-async function codexHookIsOwn(
-  payload: Record<string, unknown>,
-): Promise<boolean> {
-  const resolved = (path: unknown) =>
-    typeof path === "string" && path
-      ? realpath(path).catch(() => resolve(path))
-      : undefined;
-  return codexHookInSession(
-    await resolved(payload.cwd),
-    await resolved(process.env.DAEDALUS_SESSION_DIRECTORY),
-  );
-}
-
-/**
- * Sends a team member, or a lead, team messages that could not reach it
- * before: it was not running yet, or a send failed. Never throws.
- */
-async function deliverTeamMessages(
-  sessionId: string,
-  migrationsDirectory?: string,
-): Promise<void> {
-  let context: ApplicationContext | undefined;
-  try {
-    context = await createApplicationContext({
-      reconcile: false,
-      ...(migrationsDirectory ? { migrationsDirectory } : {}),
-    });
-    await context.teams.flushSession(sessionId);
-  } catch {
-    // Team delivery is retried on the next post, chat or turn.
-  } finally {
-    context?.close();
-  }
-}
-
-/** Whether a session holds the routines ability now. Never throws. */
-async function holdsRoutines(
-  sessionId: string,
-  migrationsDirectory?: string,
-): Promise<boolean> {
-  let context: ApplicationContext | undefined;
-  try {
-    context = await createApplicationContext({
-      reconcile: false,
-      ...(migrationsDirectory ? { migrationsDirectory } : {}),
-    });
-    return Boolean(context.abilities.held(sessionId, "routines"));
-  } catch {
-    return false;
-  } finally {
-    context?.close();
-  }
-}
-
-/**
- * How much of a Claude transcript is read for background agents. A launch
- * further back than this is missed and the turn reads as an ordinary one,
- * which is the behaviour from before this was read at all.
- */
-const CLAUDE_BACKGROUND_TAIL_BYTES = 4 * 1024 * 1024;
-
-/**
- * Background agents the Claude conversation is still waiting on, read only for
- * `Stop`, the one event whose meaning depends on it. Every other hook fires mid-turn,
- * many times a minute, and must not pay for a transcript read.
- */
-async function claudeBackgroundAgents(
-  event: string,
-  payload: Record<string, unknown>,
-): Promise<number> {
-  if (event !== "Stop") return 0;
-  const path = payload.transcript_path;
-  if (typeof path !== "string" || !path) return 0;
-  try {
-    const file = Bun.file(path);
-    const text = await file
-      .slice(Math.max(0, file.size - CLAUDE_BACKGROUND_TAIL_BYTES))
-      .text();
-    return pendingBackgroundAgents(text);
-  } catch {
-    return 0;
-  }
-}
-
-/**
- * Writes the durable record first, then applies the observation to the index.
- *
- * The order is the whole point. The record is what makes a hook succeed while
- * the control plane is unavailable, and `ActivityService.restore()` replays it
- * on the next startup — so an app that is down during a turn loses the badge
- * for the duration, never the turn.
- */
-async function applyObservation(input: {
-  sessionId: string;
-  home: string;
-  observation: ActivityObservation;
-  providerSessionId?: string;
-  migrationsDirectory?: string;
-}): Promise<void> {
-  const now = new Date().toISOString();
-  if (input.observation.heartbeat) {
-    // Subagents fire many hooks a minute. The record file answers "is there
-    // anything to refresh?" without opening the database, and a heartbeat
-    // must never write the record itself: it carries no reading of its own.
-    const record = await readActivityRecord(input.home, input.sessionId).catch(
-      () => undefined,
-    );
-    if (
-      !record ||
-      (input.observation.ifActivity &&
-        !input.observation.ifActivity.includes(record.activity)) ||
-      Date.now() - Date.parse(record.observedAt) < HEARTBEAT_INTERVAL_MS
-    )
-      return;
-  } else if (!input.observation.clear)
-    await writeActivityRecord(input.home, {
-      sessionId: input.sessionId,
-      activity: input.observation.activity,
-      detail: input.observation.detail ?? null,
-      since: now,
-      observedAt: now,
-      source: input.observation.source,
-      ...(input.providerSessionId
-        ? { providerSessionId: input.providerSessionId }
-        : {}),
-    }).catch(() => undefined);
-  let context: ApplicationContext | undefined;
-  try {
-    context = await createApplicationContext({
-      reconcile: false,
-      ...(input.migrationsDirectory
-        ? { migrationsDirectory: input.migrationsDirectory }
-        : {}),
-    });
-    await context.activity.observe({
-      sessionId: input.sessionId,
-      observation: input.observation,
-      ...(input.providerSessionId
-        ? { providerSessionId: input.providerSessionId }
-        : {}),
-    });
-  } catch {
-    // The record on disk is already correct; the index catches up on restart.
-  } finally {
-    context?.close();
-  }
 }
 
 function versionAtLeast(actual: string, minimum: string): boolean {
@@ -970,32 +698,24 @@ async function workspaceOrCaller(
   return caller.workspaceId;
 }
 
-async function resolveTaskReference(
+/**
+ * `tasks.resolve` with the CLI's fallback workspace for a bare number: the
+ * calling session's, then the one Daedalus exported into the environment.
+ */
+function resolveTaskReference(
   context: ApplicationContext,
   reference: string,
-  workspaceReference?: string,
+  workspace?: string,
 ) {
-  const exact = context.repositories.findTask(reference);
-  if (exact) return exact;
-
-  const scoped = /^(.+)#([1-9]\d*)$/.exec(reference);
-  const numeric = /^#?([1-9]\d*)$/.exec(reference);
-  if (!scoped && !numeric) return context.tasks.get(reference);
-
-  const number = Number(scoped?.[2] ?? numeric?.[1]);
-  let workspace = scoped?.[1] ?? workspaceReference;
-  if (!workspace) workspace = (await callerSession(context))?.workspaceId;
-  if (!workspace) workspace = process.env.DAEDALUS_WORKSPACE_ID;
-  if (!workspace && process.env.DAEDALUS_TASK_ID) {
-    workspace = context.tasks.get(process.env.DAEDALUS_TASK_ID).workspaceId;
-  }
-  if (!workspace)
-    throw new DaedalusError(
-      "VALIDATION",
-      "A numeric task reference requires --workspace outside a Daedalus session",
-    );
-  const resolvedWorkspace = await context.workspaces.get(workspace);
-  return context.tasks.getByNumber(resolvedWorkspace.id, number);
+  return context.tasks.resolve(reference, {
+    workspace,
+    defaultWorkspace: async () =>
+      (await callerSession(context))?.workspaceId ||
+      process.env.DAEDALUS_WORKSPACE_ID ||
+      (process.env.DAEDALUS_TASK_ID
+        ? context.tasks.get(process.env.DAEDALUS_TASK_ID).workspaceId
+        : undefined),
+  });
 }
 
 async function taskCommand(
@@ -1314,13 +1034,7 @@ async function agentCommand(
     });
     // Polled detectors run here so the CLI reports the same activity as the
     // app without the app having to be running.
-    await sweepProviderActivity({
-      config: context.config,
-      repositories: context.repositories,
-      activity: context.activity,
-      tmux: context.tmux,
-    }).catch(() => undefined);
-    await context.activity.decay().catch(() => undefined);
+    await context.activity.refresh();
     printResult(
       result.map((item) => withActivity(context, item)),
       json,
@@ -1369,13 +1083,7 @@ async function agentCommand(
   if (action === "get") {
     expectPositionals(parsed.positionals, 1, "daedal agent get <agent-id>");
     const result = await context.agents.get(parsed.positionals[0]!);
-    await sweepProviderActivity({
-      config: context.config,
-      repositories: context.repositories,
-      activity: context.activity,
-      tmux: context.tmux,
-    }).catch(() => undefined);
-    await context.activity.decay().catch(() => undefined);
+    await context.activity.refresh();
     const activity = context.activity.get(result.id);
     printResult(withActivity(context, result), json, () => {
       console.log(
@@ -1746,13 +1454,7 @@ async function agentWaitCommand(
     // Reconciliation and the polled detectors run every pass, so a wait works
     // for a provider that never pushes an event of its own.
     await context.agents.reconcile().catch(() => undefined);
-    await sweepProviderActivity({
-      config: context.config,
-      repositories: context.repositories,
-      activity: context.activity,
-      tmux: context.tmux,
-    }).catch(() => undefined);
-    await context.activity.decay().catch(() => undefined);
+    await context.activity.refresh();
     const candidates = context.repositories
       .listAgents({ ...(workspaceId ? { workspaceId } : {}) })
       .filter(
@@ -2608,14 +2310,33 @@ export async function runCli(
   }
   const json = inputArgs.includes("--json");
   const args = inputArgs.filter((argument) => argument !== "--json");
-  if (args[0] === "agent" && args[1] === "telemetry")
-    return captureClaudeTelemetry(hookSession(args.slice(2)));
-  if (args[0] === "agent" && args[1] === "event" && args[2])
-    return captureAgentEvent(
-      args[2],
-      options.migrationsDirectory,
-      hookSession(args.slice(3)),
-    );
+  // Hook sinks: they read their payload, hand it to core and return 0 on
+  // every path, so a broken control plane never reaches the agent's session.
+  if (args[0] === "agent" && args[1] === "telemetry") {
+    await ingestStatusLine({
+      home: process.env.DAEDALUS_HOME,
+      sessionId: hookSession(args.slice(2)) ?? process.env.DAEDALUS_SESSION_ID,
+      readPayload: () => Bun.stdin.text(),
+    });
+    return 0;
+  }
+  if (args[0] === "agent" && args[1] === "event" && args[2]) {
+    await ingestHook({
+      home: process.env.DAEDALUS_HOME,
+      sessionId: hookSession(args.slice(3)) ?? process.env.DAEDALUS_SESSION_ID,
+      event: args[2],
+      readPayload: () => Bun.stdin.text(),
+      sessionDirectory: process.env.DAEDALUS_SESSION_DIRECTORY,
+      openContext: () =>
+        createApplicationContext({
+          reconcile: false,
+          ...(options.migrationsDirectory
+            ? { migrationsDirectory: options.migrationsDirectory }
+            : {}),
+        }),
+    });
+    return 0;
+  }
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
     console.log(help);
     return 0;
