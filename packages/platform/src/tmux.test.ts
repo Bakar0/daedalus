@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import {
-  boundTerminalCapture,
   BUNDLED_TMUX_VARIABLE,
+  clampTerminalSize,
   CommandTmuxClient,
   findTmuxExecutable,
   isInheritedSessionVariable,
@@ -14,18 +14,6 @@ import {
   TMUX_COMMAND_TIMEOUT_MS,
   tmuxCommandBytes,
 } from "./tmux";
-
-test("terminal captures preserve recent complete UTF-8 within a byte bound", () => {
-  const capture = boundTerminalCapture(
-    `old output ${"x".repeat(20)}שלום 😀`,
-    16,
-  );
-  const decoded = new TextDecoder().decode(capture);
-  expect(capture.byteLength).toBeLessThanOrEqual(23);
-  expect(decoded).toMatch(/^\u001b\[H\u001b\[2J/);
-  expect(decoded).toContain("שלום 😀");
-  expect(decoded).not.toContain("�");
-});
 
 describe("findTmuxExecutable", () => {
   test("prefers the tmux the app bundles", async () => {
@@ -493,5 +481,73 @@ describe("CommandTmuxClient", () => {
       ],
       expect.arrayContaining(["new-session", "daedalus_123"]),
     ]);
+  });
+});
+
+describe("clampTerminalSize", () => {
+  test("keeps whole sizes inside 20..500 columns and 5..300 rows", () => {
+    expect(clampTerminalSize({ cols: 93.7, rows: 31.2 })).toEqual({
+      cols: 93,
+      rows: 31,
+    });
+    expect(clampTerminalSize({ cols: 1, rows: 1 })).toEqual({
+      cols: 20,
+      rows: 5,
+    });
+    expect(clampTerminalSize({ cols: 9000, rows: 9000 })).toEqual({
+      cols: 500,
+      rows: 300,
+    });
+  });
+});
+
+describe("CommandTmuxClient window pinning", () => {
+  const recorded = () => {
+    const command = vi.fn(async () => ({
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    }));
+    return {
+      command,
+      tmux: new CommandTmuxClient("isolated", "tmux", command),
+    };
+  };
+
+  test("pins the window to a clamped size", async () => {
+    const { command, tmux } = recorded();
+    await tmux.pinWindowSize("s", { cols: 9000, rows: 2 });
+    expect(command).toHaveBeenCalledWith(
+      "tmux",
+      [
+        "-L",
+        "isolated",
+        "set-option",
+        "-w",
+        "-t",
+        "s",
+        "window-size",
+        "manual",
+        ";",
+        "resize-window",
+        "-t",
+        "s",
+        "-x",
+        "500",
+        "-y",
+        "5",
+      ],
+      expect.anything(),
+    );
+  });
+
+  test("unpins by unsetting the window option", async () => {
+    const { command, tmux } = recorded();
+    await tmux.unpinWindowSize("s");
+    expect(command).toHaveBeenCalledWith(
+      "tmux",
+      ["-L", "isolated", "set-option", "-w", "-u", "-t", "s", "window-size"],
+      expect.anything(),
+    );
   });
 });
