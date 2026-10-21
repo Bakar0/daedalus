@@ -74,3 +74,18 @@ function commonPrefix(a: string, b: string) {
   while (n < a.length && n < b.length && a[n] === b[n]) n++;
   return n;
 }
+
+/**
+ * Whether Cmd and click on a terminal link opens it. A local session's
+ * `file://` links name files on this Mac, which Claude Code prints for the
+ * files it touches. A cloud session's output comes from a pod this Mac does
+ * not trust, and a path it prints still names a file here, where opening it
+ * with its default app can run a `.command` script or launch an app. So a
+ * cloud session opens web links only, as before file links were added.
+ */
+export function opensTerminalLink(
+  url: string,
+  session: { cloud: boolean },
+): boolean {
+  return session.cloud ? /^https?:/i.test(url) : /^(https?|file):/i.test(url);
+}

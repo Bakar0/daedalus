@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { wholeLinkRows } from "./terminal-links";
+import { opensTerminalLink, wholeLinkRows } from "./terminal-links";
 
 const URL = "https://example.com/a/very/long/path?with=query";
 
@@ -87,5 +87,25 @@ describe("the rows a hovered link covers", () => {
       { y: 1, x1: 4, x2: 29 },
       { y: 2, x1: 1, x2: 21 },
     ]);
+  });
+});
+
+describe("which terminal links Cmd and click opens", () => {
+  test("a local session opens web and file links", () => {
+    const local = { cloud: false };
+    expect(opensTerminalLink("https://example.com", local)).toBe(true);
+    expect(opensTerminalLink("http://localhost:3000", local)).toBe(true);
+    expect(opensTerminalLink("file:///Users/me/a.ts", local)).toBe(true);
+    expect(opensTerminalLink("ssh://host", local)).toBe(false);
+  });
+
+  test("a file link from a cloud session does nothing", () => {
+    const cloud = { cloud: true };
+    expect(opensTerminalLink("https://example.com", cloud)).toBe(true);
+    expect(opensTerminalLink("http://localhost:3000", cloud)).toBe(true);
+    expect(opensTerminalLink("file:///Users/me/run.command", cloud)).toBe(
+      false,
+    );
+    expect(opensTerminalLink("FILE:///Applications/X.app", cloud)).toBe(false);
   });
 });

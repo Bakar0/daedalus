@@ -58,7 +58,11 @@ import type { DesktopClient } from "./client-types";
 import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import { UpdateBanner } from "./UpdateBanner";
 import { runWithConcurrency } from "./concurrency";
-import { wholeLinkRows, type LinkRange } from "./terminal-links";
+import {
+  opensTerminalLink,
+  wholeLinkRows,
+  type LinkRange,
+} from "./terminal-links";
 import { findPathCandidates } from "./terminal-file-links";
 import { repositoryFuzzyScore } from "./repository-search";
 import { ReorderGroup } from "./ReorderGroup";
@@ -1377,7 +1381,7 @@ function TerminalSurface({
           allowNonHttpProtocols: true,
           activate: () => {},
           hover: (_event, url, range) => {
-            if (/^(https?|file):/i.test(url))
+            if (opensTerminalLink(url, { cloud: cloudRef.current }))
               hoverLink(url, range, () => onOpenLink(url));
           },
           leave: leaveLink,
@@ -1396,17 +1400,20 @@ function TerminalSurface({
       terminal.loadAddon(fitAddon);
       terminal.loadAddon(
         new WebLinksAddon((event) => event.preventDefault(), {
-          hover: (_event, url, range) =>
-            hoverLink(url, range, () => onOpenLink(url)),
+          hover: (_event, url, range) => {
+            if (opensTerminalLink(url, { cloud: cloudRef.current }))
+              hoverLink(url, range, () => onOpenLink(url));
+          },
           leave: leaveLink,
         }),
       );
       // Paths an agent prints, like `src/a.ts:12:3`. Only the ones that name
       // a file in a workspace become links, which is what keeps ordinary
-      // words with a dot in them from lighting up.
+      // words with a dot in them from lighting up. A cloud session's paths
+      // are the pod's and never links: see `opensTerminalLink`.
       terminal.registerLinkProvider({
         provideLinks: (y, callback) => {
-          const links = fileLinksRef.current;
+          const links = cloudRef.current ? undefined : fileLinksRef.current;
           const text = terminal?.buffer.active
             .getLine(y - 1)
             ?.translateToString(true);
