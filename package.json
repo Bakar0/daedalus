@@ -41,6 +41,8 @@
     "test:cloud-settings-ui": "bun run scripts/cloud-settings-ui-check.ts",
     "test:cloud-menu-ui": "bun run scripts/cloud-menu-ui-check.ts",
     "test:cloud-dialog-ui": "bun run scripts/cloud-dialog-ui-check.ts",
+    "test:cloud-cards-ui": "bun run scripts/cloud-cards-ui-check.ts",
+    "test:cloud-first-run-ui": "bun run scripts/cloud-first-run-ui-check.ts",
     "test:session-focus": "bun run scripts/session-focus-check.ts",
     "test:status-native": "bun run scripts/status-native-check.ts",
     "typecheck": "bun run scripts/typecheck.ts",

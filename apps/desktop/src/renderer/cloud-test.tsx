@@ -121,6 +121,17 @@ const snapshot = {
     session("s-cloud", "cloud-ws", { hostId: "ws:c-run" }),
     session("s-sleepy", "sleepy-ws", { hostId: "ws:c-sleep", status: "lost" }),
     session("s-other", "other-ws", { hostId: "ws:c-other", status: "lost" }),
+    // A shell in the running cloud workspace, for the first-run note's
+    // negative case. Only with `extra=terminal`.
+    ...(query.get("extra") === "terminal"
+      ? [
+          session("s-shell", "cloud-ws", {
+            hostId: "ws:c-run",
+            kind: "terminal",
+            command: "bash",
+          }),
+        ]
+      : []),
   ],
   terminals: [],
   repositories: [],
