@@ -47,6 +47,7 @@ function blocks(text: string): Block[] {
 }
 
 const LIGHT = '.app[data-theme="light"] ';
+const PHONE_LIGHT = ':root[data-theme="light"] ';
 
 /** One selector as the phone needs it, or none. */
 function selector(raw: string): string | undefined {
@@ -66,7 +67,7 @@ function selector(raw: string): string | undefined {
 
 /**
  * The selectors of a rule worth copying, split by theme: the Mac marks its
- * light theme on `.app`, the phone follows the system's.
+ * light theme on `.app`, the phone on its root (`data-theme`, theme.ts).
  */
 function selectors(head: string): { dark: string[]; light: string[] } {
   const dark: string[] = [];
@@ -119,10 +120,12 @@ export function phoneBoardCss(desktop: string): string {
     }
     const kept = selectors(head);
     if (kept.dark.length) out.push(`${kept.dark.join(",\n")} {${body}}`);
-    if (kept.light.length) light.push(`  ${kept.light.join(", ")} {${body}}`);
+    if (kept.light.length)
+      light.push(
+        `${kept.light.map((text) => PHONE_LIGHT + text).join(",\n")} {${body}}`,
+      );
   }
-  if (light.length)
-    out.push(`@media (prefers-color-scheme: light) {\n${light.join("\n")}\n}`);
+  out.push(...light);
   return `${out.join("\n")}\n`;
 }
 

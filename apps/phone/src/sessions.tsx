@@ -84,7 +84,6 @@ export function sessionGroups(snapshot: DesktopSnapshotDto): {
       const manual = sessions
         .filter((session) => session.workspaceId === workspace.id)
         .sort((left, right) => left.position - right.position);
-      if (manual.length === 0) return [];
       const rows = sessionDisplayOrder(manual, snapshot.teams).map((session) =>
         rowFor(session, manual),
       );
@@ -110,7 +109,8 @@ export function sessionGroups(snapshot: DesktopSnapshotDto): {
 export function workspaceInsight(group: WorkspaceGroup): string {
   if (group.needsYou > 0)
     return `${group.needsYou} need${group.needsYou === 1 ? "s" : ""} you`;
-  return `${group.live} live · ${group.rows.length} session${group.rows.length === 1 ? "" : "s"}`;
+  if (group.rows.length === 0) return "No sessions";
+  return `${group.rows.length} session${group.rows.length === 1 ? "" : "s"}`;
 }
 
 export const statusText = (view: SessionStatusView, now = Date.now()) =>
@@ -142,7 +142,6 @@ export function SessionRowView({
 }) {
   const { session, view, team } = row;
   const tool = sessionTool(session);
-  const second = row.task ?? "Workspace session";
   return (
     <li>
       <button
@@ -157,15 +156,16 @@ export function SessionRowView({
           <ToolIcon tool={tool} />
         </span>
         <span className="session-row-main">
-          <strong>{sessionName(session)}</strong>
-          <small>
+          {/* Two lines, as on the Mac: the name with its role beside it,
+              then the live status. */}
+          <span className="session-row-title">
+            <strong>{sessionName(session)}</strong>
             {team ? (
               <span className="session-team-badge">
                 {team.role === "lead" ? "Team lead" : `@${team.handle}`}
               </span>
             ) : undefined}
-            {second}
-          </small>
+          </span>
           <em className="session-row-status" data-tone={view.tone}>
             <AgentStatusDot count={view.reasons.length} view={view} />
             <span>{statusText(view)}</span>

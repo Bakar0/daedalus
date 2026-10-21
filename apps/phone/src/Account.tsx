@@ -9,6 +9,7 @@ import { lockAvailable, turnOnLock } from "./lock";
 import { PushControl } from "./PushControl";
 import { Shell } from "./Shell";
 import { appLock, phoneIdentity, removeAppLock, removeMac } from "./storage";
+import { PHONE_THEMES, setTheme, storedTheme } from "./theme";
 
 type Me = Awaited<ReturnType<RelayAccount["me"]>>;
 
@@ -61,6 +62,7 @@ export function Account({
           </section>
           <PushControl token={token} />
           <LockControl />
+          <ThemeControl />
           <section className="group">
             <h2 className="group-title">Devices</h2>
             <ul className="rows">
@@ -198,6 +200,32 @@ function InviteField({
  * The app lock: a passkey opens the app, and without it the key and
  * sign-in stored on this phone open nothing.
  */
+/** The phone's theme: Dark, Light or Midnight, as on the Mac. */
+function ThemeControl() {
+  const [theme, setChosen] = useState(storedTheme);
+  return (
+    <section className="group">
+      <h2 className="group-title">Theme</h2>
+      <div aria-label="Theme" className="mac-picker" role="tablist">
+        {PHONE_THEMES.map((option) => (
+          <button
+            aria-selected={theme === option.value}
+            key={option.value}
+            onClick={() => {
+              setTheme(option.value);
+              setChosen(option.value);
+            }}
+            role="tab"
+            type="button"
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function LockControl() {
   const [on, setOn] = useState(() => Boolean(appLock()));
   const [error, setError] = useState<string>();
