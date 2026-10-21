@@ -18,6 +18,7 @@ import type {
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { fuzzyScore } from "./repository-search";
+import { useMutation, useRpcQuery } from "./use-rpc";
 
 const PROVIDER_LABEL: Record<string, string> = {
   claude: "Claude",
@@ -176,8 +177,6 @@ export function SkillsPanel({
   client: DesktopClient;
   onError: (message: string | undefined) => void;
 }) {
-  const [listing, setListing] = React.useState<SkillListingDto>();
-  const [working, setWorking] = React.useState(false);
   const [filter, setFilter] = React.useState("");
   const [collapsed, setCollapsed] = React.useState<ReadonlySet<string>>(
     new Set(),
@@ -217,31 +216,21 @@ export function SkillsPanel({
     [client, onError, viewing],
   );
 
-  const reload = React.useCallback(async () => {
-    const response = await client.request.skillList({});
-    if (response.ok) setListing(response.data);
-    else onError(response.error.message);
-  }, [client, onError]);
+  const skills = useRpcQuery(() => client.request.skillList({}), {
+    onError,
+    deps: [client],
+  });
+  const listing: SkillListingDto | undefined = skills.data;
 
-  React.useEffect(() => {
-    void reload();
-  }, [reload]);
-
-  async function run(operation: Promise<{ ok: boolean } & object>) {
-    setWorking(true);
-    onError(undefined);
-    try {
-      const response = (await operation) as
-        { ok: true } | { ok: false; error: { message: string } };
-      if (!response.ok) {
-        onError(response.error.message);
-        return;
-      }
-      await reload();
-    } finally {
-      setWorking(false);
-    }
-  }
+  const mutation = useMutation({
+    onStart: () => onError(undefined),
+    onError,
+    onSettled: async ({ ok }) => {
+      if (ok) await skills.refresh();
+    },
+  });
+  const run = mutation.run;
+  const working = mutation.pending();
 
   const disabled = busy || working;
   // The same fuzzy matcher the repository picker uses, so typing "clsk" finds

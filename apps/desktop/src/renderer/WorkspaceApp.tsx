@@ -108,6 +108,7 @@ import { RoutineBar } from "./routines/RoutineBar";
 import { TeamBar, TeamPanel } from "./teams/TeamPanel";
 import { RoutinesPanel } from "./routines/RoutinesPanel";
 import { ProBadge } from "./ProPlan";
+import { useMutation, useRpcQuery } from "./use-rpc";
 import { RemoteMenu } from "./RemoteMenu";
 import { SecretsPanel } from "./SecretsPanel";
 import {
@@ -1880,7 +1881,38 @@ export function WorkspaceApp({
   // "checking" state of its own, and without one the button looks dead.
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [quitting, setQuitting] = useState<QuitChoice>();
-  const [busy, setBusy] = useState(false);
+  // Every change goes through one of three runners, which report a failure
+  // and read the snapshot again after a success. They differ in what they
+  // disable. `perform` sets `busy`, which disables buttons everywhere.
+  // Session lifecycle changes (archive, restore, revive, continue) start or
+  // stop an agent and can take seconds, so they are keyed by session id and
+  // mark only that session. Fetch, pull, push and the like are keyed by
+  // action and also read the workspace content, so every status in the tree
+  // reflects what just happened.
+  const refreshOnSuccess = {
+    onStart: () => setError(undefined),
+    onError: (message: string) => setError(message),
+    onSettled: async ({ ok }: { ok: boolean }) => {
+      if (ok) await refresh();
+    },
+  };
+  const appActions = useMutation(refreshOnSuccess);
+  const perform = appActions.run;
+  const busy = appActions.pending();
+  const sessionActions = useMutation(refreshOnSuccess);
+  const repositoryActions = useMutation({
+    onStart: () => setError(undefined),
+    onError: (message) => setError(message),
+    onSettled: async ({ ok }) => {
+      if (!ok || !workspace) return;
+      const content = await client.request.workspaceContentGet({
+        workspace: workspace.id,
+      });
+      if (!content.ok) throw new Error(content.error.message);
+      setWorkspaceContent(content.data);
+      await refresh();
+    },
+  });
   const [error, setError] = useState<string>();
   const [theme, setTheme] = useState<AppTheme>("dark");
   const [workspaceForm, setWorkspaceForm] = useState({
@@ -1943,9 +1975,6 @@ export function WorkspaceApp({
     useState<RepositoryDiscoveryDto>();
   const [repositoryDiscoveryLoading, setRepositoryDiscoveryLoading] =
     useState(false);
-  const [pendingRepositoryActions, setPendingRepositoryActions] = useState<
-    ReadonlySet<string>
-  >(() => new Set());
   // What each checkout's last fetch did, shown on its row for a while so a
   // fetch that brought something in says so, and what.
   const [fetchOutcomes, setFetchOutcomes] = useState<
@@ -1969,10 +1998,6 @@ export function WorkspaceApp({
     ReadonlySet<string>
   >(() => new Set());
   const archivingStartedAt = useRef(new Date().toISOString());
-  // Sessions with an archive, restore, revive or continue in flight.
-  const [pendingSessionIds, setPendingSessionIds] = useState<
-    ReadonlySet<string>
-  >(() => new Set());
   // Repositories confirmed in the picker whose rows have not arrived yet.
   // Attaching and reloading the workspace's git status takes seconds; these
   // rows say something is happening until the real ones replace them.
@@ -2329,41 +2354,35 @@ export function WorkspaceApp({
 
   const [dataRevision, setDataRevision] = useState(0);
 
-  const refresh = useCallback(async () => {
-    try {
-      const response = await client.request.snapshot({});
-      if (!response.ok) throw new Error(response.error.message);
-      setSnapshot(response.data);
+  const snapshotQuery = useRpcQuery(() => client.request.snapshot({}), {
+    onDataChanged: (listener) =>
+      client.subscribe(() => {
+        setDataRevision((current) => current + 1);
+        listener();
+      }),
+    // Applied before `refresh` resolves, so awaiting it means the snapshot
+    // and the selections that depend on it are in place.
+    onData: (latest) => {
+      setSnapshot(latest);
       setError(undefined);
       setWorkspaceId((current) =>
-        response.data.workspaces.some(
+        latest.workspaces.some(
           (item) => item.id === current && !item.archivedAt,
         )
           ? current
-          : response.data.workspaces.find((item) => !item.archivedAt)?.id,
+          : latest.workspaces.find((item) => !item.archivedAt)?.id,
       );
       setSelectedTaskId((current) =>
-        response.data.tasks.some((item) => item.id === current)
-          ? current
-          : undefined,
+        latest.tasks.some((item) => item.id === current) ? current : undefined,
       );
       setActiveSessionId((current) =>
-        response.data.agents.some((item) => item.id === current)
-          ? current
-          : undefined,
+        latest.agents.some((item) => item.id === current) ? current : undefined,
       );
-    } catch (cause) {
-      setError(errorMessage(cause));
-    }
-  }, [client]);
-
-  useEffect(() => {
-    void refresh();
-    return client.subscribe(() => {
-      void refresh();
-      setDataRevision((current) => current + 1);
-    });
-  }, [client, refresh]);
+    },
+    onError: (message) => setError(message),
+    deps: [client],
+  });
+  const refresh = snapshotQuery.refresh;
 
   // Repositories live in the workspace content, not in the snapshot, so
   // refreshing the snapshot alone left a repository that finished preparing in
@@ -2706,55 +2725,6 @@ export function WorkspaceApp({
     void client.request.quitDecision?.({ choice }).catch(() => {
       // The app is on its way out; there is nobody left to tell.
     });
-  }
-
-  /**
-   * `perform` for one session's own lifecycle: archive, restore, revive and
-   * continue. These start or stop an agent and can take seconds, so they mark
-   * only that session as pending instead of setting `busy`, which disables
-   * buttons across every workspace until the request returns.
-   */
-  async function performForSession<T>(
-    sessionId: string,
-    operation: Promise<RpcResult<T>>,
-  ) {
-    setPendingSessionIds((current) => new Set(current).add(sessionId));
-    setError(undefined);
-    try {
-      const response = await operation;
-      if (!response.ok) {
-        setError(response.error.message);
-        return;
-      }
-      await refresh();
-      return response.data;
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setPendingSessionIds((current) => {
-        const next = new Set(current);
-        next.delete(sessionId);
-        return next;
-      });
-    }
-  }
-
-  async function perform<T>(operation: Promise<RpcResult<T>>) {
-    setBusy(true);
-    setError(undefined);
-    try {
-      const response = await operation;
-      if (!response.ok) {
-        setError(response.error.message);
-        return;
-      }
-      await refresh();
-      return response.data;
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
   }
 
   // Activity and attention arrive as flat arrays on the snapshot, exactly like
@@ -3739,41 +3709,11 @@ export function WorkspaceApp({
     );
   }
 
-  // Fetch, pull and push are the same shape: run one request, then re-read the
-  // workspace so every status in the tree reflects what just happened.
-  async function runRepositoryAction<T>(
-    key: string,
-    request: () => Promise<RpcResult<T>>,
-  ): Promise<T | undefined> {
-    if (!workspace || pendingRepositoryActions.has(key)) return undefined;
-    setPendingRepositoryActions((current) => new Set(current).add(key));
-    setError(undefined);
-    let data: T | undefined;
-    try {
-      const response = await request();
-      if (!response.ok) throw new Error(response.error.message);
-      data = response.data;
-      const content = await client.request.workspaceContentGet({
-        workspace: workspace.id,
-      });
-      if (!content.ok) throw new Error(content.error.message);
-      setWorkspaceContent(content.data);
-      await refresh();
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setPendingRepositoryActions((current) => {
-        const next = new Set(current);
-        next.delete(key);
-        return next;
-      });
-    }
-    return data;
-  }
-
   async function detachWorkspaceRepository(repositoryId: string) {
-    await runRepositoryAction(`detach:${repositoryId}`, () =>
-      client.request.workspaceRepositoryDetach({ id: repositoryId }),
+    if (!workspace) return;
+    await repositoryActions.run(
+      () => client.request.workspaceRepositoryDetach({ id: repositoryId }),
+      `detach:${repositoryId}`,
     );
   }
 
@@ -3788,14 +3728,14 @@ export function WorkspaceApp({
     repositoryId?: string,
   ) {
     if (!workspace) return;
-    const outcomes = await runRepositoryAction(
-      `${mode}:${repositoryId ?? "all"}`,
+    const outcomes = await repositoryActions.run(
       () =>
         client.request.workspaceRepositoriesFetch({
           workspace: workspace.id,
           pull: mode === "pull",
           ...(repositoryId ? { ids: [repositoryId] } : {}),
         }),
+      `${mode}:${repositoryId ?? "all"}`,
     );
     if (!outcomes) return;
     setFetchOutcomes((current) => {
@@ -3880,9 +3820,9 @@ export function WorkspaceApp({
     archivingStartedAt.current = new Date().toISOString();
     setArchivingSessionIds((current) => new Set(current).add(session.id));
     if (wasActive) setActiveSessionId(undefined);
-    const archived = await performForSession(
-      session.id,
+    const archived = await sessionActions.run(
       client.request.agentArchive({ id: session.id, force: false }),
+      session.id,
     );
     setArchivingSessionIds((current) => {
       const next = new Set(current);
@@ -3897,15 +3837,15 @@ export function WorkspaceApp({
   // answer gets its successor straight away, working from brief and git.
   async function continueInNewAgent(session: AgentSessionDto) {
     if (session.status === "running") {
-      await performForSession(
-        session.id,
+      await sessionActions.run(
         client.request.agentRequestRebirth({ id: session.id }),
+        session.id,
       );
       return;
     }
-    const successor = await performForSession(
-      session.id,
+    const successor = await sessionActions.run(
       client.request.agentContinue({ id: session.id }),
+      session.id,
     );
     if (successor) openSession(successor.id);
   }
@@ -4047,9 +3987,9 @@ export function WorkspaceApp({
   }
 
   async function restoreSession(session: AgentSessionDto) {
-    const restored = await performForSession(
-      session.id,
+    const restored = await sessionActions.run(
       client.request.agentRestore({ id: session.id }),
+      session.id,
     );
     if (restored) openSession(restored.id);
   }
@@ -4069,9 +4009,9 @@ export function WorkspaceApp({
 
   async function deleteSession(session: AgentSessionDto) {
     setDeletingSessionIds((current) => new Set(current).add(session.id));
-    await performForSession(
-      session.id,
+    await sessionActions.run(
       client.request.agentDelete({ id: session.id }),
+      session.id,
     );
     setDeletingSessionIds((current) => {
       const next = new Set(current);
@@ -4081,9 +4021,9 @@ export function WorkspaceApp({
   }
 
   async function reviveSession(session: AgentSessionDto) {
-    const revived = await performForSession(
-      session.id,
+    const revived = await sessionActions.run(
       client.request.agentRevive({ id: session.id }),
+      session.id,
     );
     if (revived) openSession(revived.id);
   }
@@ -4177,14 +4117,15 @@ export function WorkspaceApp({
     worktree: SessionWorktreeDto,
     force: boolean,
   ) {
-    await runRepositoryAction(
-      `remove:${worktree.sessionId}:${worktree.repositoryId}`,
+    if (!workspace) return;
+    await repositoryActions.run(
       () =>
         client.request.sessionWorktreeRemove({
           session: worktree.sessionId,
           repository: worktree.repositoryId,
           force,
         }),
+      `remove:${worktree.sessionId}:${worktree.repositoryId}`,
     );
   }
 
@@ -4331,12 +4272,12 @@ export function WorkspaceApp({
             {(["fetch", "pull"] as const).map((mode) => {
               const busy = ["all", repository.id].some((target) =>
                 ["fetch", "pull"].some((kind) =>
-                  pendingRepositoryActions.has(`${kind}:${target}`),
+                  repositoryActions.pending(`${kind}:${target}`),
                 ),
               );
               const running =
-                pendingRepositoryActions.has(`${mode}:${repository.id}`) ||
-                pendingRepositoryActions.has(`${mode}:all`);
+                repositoryActions.pending(`${mode}:${repository.id}`) ||
+                repositoryActions.pending(`${mode}:all`);
               return (
                 <button
                   aria-label={`${mode === "fetch" ? "Fetch" : "Pull"} ${repository.name}`}
@@ -4365,11 +4306,11 @@ export function WorkspaceApp({
               <ConfirmButton
                 aria-label={`Remove ${repository.name}`}
                 armedTitle="Its read-only checkout under repos/ is deleted. The shared clone stays in the library, so it can be added again."
-                className={`quiet repository-action ${pendingRepositoryActions.has(`detach:${repository.id}`) ? "syncing" : ""}`}
+                className={`quiet repository-action ${repositoryActions.pending(`detach:${repository.id}`) ? "syncing" : ""}`}
                 disabled={
                   preparing ||
                   worktrees.length > 0 ||
-                  pendingRepositoryActions.has(`detach:${repository.id}`)
+                  repositoryActions.pending(`detach:${repository.id}`)
                 }
                 onConfirm={() => void detachWorkspaceRepository(repository.id)}
                 title={
@@ -4508,8 +4449,8 @@ export function WorkspaceApp({
                               ? "Removing it discards that work permanently. Push first to keep it."
                               : "Nothing is uncommitted or unpushed, so the directory and its branch go without losing anything."
                           }
-                          className={`quiet repository-action ${pendingRepositoryActions.has(`remove:${worktree.sessionId}:${worktree.repositoryId}`) ? "syncing" : ""}`}
-                          disabled={pendingRepositoryActions.has(
+                          className={`quiet repository-action ${repositoryActions.pending(`remove:${worktree.sessionId}:${worktree.repositoryId}`) ? "syncing" : ""}`}
+                          disabled={repositoryActions.pending(
                             `remove:${worktree.sessionId}:${worktree.repositoryId}`,
                           )}
                           onConfirm={() =>
@@ -4843,7 +4784,7 @@ export function WorkspaceApp({
             <button
               aria-label={`Revive ${sessionName(session)} session`}
               className="session-card-action"
-              disabled={pendingSessionIds.has(session.id)}
+              disabled={sessionActions.pending(session.id)}
               onClick={() => void reviveSession(session)}
               title="Resume this conversation in a new terminal"
             >
@@ -4869,7 +4810,7 @@ export function WorkspaceApp({
                 data-rebirth-requested={
                   session.rebirthRequestedAt ? "true" : undefined
                 }
-                disabled={pendingSessionIds.has(session.id)}
+                disabled={sessionActions.pending(session.id)}
                 onClick={() => void continueInNewAgent(session)}
                 title={
                   session.rebirthRequestedAt
@@ -5095,7 +5036,7 @@ export function WorkspaceApp({
                         detail: session.provider,
                         archivedAt: session.archivedAt!,
                         restoreLabel: "Restore and resume",
-                        disabled: pendingSessionIds.has(session.id),
+                        disabled: sessionActions.pending(session.id),
                         onRestore: () => void restoreSession(session),
                         onDelete: () => void deleteSession(session),
                         deleteDisclosure: sessionDeleteDisclosure(session),
@@ -6358,15 +6299,17 @@ export function WorkspaceApp({
                   {workspaceContent?.repositories.length ? (
                     <div className="repository-toolbar">
                       {(["fetch", "pull"] as const).map((mode) => {
-                        const anyRunning = ["fetch", "pull"].some((kind) =>
-                          [...pendingRepositoryActions].some((action) =>
-                            action.startsWith(`${kind}:`),
-                          ),
+                        const anyRunning = ["fetch", "pull"].some(
+                          (kind) =>
+                            repositoryActions.pending(`${kind}:all`) ||
+                            workspaceContent.repositories.some((item) =>
+                              repositoryActions.pending(`${kind}:${item.id}`),
+                            ),
                         );
                         return (
                           <button
                             aria-label={`${mode === "fetch" ? "Fetch" : "Pull"} all repositories`}
-                            className={`quiet repository-header-action ${pendingRepositoryActions.has(`${mode}:all`) ? "syncing" : ""}`}
+                            className={`quiet repository-header-action ${repositoryActions.pending(`${mode}:all`) ? "syncing" : ""}`}
                             disabled={
                               !workspaceContent?.repositories.some(
                                 (item) => item.status === "ready",

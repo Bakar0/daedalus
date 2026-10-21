@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useState } from "react";
-import type { RpcResult, SecretDto, WorkspaceDto } from "@daedalus/protocol";
+import React, { useState } from "react";
+import type { SecretDto, WorkspaceDto } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { ConfirmButton } from "./ConfirmButton";
+import { useMutation, useRpcQuery } from "./use-rpc";
 
 const SECRET_NAME = /^[A-Z_][A-Z0-9_]*$/;
 
@@ -26,8 +27,6 @@ export function SecretsPanel({
   workspace?: WorkspaceDto;
 }) {
   const workspaceId = workspace?.id ?? null;
-  const [secrets, setSecrets] = useState<SecretDto[]>();
-  const [working, setWorking] = useState(false);
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
   /** The secret whose value is being replaced, if any. */
@@ -36,33 +35,22 @@ export function SecretsPanel({
   /** Values the user asked to see, by secret name. */
   const [shown, setShown] = useState<Record<string, string>>({});
 
-  const load = useCallback(async () => {
-    const response = await client.request.secretList({ workspaceId });
-    if (response.ok) setSecrets(response.data);
-    else onError(response.error.message);
-  }, [client, onError, workspaceId]);
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const list = useRpcQuery(() => client.request.secretList({ workspaceId }), {
+    onError,
+    deps: [client, workspaceId],
+  });
+  const secrets: SecretDto[] | undefined = list.data;
 
   /** Runs one change, reports a failure, and reloads the list. */
-  async function act<T>(
-    request: Promise<RpcResult<T>>,
-  ): Promise<T | undefined> {
-    setWorking(true);
-    onError(undefined);
-    try {
-      const response = await request;
-      if (!response.ok) {
-        onError(response.error.message);
-        return undefined;
-      }
-      await load();
-      return response.data;
-    } finally {
-      setWorking(false);
-    }
-  }
+  const mutation = useMutation({
+    onStart: () => onError(undefined),
+    onError,
+    onSettled: async ({ ok }) => {
+      if (ok) await list.refresh();
+    },
+  });
+  const act = mutation.run;
+  const working = mutation.pending();
 
   async function add(event: React.FormEvent) {
     event.preventDefault();

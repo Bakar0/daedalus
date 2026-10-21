@@ -4,11 +4,10 @@
  * do on coming back to the Mac), and the way to pair a phone. The full
  * section, with the QR code and the paired phones, is Settings › Remote.
  */
-import { useCallback, useEffect, useState } from "react";
-import type { RemoteStateDto, RpcResult } from "@daedalus/protocol";
+import type { RpcResult } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { Menu, MenuCheck } from "./Menu";
-import { hasPlan, ProTag, showsPro } from "./ProPlan";
+import { hasPlan, ProTag, showsPro, useRemoteState } from "./ProPlan";
 import { remoteLook, remoteStatusText } from "./RemotePanel";
 
 const POLL_MS = 3_000;
@@ -42,17 +41,7 @@ export function RemoteMenu({
   /** Settings › Account, for a Mac without Pro. */
   onGetPro: () => void;
 }) {
-  const [state, setState] = useState<RemoteStateDto>();
-  const refresh = useCallback(async () => {
-    // A host without phone access (a test page) has no answer to give.
-    const result = await client.request.remoteGet({}).catch(() => undefined);
-    if (result?.ok) setState(result.data);
-  }, [client]);
-  useEffect(() => {
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
+  const { data: state, refresh } = useRemoteState(client, POLL_MS);
 
   // Phone access is Pro, and Pro shows only to those who have it.
   if (!showsPro(state)) return null;
@@ -93,7 +82,7 @@ export function RemoteMenu({
             const next = await perform(
               client.request.remoteSetEnabled({ enabled: !state?.enabled }),
             );
-            if (next) setState(next);
+            if (next) await refresh();
           }}
           role="menuitemcheckbox"
           type="button"
