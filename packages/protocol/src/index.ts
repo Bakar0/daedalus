@@ -1610,6 +1610,11 @@ export interface DesktopRpcSchema {
            * are the lead's.
            */
           teamId?: string;
+          /**
+           * Runs in the workspace's cloud pod (`daedal cloud spawn`): Claude
+           * or a terminal, with no account profile and no abilities.
+           */
+          cloud?: boolean;
         },
         AgentSessionDto
       >;

@@ -286,4 +286,34 @@ describe("cloud RPC", () => {
       expect(state.ok && state.data.workspaces).toEqual([]);
     });
   });
+
+  test("a cloud spawn needs the workspace's cloud workspace and runs Claude or a terminal", async () => {
+    await withCloud(async (rpc, context) => {
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://localhost:8080",
+        email: "dev@example.com",
+      });
+      const workspace = await context.workspaces.create({ name: "Pods" });
+      const none = await rpc.agentSpawn({
+        workspace: workspace.id,
+        cloud: true,
+      });
+      expect(!none.ok && none.error.message).toBe(
+        "Workspace 'Pods' has no cloud workspace; run 'daedal cloud create'",
+      );
+
+      await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
+      const codex = await rpc.agentSpawn({
+        workspace: workspace.id,
+        cloud: true,
+        provider: "codex",
+      });
+      expect(!codex.ok && codex.error.message).toBe(
+        "A cloud session runs Claude or a terminal",
+      );
+      expect(
+        context.repositories.listAgents({ workspaceId: workspace.id }),
+      ).toEqual([]);
+    });
+  });
 });

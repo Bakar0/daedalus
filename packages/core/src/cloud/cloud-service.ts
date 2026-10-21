@@ -349,6 +349,13 @@ export class CloudService {
     });
   }
 
+  /** The host a local workspace's cloud sessions run on. */
+  async hostId(workspaceReference: string): Promise<string> {
+    const workspace =
+      await this.options.workspaces.getActive(workspaceReference);
+    return cloudHostId(await this.#workspaceId(workspace.id));
+  }
+
   /** The cloud id of a local workspace, or a cloud id given as it is. */
   async #workspaceId(reference: string): Promise<string> {
     // A workspace removed on this Mac can still be deleted in the cloud.

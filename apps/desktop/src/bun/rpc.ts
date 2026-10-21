@@ -1147,14 +1147,22 @@ export function createDesktopRequestHandlers(
       ),
     accountSignOut: ({ provider, account }) =>
       mutate(() => context.accounts.signOut(provider, account)),
-    agentSpawn: ({ teamId, ...params }) =>
-      mutate(async () =>
-        agentDto(
+    agentSpawn: ({ teamId, cloud, ...params }) =>
+      mutate(async () => {
+        const host = cloud
+          ? await context.cloud.hostId(
+              teamId
+                ? context.teams.get(teamId).lead.workspaceId
+                : params.workspace,
+            )
+          : undefined;
+        return agentDto(
           teamId
             ? (
                 await context.teams.spawnMember({
                   team: teamId,
                   addedBy: "user",
+                  ...(host ? { host } : {}),
                   instructions: params.message ?? "",
                   ...(params.name ? { name: params.name } : {}),
                   ...(params.taskId ? { taskId: params.taskId } : {}),
@@ -1165,9 +1173,12 @@ export function createDesktopRequestHandlers(
                     : {}),
                 })
               ).session
-            : await context.agents.spawn(params),
-        ),
-      ),
+            : await context.agents.spawn({
+                ...params,
+                ...(host ? { host } : {}),
+              }),
+        );
+      }),
     agentSend: ({ id, text }) =>
       mutate(async () => agentDto(await context.agents.send(id, text))),
     agentStop: ({ id, force }) =>

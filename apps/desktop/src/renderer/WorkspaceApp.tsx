@@ -2060,6 +2060,8 @@ export function WorkspaceApp({
     teamId?: string;
     /** A member's instructions, which it needs. */
     instructions?: string;
+    /** Run in the workspace's cloud pod rather than on this Mac. */
+    cloud?: boolean;
   }>({ name: "" });
   // The Routines drawer on the selected session, and what it last read.
   const [routinesPanel, setRoutinesPanel] = useState<{
@@ -3094,6 +3096,13 @@ export function WorkspaceApp({
       : undefined) ??
     workspace;
   // Set when the dialog adds a member from its lead's card.
+  // The cloud workspace the dialog can start the session in, if any.
+  const sessionCloud = sessionWorkspace
+    ? cloudByWorkspace.get(sessionWorkspace.id)
+    : undefined;
+  const sessionInCloud = Boolean(
+    sessionForm.cloud && sessionCloud && sessionCloud.status !== "sleeping",
+  );
   const memberTeam = sessionForm.teamId
     ? teamsById.get(sessionForm.teamId)
     : undefined;
@@ -3642,10 +3651,13 @@ export function WorkspaceApp({
     const isTerminal = sessionType === "terminal";
     const { color, routines, orchestration, teamId, instructions } =
       sessionForm;
-    const abilities = [
-      ...(routines ? (["routines"] as const) : []),
-      ...(orchestration ? (["orchestration"] as const) : []),
-    ];
+    const cloud = sessionInCloud;
+    const abilities = cloud
+      ? []
+      : [
+          ...(routines ? (["routines"] as const) : []),
+          ...(orchestration ? (["orchestration"] as const) : []),
+        ];
     const launch: SessionLaunchState = {
       key: crypto.randomUUID(),
       workspaceId: sessionWorkspace.id,
@@ -3668,7 +3680,7 @@ export function WorkspaceApp({
       // Remembered before the spawn, so a session that fails to start still
       // leaves the default the user asked for. An empty model is a real
       // choice too: it records "this provider, its own default".
-      if (rememberSessionModel && !isTerminal)
+      if (rememberSessionModel && !isTerminal && !cloud)
         await perform(
           client.request.workspaceUpdate({
             reference: sessionWorkspace.id,
@@ -3704,7 +3716,10 @@ export function WorkspaceApp({
         terminal: isTerminal || undefined,
         provider: isTerminal ? undefined : (sessionType as "codex" | "claude"),
         model: isTerminal || !sessionModel ? undefined : sessionModel,
-        ...(!isTerminal && sessionAccount ? { account: sessionAccount } : {}),
+        ...(!isTerminal && sessionAccount && !cloud
+          ? { account: sessionAccount }
+          : {}),
+        ...(cloud ? { cloud: true } : {}),
         ...(color ? { color } : {}),
         ...(teamId && !isTerminal
           ? {
@@ -7159,8 +7174,72 @@ export function WorkspaceApp({
                   value={sessionForm.name}
                 />
               </label>
+              {sessionCloud && (
+                <fieldset className="session-tool-picker session-location">
+                  <legend>Where it runs</legend>
+                  <div
+                    aria-label="Where the session runs"
+                    className="session-tool-row"
+                    data-testid="session-location"
+                    role="radiogroup"
+                  >
+                    {(
+                      [
+                        {
+                          id: "local",
+                          label: "This Mac",
+                          note: "Local",
+                        },
+                        {
+                          id: "cloud",
+                          label: "Cloud",
+                          note:
+                            sessionCloud.status === "sleeping"
+                              ? "Asleep · wake it from the workspace menu"
+                              : sessionCloud.status === "failed"
+                                ? "Failed"
+                                : "In the workspace's pod",
+                        },
+                      ] as const
+                    ).map((place) => {
+                      const chosen =
+                        place.id === "cloud" ? sessionInCloud : !sessionInCloud;
+                      return (
+                        <button
+                          aria-checked={chosen}
+                          className={`session-tool ${chosen ? "selected" : ""}`}
+                          data-testid={`session-location-${place.id}`}
+                          disabled={
+                            place.id === "cloud" &&
+                            sessionCloud.status === "sleeping"
+                          }
+                          key={place.id}
+                          onClick={() => {
+                            const cloud = place.id === "cloud";
+                            setSessionForm({ ...sessionForm, cloud });
+                            // Codex runs only here; a terminal tool only there.
+                            if (cloud && sessionType === "codex")
+                              setSessionType("claude");
+                            if (!cloud && sessionType === "terminal")
+                              setSessionType("claude");
+                            setSessionAccount("");
+                            setRememberSessionModel(false);
+                          }}
+                          role="radio"
+                          title={sessionCloud.reason ?? undefined}
+                          type="button"
+                        >
+                          <strong>{place.label}</strong>
+                          <small>{place.note}</small>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </fieldset>
+              )}
               {/* Claude or Codex; a member's picker starts on its lead's.
-                Plain terminals open as tabs from the center's +. */}
+                Plain terminals open as tabs from the center's +. A cloud
+                session is Claude or a terminal in the pod. */}
               <fieldset className="session-tool-picker">
                 <legend>Choose a tool</legend>
                 <div
@@ -7172,41 +7251,57 @@ export function WorkspaceApp({
                     [
                       { id: "claude", label: "Claude" },
                       { id: "codex", label: "Codex" },
+                      { id: "terminal", label: "Terminal" },
                     ] as const
-                  ).map((tool) => {
-                    const available = Boolean(
-                      snapshot.settings.providers.find(
-                        (item) => item.name === tool.id,
-                      )?.available,
-                    );
-                    return (
-                      <button
-                        aria-checked={sessionType === tool.id}
-                        className={`session-tool ${sessionType === tool.id ? "selected" : ""}`}
-                        disabled={!available}
-                        key={tool.id}
-                        onClick={() => {
-                          setSessionType(tool.id);
-                          setSessionModel("");
-                          setSessionAccount("");
-                          setRememberSessionModel(false);
-                          setModelCatalogError(undefined);
-                        }}
-                        role="radio"
-                        type="button"
-                      >
-                        <span className={`session-tool-icon tool-${tool.id}`}>
-                          <ToolIcon tool={tool.id} />
-                        </span>
-                        <strong>{tool.label}</strong>
-                        <small>
-                          {!available
-                            ? "Unavailable"
-                            : (toolAccountLabel(tool.id) ?? "Available")}
-                        </small>
-                      </button>
-                    );
-                  })}
+                  )
+                    .filter((tool) =>
+                      sessionInCloud
+                        ? tool.id === "claude" ||
+                          (tool.id === "terminal" && !memberTeam)
+                        : tool.id !== "terminal",
+                    )
+                    .map((tool) => {
+                      // The pod has its own Claude and shell.
+                      const available =
+                        sessionInCloud ||
+                        Boolean(
+                          snapshot.settings.providers.find(
+                            (item) => item.name === tool.id,
+                          )?.available,
+                        );
+                      return (
+                        <button
+                          aria-checked={sessionType === tool.id}
+                          className={`session-tool ${sessionType === tool.id ? "selected" : ""}`}
+                          data-testid={`session-tool-${tool.id}`}
+                          disabled={!available}
+                          key={tool.id}
+                          onClick={() => {
+                            setSessionType(tool.id);
+                            setSessionModel("");
+                            setSessionAccount("");
+                            setRememberSessionModel(false);
+                            setModelCatalogError(undefined);
+                          }}
+                          role="radio"
+                          type="button"
+                        >
+                          <span className={`session-tool-icon tool-${tool.id}`}>
+                            <ToolIcon tool={tool.id} />
+                          </span>
+                          <strong>{tool.label}</strong>
+                          <small>
+                            {!available
+                              ? "Unavailable"
+                              : sessionInCloud
+                                ? "In the pod"
+                                : tool.id === "terminal"
+                                  ? "Available"
+                                  : (toolAccountLabel(tool.id) ?? "Available")}
+                          </small>
+                        </button>
+                      );
+                    })}
                 </div>
               </fieldset>
               {sessionType !== "terminal" && (
@@ -7251,18 +7346,20 @@ export function WorkspaceApp({
                       Model list unavailable: {modelCatalogError}
                     </small>
                   )}
-                  {!sessionChoiceIsWorkspaceDefault && !memberTeam && (
-                    <label className="session-model-remember">
-                      <input
-                        checked={rememberSessionModel}
-                        onChange={(event) =>
-                          setRememberSessionModel(event.target.checked)
-                        }
-                        type="checkbox"
-                      />
-                      <span>Remember for this workspace</span>
-                    </label>
-                  )}
+                  {!sessionChoiceIsWorkspaceDefault &&
+                    !memberTeam &&
+                    !sessionInCloud && (
+                      <label className="session-model-remember">
+                        <input
+                          checked={rememberSessionModel}
+                          onChange={(event) =>
+                            setRememberSessionModel(event.target.checked)
+                          }
+                          type="checkbox"
+                        />
+                        <span>Remember for this workspace</span>
+                      </label>
+                    )}
                 </div>
               )}
               {memberTeam && (
@@ -7288,36 +7385,39 @@ export function WorkspaceApp({
               )}
               {/* What most sessions leave alone: the account, the colour and
                   the abilities, folded under one row. */}
-              {(!memberTeam || sessionAccounts.length > 1) && (
+              {(!memberTeam ||
+                (sessionAccounts.length > 1 && !sessionInCloud)) && (
                 <details className="session-more-settings">
                   <summary>More settings</summary>
-                  {sessionType !== "terminal" && sessionAccounts.length > 1 && (
-                    // Right under the tool it belongs to, and the same field as
-                    // Create workspace's.
-                    <label>
-                      {providerLabel(sessionType)} account
-                      <select
-                        aria-label={`${providerLabel(sessionType)} account`}
-                        onChange={(event) => {
-                          setSessionAccount(event.target.value);
-                          // Another account offers other models; its own
-                          // remembered one is what the first option now means.
-                          setSessionModel("");
-                        }}
-                        value={chosenSessionAccount}
-                      >
-                        {sessionAccounts.map((item) => (
-                          <option key={item.account} value={item.account}>
-                            {item.name}
-                            {item.account === workspaceDefaultAccount &&
-                            sessionWorkspace
-                              ? " · workspace default"
-                              : ""}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
+                  {sessionType !== "terminal" &&
+                    sessionAccounts.length > 1 &&
+                    !sessionInCloud && (
+                      // Right under the tool it belongs to, and the same field as
+                      // Create workspace's.
+                      <label>
+                        {providerLabel(sessionType)} account
+                        <select
+                          aria-label={`${providerLabel(sessionType)} account`}
+                          onChange={(event) => {
+                            setSessionAccount(event.target.value);
+                            // Another account offers other models; its own
+                            // remembered one is what the first option now means.
+                            setSessionModel("");
+                          }}
+                          value={chosenSessionAccount}
+                        >
+                          {sessionAccounts.map((item) => (
+                            <option key={item.account} value={item.account}>
+                              {item.name}
+                              {item.account === workspaceDefaultAccount &&
+                              sessionWorkspace
+                                ? " · workspace default"
+                                : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
                   {!memberTeam && (
                     <div className="session-color-picker">
                       <span>
@@ -7334,49 +7434,51 @@ export function WorkspaceApp({
                       />
                     </div>
                   )}
-                  {sessionType !== "terminal" && !sessionForm.teamId && (
-                    // One row per ability the agent can be given at launch.
-                    <fieldset className="session-tool-picker session-abilities">
-                      <legend>Agent abilities</legend>
-                      {(
-                        [
-                          {
-                            key: "routines",
-                            label: "Routines",
-                            description:
-                              "Give the agent the ability to run routines",
-                          },
-                          {
-                            key: "orchestration",
-                            label: "Orchestration",
-                            description:
-                              "Lead a team of sessions toward one goal",
-                          },
-                        ] as const
-                      ).map((ability) => (
-                        <label
-                          className="session-ability-option"
-                          key={ability.key}
-                        >
-                          <span>
-                            <strong>{ability.label}</strong>
-                            <small>{ability.description}</small>
-                          </span>
-                          <input
-                            checked={Boolean(sessionForm[ability.key])}
-                            className="switch"
-                            onChange={(event) =>
-                              setSessionForm({
-                                ...sessionForm,
-                                [ability.key]: event.target.checked,
-                              })
-                            }
-                            type="checkbox"
-                          />
-                        </label>
-                      ))}
-                    </fieldset>
-                  )}
+                  {sessionType !== "terminal" &&
+                    !sessionForm.teamId &&
+                    !sessionInCloud && (
+                      // One row per ability the agent can be given at launch.
+                      <fieldset className="session-tool-picker session-abilities">
+                        <legend>Agent abilities</legend>
+                        {(
+                          [
+                            {
+                              key: "routines",
+                              label: "Routines",
+                              description:
+                                "Give the agent the ability to run routines",
+                            },
+                            {
+                              key: "orchestration",
+                              label: "Orchestration",
+                              description:
+                                "Lead a team of sessions toward one goal",
+                            },
+                          ] as const
+                        ).map((ability) => (
+                          <label
+                            className="session-ability-option"
+                            key={ability.key}
+                          >
+                            <span>
+                              <strong>{ability.label}</strong>
+                              <small>{ability.description}</small>
+                            </span>
+                            <input
+                              checked={Boolean(sessionForm[ability.key])}
+                              className="switch"
+                              onChange={(event) =>
+                                setSessionForm({
+                                  ...sessionForm,
+                                  [ability.key]: event.target.checked,
+                                })
+                              }
+                              type="checkbox"
+                            />
+                          </label>
+                        ))}
+                      </fieldset>
+                    )}
                 </details>
               )}
               <div className="modal-actions">
