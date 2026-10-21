@@ -39,6 +39,14 @@ export interface ActivityObservation {
    * the stored activity is in `ifActivity`.
    */
   heartbeat?: boolean;
+  /** The provider's id for the tool call this reading is about. */
+  toolUseId?: string;
+  /**
+   * The tool call named by `toolUseId` has ended. Ending one call says
+   * nothing about a wait on another, so this may only end the wait for the
+   * same call; see `admitsActivityWrite`.
+   */
+  settles?: boolean;
 }
 
 /**
@@ -266,6 +274,38 @@ export interface ClaudeHookContext {
 }
 
 /**
+ * The tool call a payload is about, spread into an observation: `call` for an
+ * event about a call in progress, `ended` for one saying it is over.
+ */
+function toolCall(payload: Record<string, unknown>): {
+  call: Pick<ActivityObservation, "toolUseId">;
+  ended: Pick<ActivityObservation, "toolUseId" | "settles">;
+} {
+  const toolUseId = text(payload.tool_use_id);
+  return toolUseId
+    ? { call: { toolUseId }, ended: { toolUseId, settles: true } }
+    : { call: {}, ended: {} };
+}
+
+/**
+ * Whether a shell call is the agent raising its own badge with
+ * `daedal attention "<reason>"`. `--clear` takes it down, so that one may
+ * retract like any other tool.
+ */
+export function raisesAttention(
+  toolName: string | undefined,
+  toolInput: unknown,
+): boolean {
+  if (toolName !== "Bash") return false;
+  const command = text((toolInput as { command?: unknown })?.command);
+  return (
+    !!command &&
+    /\bdaedal\s+attention\b/.test(command) &&
+    !/\battention\b[^\n;&|]*--clear\b/.test(command)
+  );
+}
+
+/**
  * Where a turn that finished on its own lands: `done`, a result to look at.
  *
  * The final message is deliberately not read for questions. Telling "here is
@@ -316,6 +356,7 @@ export function observeClaudeHook(
   const asking = toolName ? CLAUDE_ASK_TOOL.test(toolName) : false;
   const ask = asking ? askSummary(payload.tool_input) : undefined;
   const background = context.backgroundAgents ?? 0;
+  const { call, ended } = toolCall(payload);
   switch (event) {
     case "SessionStart":
       return { activity: "idle", source };
@@ -324,25 +365,61 @@ export function observeClaudeHook(
       // is allowed to retract a badge.
       return { activity: "working", source };
     case "PreToolUse":
-      // A question the user already allowed never reaches PermissionRequest,
-      // so it has to be caught here too or an auto-approved question reads as
-      // ordinary work and nobody is told they are being waited on.
-      return asking
-        ? { activity: "needs_input", source, ...(ask ? { detail: ask } : {}) }
+      // A question is not on screen yet. In auto mode Claude checks the call
+      // first, which was seen taking 20 seconds with the spinner up, and only
+      // then fires PermissionRequest and draws the question. It fires that
+      // even for a question the user allowed (2.1.303), so the badge waits
+      // for it. The question still names this call, for the request to take.
+      return {
+        activity: "working",
+        source,
+        ...(asking && ask ? { detail: ask } : tool ? { detail: tool } : {}),
+        ifNotActivity: ATTENTION,
+        ...call,
+      };
+    case "PostToolUse":
+      // The tool ran, so whatever it was blocked on has been answered. The
+      // exception is the agent raising its own badge: that command finishing
+      // is the badge going up, not the user answering it.
+      return {
+        activity: "working",
+        source,
+        ...(tool ? { detail: tool } : {}),
+        ...(raisesAttention(toolName, payload.tool_input)
+          ? { ifNotActivity: ATTENTION }
+          : {}),
+        ...ended,
+      };
+    case "PostToolUseFailure":
+      // A tool that ran and failed fires this instead of `PostToolUse`.
+      // Without it an approved command that exits non-zero left the badge up
+      // until the next tool succeeded, or the next prompt.
+      return payload.is_interrupt === true
+        ? // Escape on a running tool ends the turn, and no `Stop` follows.
+          { activity: "idle", source, detail: "Interrupted", ...ended }
         : {
             activity: "working",
             source,
             ...(tool ? { detail: tool } : {}),
-            ifNotActivity: ATTENTION,
+            ...ended,
           };
-    case "PostToolUse":
-      // The tool ran, so whatever it was blocked on has been answered.
-      return { activity: "working", source, ...(tool ? { detail: tool } : {}) };
+    case "PermissionDenied":
+      // A prompt that timed out, or a call the auto mode classifier refused.
+      // Nobody is asked any more and the turn carries on.
+      return {
+        activity: "working",
+        source,
+        ...(tool ? { detail: tool } : {}),
+        ...ended,
+      };
     case "PermissionRequest":
+      // Claude sends no tool_use_id here; `ActivityService` takes it from the
+      // PreToolUse for the same call.
       return {
         activity: asking ? "needs_input" : "needs_permission",
         source,
         ...(asking && ask ? { detail: ask } : tool ? { detail: tool } : {}),
+        ...call,
       };
     case "Notification": {
       const message = text(payload.message);
@@ -460,7 +537,14 @@ export function observeCodexHook(
         source,
       };
     case "PostToolUse":
-      return { activity: "working", source, ...(tool ? { detail: tool } : {}) };
+      return {
+        activity: "working",
+        source,
+        ...(tool ? { detail: tool } : {}),
+        ...(raisesAttention(toolName, payload.tool_input)
+          ? { ifNotActivity: ATTENTION }
+          : {}),
+      };
     case "PreCompact":
     case "PostCompact":
       return { activity: "working", source, detail: "Compacting context" };
@@ -770,4 +854,34 @@ export function observeClaudePane(
       return undefined;
   }
   return undefined;
+}
+
+/**
+ * Claude's permission dialogs and its question picker all end with a footer
+ * offering Escape, and nothing else on its screen does.
+ */
+const CLAUDE_DIALOG_FOOTER = /\bEsc to cancel\b/;
+
+/**
+ * What a Claude screen says right after the user pressed a key in a dialog:
+ * nothing while the dialog is still up, `working` once Claude carries on with
+ * the call, `idle` once the turn ended instead (Escape, or "No").
+ *
+ * This exists because approving a call fires no hook at all. The next one is
+ * the call's `PostToolUse`, which for a long command can be many minutes after
+ * the user answered. It is read only on the user's own keystroke, so a
+ * dialog's footer leaving the screen is the answer, not a misread.
+ */
+export function observeAnsweredDialog(
+  text: string,
+): Pick<ActivityObservation, "activity" | "detail"> | undefined {
+  if (CLAUDE_DIALOG_FOOTER.test(text)) return undefined;
+  const reading = observeClaudePane(text);
+  if (!reading) return undefined;
+  return reading.activity === "idle"
+    ? {
+        activity: "idle",
+        ...(reading.detail ? { detail: reading.detail } : {}),
+      }
+    : { activity: "working" };
 }

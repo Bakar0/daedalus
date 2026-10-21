@@ -67,6 +67,13 @@ const SESSION_RECOVERY_WINDOW_MS = 60_000;
 const SESSION_RECOVERY_UNIQUENESS_MS = 2_000;
 const PROVIDER_STARTUP_TIMEOUT_MS = 30_000;
 const PROVIDER_STARTUP_POLL_MS = 150;
+// How long reconcile leaves a `starting` row with no tmux session alone. The
+// row is written before tmux is asked for one, and on a loaded machine that
+// launch takes seconds; a reconcile in the gap, or one holding a list taken
+// before the launch, showed every new session as lost until it came up. The
+// launcher marks its own failures `exited`, so this only waits out a launcher
+// that died, and is well past its 30 second startup wait.
+const STARTING_GRACE_MS = 2 * 60_000;
 // How long a startup question must stay on screen before startup hands it to
 // the user rather than treating it as a frame on the way to the prompt.
 const STARTUP_QUESTION_SETTLE_MS = 2_000;
@@ -1328,12 +1335,16 @@ export class AgentService {
       ));
     if (!live) return;
     const now = new Date().toISOString();
+    const launching = (agent: AgentSession) =>
+      agent.status === "starting" &&
+      Date.parse(now) - Date.parse(agent.startedAt) < STARTING_GRACE_MS;
     const endedAtStartup: string[] = [];
     this.repositories.transaction(() => {
       for (const agent of this.repositories.listAgents()) {
         if (
           (agent.status === "starting" || agent.status === "running") &&
-          !live.has(agent.tmuxSession)
+          !live.has(agent.tmuxSession) &&
+          !launching(agent)
         ) {
           // Activity and attention are deliberately left alone: see
           // `onSessionEnded`. The exception is a startup question whose

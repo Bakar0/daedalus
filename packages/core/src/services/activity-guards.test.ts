@@ -5,6 +5,7 @@ import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
   ACTIVITY_STALE_AFTER_MS,
   ActivityService,
+  confirmAnsweredWait,
   createApplicationContext,
   observeClaudeHook,
   readActivityRecord,
@@ -193,6 +194,121 @@ describe("guarded transitions", () => {
       expect(after?.applied).toBe(true);
       expect(context.activity.get(sessionId)?.activity).toBe("working");
       expect(context.activity.attentionFor(sessionId)).toBeUndefined();
+    });
+  });
+
+  test("an approved command that fails still takes the badge down", async () => {
+    await withSession(async ({ context, sessionId }) => {
+      const observe = (event: string, payload: Record<string, unknown> = {}) =>
+        context.activity.observe({
+          sessionId,
+          observation: observeClaudeHook(event, {
+            hook_event_name: event,
+            ...payload,
+          })!,
+        });
+      await observe("PermissionRequest", {
+        tool_name: "Bash",
+        tool_input: { command: "false" },
+      });
+      expect(context.activity.attentionFor(sessionId)).toBeDefined();
+      // Claude fires no PostToolUse for a tool that failed.
+      await observe("PostToolUseFailure", {
+        tool_name: "Bash",
+        tool_input: { command: "false" },
+        error: "Exit code 1",
+        is_interrupt: false,
+      });
+      expect(context.activity.get(sessionId)?.activity).toBe("working");
+      expect(context.activity.attentionFor(sessionId)).toBeUndefined();
+    });
+  });
+
+  test("the agent's own badge outlives the command that raised it", async () => {
+    await withSession(async ({ context, sessionId }) => {
+      const observe = (event: string, payload: Record<string, unknown> = {}) =>
+        context.activity.observe({
+          sessionId,
+          observation: observeClaudeHook(event, {
+            hook_event_name: event,
+            ...payload,
+          })!,
+        });
+      const command = 'daedal attention "Merge PR #147"';
+      await observe("PreToolUse", {
+        tool_name: "Bash",
+        tool_input: { command },
+      });
+      await context.activity.raise({ sessionId, reason: "Merge PR #147" });
+      await observe("PostToolUse", {
+        tool_name: "Bash",
+        tool_input: { command },
+      });
+      await observe("Stop", { last_assistant_message: "Waiting on you." });
+      expect(context.activity.get(sessionId)?.activity).toBe("needs_input");
+      expect(context.activity.attentionFor(sessionId)?.reasons).toHaveLength(1);
+
+      await observe("UserPromptSubmit", { prompt: "merged" });
+      expect(context.activity.attentionFor(sessionId)).toBeUndefined();
+    });
+  });
+
+  test("only the call a dialog is about ends its wait", async () => {
+    await withSession(async ({ context, sessionId }) => {
+      const observe = (event: string, payload: Record<string, unknown> = {}) =>
+        context.activity.observe({
+          sessionId,
+          observation: observeClaudeHook(event, {
+            hook_event_name: event,
+            ...payload,
+          })!,
+        });
+      const push = { tool_name: "Bash", tool_input: { command: "git push" } };
+      const grep = { tool_name: "Grep", tool_input: { pattern: "x" } };
+      await observe("PreToolUse", { ...grep, tool_use_id: "toolu_grep" });
+      await observe("PreToolUse", { ...push, tool_use_id: "toolu_push" });
+      // No id on the request itself: it is taken from the PreToolUse above.
+      await observe("PermissionRequest", push);
+      await observe("Notification", {
+        notification_type: "permission_prompt",
+        message: "Claude needs your permission to use Bash",
+      });
+
+      // The Grep running beside the dialog finishes; the dialog is still up.
+      const other = await observe("PostToolUse", {
+        ...grep,
+        tool_use_id: "toolu_grep",
+      });
+      expect(other?.applied).toBe(false);
+      expect(context.activity.get(sessionId)?.activity).toBe(
+        "needs_permission",
+      );
+
+      await observe("PostToolUse", { ...push, tool_use_id: "toolu_push" });
+      expect(context.activity.get(sessionId)?.activity).toBe("working");
+      expect(context.activity.attentionFor(sessionId)).toBeUndefined();
+    });
+  });
+
+  test("a wait no hook tied to a call ends on any call ending, as before", async () => {
+    await withSession(async ({ context, sessionId }) => {
+      await context.activity.observe({
+        sessionId,
+        observation: observeClaudeHook("Notification", {
+          hook_event_name: "Notification",
+          notification_type: "permission_prompt",
+          message: "Claude needs your permission to use Bash",
+        })!,
+      });
+      await context.activity.observe({
+        sessionId,
+        observation: observeClaudeHook("PostToolUse", {
+          hook_event_name: "PostToolUse",
+          tool_name: "Bash",
+          tool_use_id: "toolu_any",
+        })!,
+      });
+      expect(context.activity.get(sessionId)?.activity).toBe("working");
     });
   });
 
@@ -844,6 +960,111 @@ describe("one block is one reason", () => {
       expect(context.activity.attentionFor(sessionId)?.reasons[0]?.text).toBe(
         "Claude needs your permission to use Bash",
       );
+    });
+  });
+});
+
+describe("answering at the terminal", () => {
+  const DIALOG =
+    " Do you want to proceed?\n ❯ 1. Yes\n   2. No\n Esc to cancel · Tab to amend";
+  const APPROVED =
+    "✶ Ruminating… (6s · ↓ 96 tokens)\n" +
+    "─".repeat(20) +
+    "\n❯ \n" +
+    "─".repeat(20);
+  const ESCAPED =
+    "  ⎿  Interrupted · What should Claude do instead?\n✻ Cogitated for 6s · done 4:41 PM\n" +
+    "─".repeat(20) +
+    "\n❯ \n" +
+    "─".repeat(20);
+
+  const waitOnPermission = (context: ApplicationContext, sessionId: string) =>
+    context.activity.observe({
+      sessionId,
+      observation: observeClaudeHook("PermissionRequest", {
+        hook_event_name: "PermissionRequest",
+        tool_name: "Bash",
+        tool_input: { command: "bun test" },
+      })!,
+    });
+
+  const answer = (
+    context: ApplicationContext,
+    sessionId: string,
+    tmux: FakeTmux,
+  ) =>
+    confirmAnsweredWait({
+      tmux,
+      activity: context.activity,
+      agent: context.repositories.findAgent(sessionId)!,
+      readsMs: [0, 0],
+    });
+
+  test("a key that leaves the dialog up changes nothing", async () => {
+    await withSession(async ({ context, sessionId, tmux }) => {
+      await waitOnPermission(context, sessionId);
+      tmux.paneText = DIALOG;
+      expect(await answer(context, sessionId, tmux)).toBe(false);
+      expect(context.activity.get(sessionId)?.activity).toBe(
+        "needs_permission",
+      );
+      expect(context.activity.attentionFor(sessionId)).toBeDefined();
+    });
+  });
+
+  test("an approval ends the wait before the approved command finishes", async () => {
+    await withSession(async ({ context, sessionId, tmux }) => {
+      await waitOnPermission(context, sessionId);
+      tmux.paneText = APPROVED;
+      expect(await answer(context, sessionId, tmux)).toBe(true);
+      expect(context.activity.get(sessionId)).toMatchObject({
+        activity: "working",
+        source: "hook",
+      });
+      expect(context.activity.attentionFor(sessionId)).toBeUndefined();
+    });
+  });
+
+  test("Escape at the dialog leaves the session at its prompt", async () => {
+    await withSession(async ({ context, sessionId, tmux }) => {
+      await waitOnPermission(context, sessionId);
+      tmux.paneText = ESCAPED;
+      expect(await answer(context, sessionId, tmux)).toBe(true);
+      expect(context.activity.get(sessionId)?.activity).toBe("idle");
+      expect(context.activity.attentionFor(sessionId)).toBeUndefined();
+    });
+  });
+
+  test("a wait that changed since the keystroke is not the one answered", async () => {
+    await withSession(async ({ context, sessionId, advance }) => {
+      await waitOnPermission(context, sessionId);
+      const since = context.activity.get(sessionId)!.since;
+      advance(1_000);
+      await context.activity.observe({
+        sessionId,
+        observation: observeClaudeHook("PermissionRequest", {
+          hook_event_name: "PermissionRequest",
+          tool_name: "AskUserQuestion",
+          tool_input: { questions: [{ question: "Which branch?" }] },
+        })!,
+      });
+      expect(
+        await context.activity.resolveWait({
+          sessionId,
+          since,
+          activity: "working",
+        }),
+      ).toBe(false);
+      expect(context.activity.get(sessionId)?.activity).toBe("needs_input");
+    });
+  });
+
+  test("a badge the agent raised itself is left to the agent", async () => {
+    await withSession(async ({ context, sessionId, tmux }) => {
+      await context.activity.raise({ sessionId, reason: "Merge PR #147" });
+      tmux.paneText = APPROVED;
+      expect(await answer(context, sessionId, tmux)).toBe(false);
+      expect(context.activity.attentionFor(sessionId)).toBeDefined();
     });
   });
 });

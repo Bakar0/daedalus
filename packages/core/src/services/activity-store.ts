@@ -52,6 +52,8 @@ export interface StoredActivityRecord extends AgentActivityState {
    * their `Stop` from reporting the real session idle mid-turn.
    */
   providerSessionId?: string;
+  /** See `StoredAgentActivity.toolUseId`. */
+  toolUseId?: string;
 }
 
 export const activityDirectory = (home: string): string =>

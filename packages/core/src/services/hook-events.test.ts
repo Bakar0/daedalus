@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   codexHookInSession,
+  observeAnsweredDialog,
   observeClaudeHook,
   observeClaudePane,
   observeClaudeTranscript,
@@ -100,6 +101,63 @@ describe("Claude hook payloads", () => {
     expect(observed?.ifNotActivity).toBeUndefined();
   });
 
+  test("PostToolUse after `daedal attention` cannot retract the badge it raised", () => {
+    const after = (command: string) =>
+      observeClaudeHook(
+        "PostToolUse",
+        claude("PostToolUse", {
+          tool_name: "Bash",
+          tool_input: { command },
+        }),
+      );
+    expect(
+      after('~/.daedalus/bin/daedal attention "Merge PR #147"')?.ifNotActivity,
+    ).toContain("needs_input");
+    expect(after("daedal attention --clear")?.ifNotActivity).toBeUndefined();
+    expect(after("daedal agent list")?.ifNotActivity).toBeUndefined();
+  });
+
+  test("PostToolUseFailure ends the wait like PostToolUse, and an interrupt ends the turn", () => {
+    // Captured from Claude Code 2.1.303: an allowed `false` fails with no
+    // PostToolUse at all.
+    const failed = (is_interrupt: boolean) =>
+      observeClaudeHook(
+        "PostToolUseFailure",
+        claude("PostToolUseFailure", {
+          prompt_id: "8cce3adc-a970-441c-81e6-d763d9620b94",
+          permission_mode: "auto",
+          tool_name: "Bash",
+          tool_input: { command: "false", description: "Run false once" },
+          tool_use_id: "toolu_016TUiW6qjWVLnJZVaCmS8JW",
+          error: "Exit code 1",
+          is_interrupt,
+          duration_ms: 4559,
+        }),
+      );
+    const observed = failed(false);
+    expect(observed).toMatchObject({
+      activity: "working",
+      detail: "Bash(false)",
+    });
+    expect(observed?.ifNotActivity).toBeUndefined();
+    expect(failed(true)).toMatchObject({
+      activity: "idle",
+      detail: "Interrupted",
+    });
+  });
+
+  test("PermissionDenied ends the wait: nobody is being asked any more", () => {
+    const observed = observeClaudeHook(
+      "PermissionDenied",
+      claude("PermissionDenied", {
+        tool_name: "Bash",
+        tool_input: { command: "rm -rf $o" },
+      }),
+    );
+    expect(observed).toMatchObject({ activity: "working" });
+    expect(observed?.ifNotActivity).toBeUndefined();
+  });
+
   test("Notification splits attention by notification_type", () => {
     const type = (notification_type: string) =>
       observeClaudeHook(
@@ -137,21 +195,33 @@ describe("Claude hook payloads", () => {
         },
       ],
     };
-    for (const event of ["PermissionRequest", "PreToolUse"]) {
-      expect(
-        observeClaudeHook(
-          event,
-          claude(event, {
-            tool_name: "AskUserQuestion",
-            tool_input: toolInput,
-          }),
-        ),
-      ).toMatchObject({
-        activity: "needs_input",
-        // The question itself, not the name of the tool that asked it.
-        detail: "What would you like me to do in this workspace?",
-      });
-    }
+    expect(
+      observeClaudeHook(
+        "PermissionRequest",
+        claude("PermissionRequest", {
+          tool_name: "AskUserQuestion",
+          tool_input: toolInput,
+        }),
+      ),
+    ).toMatchObject({
+      activity: "needs_input",
+      // The question itself, not the name of the tool that asked it.
+      detail: "What would you like me to do in this workspace?",
+    });
+    // Not on screen yet: in auto mode Claude checks the call for up to tens
+    // of seconds before PermissionRequest fires and the question appears.
+    expect(
+      observeClaudeHook(
+        "PreToolUse",
+        claude("PreToolUse", {
+          tool_name: "AskUserQuestion",
+          tool_input: toolInput,
+        }),
+      ),
+    ).toMatchObject({
+      activity: "working",
+      detail: "What would you like me to do in this workspace?",
+    });
     expect(
       observeClaudeHook(
         "Notification",
@@ -875,5 +945,99 @@ describe("Claude pane fallback", () => {
   test("a pane with no status line at all is no observation", () => {
     expect(observeClaudePane(box.join("\n"))).toBeUndefined();
     expect(observeClaudePane("")).toBeUndefined();
+  });
+});
+
+/**
+ * Claude Code 2.1.303 in tmux, around a Bash permission dialog: the dialog,
+ * the screen 1.5 seconds after pressing 1 ("Yes"), and the screen after
+ * Escape. Paths are shortened.
+ */
+const DIALOG_SCREEN = [
+  "❯ Run this exact shell command with the Bash tool: sleep 20 && touch done.txt",
+  "  Sleeping 20 seconds, then creating done.txt",
+  "  ⎿  $ sleep 20 && touch done.txt",
+  "─".repeat(60),
+  " Bash command",
+  " Sleep 20 seconds, then create done.txt",
+  "╌".repeat(60),
+  " sleep 20 && touch done.txt",
+  "╌".repeat(60),
+  " Do you want to proceed?",
+  " ❯ 1. Yes",
+  "   2. Yes, and always allow access to /tmp/dlg from this project",
+  "   3. Yes, and switch to auto mode · auto mode handles these prompts for you",
+  "   4. No",
+  " Esc to cancel · Tab to amend",
+].join("\n");
+
+const APPROVED_SCREEN = [
+  "❯ Run this exact shell command with the Bash tool: sleep 20 && touch done.txt",
+  "⏺ Sleeping 20 seconds, then creating done.txt · 19s",
+  "  ⎿  $ sleep 20 && touch done.txt",
+  "✶ Ruminating… (6s · ↓ 96 tokens)",
+  "                                           ◐ medium · /effort",
+  "─".repeat(60),
+  "❯ ",
+  "─".repeat(60),
+  "  haiku · 53k/1000k · 5%",
+  "  ⏸ manual mode on",
+].join("\n");
+
+const ESCAPED_SCREEN = [
+  "❯ Now run exactly: sleep 5 && touch two.txt",
+  "  ⎿  Interrupted · What should Claude do instead?",
+  "✻ Cogitated for 6s · done 4:41 PM",
+  "                                           ◐ medium · /effort",
+  "─".repeat(60),
+  "❯ ",
+  "─".repeat(60),
+  "  haiku · 54k/1000k · 5%",
+  "  ⏸ manual mode on",
+].join("\n");
+
+describe("observeAnsweredDialog", () => {
+  test("says nothing while the dialog is still up", () => {
+    expect(observeAnsweredDialog(DIALOG_SCREEN)).toBeUndefined();
+  });
+
+  test("reads an approved call carrying on as working", () => {
+    expect(observeAnsweredDialog(APPROVED_SCREEN)).toEqual({
+      activity: "working",
+    });
+  });
+
+  test("reads an escaped dialog as the turn ending", () => {
+    expect(observeAnsweredDialog(ESCAPED_SCREEN)).toMatchObject({
+      activity: "idle",
+    });
+  });
+});
+
+describe("tool call ids", () => {
+  test("a call in progress names itself, and only an ending settles", () => {
+    const id = { tool_use_id: "toolu_01", tool_name: "Bash" };
+    expect(
+      observeClaudeHook("PreToolUse", claude("PreToolUse", id)),
+    ).toMatchObject({ toolUseId: "toolu_01" });
+    expect(
+      observeClaudeHook("PreToolUse", claude("PreToolUse", id))?.settles,
+    ).toBeUndefined();
+    for (const event of [
+      "PostToolUse",
+      "PostToolUseFailure",
+      "PermissionDenied",
+    ])
+      expect(observeClaudeHook(event, claude(event, id))).toMatchObject({
+        toolUseId: "toolu_01",
+        settles: true,
+      });
+    // No id, no claim about which call ended.
+    expect(
+      observeClaudeHook(
+        "PostToolUse",
+        claude("PostToolUse", { tool_name: "Bash" }),
+      )?.settles,
+    ).toBeUndefined();
   });
 });

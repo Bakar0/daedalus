@@ -450,6 +450,11 @@ export interface AgentActivityState {
 export interface StoredAgentActivity extends AgentActivityState {
   notifiedActivity: AgentActivity | null;
   notifiedAt: string | null;
+  /**
+   * The provider's id for the tool call the reading is about, when a hook
+   * named one. A wait keeps it so that only the end of that same call ends it.
+   */
+  toolUseId?: string | null;
 }
 
 export interface AttentionReason {

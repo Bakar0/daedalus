@@ -297,6 +297,7 @@ interface AgentActivityRow {
   source: AgentActivitySource;
   notified_activity: AgentActivity | null;
   notified_at: string | null;
+  tool_use_id: string | null;
 }
 
 interface SessionAttentionRow {
@@ -349,6 +350,7 @@ const agentActivityFromRow = (row: AgentActivityRow): StoredAgentActivity => ({
   source: row.source,
   notifiedActivity: row.notified_activity,
   notifiedAt: row.notified_at,
+  toolUseId: row.tool_use_id,
 });
 
 const sessionAttentionFromRow = (
@@ -1128,14 +1130,15 @@ export class SqliteRepositories {
       .query(
         `INSERT INTO agent_activity
          (session_id, activity, detail, since, observed_at, source,
-          notified_activity, notified_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          notified_activity, notified_at, tool_use_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(session_id) DO UPDATE SET
            activity = excluded.activity, detail = excluded.detail,
            since = excluded.since, observed_at = excluded.observed_at,
            source = excluded.source,
            notified_activity = excluded.notified_activity,
-           notified_at = excluded.notified_at`,
+           notified_at = excluded.notified_at,
+           tool_use_id = excluded.tool_use_id`,
       )
       .run(
         state.sessionId,
@@ -1146,6 +1149,7 @@ export class SqliteRepositories {
         state.source,
         state.notifiedActivity,
         state.notifiedAt,
+        state.toolUseId ?? null,
       );
   }
 
