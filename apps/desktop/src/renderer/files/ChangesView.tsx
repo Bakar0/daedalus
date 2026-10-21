@@ -192,6 +192,16 @@ const ago = (iso: string, now = Date.now()) => {
 };
 
 /**
+ * Whether a commit exists only in this worktree. Git alone says so for every
+ * commit of a squash-merged branch once GitHub deletes it, so a merged pull
+ * request that holds the tree's HEAD overrules it, as it does on the card.
+ */
+export const commitIsLocal = (
+  commit: Pick<WorktreeCommitDto, "pushed">,
+  landed: boolean,
+): boolean => !landed && commit.pushed === false;
+
+/**
  * The commits a worktree made since it branched, newest first, folded behind
  * a count. Opening a commit lists the files it changed; a file opens that
  * commit's diff. Read when opened, and again when the count moves.
@@ -201,6 +211,7 @@ export function WorktreeCommits({
   workspaceId,
   root,
   count,
+  landed = false,
   onOpenDiff,
   onOpenFile,
 }: {
@@ -209,6 +220,8 @@ export function WorktreeCommits({
   root: string;
   /** Commits ahead of the base, from the worktree's git status. */
   count: number;
+  /** The merged pull request holds this tree's HEAD. */
+  landed?: boolean;
   onOpenDiff(target: DiffTarget, options: { pinned: boolean }): void;
   onOpenFile(path: string): void;
 }) {
@@ -282,7 +295,7 @@ export function WorktreeCommits({
                 <span className="worktree-commit-subject">
                   {commit.subject}
                 </span>
-                {commit.pushed === false && (
+                {commitIsLocal(commit, landed) && (
                   <span
                     className="worktree-commit-local"
 

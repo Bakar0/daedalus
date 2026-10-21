@@ -8,6 +8,7 @@ import type {
 import { App, MarkdownPreview } from "./App";
 import type { DesktopClient } from "./client-types";
 import { ConfirmButton } from "./ConfirmButton";
+import { commitIsLocal } from "./files/ChangesView";
 import {
   agentMultilineSequence,
   clampExplorerWidth,
@@ -135,6 +136,16 @@ describe("confirm in place", () => {
     expect(
       worktreeDiscardLabel({ gitStatus: status(0, 2, 2), landed: true }),
     ).toBeUndefined();
+  });
+
+  test("a commit of a squash-merged branch is not called unpushed", () => {
+    expect(commitIsLocal({ pushed: false }, false)).toBe(true);
+    expect(commitIsLocal({ pushed: true }, false)).toBe(false);
+    // Without the remote's answer nothing is claimed.
+    expect(commitIsLocal({}, false)).toBe(false);
+    // After the merge GitHub deletes the branch and no origin ref holds the
+    // commit, but the merged pull request does.
+    expect(commitIsLocal({ pushed: false }, true)).toBe(false);
   });
 
   test("an unarmed button shows its icon and its own tooltip", () => {
