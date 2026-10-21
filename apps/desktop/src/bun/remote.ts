@@ -3,9 +3,7 @@ import {
   type ApplicationContext,
   DaedalusError,
   type PhoneAlert,
-  saveRemoteEnabled,
-  saveRemoteKeepAwake,
-  saveRemoteMacName,
+  updateSettings,
 } from "@daedalus/core";
 import type { TmuxClient } from "@daedalus/platform";
 import type {
@@ -1351,16 +1349,17 @@ export class RemoteHost implements DesktopRemoteHost {
   }
 
   async setMacName(name: string): Promise<RemoteStateDto> {
-    await saveRemoteMacName(
-      this.options.context.config,
-      name.trim().slice(0, 60),
-    );
+    await updateSettings(this.options.context.config, () => ({
+      remoteMacName: name.trim().slice(0, 60),
+    }));
     this.#connector?.setMacName(this.macName);
     return this.state();
   }
 
   async setKeepAwake(enabled: boolean): Promise<RemoteStateDto> {
-    await saveRemoteKeepAwake(this.options.context.config, enabled);
+    await updateSettings(this.options.context.config, () => ({
+      remoteKeepAwake: enabled,
+    }));
     this.#keepAwake();
     return this.state();
   }
@@ -1471,7 +1470,9 @@ export class RemoteHost implements DesktopRemoteHost {
   }
 
   async setEnabled(enabled: boolean): Promise<RemoteStateDto> {
-    await saveRemoteEnabled(this.options.context.config, enabled);
+    await updateSettings(this.options.context.config, () => ({
+      remoteEnabled: enabled,
+    }));
     if (enabled) await this.#run();
     else this.stop();
     this.#keepAwake();

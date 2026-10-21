@@ -1,6 +1,6 @@
-import { mock } from "bun:test";
+import { afterAll, mock } from "bun:test";
 import * as os from "node:os";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 // Code that falls back to the user's provider folders (`~/.claude.json`,
@@ -12,3 +12,7 @@ const home = mkdtempSync(join(os.tmpdir(), "daedalus-test-home-"));
 const homedir = () => home;
 mock.module("node:os", () => ({ ...os, homedir, default: { ...os, homedir } }));
 mock.module("os", () => ({ ...os, homedir, default: { ...os, homedir } }));
+
+// A hook registered here runs once, after the last test file; `bun test`
+// fires no `exit` event a cleanup could wait for instead.
+afterAll(() => rmSync(home, { recursive: true, force: true }));
