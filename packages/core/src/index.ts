@@ -9,6 +9,7 @@ export * from "./services/activity";
 export * from "./services/activity-detect";
 export * from "./services/activity-store";
 export * from "./services/hook-events";
+export * from "./services/hook-ingest";
 export * from "./services/hook-install";
 export * from "./services/account-homes";
 export * from "./services/accounts";

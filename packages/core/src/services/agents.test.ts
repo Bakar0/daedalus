@@ -258,6 +258,40 @@ describe("AgentService", () => {
     });
   });
 
+  test("resolves a session by id or by a name only one live session has", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await Bun.write(
+        join(home, "config.json"),
+        JSON.stringify({
+          agents: { claude: { executable: process.execPath, args: [] } },
+        }),
+      );
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home, CLAUDE_CONFIG_DIR: join(home, "claude") },
+        tmux: new FakeTmux(),
+      });
+      const workspace = await context.workspaces.create({ name: "Names" });
+      const spawn = (name: string) =>
+        context.agents.spawn({
+          workspace: workspace.id,
+          provider: "claude",
+          name,
+        });
+      const review = await spawn("Review");
+      await spawn("Twin");
+      await spawn("Twin");
+      expect(context.agents.resolve(review.id).id).toBe(review.id);
+      expect(context.agents.resolve(" review ").id).toBe(review.id);
+      expect(() => context.agents.resolve("Twin")).toThrow(
+        expect.objectContaining({ code: "VALIDATION" }),
+      );
+      expect(() => context.agents.resolve("Nobody")).toThrow(
+        expect.objectContaining({ code: "NOT_FOUND" }),
+      );
+      context.close();
+    });
+  });
+
   test("keeps sessions when tmux does not answer, and takes back a lost one that is live", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       await Bun.write(

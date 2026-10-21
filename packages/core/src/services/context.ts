@@ -15,6 +15,7 @@ import { JsonLogger } from "../logging";
 import { runMigrations } from "../repositories/migrations";
 import { SqliteRepositories } from "../repositories/sqlite";
 import { ActivityService } from "./activity";
+import { sweepProviderActivity } from "./activity-detect";
 import { AbilityService } from "./abilities";
 import { findAccount } from "./account-homes";
 import { AccountService } from "./accounts";
@@ -258,6 +259,8 @@ export async function createApplicationContext(
   activity = new ActivityService(repositories, notifications, {
     home: config.home,
     ...(options.now ? { now: options.now } : {}),
+    sweep: () =>
+      sweepProviderActivity({ config, repositories, activity, tmux }),
   });
   const routines = new RoutineService(
     repositories,

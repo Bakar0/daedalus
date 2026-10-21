@@ -1427,6 +1427,29 @@ export class AgentService {
     return agent;
   }
 
+  /**
+   * A session by id, or by name when exactly one live session has it. Names
+   * are what people use; ids are what agents pass.
+   */
+  resolve(reference: string): AgentSession {
+    const byId = this.repositories.findAgent(reference);
+    if (byId) return byId;
+    const matches = this.repositories
+      .listAgents()
+      .filter(
+        (session) =>
+          !session.archivedAt &&
+          session.name.toLowerCase() === reference.trim().toLowerCase(),
+      );
+    if (matches.length === 1) return matches[0]!;
+    throw new DaedalusError(
+      matches.length ? "VALIDATION" : "NOT_FOUND",
+      matches.length
+        ? `More than one session is called '${reference}'; pass its id`
+        : `Session '${reference}' was not found`,
+    );
+  }
+
   async attach(id: string): Promise<number> {
     const agent = await this.requireRunning(id);
     return this.tmux.attach(agent.tmuxSession);

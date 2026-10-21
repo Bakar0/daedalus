@@ -4,6 +4,7 @@ import type { TmuxClient, TmuxLaunch } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
   ACTIVITY_STALE_AFTER_MS,
+  ActivityService,
   createApplicationContext,
   observeClaudeHook,
   readActivityRecord,
@@ -452,6 +453,34 @@ describe("staleness decay", () => {
         activity: "unknown",
         detail: null,
       });
+    });
+  });
+
+  test("refresh decays stale readings and survives a failing sweep", async () => {
+    await withSession(async ({ context, sessionId, home, advance }) => {
+      await context.activity.record({
+        sessionId,
+        activity: "working",
+        source: "hook",
+      });
+      advance(ACTIVITY_STALE_AFTER_MS + 1_000);
+      await context.activity.refresh();
+      expect(context.activity.get(sessionId)?.activity).toBe("unknown");
+
+      let swept = 0;
+      const failing = new ActivityService(
+        context.repositories,
+        context.notifications,
+        {
+          home,
+          sweep: async () => {
+            swept += 1;
+            throw new Error("transcript unreadable");
+          },
+        },
+      );
+      await failing.refresh();
+      expect(swept).toBe(1);
     });
   });
 

@@ -47,6 +47,59 @@ describe("TaskService", () => {
     });
   });
 
+  test("resolves a task by id, workspace#number, or a number in a workspace", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        reconcile: false,
+      });
+      const workspace = await context.workspaces.create({ name: "Refs" });
+      const task = await context.tasks.create({
+        workspace: workspace.id,
+        title: "Find me",
+      });
+      expect((await context.tasks.resolve(task.id)).id).toBe(task.id);
+      expect((await context.tasks.resolve(`${workspace.slug}#1`)).id).toBe(
+        task.id,
+      );
+      expect(
+        (await context.tasks.resolve("#1", { workspace: workspace.id })).id,
+      ).toBe(task.id);
+      expect(
+        (
+          await context.tasks.resolve("1", {
+            defaultWorkspace: async () => workspace.id,
+          })
+        ).id,
+      ).toBe(task.id);
+      // An empty --workspace counts as none.
+      expect(
+        (
+          await context.tasks.resolve("1", {
+            workspace: "",
+            defaultWorkspace: async () => workspace.id,
+          })
+        ).id,
+      ).toBe(task.id);
+      // The fallback is asked only when the reference names no workspace.
+      let asked = 0;
+      await context.tasks.resolve(`${workspace.slug}#1`, {
+        defaultWorkspace: async () => {
+          asked += 1;
+          return undefined;
+        },
+      });
+      expect(asked).toBe(0);
+      await expect(context.tasks.resolve("1")).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+      await expect(context.tasks.resolve("no-such-task")).rejects.toMatchObject(
+        { code: "NOT_FOUND" },
+      );
+      context.close();
+    });
+  });
+
   test("starts task numbering at one in each workspace", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const context = await createApplicationContext({
