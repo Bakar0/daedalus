@@ -15,7 +15,7 @@ import { defaultVault, RemoteStore } from "../services/remote-store";
 import type { SessionHosts } from "../services/session-hosts";
 import type { WorkspaceService } from "../services/workspaces";
 import { BrokerTransport, brokerAvailable, serveBroker } from "./broker";
-import { CloudAccount } from "./cloud-account";
+import { CloudAccount, type CloudSignIn } from "./cloud-account";
 import { GatewayClient } from "./gateway-client";
 import {
   CloudLink,
@@ -142,6 +142,9 @@ export class CloudService {
   async #devLogin(gatewayUrl: string, email: string): Promise<GatewayUser> {
     const client = new GatewayClient(gatewayUrl, undefined, this.options.fetch);
     const { user, token } = await client.devLogin(email);
+    // The old link goes before the new account is saved: until then it
+    // would read the new account's pins and token.
+    await this.#closeLink();
     const previous = await this.account.signIn();
     await this.account.save({ gatewayUrl: client.url, user, token });
     this.#own(
@@ -177,10 +180,7 @@ export class CloudService {
   signIn(gatewayUrl: string, email: string): Promise<GatewayUser> {
     return this.#serial(async () => {
       const user = await this.#devLogin(gatewayUrl, email);
-      if (this.#holder) {
-        await this.#closeLink();
-        await this.#hold();
-      }
+      if (this.#holder) await this.#hold();
       return user;
     });
   }
@@ -430,11 +430,20 @@ export class CloudService {
    * The runner key this Mac accepts a workspace's runner with: the pinned
    * one, else the one the gateway reports, which is pinned from then on.
    */
-  async #runnerKey(workspaceId: string): Promise<string | undefined> {
+  async #runnerKey(
+    workspaceId: string,
+    signIn: CloudSignIn,
+  ): Promise<string | undefined> {
+    // A link answers for the account it was opened with, and pins nothing
+    // once another account (or none) is signed in.
+    const current = await this.account.signIn();
+    if (current?.token !== signIn.token) return undefined;
     const pinned = await this.account.pinned(workspaceId);
     if (pinned) return pinned;
-    const workspace = await (
-      await this.#client()
+    const workspace = await new GatewayClient(
+      signIn.gatewayUrl,
+      signIn.token,
+      this.options.fetch,
     )
       .getWorkspace(workspaceId)
       .catch(() => undefined);
@@ -454,7 +463,7 @@ export class CloudService {
       gatewayUrl: signIn.gatewayUrl,
       token: signIn.token,
       identity: await this.identity(),
-      runnerKey: (workspaceId) => this.#runnerKey(workspaceId),
+      runnerKey: (workspaceId) => this.#runnerKey(workspaceId, signIn),
       answer: (hostId, call) => calls.answer(hostId, call),
       ...(this.options.connect ? { connect: this.options.connect } : {}),
       ...(this.options.log ? { log: this.options.log } : {}),

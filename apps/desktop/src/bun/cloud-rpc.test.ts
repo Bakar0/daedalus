@@ -510,4 +510,32 @@ describe("cloud RPC", () => {
       expect(relay.open()).toEqual([]);
     });
   });
+
+  test("switching accounts closes the old link before the new one opens", async () => {
+    await withCloud(async (rpc, context, _gateway, relay) => {
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://localhost:8080",
+        email: "first@example.com",
+      });
+      await context.cloud.hold();
+      expect(relay.open().map((socket) => socket.token)).toEqual([
+        `${TOKEN}-first@example.com`,
+      ]);
+      await Promise.all([
+        rpc.cloudSignIn({
+          gatewayUrl: "http://127.0.0.1:9090",
+          email: "second@example.com",
+        }),
+        rpc.cloudSignIn({
+          gatewayUrl: "http://127.0.0.1:9090",
+          email: "third@example.com",
+        }),
+      ]);
+      expect(relay.open().map((socket) => socket.token)).toEqual([
+        `${TOKEN}-third@example.com`,
+      ]);
+      await rpc.cloudSignOut({});
+      expect(relay.open()).toEqual([]);
+    });
+  });
 });
