@@ -8530,3 +8530,6 @@ dd {
 .session-card[data-cloud-state="waking"] .session-status-label {
   font-style: italic;
 }
+.cloud-first-run-bar .routine-bar-text {
+  white-space: normal;
+}

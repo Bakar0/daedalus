@@ -54,6 +54,7 @@ import {
   type AutoRebirthDto,
 } from "@daedalus/protocol";
 import { LargeFileBar } from "./LargeFileBar";
+import { CloudFirstRunBar } from "./CloudFirstRunBar";
 import type { DesktopClient } from "./client-types";
 import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import { UpdateBanner } from "./UpdateBanner";
@@ -5704,6 +5705,16 @@ export function WorkspaceApp({
               onCopy={copyCommandText}
             />
           ))}
+      {activeSession?.hostId &&
+        activeSession.kind === "agent" &&
+        activeSession.provider === "claude" &&
+        sessionIsLive(activeSession) && (
+          <CloudFirstRunBar
+            color={activeSession.color}
+            hostId={activeSession.hostId}
+            key={activeSession.hostId}
+          />
+        )}
       {activeSession ? (
         // The drawer sits over the terminal, below the routine bar, so
         // the bar's buttons stay in reach while it is open.
