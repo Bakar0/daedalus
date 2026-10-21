@@ -47,6 +47,7 @@ export class SessiondClient implements SessionBackend {
     private readonly path: string,
     private readonly connect: Connect = Bun.connect,
     private readonly requestTimeoutMs = REQUEST_TIMEOUT_MS,
+    private readonly maxReplyBytes = MAX_REPLY_BYTES,
   ) {}
 
   async call<M extends SessiondMethod>(
@@ -84,7 +85,7 @@ export class SessiondClient implements SessionBackend {
           drain: () => writer?.flush(),
           data: (socket, chunk) => {
             buffer = Buffer.concat([buffer, chunk]);
-            if (buffer.length > MAX_REPLY_BYTES) {
+            if (buffer.length > this.maxReplyBytes) {
               finish(
                 () =>
                   reply.reject(

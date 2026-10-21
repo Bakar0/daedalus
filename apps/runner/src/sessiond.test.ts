@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { FakeBackend } from "./fake-backend";
 import { SessionDaemon } from "./sessiond";
 import { SessiondClient } from "./sessiond-client";
-import { MAX_REPLY_BYTES } from "./sessiond-protocol";
 import type { Terminal } from "./backend";
 
 let dir: string;
@@ -192,10 +191,12 @@ function impostor(onData: (send: (data: string | Uint8Array) => void) => void) {
 }
 
 test("a reply that never ends is cut at the size limit", async () => {
-  const server = impostor((send) =>
-    send(Buffer.alloc(MAX_REPLY_BYTES + 1024, 97)),
-  );
-  await expect(client.call("host.listLive", null)).rejects.toMatchObject({
+  // A small limit, and a timeout no machine load reaches, so the cut is what
+  // ends the call. Sending 16 MiB raced the timeout on a busy machine.
+  const limit = 64 * 1024;
+  const capped = new SessiondClient(socket, undefined, 10 * 60_000, limit);
+  const server = impostor((send) => send(Buffer.alloc(limit + 1024, 97)));
+  await expect(capped.call("host.listLive", null)).rejects.toMatchObject({
     code: "SESSIOND_REPLY_TOO_LARGE",
   });
   server.stop(true);
