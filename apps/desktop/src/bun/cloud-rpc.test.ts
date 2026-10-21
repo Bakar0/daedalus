@@ -221,4 +221,69 @@ describe("cloud RPC", () => {
       expect(JSON.stringify(state)).not.toContain(TOKEN);
     });
   });
+
+  test("runs a workspace in the cloud, sleeps, wakes and deletes it", async () => {
+    await withCloud(async (rpc, context, gateway) => {
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://localhost:8080",
+        email: "dev@example.com",
+      });
+      const workspace = await context.workspaces.create({ name: "Pods" });
+
+      const created = await rpc.cloudWorkspaceCreate({
+        workspace: workspace.id,
+      });
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+      const cloudId = context.repositories.cloudWorkspaceId(workspace.id);
+      expect(cloudId).toBeDefined();
+      expect(created.data.workspaces).toEqual([
+        {
+          workspaceId: workspace.id,
+          cloudId,
+          status: "running",
+          runnerOnline: true,
+          reason: null,
+        },
+      ]);
+      // The runner key the gateway reports stays in the host.
+      expect(JSON.stringify(created)).not.toContain(RUNNER_KEY);
+
+      const asleep = await rpc.cloudWorkspaceSleep({ workspace: workspace.id });
+      expect(asleep.ok && asleep.data.workspaces[0]?.status).toBe("sleeping");
+      const awake = await rpc.cloudWorkspaceWake({ workspace: workspace.id });
+      expect(awake.ok && awake.data.workspaces[0]?.status).toBe("running");
+
+      const deleted = await rpc.cloudWorkspaceDelete({
+        workspace: workspace.id,
+        force: true,
+      });
+      expect(deleted.ok && deleted.data.workspaces).toEqual([]);
+      expect(
+        context.repositories.cloudWorkspaceId(workspace.id),
+      ).toBeUndefined();
+      expect(await context.workspaces.get(workspace.id)).toBeDefined();
+      expect(gateway.calls).toContain(`DELETE /v1/workspaces/${cloudId}`);
+    });
+  });
+
+  test("a cloud workspace whose local one is gone is left out", async () => {
+    await withCloud(async (rpc, _context, gateway) => {
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://localhost:8080",
+        email: "dev@example.com",
+      });
+      gateway.workspaces.set("00000000-0000-4000-8000-000000000000", {
+        workspaceId: "00000000-0000-4000-8000-000000000000",
+        name: "Elsewhere",
+        status: "running",
+        reason: null,
+        runnerOnline: true,
+        runnerKey: RUNNER_KEY,
+        createdAt: new Date().toISOString(),
+      });
+      const state = await rpc.cloudState({});
+      expect(state.ok && state.data.workspaces).toEqual([]);
+    });
+  });
 });

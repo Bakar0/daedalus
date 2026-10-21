@@ -108,6 +108,7 @@ import { MarkdownPreview } from "./markdown-preview";
 import { buildWorldModel, worldInputFromSnapshot } from "./world/world-model";
 import { TaskPriorityMenu, TaskStatusMenu } from "./TaskStatusMenu";
 import { ColorSwatches, SessionMenu, WorkspaceMenu } from "./SessionMenu";
+import { useCloudState } from "./CloudPanel";
 import { RoutineBar } from "./routines/RoutineBar";
 import { TeamBar, TeamPanel } from "./teams/TeamPanel";
 import { RoutinesPanel } from "./routines/RoutinesPanel";
@@ -2002,6 +2003,28 @@ export function WorkspaceApp({
       });
       if (!content.ok) throw new Error(content.error.message);
       setWorkspaceContent(content.data);
+      await refresh();
+    },
+  });
+  // The cloud sign-in and the cloud workspaces, from the gateway. Asked on a
+  // timer rather than with every snapshot: each answer is a gateway request.
+  const cloudState = useCloudState(client, 10_000);
+  const cloudByWorkspace = useMemo(
+    () =>
+      new Map(
+        (cloudState.data?.workspaces ?? []).map((item) => [
+          item.workspaceId,
+          item,
+        ]),
+      ),
+    [cloudState.data],
+  );
+  // Keyed by local workspace id; a create can take a minute.
+  const cloudActions = useMutation({
+    onStart: () => setError(undefined),
+    onError: (message) => setError(message),
+    onSettled: async () => {
+      await cloudState.refresh();
       await refresh();
     },
   });
@@ -6106,6 +6129,43 @@ export function WorkspaceApp({
                             void updateWorkspace(item, { autoRebirthPercent })
                           }
                           onRename={() => void renameWorkspace(item)}
+                          cloud={
+                            cloudState.data?.signedIn
+                              ? {
+                                  workspace: cloudByWorkspace.get(item.id),
+                                  pending: cloudActions.pending(item.id),
+                                  onCreate: () =>
+                                    void cloudActions.run(
+                                      client.request.cloudWorkspaceCreate({
+                                        workspace: item.id,
+                                      }),
+                                      item.id,
+                                    ),
+                                  onSleep: () =>
+                                    void cloudActions.run(
+                                      client.request.cloudWorkspaceSleep({
+                                        workspace: item.id,
+                                      }),
+                                      item.id,
+                                    ),
+                                  onWake: () =>
+                                    void cloudActions.run(
+                                      client.request.cloudWorkspaceWake({
+                                        workspace: item.id,
+                                      }),
+                                      item.id,
+                                    ),
+                                  onDelete: () =>
+                                    void cloudActions.run(
+                                      client.request.cloudWorkspaceDelete({
+                                        workspace: item.id,
+                                        force: true,
+                                      }),
+                                      item.id,
+                                    ),
+                                }
+                              : undefined
+                          }
                         />
                         {/* Last, so the ones that come in on hover open to its
                           left and it never moves. */}

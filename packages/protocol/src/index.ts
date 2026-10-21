@@ -1159,6 +1159,16 @@ export interface DesktopRpcSchema {
         CloudStateDto
       >;
       cloudSignOut: Request<Record<string, never>, CloudStateDto>;
+      /** Run in cloud: the pod for a local workspace (`daedal cloud create`). */
+      cloudWorkspaceCreate: Request<{ workspace: string }, CloudStateDto>;
+      /** Removes the pod and keeps the volume; its sessions end. */
+      cloudWorkspaceSleep: Request<{ workspace: string }, CloudStateDto>;
+      cloudWorkspaceWake: Request<{ workspace: string }, CloudStateDto>;
+      /** Removes the pod, its volume and its token; the local workspace stays. */
+      cloudWorkspaceDelete: Request<
+        { workspace: string; force: true },
+        CloudStateDto
+      >;
       remoteGet: Request<Record<string, never>, RemoteStateDto>;
       remoteSetEnabled: Request<{ enabled: boolean }, RemoteStateDto>;
       remoteSetKeepAwake: Request<{ enabled: boolean }, RemoteStateDto>;

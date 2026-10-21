@@ -828,6 +828,31 @@ export function createDesktopRequestHandlers(
         await context.cloud.logout();
         return cloudStateDto(await context.cloud.overview());
       }),
+    cloudWorkspaceCreate: ({ workspace }) =>
+      mutate(async () => {
+        await context.cloud.create(workspace);
+        return cloudStateDto(await context.cloud.overview());
+      }),
+    cloudWorkspaceSleep: ({ workspace }) =>
+      mutate(async () => {
+        await context.cloud.sleep(workspace);
+        return cloudStateDto(await context.cloud.overview());
+      }),
+    cloudWorkspaceWake: ({ workspace }) =>
+      mutate(async () => {
+        await context.cloud.wake(workspace);
+        return cloudStateDto(await context.cloud.overview());
+      }),
+    cloudWorkspaceDelete: ({ workspace, force }) =>
+      mutate(async () => {
+        if (force !== true)
+          throw new DaedalusError(
+            "VALIDATION",
+            "Deleting a cloud workspace removes its pod and its volume; confirm it",
+          );
+        await context.cloud.delete(workspace);
+        return cloudStateDto(await context.cloud.overview());
+      }),
     remoteGet: () => result(() => remote.state()),
     remoteSetEnabled: ({ enabled }) => mutate(() => remote.setEnabled(enabled)),
     remoteSetKeepAwake: ({ enabled }) =>
