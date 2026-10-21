@@ -32,6 +32,8 @@ export interface Browser {
   /** Calls the page recorded through `window.requests`, oldest first. */
   requests(): Promise<Array<Record<string, unknown>>>;
   rendererErrors: string[];
+  /** A CSS selector that test ids are looked up inside, or empty for the page. */
+  scope: string;
 }
 
 export interface RunOptions {
@@ -172,10 +174,13 @@ export async function withBrowser(
     await send("Runtime.enable");
 
     const selector = (testId: string) =>
-      JSON.stringify(`[data-testid="${testId}"]`);
+      JSON.stringify(
+        `${browser.scope ? `${browser.scope} ` : ""}[data-testid="${testId}"]`,
+      );
     const browser: Browser = {
       evaluate,
       rendererErrors,
+      scope: "",
       async waitFor(expression, what, timeoutMs = 10_000) {
         const deadline = Date.now() + timeoutMs;
         while (Date.now() < deadline) {
@@ -279,4 +284,24 @@ export const fitsViewport = (selector: string) => `(() => {
     viewport: window.innerHeight,
     pageScrolls: document.documentElement.scrollHeight > window.innerHeight + 1,
   };
+})()`;
+
+/** What the cloud fixture page hands back that the real host never sends. */
+export const FIXTURE_SECRETS = ["dtok-SECRET-5f3a9c", "rkey-SECRET-77b1e0"];
+
+/** Settings > a category, by its nav label. */
+export const openSettingsCategory = (label: string) => `(() => {
+  const button = [...document.querySelectorAll('.settings-nav button')]
+    .find((one) => one.textContent.trim() === ${JSON.stringify(label)});
+  if (!button) return false;
+  button.click();
+  return true;
+})()`;
+
+/** Opens the `<details>` menu whose trigger has this aria-label, if closed. */
+export const openMenu = (label: string) => `(() => {
+  const summary = document.querySelector('summary[aria-label=${JSON.stringify(label)}]');
+  if (!summary) return false;
+  if (!summary.parentElement.open) summary.click();
+  return true;
 })()`;
