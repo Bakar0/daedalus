@@ -20,7 +20,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import type { DesktopClient } from "../client-types";
-import type { AppTheme } from "../theme";
+import { type AppTheme, appearanceOf } from "../theme";
 import { askConfirm } from "../dialogs";
 import { MarkdownPreview } from "../markdown-preview";
 import {
@@ -775,7 +775,9 @@ export default function EditorArea({
       <div className="editor-area">
         <DockviewReact
           className={
-            theme === "dark" ? "dockview-theme-dark" : "dockview-theme-light"
+            appearanceOf(theme) === "dark"
+              ? "dockview-theme-dark"
+              : "dockview-theme-light"
           }
           components={{
             file: FilePanel,

@@ -126,6 +126,35 @@ export class TaskService {
     return task;
   }
 
+  /**
+   * A task by id, by `<workspace>#<number>`, or by `#<number>` or a bare
+   * number in `workspace`. When no workspace is named, `defaultWorkspace`
+   * supplies one; it is asked only for a numeric reference.
+   */
+  async resolve(
+    reference: string,
+    options: {
+      workspace?: string | undefined;
+      defaultWorkspace?: () => Promise<string | undefined>;
+    } = {},
+  ): Promise<Task> {
+    const exact = this.repositories.findTask(reference);
+    if (exact) return exact;
+    const scoped = /^(.+)#([1-9]\d*)$/.exec(reference);
+    const numeric = /^#?([1-9]\d*)$/.exec(reference);
+    if (!scoped && !numeric) return this.get(reference);
+    const number = Number(scoped?.[2] ?? numeric?.[1]);
+    const workspace =
+      scoped?.[1] || options.workspace || (await options.defaultWorkspace?.());
+    if (!workspace)
+      throw new DaedalusError(
+        "VALIDATION",
+        "A numeric task reference requires --workspace outside a Daedalus session",
+      );
+    const resolved = await this.workspaces.get(workspace);
+    return this.getByNumber(resolved.id, number);
+  }
+
   getByNumber(workspaceId: string, number: number): Task {
     const task = this.repositories.findTaskByNumber(workspaceId, number);
     if (!task)

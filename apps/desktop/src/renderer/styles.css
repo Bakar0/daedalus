@@ -8426,3 +8426,37 @@ dd {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Midnight: Daedalus's original navy, from before the flat layout. The
+   columns are translucent over the same gradient, the center and terminal
+   are the old near-black blue, and the accent wash is blue again. */
+.app[data-palette="midnight"] {
+  --footer: #090d17;
+  --panel: rgb(14 19 33 / 0.88);
+  --raised: rgb(255 255 255 / 0.045);
+  --raised-hover: rgb(255 255 255 / 0.075);
+  --elevated: #151b2b;
+  --overlay: #1b2130;
+  --line: rgb(151 164 190 / 0.16);
+  --line-strong: rgb(151 164 190 / 0.3);
+  --text: #eff4fc;
+  --secondary: #c8d3e7;
+  --muted: #8491a9;
+  --accent: #4596fe;
+  --accent-hover: #1c77f1;
+  --accent-wash: rgb(69 150 254 / 0.13);
+  --success: #58c79a;
+  --danger: #ff8987;
+  --center: #11151d;
+  background:
+    radial-gradient(circle at 55% -30%, rgb(63 87 150 / 0.2), transparent 48%),
+    linear-gradient(115deg, #060916 0%, #0a1022 58%, #140c22 100%);
+}
+.app[data-palette="midnight"] .agent-terminal-shell,
+.app[data-palette="midnight"] .terminal {
+  background: #11151d;
+}
+.app[data-palette="midnight"] .terminal-status,
+.app[data-palette="midnight"] .agent-session-status {
+  background: #111728;
+}

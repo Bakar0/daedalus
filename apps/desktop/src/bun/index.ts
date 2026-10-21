@@ -13,16 +13,13 @@ import {
   channelHome,
   createApplicationContext,
   ReadModel,
-  sweepProviderActivity,
   WORKSPACE_FILES_CHANGED,
   type WorkspaceFilesChanged,
 } from "@daedalus/core";
 import {
   BUNDLED_TMUX_VARIABLE,
-  CommandTmuxClient,
   isInheritedSessionVariable,
   pathExists,
-  TmuxPtyBridge,
 } from "@daedalus/platform";
 import type {
   DesktopCommand,
@@ -181,14 +178,7 @@ await context.skills.sync().catch(async (error: unknown) => {
   });
 });
 
-const terminalTmux = context.tmux;
-if (!(terminalTmux instanceof CommandTmuxClient))
-  throw new Error("Desktop terminal requires the command tmux adapter");
-const phoneSizes = new PhoneWindowSize(terminalTmux);
-const terminalTarget = (session: string) => ({
-  socketName: terminalTmux.socketName,
-  session,
-});
+const phoneSizes = new PhoneWindowSize(context.tmux);
 const preexistingLiveIds = new Set([
   ...context.repositories
     .listAgents()
@@ -245,7 +235,6 @@ const server = Bun.serve<SocketData>({
           socket.close();
           return;
         }
-        const tmuxTarget = terminalTarget(target.tmuxSession);
         const connection = new TerminalConnection({
           agentId: target.id,
           socket,
@@ -255,11 +244,10 @@ const server = Bun.serve<SocketData>({
             ? "reconnected"
             : "live",
           createBridge: (onOutput) =>
-            new TmuxPtyBridge(
-              onOutput,
-              tmuxTarget,
+            context.tmux.openPty(
+              target.tmuxSession,
               socket.data.initialSize,
-              terminalTmux.executable,
+              onOutput,
             ),
           onInput: (data) => {
             // A real keystroke holds Daedalus's own typing into this
@@ -425,7 +413,7 @@ const remote = new RemoteHost({
     createDesktopRequestHandlers(context, {
       onMutation: () => announce("desktop"),
     }),
-  openTerminal: agentTerminalOpener(context, terminalTmux, phoneSizes),
+  openTerminal: agentTerminalOpener(context, phoneSizes),
   log: (event, fields) => void context.logger.write("info", event, fields),
 });
 announceRemote = () => remote.announce();
@@ -758,13 +746,7 @@ setInterval(async () => {
     // cheap — the rollout read is gated on file mtime and decay only touches
     // rows that are already too old to believe — and neither deserves a timer
     // of its own.
-    await sweepProviderActivity({
-      config: context.config,
-      repositories: context.repositories,
-      activity: context.activity,
-      tmux: context.tmux,
-    }).catch(() => undefined);
-    await context.activity.decay().catch(() => undefined);
+    await context.activity.refresh();
     // Automatic rebirth rides the same tick. Telemetry is cached for five
     // seconds, so this is a map lookup on most ticks.
     await context.telemetry

@@ -9,9 +9,7 @@ import {
   INSTALL_COMMANDS,
   normalizeError,
   ReadModel,
-  saveAutoRestoreSessionsEnabled,
-  saveAutoRebirthPercent,
-  saveTrustSessionFoldersEnabled,
+  updateSettings,
   type AccountProfile,
   type AgentActivityState,
   type AgentSession,
@@ -794,18 +792,24 @@ export function createDesktopRequestHandlers(
     remoteActivity: () => result(() => remote.activity()),
     autoRestoreSessionsSet: ({ enabled }) =>
       mutate(async () => {
-        await saveAutoRestoreSessionsEnabled(context.config, enabled);
+        await updateSettings(context.config, () => ({
+          autoRestoreSessionsEnabled: enabled,
+        }));
         return { enabled };
       }),
     trustSessionFoldersSet: ({ enabled }) =>
       mutate(async () => {
-        await saveTrustSessionFoldersEnabled(context.config, enabled);
+        await updateSettings(context.config, () => ({
+          trustSessionFoldersEnabled: enabled,
+        }));
         return { enabled };
       }),
     autoRebirthSet: ({ percent }) =>
       mutate(async () => {
         if (percent !== null) autoRebirthPercent(percent);
-        await saveAutoRebirthPercent(context.config, percent);
+        await updateSettings(context.config, () => ({
+          autoRebirthPercent: percent,
+        }));
         return { percent };
       }),
     focusModeSet: ({ enabled }) =>

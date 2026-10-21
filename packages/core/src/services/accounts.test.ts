@@ -19,6 +19,16 @@ import {
 } from "../index";
 
 class FakeTmux implements TmuxClient {
+  openPty() {
+    return {
+      start: async () => {},
+      write() {},
+      resize() {},
+      close() {},
+    };
+  }
+  async pinWindowSize() {}
+  async unpinWindowSize() {}
   readonly sessions = new Set<string>();
   readonly launches: TmuxLaunch[] = [];
   async probe() {
@@ -232,6 +242,133 @@ describe("provider sign-in status", () => {
       }),
     ).toEqual({ method: "ChatGPT", email: "me@example.com", plan: "plus" });
     expect(parseCodexAccount({ account: null })).toBeUndefined();
+  });
+});
+
+describe("AccountService.forLaunch", () => {
+  const noDefaults = { defaultClaudeAccount: null, defaultCodexAccount: null };
+  const refusal = (promise: Promise<unknown>) =>
+    promise.then(
+      () => undefined,
+      (error: unknown) => error as DaedalusError,
+    );
+
+  test("takes the account asked for, by name or id, or the provider's own", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context } = await setup(home);
+      const profile = await context.accounts.add("claude", "Personal");
+      await Bun.write(
+        join(home, "accounts", "claude", profile.id, "signed-in"),
+        "",
+      );
+      const launch = (requested: string | null) =>
+        context.accounts.forLaunch("claude", {
+          requested,
+          workspace: { ...noDefaults, defaultClaudeAccount: profile.id },
+        });
+      expect(await launch("personal")).toBe(profile.id);
+      expect(await launch(profile.id)).toBe(profile.id);
+      // Asking for the default wins over the workspace's choice.
+      expect(await launch("default")).toBeNull();
+      expect(await launch(null)).toBeNull();
+      expect((await refusal(launch("Work")))?.code).toBe("NOT_FOUND");
+      context.close();
+    });
+  });
+
+  test("falls back from a removed workspace default but not from a removed predecessor's account", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context } = await setup(home);
+      const profile = await context.accounts.add("claude", "Gone");
+      await Bun.write(
+        join(home, "accounts", "claude", profile.id, "signed-in"),
+        "",
+      );
+      const workspace = { ...noDefaults, defaultClaudeAccount: profile.id };
+      expect(await context.accounts.forLaunch("claude", { workspace })).toBe(
+        profile.id,
+      );
+      // A predecessor keeps its account, and one on another provider says
+      // nothing about this one.
+      expect(
+        await context.accounts.forLaunch("claude", {
+          previous: { provider: "claude", account: null },
+          workspace,
+        }),
+      ).toBeNull();
+      expect(
+        await context.accounts.forLaunch("claude", {
+          previous: { provider: "codex", account: "codex-profile" },
+          workspace,
+        }),
+      ).toBe(profile.id);
+
+      await context.accounts.remove("claude", profile.id);
+      expect(
+        await context.accounts.forLaunch("claude", { workspace }),
+      ).toBeNull();
+      const removed = await refusal(
+        context.accounts.forLaunch("claude", {
+          previous: { provider: "claude", account: profile.id },
+          workspace,
+        }),
+      );
+      expect(removed?.code).toBe("CONFLICT");
+      expect(removed?.message).toContain("which was removed");
+      context.close();
+    });
+  });
+
+  test("refuses an account its provider says is signed out", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context } = await setup(home);
+      await context.accounts.add("claude", "Work");
+      const signedOut = await refusal(
+        context.accounts.forLaunch("claude", {
+          requested: "Work",
+          workspace: noDefaults,
+        }),
+      );
+      expect(signedOut?.code).toBe("DEPENDENCY");
+      expect(signedOut?.message).toContain("not signed in on the Work account");
+      expect(signedOut?.message).toContain(
+        `daedal account login claude "Work"`,
+      );
+      const keychain = { write: async () => {}, remove: async () => {} };
+      await new AccountService(
+        context.config,
+        context.repositories,
+        keychain,
+      ).add("claude", "Key", "api-key");
+      const noKey = await refusal(
+        context.accounts.forLaunch("claude", {
+          requested: "Key",
+          workspace: noDefaults,
+        }),
+      );
+      expect(noKey?.message).toContain("The Key account has no API key");
+      context.close();
+    });
+  });
+
+  test("a custom command runs on no account", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context } = await setup(home);
+      expect(
+        await context.accounts.forLaunch("custom", {
+          requested: "default",
+          workspace: noDefaults,
+        }),
+      ).toBeNull();
+      const named = await refusal(
+        context.accounts.forLaunch("custom", {
+          requested: "Work",
+          workspace: noDefaults,
+        }),
+      );
+      expect(named?.code).toBe("VALIDATION");
+      context.close();
+    });
   });
 });
 
