@@ -1240,7 +1240,8 @@ function TerminalSurface({
     // underline is drawn here rather than by xterm, which underlines only the
     // row under the mouse when a program broke a long URL across rows.
     let linksArmed = false;
-    let hoveredLink: { url: string; range: LinkRange } | undefined;
+    let hoveredLink:
+      { url: string; range: LinkRange; open: () => void } | undefined;
     const linkLayer = document.createElement("div");
     linkLayer.className = "terminal-link-layer";
     const drawLink = () => {
@@ -1277,18 +1278,40 @@ function TerminalSurface({
       container.classList.remove("links-armed");
       drawLink();
     };
-    const hoverLink = (_event: MouseEvent, url: string, range: LinkRange) => {
-      hoveredLink = { url, range };
+    const hoverLink = (url: string, range: LinkRange, open: () => void) => {
+      hoveredLink = { url, range, open };
       drawLink();
     };
     const leaveLink = () => {
       hoveredLink = undefined;
       drawLink();
     };
+    // Cmd and click on a link is Daedalus's, as it is iTerm2's: caught here,
+    // before xterm, so the program never sees a press it would act on (Claude
+    // Code moves its cursor), nor a release reported after the link has
+    // swapped the terminal for an editor tab.
+    let pressedLink: { url: string } | undefined;
+    const pressLink = (event: MouseEvent) => {
+      if (event.button !== 0 || !event.metaKey || !hoveredLink) return;
+      event.preventDefault();
+      event.stopPropagation();
+      pressedLink = hoveredLink;
+    };
+    const releaseLink = (event: MouseEvent) => {
+      if (!pressedLink) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const link = hoveredLink;
+      const pressed = pressedLink;
+      pressedLink = undefined;
+      if (link?.url === pressed.url) link.open();
+    };
     window.addEventListener("keydown", armLinks, true);
     window.addEventListener("keyup", armLinks, true);
     window.addEventListener("blur", disarmLinks);
     container.addEventListener("mousemove", armLinks);
+    container.addEventListener("mousedown", pressLink, true);
+    window.addEventListener("mouseup", releaseLink, true);
 
     void (async () => {
       if (disposed) return;
@@ -1303,12 +1326,16 @@ function TerminalSurface({
         // OSC 8 links, which Claude Code sends when told it may: the whole
         // URL rides on every row it was wrapped across, so a link split over
         // two lines opens whole. Cmd and click, like a native terminal; a
-        // plain click belongs to the program.
+        // plain click belongs to the program. xterm drops every link that is
+        // not web unless told otherwise, and Claude Code links the files it
+        // names with `file://`; anything else still opens nothing.
         linkHandler: {
-          activate: (event, url) => {
-            if (event.metaKey) onOpenLink(url);
+          allowNonHttpProtocols: true,
+          activate: () => {},
+          hover: (_event, url, range) => {
+            if (/^(https?|file):/i.test(url))
+              hoverLink(url, range, () => onOpenLink(url));
           },
-          hover: hoverLink,
           leave: leaveLink,
         },
         // Shell prompts commonly use Nerd Font private-use glyphs. Prefer the
@@ -1324,13 +1351,11 @@ function TerminalSurface({
       const fitAddon = new FitAddon();
       terminal.loadAddon(fitAddon);
       terminal.loadAddon(
-        new WebLinksAddon(
-          (event, url) => {
-            event.preventDefault();
-            if (event.metaKey) onOpenLink(url);
-          },
-          { hover: hoverLink, leave: leaveLink },
-        ),
+        new WebLinksAddon((event) => event.preventDefault(), {
+          hover: (_event, url, range) =>
+            hoverLink(url, range, () => onOpenLink(url)),
+          leave: leaveLink,
+        }),
       );
       // Paths an agent prints, like `src/a.ts:12:3`. Only the ones that name
       // a file in a workspace become links, which is what keeps ordinary
@@ -1360,16 +1385,15 @@ function TerminalSurface({
                 {
                   text: candidate.text,
                   range,
-                  activate: (event: MouseEvent) => {
-                    if (event.metaKey)
+                  activate: () => {},
+                  hover: (_event: MouseEvent, linkText: string) =>
+                    hoverLink(linkText, range, () =>
                       fileLinksRef.current?.open(
                         target,
                         candidate.line,
                         candidate.column,
-                      );
-                  },
-                  hover: (event: MouseEvent, linkText: string) =>
-                    hoverLink(event, linkText, range),
+                      ),
+                    ),
                   leave: leaveLink,
                 },
               ];
@@ -1533,6 +1557,10 @@ function TerminalSurface({
         };
       };
       terminal.onData((data) => {
+        // A mouse report xterm measured against a terminal with no size,
+        // hidden behind another tab, says `NaN` where the cell goes. The
+        // program cannot parse it and takes it for typed text.
+        if (/^\u001b\[<\d+;NaN;|^\u001b\[<\d+;\d+;NaN/.test(data)) return;
         if (socket?.readyState === WebSocket.OPEN)
           socket.send(JSON.stringify({ type: "input", data }));
       });
@@ -1564,6 +1592,8 @@ function TerminalSurface({
       window.removeEventListener("keyup", armLinks, true);
       window.removeEventListener("blur", disarmLinks);
       container.removeEventListener("mousemove", armLinks);
+      container.removeEventListener("mousedown", pressLink, true);
+      window.removeEventListener("mouseup", releaseLink, true);
       linkLayer.remove();
       container.classList.remove("links-armed");
       socket?.close();
@@ -2147,9 +2177,22 @@ export function WorkspaceApp({
   );
   const openFileTarget = useCallback(
     (target: FileLinkTargetDto, line?: number, column?: number) => {
-      enterWorkspace(target.workspaceId, "workspace");
+      // A file outside every workspace opens in a tab of the workspace on
+      // screen, as VS Code opens one from its terminal, unless the editor
+      // cannot show it; then it opens in the Mac's default app.
+      if (target.workspaceId === null && !target.viewable) {
+        void client.request.openPath({ path: target.path }).then((response) => {
+          if (!response.ok) setError(response.error.message);
+          else if (!response.data.opened)
+            setError("The file could not be opened");
+        });
+        return;
+      }
+      const workspaceId = target.workspaceId ?? viewWorkspaceId.current;
+      if (!workspaceId) return;
+      enterWorkspace(workspaceId, "workspace");
       setFileOpenRequest({
-        workspaceId: target.workspaceId,
+        workspaceId,
         path: target.path,
         line,
         column,
@@ -2158,7 +2201,7 @@ export function WorkspaceApp({
     },
     // `enterWorkspace` only calls state setters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    [client],
   );
   const fileLinksFrom = useCallback(
     (baseDirectories: readonly string[]): FileLinks => ({
@@ -2181,7 +2224,8 @@ export function WorkspaceApp({
   const openTerminalLink = useCallback(
     (url: string) => {
       // `file://` links, which Claude Code prints for the files it touches,
-      // open in the editor when they are workspace files.
+      // open in the editor when they are workspace files, and in their
+      // default app otherwise.
       if (url.startsWith("file://")) {
         let path: string;
         try {
@@ -2191,7 +2235,7 @@ export function WorkspaceApp({
         }
         void resolveFileLink(path, []).then((target) => {
           if (target) openFileTarget(target);
-          else setError("That file is not in a workspace");
+          else setError(`No file at ${path}`);
         });
         return;
       }
