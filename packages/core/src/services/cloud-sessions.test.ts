@@ -151,6 +151,34 @@ describe("cloud sessions", () => {
     });
   });
 
+  test("a cloud session holds no abilities, at spawn or later", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, workspace, host } = await setUp(home);
+      for (const ability of ["orchestration", "routines"])
+        await expect(
+          context.agents.spawn({
+            workspace: workspace.id,
+            host: host.id,
+            abilities: [ability],
+          }),
+        ).rejects.toMatchObject({
+          code: "VALIDATION",
+          message: expect.stringContaining("the pod has no Daedalus skills"),
+        });
+      expect(host.launches).toEqual([]);
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        host: host.id,
+      });
+      for (const ability of ["orchestration", "routines"])
+        expect(() =>
+          context.abilities.grant(session.id, ability, { live: true }),
+        ).toThrow("A cloud session cannot hold");
+      expect(context.abilities.list(session.id)).toEqual([]);
+      context.close();
+    });
+  });
+
   test("a launch without the API key secret still starts", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const { context, workspace, host } = await setUp(home);

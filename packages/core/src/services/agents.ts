@@ -814,7 +814,11 @@ export class AgentService {
     const unavailable = await host.probe();
     if (unavailable) throw new DaedalusError("DEPENDENCY", unavailable);
     const abilities = this.abilities.validate(
-      { kind: input.terminal ? "terminal" : "agent", provider: "claude" },
+      {
+        kind: input.terminal ? "terminal" : "agent",
+        provider: "claude",
+        hostId: host.id,
+      },
       input.abilities ?? [],
     );
     const id = crypto.randomUUID();

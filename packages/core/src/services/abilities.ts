@@ -133,14 +133,26 @@ export class AbilityService {
       .filter((row) => row.enabled);
   }
 
-  /** Refuses abilities a session of this kind and provider cannot hold. */
+  /**
+   * Refuses abilities a session of this kind and provider cannot hold. A
+   * session on a cloud host holds none in stage 0: each one works through
+   * Daedalus skills, which the pod does not have, and orchestration needs
+   * `agent spawn`, which a cloud session may not call.
+   */
   validate(
-    session: Pick<AgentSession, "kind" | "provider">,
+    session: Pick<AgentSession, "kind" | "provider"> & {
+      hostId?: string | null;
+    },
     abilities: readonly string[],
   ): AbilityId[] {
     const ids = [...new Set(abilities)].map((id) => abilityDefinition(id).id);
     for (const id of ids) {
       const definition = ABILITIES[id];
+      if (session.hostId)
+        throw new DaedalusError(
+          "VALIDATION",
+          `A cloud session cannot hold the ${definition.label.toLowerCase()} ability yet: the pod has no Daedalus skills`,
+        );
       if (
         session.kind !== "agent" ||
         !(definition.providers as readonly string[]).includes(session.provider)
