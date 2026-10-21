@@ -1,4 +1,3 @@
-import { usesInbox } from "./session-inbox";
 import type {
   AgentActivityState,
   AgentSession,
@@ -9,9 +8,10 @@ import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import { ROUTINE_RUN_SKILL, type AbilityService } from "./abilities";
 import type { AgentService } from "./agents";
-import type { DeliveryGate, DeliveryHold } from "./delivery";
+import type { DeliveryHold } from "./delivery";
 import type { RoutineReportService } from "./routine-reports";
 import type { RoutineService } from "./routines";
+import type { SessionChannel } from "./session-channel";
 
 /**
  * Runs typed in and unfinished at once, per provider. Claude hands each run
@@ -31,13 +31,6 @@ export const ROUTINES_REBIRTH_PERCENT = 60;
 export const DRAIN_LIMIT_MS = 10 * 60_000;
 /** A rebirth the session never completed is finished by Daedalus after this. */
 const REBIRTH_LIMIT_MS = 15 * 60_000;
-/** Between two lines typed into one session, at least this long. */
-const DELIVERY_GAP_MS = 15_000;
-/**
- * A line typed with no activity reading since is presumed lost after this,
- * so a session whose hooks do not report still gets its routines.
- */
-const UNACKNOWLEDGED_DELIVERY_MS = 2 * 60_000;
 
 export interface RoutineTickInput {
   /** Context use per session, from telemetry. */
@@ -72,8 +65,8 @@ export interface RoutinesStatus {
 
 /**
  * The clock for the routines ability, on the desktop host's tick. It queues
- * due runs and types them into their sessions through the delivery gate, the
- * same rule that types grant and revoke notes, and it drains a session whose
+ * due runs and hands them to their sessions through the session channel, the
+ * same way grant and revoke notes go in, and it drains a session whose
  * context is full before asking it to be reborn.
  */
 export class RoutineDelivery {
@@ -84,8 +77,6 @@ export class RoutineDelivery {
     string,
     { sessionId: string; since: number }
   >();
-  /** When a line was last typed into each session. */
-  private readonly lastTyped = new Map<string, number>();
   /** Hold changes since the last tick returned, for the host's log. */
   private holdEvents: string[] = [];
 
@@ -95,14 +86,8 @@ export class RoutineDelivery {
     private readonly agents: AgentService,
     private readonly routines: RoutineService,
     private readonly reports: RoutineReportService,
-    private readonly gate: DeliveryGate,
+    private readonly channel: SessionChannel,
     private readonly now: () => Date = () => new Date(),
-    /** Hands a line to a session's inbox; injected so tests need no pipe. */
-    private readonly postToInbox: (
-      session: AgentSession,
-      line: string,
-    ) => Promise<boolean> = (session, line) =>
-      agents.postToInbox(session.id, line),
   ) {}
 
   /**
@@ -157,11 +142,7 @@ export class RoutineDelivery {
       left.nextRunAt!.localeCompare(right.nextRunAt!),
     )[0];
     const owner = this.repositories.findAgent(ability.sessionId);
-    // Typing holds only lines that are typed in.
-    const quiet =
-      owner && usesInbox(owner)
-        ? undefined
-        : this.gate.quietUntil(ability.sessionId);
+    const quiet = owner ? this.channel.quietUntil(owner) : null;
     return {
       ability,
       waiting,
@@ -182,7 +163,7 @@ export class RoutineDelivery {
         !ability.paused && next
           ? { routine: next.name, at: next.nextRunAt! }
           : null,
-      lastKeystrokeAt: this.gate.lastKeystrokeAt(ability.sessionId),
+      lastKeystrokeAt: this.channel.lastKeystrokeAt(ability.sessionId),
       routines: this.repositories.routines.list(ability.id).length,
       openReports: open.length,
       openUrgentReports: open.filter((report) => report.urgent).length,
@@ -205,7 +186,7 @@ export class RoutineDelivery {
       ? this.routines.runNow(ability, name)
       : this.routines.waitingRuns(ability)[0];
     if (!run) throw new DaedalusError("CONFLICT", "No routine run is waiting");
-    this.gate.skipQuietOnce(ability.sessionId);
+    this.channel.skipQuietOnce(ability.sessionId);
     return { ...run, ...(name ? {} : { alreadyQueued: true }) };
   }
 
@@ -269,46 +250,17 @@ export class RoutineDelivery {
       .waitingRuns(ability)
       .find((run) => !busy.has(run.routine));
     if (!next) return this.hold(ability, null);
-    const activity = input.activity(session.id);
-    if (!this.settled(session.id, activity)) return;
-    const screen = await this.agents
-      .screen(session.id, { styled: true })
-      .catch(() => "");
-    const inbox = usesInbox(session);
-    const hold = this.gate.check({ session, activity, screen, untyped: inbox });
-    if (hold) return this.hold(ability, hold);
-    if (inbox) {
-      // Claude wakes with this as a system reminder: nothing is typed, so
-      // it never shows as the user's message.
-      const posted = await this.postToInbox(
-        session,
-        `Daedalus: routine run ${next.id} is due. Carry it out now with the ${this.abilities.skillName(ROUTINE_RUN_SKILL)} skill, for run id ${next.id}.`,
-      );
-      if (!posted)
-        return this.hold(ability, {
-          reason: "busy",
-          text: "the session is not waiting at its prompt",
-        });
-      this.typed(session.id);
-      this.hold(ability, null);
-      result.delivered.push(this.routines.markDelivered(next, session.id));
-      return;
-    }
-    try {
-      await this.agents.invokeSkill(
-        session.id,
-        ROUTINE_RUN_SKILL,
-        String(next.id),
-      );
-    } catch (error) {
-      if (error instanceof DaedalusError && error.code === "CONFLICT")
-        return this.hold(ability, {
-          reason: "skill-missing",
-          text: error.message,
-        });
-      throw error;
-    }
-    this.typed(session.id);
+    const outcome = await this.channel.deliver(
+      session,
+      `Daedalus: routine run ${next.id} is due. Carry it out now with the ${this.abilities.skillName(ROUTINE_RUN_SKILL)} skill, for run id ${next.id}.`,
+      {
+        when: "at-prompt",
+        activity: input.activity(session.id),
+        skill: { id: ROUTINE_RUN_SKILL, args: String(next.id) },
+      },
+    );
+    if (outcome.kind === "settling") return;
+    if (outcome.kind === "held") return this.hold(ability, outcome.held);
     this.hold(ability, null);
     result.delivered.push(this.routines.markDelivered(next, session.id));
   }
@@ -327,38 +279,38 @@ export class RoutineDelivery {
     input: RoutineTickInput,
   ): Promise<void> {
     const now = this.now().getTime();
-    this.hold(ability, {
+    const waiting = delivered.length > 0 && now - drain.since < DRAIN_LIMIT_MS;
+    const rebirth: DeliveryHold = {
       reason: "rebirth",
-      text:
-        delivered.length && now - drain.since < DRAIN_LIMIT_MS
-          ? "waiting for runs in flight before a rebirth"
-          : "the session is being reborn",
-    });
+      text: waiting
+        ? "waiting for runs in flight before a rebirth"
+        : "the session is being reborn",
+    };
     if (session.rebirthRequestedAt) {
+      this.hold(ability, rebirth);
       if (now - Date.parse(session.rebirthRequestedAt) >= REBIRTH_LIMIT_MS)
         await this.agents.continueSession({ id: session.id });
       return;
     }
-    if (delivered.length && now - drain.since < DRAIN_LIMIT_MS) return;
-    const activity = input.activity(session.id);
-    if (!this.settled(session.id, activity)) return;
-    const screen = await this.agents
-      .screen(session.id, { styled: true })
-      .catch(() => "");
-    if (
-      this.gate.check({
-        session,
-        activity,
-        screen,
-        untyped: usesInbox(session),
-      })
-    )
-      return;
-    await this.agents.requestRebirth(session.id);
-    this.typed(session.id);
+    if (waiting) return this.hold(ability, rebirth);
+    const outcome = await this.agents.requestRebirthAtPrompt(
+      session,
+      input.activity(session.id),
+    );
+    // Still a rebirth on the bar; the gate's reason goes in the text.
+    this.hold(
+      ability,
+      outcome.kind === "held"
+        ? { ...rebirth, text: `rebirth waits: ${outcome.held.text}` }
+        : rebirth,
+    );
   }
 
-  /** Types a grant or revoke note under the delivery rule. */
+  /**
+   * Hands a grant or revoke note to its session. An inbox takes it at once
+   * and it arrives when the session is next at its prompt; typed, it waits
+   * for the delivery rule.
+   */
   private async deliverNote(
     row: SessionAbility,
     input: RoutineTickInput,
@@ -367,44 +319,13 @@ export class RoutineDelivery {
     const session = this.repositories.findAgent(row.sessionId);
     if (!session || session.archivedAt || session.status !== "running")
       return false;
-    // An inbox takes the note at once: it reaches the session when it is
-    // next at its prompt, and nothing is typed.
-    if (usesInbox(session) && (await this.agents.leaveNote(session.id, note))) {
-      this.abilities.noteDelivered(row, note);
-      return true;
-    }
-    const activity = input.activity(session.id);
-    if (!this.settled(session.id, activity)) return false;
-    const screen = await this.agents
-      .screen(session.id, { styled: true })
-      .catch(() => "");
-    if (this.gate.check({ session, activity, screen })) return false;
-    await this.agents.send(session.id, note);
+    const outcome = await this.channel.deliver(session, note, {
+      when: "next-prompt",
+      activity: input.activity(session.id),
+    });
+    if (outcome.kind !== "delivered") return false;
     this.abilities.noteDelivered(row, note);
-    this.typed(session.id);
     return true;
-  }
-
-  /**
-   * Whether the last line typed into the session has had time to land: a
-   * gap between lines, and an activity reading since the last one, or long
-   * enough without one that it was lost.
-   */
-  private settled(
-    sessionId: string,
-    activity: AgentActivityState | undefined,
-  ): boolean {
-    const last = this.lastTyped.get(sessionId);
-    if (last === undefined) return true;
-    const now = this.now().getTime();
-    if (now - last < DELIVERY_GAP_MS) return false;
-    const seen = activity && Date.parse(activity.observedAt) > last;
-    return Boolean(seen) || now - last >= UNACKNOWLEDGED_DELIVERY_MS;
-  }
-
-  private typed(sessionId: string): void {
-    this.lastTyped.set(sessionId, this.now().getTime());
-    this.gate.delivered(sessionId);
   }
 
   /**
