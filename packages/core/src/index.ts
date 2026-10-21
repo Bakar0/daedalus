@@ -14,6 +14,7 @@ export * from "./services/hook-install";
 export * from "./services/account-homes";
 export * from "./services/accounts";
 export * from "./services/agents";
+export * from "./services/codex-sessions";
 export * from "./services/integrated-terminals";
 export * from "./services/notifications";
 export * from "./services/ordering";

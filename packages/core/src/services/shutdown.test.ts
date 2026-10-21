@@ -7,6 +7,16 @@ import { createApplicationContext } from "../index";
 import type { AgentProviderName, AgentSession, SessionKind } from "../domain";
 
 class FakeTmux implements TmuxClient {
+  openPty() {
+    return {
+      start: async () => {},
+      write() {},
+      resize() {},
+      close() {},
+    };
+  }
+  async pinWindowSize() {}
+  async unpinWindowSize() {}
   readonly sessions = new Set<string>();
   serverRunning = true;
   killServerCalls = 0;

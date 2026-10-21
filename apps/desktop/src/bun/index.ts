@@ -17,10 +17,8 @@ import {
 } from "@daedalus/core";
 import {
   BUNDLED_TMUX_VARIABLE,
-  CommandTmuxClient,
   isInheritedSessionVariable,
   pathExists,
-  TmuxPtyBridge,
 } from "@daedalus/platform";
 import type {
   DesktopCommand,
@@ -179,14 +177,7 @@ await context.skills.sync().catch(async (error: unknown) => {
   });
 });
 
-const terminalTmux = context.tmux;
-if (!(terminalTmux instanceof CommandTmuxClient))
-  throw new Error("Desktop terminal requires the command tmux adapter");
-const phoneSizes = new PhoneWindowSize(terminalTmux);
-const terminalTarget = (session: string) => ({
-  socketName: terminalTmux.socketName,
-  session,
-});
+const phoneSizes = new PhoneWindowSize(context.tmux);
 const preexistingLiveIds = new Set([
   ...context.repositories
     .listAgents()
@@ -243,7 +234,6 @@ const server = Bun.serve<SocketData>({
           socket.close();
           return;
         }
-        const tmuxTarget = terminalTarget(target.tmuxSession);
         const connection = new TerminalConnection({
           agentId: target.id,
           socket,
@@ -253,11 +243,10 @@ const server = Bun.serve<SocketData>({
             ? "reconnected"
             : "live",
           createBridge: (onOutput) =>
-            new TmuxPtyBridge(
-              onOutput,
-              tmuxTarget,
+            context.tmux.openPty(
+              target.tmuxSession,
               socket.data.initialSize,
-              terminalTmux.executable,
+              onOutput,
             ),
           onInput: (data) => {
             // A real keystroke holds Daedalus's own typing into this
@@ -411,7 +400,7 @@ const remote = new RemoteHost({
   macName: hostname().replace(/\.local$/, ""),
   handlers: () =>
     createDesktopRequestHandlers(context, () => announce("desktop")),
-  openTerminal: agentTerminalOpener(context, terminalTmux, phoneSizes),
+  openTerminal: agentTerminalOpener(context, phoneSizes),
   log: (event, fields) => void context.logger.write("info", event, fields),
 });
 announceRemote = () => remote.announce();

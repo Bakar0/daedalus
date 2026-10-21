@@ -11,6 +11,16 @@ import packageJson from "../../../../package.json";
 import { createDesktopRequestHandlers, desktopDataFingerprint } from "./rpc";
 
 class FakeTmux implements TmuxClient {
+  openPty() {
+    return {
+      start: async () => {},
+      write() {},
+      resize() {},
+      close() {},
+    };
+  }
+  async pinWindowSize() {}
+  async unpinWindowSize() {}
   sessions = new Set<string>();
   async probe() {
     return "tmux 3.7c";

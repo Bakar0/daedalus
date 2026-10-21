@@ -44,6 +44,16 @@ const claudeScreen = (draft: string) =>
   CLAUDE_IDLE_SCREEN.replace("❯ ", `❯ ${draft}`);
 
 class FakeTmux implements TmuxClient {
+  openPty() {
+    return {
+      start: async () => {},
+      write() {},
+      resize() {},
+      close() {},
+    };
+  }
+  async pinWindowSize() {}
+  async unpinWindowSize() {}
   readonly sessions = new Set<string>();
   readonly launches: TmuxLaunch[] = [];
   readonly sent: Array<{ session: string; text: string }> = [];
@@ -898,6 +908,43 @@ describe("routine delivery", () => {
         sessionId: successor.id,
         line: expect.stringMatching(/^Daedalus: routine run \d+ is due\./),
       });
+    });
+  });
+
+  test("a drain leaves the rebirth in an inbox's mailbox when nothing reads the pipe", async () => {
+    await withAbilities(async (harness) => {
+      const { context, tmux, inbox } = harness;
+      const { session, ability } = await argus(harness);
+      context.routines.add(ability, { text: routineText("ci-health") });
+      await tick(harness);
+      const [inFlight] = context.routines.deliveredRuns(ability);
+      context.routines.start(ability, inFlight!.id);
+      await context.routines.done(ability, inFlight!.id, "quiet", "ok");
+      // At its prompt by every reading, but its waiter is not reading: a
+      // turn interrupted with Esc fires no Stop hook.
+      inbox.open = false;
+      await tick(harness, idle(harness, { contextPercent: () => 72 }));
+      const mailbox = Bun.file(`${inboxPath(context.config, session.id)}.mail`);
+      expect(await mailbox.text()).toMatch(
+        /^Daedalus: continue your work in a fresh session now\. Run the daedalus-rebirth(-\w+)? skill\.\n$/,
+      );
+      const requestedAt = context.repositories.findAgent(
+        session.id,
+      )?.rebirthRequestedAt;
+      expect(requestedAt).not.toBeNull();
+      expect(tmux.sent).toEqual([]);
+      // The session never carries it out: Daedalus finishes the rebirth.
+      // The request is stamped by the wall clock, so the test clock moves
+      // to 15 minutes after it.
+      harness.clock.now = new Date(Date.parse(requestedAt!) + 15 * 60_000);
+      await tick(harness);
+      const moved = context.repositories.abilities
+        .list()
+        .find((row) => row.id === ability.id);
+      expect(moved?.sessionId).not.toBe(session.id);
+      expect(context.repositories.findAgent(moved!.sessionId)?.status).toBe(
+        "running",
+      );
     });
   });
 

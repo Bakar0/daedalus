@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { chmod, mkdir, open, rename } from "node:fs/promises";
 import { join } from "node:path";
-import { runCommand } from "@daedalus/platform";
+import { runCommand, writeFileAtomic } from "@daedalus/platform";
 import {
   type AccountPlan,
   createIdentity,
@@ -127,15 +127,7 @@ const newSecret = () => randomBytes(32).toString("base64url");
  * is never readable by other users, not even for a moment.
  */
 async function writeAtomic(path: string, text: string): Promise<void> {
-  const temporary = `${path}.${process.pid}.tmp`;
-  const handle = await open(temporary, "w", 0o600);
-  try {
-    await handle.writeFile(text);
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  await rename(temporary, path);
+  await writeFileAtomic(path, text, { mode: 0o600, sync: true });
 }
 
 /**

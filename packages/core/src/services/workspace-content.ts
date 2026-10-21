@@ -57,10 +57,7 @@ import type {
   RepositoryFetchOutcome,
   RepositoryLibraryEntry,
 } from "../domain";
-import {
-  saveWorkspaceInstructionFilesEnabled,
-  type DaedalusConfig,
-} from "../config";
+import { updateSettings, type DaedalusConfig } from "../config";
 import { DaedalusError, normalizeError } from "../errors";
 import { removeSkillLink } from "./skills";
 import type { SqliteRepositories } from "../repositories";
@@ -1993,7 +1990,9 @@ export class WorkspaceContentService {
           ),
         ),
     );
-    await saveWorkspaceInstructionFilesEnabled(this.config, enabled);
+    await updateSettings(this.config, () => ({
+      workspaceInstructionFilesEnabled: enabled,
+    }));
   }
 
   listRepositoryLibrary(): RepositoryLibraryEntry[] {
