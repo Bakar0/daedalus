@@ -1586,14 +1586,19 @@ export class AgentService {
     await this.workspaceContent.discardSessionFiles(agent);
     // Only a folder Daedalus made for the session goes with it. A session
     // that ran in the workspace folder itself leaves the workspace's trust
-    // for the workspace's own deletion.
+    // for the workspace's own deletion, and one whose folder a successor
+    // still works in leaves it to that one.
     const workspace = await this.workspaces
       .get(agent.workspaceId)
       .catch(() => undefined);
-    if (
-      workspace &&
-      resolve(agent.workingDirectory) !== resolve(workspace.path)
-    )
+    const folder = resolve(agent.workingDirectory);
+    const shared = this.repositories
+      .listAgents({ workspaceId: agent.workspaceId })
+      .some(
+        (other) =>
+          other.id !== agent.id && resolve(other.workingDirectory) === folder,
+      );
+    if (workspace && folder !== resolve(workspace.path) && !shared)
       await forgetSessionFolders(this.config, agent.workingDirectory);
     await removeClaudeSettingsFiles(this.config, id).catch(() => undefined);
     this.repositories.deleteAgent(id);

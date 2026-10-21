@@ -1,9 +1,8 @@
 import { describe, expect, test, vi } from "vitest";
 import { join } from "node:path";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
-import { loadConfig } from "../config";
+import { loadConfig, updateSettings } from "../config";
 import { chmod, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
-import { saveSkillOverride } from "../config";
 import {
   catalogOffersModel,
   claudeDaedalusSettingsArgs,
@@ -737,7 +736,7 @@ describe("ensureCodexHooks and the user's skill settings", () => {
       "---\nname: loud\ndescription: Loud\n---\n",
       "utf8",
     );
-    await saveSkillOverride(config, "loud", "off");
+    await updateSettings(config, () => ({ skillOverrides: { loud: "off" } }));
     return config;
   };
 
@@ -835,7 +834,9 @@ describe("ensureCodexHooks and the user's skill settings", () => {
         "---\nname: cursor-only\ndescription: Cursor\n---\n",
         "utf8",
       );
-      await saveSkillOverride(config, "cursor-only", "off");
+      await updateSettings(config, () => ({
+        skillOverrides: { "cursor-only": "off" },
+      }));
       // Codex never scans ~/.cursor/skills, so an entry naming that path would
       // sit in the config looking like a setting that was doing something.
       const args = await ensureCodexHooks(config, "codex", async () => ({

@@ -1,10 +1,17 @@
 import { describe, expect, test } from "vitest";
-import { isAppTheme } from "./theme";
+import { appearanceOf, isAppTheme, terminalThemeFor } from "./theme";
 import { isLocalWebUrl } from "./WorkspaceApp";
 
 describe("themes", () => {
-  test("only Dark and Light are read back from storage", () => {
-    expect(isAppTheme("light")).toBe(true);
+  test("Midnight is a dark theme with the original navy terminal", () => {
+    expect(appearanceOf("midnight")).toBe("dark");
+    expect(appearanceOf("light")).toBe("light");
+    expect(terminalThemeFor("midnight").background).toBe("#11151d");
+    expect(terminalThemeFor("dark").background).toBe("#111112");
+  });
+
+  test("only the three themes are read back from storage", () => {
+    expect(isAppTheme("midnight")).toBe(true);
     expect(isAppTheme("owl")).toBe(false);
     expect(isAppTheme(null)).toBe(false);
   });

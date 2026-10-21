@@ -6,8 +6,8 @@ import {
   loginShellPath,
   standardExecutableFallbacks,
 } from "@daedalus/platform";
-import { runCommand } from "@daedalus/platform";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { runCommand, writeFileAtomic } from "@daedalus/platform";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import {
@@ -238,13 +238,11 @@ async function writeClaudeSettingsFile(
 ): Promise<string> {
   const path = sessionClaudeSettingsPath(config, sessionId, options);
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  // Written beside and renamed, so a session starting from the old file
-  // never reads half of the new one.
-  const temporary = `${path}.${process.pid}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(settings, null, 2)}\n`, {
+  // Replaced atomically, so a session starting from the old file never reads
+  // half of the new one.
+  await writeFileAtomic(path, `${JSON.stringify(settings, null, 2)}\n`, {
     mode: 0o600,
   });
-  await rename(temporary, path);
   return path;
 }
 
@@ -442,13 +440,7 @@ export async function ensureCodexHooks(
       const backup = `${configPath}.daedalus-backup`;
       if (existing && !(await Bun.file(backup).exists()))
         await writeFile(backup, existing, { mode: 0o600 });
-      const temporary = `${configPath}.${crypto.randomUUID()}.tmp`;
-      try {
-        await writeFile(temporary, merged, { flag: "wx", mode: 0o600 });
-        await rename(temporary, configPath);
-      } finally {
-        await rm(temporary, { force: true });
-      }
+      await writeFileAtomic(configPath, merged, { mode: 0o600 });
     }
   } catch {
     // A configuration Daedalus cannot read or write is the user's to own.

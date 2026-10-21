@@ -44,6 +44,16 @@ const claudeScreen = (draft: string) =>
   CLAUDE_IDLE_SCREEN.replace("❯ ", `❯ ${draft}`);
 
 class FakeTmux implements TmuxClient {
+  openPty() {
+    return {
+      start: async () => {},
+      write() {},
+      resize() {},
+      close() {},
+    };
+  }
+  async pinWindowSize() {}
+  async unpinWindowSize() {}
   readonly sessions = new Set<string>();
   readonly launches: TmuxLaunch[] = [];
   readonly sent: Array<{ session: string; text: string }> = [];
