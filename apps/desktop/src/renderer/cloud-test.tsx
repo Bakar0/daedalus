@@ -274,7 +274,14 @@ const client = {
     toastsAcknowledge: async () => ok({ acknowledged: 0 }),
     workspaceWatchSet: async () => ok({ watching: [] }),
     agentModels: async ({ provider }: { provider: "codex" | "claude" }) =>
-      ok({ provider, models: [], source: "aliases" }),
+      ok({
+        provider,
+        models: [
+          { id: "opus", label: "Opus" },
+          { id: "sonnet", label: "Sonnet" },
+        ],
+        source: "aliases",
+      }),
     accountStatus: async () => ok([]),
     workspaceContentGet: async ({ workspace }: { workspace?: string }) =>
       ok({
@@ -353,7 +360,7 @@ const client = {
         String(params.workspace),
         {
           provider: params.provider === "codex" ? "codex" : "claude",
-          kind: params.provider === "terminal" ? "terminal" : "agent",
+          kind: params.terminal ? "terminal" : "agent",
           startedAt: new Date().toISOString(),
           ...(params.cloud
             ? { hostId: `ws:${withCloud(String(params.workspace))?.cloudId}` }
