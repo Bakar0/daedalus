@@ -142,6 +142,12 @@ try {
   await writeFile(join(repo, "untracked.txt"), "untracked on the Mac\n");
   await writeFile(join(repo, "secret.env"), "ignored, stays on the Mac\n");
 
+  check(
+    (await context.hosts.local.capture(session.tmuxSession)).includes(
+      "auto mode on",
+    ),
+    "before the move, Claude on this Mac runs in auto mode",
+  );
   let started = Date.now();
   const toCloud = await context.moves.move({
     sessionId: session.id,
@@ -256,6 +262,16 @@ try {
   check(
     (await readFile(join(repo, "secret.env"), "utf8")).startsWith("ignored"),
     "the ignored file is untouched",
+  );
+
+  check(
+    Boolean(back.notice?.includes("ask")),
+    "the move back says it resumed asking first",
+  );
+  const footer = await context.hosts.local.capture(onMac.tmuxSession);
+  check(
+    !footer.includes("auto mode on") && !footer.includes("accept edits on"),
+    "Claude on this Mac asks before acting",
   );
 
   // The same conversation: Claude on this Mac remembers the word.
