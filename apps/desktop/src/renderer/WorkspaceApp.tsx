@@ -59,6 +59,7 @@ import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import { UpdateBanner } from "./UpdateBanner";
 import { runWithConcurrency } from "./concurrency";
 import { wholeLinkRows, type LinkRange } from "./terminal-links";
+import { sgrWheelReports, WheelLines } from "./terminal-wheel";
 import { findPathCandidates } from "./terminal-file-links";
 import { repositoryFuzzyScore } from "./repository-search";
 import { ReorderGroup } from "./ReorderGroup";
@@ -1445,6 +1446,51 @@ function TerminalSurface({
           // Not base64: nothing a program meant to copy.
         }
         return true;
+      });
+      // Whether the program reads mouse reports in SGR form, the only form
+      // the wheel handler below writes. tmux asks for it with its mouse on.
+      let sgrMouse = false;
+      for (const final of ["h", "l"])
+        terminal.parser.registerCsiHandler({ prefix: "?", final }, (params) => {
+          if (params.includes(1006)) sgrMouse = final === "h";
+          return false;
+        });
+      // A wheel over a program that takes the mouse scrolls it a line per
+      // line the trackpad moved, as a browser scrolls a page; see WheelLines.
+      // Anything else, Shift and the wheel included, is left to xterm.
+      const wheelLines = new WheelLines();
+      terminal.attachCustomWheelEventHandler((event) => {
+        const current = terminal;
+        const screen = linkLayer.parentElement;
+        if (
+          !current ||
+          !screen ||
+          !sgrMouse ||
+          current.modes.mouseTrackingMode === "none" ||
+          event.shiftKey
+        ) {
+          wheelLines.reset();
+          return true;
+        }
+        event.preventDefault();
+        const bounds = screen.getBoundingClientRect();
+        const cellWidth = bounds.width / current.cols;
+        const cellHeight = bounds.height / current.rows;
+        if (!(cellWidth > 0 && cellHeight > 0)) return false;
+        const lines = wheelLines.take(event, cellHeight, current.rows);
+        if (lines === 0) return false;
+        const cell = (offset: number, size: number, count: number) =>
+          Math.max(1, Math.min(count, Math.floor(offset / size) + 1));
+        current.input(
+          sgrWheelReports(
+            lines,
+            cell(event.clientX - bounds.left, cellWidth, current.cols),
+            cell(event.clientY - bounds.top, cellHeight, current.rows),
+            event,
+          ),
+          true,
+        );
+        return false;
       });
       terminal.open(container);
       container.querySelector(".xterm-screen")?.append(linkLayer);

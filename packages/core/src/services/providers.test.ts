@@ -144,6 +144,34 @@ describe("claudeDaedalusSettingsArgs", () => {
     });
   });
 
+  test("turns Claude's wheel acceleration off unless the user set it", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const claudeHome = join(home, "claude");
+      const config = await loadConfig({
+        DAEDALUS_HOME: home,
+        CLAUDE_CONFIG_DIR: claudeHome,
+      });
+      const acceleration = async (args: string[]) =>
+        JSON.parse(
+          settingsValue(await claudeDaedalusSettingsArgs(config, args)),
+        ).wheelScrollAccelerationEnabled;
+      expect(await acceleration(["run"])).toBe(false);
+      expect(
+        await acceleration([
+          "run",
+          "--settings",
+          JSON.stringify({ wheelScrollAccelerationEnabled: true }),
+        ]),
+      ).toBe(true);
+      await mkdir(claudeHome, { recursive: true });
+      await writeFile(
+        join(claudeHome, "settings.json"),
+        JSON.stringify({ wheelScrollAccelerationEnabled: true }),
+      );
+      expect(await acceleration(["run"])).toBeUndefined();
+    });
+  });
+
   test("leaves an unreadable --settings value exactly as the user wrote it", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const config = await loadConfig({ DAEDALUS_HOME: home });

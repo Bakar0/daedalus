@@ -127,6 +127,28 @@ export interface TmuxTerminalTarget {
  */
 const HYPERLINKS_FEATURE_INDEX = 99;
 
+/** Next to the hyperlinks slot, for the same reason. */
+const SYNC_FEATURE_INDEX = 98;
+
+const copyModeWheelBindings: string[] = ["copy-mode", "copy-mode-vi"].flatMap(
+  (table) =>
+    (
+      [
+        ["WheelUpPane", "scroll-up"],
+        ["WheelDownPane", "scroll-down"],
+      ] as const
+    ).flatMap(([key, command]) => [
+      "bind-key",
+      "-T",
+      table,
+      key,
+      "send-keys",
+      "-X",
+      command,
+      ";",
+    ]),
+);
+
 export const tmuxPtyArguments = (target: TmuxTerminalTarget): string[] =>
   terminalArgs(
     target.socketName,
@@ -147,6 +169,19 @@ export const tmuxPtyArguments = (target: TmuxTerminalTarget): string[] =>
     "focus-events",
     "on",
     ";",
+    // tmux repaints the whole pane for every step a fullscreen program
+    // scrolls, about 14 KB written over 14 ms. Without `sync` xterm.js drew
+    // whatever part had arrived by the next frame, so nearly every frame of a
+    // scroll was half old screen and half new. With it, tmux brackets each
+    // repaint in synchronized output and xterm.js draws only whole ones.
+    "set-option",
+    "-s",
+    `terminal-features[${SYNC_FEATURE_INDEX}]`,
+    "xterm*:sync",
+    ";",
+    // The terminal sends one wheel report per line the trackpad moved, so a
+    // report scrolls one line, not tmux's default five.
+    ...copyModeWheelBindings,
     "set-option",
     "-t",
     target.session,

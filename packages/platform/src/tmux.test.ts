@@ -104,7 +104,7 @@ test("tmux PTYs drop an agent shell's terminal state and identity", () => {
     expect(environment).not.toHaveProperty(key);
 });
 
-test("tmux PTYs use native mouse scrolling, pass OSC 8 links and focus", () => {
+test("tmux PTYs scroll a line per wheel report, sync repaints, pass OSC 8 links and focus", () => {
   expect(
     tmuxPtyArguments({ socketName: "isolated", session: "daedalus_123" }),
   ).toEqual([
@@ -121,6 +121,17 @@ test("tmux PTYs use native mouse scrolling, pass OSC 8 links and focus", () => {
     "focus-events",
     "on",
     ";",
+    "set-option",
+    "-s",
+    "terminal-features[98]",
+    "xterm*:sync",
+    ";",
+    ...["copy-mode", "copy-mode-vi"].flatMap((table) => [
+      ...["bind-key", "-T", table, "WheelUpPane"],
+      ...["send-keys", "-X", "scroll-up", ";"],
+      ...["bind-key", "-T", table, "WheelDownPane"],
+      ...["send-keys", "-X", "scroll-down", ";"],
+    ]),
     "set-option",
     "-t",
     "daedalus_123",

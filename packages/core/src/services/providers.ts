@@ -173,12 +173,12 @@ export async function claudeDaedalusSettingsArgs(
       : await parseClaudeSettingsArgument(existingValue);
   if (existingValue !== undefined && !parsed) return [...existingArgs];
   const merged = parsed ? mergeClaudeSettings(parsed, daedalus) : daedalus;
-  // Settings passed here override the user's own file, so the renderer is
-  // only a default: a user who chose one in either place keeps it.
-  const settings =
-    "tui" in merged || (await userSetsClaudeRenderer(config))
-      ? merged
-      : { ...merged, tui: CLAUDE_DEFAULT_RENDERER };
+  // Settings passed here override the user's own file, so each of these is
+  // only a default: a user who chose a value in either place keeps it.
+  const own = await userClaudeSettings(config);
+  const settings: ClaudeSettings = { ...merged };
+  for (const [key, value] of Object.entries(CLAUDE_DEFAULT_SETTINGS))
+    if (!(key in merged) && !(own && key in own)) settings[key] = value;
   return [
     ...withoutSettingsArgument(existingArgs),
     "--settings",
@@ -197,15 +197,25 @@ export async function claudeDaedalusSettingsArgs(
  */
 export const CLAUDE_DEFAULT_RENDERER = "fullscreen";
 
-/** Whether the user's own Claude settings choose a renderer. */
-async function userSetsClaudeRenderer(
+/**
+ * What a Claude session starts with when the user has not set the key.
+ *
+ * Wheel acceleration is off because the Daedalus terminal already sends one
+ * wheel report per line the trackpad moved, and macOS has already applied its
+ * own acceleration and momentum to that movement. Claude's ramp on top of it
+ * scrolled a medium trackpad drag 2.5 times as far as the finger went, while a
+ * slow one crawled; without it the transcript follows the finger line for line.
+ */
+const CLAUDE_DEFAULT_SETTINGS: ClaudeSettings = {
+  tui: CLAUDE_DEFAULT_RENDERER,
+  wheelScrollAccelerationEnabled: false,
+};
+
+/** The user's own Claude settings, if they are readable. */
+const userClaudeSettings = (
   config: DaedalusConfig,
-): Promise<boolean> {
-  const settings = await parseClaudeSettingsArgument(
-    claudeSettingsPath(config),
-  );
-  return settings !== undefined && "tui" in settings;
-}
+): Promise<ClaudeSettings | undefined> =>
+  parseClaudeSettingsArgument(claudeSettingsPath(config));
 
 /**
  * Where a session's Claude settings are written. The name carries the inbox
