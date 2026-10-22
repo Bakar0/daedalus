@@ -5,7 +5,8 @@
  * local one, one with a running cloud workspace, one asleep, one that belongs
  * to another cloud account) and a session in each. Query parameters pick the
  * start: `modal=settings|session`, `signedIn=0`, `holdSignIn=1`,
- * `holdWake=1`, `session=<id>` to open a session's view.
+ * `holdWake=1`, `session=<id>` to open a session's view, `moving=<phase>`
+ * for s-cloud moving to this Mac, `move=approval` for a move back that asks.
  *
  * Every call a click should make is recorded in `window.requests`. The
  * replies carry a token and a runner key the real host never sends, so the
@@ -119,6 +120,20 @@ const snapshot = {
   // A sign-in page the cloud Claude session asked to open. The URL never
   // reaches the window, only its host. `signin=claude|aws`, `paste=1` for
   // the paste-code form.
+  // s-cloud on its way to this Mac, in the phase the query names.
+  sessionMoves: query.get("moving")
+    ? [
+        {
+          sessionId: "s-cloud",
+          to: "local" as const,
+          phase: query.get("moving") as "waiting",
+          detail: "Waiting for the turn to end",
+          ...(query.get("moving") === "failed"
+            ? { message: "The pod did not answer" }
+            : {}),
+        },
+      ]
+    : [],
   cloudSignIns: query.get("signin")
     ? [
         {
@@ -416,6 +431,31 @@ const client = {
       found.status = "running";
       announce();
       return ok(structuredClone(found));
+    },
+    agentMove: async (params: {
+      sessionId: string;
+      to: "cloud" | "local";
+      approved?: string[];
+    }) => {
+      record("agentMove", params);
+      if (query.get("move") === "approval" && !params.approved)
+        return ok({
+          status: "needsApproval" as const,
+          paths: [".claude/settings.json", "CLAUDE.md"],
+        });
+      const found = snapshot.agents.find(
+        (item) => item.id === params.sessionId,
+      )!;
+      if (params.to === "cloud") found.hostId = "ws:c-run";
+      else found.hostId = null;
+      announce();
+      return ok({ status: "moved" as const, session: structuredClone(found) });
+    },
+    agentMoveCancel: async (params: { sessionId: string }) => {
+      record("agentMoveCancel", params);
+      snapshot.sessionMoves = [];
+      announce();
+      return ok(null);
     },
     agentSpawn: async (params: Record<string, unknown>) => {
       record("agentSpawn", params);

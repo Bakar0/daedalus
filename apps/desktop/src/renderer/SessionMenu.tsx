@@ -240,6 +240,7 @@ export function SessionMenu({
   onAutoRebirth,
   onRoutines,
   onOrchestration,
+  move,
 }: {
   name: string;
   pinned: boolean;
@@ -261,6 +262,8 @@ export function SessionMenu({
   onAutoRebirth: (value: AutoRebirthDto) => void;
   onRoutines: (granted: boolean) => void;
   onOrchestration: (granted: boolean) => void;
+  /** Where the session can move to now, if anywhere. */
+  move?: { to: "cloud" | "local"; onMove: () => void };
 }) {
   return (
     <Menu
@@ -291,6 +294,25 @@ export function SessionMenu({
           {pinned ? "Unpin" : "Pin to top"}
         </span>
       </button>
+      {move && (
+        <button
+          className="quiet menu-item"
+          data-move-to={move.to}
+          data-testid="session-move"
+          onClick={move.onMove}
+          role="menuitem"
+          title={
+            move.to === "cloud"
+              ? "Carry on with this conversation in the workspace's cloud pod. Its changes go with it."
+              : "Carry on with this conversation on this Mac. Its changes come back with it."
+          }
+          type="button"
+        >
+          <span className="menu-item-label">
+            {move.to === "cloud" ? "Move to cloud" : "Move to this Mac"}
+          </span>
+        </button>
+      )}
       <hr className="menu-separator" />
       <span className="menu-heading">Color</span>
       <ColorSwatches onChange={onColor} role="menuitemradio" value={color} />

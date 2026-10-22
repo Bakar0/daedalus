@@ -2926,12 +2926,35 @@ export function WorkspaceApp({
     // gateway that did not answer says nothing about which.
     return cloud && cloud.connection !== "error" ? "unavailable" : undefined;
   };
+  // Sessions moving between this Mac and the cloud, by session.
+  const moveBySession = new Map(
+    (snapshot?.sessionMoves ?? []).map((move) => [move.sessionId, move]),
+  );
   const statusViewFor = (session: AgentSessionDto): SessionStatusView => {
     const view = sessionStatusView(
       session,
       activityById.get(session.id),
       attentionById.get(session.id),
     );
+    const move = moveBySession.get(session.id);
+    if (move)
+      return {
+        ...view,
+        tone: move.phase === "failed" ? "error" : "working",
+        label:
+          move.phase === "failed"
+            ? "move failed"
+            : move.to === "cloud"
+              ? "moving to cloud"
+              : "moving to this Mac",
+        detail:
+          move.phase === "failed"
+            ? (move.message ??
+              "The move stopped; the session runs where it was.")
+            : (move.detail ?? null),
+        attention: false,
+        reasons: [],
+      };
     const sleep = cloudSleep(session);
     // Quiet, unlike a lost session: nothing is wrong here that opening the
     // session or signing in does not fix.
@@ -2953,6 +2976,50 @@ export function WorkspaceApp({
         }
       : view;
   };
+
+  /** Where a session can move to now: a Claude session, not moving. */
+  const moveTarget = (
+    session: AgentSessionDto,
+  ): "cloud" | "local" | undefined => {
+    if (
+      session.kind !== "agent" ||
+      session.provider !== "claude" ||
+      session.archivedAt ||
+      moveBySession.has(session.id)
+    )
+      return undefined;
+    if (session.hostId)
+      return cloudByHost.has(session.hostId) ? "local" : undefined;
+    return cloudState.data?.signedIn ? "cloud" : undefined;
+  };
+
+  async function moveSession(
+    session: AgentSessionDto,
+    to: "cloud" | "local",
+    approved?: string[],
+  ) {
+    const moved = await sessionActions.run(
+      client.request.agentMove({
+        sessionId: session.id,
+        to,
+        ...(approved ? { approved } : {}),
+      }),
+      `move:${session.id}`,
+    );
+    if (!moved) return;
+    if (moved.status === "moved") {
+      openSession(moved.session.id);
+      return;
+    }
+    // Files that steer an agent or run when opened changed in the pod: the
+    // user decides before they come to this Mac.
+    const yes = await askConfirm({
+      title: "Bring these changes to this Mac?",
+      message: `In the cloud, ${sessionName(session)} changed files that steer agents or run when a folder opens:\n\n${moved.paths.map((path) => `• ${path}`).join("\n")}\n\nMove it back with them?`,
+      confirmLabel: "Move back",
+    });
+    if (yes) await moveSession(session, to, moved.paths);
+  }
 
   // Each cloud session's sign-in, by session.
   const signInBySession = new Map(
@@ -4916,6 +4983,7 @@ export function WorkspaceApp({
         className={`session-card tone-${statusView.tone} ${view === "session" && session.id === highlightedSessionId ? "selected" : ""}`}
         data-cloud={session.hostId ? "true" : undefined}
         data-cloud-state={cloudSleep(session)}
+        data-move-phase={moveBySession.get(session.id)?.phase}
         data-color={session.color ?? undefined}
         style={sessionColorStyle(session.color)}
         data-pinned={session.pinnedAt ? "true" : undefined}
@@ -5085,6 +5153,23 @@ export function WorkspaceApp({
           </button>
         )}
         <span className="workspace-card-actions" data-no-drag>
+          {moveBySession.get(session.id)?.phase === "waiting" && (
+            <button
+              aria-label={`Cancel moving ${sessionName(session)}`}
+              className="session-card-action session-move-cancel"
+              data-testid="session-move-cancel"
+              onClick={() =>
+                void sessionActions.run(
+                  client.request.agentMoveCancel({ sessionId: session.id }),
+                  `move-cancel:${session.id}`,
+                )
+              }
+              title="Cancel the move; the session stays where it is"
+              type="button"
+            >
+              ×
+            </button>
+          )}
           {session.status === "lost" &&
             cloudSleep(session) !== "unavailable" && (
               <button
@@ -5179,6 +5264,12 @@ export function WorkspaceApp({
             }
             pinned={Boolean(session.pinnedAt)}
             routines={holdsRoutines}
+            move={(() => {
+              const to = moveTarget(session);
+              return to
+                ? { to, onMove: () => void moveSession(session, to) }
+                : undefined;
+            })()}
           />
         </span>
       </div>

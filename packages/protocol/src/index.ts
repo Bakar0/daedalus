@@ -972,6 +972,21 @@ export interface CloudPreparingDto {
   phase: "creating" | "waking" | "starting";
 }
 
+/**
+ * A session moving between this Mac and its workspace's cloud pod
+ * (artifacts/cloud-sessions/move-design.md). The card shows it moving
+ * while an entry exists and is not `failed`; Cancel only while `waiting`.
+ */
+export interface SessionMoveDto {
+  sessionId: string;
+  to: "cloud" | "local";
+  phase: "waiting" | "stopping" | "copying" | "starting" | "failed";
+  /** Shown under the card: "Waiting for the turn to end", "Copying daedalus (12 MB)". */
+  detail?: string;
+  /** Set when `failed`; the entry stays 30 s so the card can show it. */
+  message?: string;
+}
+
 /** A Pro key (an invite code), as an admin sees it. */
 export interface AdminKeyDto {
   code: string;
@@ -1087,6 +1102,8 @@ export interface DesktopSnapshotDto {
   cloudSignIns?: CloudSignInDto[];
   /** Workspaces whose cloud copy a new session waits for. */
   cloudPreparing?: CloudPreparingDto[];
+  /** Sessions moving between this Mac and the cloud. */
+  sessionMoves?: SessionMoveDto[];
   settings: DesktopSettingsDto;
 }
 
@@ -1215,6 +1232,20 @@ export interface DesktopRpcSchema {
         { requestId: string },
         { host: string; paste: boolean }
       >;
+      /**
+       * Moves a Claude session between this Mac and its workspace's cloud
+       * pod; resolves when the move ends. `needsApproval` lists files that
+       * steer an agent or run on open, changed in the pod: ask the user,
+       * then call again with them as `approved`. On failure it throws and
+       * the session keeps running where it was.
+       */
+      agentMove: Request<
+        { sessionId: string; to: "cloud" | "local"; approved?: string[] },
+        | { status: "moved"; session: AgentSessionDto }
+        | { status: "needsApproval"; paths: string[] }
+      >;
+      /** Only while the move waits for the session's turn to end. */
+      agentMoveCancel: Request<{ sessionId: string }, null>;
       cloudSignInDismiss: Request<
         { requestId?: string; sessionId?: string },
         null

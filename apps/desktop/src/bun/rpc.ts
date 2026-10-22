@@ -894,6 +894,16 @@ export function createDesktopRequestHandlers(
           );
         return { host: page.host, paste: page.paste };
       }),
+    // The move itself is @move's (artifacts/cloud-sessions/move-design.md);
+    // until it lands these say so.
+    agentMove: () =>
+      result(() => {
+        throw new DaedalusError(
+          "DEPENDENCY",
+          "Moving a session between this Mac and the cloud is not in this build yet",
+        );
+      }),
+    agentMoveCancel: () => result(() => null),
     cloudSignInDismiss: ({ requestId, sessionId }) =>
       result(() => {
         context.cloud.signIns.dismiss({
