@@ -6,7 +6,11 @@
  * the token stays in the host's Keychain entry and never comes over RPC.
  */
 import React, { useState } from "react";
-import type { CloudStateDto, RpcResult } from "@daedalus/protocol";
+import type {
+  CloudMcpServersDto,
+  CloudStateDto,
+  RpcResult,
+} from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { useRpcQuery, type RpcQueryResult } from "./use-rpc";
 
@@ -138,6 +142,7 @@ export function CloudPanel({
               reaching them until it signs in again.
             </small>
           </div>
+          <CloudMcpServers busy={busy} client={client} />
         </>
       ) : (
         <form className="cloud-sign-in" onSubmit={signIn}>
@@ -188,6 +193,88 @@ export function CloudPanel({
       {shownError ? (
         <p className="accounts-error" data-testid="cloud-error" role="alert">
           {shownError}
+        </p>
+      ) : undefined}
+    </div>
+  );
+}
+
+/**
+ * The user's remote MCP servers, each off for cloud sessions until turned
+ * on: a key can sit in a server's URL, and the pod runs code this Mac does
+ * not trust. Name and host only; the URL stays in the host.
+ */
+export function CloudMcpServers({
+  client,
+  busy,
+}: {
+  client: DesktopClient;
+  busy: boolean;
+}) {
+  const { data, error, refresh } = useRpcQuery(
+    () => client.request.cloudMcpServers({}),
+    { deps: [client] },
+  );
+  const [failure, setFailure] = useState<string>();
+  const [pending, setPending] = useState<string>();
+  const set = async (name: string, on: boolean) => {
+    setPending(name);
+    setFailure(undefined);
+    try {
+      const response = await client.request.cloudMcpServerSet({ name, on });
+      if (!response.ok) setFailure(response.error.message);
+      await refresh();
+    } finally {
+      setPending(undefined);
+    }
+  };
+  const list: CloudMcpServersDto | undefined = data;
+  return (
+    <div className="cloud-mcp" data-testid="cloud-mcp-list">
+      <h3>MCP servers in the cloud</h3>
+      <p className="settings-note">
+        Only the servers you turn on here go to cloud sessions. A server's
+        address can hold a key, so none goes until you say so.
+      </p>
+      {list && !list.servers.length && !list.leftOut.length ? (
+        <p className="settings-note" data-testid="cloud-mcp-empty">
+          You have no remote MCP servers.
+        </p>
+      ) : undefined}
+      {list?.servers.map((server) => (
+        <label
+          className="settings-row"
+          data-name={server.name}
+          data-testid="cloud-mcp-server"
+          key={server.name}
+        >
+          <input
+            checked={server.on}
+            className="switch"
+            data-testid="cloud-mcp-toggle"
+            disabled={busy || pending === server.name}
+            onChange={(event) => void set(server.name, event.target.checked)}
+            type="checkbox"
+          />
+          <span>
+            <strong>{server.name}</strong>
+            <small>{server.host}</small>
+          </span>
+        </label>
+      ))}
+      {list?.leftOut.length ? (
+        <div className="cloud-mcp-left-out" data-testid="cloud-mcp-left-out">
+          <small>Not offered to cloud sessions:</small>
+          {list.leftOut.map((one) => (
+            <small key={one.name}>
+              {one.name}: {one.reason}
+            </small>
+          ))}
+        </div>
+      ) : undefined}
+      {failure || error ? (
+        <p className="accounts-error" role="alert">
+          {failure ?? error}
         </p>
       ) : undefined}
     </div>

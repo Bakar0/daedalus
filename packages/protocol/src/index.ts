@@ -987,6 +987,17 @@ export interface SessionMoveDto {
   message?: string;
 }
 
+/**
+ * The user's remote MCP servers a cloud session could use. None goes to the
+ * pod until turned on here: a key can sit in a server's URL. The window sees
+ * each server's name and host, never its URL.
+ */
+export interface CloudMcpServersDto {
+  servers: { name: string; host: string; on: boolean }[];
+  /** Servers that cannot go at all, and why (local commands, secrets). */
+  leftOut: { name: string; reason: string }[];
+}
+
 /** A Pro key (an invite code), as an admin sees it. */
 export interface AdminKeyDto {
   code: string;
@@ -1208,6 +1219,12 @@ export interface DesktopRpcSchema {
         CloudStateDto
       >;
       cloudSignOut: Request<Record<string, never>, CloudStateDto>;
+      cloudMcpServers: Request<Record<string, never>, CloudMcpServersDto>;
+      /** Turns one server on or off for cloud sessions. */
+      cloudMcpServerSet: Request<
+        { name: string; on: boolean },
+        CloudMcpServersDto
+      >;
       /** Run in cloud: the pod for a local workspace (`daedal cloud create`). */
       cloudWorkspaceCreate: Request<{ workspace: string }, CloudStateDto>;
       /** Removes the pod and keeps the volume; its sessions end. */

@@ -278,6 +278,20 @@ const fail = (message: string) => ({
 });
 
 const listeners = new Set<() => void>();
+// The user's remote MCP servers. The host keeps their URLs (one with a key in
+// its path); the window gets name and host only, which the check asserts.
+const mcp = {
+  servers: [
+    { name: "context7", host: "mcp.context7.com", on: false },
+    { name: "zapier", host: "actions.zapier.com", on: false },
+  ],
+  urls: { zapier: "https://actions.zapier.com/mcp/zk-SECRET-key/sse" },
+};
+const mcpList = () => ({
+  servers: mcp.servers.map((server) => ({ ...server })),
+  leftOut: [{ name: "files", reason: "runs a command on this Mac" }],
+});
+
 const announce = () => {
   for (const listener of listeners) listener();
 };
@@ -348,6 +362,13 @@ const client = {
       cloud.email = params.email;
       cloud.gatewayUrl = params.gatewayUrl;
       return ok(cloudState());
+    },
+    cloudMcpServers: async () => ok(mcpList()),
+    cloudMcpServerSet: async (params: { name: string; on: boolean }) => {
+      record("cloudMcpServerSet", params);
+      const server = mcp.servers.find((item) => item.name === params.name);
+      if (server) server.on = params.on;
+      return ok(mcpList());
     },
     cloudSignOut: async () => {
       record("cloudSignOut", {});

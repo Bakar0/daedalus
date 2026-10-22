@@ -7,6 +7,8 @@ import {
   autoRebirthPercent,
   channelName,
   cloudHostWorkspace,
+  cloudMcpChoices,
+  setCloudMcpServer,
   DaedalusError,
   INSTALL_COMMANDS,
   normalizeError,
@@ -41,6 +43,7 @@ import type {
   AppUpdateDto,
   QuitChoice,
   AgentSessionDto,
+  CloudMcpServersDto,
   CloudStateDto,
   DesktopRpcSchema,
   DesktopSnapshotDto,
@@ -129,6 +132,21 @@ const agentDto = (agent: AgentSession): AgentSessionDto => ({
   ...agent,
   args: [...agent.args],
 });
+/** Name and host only: a server's URL can hold a key. */
+const mcpDto = (
+  choices: Awaited<ReturnType<typeof cloudMcpChoices>>,
+): CloudMcpServersDto => ({
+  servers: choices.servers.map((server) => ({
+    name: server.name,
+    host: server.host,
+    on: server.on,
+  })),
+  leftOut: choices.leftOut.map((one) => ({
+    name: one.name,
+    reason: one.reason,
+  })),
+});
+
 /** Field by field, so nothing else the host knows can come along. */
 const cloudStateDto = (overview: CloudOverview): CloudStateDto => ({
   signedIn: overview.connection !== "signed-out",
@@ -829,6 +847,13 @@ export function createDesktopRequestHandlers(
       mutate(async () => {
         await context.cloud.signIn(gatewayUrl.trim(), email.trim());
         return cloudStateDto(await context.cloud.overview());
+      }),
+    cloudMcpServers: () =>
+      result(async () => mcpDto(await cloudMcpChoices(context.config))),
+    cloudMcpServerSet: ({ name, on }) =>
+      mutate(async () => {
+        await setCloudMcpServer(context.config, name, on === true);
+        return mcpDto(await cloudMcpChoices(context.config));
       }),
     cloudSignOut: () =>
       mutate(async () => {

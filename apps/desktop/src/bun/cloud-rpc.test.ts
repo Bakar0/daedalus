@@ -1,3 +1,4 @@
+import { unlink } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import {
   CloudAccount,
@@ -14,6 +15,7 @@ import {
 import type { TmuxClient } from "@daedalus/platform";
 import type { CloudWorkspace } from "@daedalus/remote-protocol";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
+import { claudeStatePath } from "../../../../packages/core/src/services/folder-trust";
 import { createDesktopRequestHandlers } from "./rpc";
 
 const TOKEN = "user-token-secret-0123456789";
@@ -789,6 +791,40 @@ describe("cloud RPC", () => {
         context.cloud.prepareForSession(workspace.id),
       ).rejects.toThrow("The image could not be pulled");
       expect(context.cloud.preparing()).toEqual([]);
+    });
+  });
+
+  test("the MCP list gives the window names and hosts, never a URL", async () => {
+    await withCloud(async (rpc, context) => {
+      const statePath = claudeStatePath(context.config);
+      const before = await Bun.file(statePath)
+        .text()
+        .catch(() => undefined);
+      await Bun.write(
+        statePath,
+        JSON.stringify({
+          mcpServers: {
+            zapier: {
+              type: "sse",
+              url: "https://actions.zapier.com/mcp/zk-SECRET-key/sse",
+            },
+          },
+        }),
+      );
+      const listed = await rpc.cloudMcpServers({});
+      expect(listed).toEqual({
+        ok: true,
+        data: {
+          servers: [{ name: "zapier", host: "actions.zapier.com", on: false }],
+          leftOut: [],
+        },
+      });
+      const on = await rpc.cloudMcpServerSet({ name: "zapier", on: true });
+      expect(on.ok && on.data.servers[0]?.on).toBe(true);
+      expect(JSON.stringify([listed, on])).not.toContain("zk-SECRET");
+      // The test home's ~/.claude.json is shared by the whole run.
+      if (before === undefined) await unlink(statePath).catch(() => {});
+      else await Bun.write(statePath, before);
     });
   });
 });

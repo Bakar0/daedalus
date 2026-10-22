@@ -144,6 +144,51 @@ await withBrowser(
     await fits(browser, "signed in");
     await browser.screenshot("cloud-settings-signed-in");
 
+    // MCP servers: name and host only, each off until turned on.
+    await browser.waitFor(
+      "document.querySelectorAll('[data-testid=\"cloud-mcp-server\"]').length === 2",
+      "the MCP servers",
+    );
+    const servers = await browser.evaluate<
+      { name: string; text: string; on: boolean }[]
+    >(`[...document.querySelectorAll('[data-testid="cloud-mcp-server"]')].map((row) => ({
+      name: row.dataset.name,
+      text: row.textContent,
+      on: row.querySelector('input').checked,
+    }))`);
+    expect(
+      servers.every((one) => !one.on) &&
+        servers.some((one) => one.text.includes("actions.zapier.com")),
+      `the MCP servers should all start off, with their hosts: ${JSON.stringify(servers)}`,
+    );
+    expect(
+      !(await browser.evaluate<boolean>(
+        "document.body.innerHTML.includes('zk-SECRET') || document.body.innerHTML.includes('/mcp/')",
+      )),
+      "an MCP server's URL reached the window",
+    );
+    expect(
+      (await browser.text("cloud-mcp-left-out")).includes("files"),
+      "the servers that cannot go are not listed",
+    );
+    await browser.evaluate(
+      `document.querySelector('[data-testid="cloud-mcp-server"][data-name="context7"] input').click()`,
+    );
+    await browser.waitFor(
+      `document.querySelector('[data-testid="cloud-mcp-server"][data-name="context7"] input').checked`,
+      "context7 turned on",
+    );
+    expect(
+      (await browser.requests()).some(
+        (one) =>
+          JSON.stringify(one) ===
+          '{"cloudMcpServerSet":{"name":"context7","on":true}}',
+      ),
+      "turning a server on sent the wrong call",
+    );
+    await fits(browser, "with MCP servers");
+    await browser.screenshot("cloud-settings-mcp");
+
     await browser.click("cloud-sign-out");
     await browser.waitFor(
       "document.querySelector('[data-testid=\"cloud-sign-in\"]')",

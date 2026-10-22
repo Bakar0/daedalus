@@ -8722,3 +8722,19 @@ dd {
   justify-content: center;
   width: 22px;
 }
+.cloud-mcp {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+  padding-top: 12px;
+}
+.cloud-mcp h3 {
+  margin: 0;
+}
+.cloud-mcp-left-out {
+  color: var(--muted);
+  display: grid;
+  font-size: 11px;
+  gap: 2px;
+}
