@@ -8631,3 +8631,43 @@ dd {
 .session-opening-steps li[data-state="now"]::before {
   content: "●";
 }
+/* The new session dialog's first line: where the session runs. */
+.session-runs-on {
+  display: grid;
+  gap: 8px;
+}
+.session-runs-on-row {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+.session-runs-on-label {
+  color: var(--secondary);
+  font-size: 12px;
+}
+.session-runs-on-value {
+  color: var(--text);
+  font-size: 12px;
+}
+.session-runs-on-setup {
+  font-size: 12px;
+  margin-left: auto;
+}
+.session-runs-on-signin {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.session-runs-on-signin input {
+  flex: 1 1 160px;
+  font-size: 12px;
+  height: 30px;
+  padding: 0 10px;
+}
+.session-runs-on-signin button {
+  height: 30px;
+}
+.session-runs-on-signin .accounts-error {
+  flex-basis: 100%;
+}

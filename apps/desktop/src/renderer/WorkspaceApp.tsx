@@ -59,6 +59,7 @@ import { LargeFileBar } from "./LargeFileBar";
 import { CloudFirstRunBar } from "./CloudFirstRunBar";
 import { CloudPasteCodeBar, CloudSignInPanel } from "./CloudSignInBar";
 import { SessionOpening } from "./SessionOpening";
+import { rememberedRunsOn, rememberRunsOn, RunsOn } from "./RunsOn";
 import type { DesktopClient } from "./client-types";
 import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import { UpdateBanner } from "./UpdateBanner";
@@ -806,20 +807,6 @@ export function fetchOutcomeNote(outcome: RepositoryFetchOutcomeDto): {
 const FETCH_OUTCOME_VISIBLE_MS = 120_000;
 
 const sessionNeedsAttention = (view: SessionStatusView) => view.attention;
-
-/** What a Claude account brings to a cloud session, under its picker. */
-function cloudAccountNote(account: AccountDto | undefined): string {
-  switch (account?.account === "default" ? undefined : account?.kind) {
-    case "api-key":
-      return "Its API key goes to the pod for this session.";
-    case "bedrock":
-      return `Its AWS profile ${account?.aws?.profile ?? ""} is copied to the pod, without credentials; Claude signs in to Bedrock through AWS SSO there.`;
-    case "login":
-      return "Sign in to Claude once in the pod's terminal.";
-    default:
-      return "Uses the workspace's ANTHROPIC_API_KEY secret if it has one; otherwise sign in to Claude once in the pod's terminal.";
-  }
-}
 
 /**
  * Three, not five. Both Sonner's default and the UX literature land on the
@@ -3650,10 +3637,15 @@ export function WorkspaceApp({
   }
 
   function openSessionModal(task?: TaskDto, forWorkspace?: WorkspaceDto) {
+    const opening = task
+      ? task.workspaceId
+      : (forWorkspace?.id ?? workspace?.id);
     setSessionForm({
       name: task?.title ?? "",
       taskId: task?.id,
       workspaceId: forWorkspace?.id,
+      // Where the last new session in this workspace ran.
+      cloud: rememberedRunsOn(opening) === "cloud",
     });
     // The dialog opens on what Start would launch, so "default" means the
     // same thing here and on the board.
@@ -3680,6 +3672,7 @@ export function WorkspaceApp({
       name: "",
       teamId: team.id,
       workspaceId: lead.workspaceId,
+      cloud: rememberedRunsOn(lead.workspaceId) === "cloud",
     });
     setSessionType(lead.provider);
     setSessionModel("");
@@ -7341,6 +7334,33 @@ export function WorkspaceApp({
             }
           >
             <form className="modal-form" onSubmit={createSession}>
+              <RunsOn
+                client={client}
+                cloudUnavailable={
+                  sessionCloud?.status === "failed"
+                    ? (sessionCloud.reason ??
+                      "The cloud workspace failed; see the workspace's cloud icon")
+                    : undefined
+                }
+                onChange={(place) => {
+                  const cloud = place === "cloud";
+                  setSessionForm({ ...sessionForm, cloud });
+                  rememberRunsOn(sessionWorkspace.id, place);
+                  // Codex runs only on this Mac.
+                  if (cloud && sessionType === "codex")
+                    setSessionType("claude");
+                  setSessionAccount("");
+                  setRememberSessionModel(false);
+                }}
+                onSignedIn={async () => {
+                  await cloudState.refresh();
+                  setSessionForm({ ...sessionForm, cloud: true });
+                  rememberRunsOn(sessionWorkspace.id, "cloud");
+                  if (sessionType === "codex") setSessionType("claude");
+                }}
+                signedIn={cloudSignedIn}
+                value={sessionInCloud ? "cloud" : "local"}
+              />
               <label>
                 {memberTeam ? "Member name" : "Session name"}
                 <input
@@ -7358,65 +7378,6 @@ export function WorkspaceApp({
                   value={sessionForm.name}
                 />
               </label>
-              {cloudSignedIn && (
-                <fieldset className="session-tool-picker session-location">
-                  <legend>Where it runs</legend>
-                  <div
-                    aria-label="Where the session runs"
-                    className="session-tool-row"
-                    data-testid="session-location"
-                    role="radiogroup"
-                  >
-                    {(
-                      [
-                        {
-                          id: "local",
-                          label: "This Mac",
-                          note: "Local",
-                        },
-                        {
-                          id: "cloud",
-                          label: "Cloud",
-                          note:
-                            sessionCloud?.status === "failed"
-                              ? "Failed"
-                              : "In the workspace's pod",
-                        },
-                      ] as const
-                    ).map((place) => {
-                      const chosen =
-                        place.id === "cloud" ? sessionInCloud : !sessionInCloud;
-                      return (
-                        <button
-                          aria-checked={chosen}
-                          className={`session-tool ${chosen ? "selected" : ""}`}
-                          data-testid={`session-location-${place.id}`}
-                          disabled={
-                            place.id === "cloud" &&
-                            sessionCloud?.status === "failed"
-                          }
-                          key={place.id}
-                          onClick={() => {
-                            const cloud = place.id === "cloud";
-                            setSessionForm({ ...sessionForm, cloud });
-                            // Codex runs only on this Mac.
-                            if (cloud && sessionType === "codex")
-                              setSessionType("claude");
-                            setSessionAccount("");
-                            setRememberSessionModel(false);
-                          }}
-                          role="radio"
-                          title={sessionCloud?.reason ?? undefined}
-                          type="button"
-                        >
-                          <strong>{place.label}</strong>
-                          <small>{place.note}</small>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </fieldset>
-              )}
               {/* Claude or Codex; a member's picker starts on its lead's.
                 Plain terminals open as tabs from the center's +. A cloud
                 session is Claude in the pod. */}
@@ -7586,18 +7547,6 @@ export function WorkspaceApp({
                           </option>
                         ))}
                       </select>
-                      {sessionInCloud && (
-                        <small
-                          className="session-cloud-account-note"
-                          data-testid="session-cloud-account-note"
-                        >
-                          {cloudAccountNote(
-                            sessionAccounts.find(
-                              (item) => item.account === chosenSessionAccount,
-                            ),
-                          )}
-                        </small>
-                      )}
                     </label>
                   )}
                   {!memberTeam && (

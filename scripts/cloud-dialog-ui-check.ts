@@ -170,9 +170,8 @@ await withBrowser({ port: 41768, page: "cloud-test.html" }, async (browser) => {
   );
   expect(
     (await present(browser, ACCOUNT)) &&
-      (await browser.has("session-cloud-account-note")) &&
-      (await browser.text("session-cloud-account-note")).length > 0,
-    "Cloud should offer the Claude account with its note",
+      !(await browser.has("session-cloud-account-note")),
+    "Cloud should offer the Claude account, with no extra note",
   );
   expect(
     !(await present(browser, ABILITIES)),
@@ -191,13 +190,6 @@ await withBrowser({ port: 41768, page: "cloud-test.html" }, async (browser) => {
     (await browser.has("session-tool-codex")) &&
       !(await browser.has("session-tool-terminal")),
     "Local did not bring Codex back and drop Terminal",
-  );
-
-  // The note belongs to Cloud only.
-  await browser.click("session-location-local");
-  expect(
-    !(await browser.has("session-cloud-account-note")),
-    "the cloud account note shows under Local",
   );
 
   // Create a Claude session in the cloud, on the Work account.
@@ -227,8 +219,14 @@ await withBrowser({ port: 41768, page: "cloud-test.html" }, async (browser) => {
     "the dialog to close after Create",
   );
 
-  // A local session in a workspace that also has a cloud one stays local.
+  // The dialog remembers Cloud for this workspace; This Mac starts a local
+  // session even though the workspace has a cloud one.
   await openDialog(browser, "Cloud project");
+  expect(
+    (await checked(browser, "cloud")) === "true",
+    "the last choice, Cloud, was not remembered",
+  );
+  await browser.click("session-location-local");
   await submit(browser);
   const local = (await browser.requests())
     .filter((one) => "agentSpawn" in one)
@@ -256,19 +254,72 @@ await withBrowser({ port: 41768, page: "cloud-test.html" }, async (browser) => {
   await closeDialog(browser);
 });
 
-// Signed out, the dialog is the local one even for a workspace that had a
-// cloud workspace.
+// Signed out, the dialog runs on this Mac and offers 'Set up cloud', which
+// signs in right in the dialog and then chooses Cloud.
 await withBrowser(
   { port: 41770, page: "cloud-test.html", query: "signedIn=0" },
   async (browser) => {
     await Bun.sleep(400);
     await openDialog(browser, "Cloud project");
     expect(
-      !(await browser.has("session-location")),
-      "the Local/Cloud choice shows while signed out",
+      !(await browser.has("session-location")) &&
+        (await browser.has("cloud-setup")),
+      "signed out, the dialog should offer Set up cloud and no choice",
     );
     await browser.screenshot("cloud-dialog-signed-out");
+    await browser.click("cloud-setup");
+    await browser.waitFor(
+      "document.querySelector('[data-testid=\"cloud-setup-form\"]')",
+      "the inline sign-in",
+    );
+    await browser.type("cloud-gateway-url", "http://127.0.0.1:8080");
+    await browser.type("cloud-email", "dev@example.com");
+    await fits(browser, "inline sign-in");
+    await browser.screenshot("cloud-dialog-setup");
+    await browser.click("cloud-sign-in");
+    await browser.waitFor(
+      'document.querySelector(\'[data-testid="session-location-cloud"][aria-checked="true"]\')',
+      "Cloud chosen after the inline sign-in",
+    );
+    expect(
+      Boolean(
+        await browser.evaluate<boolean>(
+          "Boolean(document.querySelector('.modal'))",
+        ),
+      ),
+      "the inline sign-in left the dialog",
+    );
+    expect(
+      (await browser.requests()).some(
+        (one) =>
+          JSON.stringify(one) ===
+          '{"cloudSignIn":{"gatewayUrl":"http://127.0.0.1:8080","email":"dev@example.com"}}',
+      ),
+      "the inline sign-in sent the wrong call",
+    );
+    await browser.screenshot("cloud-dialog-after-setup");
   },
 );
+
+// The last choice in a workspace is the next dialog's.
+await withBrowser({ port: 41772, page: "cloud-test.html" }, async (browser) => {
+  await Bun.sleep(400);
+  await openDialog(browser, "Cloud project");
+  await browser.click("session-location-cloud");
+  await closeDialog(browser);
+  await openDialog(browser, "Cloud project");
+  expect(
+    (await checked(browser, "cloud")) === "true",
+    "the dialog forgot Cloud for this workspace",
+  );
+  await browser.click("session-location-local");
+  await closeDialog(browser);
+  await openDialog(browser, "Plain local");
+  expect(
+    (await checked(browser, "local")) === "true",
+    "another workspace took this one's choice",
+  );
+  await closeDialog(browser);
+});
 
 console.log("cloud dialog check passed");
