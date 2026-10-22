@@ -164,4 +164,49 @@ await withBrowser(
   },
 );
 
+// After a move back, the session view says how it resumed until dismissed,
+// and the card is not moving.
+await withBrowser(
+  {
+    port: 41798,
+    page: "cloud-test.html",
+    query: "moving=moved",
+  },
+  async (browser) => {
+    await Bun.sleep(400);
+    await browser.evaluate(
+      `document.querySelector('[data-session-id="s-cloud"]').click()`,
+    );
+    await browser.waitFor(
+      "document.querySelector('[data-testid=\"session-move-notice\"]')",
+      "the moved-back notice",
+    );
+    expect(
+      (await browser.text("session-move-notice")).includes("ask mode"),
+      "the notice does not say how the session resumed",
+    );
+    const card = `document.querySelector('[data-session-id="s-cloud"]').closest('.session-card')`;
+    expect(
+      !(await browser.evaluate<string | undefined>(
+        `${card}.dataset.movePhase`,
+      )),
+      "a moved session's card still reads as moving",
+    );
+    await browser.screenshot("cloud-move-notice");
+    await browser.click("session-move-notice-dismiss");
+    await browser.waitFor(
+      "!document.querySelector('[data-testid=\"session-move-notice\"]')",
+      "the notice to go after Got it",
+    );
+    expect(
+      (await browser.requests()).some(
+        (one) =>
+          JSON.stringify(one) ===
+          '{"agentMoveDismiss":{"sessionId":"s-cloud"}}',
+      ),
+      "Got it did not call agentMoveDismiss",
+    );
+  },
+);
+
 console.log("cloud move check passed");

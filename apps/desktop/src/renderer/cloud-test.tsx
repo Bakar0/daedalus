@@ -131,6 +131,12 @@ const snapshot = {
           ...(query.get("moving") === "failed"
             ? { message: "The pod did not answer" }
             : {}),
+          ...(query.get("moving") === "moved"
+            ? {
+                notice:
+                  "Moved back to this Mac. It resumes in ask mode; switch the permission mode back when you are ready.",
+              }
+            : {}),
         },
       ]
     : [],
@@ -471,6 +477,12 @@ const client = {
       else found.hostId = null;
       announce();
       return ok({ status: "moved" as const, session: structuredClone(found) });
+    },
+    agentMoveDismiss: async (params: { sessionId: string }) => {
+      record("agentMoveDismiss", params);
+      snapshot.sessionMoves = [];
+      announce();
+      return ok(null);
     },
     agentMoveCancel: async (params: { sessionId: string }) => {
       record("agentMoveCancel", params);

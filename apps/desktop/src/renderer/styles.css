@@ -8738,3 +8738,6 @@ dd {
   font-size: 11px;
   gap: 2px;
 }
+.session-move-notice .routine-bar-text {
+  white-space: normal;
+}

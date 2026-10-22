@@ -2926,9 +2926,17 @@ export function WorkspaceApp({
     // gateway that did not answer says nothing about which.
     return cloud && cloud.connection !== "error" ? "unavailable" : undefined;
   };
-  // Sessions moving between this Mac and the cloud, by session.
+  // Sessions moving between this Mac and the cloud, by session; a `moved`
+  // entry only carries the notice the session view shows afterwards.
   const moveBySession = new Map(
-    (snapshot?.sessionMoves ?? []).map((move) => [move.sessionId, move]),
+    (snapshot?.sessionMoves ?? [])
+      .filter((move) => move.phase !== "moved")
+      .map((move) => [move.sessionId, move]),
+  );
+  const moveNoticeBySession = new Map(
+    (snapshot?.sessionMoves ?? [])
+      .filter((move) => move.phase === "moved" && move.notice)
+      .map((move) => [move.sessionId, move.notice!]),
   );
   const statusViewFor = (session: AgentSessionDto): SessionStatusView => {
     const view = sessionStatusView(
@@ -5869,6 +5877,38 @@ export function WorkspaceApp({
               onCopy={copyCommandText}
             />
           ))}
+      {activeSession && moveNoticeBySession.get(activeSession.id) && (
+        <section
+          aria-label="About this move"
+          className="routine-bar session-move-notice"
+          data-color={activeSession.color ?? undefined}
+          data-testid="session-move-notice"
+          style={sessionColorStyle(activeSession.color)}
+        >
+          <div className="routine-bar-row">
+            <span className="routine-bar-text">
+              {moveNoticeBySession.get(activeSession.id)}
+            </span>
+            <span className="routine-bar-actions">
+              <button
+                className="quiet"
+                data-testid="session-move-notice-dismiss"
+                onClick={() =>
+                  void sessionActions.run(
+                    client.request.agentMoveDismiss({
+                      sessionId: activeSession.id,
+                    }),
+                    `move-notice:${activeSession.id}`,
+                  )
+                }
+                type="button"
+              >
+                Got it
+              </button>
+            </span>
+          </div>
+        </section>
+      )}
       {activeSession &&
         signInBySession.get(activeSession.id)?.phase === "pasting" && (
           <CloudPasteCodeBar
