@@ -149,14 +149,20 @@ export function startCommandWorker(onFailure?: (error: Error) => void): {
         const env: Record<string, string> = {};
         for (const [name, value] of Object.entries(merged))
           if (value !== undefined) env[name] = value;
-        worker.postMessage({
-          id,
-          argv: [executable, ...args],
-          cwd: options.cwd,
-          env,
-          stdin: options.stdin,
-          timeoutMs: options.timeoutMs,
-        });
+        // A message that cannot be sent must not leave its call waiting.
+        try {
+          worker.postMessage({
+            id,
+            argv: [executable, ...args],
+            cwd: options.cwd,
+            env,
+            stdin: options.stdin,
+            timeoutMs: options.timeoutMs,
+          });
+        } catch (error) {
+          pending.delete(id);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
       }),
   };
 }
