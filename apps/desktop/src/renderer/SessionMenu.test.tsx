@@ -63,4 +63,15 @@ describe("WorkspaceCloudItems", () => {
     expect(markup).toContain('data-testid="cloud-wake"');
     expect(markup).not.toContain('data-testid="cloud-sleep"');
   });
+
+  test("a failed action's reason shows in the menu", () => {
+    const markup = renderToStaticMarkup(
+      <WorkspaceCloudItems
+        cloud={{ ...actions, error: "You may have at most 5 workspaces" }}
+      />,
+    );
+    expect(markup).toContain('data-testid="cloud-menu-error"');
+    expect(markup).toContain("You may have at most 5 workspaces");
+    expect(markup).not.toContain('role="menuitem"');
+  });
 });

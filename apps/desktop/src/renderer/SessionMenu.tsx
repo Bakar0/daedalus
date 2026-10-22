@@ -374,6 +374,8 @@ export interface WorkspaceCloudControls {
   workspace?: CloudWorkspaceDto;
   /** A create, sleep, wake or delete is on its way. */
   pending: boolean;
+  /** Why the last one failed, in the gateway's or Daedalus's words. */
+  error?: string;
   onCreate: () => void;
   onSleep: () => void;
   onWake: () => void;
@@ -439,6 +441,17 @@ export function WorkspaceMenu({
   );
 }
 
+/** Why the last cloud action failed, under the items, as plain text. */
+function CloudError({ error }: { error?: string }) {
+  return error ? (
+    <p className="menu-cloud-error" data-testid="cloud-menu-error" role="alert">
+      {error}
+    </p>
+  ) : null;
+}
+
+// Run in cloud, Sleep and Wake are not menuitems: choosing one would close
+// the menu, and it stays open to show the action running and how it ended.
 export function WorkspaceCloudItems({
   cloud,
 }: {
@@ -454,7 +467,6 @@ export function WorkspaceCloudItems({
           data-testid="cloud-run"
           disabled={cloud.pending}
           onClick={cloud.onCreate}
-          role="menuitem"
           title="Make a pod for this workspace on the cloud gateway, so new sessions can run there. The board and the journal stay on this Mac."
           type="button"
         >
@@ -462,6 +474,7 @@ export function WorkspaceCloudItems({
             {cloud.pending ? "Starting in cloud…" : "Run in cloud"}
           </span>
         </button>
+        <CloudError error={cloud.error} />
       </>
     );
   const asleep = workspace.status === "sleeping";
@@ -491,7 +504,6 @@ export function WorkspaceCloudItems({
           data-testid="cloud-wake"
           disabled={cloud.pending}
           onClick={cloud.onWake}
-          role="menuitem"
           title="Start its pod again. Sessions that ended when it slept come back with Revive."
           type="button"
         >
@@ -503,7 +515,6 @@ export function WorkspaceCloudItems({
           data-testid="cloud-sleep"
           disabled={cloud.pending || workspace.status === "failed"}
           onClick={cloud.onSleep}
-          role="menuitem"
           title="Remove its pod and keep its volume. The sessions running there end; Wake and Revive bring them back."
           type="button"
         >
@@ -524,6 +535,7 @@ export function WorkspaceCloudItems({
       >
         <span className="menu-item-label">Delete cloud workspace…</span>
       </ConfirmButton>
+      <CloudError error={cloud.error} />
     </>
   );
 }

@@ -43,6 +43,32 @@ export function gatewayOrigin(address: string): string {
   return url.origin;
 }
 
+/** What a Kubernetes quota counts, in words. */
+const QUOTA_RESOURCES: Record<string, string> = {
+  persistentvolumeclaims: "storage volumes",
+  pods: "running workspaces",
+  "requests.cpu": "CPU",
+  "requests.memory": "memory",
+  "requests.storage": "storage",
+  "requests.ephemeral-storage": "scratch space",
+};
+
+/**
+ * A gateway's QUOTA refusal in plain words. Its own limit already reads
+ * well; a Kubernetes quota comes as the API server's text ("... is
+ * forbidden: exceeded quota: workspaces, requested: pods=1, used: pods=6,
+ * limited: pods=6"), which names what ran out and the numbers.
+ */
+export function plainQuotaMessage(message: string): string {
+  if (!/exceeded quota/i.test(message)) return message;
+  const limited = /limited:\s*([^,=\s]+)=([^,\s]+)/i.exec(message);
+  const resource = limited?.[1];
+  const what = (resource && QUOTA_RESOURCES[resource]) ?? "resources";
+  return `Your cloud workspaces use all the ${what} the gateway allows you${
+    limited ? ` (${limited[2]})` : ""
+  }. Delete a cloud workspace, or ask the gateway's administrator to raise the limit.`;
+}
+
 /** The gateway's HTTP API (packages/remote-protocol/src/gateway.ts). */
 export class GatewayClient {
   readonly url: string;
@@ -141,7 +167,9 @@ export class GatewayClient {
         code ?? (response.status === 404 ? "NOT_FOUND" : "INTERNAL"),
         response.status === 401
           ? "The gateway did not accept the sign-in; sign in again in Settings › Cloud or with 'daedal cloud login'"
-          : (error?.message ?? `The gateway answered ${response.status}`),
+          : error?.code === "QUOTA" && error.message
+            ? plainQuotaMessage(error.message)
+            : (error?.message ?? `The gateway answered ${response.status}`),
         error?.code ? { gatewayCode: error.code } : undefined,
       );
     }

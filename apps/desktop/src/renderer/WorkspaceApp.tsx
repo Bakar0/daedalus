@@ -21,6 +21,7 @@ import type {
 } from "react";
 import type {
   AccountDto,
+  CloudStateDto,
   TeamDetailDto,
   FileLinkTargetDto,
   AppUpdateDto,
@@ -2046,15 +2047,32 @@ export function WorkspaceApp({
       ),
     [cloudState.data],
   );
-  // Keyed by local workspace id; a create can take a minute.
+  // Keyed by local workspace id; a create can take a minute. A failure is
+  // shown in that workspace's menu, where the action was chosen.
   const cloudActions = useMutation({
-    onStart: () => setError(undefined),
-    onError: (message) => setError(message),
     onSettled: async () => {
       await cloudState.refresh();
       await refresh();
     },
   });
+  const [cloudErrors, setCloudErrors] = useState<Record<string, string>>({});
+  function runCloudAction(
+    workspaceId: string,
+    request: () => Promise<RpcResult<CloudStateDto>>,
+  ) {
+    setCloudErrors(({ [workspaceId]: _gone, ...rest }) => rest);
+    void cloudActions.run(
+      request().then((response) => {
+        if (!response.ok)
+          setCloudErrors((current) => ({
+            ...current,
+            [workspaceId]: response.error.message,
+          }));
+        return response;
+      }),
+      workspaceId,
+    );
+  }
   const [error, setError] = useState<string>();
   const [theme, setTheme] = useState<AppTheme>("dark");
   const [workspaceForm, setWorkspaceForm] = useState({
@@ -6316,34 +6334,31 @@ export function WorkspaceApp({
                               ? {
                                   workspace: cloudByWorkspace.get(item.id),
                                   pending: cloudActions.pending(item.id),
+                                  error: cloudErrors[item.id],
                                   onCreate: () =>
-                                    void cloudActions.run(
+                                    runCloudAction(item.id, () =>
                                       client.request.cloudWorkspaceCreate({
                                         workspace: item.id,
                                       }),
-                                      item.id,
                                     ),
                                   onSleep: () =>
-                                    void cloudActions.run(
+                                    runCloudAction(item.id, () =>
                                       client.request.cloudWorkspaceSleep({
                                         workspace: item.id,
                                       }),
-                                      item.id,
                                     ),
                                   onWake: () =>
-                                    void cloudActions.run(
+                                    runCloudAction(item.id, () =>
                                       client.request.cloudWorkspaceWake({
                                         workspace: item.id,
                                       }),
-                                      item.id,
                                     ),
                                   onDelete: () =>
-                                    void cloudActions.run(
+                                    runCloudAction(item.id, () =>
                                       client.request.cloudWorkspaceDelete({
                                         workspace: item.id,
                                         force: true,
                                       }),
-                                      item.id,
                                     ),
                                 }
                               : undefined

@@ -8591,3 +8591,11 @@ dd {
   justify-content: center;
   margin-top: 6px;
 }
+.menu-cloud-error {
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.4;
+  margin: 4px 10px 6px;
+  max-width: 260px;
+  white-space: normal;
+}

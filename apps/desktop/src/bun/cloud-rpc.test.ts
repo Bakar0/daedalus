@@ -125,6 +125,8 @@ class FakeGateway {
   readonly workspaces = new Map<string, CloudWorkspace>();
   /** Answer every authenticated route with this status instead. */
   refuse: number | undefined;
+  /** Refuse a create with this QUOTA message, as the gateway does. */
+  quota: string | undefined;
   readonly calls: string[] = [];
 
   readonly fetch = (async (input: URL | RequestInfo, init?: RequestInit) => {
@@ -152,6 +154,8 @@ class FakeGateway {
       return json(200, { id: "u1", email: "dev@example.com" });
     if (url.pathname === "/v1/workspaces" && method === "GET")
       return json(200, { workspaces: [...this.workspaces.values()] });
+    if (url.pathname === "/v1/workspaces" && method === "POST" && this.quota)
+      return json(429, { error: { code: "QUOTA", message: this.quota } });
     if (url.pathname === "/v1/workspaces" && method === "POST") {
       const request = JSON.parse(String(init?.body)) as {
         workspaceId: string;
@@ -697,6 +701,34 @@ describe("cloud RPC", () => {
       } finally {
         context.close();
       }
+    });
+  });
+
+  test("Run in cloud refused by a quota says so in plain words", async () => {
+    await withCloud(async (rpc, context, gateway) => {
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://localhost:8080",
+        email: "dev@example.com",
+      });
+      const workspace = await context.workspaces.create({ name: "Pods" });
+      // What the user's create got back from Kubernetes on kind.
+      gateway.quota =
+        'Creating PersistentVolumeClaim ws-1-state: persistentvolumeclaims "ws-1-state" is forbidden: exceeded quota: workspaces, requested: persistentvolumeclaims=1, used: persistentvolumeclaims=6, limited: persistentvolumeclaims=6';
+      const refused = await rpc.cloudWorkspaceCreate({
+        workspace: workspace.id,
+      });
+      expect(!refused.ok && refused.error.message).toBe(
+        "Your cloud workspaces use all the storage volumes the gateway allows you (6). Delete a cloud workspace, or ask the gateway's administrator to raise the limit.",
+      );
+      // The gateway's own limit reads well as it is.
+      gateway.quota = "You may have at most 5 workspaces";
+      const limit = await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
+      expect(!limit.ok && limit.error.message).toBe(
+        "You may have at most 5 workspaces",
+      );
+      expect(
+        context.repositories.cloudWorkspaceId(workspace.id),
+      ).toBeUndefined();
     });
   });
 });
