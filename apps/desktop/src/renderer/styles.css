@@ -8599,3 +8599,35 @@ dd {
   max-width: 260px;
   white-space: normal;
 }
+.session-opening-steps {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  text-align: left;
+}
+.session-opening-steps li {
+  color: var(--muted);
+  font-size: 12px;
+  padding-left: 18px;
+  position: relative;
+}
+.session-opening-steps li::before {
+  content: "○";
+  left: 0;
+  position: absolute;
+}
+.session-opening-steps li[data-state="done"] {
+  color: var(--secondary);
+}
+.session-opening-steps li[data-state="done"]::before {
+  color: var(--success);
+  content: "✓";
+}
+.session-opening-steps li[data-state="now"] {
+  color: var(--text);
+}
+.session-opening-steps li[data-state="now"]::before {
+  content: "●";
+}

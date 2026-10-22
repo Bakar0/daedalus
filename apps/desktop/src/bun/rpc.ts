@@ -544,6 +544,7 @@ export function createDesktopRequestHandlers(
       result(async () => ({
         ...(await desktopSnapshot(readModel)),
         cloudSignIns: context.cloud.signIns.list(),
+        cloudPreparing: context.cloud.preparing(),
       })),
     sessionUpdate: ({ sessionId, name, pinned, color, autoRebirthPercent }) =>
       mutate(async () => {
@@ -1197,8 +1198,10 @@ export function createDesktopRequestHandlers(
       mutate(() => context.accounts.signOut(provider, account)),
     agentSpawn: ({ teamId, cloud, ...params }) =>
       mutate(async () => {
+        // The first cloud session makes the workspace's cloud copy; a
+        // sleeping one is woken. The window shows how far it got.
         const host = cloud
-          ? await context.cloud.hostId(
+          ? await context.cloud.prepareForSession(
               teamId
                 ? context.teams.get(teamId).lead.workspaceId
                 : params.workspace,

@@ -58,6 +58,7 @@ import {
 import { LargeFileBar } from "./LargeFileBar";
 import { CloudFirstRunBar } from "./CloudFirstRunBar";
 import { CloudPasteCodeBar, CloudSignInPanel } from "./CloudSignInBar";
+import { SessionOpening } from "./SessionOpening";
 import type { DesktopClient } from "./client-types";
 import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import { UpdateBanner } from "./UpdateBanner";
@@ -349,6 +350,8 @@ export interface SessionLaunchState {
   taskId?: string;
   name: string;
   tool: "codex" | "claude" | "terminal";
+  /** Runs in the workspace's cloud pod, which may need preparing first. */
+  cloud?: boolean;
   startedAt: string;
   status: "starting" | "error";
   error?: string;
@@ -3211,8 +3214,11 @@ export function WorkspaceApp({
   const sessionCloud = sessionWorkspace
     ? cloudByWorkspace.get(sessionWorkspace.id)
     : undefined;
+  // Signed in is enough: the first cloud session makes the workspace's cloud
+  // copy, and a sleeping one wakes for it.
+  const cloudSignedIn = Boolean(cloudState.data?.signedIn);
   const sessionInCloud = Boolean(
-    sessionForm.cloud && sessionCloud && sessionCloud.status !== "sleeping",
+    sessionForm.cloud && cloudSignedIn && sessionCloud?.status !== "failed",
   );
   const memberTeam = sessionForm.teamId
     ? teamsById.get(sessionForm.teamId)
@@ -3775,6 +3781,7 @@ export function WorkspaceApp({
       taskId: sessionForm.taskId,
       name: sessionForm.name,
       tool: isTerminal ? "terminal" : (sessionType as "codex" | "claude"),
+      ...(sessionInCloud ? { cloud: true } : {}),
       startedAt: new Date().toISOString(),
       status: "starting",
     };
@@ -5923,11 +5930,12 @@ export function WorkspaceApp({
           />
         </div>
       ) : openingLaunch ? (
-        <div aria-busy="true" className="terminal-empty">
-          <span aria-hidden="true" className="session-launch-spinner" />
-          <strong>Starting {openingLaunch.tool}…</strong>
-          <span>The terminal opens here as soon as it is ready.</span>
-        </div>
+        <SessionOpening
+          launch={openingLaunch}
+          preparing={snapshot?.cloudPreparing?.find(
+            (item) => item.workspaceId === openingLaunch.workspaceId,
+          )}
+        />
       ) : (
         <div className="terminal-empty">
           <strong>Select a session</strong>
@@ -6335,12 +6343,6 @@ export function WorkspaceApp({
                                   workspace: cloudByWorkspace.get(item.id),
                                   pending: cloudActions.pending(item.id),
                                   error: cloudErrors[item.id],
-                                  onCreate: () =>
-                                    runCloudAction(item.id, () =>
-                                      client.request.cloudWorkspaceCreate({
-                                        workspace: item.id,
-                                      }),
-                                    ),
                                   onSleep: () =>
                                     runCloudAction(item.id, () =>
                                       client.request.cloudWorkspaceSleep({
@@ -7356,7 +7358,7 @@ export function WorkspaceApp({
                   value={sessionForm.name}
                 />
               </label>
-              {sessionCloud && (
+              {cloudSignedIn && (
                 <fieldset className="session-tool-picker session-location">
                   <legend>Where it runs</legend>
                   <div
@@ -7376,11 +7378,9 @@ export function WorkspaceApp({
                           id: "cloud",
                           label: "Cloud",
                           note:
-                            sessionCloud.status === "sleeping"
-                              ? "Asleep · wake it from the workspace menu"
-                              : sessionCloud.status === "failed"
-                                ? "Failed"
-                                : "In the workspace's pod",
+                            sessionCloud?.status === "failed"
+                              ? "Failed"
+                              : "In the workspace's pod",
                         },
                       ] as const
                     ).map((place) => {
@@ -7393,7 +7393,7 @@ export function WorkspaceApp({
                           data-testid={`session-location-${place.id}`}
                           disabled={
                             place.id === "cloud" &&
-                            sessionCloud.status === "sleeping"
+                            sessionCloud?.status === "failed"
                           }
                           key={place.id}
                           onClick={() => {
@@ -7406,7 +7406,7 @@ export function WorkspaceApp({
                             setRememberSessionModel(false);
                           }}
                           role="radio"
-                          title={sessionCloud.reason ?? undefined}
+                          title={sessionCloud?.reason ?? undefined}
                           type="button"
                         >
                           <strong>{place.label}</strong>

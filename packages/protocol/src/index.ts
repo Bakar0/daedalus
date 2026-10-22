@@ -962,6 +962,16 @@ export interface CloudSignInDto {
   expiresAt: number;
 }
 
+/**
+ * A workspace's cloud copy while a new cloud session waits for it:
+ * `creating` the first time, `waking` when it slept, `starting` while its
+ * pod starts and its runner connects.
+ */
+export interface CloudPreparingDto {
+  workspaceId: string;
+  phase: "creating" | "waking" | "starting";
+}
+
 /** A Pro key (an invite code), as an admin sees it. */
 export interface AdminKeyDto {
   code: string;
@@ -1075,6 +1085,8 @@ export interface DesktopSnapshotDto {
   largeFiles?: LargeFileDto[];
   /** Sign-in pages cloud sessions asked to open; absent outside the app. */
   cloudSignIns?: CloudSignInDto[];
+  /** Workspaces whose cloud copy a new session waits for. */
+  cloudPreparing?: CloudPreparingDto[];
   settings: DesktopSettingsDto;
 }
 

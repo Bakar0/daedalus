@@ -109,11 +109,13 @@ const submit = async (browser: Browser) => {
 await withBrowser({ port: 41768, page: "cloud-test.html" }, async (browser) => {
   await Bun.sleep(400);
 
-  // A workspace with no cloud workspace gets the dialog it always had.
+  // Signed in, a workspace with no cloud workspace yet offers Cloud too: its
+  // first cloud session makes one. Local starts chosen.
   await openDialog(browser, "Plain local");
   expect(
-    !(await browser.has("session-location")),
-    "the Local/Cloud choice shows for a workspace with no cloud workspace",
+    (await browser.has("session-location")) &&
+      (await checked(browser, "local")) === "true",
+    "a signed-in Mac should offer Cloud for a workspace with no cloud workspace yet",
   );
   expect(
     (await browser.has("session-tool-codex")) &&
@@ -122,7 +124,7 @@ await withBrowser({ port: 41768, page: "cloud-test.html" }, async (browser) => {
       (await present(browser, ABILITIES)),
     "the local dialog lost Codex, the account or the abilities",
   );
-  await browser.screenshot("cloud-dialog-local-only");
+  await browser.screenshot("cloud-dialog-no-cloud-yet");
   await closeDialog(browser);
 
   // Its cloud twin: both choices, Local first, and Local keeps everything.
@@ -240,15 +242,15 @@ await withBrowser({ port: 41768, page: "cloud-test.html" }, async (browser) => {
     "the dialog to close after Create",
   );
 
-  // An asleep cloud workspace cannot take a new session.
+  // An asleep cloud workspace can take a new session: it wakes for it.
   browser.scope = "";
   await openDialog(browser, "Sleepy project");
   expect(await browser.has("session-location"), "no choice for Sleepy project");
   expect(
-    await browser.evaluate<boolean>(
+    !(await browser.evaluate<boolean>(
       `document.querySelector('[data-testid="session-location-cloud"]').disabled`,
-    ),
-    "Cloud can be chosen while the workspace sleeps",
+    )),
+    "Cloud cannot be chosen while the workspace sleeps; it should wake for the session",
   );
   await browser.screenshot("cloud-dialog-sleeping");
   await closeDialog(browser);

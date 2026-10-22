@@ -1,6 +1,6 @@
 /**
  * The workspace menu's cloud items in a real browser, against
- * `cloud-test.tsx`: Run in cloud for a local workspace; status, Sleep, Wake
+ * `cloud-test.tsx`: nothing for a local workspace; status, Sleep, Wake
  * and a Delete that needs a second click for a cloud one; nothing while this
  * Mac is signed out. The menu has to stay inside the window at two heights.
  *
@@ -65,44 +65,18 @@ await withBrowser({ port: 41764, page: "cloud-test.html" }, async (browser) => {
   // The cloud state arrives after the first paint.
   await Bun.sleep(300);
 
-  // A local workspace: Run in cloud, and no status.
+  // A local workspace: no cloud items at all; its first cloud session makes
+  // its cloud workspace, so there is nothing to enable here.
   await open(browser, "Plain local");
   expect(
-    await browser.has("cloud-run"),
-    "no Run in cloud for a local workspace",
-  );
-  expect(
-    !(await browser.has("cloud-status")) &&
+    !(await browser.has("cloud-run")) &&
+      !(await browser.has("cloud-status")) &&
       !(await browser.has("cloud-sleep")) &&
       !(await browser.has("cloud-delete")),
-    "a local workspace shows cloud status or controls",
-  );
-  expect(
-    (await browser.text("cloud-run")) === "Run in cloud",
-    `the item reads "${await browser.text("cloud-run")}"`,
+    "a local workspace shows cloud items",
   );
   await menuInsideWindow(browser, "local workspace");
   await browser.screenshot("cloud-menu-local");
-  await browser.click("cloud-run");
-  await browser.waitFor(
-    "window.requests.some((one) => 'cloudWorkspaceCreate' in one)",
-    "the create call",
-  );
-  expect(
-    (await lastRequest(browser)) ===
-      '{"cloudWorkspaceCreate":{"workspace":"local-ws"}}',
-    `Run in cloud sent ${await lastRequest(browser)}`,
-  );
-  await closeMenus(browser);
-  await open(browser, "Plain local");
-  await browser.waitFor(
-    "document.querySelector('.menu-popover:popover-open [data-testid=\"cloud-status\"]')",
-    "the status after Run in cloud",
-  );
-  expect(
-    !(await browser.has("cloud-run")),
-    "Run in cloud is still offered once the workspace has one",
-  );
   await closeMenus(browser);
 
   // A running cloud workspace: status, Sleep, no Wake.
@@ -188,12 +162,8 @@ await withBrowser({ port: 41764, page: "cloud-test.html" }, async (browser) => {
   await closeMenus(browser);
   await open(browser, "Cloud project");
   await browser.waitFor(
-    "document.querySelector('.menu-popover:popover-open [data-testid=\"cloud-run\"]')",
-    "Run in cloud after the delete",
-  );
-  expect(
-    !(await browser.has("cloud-status")),
-    "the status stays after the cloud workspace was deleted",
+    "!document.querySelector('.menu-popover:popover-open [data-testid=\"cloud-status\"]')",
+    "the status to go after the delete",
   );
   expect(
     await browser.evaluate<boolean>(

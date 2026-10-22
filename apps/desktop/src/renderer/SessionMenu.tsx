@@ -370,13 +370,12 @@ const CLOUD_STATUS_LABEL: Record<CloudWorkspaceDto["status"], string> = {
 
 /** What the workspace menu offers for the workspace's cloud twin. */
 export interface WorkspaceCloudControls {
-  /** Its cloud workspace, or undefined when it has none yet. */
+  /** Its cloud workspace, or undefined when it has none yet (no items). */
   workspace?: CloudWorkspaceDto;
   /** A create, sleep, wake or delete is on its way. */
   pending: boolean;
   /** Why the last one failed, in the gateway's or Daedalus's words. */
   error?: string;
-  onCreate: () => void;
   onSleep: () => void;
   onWake: () => void;
   onDelete: () => void;
@@ -450,7 +449,7 @@ function CloudError({ error }: { error?: string }) {
   ) : null;
 }
 
-// Run in cloud, Sleep and Wake are not menuitems: choosing one would close
+// Sleep and Wake are not menuitems: choosing one would close
 // the menu, and it stays open to show the action running and how it ended.
 export function WorkspaceCloudItems({
   cloud,
@@ -458,25 +457,8 @@ export function WorkspaceCloudItems({
   cloud: WorkspaceCloudControls;
 }) {
   const workspace = cloud.workspace;
-  if (!workspace)
-    return (
-      <>
-        <hr className="menu-separator" />
-        <button
-          className="quiet menu-item"
-          data-testid="cloud-run"
-          disabled={cloud.pending}
-          onClick={cloud.onCreate}
-          title="Make a pod for this workspace on the cloud gateway, so new sessions can run there. The board and the journal stay on this Mac."
-          type="button"
-        >
-          <span className="menu-item-label">
-            {cloud.pending ? "Starting in cloud…" : "Run in cloud"}
-          </span>
-        </button>
-        <CloudError error={cloud.error} />
-      </>
-    );
+  // No cloud workspace yet: the first cloud session makes one.
+  if (!workspace) return null;
   const asleep = workspace.status === "sleeping";
   return (
     <>

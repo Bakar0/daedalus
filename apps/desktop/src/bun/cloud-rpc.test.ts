@@ -361,22 +361,20 @@ describe("cloud RPC", () => {
     });
   });
 
-  test("a cloud spawn needs the workspace's cloud workspace and runs Claude or a terminal", async () => {
-    await withCloud(async (rpc, context) => {
+  test("a cloud spawn makes the cloud workspace first, and runs Claude or a terminal", async () => {
+    await withCloud(async (rpc, context, gateway) => {
+      const workspace = await context.workspaces.create({ name: "Pods" });
+      const signedOut = await rpc.agentSpawn({
+        workspace: workspace.id,
+        cloud: true,
+      });
+      expect(!signedOut.ok && signedOut.error.message).toBe(
+        "Sign in to a cloud gateway in Settings › Cloud to run sessions in the cloud",
+      );
       await rpc.cloudSignIn({
         gatewayUrl: "http://localhost:8080",
         email: "dev@example.com",
       });
-      const workspace = await context.workspaces.create({ name: "Pods" });
-      const none = await rpc.agentSpawn({
-        workspace: workspace.id,
-        cloud: true,
-      });
-      expect(!none.ok && none.error.message).toBe(
-        "Workspace 'Pods' has no cloud workspace; run 'daedal cloud create'",
-      );
-
-      await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
       const codex = await rpc.agentSpawn({
         workspace: workspace.id,
         cloud: true,
@@ -385,6 +383,9 @@ describe("cloud RPC", () => {
       expect(!codex.ok && codex.error.message).toBe(
         "A cloud session runs Claude or a terminal",
       );
+      // The cloud workspace was made on the way, as for any first session.
+      expect(context.repositories.cloudWorkspaceId(workspace.id)).toBeDefined();
+      expect(gateway.calls).toContain("POST /v1/workspaces");
       expect(
         context.repositories.listAgents({ workspaceId: workspace.id }),
       ).toEqual([]);
@@ -729,6 +730,65 @@ describe("cloud RPC", () => {
       expect(
         context.repositories.cloudWorkspaceId(workspace.id),
       ).toBeUndefined();
+    });
+  });
+
+  test("the first cloud session makes the cloud workspace, and a sleeping one is woken", async () => {
+    await withCloud(async (rpc, context, gateway) => {
+      await expect(context.cloud.prepareForSession("anything")).rejects.toThrow(
+        "Sign in to a cloud gateway in Settings › Cloud",
+      );
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://localhost:8080",
+        email: "dev@example.com",
+      });
+      const workspace = await context.workspaces.create({ name: "Pods" });
+      const phases: string[] = [];
+      context.cloud.onPreparingChange(() =>
+        phases.push(context.cloud.preparing()[0]?.phase ?? "done"),
+      );
+
+      // Two sessions at once share one preparation.
+      const [first, second] = await Promise.all([
+        context.cloud.prepareForSession(workspace.id),
+        context.cloud.prepareForSession(workspace.id),
+      ]);
+      const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
+      expect(first).toBe(`ws:${cloudId}`);
+      expect(second).toBe(first);
+      expect(phases).toEqual(["creating", "starting", "done"]);
+      expect(
+        gateway.calls.filter((call) => call === "POST /v1/workspaces"),
+      ).toHaveLength(1);
+
+      await rpc.cloudWorkspaceSleep({ workspace: workspace.id });
+      phases.length = 0;
+      expect(await context.cloud.prepareForSession(workspace.id)).toBe(first);
+      expect(phases).toEqual(["waking", "starting", "done"]);
+      expect(gateway.workspaces.get(cloudId)?.status).toBe("running");
+
+      // Already running: nothing to do but check.
+      phases.length = 0;
+      await context.cloud.prepareForSession(workspace.id);
+      expect(phases).toEqual(["starting", "done"]);
+    });
+  });
+
+  test("a failed cloud workspace says why instead of waiting", async () => {
+    await withCloud(async (rpc, context, gateway) => {
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://localhost:8080",
+        email: "dev@example.com",
+      });
+      const workspace = await context.workspaces.create({ name: "Pods" });
+      await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
+      const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
+      gateway.workspaces.get(cloudId)!.status = "failed";
+      gateway.workspaces.get(cloudId)!.reason = "The image could not be pulled";
+      await expect(
+        context.cloud.prepareForSession(workspace.id),
+      ).rejects.toThrow("The image could not be pulled");
+      expect(context.cloud.preparing()).toEqual([]);
     });
   });
 });
