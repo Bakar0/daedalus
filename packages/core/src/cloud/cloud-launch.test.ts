@@ -6,6 +6,7 @@ import type { RunnerLaunch } from "@daedalus/remote-protocol";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { cloudHostId, createApplicationContext } from "../index";
 import { claudeStatePath } from "../services/folder-trust";
+import { cloudMcpChoices, setCloudMcpServer } from "./cloud-mcp";
 import type { RunnerTransport } from "./link";
 import { RemoteSessionHost } from "./remote-session-host";
 
@@ -284,6 +285,7 @@ describe("cloud launch seeding", () => {
             },
           }),
         );
+        await setCloudMcpServer(context.config, "docs", true);
         await context.agents.spawn({ workspace: workspace.id, host: hostId });
         expect(pod.files.get(".home/.claude/skills/review/SKILL.md")).toBe(
           "review",
@@ -318,6 +320,16 @@ describe("cloud launch seeding", () => {
             "local: a local command",
           ],
         });
+        // Settings › Cloud sees the name and host, never the URL.
+        expect(await cloudMcpChoices(context.config)).toEqual({
+          servers: [{ name: "docs", host: "mcp.example.com", on: true }],
+          leftOut: [
+            { name: "keyed", reason: "has headers, which may hold a secret" },
+            { name: "local", reason: "a local command" },
+          ],
+        });
+        await setCloudMcpServer(context.config, "docs", false);
+        expect(context.config.cloudMcpServers).toEqual({});
 
         // Removed on the Mac, removed in the pod; nothing else written.
         await Bun.$`rm ${join(claude, "commands/commit-msg.md")}`;

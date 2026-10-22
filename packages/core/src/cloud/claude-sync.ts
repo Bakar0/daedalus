@@ -108,6 +108,11 @@ export interface ClaudeSyncInput {
   daedalusSkills: DaedalusPodSkill[];
   /** The style Daedalus selects for its own Claude sessions, if any. */
   daedalusStyle?: string;
+  /**
+   * The remote MCP servers the user turned on for cloud sessions, each with
+   * the hash of its URL then (`cloudMcpUrlHash`). Absent or empty: none.
+   */
+  mcpOn?: Record<string, string>;
 }
 
 export interface ClaudeSync {
@@ -120,8 +125,10 @@ export interface ClaudeSync {
   marketplaces: Record<string, MarketplaceRecord>;
   mcpServers: Record<string, { type: string; url: string }>;
   mcpLeftOut: McpLeftOut[];
-  /** `hooks` from the user's settings, without any that name a Mac path. */
-  hooks?: Record<string, unknown>;
+  /**
+   * How many hooks the user's settings hold. None is copied: a hook's
+   * command or fields can hold a token, and it runs on its own.
+   */
   hooksLeftOut: number;
   outputStyle?: string;
 }
@@ -458,7 +465,9 @@ async function enabledPlugins(input: ClaudeSyncInput): Promise<FoundPlugin[]> {
  * The user's MCP servers a pod can reach and may hold: remote ones, by an
  * https URL alone. A server with headers, environment, OAuth settings or
  * anything else beside its URL may carry a secret, and a local command does
- * not exist in the pod; both are left out and named.
+ * not exist in the pod; both are left out and named. A URL can still hold a
+ * key in its path, so these are only the ones the user may turn on for
+ * cloud (`carriedMcpServers`), never copied on their own.
  */
 export function remoteMcpServers(stateText: string | undefined): {
   servers: Record<string, { type: string; url: string }>;
@@ -497,8 +506,10 @@ export function remoteMcpServers(stateText: string | undefined): {
       out("not an https URL");
       continue;
     }
-    if (url.username || url.password || url.search) {
-      out("a user name or query string in its URL, which may hold a secret");
+    if (url.username || url.password || url.search || url.hash) {
+      out(
+        "a user name, query string or fragment in its URL, which may hold a secret",
+      );
       continue;
     }
     servers[name] = { type, url: url.toString() };
@@ -506,36 +517,52 @@ export function remoteMcpServers(stateText: string | undefined): {
   return { servers, leftOut };
 }
 
-/** A hook command that names a path that exists only on a Mac. */
-const MAC_PATH =
-  /(^|[\s"'=:;(])(~|\$HOME|\$\{HOME\}|\/Users\/|\/Applications\/|\/Library\/|\/opt\/homebrew\/|\/private\/|\/Volumes\/)/;
+/** What `mcpOn` records for a server: the SHA-256 of its URL. */
+export const cloudMcpUrlHash = (url: string): string =>
+  createHash("sha256").update(url).digest("hex");
 
-/** The user's hooks without any whose command names a Mac path. */
-export function podHooks(settingsText: string | undefined): {
-  hooks?: Record<string, unknown>;
-  leftOut: number;
-} {
-  const hooks = parseObject(settingsText).hooks;
-  if (!isObject(hooks)) return { leftOut: 0 };
-  let leftOut = 0;
-  const kept: Record<string, unknown> = {};
-  for (const [event, groups] of Object.entries(hooks)) {
-    if (!Array.isArray(groups)) continue;
-    const keptGroups = groups.flatMap((group: unknown) => {
-      if (!isObject(group) || !Array.isArray(group.hooks)) return [];
-      const keptHooks = group.hooks.filter((hook: unknown) => {
-        const ok =
-          isObject(hook) &&
-          (hook.type !== "command" ||
-            (typeof hook.command === "string" && !MAC_PATH.test(hook.command)));
-        if (!ok) leftOut += 1;
-        return ok;
+/**
+ * The servers that go to the pod: those the user turned on for cloud, and
+ * whose URL is still the one it had when they did.
+ */
+export function carriedMcpServers(
+  stateText: string | undefined,
+  on: Record<string, string> = {},
+): ReturnType<typeof remoteMcpServers> {
+  const remote = remoteMcpServers(stateText);
+  const servers: Record<string, { type: string; url: string }> = {};
+  const leftOut = [...remote.leftOut];
+  for (const [name, server] of Object.entries(remote.servers)) {
+    if (on[name] === cloudMcpUrlHash(server.url)) servers[name] = server;
+    else
+      leftOut.push({
+        name,
+        reason: on[name]
+          ? "its URL changed since it was turned on for cloud"
+          : "not turned on for cloud",
       });
-      return keptHooks.length ? [{ ...group, hooks: keptHooks }] : [];
-    });
-    if (keptGroups.length) kept[event] = keptGroups;
   }
-  return { ...(Object.keys(kept).length ? { hooks: kept } : {}), leftOut };
+  return {
+    servers,
+    leftOut: leftOut.sort((a, b) => a.name.localeCompare(b.name)),
+  };
+}
+
+/** How many hooks a settings file holds, for the log; none is copied. */
+export function countHooks(settingsText: string | undefined): number {
+  const hooks = parseObject(settingsText).hooks;
+  if (!isObject(hooks)) return 0;
+  return Object.values(hooks)
+    .filter(Array.isArray)
+    .flat()
+    .reduce<number>(
+      (sum, group: unknown) =>
+        sum +
+        (isObject(group) && Array.isArray(group.hooks)
+          ? group.hooks.length
+          : 0),
+      0,
+    );
 }
 
 /**
@@ -599,8 +626,7 @@ export async function collectClaudeSync(
       keptLabels.has(plugin.item.label)
     )
       copiedPlugins[plugin.key] = plugin.install;
-  const mcp = remoteMcpServers(input.stateText);
-  const hooks = podHooks(input.settingsText);
+  const mcp = carriedMcpServers(input.stateText, input.mcpOn);
   return {
     // Items with nothing to copy stay too: they carry what they skipped.
     items: capped.kept,
@@ -609,8 +635,7 @@ export async function collectClaudeSync(
     marketplaces,
     mcpServers: mcp.servers,
     mcpLeftOut: mcp.leftOut,
-    ...(hooks.hooks ? { hooks: hooks.hooks } : {}),
-    hooksLeftOut: hooks.leftOut,
+    hooksLeftOut: countHooks(input.settingsText),
     ...podStyle(input, capped.kept),
   };
 }
@@ -661,8 +686,6 @@ export interface SyncManifest {
   plugins: string[];
   marketplaces: string[];
   mcpServers: string[];
-  /** Whether the Mac set the pod's `hooks`. */
-  hooks: boolean;
 }
 
 /** Paths a manifest from the pod may name; anything else is ignored. */
@@ -688,7 +711,6 @@ export function parseManifest(text: string | undefined): SyncManifest {
     plugins: names(raw.plugins),
     marketplaces: names(raw.marketplaces),
     mcpServers: names(raw.mcpServers),
-    hooks: raw.hooks === true,
   };
 }
 
@@ -731,7 +753,6 @@ export function planSync(sync: ClaudeSync, previous: SyncManifest): SyncPlan {
     plugins: Object.keys(sync.plugins).sort(),
     marketplaces: Object.keys(sync.marketplaces).sort(),
     mcpServers: Object.keys(sync.mcpServers).sort(),
-    hooks: Boolean(sync.hooks),
   };
   const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
   const changed =
@@ -796,7 +817,7 @@ function mergeOwned(pod: Json, mac: Json, previous: string[]): Json {
 
 /**
  * The pod's `~/.claude/settings.json` with the Mac's plugins turned on, its
- * output style and its hooks. Only those keys: never `env`, `permissions`,
+ * output style. Only those keys: never `hooks`, `env`, `permissions`,
  * `apiKeyHelper` or a status line. Undefined when nothing changes.
  */
 export function syncedSettings(
@@ -814,8 +835,6 @@ export function syncedSettings(
   if (Object.keys(enabled).length) next.enabledPlugins = enabled;
   else delete next.enabledPlugins;
   if (sync.outputStyle) next.outputStyle = sync.outputStyle;
-  if (sync.hooks) next.hooks = sync.hooks;
-  else if (previous.hooks) delete next.hooks;
   return JSON.stringify(next) === JSON.stringify(pod)
     ? undefined
     : `${JSON.stringify(next, null, 2)}\n`;
