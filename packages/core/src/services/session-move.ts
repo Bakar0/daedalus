@@ -109,8 +109,9 @@ export const MOVED_BACK_NOTICE =
 
 /** A transcript, its subagents and saved tool output. */
 const MAX_TRANSCRIPT_BYTES = 256 * 1024 * 1024;
-/** One repository's bundle. */
-const MAX_BUNDLE_BYTES = 2 * 1024 * 1024 * 1024;
+/** One repository's bundle, which the Mac holds in memory while it travels. */
+const MAX_BUNDLE_BYTES = 512 * 1024 * 1024;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const POD_PROJECTS = ".home/.claude/projects";
 /**
  * A session the cloud wrote part of comes back asking before it acts: what
@@ -617,6 +618,12 @@ export class SessionMoves {
       throw new DaedalusError(
         "CONFLICT",
         "This session has no conversation to carry",
+      );
+    // It names files on both sides.
+    if (!UUID.test(agent.providerSessionId))
+      throw new DaedalusError(
+        "CONFLICT",
+        "This session's conversation id is not one a move can carry",
       );
     return agent;
   }
