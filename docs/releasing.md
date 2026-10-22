@@ -1,6 +1,6 @@
 # Releasing
 
-A release is a git tag. Pushing `v<version>` runs `.github/workflows/release.yml`, which builds the stable app on an Apple silicon runner and an Intel runner, publishes a GitHub release, and updates the Homebrew cask.
+A release is a git tag. Pushing `v<version>` runs `.github/workflows/release.yml`, which builds the stable app on an Apple silicon runner, publishes a GitHub release, and updates the Homebrew cask.
 
 ## Cutting a release
 
@@ -15,14 +15,14 @@ The workflow refuses a tag that does not match `package.json`.
 
 ## What a release contains
 
-For each architecture (`arm64`, `x64`):
+A release has an Apple silicon (`arm64`) build only. 0.31.0 was the last release with an Intel (`x64`) build; the workflow re-attaches 0.31.0's `stable-macos-x64-update.json` to every release so Intel installs of 0.31.0 find no update instead of a 404:
 
-| Asset                                      | Read by                                   |
-| ------------------------------------------ | ----------------------------------------- |
-| `stable-macos-<arch>-Daedalus.dmg`         | people downloading by hand, and the cask  |
-| `stable-macos-<arch>-update.json`          | the app's update check                    |
-| `stable-macos-<arch>-Daedalus.app.tar.zst` | the app's update download                 |
-| `stable-macos-<arch>-<hash>.patch`         | the app's update download, when it exists |
+| Asset                                     | Read by                                   |
+| ----------------------------------------- | ----------------------------------------- |
+| `stable-macos-arm64-Daedalus.dmg`         | people downloading by hand, and the cask  |
+| `stable-macos-arm64-update.json`          | the app's update check                    |
+| `stable-macos-arm64-Daedalus.app.tar.zst` | the app's update download                 |
+| `stable-macos-arm64-<hash>.patch`         | the app's update download, when it exists |
 
 and `daedalus.rb`, the cask as written for this release.
 

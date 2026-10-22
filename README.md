@@ -31,7 +31,7 @@
 
 ## Installation
 
-Requires macOS 14 or newer and `git`.
+Requires an Apple silicon Mac on macOS 14 or newer, and `git`. 0.31.0 was the last release with an Intel build.
 
 ```sh
 brew install --cask bakar0/tap/daedalus

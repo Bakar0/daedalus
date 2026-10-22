@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- macOS 14 or newer with the Xcode Command Line Tools
+- An Apple silicon Mac on macOS 14 or newer with the Xcode Command Line Tools
 - Bun **1.4.3**
 - tmux **3.7c** or newer on `PATH`, for the test suite
 
