@@ -9,11 +9,21 @@ RUN bun install --frozen-lockfile --filter @daedalus/runner \
 FROM debian:bookworm-slim
 ARG CLAUDE_CODE_VERSION=latest
 ARG CODEX_VERSION=latest
+ARG AWS_CLI_VERSION=2.38.4
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       bash ca-certificates curl git locales nodejs npm openssh-client tmux unzip \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /usr/local/bin/bun /usr/local/bin/bun
+# AWS CLI v2 for Bedrock through AWS SSO: sessions sign in with
+# `aws sso login --use-device-code`, which Claude reruns as `awsAuthRefresh`.
+# About 270 MB installed; the zip and the unpacked copy go in the same layer.
+RUN curl -fsSL -o /tmp/awscli.zip \
+      "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m)-${AWS_CLI_VERSION}.zip" \
+ && unzip -q /tmp/awscli.zip -d /tmp \
+ && /tmp/aws/install --install-dir /usr/local/aws-cli --bin-dir /usr/local/bin \
+ && rm -rf /tmp/awscli.zip /tmp/aws \
+ && aws --version
 RUN npm install -g \
       "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
       "@openai/codex@${CODEX_VERSION}" \
