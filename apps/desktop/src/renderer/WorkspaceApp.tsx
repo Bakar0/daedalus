@@ -54,6 +54,11 @@ import {
   type AutoRebirthDto,
 } from "@daedalus/protocol";
 import { LargeFileBar } from "./LargeFileBar";
+import {
+  changeReachesBeyondSnapshot,
+  mergeSnapshotParts,
+  PendingSnapshotParts,
+} from "./snapshot-parts";
 import type { DesktopClient } from "./client-types";
 import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import { UpdateBanner } from "./UpdateBanner";
@@ -2426,15 +2431,43 @@ export function WorkspaceApp({
 
   const [dataRevision, setDataRevision] = useState(0);
 
-  const snapshotQuery = useRpcQuery(() => client.request.snapshot({}), {
+  // A change the host says touched only some parts reloads only those, which
+  // while agents work is usually a session's activity or token counts: a few
+  // kilobytes instead of the whole snapshot. The query runs one request at a
+  // time and applies answers in order, so parts merged here always land on
+  // the newest snapshot.
+  const pendingParts = useRef(new PendingSnapshotParts());
+  const latestSnapshot = useRef(snapshot);
+  const fetchSnapshot = useCallback(async () => {
+    const parts = pendingParts.current.take();
+    const current = latestSnapshot.current;
+    if (parts === "full" || !current || !client.request.snapshotParts)
+      return client.request.snapshot({});
+    const response = await client.request.snapshotParts({ parts });
+    if (!response.ok) {
+      pendingParts.current.full();
+      return response;
+    }
+    return {
+      ok: true as const,
+      data: mergeSnapshotParts(
+        latestSnapshot.current ?? current,
+        response.data,
+      ),
+    };
+  }, [client]);
+  const snapshotQuery = useRpcQuery(fetchSnapshot, {
     onDataChanged: (listener) =>
-      client.subscribe(() => {
-        setDataRevision((current) => current + 1);
+      client.subscribe((change) => {
+        pendingParts.current.note(change);
+        if (changeReachesBeyondSnapshot(change))
+          setDataRevision((current) => current + 1);
         listener();
       }),
     // Applied before `refresh` resolves, so awaiting it means the snapshot
     // and the selections that depend on it are in place.
     onData: (latest) => {
+      latestSnapshot.current = latest;
       setSnapshot(latest);
       setError(undefined);
       setWorkspaceId((current) =>
@@ -2454,7 +2487,12 @@ export function WorkspaceApp({
     onError: (message) => setError(message),
     deps: [client],
   });
-  const refresh = snapshotQuery.refresh;
+  // A caller refreshing after its own mutation needs everything it changed.
+  const refreshSnapshot = snapshotQuery.refresh;
+  const refresh = useCallback(() => {
+    pendingParts.current.full();
+    return refreshSnapshot();
+  }, [refreshSnapshot]);
 
   // Repositories live in the workspace content, not in the snapshot, so
   // refreshing the snapshot alone left a repository that finished preparing in

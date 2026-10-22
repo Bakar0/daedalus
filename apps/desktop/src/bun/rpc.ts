@@ -32,8 +32,11 @@ import {
   type Workspace,
   type WorkspaceContent,
   type WorkspaceRepository,
+  isPartialReload,
 } from "@daedalus/core";
 import type {
+  DesktopSnapshotPart,
+  DesktopSnapshotPartsDto,
   AccountDto,
   AgentActivityDto,
   AppUpdateDto,
@@ -197,6 +200,34 @@ const workspaceContentDto = (
 });
 
 /** The read model's view, as the window and the phone receive it. */
+/** The named parts of `desktopSnapshot`, mapped the same way. */
+export async function desktopSnapshotParts(
+  readModel: ReadModel,
+  parts: readonly DesktopSnapshotPart[],
+): Promise<DesktopSnapshotPartsDto> {
+  const wanted = parts.filter((part) => isPartialReload([part]));
+  const view = await readModel.snapshotParts(wanted);
+  return {
+    ...(view.sessionActivity
+      ? { sessionActivity: view.sessionActivity.map(agentActivityDto) }
+      : {}),
+    ...(view.attention
+      ? { attention: view.attention.map(sessionAttentionDto) }
+      : {}),
+    ...(view.telemetry ?? {}),
+    ...(view.toasts ? { toasts: view.toasts.map(toastDto) } : {}),
+    ...(view.worktrees
+      ? { worktrees: view.worktrees.map((worktree) => ({ ...worktree })) }
+      : {}),
+    ...(view.shipped
+      ? { shipped: view.shipped.map((item) => ({ ...item })) }
+      : {}),
+    ...(view.largeFiles
+      ? { largeFiles: view.largeFiles.map((file) => ({ ...file })) }
+      : {}),
+  };
+}
+
 export async function desktopSnapshot(
   readModel: ReadModel,
 ): Promise<DesktopSnapshotDto> {
@@ -516,6 +547,8 @@ export function createDesktopRequestHandlers(
 
   return {
     snapshot: () => result(() => desktopSnapshot(readModel)),
+    snapshotParts: ({ parts }) =>
+      result(() => desktopSnapshotParts(readModel, parts)),
     sessionUpdate: ({ sessionId, name, pinned, color, autoRebirthPercent }) =>
       mutate(async () => {
         if (name !== undefined) await context.agents.rename(sessionId, name);

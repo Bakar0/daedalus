@@ -5,6 +5,7 @@ import type {
 } from "@daedalus/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DesktopClient } from "../client-types";
+import { changeReachesBeyondSnapshot } from "../snapshot-parts";
 import type { DiffTarget } from "./EditorArea";
 import { workspaceBaseName, workspaceParentPath } from "./explorer-state";
 import { FileTypeIcon } from "./file-icons";
@@ -88,7 +89,10 @@ export function useWorktreeChanges(
         if (changed === workspaceId) soon();
       },
     );
-    const stopData = client.subscribe(soon);
+    // A turn's activity or token count changes no file.
+    const stopData = client.subscribe((change) => {
+      if (changeReachesBeyondSnapshot(change)) soon();
+    });
     return () => {
       stopFiles();
       stopData();

@@ -1,7 +1,7 @@
 /**
  * What one `dataChanged` reload costs the window, measured.
  *
- *   bun run scripts/render-perf-check.ts <snapshot.json> [board|session] [reloads]
+ *   bun run scripts/render-perf-check.ts <snapshot.json> [board|session] [reloads] [full|partial]
  *
  * Builds `render-perf-test.html` for production with React's profiling build
  * (development React is several times slower and would measure the wrong
@@ -19,11 +19,11 @@ import { build } from "vite";
 import react from "@vitejs/plugin-react";
 
 const projectRoot = resolve(import.meta.dir, "..");
-const [snapshotPath, view = "board", reloadsArgument = "40"] =
+const [snapshotPath, view = "board", reloadsArgument = "40", mode = "full"] =
   Bun.argv.slice(2);
 if (!snapshotPath) {
   console.error(
-    "Usage: bun run scripts/render-perf-check.ts <snapshot.json> [board|session] [reloads]",
+    "Usage: bun run scripts/render-perf-check.ts <snapshot.json> [board|session] [reloads] [full|partial]",
   );
   process.exit(2);
 }
@@ -68,7 +68,7 @@ const server = Bun.serve({
     return file.size ? new Response(file) : new Response("", { status: 404 });
   },
 });
-const pageUrl = `http://127.0.0.1:${server.port}/render-perf-test.html?data=/snapshot.json&view=${view}`;
+const pageUrl = `http://127.0.0.1:${server.port}/render-perf-test.html?data=/snapshot.json&view=${view}&mode=${mode}`;
 const profile = await mkdtemp(join(tmpdir(), "daedalus-render-perf-chrome-"));
 const debuggingPort = 41000 + Math.floor(Math.random() * 1000);
 const chrome = Bun.spawn(
@@ -174,7 +174,7 @@ try {
       ]!;
     return `median ${at(0.5).toFixed(1)} ms, p90 ${at(0.9).toFixed(1)} ms`;
   };
-  console.log(`view ${view}, ${reloads} reloads`);
+  console.log(`view ${view}, ${reloads} ${mode} reloads`);
   console.log(`  React commit per reload: ${stat(results.commit)}`);
   console.log(`  reload, request to paint: ${stat(results.reload)}`);
   console.log(

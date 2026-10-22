@@ -17,17 +17,22 @@ import { createRoot } from "react-dom/client";
 import type { DesktopSnapshotDto } from "@daedalus/protocol";
 import { App } from "./App";
 import type { DesktopClient } from "./client-types";
+import type { DataChange } from "./snapshot-parts";
 import "./styles.css";
 
 const params = new URLSearchParams(location.search);
 const raw = await (await fetch(params.get("data")!)).text();
 const view = (params.get("view") ?? "board") as "board" | "session";
+// `partial` announces each reload as the host does when only activity and
+// token counts moved; `full` announces it with no parts, as before parts
+// existed.
+const partial = params.get("mode") === "partial";
 
 let revision = 0;
-const snapshotText = () => {
-  const snapshot = JSON.parse(raw) as DesktopSnapshotDto;
+const base = JSON.parse(raw) as DesktopSnapshotDto;
+const activity = (): DesktopSnapshotDto["sessionActivity"] => {
   const now = new Date(Date.UTC(2026, 9, 22, 12, 0, revision)).toISOString();
-  snapshot.sessionActivity = snapshot.agents
+  return base.agents
     .filter((agent) => agent.status === "running")
     .map((agent, index) => ({
       sessionId: agent.id,
@@ -37,11 +42,14 @@ const snapshotText = () => {
       observedAt: now,
       source: "hook",
     })) as DesktopSnapshotDto["sessionActivity"];
-  return JSON.stringify(snapshot);
 };
+// What the bridge hands over: a fresh parse each time, so nothing keeps its
+// identity.
+const snapshotText = () =>
+  JSON.stringify({ ...base, sessionActivity: activity() });
 const initial = JSON.parse(snapshotText()) as DesktopSnapshotDto;
 
-const listeners = new Set<() => void>();
+const listeners = new Set<(change?: DataChange) => void>();
 const commits: number[] = [];
 declare global {
   interface Window {
@@ -55,7 +63,10 @@ window.renderPerf = {
   commits,
   reload: async () => {
     revision += 1;
-    for (const listener of listeners) listener();
+    for (const listener of listeners)
+      listener(
+        partial ? { parts: ["sessionActivity", "telemetry"] } : undefined,
+      );
     // Two frames: the snapshot request resolves, then React commits.
     await new Promise((resolve) => requestAnimationFrame(resolve));
     await new Promise((resolve) => requestAnimationFrame(resolve));
@@ -67,6 +78,16 @@ const client = {
   request: new Proxy(
     {
       snapshot: () => ok(JSON.parse(snapshotText())),
+      snapshotParts: () =>
+        ok(
+          JSON.parse(
+            JSON.stringify({
+              sessionActivity: activity(),
+              providerUsage: base.providerUsage,
+              sessionTelemetry: base.sessionTelemetry,
+            }),
+          ),
+        ),
       workspaceContentGet: ({ workspace }: { workspace: string }) =>
         ok({
           workspaceId: workspace,
@@ -84,7 +105,7 @@ const client = {
       get: (target, name: string) => target[name] ?? (() => ok({})),
     },
   ),
-  subscribe: (listener: () => void) => {
+  subscribe: (listener: (change?: DataChange) => void) => {
     listeners.add(listener);
     return () => listeners.delete(listener);
   },

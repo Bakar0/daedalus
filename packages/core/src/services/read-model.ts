@@ -197,13 +197,61 @@ export class ReadModel {
   }
 
   async version(): Promise<string> {
-    const parts: Record<string, unknown> = {};
+    return JSON.stringify(await this.versions());
+  }
+
+  /**
+   * The version of each watched source on its own, so a host can say which
+   * parts changed and a window reload only those.
+   */
+  async versions(): Promise<Record<string, string>> {
+    const parts: Record<string, string> = {};
     for (const [name, part] of Object.entries(this.sources))
       if (typeof part.version === "function")
-        parts[name] = await part.version();
-    return JSON.stringify(parts);
+        parts[name] = JSON.stringify(await part.version());
+    return parts;
+  }
+
+  /**
+   * Only the named parts. Each is safe to read on its own: none of them is
+   * an input to the reconciliation that a `live` agents or terminals read
+   * runs first, so it reads the same here as inside a whole snapshot.
+   */
+  async snapshotParts<Name extends PartialReadModelSource>(
+    names: readonly Name[],
+  ): Promise<Pick<ReadModelView, Name>> {
+    const view: Partial<Record<Name, unknown>> = {};
+    for (const name of names) view[name] = await this.sources[name].read();
+    return view as Pick<ReadModelView, Name>;
   }
 }
+
+/**
+ * The sources a window may reload on their own. They are the ones that move
+ * while agents work, a turn's activity and token counts above all, and none
+ * of them changes what the rest of the snapshot says.
+ */
+export const PARTIAL_READ_MODEL_SOURCES = [
+  "sessionActivity",
+  "attention",
+  "telemetry",
+  "toasts",
+  "worktrees",
+  "shipped",
+  "largeFiles",
+] as const satisfies readonly (keyof Sources)[];
+
+export type PartialReadModelSource =
+  (typeof PARTIAL_READ_MODEL_SOURCES)[number];
+
+/** Whether every changed part can be reloaded without the rest. */
+export const isPartialReload = (
+  names: readonly string[],
+): names is PartialReadModelSource[] =>
+  names.length > 0 &&
+  names.every((name) =>
+    (PARTIAL_READ_MODEL_SOURCES as readonly string[]).includes(name),
+  );
 
 /**
  * A routines status as the version sees it. Every keystroke moves the quiet
