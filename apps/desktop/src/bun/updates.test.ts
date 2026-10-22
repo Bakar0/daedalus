@@ -19,6 +19,8 @@ function harness(
     /** "Get beta updates"; the beta feed's answer is `beta`. */
     betaUpdates?: boolean;
     beta?: { latest?: string; updateAvailable?: boolean; checkError?: string };
+    /** Each check waits on this, so a test can hold one open. */
+    checkGate?: () => Promise<void>;
   } = {},
 ) {
   const published: Array<AppUpdateDto | null> = [];
@@ -32,6 +34,8 @@ function harness(
     }),
     check: async (feed) => {
       calls.push(`check:${feed}`);
+      await options.checkGate?.();
+      calls.push(`checked:${feed}`);
       const answer =
         feed === "beta"
           ? (options.beta ?? {})
@@ -154,6 +158,7 @@ describe("UpdateController", () => {
     await controller.install();
     expect(calls).toEqual([
       "check:stable",
+      "checked:stable",
       "download:stable",
       "beforeRestart",
       "apply",
@@ -190,7 +195,7 @@ describe("UpdateController", () => {
     const { controller, calls } = harness({ latest: "0.8.0" });
     await controller.check();
     await controller.install();
-    expect(calls).toEqual(["check:stable"]);
+    expect(calls).toEqual(["check:stable", "checked:stable"]);
   });
 
   test("dev builds never check", async () => {
@@ -220,7 +225,7 @@ describe("UpdateController with beta updates", () => {
       beta: { latest: "0.10.0-beta.1" },
     });
     await controller.check();
-    expect(calls).toEqual(["check:stable"]);
+    expect(calls).toEqual(["check:stable", "checked:stable"]);
     expect(published.at(-1)).toMatchObject({ version: "0.9.0" });
   });
 
@@ -238,7 +243,9 @@ describe("UpdateController with beta updates", () => {
     await controller.install();
     expect(calls).toEqual([
       "check:stable",
+      "checked:stable",
       "check:beta",
+      "checked:beta",
       "download:beta",
       "beforeRestart",
       "apply",
@@ -301,6 +308,46 @@ describe("UpdateController with beta updates", () => {
     });
     await controller.check();
     expect(published.at(-1)).toMatchObject({ version: "0.10.0-beta.1" });
+  });
+
+  test("an install clicked during a check waits for it and takes its offer", async () => {
+    const gates: Array<() => void> = [];
+    let hold = false;
+    const { controller, calls } = harness({
+      betaUpdates: true,
+      beta: { latest: "0.10.0-beta.1" },
+      checkGate: () =>
+        hold
+          ? new Promise<void>((resolve) => gates.push(resolve))
+          : Promise.resolve(),
+    });
+    const until = async (condition: () => boolean) => {
+      while (!condition())
+        await new Promise((resolve) => setTimeout(resolve, 0));
+    };
+    await controller.check();
+    calls.length = 0;
+    hold = true;
+    const checking = controller.check();
+    const installing = controller.install();
+    await until(() => gates.length === 1);
+    // The check is still reading stable; nothing has been downloaded.
+    expect(calls).toEqual(["check:stable"]);
+    gates[0]!();
+    await until(() => gates.length === 2);
+    expect(calls).not.toContain("download:beta");
+    gates[1]!();
+    await checking;
+    await installing;
+    expect(calls).toEqual([
+      "check:stable",
+      "checked:stable",
+      "check:beta",
+      "checked:beta",
+      "download:beta",
+      "beforeRestart",
+      "apply",
+    ]);
   });
 
   test("a manual check reports the first failure when no feed answers", async () => {

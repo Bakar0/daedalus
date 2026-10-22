@@ -7,10 +7,10 @@ name: Release
 # A version with a prerelease suffix, such as v0.32.0-beta.1, is a beta. It
 # builds the same app and publishes a GitHub prerelease, which
 # releases/latest never points at, so the stable feed and the cask stay as
-# they are. Its update files also replace the assets of the rolling `beta`
-# prerelease, the fixed feed that apps with "Get beta updates" on read
-# (BETA_FEED_URL in packages/core/src/services/app-updates.ts). See
-# docs/releasing.md.
+# they are. The beta-feed job then copies the highest beta's update files to
+# the rolling `beta` prerelease, the fixed feed that apps with "Get beta
+# updates" on read (BETA_FEED_URL in packages/core/src/services/app-updates.ts).
+# See docs/releasing.md.
 #
 # Optional repository secrets:
 #   MACOS_CERTIFICATE_P12, MACOS_CERTIFICATE_PASSWORD, MACOS_DEVELOPER_ID
@@ -131,10 +131,6 @@ jobs:
   publish:
     needs: build
     runs-on: macos-15
-    # Two tags pushed together would otherwise race on the beta feed.
-    concurrency:
-      group: release-publish
-      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -194,35 +190,6 @@ jobs:
             --verify-tag \
             ${kind[@]+"${kind[@]}"}
 
-      # The beta feed is one prerelease tagged `beta` whose assets each beta
-      # replaces, so its download URL never changes. The bundles and patches
-      # go up first and update.json last: an app that reads the new
-      # update.json then finds the bundle it names. Assets an older beta left,
-      # such as its patches, are removed afterwards.
-      - name: Update the beta feed
-        if: steps.kind.outputs.prerelease == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if ! gh release view beta >/dev/null 2>&1; then
-            gh release create beta \
-              --title "Daedalus beta feed" \
-              --notes "The update feed for Daedalus with Get beta updates on. Each beta replaces these files; the versioned prereleases hold the release notes." \
-              --prerelease --latest=false \
-              --target "$GITHUB_SHA"
-          fi
-          shopt -s nullglob
-          feed=(artifacts/*.dmg artifacts/*.tar.zst artifacts/*.patch)
-          gh release upload beta "${feed[@]}" --clobber
-          gh release upload beta artifacts/*-update.json --clobber
-          keep=$(for file in "${feed[@]}" artifacts/*-update.json; do basename "$file"; done)
-          gh release view beta --json assets --jq '.assets[].name' | while read -r name; do
-            if ! grep -qxF "$name" <<<"$keep"; then
-              gh release delete-asset beta "$name" --yes
-            fi
-          done
-          gh release edit beta --notes "The update feed for Daedalus with Get beta updates on. It now carries ${GITHUB_REF_NAME}; see that release for its notes."
-
       # The same GitHub App the servant release uses: a token that lasts an
       # hour and can write only to the tap.
       - name: Check for GitHub App credentials
@@ -278,3 +245,75 @@ jobs:
             git commit -m "daedalus ${GITHUB_REF_NAME}"
             git push
           fi
+
+  # The beta feed is one prerelease tagged `beta` whose assets are replaced,
+  # so its download URL never changes. It always carries the highest beta
+  # published, not the tag that started this run: GitHub keeps only the
+  # newest queued run of a concurrency group and cancels the others, and
+  # tags can finish out of order, but whichever run comes last still leaves
+  # the highest beta in place.
+  beta-feed:
+    needs: publish
+    if: contains(github.ref_name, '-')
+    runs-on: macos-15
+    concurrency:
+      group: beta-feed
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+
+      - name: Pick the highest beta
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release list --exclude-drafts --limit 200 \
+            --json tagName,isPrerelease | bun run scripts/beta-feed.ts)
+          if [ -z "$tag" ]; then
+            echo "No beta release found" >&2
+            exit 1
+          fi
+          echo "Feed carries $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # The old update.json files go first, then the bundles and patches,
+      # then the new update.json. An app that checks in between gets a 404,
+      # which it treats as no beta, rather than an old manifest that names a
+      # bundle already replaced. Assets an older beta left, such as its
+      # patches, are removed last.
+      - name: Replace the feed's files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.pick.outputs.tag }}
+        run: |
+          mkdir -p feed
+          gh release download "$TAG" --dir feed \
+            --pattern '*.dmg' --pattern '*.tar.zst' --pattern '*.patch' --pattern '*-update.json'
+          if ! gh release view beta >/dev/null 2>&1; then
+            gh release create beta \
+              --title "Daedalus beta feed" \
+              --notes "The update feed for Daedalus with Get beta updates on." \
+              --prerelease --latest=false \
+              --target "$GITHUB_SHA"
+          fi
+          shopt -s nullglob
+          bundles=(feed/*.dmg feed/*.tar.zst feed/*.patch)
+          manifests=(feed/*-update.json)
+          current=$(gh release view beta --json assets --jq '.assets[].name')
+          for name in $current; do
+            case "$name" in
+              *-update.json) gh release delete-asset beta "$name" --yes ;;
+            esac
+          done
+          gh release upload beta "${bundles[@]}" --clobber
+          gh release upload beta "${manifests[@]}" --clobber
+          keep=$(for file in "${bundles[@]}" "${manifests[@]}"; do basename "$file"; done)
+          for name in $current; do
+            if ! grep -qxF "$name" <<<"$keep"; then
+              gh release delete-asset beta "$name" --yes 2>/dev/null || true
+            fi
+          done
+          gh release edit beta --notes "The update feed for Daedalus with Get beta updates on. It carries ${TAG}; see that release for its notes."

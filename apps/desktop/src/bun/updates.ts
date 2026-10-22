@@ -74,6 +74,13 @@ export class UpdateController {
   /** The feed the offered version came from; the download reads it. */
   #feed: UpdateFeed = "stable";
   #busy = false;
+  /**
+   * Checks and installs run one at a time. Each one points Electrobun's one
+   * shared feed URL at the feed it reads, and Electrobun hands a second
+   * check the first one's answer, so an install that started during a check
+   * could download the other feed's bundle under this feed's version.
+   */
+  #queue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly options: UpdateControllerOptions) {}
 
@@ -100,6 +107,11 @@ export class UpdateController {
   ): Promise<AppUpdateDto | null> {
     // An install in progress owns the prompt; a timer firing mid-download
     // must not replace "Downloading" with "Available".
+    if (this.#busy) return this.#update;
+    return this.#exclusive(() => this.#check(options));
+  }
+
+  async #check(options: { manual?: boolean }): Promise<AppUpdateDto | null> {
     if (this.#busy) return this.#update;
     const manual = options.manual ?? false;
     const { version: currentVersion, channel } =
@@ -168,7 +180,16 @@ export class UpdateController {
     return this.#update;
   }
 
+  /**
+   * Installs what is offered once any check in flight has finished, so the
+   * offer it installs is the one that check left.
+   */
   async install(): Promise<AppUpdateDto | null> {
+    if (this.#busy) return this.#update;
+    return this.#exclusive(() => this.#install());
+  }
+
+  async #install(): Promise<AppUpdateDto | null> {
     const offered = this.#update;
     if (this.#busy || offered?.state !== "available") return offered;
     this.#busy = true;
@@ -212,6 +233,12 @@ export class UpdateController {
     if (version) await this.options.writeDismissed(version);
     this.#set(null);
     return this.#update;
+  }
+
+  #exclusive<T>(run: () => Promise<T>): Promise<T> {
+    const next = this.#queue.then(run, run);
+    this.#queue = next.catch(() => undefined);
+    return next;
   }
 
   #set(update: AppUpdateDto | null) {

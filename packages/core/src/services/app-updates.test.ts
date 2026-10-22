@@ -1,13 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { loadConfig } from "../config";
-import {
-  AppUpdateService,
-  chooseUpdate,
-  compareVersions,
-  isNewerVersion,
-  updateFeeds,
-} from "./app-updates";
+import { compareVersions, isNewerVersion } from "../versions";
+import { AppUpdateService, chooseUpdate, updateFeeds } from "./app-updates";
 
 describe("compareVersions", () => {
   test("compares each part as a number", () => {
@@ -123,6 +118,17 @@ describe("AppUpdateService", () => {
       expect(appConfig.betaUpdatesEnabled).toBe(true);
       await cli.setBetaUpdates(false);
       expect(await app.feeds()).toEqual(["stable"]);
+    });
+  });
+
+  test("an unreadable config means stable only, not a failed check", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const service = new AppUpdateService(
+        await loadConfig({ DAEDALUS_HOME: home }),
+      );
+      await service.setBetaUpdates(true);
+      await Bun.write(`${home}/config.json`, "{ not json");
+      expect(await service.feeds()).toEqual(["stable"]);
     });
   });
 });

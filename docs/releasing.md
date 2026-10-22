@@ -30,7 +30,7 @@ The workflow builds and checks the app as for a stable release, then:
 
 - publishes a GitHub release `v0.32.0-beta.1` marked as a prerelease and never as latest, so `releases/latest`, the stable feed and the README badge stay on the last stable release;
 - skips the Homebrew cask, which `scripts/homebrew-cask.ts` refuses for a prerelease version anyway;
-- replaces the assets of the rolling `beta` release with this beta's DMGs, tarballs, patches and `update.json` files, creating that release the first time.
+- runs the `beta-feed` job, which copies the DMGs, tarballs, patches and `update.json` files of the highest beta published to the rolling `beta` release, creating that release the first time.
 
 The next beta of the same version is `-beta.2`. Versions compare by semver precedence, so `0.31.0 < 0.32.0-beta.1 < 0.32.0-beta.2 < 0.32.0-beta.10 < 0.32.0`.
 
@@ -40,7 +40,7 @@ Cut a normal release of the same version without the suffix: set `version` to `0
 
 ### The beta feed
 
-`releases/latest/download/` skips prereleases, so betas need a URL of their own that does not change between versions. The workflow keeps one prerelease tagged `beta`, and each beta replaces its assets, so the feed is `https://github.com/Bakar0/daedalus/releases/download/beta/` (`BETA_FEED_URL` in `packages/core/src/services/app-updates.ts`). It uploads the bundles and patches first and `update.json` last, then deletes assets an older beta left behind. A rolling release was chosen over the alternatives because it needs nothing outside this repository: a branch or Pages site would put build output in git, and a bucket would need credentials the workflow does not have. Testers who want a DMG can also download it from the `beta` release.
+`releases/latest/download/` skips prereleases, so betas need a URL of their own that does not change between versions. The workflow keeps one prerelease tagged `beta`, and each beta replaces its assets, so the feed is `https://github.com/Bakar0/daedalus/releases/download/beta/` (`BETA_FEED_URL` in `packages/core/src/services/app-updates.ts`). The job deletes the old `update.json` files first, uploads the bundles and patches, then uploads the new `update.json`, and finally removes assets an older beta left behind. An app that checks during the upload gets a 404, which it treats as no beta, rather than an old manifest naming a bundle that was already replaced. The job copies the highest beta by version (`scripts/beta-feed.ts`), not the tag that started it. GitHub keeps only the newest queued run of the job's concurrency group and cancels the others, and tags can finish out of order, but whichever run comes last still leaves the highest beta in place. To repair the feed by hand, re-run the `beta-feed` job of any beta's workflow run. A rolling release was chosen over the alternatives because it needs nothing outside this repository: a branch or Pages site would put build output in git, and a bucket would need credentials the workflow does not have. Testers who want a DMG can also download it from the `beta` release.
 
 Every build, beta or stable, bakes the stable feed into its `version.json`. The beta feed is chosen at run time:
 
@@ -48,7 +48,9 @@ Every build, beta or stable, bakes the stable feed into its `version.json`. The 
 - On, each check reads the stable feed and then the beta feed and offers the highest version newer than the running one. Stable wins a tie. A beta feed that does not exist yet, or fails, leaves the stable answer standing.
 - Off, the app reads only the stable feed. A beta already installed stays until a stable release passes it; turning the setting off never installs an older version.
 
-Electrobun 2 reads the feed URL from the `version.json` object it caches, on every check and download, so the app points that object's `baseUrl` at the chosen feed (`apps/desktop/src/bun/index.ts`). A download reads its feed again first, because the last check may have been the other feed's.
+Electrobun 2 reads the feed URL from the `version.json` object it caches, on every check and download, so the app points that object's `baseUrl` at the chosen feed (`apps/desktop/src/bun/index.ts`). Checks and installs run one at a time (`UpdateController`), so an install clicked during a check waits for it, and a download reads its feed again first, because the last check may have been the other feed's.
+
+Apple defines `CFBundleShortVersionString` and `CFBundleVersion` as period-separated integers, and Electrobun copies the whole version into `CFBundleVersion`. `scripts/electrobun-post-build.ts` therefore writes the numeric part, `0.32.0` for `0.32.0-beta.1`, to both keys before the bundle is signed (`scripts/bundle-version.ts`). The full version stays in `Resources/version.json`, which the updater compares and Settings › About shows.
 
 A beta's `.patch` is a delta from the latest stable release, since that is the feed the build reads. A beta user moving to the next beta has no patch for their version and downloads the whole tarball.
 

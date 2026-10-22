@@ -1,5 +1,6 @@
 // Electrobun's postBuild hook: puts the `daedal` launcher and the tmux from
-// scripts/build-tmux.ts into the bundle.
+// scripts/build-tmux.ts into the bundle, and writes Info.plist versions
+// macOS accepts (see scripts/bundle-version.ts).
 //
 // It goes in Contents/MacOS rather than through `build.copy`, which writes
 // under Resources/app. Electrobun signs every executable in Contents/MacOS and
@@ -12,7 +13,9 @@
 // lacks one. A dev build without it only warns and searches PATH as before.
 import { chmod, copyFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import packageJson from "../package.json";
 import { installLauncher } from "./bundle-launcher";
+import { writeBundleVersion } from "./bundle-version";
 
 const environment = process.env;
 const buildDirectory = environment["ELECTROBUN_BUILD_DIR"];
@@ -34,6 +37,9 @@ if (
 const bundleName = channel === "stable" ? appName : `${appName}-${channel}`;
 const bundle = join(buildDirectory, `${bundleName}.app`);
 console.log(`postBuild: added ${await installLauncher(bundle)}`);
+console.log(
+  `postBuild: Info.plist version ${writeBundleVersion(join(bundle, "Contents", "Info.plist"), packageJson.version)} for ${packageJson.version}`,
+);
 
 const source = resolve(import.meta.dir, "..", "build", "tmux", arch, "tmux");
 if (!(await Bun.file(source).exists())) {

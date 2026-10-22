@@ -66,7 +66,7 @@ Releases, the update feed, signing and the Homebrew cask are in
 `v<version>-beta.N` tag publishes a prerelease to the rolling `beta` release
 instead, which only apps with "Get beta updates" on read; it never touches
 `releases/latest` or the cask. Versions compare by semver precedence
-(`isNewerVersion` in `packages/core/src/services/app-updates.ts`).
+(`isNewerVersion` in `packages/core/src/versions.ts`).
 
 ## Electrobun
 

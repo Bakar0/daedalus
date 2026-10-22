@@ -3,6 +3,7 @@ export * from "./domain";
 export * from "./errors";
 export * from "./events";
 export * from "./logging";
+export * from "./versions";
 export * from "./repositories";
 export * from "./services/context";
 export * from "./services/activity";
