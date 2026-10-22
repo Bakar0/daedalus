@@ -239,6 +239,41 @@ export async function changedPaths(
 }
 
 /**
+ * Paths that are symbolic links in `to` and were not the same link in
+ * `from`. A link can point anywhere on this Mac, so a new one is the user's
+ * to approve, whatever its name.
+ */
+export async function changedLinks(
+  side: MoveSide,
+  dir: string,
+  from: string,
+  to: string,
+): Promise<string[]> {
+  const result = await side.run(dir, "git", [
+    "diff",
+    "--raw",
+    "-z",
+    "--no-renames",
+    "--no-abbrev",
+    from,
+    to,
+  ]);
+  if (result.exitCode !== 0)
+    throw new DaedalusError(
+      "DEPENDENCY",
+      `git diff failed on ${side.label}: ${result.stderr.trim()}`,
+    );
+  // `:<old mode> <new mode> <old id> <new id> <status>` then the path.
+  const fields = result.stdout.split("\0");
+  const links: string[] = [];
+  for (let index = 0; index + 1 < fields.length; index += 2) {
+    const newMode = fields[index]!.split(" ")[1];
+    if (newMode === "120000") links.push(fields[index + 1]!);
+  }
+  return links;
+}
+
+/**
  * Whether the copy on this side is as the session left it: the commit and
  * working tree it last sent or received. A side with no record of the
  * session has not been agreed on, so it counts as changed.

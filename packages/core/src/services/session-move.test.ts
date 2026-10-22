@@ -411,6 +411,23 @@ describe("moving a session", () => {
     });
   });
 
+  test("a new symbolic link asks, whatever its name", async () => {
+    const s = await setup();
+    await s.moves.move({ sessionId: SESSION, to: "cloud" });
+    const podRepo = join(s.podRoot, "worktrees/unassigned/claude-1/app");
+    await symlink("../../../../.zshrc", join(podRepo, "setup.md"));
+    expect(await s.moves.move({ sessionId: SESSION, to: "local" })).toEqual({
+      status: "needsApproval",
+      paths: ["app/setup.md (symbolic link)"],
+    });
+    const moved = await s.moves.move({
+      sessionId: SESSION,
+      to: "local",
+      approved: ["app/setup.md (symbolic link)"],
+    });
+    expect(moved.status).toBe("moved");
+  });
+
   test("a failed start resumes the session where it was, and the Mac copy is untouched", async () => {
     const s = await setup();
     await s.moves.move({ sessionId: SESSION, to: "cloud" });

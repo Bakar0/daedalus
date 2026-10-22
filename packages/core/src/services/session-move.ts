@@ -10,6 +10,7 @@ import { cloudHostWorkspace } from "./cloud-launch";
 import {
   applySnapshot,
   caseCollisions,
+  changedLinks,
   changedPaths,
   fetchBundle,
   isRepository,
@@ -565,7 +566,11 @@ export class SessionMoves {
       ...(await changedPaths(side, dir, last, now.work)),
       ...(await changedPaths(side, dir, last, now.index)),
     ]);
-    return [...paths].filter(steersAgent);
+    const links = new Set<string>();
+    for (const commit of [now.head, now.index, now.work])
+      for (const path of await changedLinks(side, dir, last, commit))
+        links.add(`${path} (symbolic link)`);
+    return [...[...paths].filter(steersAgent), ...links];
   }
 
   #movable(agent: AgentSession): AgentSession {
