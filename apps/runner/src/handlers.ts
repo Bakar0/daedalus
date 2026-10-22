@@ -31,6 +31,7 @@ const RUNNER_OWNED_VARIABLES = new Set([
   "USER",
   "LOGNAME",
   "SHELL",
+  "BROWSER",
   "XDG_RUNTIME_DIR",
 ]);
 

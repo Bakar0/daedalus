@@ -22,6 +22,7 @@ RUN npm install -g \
 COPY --from=build /src/apps/runner/dist/runner.js /opt/daedalus/runner.js
 COPY --from=build /src/apps/runner/dist/sessiond.js /opt/daedalus/sessiond.js
 COPY --from=build /src/apps/runner/dist/shim.js /opt/daedalus/shim.js
+COPY --from=build --chmod=0755 /src/apps/runner/daedal-browser /usr/local/bin/daedal-browser
 RUN printf '#!/bin/sh\nexec bun /opt/daedalus/shim.js "$@"\n' > /usr/local/bin/daedal \
  && chmod 0755 /usr/local/bin/daedal
 

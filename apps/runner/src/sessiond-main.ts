@@ -39,6 +39,8 @@ const daemon = new SessionDaemon({
       HOME: home,
       TMPDIR: "/tmp",
       LANG: "C.UTF-8",
+      // Sign-in pages open on the Mac: `daedal open-url`, then a click there.
+      BROWSER: RUNNER_PATHS.browser,
       ...(runtime ? { XDG_RUNTIME_DIR: runtime } : {}),
     },
   }),
