@@ -544,6 +544,7 @@ export function createDesktopRequestHandlers(
       result(async () => ({
         ...(await desktopSnapshot(readModel)),
         cloudSignIns: context.cloud.signIns.list(),
+        sessionMoves: context.moves.list(),
       })),
     sessionUpdate: ({ sessionId, name, pinned, color, autoRebirthPercent }) =>
       mutate(async () => {
@@ -882,6 +883,22 @@ export function createDesktopRequestHandlers(
         if ((await context.agents.get(sessionId)).status !== "lost")
           await context.agents.reconcile();
         return agentDto(await context.agents.reviveLost(sessionId));
+      }),
+    agentMove: ({ sessionId, to, approved }) =>
+      mutate(async () => {
+        const moved = await context.moves.move({
+          sessionId,
+          to,
+          ...(approved ? { approved } : {}),
+        });
+        return moved.status === "moved"
+          ? { status: "moved" as const, session: agentDto(moved.session) }
+          : moved;
+      }),
+    agentMoveCancel: ({ sessionId }) =>
+      result(() => {
+        context.moves.cancel(sessionId);
+        return null;
       }),
     cloudSignInOpen: ({ requestId }) =>
       result(async () => {

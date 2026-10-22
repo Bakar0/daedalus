@@ -33,6 +33,7 @@ import { PresenceService } from "./presence";
 import { ShutdownService } from "./shutdown";
 import { CloudService, type CloudServiceOptions } from "../cloud/cloud-service";
 import { CLOUD_LAUNCH_SECRETS } from "./cloud-launch";
+import { SessionMoves } from "./session-move";
 import { LocalSessionHost } from "./session-host";
 import { SessionHosts } from "./session-hosts";
 import { TaskHistoryService } from "./task-history";
@@ -97,6 +98,8 @@ export interface ApplicationContext {
   hosts: SessionHosts;
   /** Cloud workspaces: the gateway sign-in and the link to their runners. */
   cloud: CloudService;
+  /** Moving sessions between this Mac and their workspace's cloud pod. */
+  moves: SessionMoves;
   close(): void;
 }
 
@@ -373,6 +376,18 @@ export async function createApplicationContext(
     tmux,
     hosts,
     cloud,
+    moves: new SessionMoves({
+      config,
+      repositories,
+      workspaces,
+      agents,
+      hosts,
+      cloud,
+      // Read from disk: a hook's event may have come through another process.
+      activity: async (sessionId) =>
+        (await activity.binding(sessionId))?.activity ??
+        activity.get(sessionId)?.activity,
+    }),
     // Watchers are kernel resources held outside the database, so they are
     // released here rather than left to the process exiting.
     close: () => {

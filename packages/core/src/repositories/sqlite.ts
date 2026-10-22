@@ -1046,6 +1046,18 @@ export class SqliteRepositories {
       );
   }
 
+  /** Where a session runs, changed only by a session move. */
+  setAgentPlace(
+    id: string,
+    place: { hostId: string | null; workingDirectory: string },
+  ): void {
+    this.database
+      .query(
+        "UPDATE agent_sessions SET host_id = ?, working_directory = ? WHERE id = ?",
+      )
+      .run(place.hostId, place.workingDirectory, id);
+  }
+
   deleteAgent(id: string): void {
     this.database.query("DELETE FROM agent_sessions WHERE id = ?").run(id);
   }

@@ -419,6 +419,11 @@ export const startupQuestion = (provider: string, screen: string): boolean =>
 const startupQuestionReason = (session: AgentSession): string =>
   `${providerLabel(session.provider)} is asking something before it starts. Answer it in the session's terminal.`;
 
+/** Set by a session move; see `AgentService.resumeAfterMove`. */
+interface RelaunchOptions {
+  permissionMode?: string;
+}
+
 /** What a cloud launch adds for its account. */
 export interface CloudLaunchExtras {
   env?: Record<string, string>;
@@ -1014,7 +1019,10 @@ export class AgentService {
    * every session that was running there lost, with its conversation on the
    * workspace volume.
    */
-  private async relaunchCloud(agent: AgentSession): Promise<AgentSession> {
+  private async relaunchCloud(
+    agent: AgentSession,
+    options: RelaunchOptions = {},
+  ): Promise<AgentSession> {
     const host = this.hosts.get(agent.hostId);
     const unavailable = await host.probe();
     if (unavailable) throw new DaedalusError("DEPENDENCY", unavailable);
@@ -1023,31 +1031,36 @@ export class AgentService {
         "CONFLICT",
         "This session has no conversation to resume",
       );
+    // The executable too: a session that moved here from this Mac recorded
+    // this Mac's path to Claude, which the pod does not have.
+    const launch =
+      agent.kind === "agent"
+        ? await resolveProvider(this.config, {
+            provider: "claude",
+          }).adapter.buildLaunch({
+            target: "cloud",
+            sessionId: agent.id,
+            sessionName: agent.name,
+            model: modelArgument(agent.args),
+            acceptPeerMessages:
+              Boolean(agent.teamId) ||
+              Boolean(this.abilities.held(agent.id, "orchestration")),
+            resume: {
+              nativeId: agent.providerSessionId!,
+              startedAt: agent.startedAt,
+              archived: Boolean(agent.archivedAt),
+              workingDirectory: agent.workingDirectory,
+              env: {},
+              ...(options.permissionMode
+                ? { permissionMode: options.permissionMode }
+                : {}),
+            },
+          })
+        : undefined;
     const restoring: AgentSession = {
       ...agent,
-      args:
-        agent.kind === "agent"
-          ? (
-              await resolveProvider(this.config, {
-                provider: "claude",
-              }).adapter.buildLaunch({
-                target: "cloud",
-                sessionId: agent.id,
-                sessionName: agent.name,
-                model: modelArgument(agent.args),
-                acceptPeerMessages:
-                  Boolean(agent.teamId) ||
-                  Boolean(this.abilities.held(agent.id, "orchestration")),
-                resume: {
-                  nativeId: agent.providerSessionId!,
-                  startedAt: agent.startedAt,
-                  archived: Boolean(agent.archivedAt),
-                  workingDirectory: agent.workingDirectory,
-                  env: {},
-                },
-              })
-            ).args
-          : agent.args,
+      command: launch?.executable ?? agent.command,
+      args: launch?.args ?? agent.args,
       status: "starting",
       startedAt: new Date().toISOString(),
       endedAt: null,
@@ -1945,6 +1958,56 @@ export class AgentService {
     return stopped;
   }
 
+  /**
+   * Stops a session that is moving to another host. Unlike `stop`, it has
+   * not ended for its team or its activity: it comes back on the other side.
+   */
+  async stopForMove(id: string): Promise<AgentSession> {
+    const agent = await this.get(id);
+    if (agent.status !== "running" && agent.status !== "starting") return agent;
+    await this.sessionHost(agent).stop(agent.tmuxSession);
+    const stopped: AgentSession = {
+      ...agent,
+      status: "exited",
+      endedAt: new Date().toISOString(),
+    };
+    this.repositories.updateAgent(stopped);
+    return stopped;
+  }
+
+  /**
+   * Starts a stopped session on the host and in the folder `agent` names,
+   * resuming its conversation. A move calls it for the other side, and for
+   * the side it left when the move fails.
+   */
+  async resumeAfterMove(
+    agent: AgentSession,
+    permissionMode?: string,
+  ): Promise<AgentSession> {
+    const before = await this.get(agent.id);
+    const place = (session: AgentSession) => ({
+      hostId: session.hostId ?? null,
+      workingDirectory: session.workingDirectory,
+    });
+    // Recorded first, so everything the launch reads finds the session
+    // where it now runs; put back if it does not start.
+    this.repositories.setAgentPlace(agent.id, place(agent));
+    try {
+      return await this.relaunch(
+        { ...agent, archivedAt: null },
+        permissionMode ? { permissionMode } : {},
+      );
+    } catch (error) {
+      this.repositories.setAgentPlace(agent.id, place(before));
+      throw error;
+    }
+  }
+
+  /** Where Claude keeps this session's conversations on this Mac. */
+  claudeProjectsDirectory(agent: AgentSession): string {
+    return this.sessionConfig(agent).claudeProjectsDirectory;
+  }
+
   async remove(id: string): Promise<AgentSession> {
     const agent = await this.get(id);
     if (agent.status === "running" || agent.status === "starting")
@@ -2178,14 +2241,17 @@ export class AgentService {
    * `reviveLost` (vanished with the tmux server), which differ in how the
    * session stopped being live, not in how it comes back.
    */
-  private async relaunch(agent: AgentSession): Promise<AgentSession> {
+  private async relaunch(
+    agent: AgentSession,
+    options: RelaunchOptions = {},
+  ): Promise<AgentSession> {
     const workspace = await this.workspaces.get(agent.workspaceId);
     if (workspace.archivedAt)
       throw new DaedalusError(
         "CONFLICT",
         "Restore the workspace before restoring its sessions",
       );
-    if (agent.hostId) return this.relaunchCloud(agent);
+    if (agent.hostId) return this.relaunchCloud(agent, options);
     if ((await this.hosts.local.probe()) !== undefined)
       throw new DaedalusError("DEPENDENCY", "tmux is not available on PATH");
 
@@ -2242,6 +2308,9 @@ export class AgentService {
           archived: Boolean(agent.archivedAt),
           workingDirectory: agent.workingDirectory,
           env: accountEnv,
+          ...(options.permissionMode
+            ? { permissionMode: options.permissionMode }
+            : {}),
         },
       });
       executable = launch.executable;
