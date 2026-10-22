@@ -52,9 +52,10 @@ export interface SignInListener {
 }
 
 /**
- * Listens on the callback's port on 127.0.0.1, and on [::1] where it can,
- * until the one request comes or `timeoutMs` passes. Undefined when this Mac
- * cannot take the port on 127.0.0.1; the caller falls back to pasting.
+ * Listens on the callback's port on 127.0.0.1 and [::1], the two places a
+ * browser may go for `localhost`, until the one request comes or `timeoutMs`
+ * passes. Undefined when this Mac cannot take the port on either; the
+ * caller falls back to pasting.
  */
 export function listenForSignIn(
   callback: SignInCallback,
@@ -117,7 +118,10 @@ export function listenForSignIn(
   try {
     servers.push(Bun.serve({ hostname: "::1", port: callback.port, fetch }));
   } catch {
-    // No IPv6 loopback, or the port is taken there: 127.0.0.1 still serves.
+    // The browser may try [::1] first for `localhost`, so another process
+    // holding it there could take the code: listen on both or on neither.
+    for (const server of servers.splice(0)) void server.stop(true);
+    return undefined;
   }
   timer = setTimeout(() => stop("stopped"), options.timeoutMs);
   return { stop: () => stop("stopped"), done };

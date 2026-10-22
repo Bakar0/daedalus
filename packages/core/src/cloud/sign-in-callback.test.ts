@@ -99,6 +99,32 @@ describe("listenForSignIn", () => {
     }
   });
 
+  test("a port held on [::1] means pasting, and frees 127.0.0.1 (S-3)", () => {
+    const taken = Bun.serve({
+      hostname: "::1",
+      port: 0,
+      fetch: () => new Response(),
+    });
+    try {
+      expect(
+        listenForSignIn(
+          { port: taken.port!, path: "/callback", state: "s" },
+          async () => ({ status: 200 }),
+          { timeoutMs: 10_000 },
+        ),
+      ).toBeUndefined();
+      // The 127.0.0.1 half it had taken is free again.
+      const again = Bun.serve({
+        hostname: "127.0.0.1",
+        port: taken.port!,
+        fetch: () => new Response(),
+      });
+      void again.stop(true);
+    } finally {
+      void taken.stop(true);
+    }
+  });
+
   test("stops by itself after its time", async () => {
     const listener = listenForSignIn(
       { port: freePort(), path: "/callback", state: "s" },
