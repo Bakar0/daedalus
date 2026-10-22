@@ -16,7 +16,7 @@
     "build:packages": "bun build packages/core/src/index.ts packages/platform/src/index.ts packages/protocol/src/index.ts --outdir dist/packages --target bun",
     "build:cli": "bun build apps/cli/src/index.ts --outdir dist/cli --target bun",
     "build:desktop": "bun run build:tmux && bun run --cwd apps/desktop build && bun node_modules/.bin/electrobun build",
-    "build:stable": "bun run build:packages && bun run build:cli && bun run build:tmux && bun run --cwd apps/desktop build && bun node_modules/.bin/electrobun build --env=stable",
+    "build:stable": "bun run build:packages && bun run build:cli && bun run build:tmux && bun run --cwd apps/desktop build && bun node_modules/.bin/electrobun build --env=stable && bun run scripts/name-release-dmg.ts",
     "build:tmux": "bun run scripts/build-tmux.ts",
     "app:install": "bun run build:stable && bun run scripts/install-app.ts",
     "dev": "bun run --cwd apps/desktop build && bun node_modules/.bin/electrobun dev --watch",
