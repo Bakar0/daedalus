@@ -1,7 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
   awsSsoCopy,
-  CLOUD_AWS_AUTH_REFRESH,
   mergeAwsConfig,
   seedClaudeSettings,
   seedClaudeState,
@@ -69,24 +68,22 @@ describe("seedClaudeState", () => {
 
 describe("seedClaudeSettings", () => {
   test("sets a theme once and keeps the user's own", () => {
-    expect(
-      JSON.parse(seedClaudeSettings(undefined, { bedrock: false })!),
-    ).toEqual({ theme: "dark" });
-    expect(
-      seedClaudeSettings('{"theme":"light"}', { bedrock: false }),
-    ).toBeUndefined();
+    expect(JSON.parse(seedClaudeSettings(undefined, {})!)).toEqual({
+      theme: "dark",
+    });
+    expect(seedClaudeSettings('{"theme":"light"}', {})).toBeUndefined();
   });
 
   test("a Bedrock launch adds the device-code sign-in renewal", () => {
     const seeded = JSON.parse(
       seedClaudeSettings('{"theme":"light","model":"opus"}', {
-        bedrock: true,
+        bedrockProfile: "playground",
       })!,
     );
     expect(seeded).toEqual({
       theme: "light",
       model: "opus",
-      awsAuthRefresh: CLOUD_AWS_AUTH_REFRESH,
+      awsAuthRefresh: "aws sso login --use-device-code --profile playground",
     });
   });
 });

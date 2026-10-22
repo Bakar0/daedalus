@@ -26,12 +26,14 @@ const TRUST_FLAGS = {
 } as const;
 
 /**
- * Claude runs this itself when its AWS credentials fail. It takes the
- * profile from `AWS_PROFILE`, which each Bedrock session is launched with,
- * so sessions on different profiles can share the one settings file. The
- * device code needs no callback into the pod.
+ * The command Claude runs itself when its AWS credentials fail, as local
+ * Bedrock accounts have (`bedrockSettings`), with the device code: it needs
+ * no callback into the pod. It lives in the pod's user settings, the one
+ * place Claude runs it without folder trust, so the last Bedrock profile
+ * launched there is the one it renews.
  */
-export const CLOUD_AWS_AUTH_REFRESH = "aws sso login --use-device-code";
+export const cloudAwsAuthRefresh = (profile: string): string =>
+  `aws sso login --use-device-code --profile ${profile}`;
 
 type Json = Record<string, unknown>;
 
@@ -83,12 +85,13 @@ export function seedClaudeState(text: string | undefined): string | undefined {
  */
 export function seedClaudeSettings(
   text: string | undefined,
-  options: { bedrock: boolean },
+  options: { bedrockProfile?: string },
 ): string | undefined {
   const settings = parseObject(text);
   const next: Json = { ...settings };
   if (typeof next.theme !== "string") next.theme = "dark";
-  if (options.bedrock) next.awsAuthRefresh = CLOUD_AWS_AUTH_REFRESH;
+  if (options.bedrockProfile)
+    next.awsAuthRefresh = cloudAwsAuthRefresh(options.bedrockProfile);
   return JSON.stringify(next) === JSON.stringify(settings)
     ? undefined
     : render(next);

@@ -20,6 +20,7 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from "react";
 import type {
+  AccountDto,
   TeamDetailDto,
   FileLinkTargetDto,
   AppUpdateDto,
@@ -800,6 +801,20 @@ export function fetchOutcomeNote(outcome: RepositoryFetchOutcomeDto): {
 const FETCH_OUTCOME_VISIBLE_MS = 120_000;
 
 const sessionNeedsAttention = (view: SessionStatusView) => view.attention;
+
+/** What a Claude account brings to a cloud session, under its picker. */
+function cloudAccountNote(account: AccountDto | undefined): string {
+  switch (account?.account === "default" ? undefined : account?.kind) {
+    case "api-key":
+      return "Its API key goes to the pod for this session.";
+    case "bedrock":
+      return `Its AWS profile ${account?.aws?.profile ?? ""} is copied to the pod, without credentials; Claude signs in to Bedrock through AWS SSO there.`;
+    case "login":
+      return "Sign in to Claude once in the pod's terminal.";
+    default:
+      return "Uses the workspace's ANTHROPIC_API_KEY secret if it has one; otherwise sign in to Claude once in the pod's terminal.";
+  }
+}
 
 /**
  * Three, not five. Both Sonner's default and the UX literature land on the
@@ -3774,9 +3789,7 @@ export function WorkspaceApp({
         terminal: isTerminal || undefined,
         provider: isTerminal ? undefined : (sessionType as "codex" | "claude"),
         model: isTerminal || !sessionModel ? undefined : sessionModel,
-        ...(!isTerminal && sessionAccount && !cloud
-          ? { account: sessionAccount }
-          : {}),
+        ...(!isTerminal && sessionAccount ? { account: sessionAccount } : {}),
         ...(cloud ? { cloud: true } : {}),
         ...(color ? { color } : {}),
         ...(teamId && !isTerminal
@@ -7477,39 +7490,48 @@ export function WorkspaceApp({
               )}
               {/* What most sessions leave alone: the account, the colour and
                   the abilities, folded under one row. */}
-              {(!memberTeam ||
-                (sessionAccounts.length > 1 && !sessionInCloud)) && (
+              {(!memberTeam || sessionAccounts.length > 1) && (
                 <details className="session-more-settings">
                   <summary>More settings</summary>
-                  {sessionType !== "terminal" &&
-                    sessionAccounts.length > 1 &&
-                    !sessionInCloud && (
-                      // Right under the tool it belongs to, and the same field as
-                      // Create workspace's.
-                      <label>
-                        {providerLabel(sessionType)} account
-                        <select
-                          aria-label={`${providerLabel(sessionType)} account`}
-                          onChange={(event) => {
-                            setSessionAccount(event.target.value);
-                            // Another account offers other models; its own
-                            // remembered one is what the first option now means.
-                            setSessionModel("");
-                          }}
-                          value={chosenSessionAccount}
+                  {sessionType !== "terminal" && sessionAccounts.length > 1 && (
+                    // Right under the tool it belongs to, and the same field as
+                    // Create workspace's.
+                    <label>
+                      {providerLabel(sessionType)} account
+                      <select
+                        aria-label={`${providerLabel(sessionType)} account`}
+                        onChange={(event) => {
+                          setSessionAccount(event.target.value);
+                          // Another account offers other models; its own
+                          // remembered one is what the first option now means.
+                          setSessionModel("");
+                        }}
+                        value={chosenSessionAccount}
+                      >
+                        {sessionAccounts.map((item) => (
+                          <option key={item.account} value={item.account}>
+                            {item.name}
+                            {item.account === workspaceDefaultAccount &&
+                            sessionWorkspace
+                              ? " · workspace default"
+                              : ""}
+                          </option>
+                        ))}
+                      </select>
+                      {sessionInCloud && (
+                        <small
+                          className="session-cloud-account-note"
+                          data-testid="session-cloud-account-note"
                         >
-                          {sessionAccounts.map((item) => (
-                            <option key={item.account} value={item.account}>
-                              {item.name}
-                              {item.account === workspaceDefaultAccount &&
-                              sessionWorkspace
-                                ? " · workspace default"
-                                : ""}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    )}
+                          {cloudAccountNote(
+                            sessionAccounts.find(
+                              (item) => item.account === chosenSessionAccount,
+                            ),
+                          )}
+                        </small>
+                      )}
+                    </label>
+                  )}
                   {!memberTeam && (
                     <div className="session-color-picker">
                       <span>

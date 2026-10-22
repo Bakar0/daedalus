@@ -1137,6 +1137,28 @@ export class SqliteRepositories {
     this.database
       .query("DELETE FROM cloud_workspace_links WHERE cloud_id = ?")
       .run(cloudId);
+    this.database
+      .query("DELETE FROM cloud_sso_hosts WHERE cloud_id = ?")
+      .run(cloudId);
+  }
+
+  /** Records an AWS access portal host copied into a cloud workspace. */
+  addCloudSsoHost(cloudId: string, host: string): void {
+    this.database
+      .query(
+        "INSERT OR IGNORE INTO cloud_sso_hosts (cloud_id, host) VALUES (?, ?)",
+      )
+      .run(cloudId, host.toLowerCase());
+  }
+
+  /** The AWS access portal hosts copied into a cloud workspace. */
+  cloudSsoHosts(cloudId: string): string[] {
+    return this.database
+      .query<{ host: string }, [string]>(
+        "SELECT host FROM cloud_sso_hosts WHERE cloud_id = ? ORDER BY host",
+      )
+      .all(cloudId)
+      .map((row) => row.host);
   }
 
   createIntegratedTerminal(terminal: IntegratedTerminal): void {

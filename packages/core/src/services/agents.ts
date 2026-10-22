@@ -53,6 +53,7 @@ import { abilityDefinition, type AbilityService } from "./abilities";
 import {
   accountConfig,
   accountEnvironment,
+  accountProfile,
   DEFAULT_ACCOUNT,
   findAccount,
   providerLabel,
@@ -820,11 +821,16 @@ export class AgentService {
         "VALIDATION",
         "A cloud session runs Claude or a terminal",
       );
-    if (input.account && input.account !== DEFAULT_ACCOUNT)
-      throw new DaedalusError(
-        "VALIDATION",
-        "A cloud session has no account profiles",
-      );
+    // A terminal has no account. Claude runs on the one asked for, else the
+    // workspace's default; what it brings to the pod is the cloud service's.
+    const requestedAccount = input.terminal
+      ? undefined
+      : (input.account ??
+        (accountProfile(this.config, "claude", workspace.defaultClaudeAccount)
+          ? workspace.defaultClaudeAccount
+          : undefined));
+    // Throws for an account that is not there.
+    const profile = findAccount(this.config, "claude", requestedAccount);
     const task = input.taskId ? this.tasks.get(input.taskId) : undefined;
     if (task && task.workspaceId !== workspace.id)
       throw new DaedalusError(
@@ -905,19 +911,23 @@ export class AgentService {
       pinnedAt: input.pinned ? new Date().toISOString() : null,
       color: input.color ?? null,
       autoRebirthPercent: null,
-      account: null,
+      account: profile?.id ?? null,
       teamId: team?.teamId ?? null,
       teamHandle: team?.handle ?? null,
       spawnedBy: input.spawnedBy ?? null,
       hostId: host.id,
     };
+    // Before the session exists: an account that cannot run in the cloud
+    // (a Bedrock profile without SSO) leaves nothing behind.
+    const extras =
+      session.kind === "agent" ? await this.cloudLaunch(session) : {};
     this.repositories.transaction(() => {
       this.repositories.createAgent(session);
       for (const ability of abilities)
         this.abilities.grant(session.id, ability, { live: false });
     });
     try {
-      await this.startCloud(host, session);
+      await this.startCloud(host, session, extras);
       const startup = input.terminal
         ? "ready"
         : await this.waitForProviderReady("claude", session.tmuxSession, host);
@@ -948,12 +958,11 @@ export class AgentService {
   private async startCloud(
     host: SessionHost,
     session: AgentSession,
+    extras: CloudLaunchExtras,
   ): Promise<void> {
     const task = session.taskId
       ? this.repositories.findTask(session.taskId)
       : undefined;
-    const extras =
-      session.kind === "agent" ? await this.cloudLaunch(session) : {};
     await host.start({
       session: session.tmuxSession,
       cwd: session.workingDirectory,
@@ -1029,7 +1038,11 @@ export class AgentService {
         `tmux session '${agent.tmuxSession}' is already live`,
       );
     try {
-      await this.startCloud(host, restoring);
+      await this.startCloud(
+        host,
+        restoring,
+        restoring.kind === "agent" ? await this.cloudLaunch(restoring) : {},
+      );
       const startup =
         agent.kind === "agent"
           ? await this.waitForProviderReady(

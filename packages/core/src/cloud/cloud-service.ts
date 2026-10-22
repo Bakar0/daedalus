@@ -18,7 +18,14 @@ import { BrokerTransport, brokerAvailable, serveBroker } from "./broker";
 import type { AgentSession } from "../domain";
 import type { CloudLaunchExtras } from "../services/agents";
 import { CloudAccount, type CloudSignIn } from "./cloud-account";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { readKeychainPassword } from "@daedalus/platform";
+import type { AccountProfile } from "../config";
+import { accountDirectory, accountProfile } from "../services/account-homes";
+import { API_KEY_SERVICE } from "../services/accounts";
 import {
+  awsSsoCopy,
   CLOUD_SEED_PATHS,
   mergeAwsConfig,
   seedClaudeSettings,
@@ -79,6 +86,9 @@ export interface CloudServiceOptions {
   fetch?: typeof fetch;
   account?: CloudAccount;
   identity?: () => Promise<DeviceIdentity>;
+  /** Injected so tests read no real AWS config or Keychain. */
+  awsConfig?: () => Promise<string | undefined>;
+  apiKey?: (profile: AccountProfile) => Promise<string | undefined>;
   log?: (event: string, fields?: Record<string, unknown>) => void;
 }
 
@@ -418,20 +428,85 @@ export class CloudService {
    */
   async prepareLaunch(session: AgentSession): Promise<CloudLaunchExtras> {
     const host = this.options.hosts.find(session.hostId);
-    // A host of another kind (a test's) has no files to seed.
-    if (host instanceof RemoteSessionHost)
-      await this.#seed(host, { bedrock: false }).catch((error: unknown) =>
-        this.options.log?.("cloud_seed_failed", {
-          workspaceId: host.workspaceId,
-          message: error instanceof Error ? error.message : String(error),
-        }),
+    const profile = accountProfile(
+      this.options.config,
+      "claude",
+      session.account,
+    );
+    const seed = (options: Parameters<CloudService["seed"]>[1]) =>
+      // A host of another kind (a test's) has no files to seed.
+      host instanceof RemoteSessionHost
+        ? this.seed(host, options)
+        : Promise.resolve();
+    if (profile?.kind === "bedrock") {
+      if (!profile.aws)
+        throw new DaedalusError(
+          "VALIDATION",
+          `The Bedrock account '${profile.name}' has no AWS profile`,
+        );
+      const copy = awsSsoCopy(
+        (await this.#awsConfig()) ?? "",
+        profile.aws.profile,
       );
+      const cloudId = session.hostId && cloudHostWorkspace(session.hostId);
+      if (cloudId)
+        this.options.repositories.addCloudSsoHost(cloudId, copy.startUrlHost);
+      // Without the profile in the pod, Bedrock cannot sign in at all.
+      await seed({
+        bedrockProfile: profile.aws.profile,
+        awsSections: copy.sections,
+      });
+      return {
+        env: {
+          CLAUDE_CODE_USE_BEDROCK: "1",
+          AWS_PROFILE: profile.aws.profile,
+          AWS_REGION: profile.aws.region,
+        },
+        secrets: {},
+      };
+    }
+    await seed({}).catch((error: unknown) =>
+      this.options.log?.("cloud_seed_failed", {
+        hostId: session.hostId,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    if (profile?.kind === "api-key") {
+      const key = await this.#apiKey(profile);
+      if (!key)
+        throw new DaedalusError(
+          "DEPENDENCY",
+          `The ${profile.name} account has no API key. Set it in Settings → Agents.`,
+        );
+      return { secrets: { ANTHROPIC_API_KEY: key } };
+    }
+    // A login account signs in in the pod; the workspace's API key secret
+    // would take its place.
+    if (profile) return { secrets: {} };
     return {};
   }
 
-  async #seed(
+  /** This Mac's AWS config, where the AWS CLI reads it. */
+  async #awsConfig(): Promise<string | undefined> {
+    if (this.options.awsConfig) return this.options.awsConfig();
+    const file = Bun.file(
+      process.env.AWS_CONFIG_FILE ?? join(homedir(), ".aws", "config"),
+    );
+    return (await file.exists()) ? file.text() : undefined;
+  }
+
+  /** An API-key account's key, from the Keychain entry its settings read. */
+  async #apiKey(profile: AccountProfile): Promise<string | undefined> {
+    if (this.options.apiKey) return this.options.apiKey(profile);
+    return readKeychainPassword(
+      API_KEY_SERVICE,
+      accountDirectory(this.options.config, profile),
+    );
+  }
+
+  private async seed(
     host: RemoteSessionHost,
-    options: { bedrock: boolean; awsSections?: AwsSsoCopy["sections"] },
+    options: { bedrockProfile?: string; awsSections?: AwsSsoCopy["sections"] },
   ): Promise<void> {
     const files: { path: string; text: string }[] = [];
     const put = (path: string, text: string | undefined) => {

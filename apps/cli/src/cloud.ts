@@ -17,7 +17,7 @@ export const cloudHelp = `Cloud workspace commands:
   daedal cloud sleep <workspace>
   daedal cloud wake <workspace>
   daedal cloud delete <workspace> --force
-  daedal cloud spawn <workspace> [--terminal] [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>]
+  daedal cloud spawn <workspace> [--terminal] [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>]
   daedal cloud spawn <workspace> --team <lead> [--task <task-ref>] [--name <name>] [--model <model>] [--message <instructions>]
 
 A cloud workspace is a local workspace with a pod of its own on a Daedalus
@@ -27,6 +27,9 @@ gateway installed with gateway.devLogin offers.
 
 'create' makes the pod for a local workspace, under the same id. 'spawn'
 starts Claude in the workspace root of the pod, or a shell with --terminal.
+--account picks the Claude account: a login account signs in in the pod, an
+API-key account brings its key, and a Bedrock account brings its AWS SSO
+profile (never credentials) and signs in through SSO there.
 With --team it starts Claude as a member of that lead's team, which must lead
 from the same workspace; team messages are typed into it at its prompt.
 Its hooks and its 'daedal' calls come back to this Mac, which runs only the
@@ -179,7 +182,7 @@ export async function cloudCommand(
   if (action === "spawn") {
     const parsed = parseArguments(
       args,
-      ["task", "name", "model", "message", "team"],
+      ["task", "name", "model", "message", "team", "account"],
       ["terminal"],
     );
     expectPositionals(
@@ -235,6 +238,7 @@ export async function cloudCommand(
       ...(task ? { taskId: task.id } : {}),
       ...(parsed.values.name ? { name: parsed.values.name } : {}),
       ...(parsed.values.model ? { model: parsed.values.model } : {}),
+      ...(parsed.values.account ? { account: parsed.values.account } : {}),
       ...(parsed.values.message ? { message: parsed.values.message } : {}),
       ...(parsed.flags.has("terminal") ? { terminal: true } : {}),
     });

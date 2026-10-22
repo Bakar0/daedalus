@@ -86,10 +86,30 @@ class FakePod {
   };
 }
 
+const AWS_CONFIG = `[sso-session corp]
+sso_start_url = https://d-1234567890.awsapps.com/start
+sso_region = us-east-2
+
+[profile bedrock]
+sso_session = corp
+sso_account_id = 111122223333
+sso_role_name = Bedrock
+region = us-east-1
+
+[profile keys]
+aws_access_key_id = AKIAEXAMPLE
+aws_secret_access_key = secret
+`;
+
 const setUp = async (home: string) => {
   const context = await createApplicationContext({
     env: { DAEDALUS_HOME: home },
     tmux: new NoTmux(),
+    cloud: {
+      awsConfig: async () => AWS_CONFIG,
+      apiKey: async (profile) =>
+        profile.name === "Keys" ? "sk-ant-test-key" : undefined,
+    },
   });
   const workspace = await context.workspaces.create({ name: "Cloud" });
   const cloudId = crypto.randomUUID();
@@ -143,6 +163,108 @@ describe("cloud launch seeding", () => {
         terminal: true,
       });
       expect(pod.files.size).toBe(0);
+      context.close();
+    });
+  });
+});
+
+describe("cloud accounts", () => {
+  test("a Bedrock account brings its SSO profile, its variables and the sign-in renewal", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, workspace, pod, hostId } = await setUp(home);
+      await context.accounts.add("claude", "Work", "bedrock", undefined, {
+        profile: "bedrock",
+        region: "eu-west-1",
+      });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        host: hostId,
+        account: "Work",
+      });
+      expect(session.account).not.toBeNull();
+      const launch = pod.launches[0]!;
+      expect(launch.env).toMatchObject({
+        CLAUDE_CODE_USE_BEDROCK: "1",
+        AWS_PROFILE: "bedrock",
+        AWS_REGION: "eu-west-1",
+      });
+      expect(launch.secrets).toBeUndefined();
+      const config = pod.files.get(".home/.aws/config")!;
+      expect(config).toContain("[profile bedrock]");
+      expect(config).toContain("[sso-session corp]");
+      expect(config).not.toContain("aws_secret_access_key");
+      expect(
+        JSON.parse(pod.files.get(".home/.claude/settings.json")!),
+      ).toMatchObject({
+        awsAuthRefresh: "aws sso login --use-device-code --profile bedrock",
+      });
+      expect(
+        context.repositories.cloudSsoHosts(hostId.slice("ws:".length)),
+      ).toEqual(["d-1234567890.awsapps.com"]);
+      context.close();
+    });
+  });
+
+  test("a Bedrock profile without SSO is refused and leaves no session", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, workspace, pod, hostId } = await setUp(home);
+      await context.accounts.add("claude", "Keys", "bedrock", undefined, {
+        profile: "keys",
+        region: "us-east-1",
+      });
+      await expect(
+        context.agents.spawn({
+          workspace: workspace.id,
+          host: hostId,
+          account: "Keys",
+        }),
+      ).rejects.toThrow("does not sign in with AWS SSO");
+      expect(pod.launches).toEqual([]);
+      expect(
+        context.repositories.listAgents({ workspaceId: workspace.id }),
+      ).toEqual([]);
+      context.close();
+    });
+  });
+
+  test("an API-key account launches with its key; a login account with none", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, workspace, pod, hostId } = await setUp(home);
+      context.agents.onCloudSecrets(async () => ({
+        ANTHROPIC_API_KEY: "workspace-secret",
+      }));
+      await context.accounts.add("claude", "Keys", "api-key");
+      await context.accounts.add("claude", "Me", "login");
+      await context.agents.spawn({
+        workspace: workspace.id,
+        host: hostId,
+        account: "Keys",
+      });
+      await context.agents.spawn({
+        workspace: workspace.id,
+        host: hostId,
+        account: "Me",
+      });
+      await context.agents.spawn({ workspace: workspace.id, host: hostId });
+      expect(pod.launches.map((launch) => launch.secrets)).toEqual([
+        { ANTHROPIC_API_KEY: "sk-ant-test-key" },
+        undefined,
+        { ANTHROPIC_API_KEY: "workspace-secret" },
+      ]);
+      context.close();
+    });
+  });
+
+  test("an unknown account is refused", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, workspace, hostId } = await setUp(home);
+      await expect(
+        context.agents.spawn({
+          workspace: workspace.id,
+          host: hostId,
+          account: "Nobody",
+        }),
+      ).rejects.toThrow("No Claude account named 'Nobody'");
       context.close();
     });
   });

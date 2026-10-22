@@ -121,7 +121,7 @@ export interface ApplicationContextOptions {
   /** Injected so tests reach a fake gateway, with no Keychain. */
   cloud?: Pick<
     CloudServiceOptions,
-    "fetch" | "account" | "identity" | "connect"
+    "fetch" | "account" | "identity" | "connect" | "awsConfig" | "apiKey"
   >;
   /** Injected so tests never reach the real Notification Center. */
   sendNativeNotification?: (
