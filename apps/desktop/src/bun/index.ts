@@ -13,7 +13,9 @@ import {
   channelHome,
   confirmAnsweredWait,
   createApplicationContext,
+  isPartialReload,
   ReadModel,
+  versionsAfterAnnouncing,
   WORKSPACE_FILES_CHANGED,
   type WorkspaceFilesChanged,
 } from "@daedalus/core";
@@ -21,10 +23,13 @@ import {
   BUNDLED_TMUX_VARIABLE,
   isInheritedSessionVariable,
   pathExists,
+  runCommandsOn,
+  startCommandWorker,
 } from "@daedalus/platform";
 import type {
   DesktopCommand,
   DesktopRpcSchema,
+  DesktopSnapshotPart,
   DesktopWindowRole,
   TerminalServerMessage,
 } from "@daedalus/protocol";
@@ -85,6 +90,17 @@ if (await pathExists(bundledTmux))
 for (const key of Object.keys(process.env))
   if (isInheritedSessionVariable(key)) delete process.env[key];
 
+// Every child the host runs for its output (git, gh, tmux and the rest) is
+// launched from a worker thread, because launching one blocks the launching
+// thread and this is the thread that relays terminal output to the window.
+// A worker that dies hands launching back here; the failure is logged once
+// the context, and its logger, exist.
+let commandWorkerFailure: Error | undefined;
+let reportCommandWorkerFailure = (error: Error): void => {
+  commandWorkerFailure = error;
+};
+runCommandsOn(startCommandWorker((error) => reportCommandWorkerFailure(error)));
+
 // The window is the only surface that can draw a toast, so the host is the
 // only adapter that may claim it; everywhere else a toast waits in the queue.
 let windowReady = false;
@@ -105,8 +121,9 @@ const context = await createApplicationContext({
     }),
   // A repository finishes cloning outside any request, so the window is told
   // the same way an external change tells it: otherwise the row would sit at
-  // "preparing" until something unrelated refreshed it.
-  onRepositoriesChanged: () => announce("external"),
+  // "preparing" until something unrelated refreshed it. A measured git status
+  // or pull request names its parts, and the window reloads only those.
+  onRepositoriesChanged: (parts) => announce("external", undefined, parts),
 });
 // A Mac reboot kills the Daedalus tmux server and nothing else, so the context
 // that just reconciled has turned every session that was running into `lost`.
@@ -309,11 +326,13 @@ ApplicationMenu.setApplicationMenu(APPLICATION_MENU);
 let revision = 0;
 const readModel = new ReadModel(context);
 /**
- * The read model's version as of the last announcement. A promise, so a
- * window's own mutation replaces it at once and the next tick compares against
- * that rather than announcing the same change a second time.
+ * The read model's version of each part as of the last announcement. A
+ * promise, so a window's own mutation replaces it at once and the next tick
+ * compares against that rather than announcing the same change a second time.
  */
-let announcedVersion = readModel.version().catch(() => "");
+const currentVersions = () =>
+  readModel.versions().catch((): Record<string, string> => ({}));
+let announcedVersions = currentVersions();
 /** The first tick announces whatever it finds, as the window may predate it. */
 let firstTick = true;
 let dockBadgeCount = 0;
@@ -330,16 +349,31 @@ async function recordAttentionCount(count: number): Promise<void> {
   await context.logger.write("info", "attention_count_changed", { count });
 }
 
-function announce(source: "desktop" | "external", version?: string): void {
-  announcedVersion =
-    version === undefined
-      ? readModel.version().catch(() => "")
-      : Promise.resolve(version);
+/**
+ * Tells the windows the data changed. `parts` names what changed when only
+ * those parts did, so a window reloads them alone; without it, it reloads
+ * everything.
+ */
+function announce(
+  source: "desktop" | "external",
+  versions?: Record<string, string>,
+  parts?: DesktopSnapshotPart[],
+): void {
+  // A partial announcement records only its own parts' versions. Anything
+  // else that moved meanwhile, such as a repository's row when it finishes
+  // preparing, still differs at the next tick and reloads in full there.
+  const announced = announcedVersions;
+  const current =
+    versions === undefined ? currentVersions() : Promise.resolve(versions);
+  announcedVersions = Promise.all([announced, current]).then(
+    ([previous, next]) => versionsAfterAnnouncing(previous, next, parts),
+  );
   // There is no window between closing one and reopening from the Dock, and
   // a repository finishing its clone in that gap must not throw.
   revision += 1;
-  if (windowOpen) rpc.send.dataChanged({ revision, source });
-  if (worldOpen) worldRpc.send.dataChanged({ revision, source });
+  const change = { revision, source, ...(parts ? { parts } : {}) };
+  if (windowOpen) rpc.send.dataChanged(change);
+  if (worldOpen) worldRpc.send.dataChanged(change);
   announceRemote();
 }
 
@@ -837,14 +871,23 @@ setInterval(async () => {
     await recordAttentionCount(
       context.repositories.listSessionAttention().length,
     );
-    const seen = announcedVersion;
-    const next = await readModel.version();
+    const seen = announcedVersions;
+    const next = await readModel.versions();
     const first = firstTick;
     firstTick = false;
     // A mutation announced while this read ran has already reloaded the
     // windows, and the next tick compares against its version.
-    if (announcedVersion !== seen) return;
-    if (first || next !== (await seen)) announce("external", next);
+    if (announcedVersions !== seen) return;
+    const previous = await seen;
+    const changed = Object.keys(next).filter(
+      (name) => next[name] !== previous[name],
+    );
+    if (first || changed.length)
+      announce(
+        "external",
+        next,
+        !first && isPartialReload(changed) ? changed : undefined,
+      );
   } catch (error) {
     await context.logger.write("error", "desktop_change_check_failed", {
       message: error instanceof Error ? error.message : String(error),
@@ -874,6 +917,12 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
 // Anything parked while the app was down is dropped rather than delivered:
 // it is already stale, and the badge that outlived it is the durable signal.
 context.notifications.discardPending("desktop");
+
+reportCommandWorkerFailure = (error) =>
+  void context.logger
+    .write("error", "command_worker_failed", { message: error.message })
+    .catch(() => undefined);
+if (commandWorkerFailure) reportCommandWorkerFailure(commandWorkerFailure);
 
 await context.logger.write("info", "desktop_started", {
   terminalTransport: "loopback_websocket",

@@ -1053,6 +1053,35 @@ type Request<Params, Response> = {
   response: RpcResult<Response>;
 };
 
+/**
+ * The parts of a snapshot a window can reload on their own when only they
+ * changed: the host's read-model sources of the same names, where
+ * `telemetry` is `providerUsage` and `sessionTelemetry`.
+ */
+export type DesktopSnapshotPart =
+  | "sessionActivity"
+  | "attention"
+  | "telemetry"
+  | "toasts"
+  | "worktrees"
+  | "shipped"
+  | "largeFiles";
+
+/** What `snapshotParts` answers: only the fields of the parts asked for. */
+export type DesktopSnapshotPartsDto = Partial<
+  Pick<
+    DesktopSnapshotDto,
+    | "sessionActivity"
+    | "attention"
+    | "providerUsage"
+    | "sessionTelemetry"
+    | "toasts"
+    | "worktrees"
+    | "shipped"
+    | "largeFiles"
+  >
+>;
+
 /** The app's own window, or the World opened in a window of its own. */
 export type DesktopWindowRole = "main" | "world";
 
@@ -1061,6 +1090,11 @@ export interface DesktopRpcSchema {
   bun: {
     requests: {
       snapshot: Request<Record<string, never>, DesktopSnapshotDto>;
+      /** Only the named parts, for a `dataChanged` that names them. */
+      snapshotParts: Request<
+        { parts: DesktopSnapshotPart[] },
+        DesktopSnapshotPartsDto
+      >;
       /** Name, pin, color and rebirth threshold, any of them. */
       sessionUpdate: Request<
         {
@@ -1723,7 +1757,15 @@ export interface DesktopRpcSchema {
       };
     };
     messages: {
-      dataChanged: { revision: number; source: "desktop" | "external" };
+      dataChanged: {
+        revision: number;
+        source: "desktop" | "external";
+        /**
+         * Set when only these parts changed, so the window may reload them
+         * alone. Absent means reload everything.
+         */
+        parts?: DesktopSnapshotPart[];
+      };
       /**
        * A workspace's files changed on disk. Already coalesced and debounced
        * by the host; `overflow` means the batch was too large to describe and

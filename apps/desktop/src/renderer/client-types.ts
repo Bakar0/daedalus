@@ -5,6 +5,7 @@ import type {
   ShutdownPlanDto,
   WorkspaceFileChangeDto,
 } from "@daedalus/protocol";
+import type { DataChange } from "./snapshot-parts";
 
 type Requests = DesktopRpcSchema["bun"]["requests"];
 
@@ -16,7 +17,8 @@ export type DesktopRequests = {
 
 export interface DesktopClient {
   request: DesktopRequests;
-  subscribe(listener: () => void): () => void;
+  /** Data changed; see `DataChange` for what the change says. */
+  subscribe(listener: (change?: DataChange) => void): () => void;
   subscribeCommands(listener: (command: DesktopCommand) => void): () => void;
   subscribeWindowResize(listener: () => void): () => void;
   subscribeFocusSession(listener: (sessionId: string) => void): () => void;

@@ -5,6 +5,7 @@ import {
   pathExists,
   runCommand,
   watchFileTree,
+  type CommandResult,
   type FileTreeWatcher,
 } from "@daedalus/platform";
 import type {
@@ -17,6 +18,7 @@ import type {
 } from "../domain";
 import type { SqliteRepositories } from "../repositories";
 import { GH_EXECUTABLE_FALLBACKS } from "./git-commands";
+import { IgnoredPaths } from "./git-ignored";
 import type { WorkspaceService } from "./workspaces";
 
 // The branch a working tree is on now, or `null` on a detached HEAD. Daedalus
@@ -170,7 +172,7 @@ async function gitDirectories(
  * branches and remote refs, the worktree's own for its HEAD. Both are read,
  * as are the loose-ref files, so either format is seen.
  */
-async function gitMetadataFingerprint(
+export async function gitMetadataFingerprint(
   path: string,
   baseBranch: string | null,
 ): Promise<string | undefined> {
@@ -188,6 +190,19 @@ async function gitMetadataFingerprint(
     join(commonDir, "reftable", "tables.list"),
     join(commonDir, "packed-refs"),
     ...(branchRef ? [join(commonDir, branchRef)] : []),
+    // The branch as `origin` last showed it, which a push moves. A pull
+    // request is opened after a push, so this is what asks `gh` again.
+    ...(branchRef?.startsWith("refs/heads/")
+      ? [
+          join(
+            commonDir,
+            "refs",
+            "remotes",
+            "origin",
+            branchRef.slice("refs/heads/".length),
+          ),
+        ]
+      : []),
     ...(baseBranch
       ? [join(commonDir, "refs", "remotes", "origin", baseBranch)]
       : []),
@@ -298,6 +313,39 @@ export function parseChangedFiles(
   return files;
 }
 
+const statusState = (
+  changedFiles: number,
+  ahead: number,
+  behind: number,
+): GitStatus["state"] =>
+  changedFiles
+    ? "modified"
+    : ahead && behind
+      ? "diverged"
+      : behind
+        ? "behind"
+        : ahead
+          ? "ahead"
+          : "clean";
+
+/** The `git status` half of `gitStatusAt`: how many paths it lists. */
+async function changedFilesAt(path: string): Promise<number | undefined> {
+  const git = findExecutable("git");
+  if (!git) return undefined;
+  const status = await runCommand(git, [
+    "--no-optional-locks",
+    "-C",
+    path,
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=normal",
+  ]);
+  return status.exitCode === 0
+    ? status.stdout.split("\0").filter(Boolean).length
+    : undefined;
+}
+
 // Shared by the read-only checkout under `repos/` and by session worktrees.
 // Both answer the same two questions — what is uncommitted here, and how far
 // has this tree moved from the branch it started on — so both are compared
@@ -374,17 +422,8 @@ async function gitStatusAt(
     if (local.exitCode === 0)
       unpushed = Number.parseInt(local.stdout.trim(), 10) || 0;
   }
-  const state = changedFiles
-    ? ("modified" as const)
-    : ahead && behind
-      ? ("diverged" as const)
-      : behind
-        ? ("behind" as const)
-        : ahead
-          ? ("ahead" as const)
-          : ("clean" as const);
   return {
-    state,
+    state: statusState(changedFiles, ahead, behind),
     changedFiles,
     ahead,
     behind,
@@ -395,6 +434,193 @@ async function gitStatusAt(
 
 /** How often one branch is asked about. `gh` is a network round trip. */
 const PULL_REQUEST_REFRESH_MS = 60_000;
+/**
+ * How often a branch is asked about again when it had no open pull request
+ * and its git metadata has not moved since. A pull request is opened after a
+ * push, and a push moves the refs, which asks again within the minute; what
+ * this slows is the asking about branches where nothing happens. A real
+ * machine was seen making about 45 `gh` calls a minute, each one a GitHub
+ * API request against the user's rate limit.
+ */
+const QUIET_PULL_REQUEST_REFRESH_MS = 5 * 60_000;
+
+/** One branch whose pull request a pass wants to know about. */
+interface PullRequestCheck {
+  key: string;
+  path: string;
+  /** The name it publishes under, which is the name its pull request has. */
+  branchName: string;
+  worktree?: SessionWorktree;
+  fingerprint: string | undefined;
+}
+
+/** Branches asked about in one GraphQL request. */
+const PULL_REQUEST_BATCH_SIZE = 25;
+
+export interface GitHubRemote {
+  host: string;
+  owner: string;
+  name: string;
+}
+
+/**
+ * The host, owner and name in a clone URL GitHub hands out: HTTPS, SSH
+ * (`git@host:owner/name`) or `ssh://`. Anything else, a local path included,
+ * is undefined and is asked about with `gh pr view` instead.
+ */
+export function parseGitHubRemote(url: string): GitHubRemote | undefined {
+  const match =
+    /^(?:https?:\/\/(?:[^@/]+@)?|ssh:\/\/(?:[^@/]+@)?|[^@/\s]+@)([^/:\s]+)(?::\d+)?[/:]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(
+      url.trim(),
+    );
+  if (!match) return undefined;
+  const [, host, owner, name] = match;
+  return host && owner && name ? { host, owner, name } : undefined;
+}
+
+/** The GraphQL request for `count` branches, `$b0` to `$b<count-1>`. */
+export function branchPullRequestQuery(count: number): string {
+  const variables = Array.from(
+    { length: count },
+    (_, index) => `$b${index}: String!`,
+  ).join(", ");
+  const fields = Array.from(
+    { length: count },
+    (_, index) =>
+      `b${index}: pullRequests(headRefName: $b${index}, first: 5, ` +
+      `orderBy: {field: CREATED_AT, direction: DESC}, ` +
+      `states: [OPEN, CLOSED, MERGED]) { nodes { number url state isDraft ` +
+      `headRefOid title mergedAt headRepositoryOwner { login } } }`,
+  ).join(" ");
+  return `query($owner: String!, $name: String!, ${variables}) { repository(owner: $owner, name: $name) { isFork ${fields} } }`;
+}
+
+/**
+ * The pull request `gh pr view <branch>` would show from these candidates,
+ * newest first: one from this repository's owner over one from a fork with
+ * the same branch name, and an open one over the rest.
+ */
+export function chooseBranchPullRequest(
+  nodes: ReadonlyArray<Record<string, unknown>>,
+  owner: string,
+): Record<string, unknown> | undefined {
+  const own = nodes.filter(
+    (node) =>
+      String(
+        (node.headRepositoryOwner as { login?: unknown } | null)?.login ?? "",
+      ).toLowerCase() === owner.toLowerCase(),
+  );
+  const candidates = own.length ? own : nodes;
+  return candidates.find((node) => node.state === "OPEN") ?? candidates[0];
+}
+
+/**
+ * Asks GitHub about several branches of one repository in one request. Each
+ * answer is in `gh pr view --json` form, or null when the branch has no pull
+ * request. The whole result is undefined when the request failed, and for a
+ * fork, where `gh pr view` looks in the repository it was forked from.
+ */
+export async function queryBranchPullRequests(
+  gh: string,
+  remote: GitHubRemote,
+  branches: readonly string[],
+  cwd: string,
+): Promise<Array<string | null> | undefined> {
+  const response = await runCommand(
+    gh,
+    [
+      "api",
+      "graphql",
+      "--hostname",
+      remote.host,
+      "-f",
+      `query=${branchPullRequestQuery(branches.length)}`,
+      "-f",
+      `owner=${remote.owner}`,
+      "-f",
+      `name=${remote.name}`,
+      ...branches.flatMap((branch, index) => ["-f", `b${index}=${branch}`]),
+    ],
+    { cwd, env: { GH_PROMPT_DISABLED: "1" } },
+  ).catch(() => undefined);
+  if (!response || response.exitCode !== 0) return undefined;
+  let repository: Record<string, unknown> | undefined;
+  try {
+    repository = (
+      JSON.parse(response.stdout) as {
+        data?: { repository?: Record<string, unknown> };
+      }
+    ).data?.repository;
+  } catch {
+    return undefined;
+  }
+  if (!repository || repository.isFork !== false) return undefined;
+  const answers: Array<string | null> = [];
+  for (let index = 0; index < branches.length; index += 1) {
+    const nodes = (repository[`b${index}`] as { nodes?: unknown } | null)
+      ?.nodes;
+    // A branch the answer leaves out is not known to have no pull request.
+    if (!Array.isArray(nodes)) return undefined;
+    const chosen = chooseBranchPullRequest(
+      nodes as Record<string, unknown>[],
+      remote.owner,
+    );
+    answers.push(chosen ? JSON.stringify(chosen) : null);
+  }
+  return answers;
+}
+
+/**
+ * What `gh pr view --json` said: its output, null when it reported that the
+ * branch has no pull request, or undefined when it could not say (offline,
+ * rate limited, signed out).
+ */
+export function pullRequestViewAnswer(
+  result: CommandResult | undefined,
+): string | null | undefined {
+  if (!result) return undefined;
+  if (result.exitCode === 0) return result.stdout;
+  return /no pull requests? found/i.test(result.stderr) ? null : undefined;
+}
+
+/**
+ * The cache entry after `gh` could not answer: the pull request and landed
+ * HEAD it had stay, and only the time it was asked moves on.
+ */
+export function keptPullRequest<T extends { checkedAt: number }>(
+  cached: T | undefined,
+  now: number,
+): T | { checkedAt: number } {
+  return cached ? { ...cached, checkedAt: now } : { checkedAt: now };
+}
+
+/** Whether a branch's pull request is worth asking `gh` about again. */
+export function pullRequestDue(
+  cached:
+    | {
+        checkedAt: number;
+        value?: Pick<PullRequestRef, "state">;
+        fingerprint?: string;
+        movedAt?: number;
+      }
+    | undefined,
+  fingerprint: string | undefined,
+  now = Date.now(),
+): boolean {
+  if (!cached) return true;
+  const age = now - cached.checkedAt;
+  return (
+    age >= PULL_REQUEST_REFRESH_MS &&
+    (cached.value?.state === "OPEN" ||
+      fingerprint === undefined ||
+      cached.fingerprint !== fingerprint ||
+      // The refs moved lately, as a push does just before `gh pr create`:
+      // the check that ran in between must not hold the next one off.
+      (cached.movedAt !== undefined &&
+        now - cached.movedAt < QUIET_PULL_REQUEST_REFRESH_MS) ||
+      age >= QUIET_PULL_REQUEST_REFRESH_MS)
+  );
+}
 
 /**
  * Reads `gh pr view --json number,url,state,isDraft,title,mergedAt`. Anything
@@ -468,6 +694,12 @@ export interface GitMeasure {
   /** The tree's state against `refs/remotes/origin/<baseBranch>`. */
   status(path: string | null, baseBranch: string | null): Promise<GitStatus>;
   /**
+   * Only the count of paths `git status` lists: one process where `status`
+   * takes up to four. Enough when the git metadata has not moved, since then
+   * the distance from the base branch has not either.
+   */
+  changedFiles(path: string): Promise<number | undefined>;
+  /**
    * What `git status` reports, as VS Code's Source Control lists it: the
    * working tree and the index against HEAD, plus untracked files. Committed
    * work is not here; it is in the worktree's commits.
@@ -508,6 +740,7 @@ async function gitChangesAt(path: string): Promise<TreeChanges> {
 /** The real thing: git on this machine. */
 export const gitMeasure: GitMeasure = {
   status: gitStatusAt,
+  changedFiles: changedFilesAt,
   changes: gitChangesAt,
 };
 
@@ -536,6 +769,10 @@ export class GitStatusMonitor {
        * while HEAD stays put there is nothing more to ask `gh`.
        */
       landedHead?: string;
+      /** The tree's git metadata fingerprint when `gh` was asked. */
+      fingerprint?: string;
+      /** When an answer first saw that fingerprint, so when the refs moved. */
+      movedAt?: number;
     }
   >();
   private statusRefresh?: Promise<void>;
@@ -584,6 +821,8 @@ export class GitStatusMonitor {
    * age. Kept in step with the sessions by every pass.
    */
   private readonly treeWatchers = new Map<string, FileTreeWatcher>();
+  /** What git ignores in each tree, so changes there cost no pass. */
+  private readonly ignored = new IgnoredPaths();
   /** Workspaces whose file changes are waiting out `FILE_CHANGE_SETTLE_MS`. */
   private readonly settlingWorkspaces = new Map<
     string,
@@ -688,7 +927,9 @@ export class GitStatusMonitor {
         overflow ||
         changes.some(
           (change) =>
-            change.path === root || change.path.startsWith(`${root}/`),
+            change.path === root ||
+            (change.path.startsWith(`${root}/`) &&
+              !this.ignored.matches(key, change.path.slice(root.length + 1))),
         )
       )
         this.markTreeChanged(key, workspaceId);
@@ -739,6 +980,7 @@ export class GitStatusMonitor {
       if (!wanted.has(key)) {
         watcher.close();
         this.treeWatchers.delete(key);
+        this.ignored.forget(key);
       }
     for (const [key, worktree] of wanted) {
       if (this.treeWatchers.has(key)) continue;
@@ -747,7 +989,11 @@ export class GitStatusMonitor {
           key,
           watchFileTree({
             root: worktree.path,
-            // Any change at all, or a burst too big to describe, means the
+            // What git ignores never changes a status, and dropping it here,
+            // before the overflow count, keeps a build's output from
+            // starting a pass.
+            ignorePath: (path) => this.ignored.matches(key, path),
+            // Any other change, or a burst too big to describe, means the
             // tree is worth measuring; which file does not matter here.
             onChanges: () => this.markTreeChanged(key, worktree.workspaceId),
             // A tree that cannot be watched still has its maximum age.
@@ -807,9 +1053,11 @@ export class GitStatusMonitor {
     );
   }
 
-  private pullRequestDue(key: string): boolean {
-    const cached = this.pullRequestCache.get(key);
-    return !cached || Date.now() - cached.checkedAt >= PULL_REQUEST_REFRESH_MS;
+  private pullRequestDue(
+    key: string,
+    fingerprint: string | undefined,
+  ): boolean {
+    return pullRequestDue(this.pullRequestCache.get(key), fingerprint);
   }
 
   private async refreshGitStatuses(
@@ -849,6 +1097,7 @@ export class GitStatusMonitor {
         })),
     ];
     let changed = false;
+    const pullRequestChecks: PullRequestCheck[] = [];
     await forEachWithConcurrency(
       targets,
       STATUS_REFRESH_CONCURRENCY,
@@ -864,21 +1113,53 @@ export class GitStatusMonitor {
           target.path,
           target.baseBranch,
         );
+        const maxAge =
+          target.worktree && this.sessionIsLive(target.worktree.sessionId)
+            ? LIVE_TREE_MAX_AGE_MS
+            : IDLE_TREE_MAX_AGE_MS;
         const due =
           force ||
           !previous ||
-          (await this.treeIsDue(
-            record,
-            key,
-            fingerprint,
-            target.worktree && this.sessionIsLive(target.worktree.sessionId)
-              ? LIVE_TREE_MAX_AGE_MS
-              : IDLE_TREE_MAX_AGE_MS,
-          ));
+          (await this.treeIsDue(record, key, fingerprint, maxAge));
         const git = findExecutable("git");
         let status = previous;
         let current = record?.branch ?? null;
-        if (due) {
+        // Due only because the watcher saw a file change: HEAD, the index and
+        // the refs are as they were, so the branch and the distance from the
+        // base are too, and only the count of changed paths can have moved.
+        // That is one git process instead of three to five. The record keeps
+        // its time, so the full measurement still comes round at the maximum
+        // age. An agent's edit is often followed at once by `git add` and
+        // `git commit`, so the fingerprint is read again after the count: if
+        // the metadata moved meanwhile, the full measurement runs instead of
+        // an answer that is already behind.
+        let filesOnly =
+          due &&
+          !force &&
+          previous &&
+          // A tree git could not measure has no distance from its base to
+          // keep, so it is measured in full until it can be.
+          previous.state !== "unavailable" &&
+          record &&
+          fingerprint !== undefined &&
+          record.fingerprint === fingerprint &&
+          Date.now() - record.at < maxAge
+            ? await this.measure.changedFiles(target.path)
+            : undefined;
+        if (
+          filesOnly !== undefined &&
+          (await gitMetadataFingerprint(target.path, target.baseBranch)) !==
+            fingerprint
+        )
+          filesOnly = undefined;
+        if (filesOnly !== undefined && previous && record) {
+          status = {
+            ...previous,
+            state: statusState(filesOnly, previous.ahead, previous.behind),
+            changedFiles: filesOnly,
+          };
+          this.measuredTrees.set(key, { ...record, generation });
+        } else if (due) {
           status = await this.measure.status(target.path, target.baseBranch);
           current =
             target.worktree && git
@@ -911,27 +1192,30 @@ export class GitStatusMonitor {
         // state, so a merge after the card was marked done is still seen.
         // This runs on its own clock, not the tree's: a pull request is merged
         // on GitHub, where nothing in the tree moves.
+        // The checks are collected and asked after the pass, so every branch
+        // of one GitHub repository shares a single request.
         if (
           git &&
           current &&
-          this.pullRequestDue(key) &&
+          this.pullRequestDue(key, fingerprint) &&
           ((target.wantsPullRequest &&
             (status.ahead > 0 || this.pullRequestCache.get(key)?.value)) ||
             this.pullRequestCache.get(key)?.value?.state === "OPEN" ||
-            (status.unpushed ?? 0) > 0) &&
-          (await this.refreshPullRequest(
-            key,
-            target.path,
-            (await publishedBranchName(
-              git,
-              target.path,
-              current,
-              target.baseBranch,
-            )) ?? current,
-            target.worktree,
-          ))
+            (status.unpushed ?? 0) > 0)
         )
-          changed = true;
+          pullRequestChecks.push({
+            key,
+            path: target.path,
+            branchName:
+              (await publishedBranchName(
+                git,
+                target.path,
+                current,
+                target.baseBranch,
+              )) ?? current,
+            ...(target.worktree ? { worktree: target.worktree } : {}),
+            fingerprint,
+          });
         if (
           !due ||
           (previous &&
@@ -947,6 +1231,7 @@ export class GitStatusMonitor {
         changed = true;
       },
     );
+    if (await this.refreshPullRequests(pullRequestChecks)) changed = true;
     if (changed) this.onRepositoriesChanged();
   }
 
@@ -967,64 +1252,168 @@ export class GitStatusMonitor {
   }
 
   /**
-   * Asks `gh` whether this branch has a pull request, at most once a minute
-   * per worktree. Returns whether the answer changed.
+   * Asks `gh` whether these branches have pull requests, at most once a
+   * minute per worktree (see `pullRequestDue` for a branch where nothing
+   * moves). Branches of one GitHub repository share one GraphQL request; a
+   * remote that is not recognisably GitHub is asked about with `gh pr view`,
+   * one branch at a time. Returns whether any answer changed.
    *
    * Every failure is silence: `gh` missing, signed out, offline, or a branch
    * that was never pushed all leave the card without a link, which is the
    * whole of what the board promises about pull requests.
    */
-  private async refreshPullRequest(
-    key: string,
-    path: string,
-    branchName: string,
-    worktree?: SessionWorktree,
+  private async refreshPullRequests(
+    checks: readonly PullRequestCheck[],
   ): Promise<boolean> {
-    const cached = this.pullRequestCache.get(key);
+    if (checks.length === 0) return false;
     const git = findExecutable("git");
-    const head = git
-      ? (await runCommand(git, ["-C", path, "rev-parse", "HEAD"])).stdout.trim()
-      : "";
-    if (cached?.landedHead && cached.landedHead === head) {
-      // Still the merged HEAD: nothing to ask, and nothing to ask again for
-      // another minute.
-      cached.checkedAt = Date.now();
-      return false;
-    }
-    if (cached && Date.now() - cached.checkedAt < PULL_REQUEST_REFRESH_MS)
-      return false;
     const gh = findExecutable("gh", GH_EXECUTABLE_FALLBACKS);
-    if (!gh || !(await pathExists(path))) {
-      this.pullRequestCache.set(key, { checkedAt: Date.now() });
-      return cached?.value !== undefined || cached?.landedHead !== undefined;
-    }
-    const response = await runCommand(
-      gh,
-      [
-        "pr",
-        "view",
-        branchName,
-        "--json",
-        "number,url,state,isDraft,headRefOid,title,mergedAt",
-      ],
-      { cwd: path, env: { GH_PROMPT_DISABLED: "1" } },
-    ).catch(() => undefined);
-    const answered = response && response.exitCode === 0;
-    const value = answered ? parsePullRequestView(response.stdout) : undefined;
-    const landed =
-      Boolean(git && head && value?.state === "MERGED") &&
-      (await pullRequestAnswerHoldsHead(git!, path, response!.stdout));
-    this.pullRequestCache.set(key, {
-      checkedAt: Date.now(),
-      ...(value ? { value } : {}),
-      ...(landed ? { landedHead: head } : {}),
-    });
-    if (value?.state === "MERGED" && worktree)
-      this.recordShipped(worktree, value, branchName);
-    return (
-      !samePullRequest(cached?.value, value) ||
-      Boolean(cached?.landedHead) !== landed
+    let changed = false;
+    const asking: Array<PullRequestCheck & { head: string }> = [];
+    await forEachWithConcurrency(
+      checks,
+      STATUS_REFRESH_CONCURRENCY,
+      async (check) => {
+        const cached = this.pullRequestCache.get(check.key);
+        const head = git
+          ? (
+              await runCommand(git, ["-C", check.path, "rev-parse", "HEAD"])
+            ).stdout.trim()
+          : "";
+        if (cached?.landedHead && cached.landedHead === head) {
+          // Still the merged HEAD: nothing to ask, and nothing to ask again
+          // for another minute.
+          cached.checkedAt = Date.now();
+          if (cached.fingerprint !== check.fingerprint)
+            cached.movedAt = cached.checkedAt;
+          cached.fingerprint = check.fingerprint;
+          return;
+        }
+        if (cached && Date.now() - cached.checkedAt < PULL_REQUEST_REFRESH_MS)
+          return;
+        if (!gh || !(await pathExists(check.path))) {
+          this.pullRequestCache.set(check.key, {
+            checkedAt: Date.now(),
+            fingerprint: check.fingerprint,
+          });
+          if (cached?.value !== undefined || cached?.landedHead !== undefined)
+            changed = true;
+          return;
+        }
+        asking.push({ ...check, head });
+      },
     );
+    if (!gh || asking.length === 0) return changed;
+
+    // What `gh pr view --json` would have printed for each branch: its
+    // output, null for no pull request, or undefined when nobody could say.
+    const answers = new Map<PullRequestCheck, string | null | undefined>();
+    const groups = new Map<
+      string,
+      { remote: GitHubRemote; checks: Array<(typeof asking)[number]> }
+    >();
+    const alone: Array<(typeof asking)[number]> = [];
+    for (const check of asking) {
+      const remote = check.worktree && this.githubRemote(check.worktree);
+      // Only github.com is asked in a batch. Any other host, an SSH alias
+      // such as `github-work` included, is one `gh` resolves through its
+      // own configuration, so it is left to `gh pr view`.
+      if (!remote || remote.host.toLowerCase() !== "github.com") {
+        alone.push(check);
+        continue;
+      }
+      const name = `${remote.owner}/${remote.name}`.toLowerCase();
+      const group = groups.get(name) ?? { remote, checks: [] };
+      group.checks.push(check);
+      groups.set(name, group);
+    }
+    for (const { remote, checks: grouped } of groups.values())
+      for (
+        let start = 0;
+        start < grouped.length;
+        start += PULL_REQUEST_BATCH_SIZE
+      ) {
+        const batch = grouped.slice(start, start + PULL_REQUEST_BATCH_SIZE);
+        const found = await queryBranchPullRequests(
+          gh,
+          remote,
+          batch.map((check) => check.branchName),
+          batch[0]!.path,
+        );
+        // A request that failed, or a fork, whose pull requests live on the
+        // repository it was forked from, is asked branch by branch as before.
+        if (!found) alone.push(...batch);
+        else batch.forEach((check, index) => answers.set(check, found[index]));
+      }
+    for (const check of alone)
+      answers.set(
+        check,
+        pullRequestViewAnswer(
+          await runCommand(
+            gh,
+            [
+              "pr",
+              "view",
+              check.branchName,
+              "--json",
+              "number,url,state,isDraft,headRefOid,title,mergedAt",
+            ],
+            { cwd: check.path, env: { GH_PROMPT_DISABLED: "1" } },
+          ).catch(() => undefined),
+        ),
+      );
+
+    for (const check of asking) {
+      const cached = this.pullRequestCache.get(check.key);
+      const answer = answers.get(check);
+      if (answer === undefined) {
+        // Rate limited, offline or signed out: what was known stays known,
+        // and the branch is asked again at the usual time.
+        this.pullRequestCache.set(
+          check.key,
+          keptPullRequest(cached, Date.now()),
+        );
+        continue;
+      }
+      const value = answer === null ? undefined : parsePullRequestView(answer);
+      const landed =
+        Boolean(git && check.head && value?.state === "MERGED") &&
+        (await pullRequestAnswerHoldsHead(git!, check.path, answer!));
+      const now = Date.now();
+      // A first answer is not a move: at startup every branch has one.
+      const movedAt =
+        !cached || cached.fingerprint === check.fingerprint
+          ? cached?.movedAt
+          : now;
+      this.pullRequestCache.set(check.key, {
+        checkedAt: now,
+        fingerprint: check.fingerprint,
+        ...(movedAt === undefined ? {} : { movedAt }),
+        ...(value ? { value } : {}),
+        ...(landed ? { landedHead: check.head } : {}),
+      });
+      if (value?.state === "MERGED" && check.worktree)
+        this.recordShipped(check.worktree, value, check.branchName);
+      if (
+        !samePullRequest(cached?.value, value) ||
+        Boolean(cached?.landedHead) !== landed
+      )
+        changed = true;
+    }
+    return changed;
+  }
+
+  /** The GitHub repository a worktree's clone came from, when it is one. */
+  private githubRemote(worktree: SessionWorktree): GitHubRemote | undefined {
+    const repository = this.repositories.findWorkspaceRepository(
+      worktree.repositoryId,
+    );
+    const entry = repository?.libraryRepositoryId
+      ? this.repositories.findRepositoryLibraryEntry(
+          repository.libraryRepositoryId,
+        )
+      : undefined;
+    return entry ? parseGitHubRemote(entry.remoteUrl) : undefined;
   }
 
   /**
@@ -1237,11 +1626,19 @@ export class GitStatusMonitor {
    * `get` deliberately does not wait for git, so anything that needs the
    * measured answer rather than the last known one — a test, a caller about to
    * act on it — asks for it here.
+   *
+   * With a workspace, the answer is measured after the call. A pass already
+   * running may have read a tree before the caller's last change, such as
+   * between an agent's `git add` and its `git commit`, so that pass is waited
+   * out and one more forced pass runs after it.
    */
   /** `null` measures every workspace, which is what the board reads. */
   async settle(workspaceId?: string | null): Promise<void> {
-    if (!this.statusRefresh && workspaceId !== undefined)
+    if (workspaceId !== undefined) {
+      while (this.statusRefresh) await this.statusRefresh;
       this.scheduleRefresh(workspaceId, true);
+    }
     while (this.statusRefresh) await this.statusRefresh;
+    await this.ignored.settle();
   }
 }
