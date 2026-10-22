@@ -12,6 +12,8 @@ import type { RunnerTransport } from "./link";
 /** A start waits for the provider's first screen, so it gets longer. */
 const START_TIMEOUT_MS = 60_000;
 const LIST_TIMEOUT_MS = 5_000;
+/** The runner gives the tool 10 seconds; the relay adds its own time. */
+const AUTH_CALLBACK_TIMEOUT_MS = 20_000;
 const MAX_SESSIONS = 10_000;
 const MAX_CAPTURE = 1024 * 1024;
 
@@ -72,6 +74,35 @@ export class RemoteSessionHost implements SessionHost {
       },
       START_TIMEOUT_MS,
     );
+  }
+
+  /**
+   * Sends a sign-in page's redirect to a tool's listener in the pod. The
+   * reply is the pod's, so only a status and a string location are kept.
+   */
+  async authCallback(params: {
+    port: number;
+    path: string;
+    query: string;
+  }): Promise<{ status: number; location?: string }> {
+    const reply: unknown = await this.transport.request(
+      this.workspaceId,
+      "auth.callback",
+      params,
+      AUTH_CALLBACK_TIMEOUT_MS,
+    );
+    const status = (reply as { status?: unknown } | null)?.status;
+    const location = (reply as { location?: unknown } | null)?.location;
+    if (
+      typeof status !== "number" ||
+      !Number.isInteger(status) ||
+      (location !== undefined && typeof location !== "string")
+    )
+      throw malformed("auth.callback");
+    return {
+      status,
+      ...(typeof location === "string" ? { location } : {}),
+    };
   }
 
   /** A text file in the pod, or undefined when it is not there. */

@@ -16,7 +16,13 @@ import {
   REFUSED_EXIT_CODE,
   REFUSED_MESSAGE,
 } from "../services/cloud-calls";
-import { checkSignInUrl, pasteCodeUrl, SignInOffers } from "./sign-in-pages";
+import { listenForSignIn, type SignInListener } from "./sign-in-callback";
+import {
+  checkSignInUrl,
+  pasteCodeUrl,
+  SIGN_IN_OFFER_MS,
+  SignInOffers,
+} from "./sign-in-pages";
 import { cloudHostId, cloudHostWorkspace } from "../services/cloud-launch";
 import { defaultVault, RemoteStore } from "../services/remote-store";
 import type { SessionHosts } from "../services/session-hosts";
@@ -111,6 +117,7 @@ export class CloudService {
   readonly account: CloudAccount;
   /** Sign-in pages cloud sessions asked to open, waiting for a click. */
   readonly signIns = new SignInOffers();
+  readonly #signInListeners = new Set<SignInListener>();
   #link: CloudLink | undefined;
   #transport: Promise<RunnerTransport> | undefined;
   #stopBroker: (() => Promise<void>) | undefined;
@@ -572,8 +579,9 @@ export class CloudService {
 
   /**
    * The page to open for an offer the user clicked, once. A page whose
-   * redirect goes to a listener in the pod opens in its paste-code form,
-   * where Claude shows the code to paste into the session.
+   * redirect goes to a listener in the pod gets a listener on this Mac's
+   * port first; when the port cannot be had, it opens in its paste-code
+   * form, where Claude shows the code to paste into the session.
    */
   async openSignIn(
     requestId: string,
@@ -590,12 +598,34 @@ export class CloudService {
         "NOT_FOUND",
         "The session that asked for this sign-in page is gone",
       );
-    if (offer.checked.callback)
-      return {
-        url: pasteCodeUrl(offer.checked.url),
-        host: offer.host,
-        paste: true,
-      };
+    const callback = offer.checked.callback;
+    if (callback) {
+      const host = this.options.hosts.find(offer.hostId);
+      // The browser comes back to this Mac's localhost; this listener takes
+      // that one request to the tool in the pod. Without the port, the page
+      // shows a code to paste instead.
+      const listener =
+        host instanceof RemoteSessionHost
+          ? listenForSignIn(
+              callback,
+              (query) =>
+                host.authCallback({
+                  port: callback.port,
+                  path: callback.path,
+                  query,
+                }),
+              { timeoutMs: SIGN_IN_OFFER_MS },
+            )
+          : undefined;
+      if (!listener)
+        return {
+          url: pasteCodeUrl(offer.checked.url),
+          host: offer.host,
+          paste: true,
+        };
+      this.#signInListeners.add(listener);
+      void listener.done.then(() => this.#signInListeners.delete(listener));
+    }
     return { url: offer.checked.url, host: offer.host, paste: false };
   }
 
@@ -797,6 +827,7 @@ export class CloudService {
   }
 
   close(): void {
+    for (const listener of this.#signInListeners) listener.stop();
     this.#link?.stop();
     this.#link = undefined;
     this.#transport = undefined;
