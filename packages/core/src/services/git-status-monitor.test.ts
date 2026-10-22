@@ -6,6 +6,9 @@ import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { createApplicationContext } from "../index";
 import {
   gitMeasure,
+  branchPullRequestQuery,
+  chooseBranchPullRequest,
+  parseGitHubRemote,
   pullRequestDue,
   type GitMeasure,
 } from "./git-status-monitor";
@@ -661,5 +664,71 @@ describe("pullRequestDue", () => {
     expect(pullRequestDue(cached, "b", minute - 1)).toBe(false);
     expect(pullRequestDue(cached, "b", minute)).toBe(true);
     expect(pullRequestDue(cached, undefined, minute)).toBe(true);
+  });
+});
+
+describe("parseGitHubRemote", () => {
+  test("reads the clone URLs GitHub hands out", () => {
+    const expected = { host: "github.com", owner: "Bakar0", name: "daedalus" };
+    expect(parseGitHubRemote("https://github.com/Bakar0/daedalus.git")).toEqual(
+      expected,
+    );
+    expect(parseGitHubRemote("https://github.com/Bakar0/daedalus")).toEqual(
+      expected,
+    );
+    expect(parseGitHubRemote("git@github.com:Bakar0/daedalus.git")).toEqual(
+      expected,
+    );
+    expect(
+      parseGitHubRemote("ssh://git@github.com/Bakar0/daedalus.git"),
+    ).toEqual(expected);
+    expect(parseGitHubRemote("https://ghe.example.com/team/app.git")).toEqual({
+      host: "ghe.example.com",
+      owner: "team",
+      name: "app",
+    });
+  });
+  test("leaves anything else to gh pr view", () => {
+    expect(parseGitHubRemote("/tmp/source/product")).toBeUndefined();
+    expect(parseGitHubRemote("file:///tmp/source/product")).toBeUndefined();
+  });
+});
+
+describe("branchPullRequestQuery", () => {
+  test("asks about every branch through its own variable", () => {
+    const query = branchPullRequestQuery(3);
+    expect(query).toContain("$b2: String!");
+    expect(query).toContain("b2: pullRequests(headRefName: $b2");
+    expect(query).not.toContain("$b3");
+  });
+});
+
+describe("chooseBranchPullRequest", () => {
+  const pull = (number: number, state: string, login: string) => ({
+    number,
+    state,
+    headRepositoryOwner: { login },
+  });
+  test("prefers this repository's own branch, then an open pull request", () => {
+    expect(
+      chooseBranchPullRequest(
+        [
+          pull(3, "CLOSED", "me"),
+          pull(2, "OPEN", "me"),
+          pull(1, "MERGED", "me"),
+        ],
+        "Me",
+      )?.number,
+    ).toBe(2);
+    expect(
+      chooseBranchPullRequest(
+        [pull(4, "OPEN", "fork"), pull(3, "MERGED", "me")],
+        "me",
+      )?.number,
+    ).toBe(3);
+    expect(
+      chooseBranchPullRequest([pull(5, "CLOSED", "me")], "me")?.number,
+    ).toBe(5);
+    expect(chooseBranchPullRequest([], "me")).toBeUndefined();
   });
 });

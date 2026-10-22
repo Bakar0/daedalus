@@ -430,6 +430,128 @@ const PULL_REQUEST_REFRESH_MS = 60_000;
  */
 const QUIET_PULL_REQUEST_REFRESH_MS = 5 * 60_000;
 
+/** One branch whose pull request a pass wants to know about. */
+interface PullRequestCheck {
+  key: string;
+  path: string;
+  /** The name it publishes under, which is the name its pull request has. */
+  branchName: string;
+  worktree?: SessionWorktree;
+  fingerprint: string | undefined;
+}
+
+/** Branches asked about in one GraphQL request. */
+const PULL_REQUEST_BATCH_SIZE = 25;
+
+export interface GitHubRemote {
+  host: string;
+  owner: string;
+  name: string;
+}
+
+/**
+ * The host, owner and name in a clone URL GitHub hands out: HTTPS, SSH
+ * (`git@host:owner/name`) or `ssh://`. Anything else, a local path included,
+ * is undefined and is asked about with `gh pr view` instead.
+ */
+export function parseGitHubRemote(url: string): GitHubRemote | undefined {
+  const match =
+    /^(?:https?:\/\/(?:[^@/]+@)?|ssh:\/\/(?:[^@/]+@)?|[^@/\s]+@)([^/:\s]+)(?::\d+)?[/:]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(
+      url.trim(),
+    );
+  if (!match) return undefined;
+  const [, host, owner, name] = match;
+  return host && owner && name ? { host, owner, name } : undefined;
+}
+
+/** The GraphQL request for `count` branches, `$b0` to `$b<count-1>`. */
+export function branchPullRequestQuery(count: number): string {
+  const variables = Array.from(
+    { length: count },
+    (_, index) => `$b${index}: String!`,
+  ).join(", ");
+  const fields = Array.from(
+    { length: count },
+    (_, index) =>
+      `b${index}: pullRequests(headRefName: $b${index}, first: 5, ` +
+      `orderBy: {field: CREATED_AT, direction: DESC}, ` +
+      `states: [OPEN, CLOSED, MERGED]) { nodes { number url state isDraft ` +
+      `headRefOid title mergedAt headRepositoryOwner { login } } }`,
+  ).join(" ");
+  return `query($owner: String!, $name: String!, ${variables}) { repository(owner: $owner, name: $name) { ${fields} } }`;
+}
+
+/**
+ * The pull request `gh pr view <branch>` would show from these candidates,
+ * newest first: one from this repository's owner over one from a fork with
+ * the same branch name, and an open one over the rest.
+ */
+export function chooseBranchPullRequest(
+  nodes: ReadonlyArray<Record<string, unknown>>,
+  owner: string,
+): Record<string, unknown> | undefined {
+  const own = nodes.filter(
+    (node) =>
+      String(
+        (node.headRepositoryOwner as { login?: unknown } | null)?.login ?? "",
+      ).toLowerCase() === owner.toLowerCase(),
+  );
+  const candidates = own.length ? own : nodes;
+  return candidates.find((node) => node.state === "OPEN") ?? candidates[0];
+}
+
+/**
+ * Asks GitHub about several branches of one repository in one request. Each
+ * answer is in `gh pr view --json` form, or undefined when the branch has no
+ * pull request. The whole result is undefined when the request failed.
+ */
+async function queryBranchPullRequests(
+  gh: string,
+  remote: GitHubRemote,
+  branches: readonly string[],
+  cwd: string,
+): Promise<Array<string | undefined> | undefined> {
+  const response = await runCommand(
+    gh,
+    [
+      "api",
+      "graphql",
+      "--hostname",
+      remote.host,
+      "-f",
+      `query=${branchPullRequestQuery(branches.length)}`,
+      "-f",
+      `owner=${remote.owner}`,
+      "-f",
+      `name=${remote.name}`,
+      ...branches.flatMap((branch, index) => ["-f", `b${index}=${branch}`]),
+    ],
+    { cwd, env: { GH_PROMPT_DISABLED: "1" } },
+  ).catch(() => undefined);
+  if (!response || response.exitCode !== 0) return undefined;
+  let repository: Record<string, { nodes?: unknown } | null> | undefined;
+  try {
+    repository = (
+      JSON.parse(response.stdout) as {
+        data?: { repository?: Record<string, { nodes?: unknown } | null> };
+      }
+    ).data?.repository;
+  } catch {
+    return undefined;
+  }
+  if (!repository) return undefined;
+  return branches.map((_, index) => {
+    const nodes = repository[`b${index}`]?.nodes;
+    const chosen = Array.isArray(nodes)
+      ? chooseBranchPullRequest(
+          nodes as Record<string, unknown>[],
+          remote.owner,
+        )
+      : undefined;
+    return chosen ? JSON.stringify(chosen) : undefined;
+  });
+}
+
 /** Whether a branch's pull request is worth asking `gh` about again. */
 export function pullRequestDue(
   cached:
@@ -926,6 +1048,7 @@ export class GitStatusMonitor {
         })),
     ];
     let changed = false;
+    const pullRequestChecks: PullRequestCheck[] = [];
     await forEachWithConcurrency(
       targets,
       STATUS_REFRESH_CONCURRENCY,
@@ -1017,6 +1140,8 @@ export class GitStatusMonitor {
         // state, so a merge after the card was marked done is still seen.
         // This runs on its own clock, not the tree's: a pull request is merged
         // on GitHub, where nothing in the tree moves.
+        // The checks are collected and asked after the pass, so every branch
+        // of one GitHub repository shares a single request.
         if (
           git &&
           current &&
@@ -1024,21 +1149,21 @@ export class GitStatusMonitor {
           ((target.wantsPullRequest &&
             (status.ahead > 0 || this.pullRequestCache.get(key)?.value)) ||
             this.pullRequestCache.get(key)?.value?.state === "OPEN" ||
-            (status.unpushed ?? 0) > 0) &&
-          (await this.refreshPullRequest(
-            key,
-            target.path,
-            (await publishedBranchName(
-              git,
-              target.path,
-              current,
-              target.baseBranch,
-            )) ?? current,
-            target.worktree,
-            fingerprint,
-          ))
+            (status.unpushed ?? 0) > 0)
         )
-          changed = true;
+          pullRequestChecks.push({
+            key,
+            path: target.path,
+            branchName:
+              (await publishedBranchName(
+                git,
+                target.path,
+                current,
+                target.baseBranch,
+              )) ?? current,
+            ...(target.worktree ? { worktree: target.worktree } : {}),
+            fingerprint,
+          });
         if (
           !due ||
           (previous &&
@@ -1054,6 +1179,7 @@ export class GitStatusMonitor {
         changed = true;
       },
     );
+    if (await this.refreshPullRequests(pullRequestChecks)) changed = true;
     if (changed) this.onRepositoriesChanged();
   }
 
@@ -1074,68 +1200,146 @@ export class GitStatusMonitor {
   }
 
   /**
-   * Asks `gh` whether this branch has a pull request, at most once a minute
-   * per worktree, and see `QUIET_PULL_REQUEST_REFRESH_MS` for a branch where
-   * nothing moves. Returns whether the answer changed.
+   * Asks `gh` whether these branches have pull requests, at most once a
+   * minute per worktree (see `pullRequestDue` for a branch where nothing
+   * moves). Branches of one GitHub repository share one GraphQL request; a
+   * remote that is not recognisably GitHub is asked about with `gh pr view`,
+   * one branch at a time. Returns whether any answer changed.
    *
    * Every failure is silence: `gh` missing, signed out, offline, or a branch
    * that was never pushed all leave the card without a link, which is the
    * whole of what the board promises about pull requests.
    */
-  private async refreshPullRequest(
-    key: string,
-    path: string,
-    branchName: string,
-    worktree?: SessionWorktree,
-    fingerprint?: string,
+  private async refreshPullRequests(
+    checks: readonly PullRequestCheck[],
   ): Promise<boolean> {
-    const cached = this.pullRequestCache.get(key);
+    if (checks.length === 0) return false;
     const git = findExecutable("git");
-    const head = git
-      ? (await runCommand(git, ["-C", path, "rev-parse", "HEAD"])).stdout.trim()
-      : "";
-    if (cached?.landedHead && cached.landedHead === head) {
-      // Still the merged HEAD: nothing to ask, and nothing to ask again for
-      // another minute.
-      cached.checkedAt = Date.now();
-      cached.fingerprint = fingerprint;
-      return false;
-    }
-    if (cached && Date.now() - cached.checkedAt < PULL_REQUEST_REFRESH_MS)
-      return false;
     const gh = findExecutable("gh", GH_EXECUTABLE_FALLBACKS);
-    if (!gh || !(await pathExists(path))) {
-      this.pullRequestCache.set(key, { checkedAt: Date.now(), fingerprint });
-      return cached?.value !== undefined || cached?.landedHead !== undefined;
-    }
-    const response = await runCommand(
-      gh,
-      [
-        "pr",
-        "view",
-        branchName,
-        "--json",
-        "number,url,state,isDraft,headRefOid,title,mergedAt",
-      ],
-      { cwd: path, env: { GH_PROMPT_DISABLED: "1" } },
-    ).catch(() => undefined);
-    const answered = response && response.exitCode === 0;
-    const value = answered ? parsePullRequestView(response.stdout) : undefined;
-    const landed =
-      Boolean(git && head && value?.state === "MERGED") &&
-      (await pullRequestAnswerHoldsHead(git!, path, response!.stdout));
-    this.pullRequestCache.set(key, {
-      checkedAt: Date.now(),
-      fingerprint,
-      ...(value ? { value } : {}),
-      ...(landed ? { landedHead: head } : {}),
-    });
-    if (value?.state === "MERGED" && worktree)
-      this.recordShipped(worktree, value, branchName);
-    return (
-      !samePullRequest(cached?.value, value) ||
-      Boolean(cached?.landedHead) !== landed
+    let changed = false;
+    const asking: Array<PullRequestCheck & { head: string }> = [];
+    await forEachWithConcurrency(
+      checks,
+      STATUS_REFRESH_CONCURRENCY,
+      async (check) => {
+        const cached = this.pullRequestCache.get(check.key);
+        const head = git
+          ? (
+              await runCommand(git, ["-C", check.path, "rev-parse", "HEAD"])
+            ).stdout.trim()
+          : "";
+        if (cached?.landedHead && cached.landedHead === head) {
+          // Still the merged HEAD: nothing to ask, and nothing to ask again
+          // for another minute.
+          cached.checkedAt = Date.now();
+          cached.fingerprint = check.fingerprint;
+          return;
+        }
+        if (cached && Date.now() - cached.checkedAt < PULL_REQUEST_REFRESH_MS)
+          return;
+        if (!gh || !(await pathExists(check.path))) {
+          this.pullRequestCache.set(check.key, {
+            checkedAt: Date.now(),
+            fingerprint: check.fingerprint,
+          });
+          if (cached?.value !== undefined || cached?.landedHead !== undefined)
+            changed = true;
+          return;
+        }
+        asking.push({ ...check, head });
+      },
     );
+    if (!gh || asking.length === 0) return changed;
+
+    // What `gh pr view --json` would have printed for each branch, or
+    // undefined for no answer.
+    const answers = new Map<PullRequestCheck, string | undefined>();
+    const groups = new Map<
+      string,
+      { remote: GitHubRemote; checks: Array<(typeof asking)[number]> }
+    >();
+    const alone: Array<(typeof asking)[number]> = [];
+    for (const check of asking) {
+      const remote = check.worktree && this.githubRemote(check.worktree);
+      if (!remote) {
+        alone.push(check);
+        continue;
+      }
+      const name =
+        `${remote.host}/${remote.owner}/${remote.name}`.toLowerCase();
+      const group = groups.get(name) ?? { remote, checks: [] };
+      group.checks.push(check);
+      groups.set(name, group);
+    }
+    for (const { remote, checks: grouped } of groups.values())
+      for (
+        let start = 0;
+        start < grouped.length;
+        start += PULL_REQUEST_BATCH_SIZE
+      ) {
+        const batch = grouped.slice(start, start + PULL_REQUEST_BATCH_SIZE);
+        const found = await queryBranchPullRequests(
+          gh,
+          remote,
+          batch.map((check) => check.branchName),
+          batch[0]!.path,
+        );
+        batch.forEach((check, index) => answers.set(check, found?.[index]));
+      }
+    for (const check of alone) {
+      const response = await runCommand(
+        gh,
+        [
+          "pr",
+          "view",
+          check.branchName,
+          "--json",
+          "number,url,state,isDraft,headRefOid,title,mergedAt",
+        ],
+        { cwd: check.path, env: { GH_PROMPT_DISABLED: "1" } },
+      ).catch(() => undefined);
+      answers.set(
+        check,
+        response && response.exitCode === 0 ? response.stdout : undefined,
+      );
+    }
+
+    for (const check of asking) {
+      const cached = this.pullRequestCache.get(check.key);
+      const answer = answers.get(check);
+      const value =
+        answer === undefined ? undefined : parsePullRequestView(answer);
+      const landed =
+        Boolean(git && check.head && value?.state === "MERGED") &&
+        (await pullRequestAnswerHoldsHead(git!, check.path, answer!));
+      this.pullRequestCache.set(check.key, {
+        checkedAt: Date.now(),
+        fingerprint: check.fingerprint,
+        ...(value ? { value } : {}),
+        ...(landed ? { landedHead: check.head } : {}),
+      });
+      if (value?.state === "MERGED" && check.worktree)
+        this.recordShipped(check.worktree, value, check.branchName);
+      if (
+        !samePullRequest(cached?.value, value) ||
+        Boolean(cached?.landedHead) !== landed
+      )
+        changed = true;
+    }
+    return changed;
+  }
+
+  /** The GitHub repository a worktree's clone came from, when it is one. */
+  private githubRemote(worktree: SessionWorktree): GitHubRemote | undefined {
+    const repository = this.repositories.findWorkspaceRepository(
+      worktree.repositoryId,
+    );
+    const entry = repository?.libraryRepositoryId
+      ? this.repositories.findRepositoryLibraryEntry(
+          repository.libraryRepositoryId,
+        )
+      : undefined;
+    return entry ? parseGitHubRemote(entry.remoteUrl) : undefined;
   }
 
   /**
