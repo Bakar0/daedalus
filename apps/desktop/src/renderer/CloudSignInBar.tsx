@@ -7,63 +7,105 @@ const KIND_LABEL: Record<CloudSignInDto["kind"], string> = {
 };
 
 /**
- * A bar above a cloud session's terminal when its pod asked to open a
- * sign-in page (`daedal open-url`). It names the page's host and opens it
- * only on the click: the pod runs code this Mac does not trust. The URL
- * itself never reaches the window.
+ * A cloud session's sign-in, over its terminal while there is nothing for
+ * the user to do in the terminal itself: Daedalus starting Claude's
+ * sign-in, the page waiting for the click, and the browser step. The page
+ * opens only on the click (the pod runs code this Mac does not trust), and
+ * its URL never reaches the window.
  */
-export function CloudSignInBar({
-  offer,
-  color,
+export function CloudSignInPanel({
+  signIn,
   busy,
   onOpen,
   onDismiss,
 }: {
-  offer: CloudSignInDto;
-  color: SessionColorDto | null;
+  signIn: CloudSignInDto;
   busy: boolean;
   onOpen: () => void;
   onDismiss: () => void;
 }) {
+  const what = KIND_LABEL[signIn.kind];
   return (
-    <section
-      aria-label="Sign-in page"
-      className="routine-bar cloud-sign-in-bar"
-      data-color={color ?? undefined}
-      data-kind={offer.kind}
-      data-testid="cloud-signin-bar"
-      style={sessionColorStyle(color)}
+    <div
+      aria-live="polite"
+      className="cloud-signin-panel"
+      data-kind={signIn.kind}
+      data-phase={signIn.phase}
+      data-testid={
+        signIn.phase === "waiting"
+          ? "cloud-signin-bar"
+          : "cloud-signin-progress"
+      }
     >
-      <div className="routine-bar-row">
-        <span className="routine-bar-text">
-          This session wants to open a {KIND_LABEL[offer.kind]} sign-in page on{" "}
-          <strong data-testid="cloud-signin-host">{offer.host}</strong>.
-        </span>
-        <span className="routine-bar-actions">
-          <button
-            data-testid="cloud-signin-open"
-            disabled={busy}
-            onClick={onOpen}
-            type="button"
-          >
-            Open sign-in page
-          </button>
-          <button
-            className="quiet"
-            data-testid="cloud-signin-dismiss"
-            disabled={busy}
-            onClick={onDismiss}
-            type="button"
-          >
-            Dismiss
-          </button>
-        </span>
-      </div>
-    </section>
+      {signIn.phase === "starting" ? (
+        <>
+          <span aria-hidden="true" className="session-launch-spinner" />
+          <strong>Signing in to {what}…</strong>
+          <span>
+            This session runs in the cloud and is not signed in yet. Daedalus
+            started the sign-in; the page to open comes next.
+          </span>
+        </>
+      ) : signIn.phase === "waiting" ? (
+        <>
+          <strong>Sign in to {what} to use this session</strong>
+          <span>
+            The session wants to open a sign-in page on{" "}
+            <strong data-testid="cloud-signin-host">{signIn.host}</strong>.
+            {signIn.kind === "aws"
+              ? " Sign in there and approve the code it shows."
+              : " Sign in there; the session carries on by itself."}
+          </span>
+          <span className="cloud-signin-actions">
+            <button
+              data-testid="cloud-signin-open"
+              disabled={busy}
+              onClick={onOpen}
+              type="button"
+            >
+              Open sign-in page
+            </button>
+            <button
+              className="quiet"
+              data-testid="cloud-signin-dismiss"
+              disabled={busy}
+              onClick={onDismiss}
+              type="button"
+            >
+              Not now
+            </button>
+          </span>
+        </>
+      ) : signIn.phase === "browser" ? (
+        <>
+          <span aria-hidden="true" className="session-launch-spinner" />
+          <strong>Finish signing in in your browser</strong>
+          <span>
+            The page on {signIn.host} is open. This session goes on as soon as
+            you are signed in.
+          </span>
+          <span className="cloud-signin-actions">
+            <button className="quiet" onClick={onDismiss} type="button">
+              Show the terminal
+            </button>
+          </span>
+        </>
+      ) : (
+        <>
+          <strong>The sign-in stopped</strong>
+          <span>{signIn.message}</span>
+          <span className="cloud-signin-actions">
+            <button className="quiet" onClick={onDismiss} type="button">
+              Show the terminal
+            </button>
+          </span>
+        </>
+      )}
+    </div>
   );
 }
 
-/** After the page opened in its paste-code form. */
+/** After the page opened in its paste-code form: the terminal stays usable. */
 export function CloudPasteCodeBar({
   host,
   color,

@@ -66,6 +66,13 @@ const RUNNER_WAIT_MS = 20_000;
 /** How long a wake keeps trying while the old pod is still going. */
 const WAKE_RETRY_MS = 30_000;
 
+/** Claude's footer, and its /login screens, as the pod shows them. */
+const LOGIN_METHODS = /Select login method|Claude account with subscription/i;
+const CLAUDE_SIGNED_IN = /Login successful|Logged in as/i;
+const AWS_SIGNED_IN = /Successfully logged into Start URL/i;
+/** How long Claude has to ask for its page after /login. */
+const SIGN_IN_START_MS = 45_000;
+
 /** How long a wake for a session waits for the new pod's runner. */
 const WAKE_RUNNER_MS = 180_000;
 
@@ -617,30 +624,20 @@ export class CloudService {
    * The page to open for an offer the user clicked, once. A page whose
    * redirect goes to a listener in the pod gets a listener on this Mac's
    * port first; when the port cannot be had, it opens in its paste-code
-   * form, where Claude shows the code to paste into the session.
+   * form, where Claude shows the code to paste into the session. Either way
+   * the session's sign-in is followed until it finishes.
    */
   async openSignIn(
     requestId: string,
   ): Promise<{ url: string; host: string; paste: boolean }> {
-    const offer = this.signIns.take(requestId);
-    if (!offer)
-      throw new DaedalusError(
-        "NOT_FOUND",
-        "This sign-in page expired or was already opened; ask again in the session",
-      );
-    const session = this.options.repositories.findAgent(offer.sessionId);
-    if (!session || session.hostId !== offer.hostId)
-      throw new DaedalusError(
-        "NOT_FOUND",
-        "The session that asked for this sign-in page is gone",
-      );
-    const callback = offer.checked.callback;
-    if (callback) {
-      const host = this.options.hosts.find(offer.hostId);
+    let listener: SignInListener | undefined;
+    const offer = this.signIns.open(requestId, (stored) => {
+      const callback = stored.checked?.callback;
+      if (!callback) return false;
+      const host = this.options.hosts.find(stored.hostId);
       // The browser comes back to this Mac's localhost; this listener takes
-      // that one request to the tool in the pod. Without the port, the page
-      // shows a code to paste instead.
-      const listener =
+      // that one request to the tool in the pod.
+      listener =
         host instanceof RemoteSessionHost
           ? listenForSignIn(
               callback,
@@ -653,16 +650,126 @@ export class CloudService {
               { timeoutMs: SIGN_IN_OFFER_MS },
             )
           : undefined;
-      if (!listener)
-        return {
-          url: pasteCodeUrl(offer.checked.url),
-          host: offer.host,
-          paste: true,
-        };
-      this.#signInListeners.add(listener);
-      void listener.done.then(() => this.#signInListeners.delete(listener));
+      return !listener;
+    });
+    if (!offer)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        "This sign-in page expired or was already opened; ask again in the session",
+      );
+    const session = this.options.repositories.findAgent(offer.sessionId);
+    if (!session || session.hostId !== offer.hostId) {
+      (listener as SignInListener | undefined)?.stop();
+      this.signIns.finish(offer.sessionId);
+      throw new DaedalusError(
+        "NOT_FOUND",
+        "The session that asked for this sign-in page is gone",
+      );
     }
-    return { url: offer.checked.url, host: offer.host, paste: false };
+    const opened = listener as SignInListener | undefined;
+    const paste = Boolean(offer.checked.callback) && !opened;
+    if (opened) {
+      this.#signInListeners.add(opened);
+      void opened.done.then((result) => {
+        this.#signInListeners.delete(opened);
+        if (result === "forwarded") void this.#followSignIn(session, "claude");
+        else
+          this.signIns.fail(
+            session.id,
+            result === "failed"
+              ? "The sign-in could not reach the session. Type /login in it to try again."
+              : "The sign-in page was not finished in time. Type /login in the session to try again.",
+          );
+      });
+    } else void this.#followSignIn(session, offer.kind);
+    const url = paste ? pasteCodeUrl(offer.checked.url) : offer.checked.url;
+    return { url, host: offer.host ?? offer.checked.host, paste };
+  }
+
+  /**
+   * Starts Claude's sign-in in a cloud session that came up signed out, so
+   * the user only has to open the page: /login, then the method its account
+   * signs in with. API-key and Bedrock accounts need none of it.
+   */
+  async autoSignIn(
+    session: AgentSession,
+    launch: { apiKey: boolean } = { apiKey: false },
+  ): Promise<void> {
+    const profile = accountProfile(
+      this.options.config,
+      "claude",
+      session.account,
+    );
+    if (launch.apiKey || (profile && (profile.kind ?? "login") !== "login"))
+      return;
+    const host = this.options.hosts.find(session.hostId);
+    if (!(host instanceof RemoteSessionHost)) return;
+    // Claude in the pod keeps its sign-in in this file (the pod is Linux).
+    // Its screen is no guide: the fullscreen renderer shows no footer.
+    const signedIn = await host
+      .exists(CLOUD_SEED_PATHS.claudeCredentials)
+      .catch(() => true);
+    if (signedIn) return;
+    this.signIns.begin(host.id, session.id, "claude");
+    try {
+      await host.send(session.tmuxSession, "/login");
+      // The subscription is the first method; the Console the second.
+      let chosen = false;
+      for (let tries = 0; tries < 20 && !chosen; tries++) {
+        await Bun.sleep(500);
+        const now = await host.capture(session.tmuxSession).catch(() => "");
+        if (!LOGIN_METHODS.test(now)) continue;
+        await host.sendKeys(
+          session.tmuxSession,
+          profile?.login === "console" ? ["Down", "Enter"] : ["Enter"],
+        );
+        chosen = true;
+      }
+      // A method screen the capture cannot read still takes the first one.
+      if (!chosen && profile?.login !== "console")
+        await host.sendKeys(session.tmuxSession, ["Enter"]);
+    } catch (error) {
+      this.signIns.fail(
+        session.id,
+        `Daedalus could not start the sign-in: ${error instanceof Error ? error.message : String(error)}. Type /login in the session.`,
+      );
+      return;
+    }
+    // The page arrives through open-url, which moves the sign-in on.
+    const deadline = Date.now() + SIGN_IN_START_MS;
+    while (
+      Date.now() < deadline &&
+      this.signIns.get(session.id)?.phase === "starting"
+    )
+      await Bun.sleep(500);
+    if (this.signIns.get(session.id)?.phase === "starting")
+      this.signIns.fail(
+        session.id,
+        "Claude did not ask to open a sign-in page. Type /login in the session.",
+      );
+  }
+
+  /**
+   * Watches a session whose sign-in page was opened, until the tool says it
+   * is signed in, then clears it. Claude waits for Enter after a sign-in.
+   */
+  async #followSignIn(session: AgentSession, kind: "claude" | "aws") {
+    const host = this.options.hosts.find(session.hostId);
+    if (!(host instanceof RemoteSessionHost)) return;
+    const done = kind === "claude" ? CLAUDE_SIGNED_IN : AWS_SIGNED_IN;
+    const deadline = Date.now() + SIGN_IN_OFFER_MS;
+    while (Date.now() < deadline) {
+      const phase = this.signIns.get(session.id)?.phase;
+      if (phase !== "browser" && phase !== "pasting") return;
+      const screen = await host.capture(session.tmuxSession).catch(() => "");
+      if (done.test(screen)) {
+        if (kind === "claude")
+          await host.sendKeys(session.tmuxSession, ["Enter"]).catch(() => {});
+        this.signIns.finish(session.id);
+        return;
+      }
+      await Bun.sleep(1_500);
+    }
   }
 
   /** The host a local workspace's cloud sessions run on. */

@@ -178,7 +178,7 @@ await withBrowser(
     );
     expect(
       JSON.stringify(await calls(browser, "cloudSignInDismiss")) ===
-        '[{"cloudSignInDismiss":{"requestId":"req-1"}}]' &&
+        '[{"cloudSignInDismiss":{"sessionId":"s-cloud"}}]' &&
         !(await calls(browser, "cloudSignInOpen")).length,
       "Dismiss sent the wrong calls",
     );

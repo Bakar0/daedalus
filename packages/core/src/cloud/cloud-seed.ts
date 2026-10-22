@@ -14,6 +14,8 @@ export const CLOUD_SEED_PATHS = {
   claudeSettings: ".home/.claude/settings.json",
   awsConfig: ".home/.aws/config",
   claudeConsent: ".home/.claude/remote-settings-consent.json",
+  /** Where Claude on Linux keeps its sign-in; never read, only checked for. */
+  claudeCredentials: ".home/.claude/.credentials.json",
 } as const;
 
 /** Where Claude keeps the user's approval of the organization's settings. */

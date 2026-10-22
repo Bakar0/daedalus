@@ -129,6 +129,7 @@ const snapshot = {
               ? "d-9a672d87aa.awsapps.com"
               : "claude.com",
           kind: query.get("signin") === "aws" ? "aws" : "claude",
+          phase: "waiting",
           expiresAt: now + 10 * 60_000,
         },
       ]
@@ -376,19 +377,32 @@ const client = {
       const offer = snapshot.cloudSignIns?.find(
         (item) => item.requestId === requestId,
       );
-      snapshot.cloudSignIns = (snapshot.cloudSignIns ?? []).filter(
-        (item) => item.requestId !== requestId,
+      const paste = query.get("paste") === "1";
+      // Opened: the page moves on to the browser, or to pasting the code.
+      snapshot.cloudSignIns = (snapshot.cloudSignIns ?? []).map((item) =>
+        item.requestId === requestId
+          ? {
+              sessionId: item.sessionId,
+              kind: item.kind,
+              phase: paste ? ("pasting" as const) : ("browser" as const),
+              ...(item.host ? { host: item.host } : {}),
+              expiresAt: item.expiresAt,
+            }
+          : item,
       );
       announce();
-      return ok({
-        host: offer?.host ?? "",
-        paste: query.get("paste") === "1",
-      });
+      return ok({ host: offer?.host ?? "", paste });
     },
-    cloudSignInDismiss: async ({ requestId }: { requestId: string }) => {
-      record("cloudSignInDismiss", { requestId });
+    cloudSignInDismiss: async ({
+      requestId,
+      sessionId,
+    }: {
+      requestId?: string;
+      sessionId?: string;
+    }) => {
+      record("cloudSignInDismiss", { requestId, sessionId });
       snapshot.cloudSignIns = (snapshot.cloudSignIns ?? []).filter(
-        (item) => item.requestId !== requestId,
+        (item) => item.requestId !== requestId && item.sessionId !== sessionId,
       );
       announce();
       return ok(null);

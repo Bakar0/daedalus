@@ -105,6 +105,22 @@ export class RemoteSessionHost implements SessionHost {
     };
   }
 
+  /**
+   * Whether a file exists in the pod, without reading it: for files such as
+   * a sign-in whose content must stay there.
+   */
+  async exists(path: string): Promise<boolean> {
+    const result: unknown = await this.transport.request(
+      this.workspaceId,
+      "host.run",
+      { cwd: ".", executable: "test", args: ["-e", path], timeoutMs: 10_000 },
+      LIST_TIMEOUT_MS * 3,
+    );
+    const exitCode = (result as { exitCode?: unknown } | null)?.exitCode;
+    if (typeof exitCode !== "number") throw malformed("host.run");
+    return exitCode === 0;
+  }
+
   /** A text file in the pod, or undefined when it is not there. */
   async readText(path: string): Promise<string | undefined> {
     const file: unknown = await this.transport.request(

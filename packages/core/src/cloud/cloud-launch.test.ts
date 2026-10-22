@@ -43,6 +43,10 @@ class FakePod {
   readonly launches: RunnerLaunch[] = [];
   readonly live = new Set<string>();
   writes = 0;
+  /** What the session's pane shows. */
+  screen = "Claude Code v2.1.303\nshift+tab to cycle";
+  readonly typed: string[] = [];
+  readonly keys: string[][] = [];
 
   readonly transport: RunnerTransport = {
     unavailable: async () => undefined,
@@ -62,11 +66,28 @@ class FakePod {
         case "host.listLive":
           return [...this.live];
         case "host.capture":
-          return "Claude Code v2.1.303\nshift+tab to cycle";
+          return this.screen;
         case "host.send":
+          this.typed.push(p.text as string);
+          if (p.text === "/login")
+            this.screen =
+              "Select login method:\n❯ 1. Claude account with subscription";
+          return null;
         case "host.sendKeys":
+          this.keys.push(p.keys as string[]);
+          return null;
         case "host.stop":
           return null;
+        case "host.run": {
+          const args = p.args as string[];
+          if (p.executable === "test" && args[0] === "-e")
+            return {
+              exitCode: this.files.has(args[1]!) ? 0 : 1,
+              stdout: "",
+              stderr: "",
+            };
+          throw new Error(`unexpected command ${String(p.executable)}`);
+        }
         case "fs.read": {
           const text = this.files.get(p.path as string);
           return text === undefined
@@ -293,6 +314,64 @@ describe("cloud accounts", () => {
           account: "Nobody",
         }),
       ).rejects.toThrow("No Claude account named 'Nobody'");
+      context.close();
+    });
+  });
+});
+
+describe("automatic sign-in", () => {
+  test("a cloud Claude that opens signed out gets /login and its method, then the page", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, workspace, pod, hostId } = await setUp(home);
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        host: hostId,
+      });
+      // The spawn found no sign-in file in the pod, so /login went in.
+      for (let tries = 0; tries < 100 && !pod.keys.length; tries++)
+        await Bun.sleep(50);
+      expect(pod.typed).toEqual(["/login"]);
+      expect(pod.keys).toEqual([["Enter"]]);
+      expect(context.cloud.signIns.get(session.id)).toMatchObject({
+        phase: "starting",
+        kind: "claude",
+      });
+      // The pod's BROWSER asks for the page.
+      expect(
+        context.cloud.offerSignIn(
+          hostId,
+          session.id,
+          "https://claude.com/cai/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A4000%2Fcallback&state=s",
+        ).exitCode,
+      ).toBe(0);
+      expect(context.cloud.signIns.get(session.id)).toMatchObject({
+        phase: "waiting",
+        host: "claude.com",
+      });
+      context.close();
+    });
+  });
+
+  test("a signed-in session, or an API-key or Bedrock one, is left alone", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, workspace, pod, hostId } = await setUp(home);
+      await context.accounts.add("claude", "Keys", "api-key");
+      pod.files.set(".home/.claude/.credentials.json", "{}");
+      const plain = await context.agents.spawn({
+        workspace: workspace.id,
+        host: hostId,
+      });
+      await context.cloud.autoSignIn(plain);
+      pod.files.delete(".home/.claude/.credentials.json");
+      const keyed = await context.agents.spawn({
+        workspace: workspace.id,
+        host: hostId,
+        account: "Keys",
+      });
+      await context.cloud.autoSignIn(keyed, { apiKey: true });
+      await context.cloud.autoSignIn(plain, { apiKey: true });
+      expect(pod.typed).toEqual([]);
+      expect(context.cloud.signIns.list()).toEqual([]);
       context.close();
     });
   });

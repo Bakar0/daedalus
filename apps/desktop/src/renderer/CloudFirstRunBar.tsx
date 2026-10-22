@@ -38,19 +38,19 @@ export function cloudFirstRunText(
     case "login":
       return (
         <>
-          This Claude runs in the workspace's cloud pod. Sign in to Claude once:
-          type <code>/login</code> in this terminal, then open the sign-in page
-          from the bar that appears here. The sign-in stays on the workspace's
-          volume for later sessions.
+          This Claude runs in the workspace's cloud pod. Sign in to Claude once
+          per workspace: when a session opens signed out, Daedalus starts the
+          sign-in and shows the page to open here. To sign in again later, type{" "}
+          <code>/login</code>.
         </>
       );
     case "default":
       return (
         <>
-          This Claude runs in the workspace's cloud pod. Sign in to Claude once:
-          type <code>/login</code> in this terminal, then open the sign-in page
-          from the bar that appears here; the sign-in stays on the workspace's
-          volume. Not needed when the workspace has an{" "}
+          This Claude runs in the workspace's cloud pod. Sign in to Claude once
+          per workspace: when a session opens signed out, Daedalus starts the
+          sign-in and shows the page to open here. To sign in again later, type{" "}
+          <code>/login</code>. Not needed when the workspace has an{" "}
           <code>ANTHROPIC_API_KEY</code> secret.
         </>
       );

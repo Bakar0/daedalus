@@ -681,7 +681,7 @@ describe("cloud RPC", () => {
         ]);
         expect(JSON.stringify(snapshot.data.cloudSignIns)).not.toContain("st8");
 
-        const requestId = snapshot.data.cloudSignIns![0]!.requestId;
+        const requestId = snapshot.data.cloudSignIns![0]!.requestId!;
         const open = await rpc.cloudSignInOpen({ requestId });
         expect(open).toEqual({
           ok: true,

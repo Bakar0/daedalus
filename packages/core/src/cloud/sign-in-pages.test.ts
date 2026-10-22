@@ -126,21 +126,32 @@ describe("SignInOffers", () => {
     SSO,
   ) as CheckedSignInUrl;
 
-  test("one offer per session; a window sees no URL", () => {
+  test("one sign-in per session; a window sees no URL; a page opens once", () => {
     const offers = new SignInOffers();
     let changes = 0;
     offers.onChange(() => changes++);
+    offers.begin("ws:a", "s", "claude");
+    expect(offers.get("s")).toMatchObject({ phase: "starting" });
     const first = offers.offer("ws:a", "s", checked);
     const second = offers.offer("ws:a", "s", checked);
     expect(offers.list()).toEqual([second]);
+    expect(second).toMatchObject({ phase: "waiting", host: "claude.com" });
     expect(JSON.stringify(offers.list())).not.toContain("localhost");
-    expect(offers.take(first.requestId)).toBeUndefined();
-    expect(offers.take(second.requestId)?.checked.url).toBe(checked.url);
-    expect(offers.take(second.requestId)).toBeUndefined();
-    expect(changes).toBe(3);
+    expect(offers.open(first.requestId!, () => false)).toBeUndefined();
+    expect(offers.open(second.requestId!, () => true)?.checked.url).toBe(
+      checked.url,
+    );
+    expect(offers.get("s")).toMatchObject({ phase: "pasting" });
+    expect(offers.get("s")?.requestId).toBeUndefined();
+    expect(offers.open(second.requestId!, () => false)).toBeUndefined();
+    offers.fail("s", "why");
+    expect(offers.get("s")).toMatchObject({ phase: "failed", message: "why" });
+    offers.finish("s");
+    expect(offers.list()).toEqual([]);
+    expect(changes).toBe(6);
   });
 
-  test("offers expire, and go with their host", () => {
+  test("sign-ins expire, go with their host, and can be dismissed", () => {
     let now = 1_000;
     const offers = new SignInOffers(() => now);
     const old = offers.offer("ws:a", "s1", checked);
@@ -149,6 +160,9 @@ describe("SignInOffers", () => {
     expect(offers.list().map((offer) => offer.sessionId)).toEqual(["s1"]);
     now += SIGN_IN_OFFER_MS;
     expect(offers.list()).toEqual([]);
-    expect(offers.take(old.requestId)).toBeUndefined();
+    expect(offers.open(old.requestId!, () => false)).toBeUndefined();
+    offers.begin("ws:a", "s3", "claude");
+    offers.dismiss({ sessionId: "s3" });
+    expect(offers.list()).toEqual([]);
   });
 });

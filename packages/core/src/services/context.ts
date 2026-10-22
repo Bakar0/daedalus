@@ -254,6 +254,7 @@ export async function createApplicationContext(
     ...options.cloud,
   });
   agents.onCloudLaunch((session) => cloud.prepareLaunch(session));
+  agents.onCloudReady((session, launch) => cloud.autoSignIn(session, launch));
   const events = new EventBus();
   const logger = new JsonLogger(config.logsDirectory);
   const workspaceWatch = new WorkspaceWatchService(

@@ -8563,3 +8563,31 @@ dd {
   font-style: normal;
   padding: 0 6px;
 }
+/* A cloud session's sign-in, over its terminal. */
+.cloud-signin-panel {
+  align-items: center;
+  background: var(--center, var(--surface));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  inset: 0;
+  justify-content: center;
+  padding: 24px;
+  position: absolute;
+  text-align: center;
+  z-index: 5;
+}
+.cloud-signin-panel > span {
+  color: var(--secondary);
+  font-size: 13px;
+  max-width: 460px;
+}
+.cloud-signin-panel strong {
+  color: var(--text);
+}
+.cloud-signin-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 6px;
+}

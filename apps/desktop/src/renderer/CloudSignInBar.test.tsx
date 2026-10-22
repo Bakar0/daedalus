@@ -1,28 +1,48 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
-import { CloudSignInBar } from "./CloudSignInBar";
+import type { CloudSignInDto } from "@daedalus/protocol";
+import { CloudSignInPanel } from "./CloudSignInBar";
 
-describe("CloudSignInBar", () => {
-  test("names the page's host and asks before opening it", () => {
-    const markup = renderToStaticMarkup(
-      <CloudSignInBar
-        busy={false}
-        color={null}
-        offer={{
-          requestId: "r1",
-          sessionId: "s1",
-          host: "d-9a672d87aa.awsapps.com",
-          kind: "aws",
-          expiresAt: 0,
-        }}
-        onDismiss={() => {}}
-        onOpen={() => {}}
-      />,
-    );
+const render = (signIn: Partial<CloudSignInDto>) =>
+  renderToStaticMarkup(
+    <CloudSignInPanel
+      busy={false}
+      onDismiss={() => {}}
+      onOpen={() => {}}
+      signIn={{
+        sessionId: "s1",
+        kind: "claude",
+        phase: "waiting",
+        expiresAt: 0,
+        ...signIn,
+      }}
+    />,
+  );
+
+describe("CloudSignInPanel", () => {
+  test("a waiting page names its host and asks before opening it", () => {
+    const markup = render({
+      kind: "aws",
+      requestId: "r1",
+      host: "d-9a672d87aa.awsapps.com",
+    });
     expect(markup).toContain('data-testid="cloud-signin-bar"');
-    expect(markup).toContain("AWS sign-in page");
+    expect(markup).toContain("Sign in to AWS");
     expect(markup).toContain("d-9a672d87aa.awsapps.com");
     expect(markup).toContain('data-testid="cloud-signin-open"');
     expect(markup).toContain('data-testid="cloud-signin-dismiss"');
+  });
+
+  test("shows what is happening before and after the page", () => {
+    expect(render({ phase: "starting" })).toContain("Signing in to Claude");
+    expect(render({ phase: "starting" })).toContain(
+      'data-testid="cloud-signin-progress"',
+    );
+    expect(render({ phase: "browser", host: "claude.com" })).toContain(
+      "Finish signing in in your browser",
+    );
+    expect(render({ phase: "failed", message: "Type /login." })).toContain(
+      "Type /login.",
+    );
   });
 });

@@ -782,6 +782,24 @@ export class AgentService {
     this.cloudLaunch = prepare;
   }
 
+  private cloudReady: (
+    session: AgentSession,
+    launch: { apiKey: boolean },
+  ) => Promise<void> = async () => {};
+
+  /**
+   * Told when a cloud Claude session is up, after a spawn or a revive, so it
+   * can be signed in. Not awaited: the session is running either way.
+   */
+  onCloudReady(
+    ready: (
+      session: AgentSession,
+      launch: { apiKey: boolean },
+    ) => Promise<void>,
+  ): void {
+    this.cloudReady = ready;
+  }
+
   /** Reads the secrets a cloud session is launched with; set by the context. */
   onCloudSecrets(
     read: (workspaceId: string) => Promise<Record<string, string>>,
@@ -927,7 +945,7 @@ export class AgentService {
         this.abilities.grant(session.id, ability, { live: false });
     });
     try {
-      await this.startCloud(host, session, extras);
+      const launched = await this.startCloud(host, session, extras);
       const startup = input.terminal
         ? "ready"
         : await this.waitForProviderReady("claude", session.tmuxSession, host);
@@ -937,6 +955,8 @@ export class AgentService {
       if (startup === "question") this.askedAtStartup(running);
       else if (!input.terminal) await this.readyAtStartup(running);
       await this.sessionRunning(running);
+      if (!input.terminal)
+        void this.cloudReady(running, launched).catch(() => {});
       return running;
     } catch (error) {
       if (await host.isLive(session.tmuxSession).catch(() => false))
@@ -959,10 +979,15 @@ export class AgentService {
     host: SessionHost,
     session: AgentSession,
     extras: CloudLaunchExtras,
-  ): Promise<void> {
+  ): Promise<{ apiKey: boolean }> {
     const task = session.taskId
       ? this.repositories.findTask(session.taskId)
       : undefined;
+    const secrets: Record<string, string> | undefined =
+      session.kind === "agent"
+        ? (extras.secrets ??
+          (await this.cloudSecrets(session.workspaceId).catch(() => ({}))))
+        : undefined;
     await host.start({
       session: session.tmuxSession,
       cwd: session.workingDirectory,
@@ -977,12 +1002,10 @@ export class AgentService {
         }),
         ...extras.env,
       },
-      secrets:
-        session.kind === "agent"
-          ? (extras.secrets ??
-            (await this.cloudSecrets(session.workspaceId).catch(() => ({}))))
-          : undefined,
+      secrets,
     });
+    // Claude with an API key needs no sign-in.
+    return { apiKey: Boolean(secrets?.ANTHROPIC_API_KEY) };
   }
 
   /**
@@ -1038,7 +1061,7 @@ export class AgentService {
         `tmux session '${agent.tmuxSession}' is already live`,
       );
     try {
-      await this.startCloud(
+      const launched = await this.startCloud(
         host,
         restoring,
         restoring.kind === "agent" ? await this.cloudLaunch(restoring) : {},
@@ -1063,6 +1086,8 @@ export class AgentService {
       if (startup === "question") this.askedAtStartup(restored);
       else if (agent.kind === "agent") await this.readyAtStartup(restored);
       await this.sessionRunning(restored);
+      if (agent.kind === "agent")
+        void this.cloudReady(restored, launched).catch(() => {});
       return restored;
     } catch (error) {
       if (await host.isLive(restoring.tmuxSession).catch(() => false))

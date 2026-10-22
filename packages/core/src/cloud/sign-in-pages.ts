@@ -135,83 +135,161 @@ export function pasteCodeUrl(url: string): string {
   return pasted.toString();
 }
 
-/** What a window sees of an offer: never the URL, its state or a code. */
+/**
+ * Where a cloud session's sign-in stands.
+ * - `starting`: Daedalus typed /login in the session and waits for its page.
+ * - `waiting`: the page is offered and waits for the user's click.
+ * - `browser`: the page is open; the user finishes in the browser, and the
+ *   session carries on by itself.
+ * - `pasting`: the page opened in its paste-code form; the user pastes the
+ *   code into the session.
+ * - `failed`: it stopped; `message` says why.
+ */
+export type SignInPhase =
+  "starting" | "waiting" | "browser" | "pasting" | "failed";
+
+/** What a window sees of a sign-in: never the URL, its state or a code. */
 export interface SignInOffer {
-  requestId: string;
   sessionId: string;
-  host: string;
   kind: SignInKind;
+  phase: SignInPhase;
+  /** Set while `waiting`: what the click opens. */
+  requestId?: string;
+  /** The page's host, once there is a page. */
+  host?: string;
+  message?: string;
   expiresAt: number;
 }
 
 interface StoredOffer extends SignInOffer {
   hostId: string;
-  checked: CheckedSignInUrl;
+  checked?: CheckedSignInUrl;
 }
 
+/** How long the steps around a page may take. */
+const STARTING_MS = 90_000;
+const FAILED_MS = 60_000;
+
 /**
- * The sign-in pages waiting for a click, one per session: a newer one
- * replaces the older. Kept in memory only.
+ * Each cloud session's sign-in, one per session: a newer page replaces the
+ * older. Kept in memory only.
  */
 export class SignInOffers {
-  readonly #offers = new Map<string, StoredOffer>();
+  readonly #bySession = new Map<string, StoredOffer>();
   readonly #listeners = new Set<() => void>();
 
   constructor(private readonly now: () => number = Date.now) {}
+
+  /** Daedalus started a sign-in in the session itself. */
+  begin(hostId: string, sessionId: string, kind: SignInKind): void {
+    this.#set({
+      sessionId,
+      hostId,
+      kind,
+      phase: "starting",
+      expiresAt: this.now() + STARTING_MS,
+    });
+  }
 
   offer(
     hostId: string,
     sessionId: string,
     checked: CheckedSignInUrl,
   ): SignInOffer {
-    for (const [id, offer] of this.#offers)
-      if (offer.sessionId === sessionId) this.#offers.delete(id);
-    const stored: StoredOffer = {
-      requestId: crypto.randomUUID(),
-      sessionId,
-      host: checked.host,
-      kind: checked.kind,
-      expiresAt: this.now() + SIGN_IN_OFFER_MS,
-      hostId,
-      checked,
-    };
-    this.#offers.set(stored.requestId, stored);
-    this.#changed();
-    return this.#view(stored);
+    return this.#view(
+      this.#set({
+        sessionId,
+        hostId,
+        kind: checked.kind,
+        phase: "waiting",
+        requestId: crypto.randomUUID(),
+        host: checked.host,
+        expiresAt: this.now() + SIGN_IN_OFFER_MS,
+        checked,
+      }),
+    );
   }
 
   list(): SignInOffer[] {
     this.#expire();
-    return [...this.#offers.values()].map((offer) => this.#view(offer));
+    return [...this.#bySession.values()].map((offer) => this.#view(offer));
   }
 
-  /** Removes an offer and returns it whole, for the click that opens it. */
-  take(
+  /** The sign-in of one session, as a window sees it. */
+  get(sessionId: string): SignInOffer | undefined {
+    this.#expire();
+    const offer = this.#bySession.get(sessionId);
+    return offer && this.#view(offer);
+  }
+
+  /**
+   * The page for the click that opens it, once: the offer moves on to
+   * `browser` or `pasting` and can be opened no more.
+   */
+  open(
     requestId: string,
+    paste: (offer: StoredOffer) => boolean,
   ): (SignInOffer & { hostId: string; checked: CheckedSignInUrl }) | undefined {
     this.#expire();
-    const offer = this.#offers.get(requestId);
-    if (!offer) return undefined;
-    this.#offers.delete(requestId);
-    this.#changed();
-    return offer;
+    const offer = [...this.#bySession.values()].find(
+      (item) => item.requestId === requestId && item.phase === "waiting",
+    );
+    if (!offer?.checked) return undefined;
+    const checked = offer.checked;
+    const pasting = paste(offer);
+    this.#set({
+      sessionId: offer.sessionId,
+      hostId: offer.hostId,
+      kind: offer.kind,
+      phase: pasting ? "pasting" : "browser",
+      ...(offer.host ? { host: offer.host } : {}),
+      expiresAt: this.now() + SIGN_IN_OFFER_MS,
+    });
+    return { ...offer, checked };
   }
 
-  dismiss(requestId: string): void {
-    if (this.#offers.delete(requestId)) this.#changed();
+  /** The sign-in finished: nothing more to show. */
+  finish(sessionId: string): void {
+    if (this.#bySession.delete(sessionId)) this.#changed();
   }
 
-  /** Drops every offer from a host, when its account or workspace goes. */
+  fail(sessionId: string, message: string): void {
+    const offer = this.#bySession.get(sessionId);
+    if (!offer) return;
+    this.#set({
+      sessionId,
+      hostId: offer.hostId,
+      kind: offer.kind,
+      phase: "failed",
+      ...(offer.host ? { host: offer.host } : {}),
+      message,
+      expiresAt: this.now() + FAILED_MS,
+    });
+  }
+
+  /** By session, or by the page's request id. */
+  dismiss(reference: { sessionId?: string; requestId?: string }): void {
+    for (const [sessionId, offer] of this.#bySession)
+      if (
+        sessionId === reference.sessionId ||
+        (reference.requestId && offer.requestId === reference.requestId)
+      ) {
+        this.#bySession.delete(sessionId);
+        this.#changed();
+      }
+  }
+
+  /** Drops every sign-in from a host, when its account or workspace goes. */
   dropHost(hostId: string): void {
     let dropped = false;
-    for (const [id, offer] of this.#offers)
-      if (offer.hostId === hostId) dropped = this.#offers.delete(id);
+    for (const [sessionId, offer] of this.#bySession)
+      if (offer.hostId === hostId) dropped = this.#bySession.delete(sessionId);
     if (dropped) this.#changed();
   }
 
   clear(): void {
-    if (!this.#offers.size) return;
-    this.#offers.clear();
+    if (!this.#bySession.size) return;
+    this.#bySession.clear();
     this.#changed();
   }
 
@@ -220,20 +298,28 @@ export class SignInOffers {
     return () => this.#listeners.delete(listener);
   }
 
+  #set(offer: StoredOffer): StoredOffer {
+    this.#bySession.set(offer.sessionId, offer);
+    this.#changed();
+    return offer;
+  }
+
   #view(offer: StoredOffer): SignInOffer {
     return {
-      requestId: offer.requestId,
       sessionId: offer.sessionId,
-      host: offer.host,
       kind: offer.kind,
+      phase: offer.phase,
+      ...(offer.requestId ? { requestId: offer.requestId } : {}),
+      ...(offer.host ? { host: offer.host } : {}),
+      ...(offer.message ? { message: offer.message } : {}),
       expiresAt: offer.expiresAt,
     };
   }
 
   #expire(): void {
     const now = this.now();
-    for (const [id, offer] of this.#offers)
-      if (offer.expiresAt <= now) this.#offers.delete(id);
+    for (const [sessionId, offer] of this.#bySession)
+      if (offer.expiresAt <= now) this.#bySession.delete(sessionId);
   }
 
   #changed(): void {

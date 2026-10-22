@@ -1,7 +1,8 @@
 /**
  * Cloud sign-in, end to end on the kind cluster, with this Mac's real code:
- * a cloud Claude session asks for a sign-in page (`daedal open-url` from the
- * pod's BROWSER), this Mac offers it, and with `--open` the page opens in
+ * a cloud Claude session that opens signed out gets /login from the Mac,
+ * asks for a sign-in page (`daedal open-url` from the pod's BROWSER), this
+ * Mac offers it, and with `--open` the page opens in
  * the browser, as the app's "Open sign-in page" does.
  *
  *   bun run scripts/cloud-signin-try.ts claude            # up to the offer
@@ -111,12 +112,8 @@ try {
     ...(account ? { account } : {}),
   });
   say(`cloud Claude session ${session.id.slice(0, 8)} is running`);
-  if (mode === "claude") {
-    // /login, then the first method: the Claude subscription.
-    await context.agents.send(session.id, "/login");
-    await Bun.sleep(3_000);
-    await host.sendKeys(session.tmuxSession, ["Enter"]);
-  }
+  // A Claude that opens signed out gets /login from the Mac by itself
+  // (CloudService.autoSignIn); a signed-in one asks for no page.
   // Bedrock: Claude's first AWS call fails without an SSO sign-in and runs
   // awsAuthRefresh, whose device code page goes to BROWSER.
 
@@ -126,7 +123,10 @@ try {
     offer = cloud.signIns
       .list()
       .find(
-        (item) => item.sessionId === session.id && !before.has(item.requestId),
+        (item) =>
+          item.sessionId === session.id &&
+          item.phase === "waiting" &&
+          !before.has(item.requestId),
       );
     if (!offer) await Bun.sleep(1_000);
   }
@@ -143,7 +143,7 @@ try {
     // The browser's part, with a made-up code: proves the Mac's listener
     // takes the request over the link to Claude's listener in the pod,
     // which then refuses the code. Nothing real is signed in.
-    const page = await cloud.openSignIn(offer.requestId);
+    const page = await cloud.openSignIn(offer.requestId!);
     if (page.paste) fail("this Mac could not take the callback's port");
     const opened = new URL(page.url);
     const redirect = new URL(opened.searchParams.get("redirect_uri")!);
@@ -176,7 +176,7 @@ try {
     `[signin-try] Press Enter to open the sign-in page on ${offer.host} in your browser… `,
   );
   for await (const _ of console) break;
-  const page = await cloud.openSignIn(offer.requestId);
+  const page = await cloud.openSignIn(offer.requestId!);
   Bun.spawnSync(["/usr/bin/open", page.url]);
   say(
     page.paste

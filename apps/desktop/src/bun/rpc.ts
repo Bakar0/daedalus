@@ -893,9 +893,12 @@ export function createDesktopRequestHandlers(
           );
         return { host: page.host, paste: page.paste };
       }),
-    cloudSignInDismiss: ({ requestId }) =>
+    cloudSignInDismiss: ({ requestId, sessionId }) =>
       result(() => {
-        context.cloud.signIns.dismiss(requestId);
+        context.cloud.signIns.dismiss({
+          ...(requestId ? { requestId } : {}),
+          ...(sessionId ? { sessionId } : {}),
+        });
         return null;
       }),
     remoteGet: () => result(() => remote.state()),

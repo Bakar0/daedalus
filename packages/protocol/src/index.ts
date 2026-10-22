@@ -945,14 +945,20 @@ export interface CloudStateDto {
 }
 
 /**
- * A sign-in page a cloud session asked to open, waiting for the user's
- * click. The URL stays in the host: it carries the sign-in's state.
+ * Where a cloud session's sign-in stands: `starting` (Daedalus typed /login
+ * and waits for the page), `waiting` (the page waits for the user's click),
+ * `browser` (open; the user finishes in the browser), `pasting` (open in its
+ * paste-code form) or `failed` (see `message`). The URL stays in the host:
+ * it carries the sign-in's state.
  */
 export interface CloudSignInDto {
-  requestId: string;
   sessionId: string;
-  host: string;
   kind: "claude" | "aws";
+  phase: "starting" | "waiting" | "browser" | "pasting" | "failed";
+  /** Set while `waiting`: what Open sign-in page opens. */
+  requestId?: string;
+  host?: string;
+  message?: string;
   expiresAt: number;
 }
 
@@ -1197,7 +1203,10 @@ export interface DesktopRpcSchema {
         { requestId: string },
         { host: string; paste: boolean }
       >;
-      cloudSignInDismiss: Request<{ requestId: string }, null>;
+      cloudSignInDismiss: Request<
+        { requestId?: string; sessionId?: string },
+        null
+      >;
       remoteGet: Request<Record<string, never>, RemoteStateDto>;
       remoteSetEnabled: Request<{ enabled: boolean }, RemoteStateDto>;
       remoteSetKeepAwake: Request<{ enabled: boolean }, RemoteStateDto>;

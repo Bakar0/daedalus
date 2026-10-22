@@ -56,7 +56,7 @@ import {
 } from "@daedalus/protocol";
 import { LargeFileBar } from "./LargeFileBar";
 import { CloudFirstRunBar } from "./CloudFirstRunBar";
-import { CloudPasteCodeBar, CloudSignInBar } from "./CloudSignInBar";
+import { CloudPasteCodeBar, CloudSignInPanel } from "./CloudSignInBar";
 import type { DesktopClient } from "./client-types";
 import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import { UpdateBanner } from "./UpdateBanner";
@@ -2941,22 +2941,23 @@ export function WorkspaceApp({
       : view;
   };
 
-  // Sign-in pages cloud sessions asked to open, by session.
+  // Each cloud session's sign-in, by session.
   const signInBySession = new Map(
     (snapshot?.cloudSignIns ?? []).map((offer) => [offer.sessionId, offer]),
   );
-  // A page opened in its paste-code form, until the user says it is done.
-  const [pasteCode, setPasteCode] = useState<{
-    sessionId: string;
-    host: string;
-  }>();
 
-  async function openCloudSignIn(requestId: string, sessionId: string) {
-    const opened = await sessionActions.run(
+  function openCloudSignIn(requestId: string, sessionId: string) {
+    void sessionActions.run(
       client.request.cloudSignInOpen({ requestId }),
       `signin:${sessionId}`,
     );
-    if (opened?.paste) setPasteCode({ sessionId, host: opened.host });
+  }
+
+  function dismissCloudSignIn(sessionId: string) {
+    void sessionActions.run(
+      client.request.cloudSignInDismiss({ sessionId }),
+      `signin:${sessionId}`,
+    );
   }
 
   async function wakeCloudSession(session: AgentSessionDto) {
@@ -4951,7 +4952,7 @@ export function WorkspaceApp({
                   Cloud
                 </span>
               )}
-              {signInBySession.has(session.id) && (
+              {signInBySession.get(session.id)?.phase === "waiting" && (
                 <span
                   className="session-cloud-signin"
                   data-testid="session-cloud-signin"
@@ -5754,38 +5755,20 @@ export function WorkspaceApp({
               onCopy={copyCommandText}
             />
           ))}
-      {activeSession && signInBySession.get(activeSession.id) && (
-        <CloudSignInBar
-          busy={sessionActions.pending(`signin:${activeSession.id}`)}
-          color={activeSession.color}
-          offer={signInBySession.get(activeSession.id)!}
-          onDismiss={() =>
-            void sessionActions.run(
-              client.request.cloudSignInDismiss({
-                requestId: signInBySession.get(activeSession.id)!.requestId,
-              }),
-              `signin:${activeSession.id}`,
-            )
-          }
-          onOpen={() =>
-            void openCloudSignIn(
-              signInBySession.get(activeSession.id)!.requestId,
-              activeSession.id,
-            )
-          }
-        />
-      )}
-      {activeSession && pasteCode?.sessionId === activeSession.id && (
-        <CloudPasteCodeBar
-          color={activeSession.color}
-          host={pasteCode.host}
-          onDone={() => setPasteCode(undefined)}
-        />
-      )}
+      {activeSession &&
+        signInBySession.get(activeSession.id)?.phase === "pasting" && (
+          <CloudPasteCodeBar
+            color={activeSession.color}
+            host={signInBySession.get(activeSession.id)!.host ?? ""}
+            onDone={() => dismissCloudSignIn(activeSession.id)}
+          />
+        )}
       {activeSession?.hostId &&
         activeSession.kind === "agent" &&
         activeSession.provider === "claude" &&
-        sessionIsLive(activeSession) && (
+        sessionIsLive(activeSession) &&
+        // The sign-in itself shows over the terminal meanwhile.
+        !signInBySession.has(activeSession.id) && (
           <CloudFirstRunBar
             color={activeSession.color}
             hostId={activeSession.hostId}
@@ -5805,6 +5788,20 @@ export function WorkspaceApp({
         // The drawer sits over the terminal, below the routine bar, so
         // the bar's buttons stay in reach while it is open.
         <div className="terminal-stage">
+          {(() => {
+            const signIn = signInBySession.get(activeSession.id);
+            return signIn && signIn.phase !== "pasting" ? (
+              <CloudSignInPanel
+                busy={sessionActions.pending(`signin:${activeSession.id}`)}
+                onDismiss={() => dismissCloudSignIn(activeSession.id)}
+                onOpen={() =>
+                  signIn.requestId &&
+                  openCloudSignIn(signIn.requestId, activeSession.id)
+                }
+                signIn={signIn}
+              />
+            ) : null;
+          })()}
           {activeSessionRoutines &&
             routinesPanel?.sessionId === activeSession.id && (
               <RoutinesPanel
