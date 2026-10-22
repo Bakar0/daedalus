@@ -1,6 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
-import { COLOR_GRID, WorkspaceCloudItems } from "./SessionMenu";
+import {
+  COLOR_GRID,
+  WorkspaceCloudItems,
+  WorkspaceCloudMenu,
+} from "./SessionMenu";
 
 describe("COLOR_GRID", () => {
   test("is five rows of ten distinct #rrggbb colors", () => {
@@ -72,5 +76,34 @@ describe("WorkspaceCloudItems", () => {
     expect(markup).toContain('data-testid="cloud-menu-error"');
     expect(markup).toContain("You may have at most 5 workspaces");
     expect(markup).not.toContain('role="menuitem"');
+  });
+
+  test("a failed one says why, and Delete sits under a separator", () => {
+    const markup = renderToStaticMarkup(
+      <WorkspaceCloudItems
+        cloud={{
+          ...actions,
+          workspace: {
+            ...workspace,
+            status: "failed",
+            reason: "The image could not be pulled",
+          },
+        }}
+      />,
+    );
+    expect(markup).toContain('data-testid="cloud-reason"');
+    expect(markup).toContain("The image could not be pulled");
+    expect(markup).toMatch(
+      /<hr[^>]*menu-separator[^>]*\/?>(<!-- -->)?<button[^>]*data-testid="cloud-delete"/,
+    );
+  });
+
+  test("the header icon shows the status and opens the same items", () => {
+    const markup = renderToStaticMarkup(
+      <WorkspaceCloudMenu cloud={{ ...actions, workspace }} name="Pods" />,
+    );
+    expect(markup).toContain('data-testid="workspace-cloud-icon"');
+    expect(markup).toContain('data-status="running"');
+    expect(markup).toContain('aria-label="Cloud workspace of Pods: running"');
   });
 });

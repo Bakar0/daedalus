@@ -1,10 +1,12 @@
 /**
- * The workspace menu's cloud items in a real browser, against
- * `cloud-test.tsx`: nothing for a local workspace; status, Sleep, Wake
- * and a Delete that needs a second click for a cloud one; nothing while this
- * Mac is signed out. The menu has to stay inside the window at two heights.
+ * A workspace's cloud icon in a real browser, against `cloud-test.tsx`: the
+ * icon shows on a workspace's header only while it has a cloud workspace;
+ * its popover has the status, Sleep or Wake, and a Delete under a separator
+ * that needs a second click. Nothing while this Mac is signed out, and the
+ * workspace menu itself has no cloud items. The popover has to stay inside
+ * the window at two heights.
  *
- *   bun run test:cloud-menu-ui
+ *   bun run test:cloud-header-ui
  */
 import {
   expect,
@@ -13,7 +15,34 @@ import {
   type Browser,
 } from "./lib/browser-check";
 
+const cloudSummary = (workspace: string) =>
+  `document.querySelector('summary[aria-label^="Cloud workspace of ${workspace}:"]')`;
+
+/** Opens a workspace's cloud popover from the icon on its header. */
 const open = async (browser: Browser, workspace: string) => {
+  browser.scope = "";
+  expect(
+    await browser.evaluate<boolean>(`(() => {
+      const summary = ${cloudSummary(workspace)};
+      if (!summary) return false;
+      if (!summary.parentElement.open) summary.click();
+      return true;
+    })()`),
+    `no cloud icon on ${workspace}`,
+  );
+  await browser.waitFor(
+    `${cloudSummary(workspace)}.parentElement.querySelector('.menu-popover:popover-open')`,
+    `the ${workspace} cloud popover to open`,
+  );
+  browser.scope = ".menu-popover:popover-open";
+};
+
+/** Whether a workspace's header shows the cloud icon. */
+const hasIcon = (browser: Browser, workspace: string) =>
+  browser.evaluate<boolean>(`Boolean(${cloudSummary(workspace)})`);
+
+const openSettings = async (browser: Browser, workspace: string) => {
+  browser.scope = "";
   expect(
     await browser.evaluate<boolean>(openMenu(`Settings of ${workspace}`)),
     `no menu for ${workspace}`,
@@ -67,16 +96,19 @@ await withBrowser({ port: 41764, page: "cloud-test.html" }, async (browser) => {
 
   // A local workspace: no cloud items at all; its first cloud session makes
   // its cloud workspace, so there is nothing to enable here.
-  await open(browser, "Plain local");
+  // A local workspace: no cloud icon, and no cloud items in its menu; its
+  // first cloud session makes its cloud workspace.
   expect(
-    !(await browser.has("cloud-run")) &&
-      !(await browser.has("cloud-status")) &&
+    !(await hasIcon(browser, "Plain local")),
+    "a local workspace shows a cloud icon",
+  );
+  await openSettings(browser, "Plain local");
+  expect(
+    !(await browser.has("cloud-status")) &&
       !(await browser.has("cloud-sleep")) &&
       !(await browser.has("cloud-delete")),
-    "a local workspace shows cloud items",
+    "the workspace menu still has cloud items",
   );
-  await menuInsideWindow(browser, "local workspace");
-  await browser.screenshot("cloud-menu-local");
   await closeMenus(browser);
 
   // A running cloud workspace: status, Sleep, no Wake.
@@ -90,11 +122,15 @@ await withBrowser({ port: 41764, page: "cloud-test.html" }, async (browser) => {
     "a running workspace should offer Sleep and not Wake",
   );
   expect(
-    !(await browser.has("cloud-run")),
-    "Run in cloud is offered on a workspace that has one",
+    await browser.evaluate<boolean>(
+      "document.querySelector('.menu-popover:popover-open hr.menu-separator + [data-testid=\"cloud-delete\"]') !== null",
+    ),
+    "Delete is not under a separator",
   );
   await menuInsideWindow(browser, "running workspace");
-  await browser.screenshot("cloud-menu-running");
+  browser.scope = "";
+  await browser.screenshot("cloud-header-running");
+  browser.scope = ".menu-popover:popover-open";
   await browser.click("cloud-sleep");
   await browser.waitFor(
     "window.requests.some((one) => 'cloudWorkspaceSleep' in one)",
@@ -117,7 +153,7 @@ await withBrowser({ port: 41764, page: "cloud-test.html" }, async (browser) => {
     (await browser.has("cloud-wake")) && !(await browser.has("cloud-sleep")),
     "a sleeping workspace should offer Wake and not Sleep",
   );
-  await browser.screenshot("cloud-menu-sleeping");
+  await browser.screenshot("cloud-header-sleeping");
   await browser.click("cloud-wake");
   await browser.waitFor(
     "window.requests.some((one) => 'cloudWorkspaceWake' in one)",
@@ -146,7 +182,7 @@ await withBrowser({ port: 41764, page: "cloud-test.html" }, async (browser) => {
     (await browser.attribute("cloud-delete", "data-armed")) === "true",
     "the first click did not arm Delete",
   );
-  await browser.screenshot("cloud-menu-delete-armed");
+  await browser.screenshot("cloud-header-delete-armed");
   // A second click inside the double-click window is ignored on purpose.
   await Bun.sleep(700);
   await browser.click("cloud-delete");
@@ -160,10 +196,9 @@ await withBrowser({ port: 41764, page: "cloud-test.html" }, async (browser) => {
     `Delete sent ${await lastRequest(browser)}`,
   );
   await closeMenus(browser);
-  await open(browser, "Cloud project");
   await browser.waitFor(
-    "!document.querySelector('.menu-popover:popover-open [data-testid=\"cloud-status\"]')",
-    "the status to go after the delete",
+    `!${cloudSummary("Cloud project")}`,
+    "the cloud icon to go after the delete",
   );
   expect(
     await browser.evaluate<boolean>(
@@ -171,10 +206,10 @@ await withBrowser({ port: 41764, page: "cloud-test.html" }, async (browser) => {
     ),
     "deleting the cloud workspace removed the local workspace's sessions",
   );
-  await browser.screenshot("cloud-menu-after-delete");
+  await browser.screenshot("cloud-header-after-delete");
 });
 
-// Signed out: the menu has no cloud items at all.
+// Signed out: no cloud icon anywhere, and no cloud items in the menu.
 await withBrowser(
   { port: 41766, page: "cloud-test.html", query: "signedIn=0" },
   async (browser) => {
@@ -183,13 +218,19 @@ await withBrowser(
       "the workspace list",
     );
     await Bun.sleep(300);
-    await open(browser, "Plain local");
     expect(
-      !(await browser.has("cloud-run")) && !(await browser.has("cloud-status")),
+      !(await browser.evaluate<boolean>(
+        "Boolean(document.querySelector('[data-testid=\"workspace-cloud-icon\"]'))",
+      )),
+      "a cloud icon shows while signed out",
+    );
+    await openSettings(browser, "Cloud project");
+    expect(
+      !(await browser.has("cloud-status")),
       "the menu offers cloud items while signed out",
     );
-    await browser.screenshot("cloud-menu-signed-out");
+    await browser.screenshot("cloud-header-signed-out");
   },
 );
 
-console.log("cloud menu check passed");
+console.log("cloud header check passed");

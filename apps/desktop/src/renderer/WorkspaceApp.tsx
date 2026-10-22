@@ -113,7 +113,12 @@ import type { DiffTarget } from "./files/EditorArea";
 import { MarkdownPreview } from "./markdown-preview";
 import { buildWorldModel, worldInputFromSnapshot } from "./world/world-model";
 import { TaskPriorityMenu, TaskStatusMenu } from "./TaskStatusMenu";
-import { ColorSwatches, SessionMenu, WorkspaceMenu } from "./SessionMenu";
+import {
+  ColorSwatches,
+  SessionMenu,
+  WorkspaceCloudMenu,
+  WorkspaceMenu,
+} from "./SessionMenu";
 import { useCloudState } from "./CloudPanel";
 import { RoutineBar } from "./routines/RoutineBar";
 import { TeamBar, TeamPanel } from "./teams/TeamPanel";
@@ -6290,6 +6295,36 @@ export function WorkspaceApp({
                         </span>
                       </button>
                       <span className="workspace-card-actions" data-no-drag>
+                        {cloudState.data?.signedIn &&
+                          cloudByWorkspace.get(item.id) && (
+                            <WorkspaceCloudMenu
+                              cloud={{
+                                workspace: cloudByWorkspace.get(item.id)!,
+                                pending: cloudActions.pending(item.id),
+                                error: cloudErrors[item.id],
+                                onSleep: () =>
+                                  runCloudAction(item.id, () =>
+                                    client.request.cloudWorkspaceSleep({
+                                      workspace: item.id,
+                                    }),
+                                  ),
+                                onWake: () =>
+                                  runCloudAction(item.id, () =>
+                                    client.request.cloudWorkspaceWake({
+                                      workspace: item.id,
+                                    }),
+                                  ),
+                                onDelete: () =>
+                                  runCloudAction(item.id, () =>
+                                    client.request.cloudWorkspaceDelete({
+                                      workspace: item.id,
+                                      force: true,
+                                    }),
+                                  ),
+                              }}
+                              name={item.name}
+                            />
+                          )}
                         <button
                           aria-label={`Open ${item.name} in integrated terminal`}
                           className="session-card-action workspace-terminal-action"
@@ -6330,34 +6365,6 @@ export function WorkspaceApp({
                             void updateWorkspace(item, { autoRebirthPercent })
                           }
                           onRename={() => void renameWorkspace(item)}
-                          cloud={
-                            cloudState.data?.signedIn
-                              ? {
-                                  workspace: cloudByWorkspace.get(item.id),
-                                  pending: cloudActions.pending(item.id),
-                                  error: cloudErrors[item.id],
-                                  onSleep: () =>
-                                    runCloudAction(item.id, () =>
-                                      client.request.cloudWorkspaceSleep({
-                                        workspace: item.id,
-                                      }),
-                                    ),
-                                  onWake: () =>
-                                    runCloudAction(item.id, () =>
-                                      client.request.cloudWorkspaceWake({
-                                        workspace: item.id,
-                                      }),
-                                    ),
-                                  onDelete: () =>
-                                    runCloudAction(item.id, () =>
-                                      client.request.cloudWorkspaceDelete({
-                                        workspace: item.id,
-                                        force: true,
-                                      }),
-                                    ),
-                                }
-                              : undefined
-                          }
                         />
                         {/* Last, so the ones that come in on hover open to its
                           left and it never moves. */}
