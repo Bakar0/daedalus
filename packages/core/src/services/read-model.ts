@@ -244,6 +244,25 @@ export const PARTIAL_READ_MODEL_SOURCES = [
 export type PartialReadModelSource =
   (typeof PARTIAL_READ_MODEL_SOURCES)[number];
 
+/**
+ * The versions a host should compare its next tick against after announcing
+ * a change. A whole reload takes every current version. A partial one takes
+ * only its own parts', so a change to any other part that has not been
+ * announced still shows as a difference.
+ */
+export function versionsAfterAnnouncing(
+  previous: Record<string, string>,
+  current: Record<string, string>,
+  parts?: readonly string[],
+): Record<string, string> {
+  if (!parts) return current;
+  const next = { ...previous };
+  for (const part of parts)
+    if (part in current) next[part] = current[part]!;
+    else delete next[part];
+  return next;
+}
+
 /** Whether every changed part can be reloaded without the rest. */
 export const isPartialReload = (
   names: readonly string[],

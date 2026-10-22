@@ -3,7 +3,8 @@ import { mkdir, readFile } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import { pathExists } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
-import { createApplicationContext } from "../index";
+import { createApplicationContext, versionsAfterAnnouncing } from "../index";
+import { createRepository, FakeTmux } from "./workspace-content.fixtures";
 import {
   AGENTS_TEMPLATE,
   ensureSessionInstructionFiles,
@@ -402,5 +403,58 @@ test("a session's instructions from before --branch was required are upgraded, a
       false,
     );
     expect(await pathExists(agentsPath)).toBe(false);
+  });
+});
+
+describe("announcing repository changes", () => {
+  test("a git measurement names its parts; a finished preparation names none", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const source = join(home, "source", "product");
+      await createRepository(source);
+      const announced: Array<string[] | undefined> = [];
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux: new FakeTmux(),
+        reconcile: false,
+        onRepositoriesChanged: (parts) => announced.push(parts),
+      });
+      try {
+        const workspace = await context.workspaces.create({ name: "Notes" });
+        // As the window attaches one: the clone finishes in the background.
+        await context.workspaceContent.beginAddAndAttachRepository({
+          workspace: workspace.id,
+          remoteUrl: source,
+        });
+        await context.workspaceContent.settlePreparations();
+        // The repository's own row moved, so the window reloads in full.
+        expect(announced).toContain(undefined);
+        announced.length = 0;
+        // Its first measured status moves only the measured parts.
+        await context.workspaceContent.settleGitStatus(workspace.id);
+        expect(announced).toEqual([["worktrees", "shipped"]]);
+      } finally {
+        context.close();
+      }
+    });
+  }, 30_000);
+});
+
+describe("versionsAfterAnnouncing", () => {
+  const previous = { workspaces: "w1", sessionActivity: "a1", worktrees: "t1" };
+  const current = { workspaces: "w2", sessionActivity: "a2", worktrees: "t2" };
+  test("a whole reload takes every current version", () => {
+    expect(versionsAfterAnnouncing(previous, current)).toEqual(current);
+  });
+  test("a partial one takes only its own, so other changes still show", () => {
+    expect(versionsAfterAnnouncing(previous, current, ["worktrees"])).toEqual({
+      workspaces: "w1",
+      sessionActivity: "a1",
+      worktrees: "t2",
+    });
+  });
+  test("a part with no version of its own is left out", () => {
+    expect(versionsAfterAnnouncing(previous, current, ["shipped"])).toEqual(
+      previous,
+    );
   });
 });

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { PartialReadModelSource } from "./read-model";
 import { join, resolve } from "node:path";
 import {
   CommandTmuxClient,
@@ -93,8 +94,12 @@ export interface ApplicationContextOptions {
   env?: NodeJS.ProcessEnv;
   tmux?: TmuxClient;
   reconcile?: boolean;
-  /** Notified when a background repository preparation settles. */
-  onRepositoriesChanged?: () => void;
+  /**
+   * Notified when a background repository preparation settles, or a measured
+   * git status or pull request changes. `parts` names the read-model parts
+   * that moved when only those did; without it anything may have.
+   */
+  onRepositoriesChanged?: (parts?: PartialReadModelSource[]) => void;
   /**
    * Set by the desktop host, which is the only adapter with a window to draw a
    * toast in. Everywhere else a toast has to wait in the queue.
@@ -172,7 +177,7 @@ export async function createApplicationContext(
     repositories,
     workspaces,
     config,
-    () => options.onRepositoriesChanged?.(),
+    (parts) => options.onRepositoriesChanged?.(parts),
     (folder) => terminals.closeInside(folder),
   );
   const accounts = new AccountService(config, repositories, undefined, (id) =>

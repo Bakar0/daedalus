@@ -15,6 +15,7 @@ import {
   createApplicationContext,
   isPartialReload,
   ReadModel,
+  versionsAfterAnnouncing,
   WORKSPACE_FILES_CHANGED,
   type WorkspaceFilesChanged,
 } from "@daedalus/core";
@@ -120,11 +121,9 @@ const context = await createApplicationContext({
     }),
   // A repository finishes cloning outside any request, so the window is told
   // the same way an external change tells it: otherwise the row would sit at
-  // "preparing" until something unrelated refreshed it.
-  // A measured git status or pull request: the worktrees, and a merged pull
-  // request remembered in `shipped`.
-  onRepositoriesChanged: () =>
-    announce("external", undefined, ["worktrees", "shipped"]),
+  // "preparing" until something unrelated refreshed it. A measured git status
+  // or pull request names its parts, and the window reloads only those.
+  onRepositoriesChanged: (parts) => announce("external", undefined, parts),
 });
 // A Mac reboot kills the Daedalus tmux server and nothing else, so the context
 // that just reconciled has turned every session that was running into `lost`.
@@ -360,8 +359,15 @@ function announce(
   versions?: Record<string, string>,
   parts?: DesktopSnapshotPart[],
 ): void {
-  announcedVersions =
+  // A partial announcement records only its own parts' versions. Anything
+  // else that moved meanwhile, such as a repository's row when it finishes
+  // preparing, still differs at the next tick and reloads in full there.
+  const announced = announcedVersions;
+  const current =
     versions === undefined ? currentVersions() : Promise.resolve(versions);
+  announcedVersions = Promise.all([announced, current]).then(
+    ([previous, next]) => versionsAfterAnnouncing(previous, next, parts),
+  );
   // There is no window between closing one and reopening from the Dock, and
   // a repository finishing its clone in that gap must not throw.
   revision += 1;
