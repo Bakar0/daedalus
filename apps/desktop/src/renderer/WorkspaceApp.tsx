@@ -59,7 +59,7 @@ import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import { UpdateBanner } from "./UpdateBanner";
 import { runWithConcurrency } from "./concurrency";
 import { wholeLinkRows, type LinkRange } from "./terminal-links";
-import { sgrWheelReports, WheelLines } from "./terminal-wheel";
+import { WheelLines, wheelToReports } from "./terminal-wheel";
 import { findPathCandidates } from "./terminal-file-links";
 import { repositoryFuzzyScore } from "./repository-search";
 import { ReorderGroup } from "./ReorderGroup";
@@ -1462,34 +1462,19 @@ function TerminalSurface({
       terminal.attachCustomWheelEventHandler((event) => {
         const current = terminal;
         const screen = linkLayer.parentElement;
-        if (
-          !current ||
-          !screen ||
-          !sgrMouse ||
-          current.modes.mouseTrackingMode === "none" ||
-          event.shiftKey
-        ) {
-          wheelLines.reset();
-          return true;
-        }
-        event.preventDefault();
-        const bounds = screen.getBoundingClientRect();
-        const cellWidth = bounds.width / current.cols;
-        const cellHeight = bounds.height / current.rows;
-        if (!(cellWidth > 0 && cellHeight > 0)) return false;
-        const lines = wheelLines.take(event, cellHeight, current.rows);
-        if (lines === 0) return false;
-        const cell = (offset: number, size: number, count: number) =>
-          Math.max(1, Math.min(count, Math.floor(offset / size) + 1));
-        current.input(
-          sgrWheelReports(
-            lines,
-            cell(event.clientX - bounds.left, cellWidth, current.cols),
-            cell(event.clientY - bounds.top, cellHeight, current.rows),
-            event,
-          ),
-          true,
-        );
+        const wheel =
+          current && screen
+            ? wheelToReports(wheelLines, event, {
+                sgrMouse,
+                mouseTracking: current.modes.mouseTrackingMode !== "none",
+                cols: current.cols,
+                rows: current.rows,
+                bounds: screen.getBoundingClientRect(),
+              })
+            : undefined;
+        if (!wheel) return true;
+        if (wheel.consumed) event.preventDefault();
+        if (wheel.reports) current?.input(wheel.reports, true);
         return false;
       });
       terminal.open(container);

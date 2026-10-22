@@ -3,6 +3,21 @@ export type WheelInput = Pick<
   "deltaY" | "deltaMode" | "altKey" | "ctrlKey"
 >;
 
+export type TerminalWheelEvent = WheelInput &
+  Pick<WheelEvent, "shiftKey" | "clientX" | "clientY">;
+
+/** What the wheel handler needs to know about the terminal under the wheel. */
+export interface WheelTarget {
+  /** The program asked for SGR mouse reports (mode 1006). */
+  sgrMouse: boolean;
+  /** The program asked for mouse reports at all. */
+  mouseTracking: boolean;
+  cols: number;
+  rows: number;
+  /** The screen element's box, in client pixels. */
+  bounds: Pick<DOMRect, "left" | "top" | "width" | "height">;
+}
+
 // WheelEvent's constants, which a test run without a DOM does not have.
 const DOM_DELTA_LINE = 1;
 const DOM_DELTA_PAGE = 2;
@@ -60,4 +75,37 @@ export function sgrWheelReports(
   const button =
     (lines < 0 ? 64 : 65) + (event.altKey ? 8 : 0) + (event.ctrlKey ? 16 : 0);
   return `\u001b[<${button};${col};${row}M`.repeat(Math.abs(lines));
+}
+
+/**
+ * The wheel reports to send the program for `event`, or `undefined` when the
+ * event is xterm's to handle: no program reading SGR mouse reports, or Shift
+ * held, which xterm keeps for itself. `consumed` says whether to cancel the
+ * browser's default: every vertical event over such a program is the
+ * program's, even one not yet worth a line, while a horizontal-only one is not.
+ */
+export function wheelToReports(
+  lines: WheelLines,
+  event: TerminalWheelEvent,
+  target: WheelTarget,
+): { reports: string; consumed: boolean } | undefined {
+  if (!target.sgrMouse || !target.mouseTracking || event.shiftKey) {
+    lines.reset();
+    return undefined;
+  }
+  const consumed = event.deltaY !== 0;
+  const cellWidth = target.bounds.width / target.cols;
+  const cellHeight = target.bounds.height / target.rows;
+  if (!(cellWidth > 0 && cellHeight > 0)) return { reports: "", consumed };
+  const cell = (offset: number, size: number, count: number) =>
+    Math.max(1, Math.min(count, Math.floor(offset / size) + 1));
+  return {
+    reports: sgrWheelReports(
+      lines.take(event, cellHeight, target.rows),
+      cell(event.clientX - target.bounds.left, cellWidth, target.cols),
+      cell(event.clientY - target.bounds.top, cellHeight, target.rows),
+      event,
+    ),
+    consumed,
+  };
 }
