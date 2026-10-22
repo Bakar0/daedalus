@@ -165,7 +165,9 @@ jobs:
       # release holds, so a release without it answers them with a 404 every
       # time they check. 0.31.0's own file names a version no newer than the
       # one they run, so re-attaching it keeps them quiet.
+      # releases/latest never serves a beta, so a beta does not need it.
       - name: Keep the Intel update feed answering
+        if: steps.kind.outputs.prerelease == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
