@@ -239,6 +239,41 @@ export async function changedPaths(
 }
 
 /**
+ * Paths that are symbolic links in `to` and were not the same link in
+ * `from`. A link can point anywhere on this Mac, so a new one is the user's
+ * to approve, whatever its name.
+ */
+export async function changedLinks(
+  side: MoveSide,
+  dir: string,
+  from: string,
+  to: string,
+): Promise<string[]> {
+  const result = await side.run(dir, "git", [
+    "diff",
+    "--raw",
+    "-z",
+    "--no-renames",
+    "--no-abbrev",
+    from,
+    to,
+  ]);
+  if (result.exitCode !== 0)
+    throw new DaedalusError(
+      "DEPENDENCY",
+      `git diff failed on ${side.label}: ${result.stderr.trim()}`,
+    );
+  // `:<old mode> <new mode> <old id> <new id> <status>` then the path.
+  const fields = result.stdout.split("\0");
+  const links: string[] = [];
+  for (let index = 0; index + 1 < fields.length; index += 2) {
+    const newMode = fields[index]!.split(" ")[1];
+    if (newMode === "120000") links.push(fields[index + 1]!);
+  }
+  return links;
+}
+
+/**
  * Whether the copy on this side is as the session left it: the commit and
  * working tree it last sent or received. A side with no record of the
  * session has not been agreed on, so it counts as changed.
@@ -341,26 +376,94 @@ export async function applySnapshot(
   }
 }
 
+/**
+ * A path as this Mac's file system compares names: APFS and HFS+ ignore case
+ * and Unicode normalization, so `.CLAUDE/x` lands in `.claude/x`. Folded
+ * wide (compatibility forms, upper then lower) so a variant asks rather
+ * than slips through.
+ */
+export const foldPath = (path: string): string =>
+  path
+    .normalize("NFKC")
+    // HFS+ also ignores characters that draw nothing, such as U+200C.
+    .replace(/\p{Default_Ignorable_Code_Point}/gu, "")
+    .toUpperCase()
+    .toLowerCase()
+    .normalize("NFKC");
+
+/** Folders whose files steer an agent or run on open, at any depth. */
+const STEERING_FOLDERS = [
+  ".claude",
+  ".husky",
+  ".githooks",
+  ".vscode",
+  ".devcontainer",
+  // Other agents' configuration.
+  ".cursor",
+  ".codex",
+  ".windsurf",
+  ".gemini",
+];
+/** Files that do, by name at any depth. */
+const STEERING_FILES = [
+  "claude.md",
+  "claude.local.md",
+  "agents.md",
+  "gemini.md",
+  ".mcp.json",
+  ".envrc",
+  ".cursorrules",
+  ".windsurfrules",
+  // Tool managers act on these when a shell enters the folder.
+  ".mise.toml",
+  ".tool-versions",
+  // git's own: filters (git-lfs and the like) run on checkout, and
+  // submodules can be fetched with it.
+  ".gitattributes",
+  ".lfsconfig",
+  ".gitmodules",
+];
+
 /** Whether a repository path steers an agent or runs when it is opened. */
 export function steersAgent(path: string): boolean {
-  const parts = path.split("/");
+  const parts = foldPath(path).split("/");
   const name = parts.at(-1) ?? "";
-  const folders = parts.slice(0, -1);
   return (
-    folders.some((folder) =>
-      [".claude", ".husky", ".githooks", ".vscode", ".devcontainer"].includes(
-        folder,
-      ),
-    ) ||
-    [
-      "CLAUDE.md",
-      "CLAUDE.local.md",
-      "AGENTS.md",
-      ".mcp.json",
-      ".envrc",
-    ].includes(name) ||
-    [".claude", ".husky", ".githooks", ".vscode", ".devcontainer"].includes(
-      name,
+    parts.some((part) => STEERING_FOLDERS.includes(part)) ||
+    STEERING_FILES.includes(name) ||
+    // Copilot's instructions live under .github, beside files that do not.
+    parts.some(
+      (part, index) =>
+        part === ".github" &&
+        (parts[index + 1] === "instructions" ||
+          (parts[index + 1] === "copilot-instructions.md" &&
+            index + 2 === parts.length)),
     )
   );
+}
+
+/**
+ * Paths in a commit's tree that this Mac would lay down as one file: two
+ * names that differ only in case or normalization. git cannot check such a
+ * tree out faithfully here, and the second one would overwrite the first.
+ */
+export async function caseCollisions(
+  side: MoveSide,
+  dir: string,
+  commit: string,
+): Promise<string[]> {
+  const names = (
+    await git(side, dir, ["ls-tree", "-r", "-z", "--name-only", commit])
+  )
+    .split("\0")
+    .filter(Boolean);
+  const seen = new Map<string, string>();
+  const collisions: string[] = [];
+  for (const name of names) {
+    const folded = foldPath(name);
+    const earlier = seen.get(folded);
+    if (earlier !== undefined && earlier !== name) collisions.push(name);
+    else seen.set(folded, name);
+  }
+  return collisions;
 }

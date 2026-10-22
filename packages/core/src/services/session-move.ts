@@ -9,6 +9,8 @@ import type { AgentService } from "./agents";
 import { cloudHostWorkspace } from "./cloud-launch";
 import {
   applySnapshot,
+  caseCollisions,
+  changedLinks,
   changedPaths,
   fetchBundle,
   isRepository,
@@ -31,12 +33,15 @@ import {
   type MoveSide,
 } from "./move-side";
 import {
-  isClaudePermissionMode,
+  appendedTranscript,
   lastPermissionMode,
+  safeTranscriptPath,
+  sentFile,
   readTranscript,
   rewriteTranscript,
   writeTranscript,
   type ClaudePermissionMode,
+  type SentTranscriptFile,
   type TranscriptFiles,
 } from "./move-transcript";
 import type { SessionHosts } from "./session-hosts";
@@ -48,14 +53,17 @@ export type MoveTarget = "cloud" | "local";
 export interface SessionMoveState {
   sessionId: string;
   to: MoveTarget;
-  phase: "waiting" | "stopping" | "copying" | "starting" | "failed";
+  /** `moved` stays, with `notice`, until the user dismisses it. */
+  phase: "waiting" | "stopping" | "copying" | "starting" | "failed" | "moved";
   detail?: string;
   /** Set when `failed`. */
   message?: string;
+  /** Set when `moved` and the user should know something about the result. */
+  notice?: string;
 }
 
 export type SessionMoveResult =
-  | { status: "moved"; session: AgentSession }
+  | { status: "moved"; session: AgentSession; notice?: string }
   | { status: "needsApproval"; paths: string[] };
 
 /** What the cloud service does for a move; `CloudService` has it. */
@@ -87,19 +95,29 @@ export interface SessionMovesOptions {
 
 /**
  * What a session that moved to the cloud needs to come back: the folder it
- * had on this Mac and the permission mode it ran in there. Kept on this Mac,
- * so nothing the pod says decides either.
+ * had on this Mac, and the conversation files as they were sent, which the
+ * pod may only add to. Kept on this Mac, so nothing the pod says decides it.
  */
 interface MoveRecord {
   macWorkingDirectory: string;
-  permissionMode: ClaudePermissionMode;
+  transcript: SentTranscriptFile[];
 }
+
+/** Shown on the session after it comes back from the cloud. */
+export const MOVED_BACK_NOTICE =
+  "Back on this Mac in ask-before-acting mode, since the cloud wrote part of this conversation. Press Shift+Tab in the session to switch modes.";
 
 /** A transcript, its subagents and saved tool output. */
 const MAX_TRANSCRIPT_BYTES = 256 * 1024 * 1024;
-/** One repository's bundle. */
-const MAX_BUNDLE_BYTES = 2 * 1024 * 1024 * 1024;
+/** One repository's bundle, which the Mac holds in memory while it travels. */
+const MAX_BUNDLE_BYTES = 512 * 1024 * 1024;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const POD_PROJECTS = ".home/.claude/projects";
+/**
+ * A session the cloud wrote part of comes back asking before it acts: what
+ * the pod added to its conversation is not this Mac's (move-design.md).
+ */
+const MOVED_BACK_PERMISSION_MODE: ClaudePermissionMode = "default";
 const POD_SCRATCH = ".daedalus-move";
 const BUSY: readonly (AgentActivity | undefined)[] = [
   "working",
@@ -136,6 +154,13 @@ export class SessionMoves {
     return () => this.#listeners.delete(listener);
   }
 
+  /** Clears a finished move's notice from the session. */
+  dismiss(sessionId: string): void {
+    if (this.#moves.get(sessionId)?.phase !== "moved") return;
+    this.#moves.delete(sessionId);
+    this.#changed();
+  }
+
   /** Stops a move that is still waiting for the turn to end. */
   cancel(sessionId: string): void {
     const move = this.#moves.get(sessionId);
@@ -159,7 +184,7 @@ export class SessionMoves {
         "A session moves to cloud or local",
       );
     const existing = this.#moves.get(sessionId);
-    if (existing && existing.phase !== "failed")
+    if (existing && existing.phase !== "failed" && existing.phase !== "moved")
       throw new DaedalusError("CONFLICT", "This session is already moving");
     const state = {
       sessionId,
@@ -174,8 +199,16 @@ export class SessionMoves {
         to === "cloud"
           ? await this.#toCloud(sessionId, state)
           : await this.#toLocal(sessionId, state, input.approved ?? []);
-      this.#moves.delete(sessionId);
-      this.#changed();
+      if (result.status === "moved" && result.notice)
+        this.#update(state, {
+          phase: "moved",
+          detail: undefined,
+          notice: result.notice,
+        });
+      else {
+        this.#moves.delete(sessionId);
+        this.#changed();
+      }
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -286,18 +319,19 @@ export class SessionMoves {
       const permissionMode =
         lastPermissionMode(text) ?? this.#defaultPermissionMode();
       const podFolder = podWorkingDirectory(folder);
+      const podTranscript = withMain(
+        transcript,
+        rewriteTranscript(text, {
+          from: agent.workingDirectory,
+          to: podFolder,
+          strict: false,
+        }),
+      );
       await writeTranscript(
         pod,
         POD_PROJECTS,
         claudeProjectKey(podFolder),
-        withMain(
-          transcript,
-          rewriteTranscript(text, {
-            from: agent.workingDirectory,
-            to: podFolder,
-            strict: false,
-          }),
-        ),
+        podTranscript,
       );
 
       // Both copies now agree; the next move in either direction checks
@@ -308,7 +342,13 @@ export class SessionMoves {
       }
       await this.#saveRecord(sessionId, {
         macWorkingDirectory: agent.workingDirectory,
-        permissionMode,
+        transcript: transcript.files.map((file, index) =>
+          sentFile(
+            file.path,
+            file.contents,
+            podTranscript.files[index]!.contents,
+          ),
+        ),
       });
 
       this.#update(state, { phase: "starting", detail: undefined });
@@ -451,6 +491,18 @@ export class SessionMoves {
           sessionId,
           bundle,
         );
+        for (const commit of [fetched.head, fetched.index, fetched.work]) {
+          const collisions = await caseCollisions(
+            this.#local,
+            worktree.path,
+            commit,
+          );
+          if (collisions.length)
+            throw new DaedalusError(
+              "CONFLICT",
+              `The cloud copy of ${repositoryName(worktree)} has names that differ only in case, which this Mac cannot hold apart: ${collisions.slice(0, 5).join(", ")}`,
+            );
+        }
         for (const path of await this.#steering(
           this.#local,
           worktree.path,
@@ -474,28 +526,28 @@ export class SessionMoves {
         agent.providerSessionId!,
         MAX_TRANSCRIPT_BYTES,
       );
-      const rewritten = withMain(
-        transcript,
-        rewriteTranscript(
-          new TextDecoder().decode(transcript.files[0]!.contents),
-          {
+      const macProjects = agents.claudeProjectsDirectory(agent);
+      const macKey = claudeProjectKey(record.macWorkingDirectory);
+      const macCopies = new Map<string, Uint8Array | undefined>();
+      for (const sent of record.transcript)
+        macCopies.set(
+          sent.path,
+          await this.#local.readFile(
+            join(macProjects, macKey, ...sent.path.split("/")),
+          ),
+        );
+      const rewritten = appendedTranscript({
+        pod: transcript,
+        sent: record.transcript,
+        mac: (path) => macCopies.get(path),
+        rewrite: (text) =>
+          rewriteTranscript(text, {
             from: podFolder,
             to: record.macWorkingDirectory,
-            permissionMode: record.permissionMode,
+            permissionMode: MOVED_BACK_PERMISSION_MODE,
             strict: true,
-          },
-        ),
-      );
-      for (const file of rewritten.files.slice(1))
-        if (file.path.endsWith(".jsonl"))
-          file.contents = new TextEncoder().encode(
-            rewriteTranscript(new TextDecoder().decode(file.contents), {
-              from: podFolder,
-              to: record.macWorkingDirectory,
-              permissionMode: record.permissionMode,
-              strict: true,
-            }),
-          );
+          }),
+      });
 
       // Nothing on this Mac changed until here.
       for (const { worktree, dir, snapshot, last } of received) {
@@ -509,12 +561,7 @@ export class SessionMoves {
         await markLast(this.#local, worktree.path, sessionId, snapshot.work);
         await markLast(pod, dir, sessionId, snapshot.work);
       }
-      await writeTranscript(
-        this.#local,
-        agents.claudeProjectsDirectory(agent),
-        claudeProjectKey(record.macWorkingDirectory),
-        rewritten,
-      );
+      await writeTranscript(this.#local, macProjects, macKey, rewritten);
 
       this.#update(state, { phase: "starting", detail: undefined });
       const moved = await agents.resumeAfterMove(
@@ -523,10 +570,10 @@ export class SessionMoves {
           hostId: null,
           workingDirectory: record.macWorkingDirectory,
         },
-        record.permissionMode,
+        MOVED_BACK_PERMISSION_MODE,
       );
       await rm(this.#recordPath(sessionId), { force: true });
-      return { status: "moved", session: moved };
+      return { status: "moved", session: moved, notice: MOVED_BACK_NOTICE };
     } catch (error) {
       await this.#resumeWhereItWas(stopped, agent, error);
       throw error;
@@ -545,11 +592,18 @@ export class SessionMoves {
     last: string,
     now: RepositorySnapshot,
   ): Promise<string[]> {
+    // The commit too: what it holds is the branch's content on this Mac,
+    // which a reset or a stash puts back in the working tree.
     const paths = new Set([
+      ...(await changedPaths(side, dir, last, now.head)),
       ...(await changedPaths(side, dir, last, now.work)),
       ...(await changedPaths(side, dir, last, now.index)),
     ]);
-    return [...paths].filter(steersAgent);
+    const links = new Set<string>();
+    for (const commit of [now.head, now.index, now.work])
+      for (const path of await changedLinks(side, dir, last, commit))
+        links.add(`${path} (symbolic link)`);
+    return [...[...paths].filter(steersAgent), ...links];
   }
 
   #movable(agent: AgentSession): AgentSession {
@@ -564,6 +618,12 @@ export class SessionMoves {
       throw new DaedalusError(
         "CONFLICT",
         "This session has no conversation to carry",
+      );
+    // It names files on both sides.
+    if (!UUID.test(agent.providerSessionId))
+      throw new DaedalusError(
+        "CONFLICT",
+        "This session's conversation id is not one a move can carry",
       );
     return agent;
   }
@@ -650,12 +710,21 @@ export class SessionMoves {
       if (
         typeof value.macWorkingDirectory !== "string" ||
         !isAbsolute(value.macWorkingDirectory) ||
-        !isClaudePermissionMode(value.permissionMode)
+        !Array.isArray(value.transcript) ||
+        !value.transcript.every(
+          (file) =>
+            typeof file?.path === "string" &&
+            safeTranscriptPath(file.path) &&
+            Number.isSafeInteger(file.macLength) &&
+            Number.isSafeInteger(file.podLength) &&
+            typeof file.macSha256 === "string" &&
+            typeof file.podSha256 === "string",
+        )
       )
         return undefined;
       return {
         macWorkingDirectory: value.macWorkingDirectory,
-        permissionMode: value.permissionMode,
+        transcript: value.transcript,
       };
     } catch {
       return undefined;
