@@ -120,8 +120,10 @@ export interface ClaudeSync {
   marketplaces: Record<string, MarketplaceRecord>;
   mcpServers: Record<string, { type: string; url: string }>;
   mcpLeftOut: McpLeftOut[];
-  /** `hooks` from the user's settings, without any that name a Mac path. */
-  hooks?: Record<string, unknown>;
+  /**
+   * How many hooks the user's settings hold. None is copied: a hook's
+   * command or fields can hold a token, and it runs on its own.
+   */
   hooksLeftOut: number;
   outputStyle?: string;
 }
@@ -506,36 +508,21 @@ export function remoteMcpServers(stateText: string | undefined): {
   return { servers, leftOut };
 }
 
-/** A hook command that names a path that exists only on a Mac. */
-const MAC_PATH =
-  /(^|[\s"'=:;(])(~|\$HOME|\$\{HOME\}|\/Users\/|\/Applications\/|\/Library\/|\/opt\/homebrew\/|\/private\/|\/Volumes\/)/;
-
-/** The user's hooks without any whose command names a Mac path. */
-export function podHooks(settingsText: string | undefined): {
-  hooks?: Record<string, unknown>;
-  leftOut: number;
-} {
+/** How many hooks a settings file holds, for the log; none is copied. */
+export function countHooks(settingsText: string | undefined): number {
   const hooks = parseObject(settingsText).hooks;
-  if (!isObject(hooks)) return { leftOut: 0 };
-  let leftOut = 0;
-  const kept: Record<string, unknown> = {};
-  for (const [event, groups] of Object.entries(hooks)) {
-    if (!Array.isArray(groups)) continue;
-    const keptGroups = groups.flatMap((group: unknown) => {
-      if (!isObject(group) || !Array.isArray(group.hooks)) return [];
-      const keptHooks = group.hooks.filter((hook: unknown) => {
-        const ok =
-          isObject(hook) &&
-          (hook.type !== "command" ||
-            (typeof hook.command === "string" && !MAC_PATH.test(hook.command)));
-        if (!ok) leftOut += 1;
-        return ok;
-      });
-      return keptHooks.length ? [{ ...group, hooks: keptHooks }] : [];
-    });
-    if (keptGroups.length) kept[event] = keptGroups;
-  }
-  return { ...(Object.keys(kept).length ? { hooks: kept } : {}), leftOut };
+  if (!isObject(hooks)) return 0;
+  return Object.values(hooks)
+    .filter(Array.isArray)
+    .flat()
+    .reduce<number>(
+      (sum, group: unknown) =>
+        sum +
+        (isObject(group) && Array.isArray(group.hooks)
+          ? group.hooks.length
+          : 0),
+      0,
+    );
 }
 
 /**
@@ -600,7 +587,6 @@ export async function collectClaudeSync(
     )
       copiedPlugins[plugin.key] = plugin.install;
   const mcp = remoteMcpServers(input.stateText);
-  const hooks = podHooks(input.settingsText);
   return {
     // Items with nothing to copy stay too: they carry what they skipped.
     items: capped.kept,
@@ -609,8 +595,7 @@ export async function collectClaudeSync(
     marketplaces,
     mcpServers: mcp.servers,
     mcpLeftOut: mcp.leftOut,
-    ...(hooks.hooks ? { hooks: hooks.hooks } : {}),
-    hooksLeftOut: hooks.leftOut,
+    hooksLeftOut: countHooks(input.settingsText),
     ...podStyle(input, capped.kept),
   };
 }
@@ -661,8 +646,6 @@ export interface SyncManifest {
   plugins: string[];
   marketplaces: string[];
   mcpServers: string[];
-  /** Whether the Mac set the pod's `hooks`. */
-  hooks: boolean;
 }
 
 /** Paths a manifest from the pod may name; anything else is ignored. */
@@ -688,7 +671,6 @@ export function parseManifest(text: string | undefined): SyncManifest {
     plugins: names(raw.plugins),
     marketplaces: names(raw.marketplaces),
     mcpServers: names(raw.mcpServers),
-    hooks: raw.hooks === true,
   };
 }
 
@@ -731,7 +713,6 @@ export function planSync(sync: ClaudeSync, previous: SyncManifest): SyncPlan {
     plugins: Object.keys(sync.plugins).sort(),
     marketplaces: Object.keys(sync.marketplaces).sort(),
     mcpServers: Object.keys(sync.mcpServers).sort(),
-    hooks: Boolean(sync.hooks),
   };
   const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
   const changed =
@@ -796,7 +777,7 @@ function mergeOwned(pod: Json, mac: Json, previous: string[]): Json {
 
 /**
  * The pod's `~/.claude/settings.json` with the Mac's plugins turned on, its
- * output style and its hooks. Only those keys: never `env`, `permissions`,
+ * output style. Only those keys: never `hooks`, `env`, `permissions`,
  * `apiKeyHelper` or a status line. Undefined when nothing changes.
  */
 export function syncedSettings(
@@ -814,8 +795,6 @@ export function syncedSettings(
   if (Object.keys(enabled).length) next.enabledPlugins = enabled;
   else delete next.enabledPlugins;
   if (sync.outputStyle) next.outputStyle = sync.outputStyle;
-  if (sync.hooks) next.hooks = sync.hooks;
-  else if (previous.hooks) delete next.hooks;
   return JSON.stringify(next) === JSON.stringify(pod)
     ? undefined
     : `${JSON.stringify(next, null, 2)}\n`;

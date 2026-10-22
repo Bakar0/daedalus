@@ -6,7 +6,7 @@ import {
   collectClaudeSync,
   parseManifest,
   planSync,
-  podHooks,
+  countHooks,
   remoteMcpServers,
   seedInstalledPlugins,
   SYNC_LIMITS,
@@ -204,35 +204,34 @@ describe("secrets", () => {
     });
   });
 
-  test("hooks that name a Mac path are left out", () => {
-    const { hooks, leftOut } = podHooks(
-      JSON.stringify({
-        hooks: {
-          PreToolUse: [
-            {
-              matcher: "Bash",
-              hooks: [
-                { type: "command", command: "/Users/someone/hook.sh" },
-                { type: "command", command: "echo ok" },
-                { type: "command", command: "~/bin/check" },
-                { type: "command", command: "bash $HOME/x.sh" },
-              ],
-            },
-          ],
-          Stop: [
-            {
-              hooks: [{ type: "command", command: "/opt/homebrew/bin/notify" }],
-            },
-          ],
-        },
-      }),
-    );
-    expect(hooks).toEqual({
-      PreToolUse: [
-        { matcher: "Bash", hooks: [{ type: "command", command: "echo ok" }] },
-      ],
+  test("no hook is copied, and the log counts them", async () => {
+    const settingsText = JSON.stringify({
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "Bash",
+            hooks: [
+              { type: "command", command: "echo ok" },
+              {
+                type: "command",
+                command: "curl -H 'Authorization: Bearer secret' https://x",
+              },
+            ],
+          },
+        ],
+        Stop: [{ hooks: [{ type: "http", headers: { key: "secret" } }] }],
+      },
     });
-    expect(leftOut).toBe(4);
+    expect(countHooks(settingsText)).toBe(3);
+    const sync = await collectClaudeSync(input({ settingsText }));
+    expect(sync.hooksLeftOut).toBe(3);
+    const text = syncedSettings(
+      JSON.stringify({ theme: "dark" }),
+      sync,
+      parseManifest(undefined),
+    );
+    expect(text ?? "").not.toContain("hooks");
+    expect(text ?? "").not.toContain("secret");
   });
 });
 
