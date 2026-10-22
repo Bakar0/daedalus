@@ -189,3 +189,94 @@ export async function writeTranscript(
     );
   }
 }
+
+/**
+ * One transcript file as a move sent it: its bytes on this Mac, and what the
+ * pod was given (cwd fields rewritten). Kept on this Mac.
+ */
+export interface SentTranscriptFile {
+  path: string;
+  macLength: number;
+  macSha256: string;
+  podLength: number;
+  podSha256: string;
+}
+
+export const sha256 = (bytes: Uint8Array): string =>
+  new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+
+export const sentFile = (
+  path: string,
+  mac: Uint8Array,
+  pod: Uint8Array,
+): SentTranscriptFile => ({
+  path,
+  macLength: mac.length,
+  macSha256: sha256(mac),
+  podLength: pod.length,
+  podSha256: sha256(pod),
+});
+
+const concat = (a: Uint8Array, b: Uint8Array): Uint8Array => {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a);
+  out.set(b, a.length);
+  return out;
+};
+
+/**
+ * The conversation to resume on this Mac from what the pod sends back. The
+ * pod may only add: every file the Mac sent must start with exactly the
+ * bytes it was given, and this Mac's own copy, unchanged since, is kept with
+ * only the added part after it. Added JSON lines must parse (`rewrite` is
+ * strict) and come out of `rewrite`; a file the pod made is read the same way.
+ */
+export function appendedTranscript(input: {
+  pod: TranscriptFiles;
+  sent: SentTranscriptFile[];
+  /** This Mac's copy of a file the move sent, as it is now. */
+  mac: (path: string) => Uint8Array | undefined;
+  rewrite: (text: string) => string;
+}): TranscriptFiles {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const added = (path: string, bytes: Uint8Array): Uint8Array => {
+    if (!path.endsWith(".jsonl")) return bytes;
+    let text: string;
+    try {
+      text = decoder.decode(bytes);
+    } catch {
+      throw new DaedalusError(
+        "DEPENDENCY",
+        "The conversation from the cloud workspace is not a Claude transcript",
+      );
+    }
+    return new TextEncoder().encode(input.rewrite(text));
+  };
+  const files = input.pod.files.map((file) => {
+    const sent = input.sent.find((entry) => entry.path === file.path);
+    if (!sent)
+      return { path: file.path, contents: added(file.path, file.contents) };
+    if (
+      file.contents.length < sent.podLength ||
+      sha256(file.contents.subarray(0, sent.podLength)) !== sent.podSha256
+    )
+      throw new DaedalusError(
+        "CONFLICT",
+        "The conversation in the cloud workspace was changed, not only added to, so it does not come back to this Mac",
+      );
+    const mac = input.mac(file.path);
+    if (!mac || mac.length !== sent.macLength || sha256(mac) !== sent.macSha256)
+      throw new DaedalusError(
+        "CONFLICT",
+        "This Mac's copy of the conversation changed while the session was in the cloud",
+      );
+    return {
+      path: file.path,
+      contents: concat(
+        mac,
+        added(file.path, file.contents.subarray(sent.podLength)),
+      ),
+    };
+  });
+  return { files };
+}

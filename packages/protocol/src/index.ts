@@ -980,11 +980,20 @@ export interface CloudPreparingDto {
 export interface SessionMoveDto {
   sessionId: string;
   to: "cloud" | "local";
-  phase: "waiting" | "stopping" | "copying" | "starting" | "failed";
+  /**
+   * `moved`: done, with a `notice` the session view shows as a one-line
+   * banner until `agentMoveDismiss`. The card is not moving then.
+   */
+  phase: "waiting" | "stopping" | "copying" | "starting" | "failed" | "moved";
   /** Shown under the card: "Waiting for the turn to end", "Copying daedalus (12 MB)". */
   detail?: string;
   /** Set when `failed`; the entry stays 30 s so the card can show it. */
   message?: string;
+  /**
+   * Set when `moved` back to this Mac: it resumed in ask-before-acting mode,
+   * since the cloud wrote part of its conversation.
+   */
+  notice?: string;
 }
 
 /** A Pro key (an invite code), as an admin sees it. */
@@ -1241,11 +1250,13 @@ export interface DesktopRpcSchema {
        */
       agentMove: Request<
         { sessionId: string; to: "cloud" | "local"; approved?: string[] },
-        | { status: "moved"; session: AgentSessionDto }
+        | { status: "moved"; session: AgentSessionDto; notice?: string }
         | { status: "needsApproval"; paths: string[] }
       >;
       /** Only while the move waits for the session's turn to end. */
       agentMoveCancel: Request<{ sessionId: string }, null>;
+      /** Clears a `moved` entry's notice from the session view. */
+      agentMoveDismiss: Request<{ sessionId: string }, null>;
       cloudSignInDismiss: Request<
         { requestId?: string; sessionId?: string },
         null

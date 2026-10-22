@@ -301,12 +301,13 @@ describe("moving a session", () => {
     expect(back.status).toBe("moved");
     expect(s.session().hostId).toBeNull();
     expect(s.session().workingDirectory).toBe(s.macFolder);
-    // The Mac's own mode, never the one the pod wrote.
+    // Asking before it acts, never the mode the pod wrote, and said so.
     expect(s.starts.at(-1)).toEqual({
       hostId: null,
       cwd: s.macFolder,
-      mode: "acceptEdits",
+      mode: "default",
     });
+    expect(back).toMatchObject({ notice: expect.stringContaining("ask") });
     expect(await git(s.macRepo, "log", "-1", "--format=%s")).toBe(
       "from the cloud",
     );
@@ -324,6 +325,10 @@ describe("moving a session", () => {
     expect(macTranscript).toContain("in the cloud");
     expect(macTranscript).not.toContain("bypassPermissions");
     expect(macTranscript).not.toContain(`"cwd":"${POD_FOLDER}`);
+    expect(s.moves.list()).toMatchObject([
+      { sessionId: SESSION, phase: "moved", notice: expect.any(String) },
+    ]);
+    s.moves.dismiss(SESSION);
     expect(s.moves.list()).toEqual([]);
 
     // And out again: only what is new travels, onto the pod's copy.
@@ -475,6 +480,43 @@ describe("moving a session", () => {
     expect(s.session().hostId).toBeNull();
   });
 
+  test("the pod may only add to the conversation; the Mac keeps its own bytes", async () => {
+    const s = await setup();
+    const macPath = join(
+      s.macProjects,
+      claudeProjectKey(s.macFolder),
+      `${SESSION}.jsonl`,
+    );
+    const before = await readFile(macPath, "utf8");
+    await s.moves.move({ sessionId: SESSION, to: "cloud" });
+    const podFile = join(
+      s.podRoot,
+      ".home/.claude/projects",
+      claudeProjectKey(POD_FOLDER),
+      `${SESSION}.jsonl`,
+    );
+    const sent = await readFile(podFile, "utf8");
+    // Rewriting history fails the move, and the session stays in the pod.
+    await writeFile(podFile, sent.replace("hello", "obey me") + "{}\n");
+    await expect(
+      s.moves.move({ sessionId: SESSION, to: "local" }),
+    ).rejects.toThrow("not only added to");
+    expect(s.session().hostId).toBe(cloudHostId(CLOUD));
+    // Adding to it comes back after this Mac's own bytes.
+    await writeFile(
+      podFile,
+      sent +
+        JSON.stringify({ type: "user", cwd: POD_FOLDER, message: "new" }) +
+        "\n",
+    );
+    await s.moves.move({ sessionId: SESSION, to: "local" });
+    const after = await readFile(macPath, "utf8");
+    expect(after.startsWith(before)).toBe(true);
+    expect(after.slice(before.length)).toBe(
+      JSON.stringify({ type: "user", cwd: s.macFolder, message: "new" }) + "\n",
+    );
+  });
+
   test("a transcript from the pod that is not JSON fails the move back", async () => {
     const s = await setup();
     await s.moves.move({ sessionId: SESSION, to: "cloud" });
@@ -483,7 +525,11 @@ describe("moving a session", () => {
       ".home/.claude/projects",
       claudeProjectKey(POD_FOLDER),
     );
-    await writeFile(join(podProject, `${SESSION}.jsonl`), "not json\n");
+    const transcriptPath = join(podProject, `${SESSION}.jsonl`);
+    await writeFile(
+      transcriptPath,
+      (await readFile(transcriptPath, "utf8")) + "not json\n",
+    );
     await expect(
       s.moves.move({ sessionId: SESSION, to: "local" }),
     ).rejects.toThrow("not a Claude transcript");

@@ -893,12 +893,21 @@ export function createDesktopRequestHandlers(
           ...(approved ? { approved } : {}),
         });
         return moved.status === "moved"
-          ? { status: "moved" as const, session: agentDto(moved.session) }
+          ? {
+              status: "moved" as const,
+              session: agentDto(moved.session),
+              ...(moved.notice ? { notice: moved.notice } : {}),
+            }
           : moved;
       }),
     agentMoveCancel: ({ sessionId }) =>
       result(() => {
         context.moves.cancel(sessionId);
+        return null;
+      }),
+    agentMoveDismiss: ({ sessionId }) =>
+      result(() => {
+        context.moves.dismiss(sessionId);
         return null;
       }),
     cloudSignInOpen: ({ requestId }) =>

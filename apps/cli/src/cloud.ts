@@ -215,12 +215,14 @@ export async function cloudCommand(
       });
       return 1;
     }
-    const session = result.session;
-    printResult(session, json, () =>
+    const { session, notice } = result;
+    context.moves.dismiss(session.id);
+    printResult(session, json, () => {
       console.log(
         `Moved ${session.id} to ${to === "cloud" ? "the cloud" : "this Mac"}`,
-      ),
-    );
+      );
+      if (notice) console.log(notice);
+    });
     return 0;
   }
   if (action === "spawn") {
