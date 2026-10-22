@@ -167,8 +167,10 @@ await withBrowser({ port: 41768, page: "cloud-test.html" }, async (browser) => {
     "Cloud should offer Claude and Terminal",
   );
   expect(
-    !(await present(browser, ACCOUNT)),
-    "the account choice is offered for a cloud session",
+    (await present(browser, ACCOUNT)) &&
+      (await browser.has("session-cloud-account-note")) &&
+      (await browser.text("session-cloud-account-note")).length > 0,
+    "Cloud should offer the Claude account with its note",
   );
   expect(
     !(await present(browser, ABILITIES)),
@@ -189,8 +191,22 @@ await withBrowser({ port: 41768, page: "cloud-test.html" }, async (browser) => {
     "Local did not bring Codex back and drop Terminal",
   );
 
-  // Create a Claude session in the cloud.
+  // The note belongs to Cloud only.
+  await browser.click("session-location-local");
+  expect(
+    !(await browser.has("session-cloud-account-note")),
+    "the cloud account note shows under Local",
+  );
+
+  // Create a Claude session in the cloud, on the Work account.
   await browser.click("session-location-cloud");
+  await browser.evaluate(`(() => {
+    const select = document.querySelector('.modal ${ACCOUNT}');
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+    setter.call(select, 'work-1a2b');
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  await Bun.sleep(80);
   await submit(browser);
   const claude = (await browser.requests()).find((one) => "agentSpawn" in one)
     ?.agentSpawn as Record<string, unknown>;
@@ -201,7 +217,7 @@ await withBrowser({ port: 41768, page: "cloud-test.html" }, async (browser) => {
     `a cloud Claude session sent ${JSON.stringify(claude)}`,
   );
   expect(
-    !("account" in claude) && !("abilities" in claude),
+    claude.account === "work-1a2b" && !("abilities" in claude),
     `a cloud session sent a local-only option: ${JSON.stringify(claude)}`,
   );
   await browser.waitFor(

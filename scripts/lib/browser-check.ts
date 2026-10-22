@@ -93,7 +93,7 @@ export async function withBrowser(
       { stdout: "ignore", stderr: "ignore" },
     );
     let websocketUrl: string | undefined;
-    for (let attempt = 0; attempt < 100 && !websocketUrl; attempt += 1) {
+    for (let attempt = 0; attempt < 600 && !websocketUrl; attempt += 1) {
       try {
         const pages = (await (
           await fetch(`http://127.0.0.1:${debuggingPort}/json/list`)

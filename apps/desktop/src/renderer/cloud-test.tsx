@@ -116,6 +116,23 @@ const snapshot = {
     workspace("other-ws", "Other account", 4),
   ],
   tasks: [],
+  // A sign-in page the cloud Claude session asked to open. The URL never
+  // reaches the window, only its host. `signin=claude|aws`, `paste=1` for
+  // the paste-code form.
+  cloudSignIns: query.get("signin")
+    ? [
+        {
+          requestId: "req-1",
+          sessionId: "s-cloud",
+          host:
+            query.get("signin") === "aws"
+              ? "d-9a672d87aa.awsapps.com"
+              : "claude.com",
+          kind: query.get("signin") === "aws" ? "aws" : "claude",
+          expiresAt: now + 10 * 60_000,
+        },
+      ]
+    : [],
   agents: [
     session("s-local", "local-ws"),
     session("s-cloud", "cloud-ws", { hostId: "ws:c-run" }),
@@ -353,6 +370,28 @@ const client = {
         (item) => item.workspaceId !== params.workspace,
       );
       return ok(cloudState());
+    },
+    cloudSignInOpen: async ({ requestId }: { requestId: string }) => {
+      record("cloudSignInOpen", { requestId });
+      const offer = snapshot.cloudSignIns?.find(
+        (item) => item.requestId === requestId,
+      );
+      snapshot.cloudSignIns = (snapshot.cloudSignIns ?? []).filter(
+        (item) => item.requestId !== requestId,
+      );
+      announce();
+      return ok({
+        host: offer?.host ?? "",
+        paste: query.get("paste") === "1",
+      });
+    },
+    cloudSignInDismiss: async ({ requestId }: { requestId: string }) => {
+      record("cloudSignInDismiss", { requestId });
+      snapshot.cloudSignIns = (snapshot.cloudSignIns ?? []).filter(
+        (item) => item.requestId !== requestId,
+      );
+      announce();
+      return ok(null);
     },
     cloudSessionWake: async ({ sessionId }: { sessionId: string }) => {
       record("cloudSessionWake", { sessionId });
