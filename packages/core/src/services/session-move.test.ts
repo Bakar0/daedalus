@@ -366,6 +366,34 @@ describe("moving a session", () => {
     );
   });
 
+  test("a steering file under another case still asks, and a case collision is refused", async () => {
+    const s = await setup();
+    await s.moves.move({ sessionId: SESSION, to: "cloud" });
+    const podRepo = join(s.podRoot, "worktrees/unassigned/claude-1/app");
+    await mkdir(join(podRepo, ".CLAUDE"), { recursive: true });
+    await writeFile(join(podRepo, ".CLAUDE/settings.json"), '{"hooks":{}}');
+    expect(await s.moves.move({ sessionId: SESSION, to: "local" })).toEqual({
+      status: "needsApproval",
+      paths: ["app/.CLAUDE/settings.json"],
+    });
+    // Two names this Mac would write as one file.
+    await git(
+      podRepo,
+      "update-index",
+      "--add",
+      "--cacheinfo",
+      `100644,${await git(podRepo, "hash-object", "-w", "a.txt")},A.TXT`,
+    );
+    await expect(
+      s.moves.move({
+        sessionId: SESSION,
+        to: "local",
+        approved: ["app/.CLAUDE/settings.json"],
+      }),
+    ).rejects.toThrow("differ only in case");
+    expect(s.session().hostId).toBe(cloudHostId(CLOUD));
+  });
+
   test("a failed start resumes the session where it was, and the Mac copy is untouched", async () => {
     const s = await setup();
     await s.moves.move({ sessionId: SESSION, to: "cloud" });
@@ -470,6 +498,9 @@ describe("move rules", () => {
       ".githooks/post-checkout",
       ".vscode/tasks.json",
       ".devcontainer/devcontainer.json",
+      // The Kelvin sign folds to k, and a decomposed é to a composed one.
+      ".githoo\u212As/pre-commit",
+      "docs/AGENTS.md".normalize("NFD"),
     ])
       expect(steersAgent(path)).toBe(true);
     for (const path of ["src/claude.ts", "README.md", "claude/notes.md"])

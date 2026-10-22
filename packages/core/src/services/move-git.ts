@@ -341,26 +341,62 @@ export async function applySnapshot(
   }
 }
 
+/**
+ * A path as this Mac's file system compares names: APFS and HFS+ ignore case
+ * and Unicode normalization, so `.CLAUDE/x` lands in `.claude/x`. Folded
+ * wide (compatibility forms, upper then lower) so a variant asks rather
+ * than slips through.
+ */
+export const foldPath = (path: string): string =>
+  path.normalize("NFKC").toUpperCase().toLowerCase().normalize("NFKC");
+
+const STEERING_FOLDERS = [
+  ".claude",
+  ".husky",
+  ".githooks",
+  ".vscode",
+  ".devcontainer",
+];
+const STEERING_FILES = [
+  "claude.md",
+  "claude.local.md",
+  "agents.md",
+  ".mcp.json",
+  ".envrc",
+];
+
 /** Whether a repository path steers an agent or runs when it is opened. */
 export function steersAgent(path: string): boolean {
-  const parts = path.split("/");
+  const parts = foldPath(path).split("/");
   const name = parts.at(-1) ?? "";
-  const folders = parts.slice(0, -1);
   return (
-    folders.some((folder) =>
-      [".claude", ".husky", ".githooks", ".vscode", ".devcontainer"].includes(
-        folder,
-      ),
-    ) ||
-    [
-      "CLAUDE.md",
-      "CLAUDE.local.md",
-      "AGENTS.md",
-      ".mcp.json",
-      ".envrc",
-    ].includes(name) ||
-    [".claude", ".husky", ".githooks", ".vscode", ".devcontainer"].includes(
-      name,
-    )
+    parts.some((part) => STEERING_FOLDERS.includes(part)) ||
+    STEERING_FILES.includes(name)
   );
+}
+
+/**
+ * Paths in a commit's tree that this Mac would lay down as one file: two
+ * names that differ only in case or normalization. git cannot check such a
+ * tree out faithfully here, and the second one would overwrite the first.
+ */
+export async function caseCollisions(
+  side: MoveSide,
+  dir: string,
+  commit: string,
+): Promise<string[]> {
+  const names = (
+    await git(side, dir, ["ls-tree", "-r", "-z", "--name-only", commit])
+  )
+    .split("\0")
+    .filter(Boolean);
+  const seen = new Map<string, string>();
+  const collisions: string[] = [];
+  for (const name of names) {
+    const folded = foldPath(name);
+    const earlier = seen.get(folded);
+    if (earlier !== undefined && earlier !== name) collisions.push(name);
+    else seen.set(folded, name);
+  }
+  return collisions;
 }

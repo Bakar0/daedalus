@@ -9,6 +9,7 @@ import type { AgentService } from "./agents";
 import { cloudHostWorkspace } from "./cloud-launch";
 import {
   applySnapshot,
+  caseCollisions,
   changedPaths,
   fetchBundle,
   isRepository,
@@ -451,6 +452,18 @@ export class SessionMoves {
           sessionId,
           bundle,
         );
+        for (const commit of [fetched.head, fetched.index, fetched.work]) {
+          const collisions = await caseCollisions(
+            this.#local,
+            worktree.path,
+            commit,
+          );
+          if (collisions.length)
+            throw new DaedalusError(
+              "CONFLICT",
+              `The cloud copy of ${repositoryName(worktree)} has names that differ only in case, which this Mac cannot hold apart: ${collisions.slice(0, 5).join(", ")}`,
+            );
+        }
         for (const path of await this.#steering(
           this.#local,
           worktree.path,
