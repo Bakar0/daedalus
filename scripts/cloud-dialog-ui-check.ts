@@ -2,7 +2,7 @@
  * The new session dialog's Local/Cloud choice in a real browser, against
  * `cloud-test.tsx`. The choice shows only when the workspace has a cloud
  * workspace. Cloud hides what a pod cannot honour (Codex, accounts,
- * abilities, remembering a model) and offers Claude and a terminal. The
+ * abilities, remembering a model, a terminal) and offers Claude only. The
  * dialog must stay inside the window at two heights.
  *
  *   bun run test:cloud-dialog-ui
@@ -163,8 +163,8 @@ await withBrowser({ port: 41768, page: "cloud-test.html" }, async (browser) => {
   );
   expect(
     (await browser.has("session-tool-claude")) &&
-      (await browser.has("session-tool-terminal")),
-    "Cloud should offer Claude and Terminal",
+      !(await browser.has("session-tool-terminal")),
+    "Cloud should offer Claude only, with no Terminal",
   );
   expect(
     (await present(browser, ACCOUNT)) &&
@@ -183,7 +183,7 @@ await withBrowser({ port: 41768, page: "cloud-test.html" }, async (browser) => {
   await fits(browser, "cloud choice");
   await browser.screenshot("cloud-dialog-cloud");
 
-  // Back to Local: the terminal tool goes and Codex returns.
+  // Back to Local: Codex returns, and still no terminal tool.
   await browser.click("session-location-local");
   expect(
     (await browser.has("session-tool-codex")) &&
@@ -219,23 +219,6 @@ await withBrowser({ port: 41768, page: "cloud-test.html" }, async (browser) => {
   expect(
     claude.account === "work-1a2b" && !("abilities" in claude),
     `a cloud session sent a local-only option: ${JSON.stringify(claude)}`,
-  );
-  await browser.waitFor(
-    "!document.querySelector('.modal')",
-    "the dialog to close after Create",
-  );
-
-  // And a terminal in the cloud.
-  await openDialog(browser, "Cloud project");
-  await browser.click("session-location-cloud");
-  await browser.click("session-tool-terminal");
-  await submit(browser);
-  const terminal = (await browser.requests())
-    .filter((one) => "agentSpawn" in one)
-    .at(-1)?.agentSpawn as Record<string, unknown>;
-  expect(
-    terminal.cloud === true && terminal.terminal === true,
-    `a cloud terminal sent ${JSON.stringify(terminal)}`,
   );
   await browser.waitFor(
     "!document.querySelector('.modal')",

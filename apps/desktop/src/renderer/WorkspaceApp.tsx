@@ -7387,10 +7387,8 @@ export function WorkspaceApp({
                           onClick={() => {
                             const cloud = place.id === "cloud";
                             setSessionForm({ ...sessionForm, cloud });
-                            // Codex runs only here; a terminal tool only there.
+                            // Codex runs only on this Mac.
                             if (cloud && sessionType === "codex")
-                              setSessionType("claude");
-                            if (!cloud && sessionType === "terminal")
                               setSessionType("claude");
                             setSessionAccount("");
                             setRememberSessionModel(false);
@@ -7409,7 +7407,7 @@ export function WorkspaceApp({
               )}
               {/* Claude or Codex; a member's picker starts on its lead's.
                 Plain terminals open as tabs from the center's +. A cloud
-                session is Claude or a terminal in the pod. */}
+                session is Claude in the pod. */}
               <fieldset className="session-tool-picker">
                 <legend>Choose a tool</legend>
                 <div
@@ -7421,17 +7419,12 @@ export function WorkspaceApp({
                     [
                       { id: "claude", label: "Claude" },
                       { id: "codex", label: "Codex" },
-                      { id: "terminal", label: "Terminal" },
                     ] as const
                   )
-                    .filter((tool) =>
-                      sessionInCloud
-                        ? tool.id === "claude" ||
-                          (tool.id === "terminal" && !memberTeam)
-                        : tool.id !== "terminal",
-                    )
+                    // Codex does not run in a pod yet.
+                    .filter((tool) => !sessionInCloud || tool.id === "claude")
                     .map((tool) => {
-                      // The pod has its own Claude and shell.
+                      // The pod has its own Claude.
                       const available =
                         sessionInCloud ||
                         Boolean(
@@ -7465,9 +7458,7 @@ export function WorkspaceApp({
                               ? "Unavailable"
                               : sessionInCloud
                                 ? "In the pod"
-                                : tool.id === "terminal"
-                                  ? "Available"
-                                  : (toolAccountLabel(tool.id) ?? "Available")}
+                                : (toolAccountLabel(tool.id) ?? "Available")}
                           </small>
                         </button>
                       );
