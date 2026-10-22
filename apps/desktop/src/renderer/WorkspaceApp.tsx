@@ -56,7 +56,7 @@ import {
 import { LargeFileBar } from "./LargeFileBar";
 import {
   changeReachesBeyondSnapshot,
-  mergeSnapshotParts,
+  fetchSnapshot,
   PendingSnapshotParts,
 } from "./snapshot-parts";
 import type { DesktopClient } from "./client-types";
@@ -2438,25 +2438,17 @@ export function WorkspaceApp({
   // the newest snapshot.
   const pendingParts = useRef(new PendingSnapshotParts());
   const latestSnapshot = useRef(snapshot);
-  const fetchSnapshot = useCallback(async () => {
-    const parts = pendingParts.current.take();
-    const current = latestSnapshot.current;
-    if (parts === "full" || !current || !client.request.snapshotParts)
-      return client.request.snapshot({});
-    const response = await client.request.snapshotParts({ parts });
-    if (!response.ok) {
-      pendingParts.current.full();
-      return response;
-    }
-    return {
-      ok: true as const,
-      data: mergeSnapshotParts(
-        latestSnapshot.current ?? current,
-        response.data,
-      ),
-    };
-  }, [client]);
-  const snapshotQuery = useRpcQuery(fetchSnapshot, {
+  const fetchSnapshotParts = useCallback(
+    () =>
+      fetchSnapshot(pendingParts.current, () => latestSnapshot.current, {
+        snapshot: () => client.request.snapshot({}),
+        ...(client.request.snapshotParts
+          ? { snapshotParts: (params) => client.request.snapshotParts(params) }
+          : {}),
+      }),
+    [client],
+  );
+  const snapshotQuery = useRpcQuery(fetchSnapshotParts, {
     onDataChanged: (listener) =>
       client.subscribe((change) => {
         pendingParts.current.note(change);

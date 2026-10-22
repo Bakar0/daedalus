@@ -2,6 +2,7 @@ import type {
   DesktopSnapshotDto,
   DesktopSnapshotPart,
   DesktopSnapshotPartsDto,
+  RpcResult,
 } from "@daedalus/protocol";
 
 /** What a `dataChanged` message carries for the window. */
@@ -64,3 +65,43 @@ export const mergeSnapshotParts = (
   snapshot: DesktopSnapshotDto,
   parts: DesktopSnapshotPartsDto,
 ): DesktopSnapshotDto => ({ ...snapshot, ...parts });
+
+/**
+ * One snapshot request: the parts pending since the last one, merged into
+ * `current()`, or the whole snapshot when everything is pending or there is
+ * nothing yet to merge into. A request that fails or throws leaves the next
+ * one asking for everything, because the parts it took are no longer pending
+ * and a failed whole request may have been a mutation's own refresh.
+ */
+export async function fetchSnapshot(
+  pending: PendingSnapshotParts,
+  current: () => DesktopSnapshotDto | undefined,
+  request: {
+    snapshot: () => Promise<RpcResult<DesktopSnapshotDto>>;
+    snapshotParts?: (params: {
+      parts: DesktopSnapshotPart[];
+    }) => Promise<RpcResult<DesktopSnapshotPartsDto>>;
+  },
+): Promise<RpcResult<DesktopSnapshotDto>> {
+  const parts = pending.take();
+  const base = current();
+  try {
+    if (parts === "full" || !base || !request.snapshotParts) {
+      const response = await request.snapshot();
+      if (!response.ok) pending.full();
+      return response;
+    }
+    const response = await request.snapshotParts({ parts });
+    if (!response.ok) {
+      pending.full();
+      return response;
+    }
+    return {
+      ok: true,
+      data: mergeSnapshotParts(current() ?? base, response.data),
+    };
+  } catch (error) {
+    pending.full();
+    throw error;
+  }
+}
