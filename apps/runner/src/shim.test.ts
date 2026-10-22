@@ -1,18 +1,26 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ShimRequest } from "./shim-protocol";
 import { SocketWriter } from "@daedalus/remote-protocol";
 
 const shim = join(import.meta.dir, "shim.ts");
+const browser = join(import.meta.dir, "..", "daedal-browser");
 let dir: string;
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 async function runShim(
   args: string[],
   reply: (request: ShimRequest) => unknown,
-  stdin = "",
+  stdin: string | "open" = "",
+  command = (dir: string) => ["bun", shim, ...args],
 ) {
   dir = mkdtempSync(join(tmpdir(), "runner-shim-"));
   const path = join(dir, "shim.sock");
@@ -37,16 +45,17 @@ async function runShim(
       },
     },
   });
-  const child = Bun.spawn(["bun", shim, ...args], {
+  const child = Bun.spawn(command(dir), {
     env: {
-      PATH: process.env.PATH!,
+      PATH: `${join(dir, "bin")}:${process.env.PATH!}`,
       DAEDALUS_RUNNER_SOCKET: path,
       DAEDALUS_SESSION_ID: "sess-1",
       DAEDALUS_RUNNER_TOKEN: "tok",
       DAEDALUS_MAC_KEY: "key",
       SECRET_THING: "no",
     },
-    stdin: new Blob([stdin]),
+    // "open": a pipe nobody writes to or closes, as a tool may leave it.
+    stdin: stdin === "open" ? "pipe" : new Blob([stdin]),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -105,4 +114,32 @@ test("exits 75 when the runner socket is missing", async () => {
   });
   expect(await child.exited).toBe(75);
   expect(await new Response(child.stderr).text()).toContain("not reachable");
+});
+
+test("daedal-browser sends open-url with the URL, without waiting on stdin", async () => {
+  const url = "https://claude.com/cai/oauth/authorize?code=true&state=s";
+  const run = await runShim(
+    [],
+    () => ({ exitCode: 0, stdout: "", stderr: "" }),
+    "open",
+    (dir) => {
+      // The pod's `daedal`, as the image installs it.
+      mkdirSync(join(dir, "bin"));
+      writeFileSync(
+        join(dir, "bin", "daedal"),
+        `#!/bin/sh\nexec bun ${shim} "$@"\n`,
+      );
+      chmodSync(join(dir, "bin", "daedal"), 0o755);
+      return ["sh", browser, url];
+    },
+  );
+  expect(run.code).toBe(0);
+  expect(run.seen.argv).toEqual(["open-url", url]);
+  expect(run.seen.stdin).toBe("");
+  expect(run.seen.env.DAEDALUS_SESSION_ID).toBe("sess-1");
+});
+
+test("daedal-browser takes exactly one URL", async () => {
+  const child = Bun.spawn(["sh", browser, "a", "b"], { stderr: "pipe" });
+  expect(await child.exited).toBe(2);
 });

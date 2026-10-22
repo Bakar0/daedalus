@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, rmSync } from "node:fs";
 import { runCommand } from "@daedalus/platform";
 import { SocketWriter } from "@daedalus/remote-protocol";
 import { RunnerError } from "./errors";
@@ -12,6 +12,33 @@ import {
   type TerminalHeader,
 } from "./sessiond-protocol";
 import type { Terminal } from "./backend";
+
+/**
+ * Makes `path` a folder only this process can use, for `XDG_RUNTIME_DIR`,
+ * and returns it, or undefined when that is not possible.
+ *
+ * Claude Code refuses to put its cross-session messaging socket under a
+ * folder that anyone can write without the sticky bit, which the session's
+ * `/tmp` is (a disk `emptyDir`, mode 2777, owned by root). The shared runtime
+ * folder is a memory `emptyDir`, which is sticky, so a private folder inside
+ * it passes. Only sockets go there; the folder is small.
+ */
+export function privateRuntimeFolder(path: string): string | undefined {
+  try {
+    mkdirSync(path, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") return undefined;
+  }
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isDirectory() || stat.uid !== process.getuid?.())
+      return undefined;
+    chmodSync(path, 0o700);
+    return path;
+  } catch {
+    return undefined;
+  }
+}
 
 export interface SessionDaemonDeps {
   handlers: RunnerHandlers;

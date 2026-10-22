@@ -441,3 +441,61 @@ test("an unreadable token file means no connection attempt, and a retry later", 
   second.stop();
   expect(connects.length).toBe(before);
 });
+
+test("answers auth.callback itself, to 127.0.0.1, never through sessiond", async () => {
+  const seen: string[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: (request) => {
+      seen.push(new URL(request.url).search);
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://platform.claude.com/oauth/code/success" },
+      });
+    },
+  });
+  try {
+    macOnline(true);
+    const backendCalls: string[] = [];
+    const call = backend.call.bind(backend);
+    backend.call = (method, params) => {
+      backendCalls.push(method);
+      return call(method, params);
+    };
+    mac.sendSecure({
+      t: "req",
+      id: 21,
+      method: "auth.callback",
+      params: {
+        port: server.port,
+        path: "/callback",
+        query: "code=c1&state=s1",
+      },
+    });
+    mac.sendSecure({
+      t: "req",
+      id: 22,
+      method: "auth.callback",
+      params: { port: server.port, path: "/elsewhere", query: "code=c2" },
+    });
+    for (let i = 0; i < 100 && mac.received.length < 2; i++) await tick();
+    expect(seen).toEqual(["?code=c1&state=s1"]);
+    expect(mac.received).toContainEqual({
+      t: "res",
+      id: 21,
+      result: {
+        status: 302,
+        location: "https://platform.claude.com/oauth/code/success",
+      },
+    });
+    const refused = mac.received.find(
+      (message) => message.t === "err" && message.id === 22,
+    );
+    expect(refused).toMatchObject({ code: "VALIDATION" });
+    expect(JSON.stringify(refused)).not.toContain("c2");
+    expect(backendCalls).toEqual([]);
+  } finally {
+    server.stop(true);
+  }
+});
