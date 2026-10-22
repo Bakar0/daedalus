@@ -298,6 +298,39 @@ export function parseChangedFiles(
   return files;
 }
 
+const statusState = (
+  changedFiles: number,
+  ahead: number,
+  behind: number,
+): GitStatus["state"] =>
+  changedFiles
+    ? "modified"
+    : ahead && behind
+      ? "diverged"
+      : behind
+        ? "behind"
+        : ahead
+          ? "ahead"
+          : "clean";
+
+/** The `git status` half of `gitStatusAt`: how many paths it lists. */
+async function changedFilesAt(path: string): Promise<number | undefined> {
+  const git = findExecutable("git");
+  if (!git) return undefined;
+  const status = await runCommand(git, [
+    "--no-optional-locks",
+    "-C",
+    path,
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=normal",
+  ]);
+  return status.exitCode === 0
+    ? status.stdout.split("\0").filter(Boolean).length
+    : undefined;
+}
+
 // Shared by the read-only checkout under `repos/` and by session worktrees.
 // Both answer the same two questions — what is uncommitted here, and how far
 // has this tree moved from the branch it started on — so both are compared
@@ -374,17 +407,8 @@ async function gitStatusAt(
     if (local.exitCode === 0)
       unpushed = Number.parseInt(local.stdout.trim(), 10) || 0;
   }
-  const state = changedFiles
-    ? ("modified" as const)
-    : ahead && behind
-      ? ("diverged" as const)
-      : behind
-        ? ("behind" as const)
-        : ahead
-          ? ("ahead" as const)
-          : ("clean" as const);
   return {
-    state,
+    state: statusState(changedFiles, ahead, behind),
     changedFiles,
     ahead,
     behind,
@@ -468,6 +492,12 @@ export interface GitMeasure {
   /** The tree's state against `refs/remotes/origin/<baseBranch>`. */
   status(path: string | null, baseBranch: string | null): Promise<GitStatus>;
   /**
+   * Only the count of paths `git status` lists: one process where `status`
+   * takes up to four. Enough when the git metadata has not moved, since then
+   * the distance from the base branch has not either.
+   */
+  changedFiles(path: string): Promise<number | undefined>;
+  /**
    * What `git status` reports, as VS Code's Source Control lists it: the
    * working tree and the index against HEAD, plus untracked files. Committed
    * work is not here; it is in the worktree's commits.
@@ -508,6 +538,7 @@ async function gitChangesAt(path: string): Promise<TreeChanges> {
 /** The real thing: git on this machine. */
 export const gitMeasure: GitMeasure = {
   status: gitStatusAt,
+  changedFiles: changedFilesAt,
   changes: gitChangesAt,
 };
 
@@ -864,21 +895,41 @@ export class GitStatusMonitor {
           target.path,
           target.baseBranch,
         );
+        const maxAge =
+          target.worktree && this.sessionIsLive(target.worktree.sessionId)
+            ? LIVE_TREE_MAX_AGE_MS
+            : IDLE_TREE_MAX_AGE_MS;
         const due =
           force ||
           !previous ||
-          (await this.treeIsDue(
-            record,
-            key,
-            fingerprint,
-            target.worktree && this.sessionIsLive(target.worktree.sessionId)
-              ? LIVE_TREE_MAX_AGE_MS
-              : IDLE_TREE_MAX_AGE_MS,
-          ));
+          (await this.treeIsDue(record, key, fingerprint, maxAge));
         const git = findExecutable("git");
         let status = previous;
         let current = record?.branch ?? null;
-        if (due) {
+        // Due only because the watcher saw a file change: HEAD, the index and
+        // the refs are as they were, so the branch and the distance from the
+        // base are too, and only the count of changed paths can have moved.
+        // While an agent writes files this is most passes, and it is one git
+        // process instead of three to five. The record keeps its time, so the
+        // full measurement still comes round at the maximum age.
+        const filesOnly =
+          due &&
+          !force &&
+          previous &&
+          record &&
+          fingerprint !== undefined &&
+          record.fingerprint === fingerprint &&
+          Date.now() - record.at < maxAge
+            ? await this.measure.changedFiles(target.path)
+            : undefined;
+        if (filesOnly !== undefined && previous && record) {
+          status = {
+            ...previous,
+            state: statusState(filesOnly, previous.ahead, previous.behind),
+            changedFiles: filesOnly,
+          };
+          this.measuredTrees.set(key, { ...record, generation });
+        } else if (due) {
           status = await this.measure.status(target.path, target.baseBranch);
           current =
             target.worktree && git

@@ -67,11 +67,15 @@ describe("GitStatusMonitor", () => {
         // service has finished; this test measures through a service of its
         // own, whose git calls it counts.
         await content.settleGitStatus();
-        const counts = { status: 0, changes: 0 };
+        const counts = { status: 0, changedFiles: 0, changes: 0 };
         const counting: GitMeasure = {
           status: (path, baseBranch) => {
             counts.status += 1;
             return gitMeasure.status(path, baseBranch);
+          },
+          changedFiles: (path) => {
+            counts.changedFiles += 1;
+            return gitMeasure.changedFiles(path);
           },
           changes: (path) => {
             counts.changes += 1;
@@ -116,6 +120,7 @@ describe("GitStatusMonitor", () => {
           await run();
           return {
             status: counts.status - before.status,
+            changedFiles: counts.changedFiles - before.changedFiles,
             changes: counts.changes - before.changes,
           };
         };
@@ -132,10 +137,14 @@ describe("GitStatusMonitor", () => {
 
         // Nothing moved: an ordinary pass and a changes listing run no git.
         await counted.worktreeChanges(workspace.id);
-        expect(await measured(ordinaryPass)).toEqual({ status: 0, changes: 0 });
+        expect(await measured(ordinaryPass)).toEqual({
+          status: 0,
+          changedFiles: 0,
+          changes: 0,
+        });
         expect(
           await measured(() => counted.worktreeChanges(workspace.id)),
-        ).toEqual({ status: 0, changes: 0 });
+        ).toEqual({ status: 0, changedFiles: 0, changes: 0 });
 
         // A commit moves HEAD, which the cheap check sees on its own.
         await runCommand("git", [
@@ -154,21 +163,32 @@ describe("GitStatusMonitor", () => {
         // Both are trees of one shared clone, whose refs live in a single
         // reftable; a commit rewrites it, and which branch moved is not
         // knowable without git. Commits come minutes apart, so this is cheap.
-        expect(await measured(ordinaryPass)).toEqual({ status: 2, changes: 0 });
+        expect(await measured(ordinaryPass)).toEqual({
+          status: 2,
+          changedFiles: 0,
+          changes: 0,
+        });
         expect(await status()).toMatchObject({ state: "ahead", ahead: 1 });
 
         // An edit moves no git metadata; the watcher's report is what says
-        // the tree changed, and its pass follows without being asked.
+        // the tree changed, and its pass follows without being asked. Only
+        // the changed paths are counted again: the branch and the distance
+        // from the base cannot have moved.
         await Bun.write(join(worktree.path, "SCRATCH.md"), "# Scratch\n");
-        counted.noteFilesChanged(
-          workspace.id,
-          [{ path: `${relativeRoot}/SCRATCH.md` }],
-          false,
-        );
-        expect(await statusBecomes(1)).toMatchObject({
-          state: "modified",
-          changedFiles: 1,
-        });
+        expect(
+          await measured(async () => {
+            counted.noteFilesChanged(
+              workspace.id,
+              [{ path: `${relativeRoot}/SCRATCH.md` }],
+              false,
+            );
+            expect(await statusBecomes(1)).toMatchObject({
+              state: "modified",
+              changedFiles: 1,
+              ahead: 1,
+            });
+          }),
+        ).toEqual({ status: 0, changedFiles: 1, changes: 0 });
         expect(
           (await counted.worktreeChanges(workspace.id))[0]?.files.map(
             (file) => file.repositoryPath,
@@ -179,7 +199,7 @@ describe("GitStatusMonitor", () => {
         counted.noteFilesChanged(workspace.id, [{ path: "BRIEF.md" }], false);
         expect(
           await measured(() => counted.worktreeChanges(workspace.id)),
-        ).toEqual({ status: 0, changes: 0 });
+        ).toEqual({ status: 0, changedFiles: 0, changes: 0 });
 
         // Fetch is the user saying something changed: everything is measured
         // again, whatever the cheap checks say.
