@@ -419,6 +419,38 @@ async function gitStatusAt(
 
 /** How often one branch is asked about. `gh` is a network round trip. */
 const PULL_REQUEST_REFRESH_MS = 60_000;
+/**
+ * How often a branch is asked about again when it had no open pull request
+ * and its git metadata has not moved since. A pull request is opened after a
+ * push, and a push moves the refs, which asks again within the minute; what
+ * this slows is the asking about branches where nothing happens. A real
+ * machine was seen making about 45 `gh` calls a minute, each one a GitHub
+ * API request against the user's rate limit.
+ */
+const QUIET_PULL_REQUEST_REFRESH_MS = 5 * 60_000;
+
+/** Whether a branch's pull request is worth asking `gh` about again. */
+export function pullRequestDue(
+  cached:
+    | {
+        checkedAt: number;
+        value?: Pick<PullRequestRef, "state">;
+        fingerprint?: string;
+      }
+    | undefined,
+  fingerprint: string | undefined,
+  now = Date.now(),
+): boolean {
+  if (!cached) return true;
+  const age = now - cached.checkedAt;
+  return (
+    age >= PULL_REQUEST_REFRESH_MS &&
+    (cached.value?.state === "OPEN" ||
+      fingerprint === undefined ||
+      cached.fingerprint !== fingerprint ||
+      age >= QUIET_PULL_REQUEST_REFRESH_MS)
+  );
+}
 
 /**
  * Reads `gh pr view --json number,url,state,isDraft,title,mergedAt`. Anything
@@ -567,6 +599,8 @@ export class GitStatusMonitor {
        * while HEAD stays put there is nothing more to ask `gh`.
        */
       landedHead?: string;
+      /** The tree's git metadata fingerprint when `gh` was asked. */
+      fingerprint?: string;
     }
   >();
   private statusRefresh?: Promise<void>;
@@ -838,9 +872,11 @@ export class GitStatusMonitor {
     );
   }
 
-  private pullRequestDue(key: string): boolean {
-    const cached = this.pullRequestCache.get(key);
-    return !cached || Date.now() - cached.checkedAt >= PULL_REQUEST_REFRESH_MS;
+  private pullRequestDue(
+    key: string,
+    fingerprint: string | undefined,
+  ): boolean {
+    return pullRequestDue(this.pullRequestCache.get(key), fingerprint);
   }
 
   private async refreshGitStatuses(
@@ -965,7 +1001,7 @@ export class GitStatusMonitor {
         if (
           git &&
           current &&
-          this.pullRequestDue(key) &&
+          this.pullRequestDue(key, fingerprint) &&
           ((target.wantsPullRequest &&
             (status.ahead > 0 || this.pullRequestCache.get(key)?.value)) ||
             this.pullRequestCache.get(key)?.value?.state === "OPEN" ||
@@ -980,6 +1016,7 @@ export class GitStatusMonitor {
               target.baseBranch,
             )) ?? current,
             target.worktree,
+            fingerprint,
           ))
         )
           changed = true;
@@ -1019,7 +1056,8 @@ export class GitStatusMonitor {
 
   /**
    * Asks `gh` whether this branch has a pull request, at most once a minute
-   * per worktree. Returns whether the answer changed.
+   * per worktree, and see `QUIET_PULL_REQUEST_REFRESH_MS` for a branch where
+   * nothing moves. Returns whether the answer changed.
    *
    * Every failure is silence: `gh` missing, signed out, offline, or a branch
    * that was never pushed all leave the card without a link, which is the
@@ -1030,6 +1068,7 @@ export class GitStatusMonitor {
     path: string,
     branchName: string,
     worktree?: SessionWorktree,
+    fingerprint?: string,
   ): Promise<boolean> {
     const cached = this.pullRequestCache.get(key);
     const git = findExecutable("git");
@@ -1040,13 +1079,14 @@ export class GitStatusMonitor {
       // Still the merged HEAD: nothing to ask, and nothing to ask again for
       // another minute.
       cached.checkedAt = Date.now();
+      cached.fingerprint = fingerprint;
       return false;
     }
     if (cached && Date.now() - cached.checkedAt < PULL_REQUEST_REFRESH_MS)
       return false;
     const gh = findExecutable("gh", GH_EXECUTABLE_FALLBACKS);
     if (!gh || !(await pathExists(path))) {
-      this.pullRequestCache.set(key, { checkedAt: Date.now() });
+      this.pullRequestCache.set(key, { checkedAt: Date.now(), fingerprint });
       return cached?.value !== undefined || cached?.landedHead !== undefined;
     }
     const response = await runCommand(
@@ -1067,6 +1107,7 @@ export class GitStatusMonitor {
       (await pullRequestAnswerHoldsHead(git!, path, response!.stdout));
     this.pullRequestCache.set(key, {
       checkedAt: Date.now(),
+      fingerprint,
       ...(value ? { value } : {}),
       ...(landed ? { landedHead: head } : {}),
     });

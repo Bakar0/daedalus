@@ -4,7 +4,11 @@ import { describe, expect, test } from "vitest";
 import { runCommand } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { createApplicationContext } from "../index";
-import { gitMeasure, type GitMeasure } from "./git-status-monitor";
+import {
+  gitMeasure,
+  pullRequestDue,
+  type GitMeasure,
+} from "./git-status-monitor";
 import { WorkspaceContentService } from "./workspace-content";
 import {
   contextWithStubbedAgent,
@@ -598,5 +602,34 @@ describe("GitStatusMonitor", () => {
       expect((await stat(resolvedIndex)).mtimeMs).toBe(before);
       context.close();
     });
+  });
+});
+
+describe("pullRequestDue", () => {
+  const minute = 60_000;
+  test("asks about a branch never asked about", () => {
+    expect(pullRequestDue(undefined, "a")).toBe(true);
+  });
+  test("follows an open pull request every minute", () => {
+    const cached = {
+      checkedAt: 0,
+      value: { state: "OPEN" as const },
+      fingerprint: "a",
+    };
+    expect(pullRequestDue(cached, "a", minute - 1)).toBe(false);
+    expect(pullRequestDue(cached, "a", minute)).toBe(true);
+  });
+  test("asks less often about a branch where nothing moves", () => {
+    const cached = { checkedAt: 0, fingerprint: "a" };
+    expect(pullRequestDue(cached, "a", minute)).toBe(false);
+    expect(pullRequestDue(cached, "a", 5 * minute)).toBe(true);
+    const closed = { ...cached, value: { state: "CLOSED" as const } };
+    expect(pullRequestDue(closed, "a", 2 * minute)).toBe(false);
+  });
+  test("asks again within the minute once the refs move, as after a push", () => {
+    const cached = { checkedAt: 0, fingerprint: "a" };
+    expect(pullRequestDue(cached, "b", minute - 1)).toBe(false);
+    expect(pullRequestDue(cached, "b", minute)).toBe(true);
+    expect(pullRequestDue(cached, undefined, minute)).toBe(true);
   });
 });
