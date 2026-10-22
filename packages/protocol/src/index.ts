@@ -563,6 +563,8 @@ export interface DesktopSettingsDto {
   /** The global rebirth threshold, 10 to 100, or null for off. */
   autoRebirthPercent: number | null;
   focusMode: boolean;
+  /** "Get beta updates": the updater also reads the beta feed. */
+  betaUpdatesEnabled: boolean;
   providers: ProviderAvailabilityDto[];
   /** Every account, default ones first. Sign-in state is `accountStatus`. */
   accounts: AccountDto[];
@@ -1371,6 +1373,8 @@ export interface DesktopRpcSchema {
         { percent: number | null }
       >;
       focusModeSet: Request<{ enabled: boolean }, { enabled: boolean }>;
+      /** "Get beta updates". Turning it on checks for an update at once. */
+      betaUpdatesSet: Request<{ enabled: boolean }, { enabled: boolean }>;
       /**
        * The skill system. Global, so none of these takes a workspace: a skill
        * is installed once and applies to every session on the machine.

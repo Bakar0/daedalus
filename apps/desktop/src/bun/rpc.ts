@@ -267,6 +267,7 @@ export async function desktopSnapshot(
       trustSessionFoldersEnabled: config.trustSessionFoldersEnabled,
       autoRebirthPercent: config.autoRebirthPercent,
       focusMode: config.focusMode,
+      betaUpdatesEnabled: config.betaUpdatesEnabled,
       ...view.capabilities,
       accounts: accounts.map((item) => ({ ...item })),
     },
@@ -891,6 +892,16 @@ export function createDesktopRequestHandlers(
       mutate(async () => ({
         enabled: await context.presence.setFocusMode(enabled),
       })),
+    betaUpdatesSet: ({ enabled }) =>
+      mutate(async () => {
+        await context.appUpdates.setBetaUpdates(enabled);
+        // The switch sits beside the update row in About, so the check
+        // answers there: a beta already out shows up now rather than at the
+        // next six-hourly check. Off needs no check, since it can only
+        // narrow what is offered.
+        if (enabled) void updates.check();
+        return { enabled };
+      }),
     // Reading is a plain result. Everything that writes goes through `mutate`,
     // because a skill toggle changes what every future session sees and the
     // rest of the app should redraw around it.

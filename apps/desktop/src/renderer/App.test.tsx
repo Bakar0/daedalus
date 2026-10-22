@@ -74,6 +74,7 @@ const base: DesktopSnapshotDto = {
     trustSessionFoldersEnabled: true,
     autoRebirthPercent: null,
     focusMode: false,
+    betaUpdatesEnabled: false,
     accounts: [],
     providers: [
       { name: "codex", executable: "codex", available: false },

@@ -23,6 +23,7 @@ const settings: DesktopSettingsDto = {
   trustSessionFoldersEnabled: true,
   autoRebirthPercent: null,
   focusMode: false,
+  betaUpdatesEnabled: false,
   accounts: [
     {
       provider: "claude",
@@ -225,8 +226,16 @@ describe("SettingsModal updates", () => {
   });
 
   test("dev builds have no update row", () => {
-    expect(renderAbout(null, { channel: "dev" })).not.toContain(
-      "Check for updates",
+    const markup = renderAbout(null, { channel: "dev" });
+    expect(markup).not.toContain("Check for updates");
+    expect(markup).not.toContain("Get beta updates");
+  });
+
+  test("About has the beta updates switch, off by default", () => {
+    const markup = renderAbout(null);
+    expect(markup).toContain("Get beta updates");
+    expect(markup).toMatch(
+      /<input(?![^>]*checked)[^>]*class="switch"[^>]*>\s*<span><strong>Get beta updates/,
     );
   });
 });

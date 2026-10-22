@@ -97,6 +97,7 @@ Usage:
   daedal notify "<message>" [--level info|success|error] [--desktop] [--json]
   daedal ui state [--json]
   daedal focus <agent-id> | --task <task-id> [--json]
+  daedal update beta [on|off] [--json]
 
 Run 'daedal <command> --help' for command details.`;
 
@@ -265,6 +266,16 @@ session is blocked and the alert has to persist.`,
 
 Raises the Daedalus window and selects that session. This is what a clicked
 notification runs, and it works whether or not the app is already open.`,
+  update: `Update command:
+  daedal update beta [on|off] [--json]
+
+"Get beta updates", the same switch as Settings > About. Without on or off it
+prints the current setting. On, the app reads the beta feed beside the stable
+one and offers whichever of the newest beta and the newest stable release is
+higher. Off, it reads only the stable feed, and a beta already installed stays
+until a stable release passes it; nothing is downgraded. The app picks the
+change up at its next check, or at once from Settings > About > Check for
+updates.`,
   shutdown: `Shutdown command:
   daedal shutdown [--dry-run] [--keep-terminals] [--force] [--json]
 
@@ -1675,6 +1686,38 @@ async function focusCommand(
   return 0;
 }
 
+async function updateCommand(
+  context: ApplicationContext,
+  args: string[],
+  json: boolean,
+): Promise<number> {
+  const action = args.shift();
+  if (!action || action === "help") {
+    console.log(commandHelp.update);
+    return 0;
+  }
+  if (action !== "beta")
+    throw new DaedalusError("VALIDATION", `Unknown update command '${action}'`);
+  const parsed = parseArguments(args, []);
+  const usage = "daedal update beta [on|off] [--json]";
+  if (parsed.positionals.length > 1)
+    throw new DaedalusError("VALIDATION", `Usage: ${usage}`);
+  const value = parsed.positionals[0];
+  if (value !== undefined && value !== "on" && value !== "off")
+    throw new DaedalusError(
+      "VALIDATION",
+      `Expected on or off, got '${value}'. Usage: ${usage}`,
+    );
+  const enabled =
+    value === undefined
+      ? await context.appUpdates.betaUpdates()
+      : await context.appUpdates.setBetaUpdates(value === "on");
+  printResult({ betaUpdates: enabled }, json, () =>
+    console.log(`beta updates ${enabled ? "on" : "off"}`),
+  );
+  return 0;
+}
+
 async function uiCommand(
   context: ApplicationContext,
   args: string[],
@@ -2369,6 +2412,7 @@ export async function runCli(
       "notify",
       "ui",
       "focus",
+      "update",
       "shutdown",
       "session",
       "routine",
@@ -2398,6 +2442,8 @@ export async function runCli(
     if (args[0] === "ui") return await uiCommand(context, args.slice(1), json);
     if (args[0] === "focus")
       return await focusCommand(context, args.slice(1), json);
+    if (args[0] === "update")
+      return await updateCommand(context, args.slice(1), json);
     if (args[0] === "shutdown")
       return await shutdownCommand(context, args.slice(1), json);
     if (args[0] === "session")

@@ -62,7 +62,11 @@ bundled CLI export that tmux as `DAEDALUS_TMUX`; resolve tmux with
 without the bundled tmux; a dev build warns and falls back to `PATH`.
 
 Releases, the update feed, signing and the Homebrew cask are in
-`docs/releasing.md`. Pushing a `v<version>` tag is what publishes.
+`docs/releasing.md`. Pushing a `v<version>` tag is what publishes. A
+`v<version>-beta.N` tag publishes a prerelease to the rolling `beta` release
+instead, which only apps with "Get beta updates" on read; it never touches
+`releases/latest` or the cask. Versions compare by semver precedence
+(`isNewerVersion` in `packages/core/src/versions.ts`).
 
 ## Electrobun
 

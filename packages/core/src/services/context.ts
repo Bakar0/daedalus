@@ -30,6 +30,7 @@ import { SkillService } from "./skills";
 import { AgentService } from "./agents";
 import { IntegratedTerminalService } from "./integrated-terminals";
 import { NotificationService } from "./notifications";
+import { AppUpdateService } from "./app-updates";
 import { PresenceService } from "./presence";
 import { ShutdownService } from "./shutdown";
 import { TaskHistoryService } from "./task-history";
@@ -66,6 +67,7 @@ export interface ApplicationContext {
   terminals: IntegratedTerminalService;
   telemetry: TelemetryService;
   presence: PresenceService;
+  appUpdates: AppUpdateService;
   notifications: NotificationService;
   activity: ActivityService;
   skills: SkillService;
@@ -327,6 +329,7 @@ export async function createApplicationContext(
     terminals,
     telemetry,
     presence,
+    appUpdates: new AppUpdateService(config),
     notifications,
     activity,
     skills: new SkillService(config),

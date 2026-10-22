@@ -2,7 +2,6 @@ import { describe, expect, test } from "vitest";
 import type { AppUpdateDto } from "@daedalus/protocol";
 import {
   FIRST_UPDATE_CHECK_DELAY_MS,
-  isNewerVersion,
   UPDATE_CHECK_INTERVAL_MS,
   UpdateController,
   type AppUpdater,
@@ -17,6 +16,11 @@ function harness(
     checkError?: string;
     downloadReady?: boolean;
     dismissed?: string;
+    /** "Get beta updates"; the beta feed's answer is `beta`. */
+    betaUpdates?: boolean;
+    beta?: { latest?: string; updateAvailable?: boolean; checkError?: string };
+    /** Each check waits on this, so a test can hold one open. */
+    checkGate?: () => Promise<void>;
   } = {},
 ) {
   const published: Array<AppUpdateDto | null> = [];
@@ -28,16 +32,26 @@ function harness(
       version: options.current ?? "0.8.0",
       channel: options.channel ?? "stable",
     }),
-    check: async () => {
-      calls.push("check");
+    check: async (feed) => {
+      calls.push(`check:${feed}`);
+      await options.checkGate?.();
+      calls.push(`checked:${feed}`);
+      const answer =
+        feed === "beta"
+          ? (options.beta ?? {})
+          : {
+              latest: options.latest ?? "0.9.0",
+              updateAvailable: options.updateAvailable,
+              checkError: options.checkError,
+            };
       return {
-        version: options.latest ?? "0.9.0",
-        updateAvailable: options.updateAvailable ?? true,
-        ...(options.checkError ? { error: options.checkError } : {}),
+        version: answer.latest ?? "",
+        updateAvailable: answer.updateAvailable ?? true,
+        ...(answer.checkError ? { error: answer.checkError } : {}),
       };
     },
-    download: async () => {
-      calls.push("download");
+    download: async (feed) => {
+      calls.push(`download:${feed}`);
       return { ready: options.downloadReady ?? true };
     },
     apply: async () => {
@@ -46,6 +60,7 @@ function harness(
   };
   const controller = new UpdateController({
     updater,
+    feeds: async () => (options.betaUpdates ? ["stable", "beta"] : ["stable"]),
     readDismissed: async () => dismissed,
     writeDismissed: async (version) => {
       dismissed = version;
@@ -65,22 +80,6 @@ function harness(
     dismissed: () => dismissed,
   };
 }
-
-describe("isNewerVersion", () => {
-  test("compares each part as a number", () => {
-    expect(isNewerVersion("0.10.0", "0.9.9")).toBe(true);
-    expect(isNewerVersion("1.0.0", "0.99.99")).toBe(true);
-    expect(isNewerVersion("v0.8.1", "0.8.0")).toBe(true);
-    expect(isNewerVersion("0.8.0", "0.8.0")).toBe(false);
-    expect(isNewerVersion("0.7.9", "0.8.0")).toBe(false);
-  });
-
-  test("never treats an unparsable version as newer", () => {
-    expect(isNewerVersion("", "0.8.0")).toBe(false);
-    expect(isNewerVersion("0.9.0-beta.1", "0.8.0")).toBe(false);
-    expect(isNewerVersion("0.9.0", "unknown")).toBe(false);
-  });
-});
 
 describe("UpdateController", () => {
   test("offers a newer release", async () => {
@@ -157,7 +156,13 @@ describe("UpdateController", () => {
     const { controller, published, calls } = harness();
     await controller.check();
     await controller.install();
-    expect(calls).toEqual(["check", "download", "beforeRestart", "apply"]);
+    expect(calls).toEqual([
+      "check:stable",
+      "checked:stable",
+      "download:stable",
+      "beforeRestart",
+      "apply",
+    ]);
     expect(published.map((update) => update?.state)).toContain("downloading");
     expect(published.map((update) => update?.state)).toContain("restarting");
   });
@@ -190,7 +195,7 @@ describe("UpdateController", () => {
     const { controller, calls } = harness({ latest: "0.8.0" });
     await controller.check();
     await controller.install();
-    expect(calls).toEqual(["check"]);
+    expect(calls).toEqual(["check:stable", "checked:stable"]);
   });
 
   test("dev builds never check", async () => {
@@ -211,5 +216,150 @@ describe("UpdateController", () => {
       { ms: FIRST_UPDATE_CHECK_DELAY_MS, repeating: false },
       { ms: UPDATE_CHECK_INTERVAL_MS, repeating: true },
     ]);
+  });
+});
+
+describe("UpdateController with beta updates", () => {
+  test("off, the beta feed is never read", async () => {
+    const { controller, published, calls } = harness({
+      beta: { latest: "0.10.0-beta.1" },
+    });
+    await controller.check();
+    expect(calls).toEqual(["check:stable", "checked:stable"]);
+    expect(published.at(-1)).toMatchObject({ version: "0.9.0" });
+  });
+
+  test("on, a beta newer than stable is offered and downloaded from the beta feed", async () => {
+    const { controller, published, calls } = harness({
+      betaUpdates: true,
+      beta: { latest: "0.10.0-beta.1" },
+    });
+    await controller.check();
+    expect(published.at(-1)).toEqual({
+      state: "available",
+      currentVersion: "0.8.0",
+      version: "0.10.0-beta.1",
+    });
+    await controller.install();
+    expect(calls).toEqual([
+      "check:stable",
+      "checked:stable",
+      "check:beta",
+      "checked:beta",
+      "download:beta",
+      "beforeRestart",
+      "apply",
+    ]);
+  });
+
+  test("on, a stable release past the beta wins", async () => {
+    const { controller, published, calls } = harness({
+      betaUpdates: true,
+      current: "0.10.0-beta.2",
+      latest: "0.10.0",
+      beta: { latest: "0.10.0-beta.2" },
+    });
+    await controller.check();
+    expect(published.at(-1)).toMatchObject({ version: "0.10.0" });
+    await controller.install();
+    expect(calls).toContain("download:stable");
+  });
+
+  test("a newer beta replaces an older one", async () => {
+    const { controller, published } = harness({
+      betaUpdates: true,
+      current: "0.10.0-beta.1",
+      latest: "0.9.0",
+      beta: { latest: "0.10.0-beta.2" },
+    });
+    await controller.check();
+    expect(published.at(-1)).toMatchObject({ version: "0.10.0-beta.2" });
+  });
+
+  test("turning beta off never offers the older stable release", async () => {
+    const { controller, published } = harness({
+      current: "0.10.0-beta.2",
+      latest: "0.9.0",
+    });
+    await controller.check({ manual: true });
+    expect(published.at(-1)).toEqual({
+      state: "current",
+      currentVersion: "0.10.0-beta.2",
+    });
+  });
+
+  test("a missing beta feed leaves the stable answer standing", async () => {
+    const { controller, published } = harness({
+      betaUpdates: true,
+      beta: { checkError: "HTTP 404" },
+    });
+    await controller.check({ manual: true });
+    expect(published.at(-1)).toMatchObject({
+      state: "available",
+      version: "0.9.0",
+    });
+  });
+
+  test("an unreachable stable feed still lets a beta through", async () => {
+    const { controller, published } = harness({
+      betaUpdates: true,
+      checkError: "HTTP 500",
+      beta: { latest: "0.10.0-beta.1" },
+    });
+    await controller.check();
+    expect(published.at(-1)).toMatchObject({ version: "0.10.0-beta.1" });
+  });
+
+  test("an install clicked during a check waits for it and takes its offer", async () => {
+    const gates: Array<() => void> = [];
+    let hold = false;
+    const { controller, calls } = harness({
+      betaUpdates: true,
+      beta: { latest: "0.10.0-beta.1" },
+      checkGate: () =>
+        hold
+          ? new Promise<void>((resolve) => gates.push(resolve))
+          : Promise.resolve(),
+    });
+    const until = async (condition: () => boolean) => {
+      while (!condition())
+        await new Promise((resolve) => setTimeout(resolve, 0));
+    };
+    await controller.check();
+    calls.length = 0;
+    hold = true;
+    const checking = controller.check();
+    const installing = controller.install();
+    await until(() => gates.length === 1);
+    // The check is still reading stable; nothing has been downloaded.
+    expect(calls).toEqual(["check:stable"]);
+    gates[0]!();
+    await until(() => gates.length === 2);
+    expect(calls).not.toContain("download:beta");
+    gates[1]!();
+    await checking;
+    await installing;
+    expect(calls).toEqual([
+      "check:stable",
+      "checked:stable",
+      "check:beta",
+      "checked:beta",
+      "download:beta",
+      "beforeRestart",
+      "apply",
+    ]);
+  });
+
+  test("a manual check reports the first failure when no feed answers", async () => {
+    const { controller, published } = harness({
+      betaUpdates: true,
+      checkError: "offline",
+      beta: { checkError: "offline too" },
+    });
+    await controller.check({ manual: true });
+    expect(published.at(-1)).toMatchObject({
+      state: "error",
+      message: "Could not check for updates: offline",
+    });
   });
 });

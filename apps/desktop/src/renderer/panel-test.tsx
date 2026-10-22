@@ -243,6 +243,7 @@ const snapshot: DesktopSnapshotDto = {
     trustSessionFoldersEnabled: true,
     autoRebirthPercent: null,
     focusMode: false,
+    betaUpdatesEnabled: false,
     accounts: [],
     providers: [],
   },
