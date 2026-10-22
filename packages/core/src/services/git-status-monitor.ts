@@ -1552,11 +1552,18 @@ export class GitStatusMonitor {
    * `get` deliberately does not wait for git, so anything that needs the
    * measured answer rather than the last known one — a test, a caller about to
    * act on it — asks for it here.
+   *
+   * With a workspace, the answer is measured after the call. A pass already
+   * running may have read a tree before the caller's last change, such as
+   * between an agent's `git add` and its `git commit`, so that pass is waited
+   * out and one more forced pass runs after it.
    */
   /** `null` measures every workspace, which is what the board reads. */
   async settle(workspaceId?: string | null): Promise<void> {
-    if (!this.statusRefresh && workspaceId !== undefined)
+    if (workspaceId !== undefined) {
+      while (this.statusRefresh) await this.statusRefresh;
       this.scheduleRefresh(workspaceId, true);
+    }
     while (this.statusRefresh) await this.statusRefresh;
     await this.ignored.settle();
   }
