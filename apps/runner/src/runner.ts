@@ -16,6 +16,7 @@ import {
   type SecureChannel,
   type Welcome,
 } from "@daedalus/remote-protocol";
+import { authCallback } from "./auth-callback";
 import type { SessionBackend, Terminal } from "./backend";
 import { RunnerError } from "./errors";
 import { IdleTracker } from "./idle";
@@ -63,6 +64,8 @@ export interface RunnerOptions {
   idleMinutes: number;
   /** Defaults to the global `fetch`. */
   fetch?: typeof fetch;
+  /** For `auth.callback`, to `127.0.0.1` in this pod. Defaults to the global `fetch`. */
+  authFetch?: typeof fetch;
   now?: () => number;
   log?: (message: string) => void;
   backoff?: { initialMs: number; maxMs: number };
@@ -321,6 +324,24 @@ export class Runner {
   }
 
   async #serve(id: number, method: string, params: unknown): Promise<void> {
+    if (method === "auth.callback") {
+      try {
+        const result = await authCallback(params, this.#o.authFetch);
+        this.#send({ t: "res", id, result });
+      } catch (error) {
+        const failure =
+          error instanceof RunnerError
+            ? error
+            : new RunnerError("FAILED", "The sign-in callback failed");
+        this.#send({
+          t: "err",
+          id,
+          code: failure.code,
+          message: failure.message,
+        });
+      }
+      return;
+    }
     if (!MAC_FACING_METHODS.has(method)) {
       this.#send({ t: "err", id, code: "UNKNOWN_METHOD", message: method });
       return;
