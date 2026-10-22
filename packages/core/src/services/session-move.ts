@@ -558,7 +558,10 @@ export class SessionMoves {
     last: string,
     now: RepositorySnapshot,
   ): Promise<string[]> {
+    // The commit too: what it holds is the branch's content on this Mac,
+    // which a reset or a stash puts back in the working tree.
     const paths = new Set([
+      ...(await changedPaths(side, dir, last, now.head)),
       ...(await changedPaths(side, dir, last, now.work)),
       ...(await changedPaths(side, dir, last, now.index)),
     ]);

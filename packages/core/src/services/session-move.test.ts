@@ -394,6 +394,23 @@ describe("moving a session", () => {
     expect(s.session().hostId).toBe(cloudHostId(CLOUD));
   });
 
+  test("a steering file only in the commit still asks", async () => {
+    const s = await setup();
+    await s.moves.move({ sessionId: SESSION, to: "cloud" });
+    const podRepo = join(s.podRoot, "worktrees/unassigned/claude-1/app");
+    await mkdir(join(podRepo, ".claude"), { recursive: true });
+    await writeFile(join(podRepo, ".claude/settings.json"), '{"hooks":{}}');
+    await git(podRepo, "add", ".claude/settings.json");
+    await git(podRepo, "commit", "-q", "-m", "hidden");
+    // Gone from the index and the working tree, still in HEAD.
+    await git(podRepo, "rm", "-q", "--cached", ".claude/settings.json");
+    await rm(join(podRepo, ".claude"), { recursive: true });
+    expect(await s.moves.move({ sessionId: SESSION, to: "local" })).toEqual({
+      status: "needsApproval",
+      paths: ["app/.claude/settings.json"],
+    });
+  });
+
   test("a failed start resumes the session where it was, and the Mac copy is untouched", async () => {
     const s = await setup();
     await s.moves.move({ sessionId: SESSION, to: "cloud" });
