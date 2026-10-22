@@ -37,13 +37,13 @@ import packageJson from "../../../package.json";
 
 const VERSION = packageJson.version;
 const MINIMUM_TMUX = "3.7c";
-const VERIFIED_BUN = "1.4.2";
+const VERIFIED_BUN = "1.4.3";
 /**
  * The bun inside Daedalus.app, which the bundled CLI runs on: the one
- * Electrobun 1.18.1 ships. It is pinned by Electrobun, not by this repository
+ * Electrobun 2.0.4 ships. It is pinned by Electrobun, not by this repository
  * (see electrobun.config.ts), so it is a verified runtime too.
  */
-const BUNDLED_BUN = "1.3.13";
+const BUNDLED_BUN = "1.4.0";
 const VERIFIED_BUN_RUNTIMES = [VERIFIED_BUN, BUNDLED_BUN];
 
 /**

@@ -222,7 +222,7 @@ The app that gets raised follows the home's channel: a `~/.daedalus-dev` home
 raises `dev.daedalus.app.dev`, never the stable app. They are separate
 applications and macOS keys activation off the identifier.
 
-Electrobun 1.18.1 exposes `setDockIconVisible` but no dock _badge_, so the
+Electrobun 2.0.4 exposes `setDockIconVisible` but no dock _badge_, so the
 attention count has nowhere native to go; the host logs `attention_count_changed`
 and the in-app workspace roll-up is what the user reads.
 

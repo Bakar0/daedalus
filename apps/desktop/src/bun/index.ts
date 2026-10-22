@@ -319,7 +319,7 @@ let firstTick = true;
 let dockBadgeCount = 0;
 
 /**
- * Electrobun 1.18.1 exposes `setDockIconVisible` but no dock *badge*, so there
+ * Electrobun 2.0.4 exposes `setDockIconVisible` but no dock *badge*, so there
  * is no API to call and the count has nowhere native to go. It is logged when
  * it changes so the signal exists, and the in-app workspace roll-up is what
  * the user actually reads. Revisit if Electrobun grows a badge surface.
