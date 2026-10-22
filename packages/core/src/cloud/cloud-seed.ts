@@ -13,7 +13,11 @@ export const CLOUD_SEED_PATHS = {
   claudeState: ".home/.claude.json",
   claudeSettings: ".home/.claude/settings.json",
   awsConfig: ".home/.aws/config",
+  claudeConsent: ".home/.claude/remote-settings-consent.json",
 } as const;
+
+/** Where Claude keeps the user's approval of the organization's settings. */
+export const CLAUDE_CONSENT_FILE = "remote-settings-consent.json";
 
 /** The workspace root as the pod's Claude records it in `.claude.json`. */
 const POD_WORKSPACE = "/workspace";
@@ -235,4 +239,53 @@ export function mergeAwsConfig(
     )
     .join("\n");
   return text === podText ? undefined : text;
+}
+
+interface ConsentRecord {
+  accountUuid: string;
+  dangerousSettingsHash: string;
+  updatedAt: number;
+}
+
+/** The well-formed records of a consent file, and nothing else from it. */
+function consentRecords(
+  text: string | undefined,
+): Record<string, ConsentRecord> {
+  const records = parseObject(text).records;
+  if (!isObject(records)) return {};
+  const kept: Record<string, ConsentRecord> = {};
+  for (const [key, value] of Object.entries(records))
+    if (
+      isObject(value) &&
+      typeof value.accountUuid === "string" &&
+      typeof value.dangerousSettingsHash === "string" &&
+      typeof value.updatedAt === "number"
+    )
+      kept[key] = {
+        accountUuid: value.accountUuid,
+        dangerousSettingsHash: value.dangerousSettingsHash,
+        updatedAt: value.updatedAt,
+      };
+  return kept;
+}
+
+/**
+ * The pod's record of approved organization settings, with this Mac's
+ * approvals added. Claude asks again before it applies managed settings
+ * (hooks, environment) it has no approval for; an approval names the
+ * account and a hash of exactly the settings approved, so it carries no
+ * secret and covers nothing new. Undefined when nothing changes.
+ */
+export function seedClaudeConsent(
+  podText: string | undefined,
+  macText: string | undefined,
+): string | undefined {
+  const mac = consentRecords(macText);
+  if (!Object.keys(mac).length) return undefined;
+  const pod = parseObject(podText);
+  const records = { ...consentRecords(podText), ...mac };
+  const next = { ...pod, version: pod.version ?? 1, records };
+  return JSON.stringify(next) === JSON.stringify(pod)
+    ? undefined
+    : render(next);
 }

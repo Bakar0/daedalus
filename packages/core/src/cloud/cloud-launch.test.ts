@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { TmuxClient } from "@daedalus/platform";
 import type { RunnerLaunch } from "@daedalus/remote-protocol";
@@ -150,6 +151,33 @@ describe("cloud launch seeding", () => {
       // A second launch finds it all there and writes nothing.
       await context.agents.spawn({ workspace: workspace.id, host: hostId });
       expect(pod.writes).toBe(1);
+      context.close();
+    });
+  });
+
+  test("this Mac's approval of the organization's settings goes to the pod", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, workspace, pod, hostId } = await setUp(home);
+      const consent = {
+        version: 1,
+        records: {
+          "org-1": {
+            accountUuid: "acc-1",
+            dangerousSettingsHash: "f".repeat(64),
+            updatedAt: 5,
+          },
+        },
+      };
+      await Bun.write(
+        join(context.config.claudeHome, "remote-settings-consent.json"),
+        JSON.stringify(consent),
+      );
+      await context.agents.spawn({ workspace: workspace.id, host: hostId });
+      expect(
+        JSON.parse(
+          pod.files.get(".home/.claude/remote-settings-consent.json")!,
+        ),
+      ).toEqual(consent);
       context.close();
     });
   });

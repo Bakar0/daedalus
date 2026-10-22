@@ -35,11 +35,17 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { readKeychainPassword } from "@daedalus/platform";
 import type { AccountProfile } from "../config";
-import { accountDirectory, accountProfile } from "../services/account-homes";
+import {
+  accountConfig,
+  accountDirectory,
+  accountProfile,
+} from "../services/account-homes";
 import { API_KEY_SERVICE } from "../services/accounts";
 import {
   awsSsoCopy,
+  CLAUDE_CONSENT_FILE,
   CLOUD_SEED_PATHS,
+  seedClaudeConsent,
   mergeAwsConfig,
   seedClaudeSettings,
   seedClaudeState,
@@ -483,11 +489,12 @@ export class CloudService {
         secrets: {},
       };
     }
-    await seed({}).catch((error: unknown) =>
-      this.options.log?.("cloud_seed_failed", {
-        hostId: session.hostId,
-        message: error instanceof Error ? error.message : String(error),
-      }),
+    await seed({ consent: await this.#claudeConsent(session.account) }).catch(
+      (error: unknown) =>
+        this.options.log?.("cloud_seed_failed", {
+          hostId: session.hostId,
+          message: error instanceof Error ? error.message : String(error),
+        }),
     );
     if (profile?.kind === "api-key") {
       const key = await this.#apiKey(profile);
@@ -502,6 +509,22 @@ export class CloudService {
     // would take its place.
     if (profile) return { secrets: {} };
     return {};
+  }
+
+  /**
+   * The approvals this Mac's Claude recorded for the account's organization
+   * settings, from the account's own Claude folder.
+   */
+  async #claudeConsent(account: string | null): Promise<string | undefined> {
+    const file = Bun.file(
+      join(
+        accountConfig(this.options.config, "claude", account).claudeHome,
+        CLAUDE_CONSENT_FILE,
+      ),
+    );
+    return (await file.exists())
+      ? file.text().catch(() => undefined)
+      : undefined;
   }
 
   /** This Mac's AWS config, where the AWS CLI reads it. */
@@ -524,7 +547,12 @@ export class CloudService {
 
   private async seed(
     host: RemoteSessionHost,
-    options: { bedrockProfile?: string; awsSections?: AwsSsoCopy["sections"] },
+    options: {
+      bedrockProfile?: string;
+      awsSections?: AwsSsoCopy["sections"];
+      /** This Mac's approvals of the organization's managed settings. */
+      consent?: string;
+    },
   ): Promise<void> {
     const files: { path: string; text: string }[] = [];
     const put = (path: string, text: string | undefined) => {
@@ -541,6 +569,14 @@ export class CloudService {
         options,
       ),
     );
+    if (options.consent)
+      put(
+        CLOUD_SEED_PATHS.claudeConsent,
+        seedClaudeConsent(
+          await host.readText(CLOUD_SEED_PATHS.claudeConsent),
+          options.consent,
+        ),
+      );
     if (options.awsSections)
       put(
         CLOUD_SEED_PATHS.awsConfig,

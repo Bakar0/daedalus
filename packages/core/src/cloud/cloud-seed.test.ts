@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   awsSsoCopy,
   mergeAwsConfig,
+  seedClaudeConsent,
   seedClaudeSettings,
   seedClaudeState,
 } from "./cloud-seed";
@@ -149,5 +150,36 @@ describe("mergeAwsConfig", () => {
     expect(
       mergeAwsConfig(merged, awsSsoCopy(AWS_CONFIG, "playground").sections),
     ).toBeUndefined();
+  });
+});
+
+describe("seedClaudeConsent", () => {
+  const record = {
+    accountUuid: "acc-1",
+    dangerousSettingsHash: "a".repeat(64),
+    updatedAt: 1,
+  };
+  test("adds this Mac's approvals to the pod's, keeping only their known fields", () => {
+    const mac = JSON.stringify({
+      version: 1,
+      records: { "org-1": { ...record, extra: "dropped" }, bad: { x: 1 } },
+    });
+    const pod = JSON.stringify({
+      version: 1,
+      records: { "org-2": { ...record, accountUuid: "acc-2" } },
+    });
+    expect(JSON.parse(seedClaudeConsent(pod, mac)!)).toEqual({
+      version: 1,
+      records: {
+        "org-2": { ...record, accountUuid: "acc-2" },
+        "org-1": record,
+      },
+    });
+    expect(seedClaudeConsent(seedClaudeConsent(pod, mac), mac)).toBeUndefined();
+  });
+
+  test("nothing to copy writes nothing", () => {
+    expect(seedClaudeConsent(undefined, undefined)).toBeUndefined();
+    expect(seedClaudeConsent(undefined, "not json")).toBeUndefined();
   });
 });
