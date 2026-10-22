@@ -1,9 +1,16 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FakeBackend } from "./fake-backend";
-import { SessionDaemon } from "./sessiond";
+import { privateRuntimeFolder, SessionDaemon } from "./sessiond";
 import { SessiondClient } from "./sessiond-client";
 import type { Terminal } from "./backend";
 
@@ -247,4 +254,19 @@ test("a terminal header that is too long or false is refused", async () => {
     client.openTerminal("s", { cols: 80, rows: 24 }, () => {}),
   ).rejects.toBeDefined();
   server.stop(true);
+});
+
+test("privateRuntimeFolder makes a 0700 folder and refuses what it cannot own", () => {
+  const made = join(dir, "runtime");
+  expect(privateRuntimeFolder(made)).toBe(made);
+  expect(statSync(made).mode & 0o777).toBe(0o700);
+  // A second start keeps it, and tightens a loosened mode.
+  mkdirSync(join(dir, "loose"), { mode: 0o777 });
+  expect(privateRuntimeFolder(join(dir, "loose"))).toBe(join(dir, "loose"));
+  expect(statSync(join(dir, "loose")).mode & 0o777).toBe(0o700);
+  writeFileSync(join(dir, "file"), "");
+  expect(privateRuntimeFolder(join(dir, "file"))).toBeUndefined();
+  symlinkSync(made, join(dir, "link"));
+  expect(privateRuntimeFolder(join(dir, "link"))).toBeUndefined();
+  expect(privateRuntimeFolder(join(dir, "missing", "deeper"))).toBeUndefined();
 });

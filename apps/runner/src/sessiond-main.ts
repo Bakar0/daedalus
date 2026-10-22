@@ -7,7 +7,7 @@ import {
 } from "@daedalus/platform";
 import { RUNNER_PATHS } from "@daedalus/remote-protocol";
 import { createHandlers } from "./handlers";
-import { deadPanes, SessionDaemon } from "./sessiond";
+import { deadPanes, privateRuntimeFolder, SessionDaemon } from "./sessiond";
 
 // The entry point of the session container (uid 1001). It reads no token and
 // no runner state: neither is mounted here.
@@ -16,6 +16,11 @@ const TMUX_SOCKET = "daedalus";
 
 const home = join(RUNNER_PATHS.workspace, ".home");
 mkdirSync(home, { recursive: true });
+const runtime = privateRuntimeFolder(join(RUNNER_PATHS.runtime, "session"));
+if (!runtime)
+  console.log(
+    "[sessiond] no private runtime folder; Claude messaging stays off",
+  );
 const tmuxPath = findTmuxExecutable() ?? "tmux";
 const tmux = new CommandTmuxClient(
   TMUX_SOCKET,
@@ -34,6 +39,7 @@ const daemon = new SessionDaemon({
       HOME: home,
       TMPDIR: "/tmp",
       LANG: "C.UTF-8",
+      ...(runtime ? { XDG_RUNTIME_DIR: runtime } : {}),
     },
   }),
   deadPanes: () => deadPanes(tmuxPath, TMUX_SOCKET),

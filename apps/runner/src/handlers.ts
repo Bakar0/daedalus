@@ -31,6 +31,7 @@ const RUNNER_OWNED_VARIABLES = new Set([
   "USER",
   "LOGNAME",
   "SHELL",
+  "XDG_RUNTIME_DIR",
 ]);
 
 /** What `sessiond` serves: every Mac method but those the runner answers. */
