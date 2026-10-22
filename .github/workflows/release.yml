@@ -290,8 +290,8 @@ jobs:
           TAG: ${{ steps.pick.outputs.tag }}
         run: |
           mkdir -p feed
-          gh release download "$TAG" --dir feed \
-            --pattern '*.dmg' --pattern '*.tar.zst' --pattern '*.patch' --pattern '*-update.json'
+          # Apple silicon only: Intel builds stopped at 0.31.0.
+          gh release download "$TAG" --dir feed --pattern 'stable-macos-arm64-*'
           if ! gh release view beta >/dev/null 2>&1; then
             gh release create beta \
               --title "Daedalus beta feed" \

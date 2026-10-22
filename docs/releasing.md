@@ -30,7 +30,7 @@ The workflow builds and checks the app as for a stable release, then:
 
 - publishes a GitHub release `v0.32.0-beta.1` marked as a prerelease and never as latest, so `releases/latest`, the stable feed and the README badge stay on the last stable release;
 - skips the Homebrew cask, which `scripts/homebrew-cask.ts` refuses for a prerelease version anyway;
-- runs the `beta-feed` job, which copies the DMGs, tarballs, patches and `update.json` files of the highest beta published to the rolling `beta` release, creating that release the first time.
+- runs the `beta-feed` job, which copies the Apple silicon DMG, tarball, patch and `update.json` of the highest beta published to the rolling `beta` release, creating that release the first time.
 
 The next beta of the same version is `-beta.2`. Versions compare by semver precedence, so `0.31.0 < 0.32.0-beta.1 < 0.32.0-beta.2 < 0.32.0-beta.10 < 0.32.0`.
 
