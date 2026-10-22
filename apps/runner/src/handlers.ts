@@ -33,8 +33,9 @@ const RUNNER_OWNED_VARIABLES = new Set([
   "SHELL",
 ]);
 
+/** What `sessiond` serves: every Mac method but those the runner answers. */
 export type RunnerHandlers = {
-  [M in keyof RunnerMethods]: (
+  [M in Exclude<keyof RunnerMethods, "auth.callback">]: (
     params: RunnerMethods[M]["params"],
   ) => Promise<RunnerMethods[M]["result"]>;
 };

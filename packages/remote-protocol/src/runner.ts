@@ -79,12 +79,41 @@ export interface RunnerMethods {
     /** null when the file does not exist. Files over 8 MiB are refused. */
     result: { base64: string } | null;
   };
+  /**
+   * Carries a sign-in page's redirect back into the pod
+   * (artifacts/cloud-sessions/auth-spike.md). A tool in the pod, such as
+   * Claude's `/login`, listens on `127.0.0.1:<port>` and hands its sign-in
+   * URL to `daedal open-url`. The Mac opens that URL on the user's click,
+   * listens on the same port itself, and sends the browser's one request
+   * here: once per URL it opened, with `port` and `path` taken from that
+   * URL's `redirect_uri` and its `state` checked.
+   *
+   * The runner itself answers, not `sessiond`: it fetches
+   * `http://127.0.0.1:<port><path>?<query>` with redirects off and a 10 s
+   * timeout, and returns only the status and `Location`, which the Mac
+   * treats as untrusted. `path` is one of `AUTH_CALLBACK_PATHS`. `query`
+   * holds the authorization code, so neither side logs it, queues it or
+   * passes it on.
+   */
+  "auth.callback": {
+    params: { port: number; path: string; query: string };
+    result: { status: number; location?: string };
+  };
 }
+
+/** The redirect paths `auth.callback` serves: Claude's, then the AWS CLI's. */
+export const AUTH_CALLBACK_PATHS = ["/callback", "/oauth/callback"] as const;
 
 /**
  * `daedal` run inside a pod. The pod's `daedal` is a shim that sends this to
  * the Mac, which runs the command against its own database with `cwd` mapped
  * onto its copy of the workspace, and replies with a `CommandResult`.
+ *
+ * `daedal open-url <url>` is one such call, and the pod's `BROWSER`
+ * (`RUNNER_PATHS.browser`) runs it. The Mac does not run it as a command:
+ * it checks the URL (https, an allowlisted host and path), offers the user
+ * an "Open sign-in page" button, and replies at once, exit code 0 when
+ * offered and 77 when refused.
  */
 export interface DaedalCall {
   /** Unique per call; the Mac ignores a call id it has already answered. */
@@ -171,6 +200,8 @@ export const RUNNER_PATHS = {
   shimSocket: "/run/daedalus-runner/runner/daedal.sock",
   /** Where `sessiond` listens for the runner. */
   sessionSocket: "/run/daedalus-runner/session.sock",
+  /** Session container: the `BROWSER` sessions get; runs `daedal open-url "$1"`. */
+  browser: "/usr/local/bin/daedal-browser",
 } as const;
 
 /**

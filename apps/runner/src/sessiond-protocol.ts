@@ -23,7 +23,7 @@ import type { RunnerMethods } from "@daedalus/remote-protocol";
  * listen on the socket in its place: replies are size limited, and a request
  * that gets no answer times out.
  */
-export interface SessiondMethods extends Omit<RunnerMethods, never> {
+export interface SessiondMethods extends Omit<RunnerMethods, "auth.callback"> {
   /** Sessions whose command ended, with the exit status, by session name. */
   deadPanes: { params: null; result: Record<string, number | null> };
 }
