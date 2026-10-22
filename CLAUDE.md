@@ -74,7 +74,9 @@ gitignored. `tsconfig.json` maps `electrobun`, `electrobun/bun` and
 `ELECTROBUN_APP_NAME` without the channel suffix, so
 `scripts/electrobun-post-build.ts` adds it to find `Daedalus-dev.app`. 1.18.x
 could not package on this machine because Cottontail would not start; 2.0.4
-packages here.
+packages here. The renderer imports `electrobun/view`, which vite must alias
+to `.hutch/devkit` (`apps/desktop/vite.config.ts`); without it the bundle
+resolves to a `node_modules` stub that throws and the window is black.
 
 `views://` URLs resolve as resource paths, so they take **no query string and no
 fragment**; either makes the page fail to load. Renderer parameters travel over
