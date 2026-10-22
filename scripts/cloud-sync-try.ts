@@ -15,7 +15,11 @@
 import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { cloudHostId, createApplicationContext } from "@daedalus/core";
+import {
+  cloudHostId,
+  createApplicationContext,
+  setCloudMcpServer,
+} from "@daedalus/core";
 import { RemoteSessionHost } from "../packages/core/src/cloud/remote-session-host";
 
 process.env.DAEDALUS_REMOTE_VAULT = "file";
@@ -161,6 +165,8 @@ try {
   say("pod ready");
   if (!(host instanceof RemoteSessionHost)) throw new Error("not a cloud host");
 
+  // Remote servers go only when turned on for cloud (Settings › Cloud).
+  await setCloudMcpServer(context.config, "context7", true);
   const session = await context.agents.spawn({
     workspace: workspace.id,
     host: host.id,

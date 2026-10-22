@@ -45,6 +45,7 @@ export async function gatherClaudeSync(
     settingsText: await read(join(claude.claudeHome, "settings.json")),
     daedalusSkills: skills.cloudSkills(CLOUD_DAEDAL),
     daedalusStyle: skills.claudeSkillSettings().outputStyle,
+    mcpOn: config.cloudMcpServers,
   });
 }
 

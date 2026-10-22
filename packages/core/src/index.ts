@@ -25,6 +25,7 @@ export * from "./services/cloud-mark";
 export * from "./cloud/broker";
 export * from "./cloud/cloud-account";
 export * from "./cloud/cloud-seed";
+export { cloudMcpChoices, setCloudMcpServer } from "./cloud/cloud-mcp";
 export * from "./cloud/sign-in-pages";
 export * from "./cloud/cloud-service";
 export * from "./cloud/gateway-client";

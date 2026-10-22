@@ -6,6 +6,7 @@ import {
   collectClaudeSync,
   parseManifest,
   planSync,
+  cloudMcpUrlHash,
   countHooks,
   remoteMcpServers,
   seedInstalledPlugins,
@@ -162,6 +163,10 @@ describe("secrets", () => {
           },
           query: { type: "http", url: "https://api.example.com/?token=secret" },
           user: { type: "http", url: "https://me:secret@api.example.com/" },
+          fragment: {
+            type: "http",
+            url: "https://mcp.example.com/mcp#token=secret",
+          },
           plain: { type: "http", url: "http://api.example.com/" },
           local: { command: "docker", args: ["run"] },
           stdio: { type: "stdio", command: "npx", env: { TOKEN: "secret" } },
@@ -181,11 +186,52 @@ describe("secrets", () => {
       local: "a local command",
       oauth: "has oauth, which may hold a secret",
       plain: "not an https URL",
-      query: "a user name or query string in its URL, which may hold a secret",
+      fragment:
+        "a user name, query string or fragment in its URL, which may hold a secret",
+      query:
+        "a user name, query string or fragment in its URL, which may hold a secret",
       stdio: "a local command",
-      user: "a user name or query string in its URL, which may hold a secret",
+      user: "a user name, query string or fragment in its URL, which may hold a secret",
     });
     expect(JSON.stringify(servers)).not.toContain("secret");
+  });
+
+  test("a remote server goes only when turned on for cloud, with the URL it had then", async () => {
+    const stateText = (url: string) =>
+      JSON.stringify({
+        mcpServers: {
+          zap: { type: "sse", url },
+          docs: { type: "http", url: "https://mcp.example.com/" },
+        },
+      });
+    const before = "https://actions.example.com/mcp/sse";
+    const on = { zap: cloudMcpUrlHash(new URL(before).toString()) };
+    const sync = await collectClaudeSync(
+      input({ stateText: stateText(before), mcpOn: on }),
+    );
+    expect(Object.keys(sync.mcpServers)).toEqual(["zap"]);
+    expect(sync.mcpLeftOut).toEqual([
+      { name: "docs", reason: "not turned on for cloud" },
+    ]);
+    // The same name with a key put in its path later does not go.
+    const later = await collectClaudeSync(
+      input({
+        stateText: stateText(
+          "https://actions.example.com/mcp/sk-ak-SECRET/sse",
+        ),
+        mcpOn: on,
+      }),
+    );
+    expect(later.mcpServers).toEqual({});
+    expect(later.mcpLeftOut).toContainEqual({
+      name: "zap",
+      reason: "its URL changed since it was turned on for cloud",
+    });
+    // Off by default.
+    const none = await collectClaudeSync(
+      input({ stateText: stateText(before) }),
+    );
+    expect(none.mcpServers).toEqual({});
   });
 
   test("the pod's settings get no env, permissions, status line or key helper", () => {

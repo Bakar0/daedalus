@@ -108,6 +108,11 @@ export interface ClaudeSyncInput {
   daedalusSkills: DaedalusPodSkill[];
   /** The style Daedalus selects for its own Claude sessions, if any. */
   daedalusStyle?: string;
+  /**
+   * The remote MCP servers the user turned on for cloud sessions, each with
+   * the hash of its URL then (`cloudMcpUrlHash`). Absent or empty: none.
+   */
+  mcpOn?: Record<string, string>;
 }
 
 export interface ClaudeSync {
@@ -460,7 +465,9 @@ async function enabledPlugins(input: ClaudeSyncInput): Promise<FoundPlugin[]> {
  * The user's MCP servers a pod can reach and may hold: remote ones, by an
  * https URL alone. A server with headers, environment, OAuth settings or
  * anything else beside its URL may carry a secret, and a local command does
- * not exist in the pod; both are left out and named.
+ * not exist in the pod; both are left out and named. A URL can still hold a
+ * key in its path, so these are only the ones the user may turn on for
+ * cloud (`carriedMcpServers`), never copied on their own.
  */
 export function remoteMcpServers(stateText: string | undefined): {
   servers: Record<string, { type: string; url: string }>;
@@ -499,13 +506,46 @@ export function remoteMcpServers(stateText: string | undefined): {
       out("not an https URL");
       continue;
     }
-    if (url.username || url.password || url.search) {
-      out("a user name or query string in its URL, which may hold a secret");
+    if (url.username || url.password || url.search || url.hash) {
+      out(
+        "a user name, query string or fragment in its URL, which may hold a secret",
+      );
       continue;
     }
     servers[name] = { type, url: url.toString() };
   }
   return { servers, leftOut };
+}
+
+/** What `mcpOn` records for a server: the SHA-256 of its URL. */
+export const cloudMcpUrlHash = (url: string): string =>
+  createHash("sha256").update(url).digest("hex");
+
+/**
+ * The servers that go to the pod: those the user turned on for cloud, and
+ * whose URL is still the one it had when they did.
+ */
+export function carriedMcpServers(
+  stateText: string | undefined,
+  on: Record<string, string> = {},
+): ReturnType<typeof remoteMcpServers> {
+  const remote = remoteMcpServers(stateText);
+  const servers: Record<string, { type: string; url: string }> = {};
+  const leftOut = [...remote.leftOut];
+  for (const [name, server] of Object.entries(remote.servers)) {
+    if (on[name] === cloudMcpUrlHash(server.url)) servers[name] = server;
+    else
+      leftOut.push({
+        name,
+        reason: on[name]
+          ? "its URL changed since it was turned on for cloud"
+          : "not turned on for cloud",
+      });
+  }
+  return {
+    servers,
+    leftOut: leftOut.sort((a, b) => a.name.localeCompare(b.name)),
+  };
 }
 
 /** How many hooks a settings file holds, for the log; none is copied. */
@@ -586,7 +626,7 @@ export async function collectClaudeSync(
       keptLabels.has(plugin.item.label)
     )
       copiedPlugins[plugin.key] = plugin.install;
-  const mcp = remoteMcpServers(input.stateText);
+  const mcp = carriedMcpServers(input.stateText, input.mcpOn);
   return {
     // Items with nothing to copy stay too: they carry what they skipped.
     items: capped.kept,
