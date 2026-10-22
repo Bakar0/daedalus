@@ -589,6 +589,11 @@ describe("move rules", () => {
       "GEMINI.md",
       // The Kelvin sign folds to k, and a decomposed é to a composed one.
       ".githoo\u212As/pre-commit",
+      ".cla\u200cude/settings.json",
+      "\ufeffCLAUDE.md",
+      ".en\u200bvrc",
+      ".mcp\ufe0f.json",
+      "AGENTS\u200d.md",
       "docs/AGENTS.md".normalize("NFD"),
     ])
       expect(steersAgent(path)).toBe(true);

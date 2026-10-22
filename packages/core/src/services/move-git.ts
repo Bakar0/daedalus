@@ -383,7 +383,13 @@ export async function applySnapshot(
  * than slips through.
  */
 export const foldPath = (path: string): string =>
-  path.normalize("NFKC").toUpperCase().toLowerCase().normalize("NFKC");
+  path
+    .normalize("NFKC")
+    // HFS+ also ignores characters that draw nothing, such as U+200C.
+    .replace(/\p{Default_Ignorable_Code_Point}/gu, "")
+    .toUpperCase()
+    .toLowerCase()
+    .normalize("NFKC");
 
 /** Folders whose files steer an agent or run on open, at any depth. */
 const STEERING_FOLDERS = [
