@@ -10,6 +10,7 @@ import Electrobun, {
   Utils,
 } from "electrobun/bun";
 import {
+  BETA_FEED_URL,
   channelHome,
   confirmAnsweredWait,
   createApplicationContext,
@@ -17,6 +18,7 @@ import {
   ReadModel,
   versionsAfterAnnouncing,
   WORKSPACE_FILES_CHANGED,
+  type UpdateFeed,
   type WorkspaceFilesChanged,
 } from "@daedalus/core";
 import {
@@ -402,6 +404,16 @@ const quitController = new QuitController({
 const dismissedUpdateFile = Bun.file(
   join(context.config.home, "update-dismissed.json"),
 );
+// Electrobun reads the feed URL from the version.json object it caches, on
+// every check and on every download, so pointing that one field at a feed is
+// how the updater reads the beta feed. The stable URL is what the build baked
+// in, kept from the first look so switching back restores it.
+let stableFeedUrl: string | undefined;
+const pointUpdaterAt = async (feed: UpdateFeed) => {
+  const info = await Updater.getLocalInfo();
+  stableFeedUrl ??= info.baseUrl;
+  info.baseUrl = feed === "beta" ? BETA_FEED_URL : stableFeedUrl;
+};
 const updates = new UpdateController({
   updater: {
     local: async () => {
@@ -409,7 +421,8 @@ const updates = new UpdateController({
       // An unpackaged run has no version.json and so no feed to ask.
       return { version: info.version, channel: info.channel || "dev" };
     },
-    check: async () => {
+    check: async (feed) => {
+      await pointUpdaterAt(feed);
       const info = await Updater.checkForUpdate();
       return {
         version: info.version,
@@ -417,7 +430,11 @@ const updates = new UpdateController({
         ...(info.error ? { error: info.error } : {}),
       };
     },
-    download: async () => {
+    download: async (feed) => {
+      // The download takes the manifest of the last check, which may have
+      // been the other feed's, so it reads this feed again first.
+      await pointUpdaterAt(feed);
+      await Updater.checkForUpdate();
       await Updater.downloadUpdate();
       const info = Updater.updateInfo();
       return {
@@ -429,6 +446,7 @@ const updates = new UpdateController({
     // new one. Sessions keep running, as with any quit.
     apply: () => Updater.applyUpdate(),
   },
+  feeds: () => context.appUpdates.feeds(),
   readDismissed: async () =>
     (await dismissedUpdateFile.exists())
       ? ((await dismissedUpdateFile.json()) as { version?: string }).version

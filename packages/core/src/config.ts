@@ -166,6 +166,13 @@ export interface DaedalusConfig {
    */
   focusMode: boolean;
   /**
+   * Whether the updater also reads the beta feed and offers whichever of the
+   * newest beta and the newest stable release is higher. Off by default.
+   * Turning it off never installs an older version: a beta stays until a
+   * stable release passes it.
+   */
+  betaUpdatesEnabled: boolean;
+  /**
    * Whether a paired phone may operate this Mac through the relay. Off until
    * the user turns it on; the Mac then connects out to `remoteRelay`.
    */
@@ -224,6 +231,7 @@ type StoredConfig = Partial<
     | "trustSessionFoldersEnabled"
     | "autoRebirthPercent"
     | "focusMode"
+    | "betaUpdatesEnabled"
     | "remoteEnabled"
     | "remoteRelay"
     | "remoteKeepAwake"
@@ -305,6 +313,7 @@ export type SettingsPatch = Partial<
     | "trustSessionFoldersEnabled"
     | "autoRebirthPercent"
     | "focusMode"
+    | "betaUpdatesEnabled"
     | "remoteEnabled"
     | "remoteKeepAwake"
     | "remoteMacName"
@@ -335,6 +344,7 @@ function settingsFromStored(
         ? stored.autoRebirthPercent
         : null,
     focusMode: stored.focusMode === true,
+    betaUpdatesEnabled: stored.betaUpdatesEnabled === true,
     remoteEnabled: stored.remoteEnabled === true,
     remoteKeepAwake: stored.remoteKeepAwake === true,
     remoteMacName:
@@ -441,6 +451,27 @@ function storedAccounts(value: unknown): AccountProfile[] {
 }
 
 export const isAccountId = (value: string): boolean => ACCOUNT_ID.test(value);
+
+/**
+ * Lays the settings stored on disk over the live config and returns it. The
+ * CLI and the app each hold their own config, so a setting one of them wrote
+ * reaches a long-running reader only when it reads the file again.
+ */
+export async function reloadSettings(
+  config: DaedalusConfig,
+): Promise<DaedalusConfig> {
+  await settingsQueues.get(config.home)?.catch(() => undefined);
+  const file = Bun.file(join(config.home, "config.json"));
+  const stored = (await file.exists())
+    ? ((await file.json()) as StoredConfig)
+    : {};
+  const settings = settingsFromStored(stored);
+  Object.assign(config, settings);
+  if (settings.claudeOutputStyleWritten === undefined)
+    delete (config as { claudeOutputStyleWritten?: string })
+      .claudeOutputStyleWritten;
+  return config;
+}
 
 /** The write in flight for each home, so saves run one after another. */
 const settingsQueues = new Map<string, Promise<unknown>>();

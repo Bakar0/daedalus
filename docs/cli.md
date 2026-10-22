@@ -464,6 +464,19 @@ notifier, a Slack ping or a tmux bell can wait on the same fact the badge draws,
 with no desktop app running. The app's notification is one consumer of this
 mechanism rather than the only way to find out.
 
+## Updates
+
+```text
+daedal update beta [on|off] [--json]
+```
+
+"Get beta updates", the same switch as Settings › About. Without `on` or `off`
+it prints the current setting. On, the app also reads the beta feed and offers
+whichever of the newest beta and the newest stable release is higher. Off, it
+reads only the stable feed, and a beta already installed stays until a stable
+release passes it. The app reads the setting before each check, so no restart
+is needed. See [Betas](releasing.md#betas).
+
 ## Attention, notifications, and presence
 
 ```text

@@ -18,6 +18,7 @@ export * from "./services/codex-sessions";
 export * from "./services/integrated-terminals";
 export * from "./services/notifications";
 export * from "./services/ordering";
+export * from "./services/app-updates";
 export * from "./services/presence";
 export * from "./services/providers";
 export * from "./services/shutdown";

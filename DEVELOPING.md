@@ -46,7 +46,7 @@ CI runs the first six, and `bun run build`, on every push.
 
 ## Releasing
 
-Set `version` in `package.json`, merge it, and push a matching `v<version>` tag. The release workflow builds both architectures, publishes the GitHub release and updates the Homebrew cask. See [docs/releasing.md](docs/releasing.md).
+Set `version` in `package.json`, merge it, and push a matching `v<version>` tag. The release workflow builds both architectures, publishes the GitHub release and updates the Homebrew cask. A version with a `-beta.N` suffix publishes a prerelease that only users with "Get beta updates" on are offered; promote it by releasing the same version without the suffix. See [docs/releasing.md](docs/releasing.md).
 
 ## Further reading
 

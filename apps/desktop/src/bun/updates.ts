@@ -1,3 +1,8 @@
+import {
+  chooseUpdate,
+  type FeedRelease,
+  type UpdateFeed,
+} from "@daedalus/core";
 import type { AppUpdateDto } from "@daedalus/protocol";
 
 /**
@@ -8,22 +13,28 @@ export interface AppUpdater {
   /** The running build's version and channel, from its version.json. */
   local(): Promise<{ version: string; channel: string }>;
   /**
-   * Reads the release feed. `updateAvailable` is Electrobun's own answer,
-   * which only compares bundle hashes.
+   * Reads one feed. `updateAvailable` is Electrobun's own answer, which only
+   * compares bundle hashes.
    */
-  check(): Promise<{
+  check(feed: UpdateFeed): Promise<{
     version: string;
     updateAvailable: boolean;
     error?: string;
   }>;
-  /** Fetches the new bundle. `ready` is false when it failed. */
-  download(): Promise<{ ready: boolean; error?: string }>;
+  /** Fetches the new bundle from `feed`. `ready` is false when it failed. */
+  download(feed: UpdateFeed): Promise<{ ready: boolean; error?: string }>;
   /** Replaces the app and quits; the new version opens on its own. */
   apply(): Promise<void>;
 }
 
 export interface UpdateControllerOptions {
   updater: AppUpdater;
+  /**
+   * The feeds to read, stable first: only stable, or stable and beta when
+   * "Get beta updates" is on. Asked before every check, so the setting
+   * applies without a restart.
+   */
+  feeds(): Promise<UpdateFeed[]>;
   /** The version the user said "Later" to, if any. */
   readDismissed(): Promise<string | undefined>;
   writeDismissed(version: string): Promise<void>;
@@ -42,26 +53,6 @@ export const FIRST_UPDATE_CHECK_DELAY_MS = 30_000;
 export const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60_000;
 
 /**
- * True when `candidate` is a later `major.minor.patch` than `current`. A
- * version that does not parse is never newer, so a malformed feed cannot
- * produce a prompt.
- */
-export function isNewerVersion(candidate: string, current: string): boolean {
-  const parse = (version: string) => {
-    const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(version.trim());
-    return match ? match.slice(1).map(Number) : undefined;
-  };
-  const next = parse(candidate);
-  const now = parse(current);
-  if (!next || !now) return false;
-  for (let index = 0; index < 3; index += 1) {
-    const difference = (next[index] ?? 0) - (now[index] ?? 0);
-    if (difference !== 0) return difference > 0;
-  }
-  return false;
-}
-
-/**
  * Decides when the window offers a newer Daedalus, and installs it on request.
  *
  * Electrobun's updater calls any release whose bundle hash differs from the
@@ -70,12 +61,18 @@ export function isNewerVersion(candidate: string, current: string): boolean {
  * build of main, including one newer than the release. The prompt therefore
  * needs a strictly higher version as well.
  *
+ * With beta updates on it reads the beta feed as well and offers the higher
+ * of the two. Turning them off never moves anyone backwards: a beta build
+ * sees no stable release as newer until one passes its version.
+ *
  * A background check is silent unless it finds something: being offline or
  * up to date is not news. A check the user asked for from the menu always
  * answers.
  */
 export class UpdateController {
   #update: AppUpdateDto | null = null;
+  /** The feed the offered version came from; the download reads it. */
+  #feed: UpdateFeed = "stable";
   #busy = false;
 
   constructor(private readonly options: UpdateControllerOptions) {}
@@ -116,40 +113,58 @@ export class UpdateController {
         });
       return this.#update;
     }
-    const result = await this.options.updater
-      .check()
-      .catch((error: unknown) => ({
-        version: "",
-        updateAvailable: false,
-        error: describe(error),
-      }));
-    if (result.error) {
-      this.#log("update_check_failed", { message: result.error });
+    const releases: FeedRelease[] = [];
+    const failures: string[] = [];
+    for (const feed of await this.options.feeds()) {
+      const result = await this.options.updater
+        .check(feed)
+        .catch((error: unknown) => ({
+          version: "",
+          updateAvailable: false,
+          error: describe(error),
+        }));
+      if (result.error) {
+        this.#log("update_check_failed", { feed, message: result.error });
+        failures.push(result.error);
+        continue;
+      }
+      releases.push({
+        feed,
+        version: result.version,
+        updateAvailable: result.updateAvailable,
+      });
+    }
+    // One feed answering is enough. The beta feed may not exist yet, and a
+    // stable answer alone is still a complete check.
+    if (releases.length === 0) {
       if (manual)
         this.#set({
           state: "error",
           currentVersion,
-          message: `Could not check for updates: ${result.error}`,
+          message: `Could not check for updates: ${failures[0] ?? "no feed to read"}`,
         });
       return this.#update;
     }
-    const newer =
-      result.updateAvailable && isNewerVersion(result.version, currentVersion);
+    const chosen = chooseUpdate(currentVersion, releases);
     this.#log("update_checked", {
       currentVersion,
-      latestVersion: result.version,
-      newer,
+      latestVersion: releases.find((release) => release.feed === "stable")
+        ?.version,
+      betaVersion: releases.find((release) => release.feed === "beta")?.version,
+      newer: Boolean(chosen),
+      feed: chosen?.feed,
       manual,
     });
-    if (!newer) {
+    if (!chosen) {
       this.#set(manual ? { state: "current", currentVersion } : null);
       return this.#update;
     }
-    if (!manual && (await this.options.readDismissed()) === result.version) {
+    if (!manual && (await this.options.readDismissed()) === chosen.version) {
       this.#set(null);
       return this.#update;
     }
-    this.#set({ state: "available", currentVersion, version: result.version });
+    this.#feed = chosen.feed;
+    this.#set({ state: "available", currentVersion, version: chosen.version });
     return this.#update;
   }
 
@@ -159,7 +174,7 @@ export class UpdateController {
     this.#busy = true;
     this.#set({ ...offered, state: "downloading" });
     const downloaded = await this.options.updater
-      .download()
+      .download(this.#feed)
       .catch((error: unknown) => ({ ready: false, error: describe(error) }));
     if (!downloaded.ready) {
       this.#busy = false;
