@@ -1,3 +1,4 @@
+import type { CommandResult } from "@daedalus/remote-protocol";
 import { DaedalusError } from "../errors";
 import { cloudHostId } from "../services/cloud-launch";
 import type {
@@ -12,6 +13,9 @@ import type { RunnerTransport } from "./link";
 /** A start waits for the provider's first screen, so it gets longer. */
 const START_TIMEOUT_MS = 60_000;
 const LIST_TIMEOUT_MS = 5_000;
+/** Raw bytes per `fs.write`: base64 makes it 4 MiB, half the relay's frame. */
+const WRITE_BATCH_BYTES = 3 * 1024 * 1024;
+const WRITE_TIMEOUT_MS = 60_000;
 /** The runner gives the tool 10 seconds; the relay adds its own time. */
 const AUTH_CALLBACK_TIMEOUT_MS = 20_000;
 const MAX_SESSIONS = 10_000;
@@ -142,18 +146,55 @@ export class RemoteSessionHost implements SessionHost {
 
   /** Writes text files in the pod, each replaced whole. */
   async writeText(files: { path: string; text: string }[]): Promise<void> {
-    if (!files.length) return;
-    await this.transport.request(
-      this.workspaceId,
-      "fs.write",
-      {
-        files: files.map((file) => ({
-          path: file.path,
-          base64: Buffer.from(file.text).toString("base64"),
-        })),
-      },
-      LIST_TIMEOUT_MS,
+    await this.writeFiles(
+      files.map((file) => ({ path: file.path, bytes: Buffer.from(file.text) })),
     );
+  }
+
+  /**
+   * Writes files in the pod, each replaced whole, in requests of at most
+   * `WRITE_BATCH_BYTES` so each fits the relay's frame.
+   */
+  async writeFiles(
+    files: { path: string; bytes: Uint8Array }[],
+  ): Promise<void> {
+    let batch: typeof files = [];
+    let size = 0;
+    const send = async () => {
+      if (!batch.length) return;
+      await this.transport.request(
+        this.workspaceId,
+        "fs.write",
+        {
+          files: batch.map((file) => ({
+            path: file.path,
+            base64: Buffer.from(file.bytes).toString("base64"),
+          })),
+        },
+        WRITE_TIMEOUT_MS,
+      );
+      batch = [];
+      size = 0;
+    };
+    for (const file of files) {
+      if (size && size + file.bytes.length > WRITE_BATCH_BYTES) await send();
+      batch.push(file);
+      size += file.bytes.length;
+    }
+    await send();
+  }
+
+  /** A one-shot command in the pod, at the workspace root; not in tmux. */
+  async run(executable: string, args: string[]): Promise<CommandResult> {
+    const result: unknown = await this.transport.request(
+      this.workspaceId,
+      "host.run",
+      { cwd: ".", executable, args, timeoutMs: 30_000 },
+      WRITE_TIMEOUT_MS,
+    );
+    if (typeof (result as { exitCode?: unknown } | null)?.exitCode !== "number")
+      throw malformed("host.run");
+    return result as CommandResult;
   }
 
   async isLive(session: string): Promise<boolean> {
