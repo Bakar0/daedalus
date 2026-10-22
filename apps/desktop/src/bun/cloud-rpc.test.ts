@@ -618,4 +618,85 @@ describe("cloud RPC", () => {
       expect(relay.sockets).toHaveLength(1);
     });
   });
+
+  test("a sign-in page from a cloud session waits for the click, and opens once", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const gateway = new FakeGateway();
+      const context = await createApplicationContext({
+        env: { ...process.env, DAEDALUS_HOME: home },
+        tmux: new NoTmux(),
+        cloud: {
+          fetch: gateway.fetch,
+          account: new CloudAccount(home, memoryVault()),
+          identity: async () => ({
+            id: "mac-1",
+            publicKey: "mac-public",
+            secretKey: "mac-secret",
+          }),
+        },
+      });
+      const opened: string[] = [];
+      try {
+        const rpc = createDesktopRequestHandlers(context, {
+          openExternal: (url) => {
+            opened.push(url);
+            return true;
+          },
+        });
+        await rpc.cloudSignIn({
+          gatewayUrl: "http://localhost:8080",
+          email: "dev@example.com",
+        });
+        const workspace = await context.workspaces.create({ name: "Pods" });
+        await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
+        const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
+        const host = new FakeCloudHost(cloudHostId(cloudId));
+        context.hosts.register(host);
+        const session = await rpc.agentSpawn({
+          workspace: workspace.id,
+          cloud: true,
+        });
+        if (!session.ok) throw new Error(session.error.message);
+        const url =
+          "https://claude.com/cai/oauth/authorize?code=true&redirect_uri=http%3A%2F%2Flocalhost%3A42431%2Fcallback&state=st8&code_challenge=ch";
+
+        const refused = context.cloud.offerSignIn(
+          host.id,
+          session.data.id,
+          "https://evil.test/cai/oauth/authorize",
+        );
+        expect(refused.exitCode).toBe(77);
+        expect(
+          context.cloud.offerSignIn(host.id, session.data.id, url).exitCode,
+        ).toBe(0);
+
+        const snapshot = await rpc.snapshot({});
+        if (!snapshot.ok) throw new Error(snapshot.error.message);
+        expect(snapshot.data.cloudSignIns).toEqual([
+          expect.objectContaining({
+            sessionId: session.data.id,
+            host: "claude.com",
+            kind: "claude",
+          }),
+        ]);
+        expect(JSON.stringify(snapshot.data.cloudSignIns)).not.toContain("st8");
+
+        const requestId = snapshot.data.cloudSignIns![0]!.requestId;
+        const open = await rpc.cloudSignInOpen({ requestId });
+        expect(open).toEqual({
+          ok: true,
+          data: { host: "claude.com", paste: true },
+        });
+        expect(opened).toHaveLength(1);
+        expect(new URL(opened[0]!).searchParams.get("redirect_uri")).toBe(
+          "https://platform.claude.com/oauth/code/callback",
+        );
+        const again = await rpc.cloudSignInOpen({ requestId });
+        expect(again.ok).toBe(false);
+        expect(opened).toHaveLength(1);
+      } finally {
+        context.close();
+      }
+    });
+  });
 });

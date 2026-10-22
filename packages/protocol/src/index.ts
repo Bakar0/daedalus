@@ -944,6 +944,18 @@ export interface CloudStateDto {
   workspaces: CloudWorkspaceDto[];
 }
 
+/**
+ * A sign-in page a cloud session asked to open, waiting for the user's
+ * click. The URL stays in the host: it carries the sign-in's state.
+ */
+export interface CloudSignInDto {
+  requestId: string;
+  sessionId: string;
+  host: string;
+  kind: "claude" | "aws";
+  expiresAt: number;
+}
+
 /** A Pro key (an invite code), as an admin sees it. */
 export interface AdminKeyDto {
   code: string;
@@ -1055,6 +1067,8 @@ export interface DesktopSnapshotDto {
   routineReports: RoutineReportDto[];
   /** Workspace journals and team files grown past their compact size. */
   largeFiles?: LargeFileDto[];
+  /** Sign-in pages cloud sessions asked to open; absent outside the app. */
+  cloudSignIns?: CloudSignInDto[];
   settings: DesktopSettingsDto;
 }
 
@@ -1174,6 +1188,16 @@ export interface DesktopRpcSchema {
        * waits for its runner, then revives the session.
        */
       cloudSessionWake: Request<{ sessionId: string }, AgentSessionDto>;
+      /**
+       * The user's click on a cloud session's sign-in page: the host opens
+       * it in the browser. `paste` means the page shows a code to paste
+       * into the session.
+       */
+      cloudSignInOpen: Request<
+        { requestId: string },
+        { host: string; paste: boolean }
+      >;
+      cloudSignInDismiss: Request<{ requestId: string }, null>;
       remoteGet: Request<Record<string, never>, RemoteStateDto>;
       remoteSetEnabled: Request<{ enabled: boolean }, RemoteStateDto>;
       remoteSetKeepAwake: Request<{ enabled: boolean }, RemoteStateDto>;

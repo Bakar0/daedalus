@@ -1,6 +1,7 @@
 import type {
   CloudWorkspace,
   CloudWorkspaceStatus,
+  CommandResult,
   DeviceIdentity,
   GatewayUser,
   RunnerMethod,
@@ -9,7 +10,13 @@ import type {
 import type { DaedalusConfig } from "../config";
 import { DaedalusError } from "../errors";
 import type { CloudOwner, SqliteRepositories } from "../repositories";
-import { CloudCalls, cloudDaedal } from "../services/cloud-calls";
+import {
+  CloudCalls,
+  cloudDaedal,
+  REFUSED_EXIT_CODE,
+  REFUSED_MESSAGE,
+} from "../services/cloud-calls";
+import { checkSignInUrl, pasteCodeUrl, SignInOffers } from "./sign-in-pages";
 import { cloudHostId, cloudHostWorkspace } from "../services/cloud-launch";
 import { defaultVault, RemoteStore } from "../services/remote-store";
 import type { SessionHosts } from "../services/session-hosts";
@@ -102,6 +109,8 @@ export interface CloudServiceOptions {
  */
 export class CloudService {
   readonly account: CloudAccount;
+  /** Sign-in pages cloud sessions asked to open, waiting for a click. */
+  readonly signIns = new SignInOffers();
   #link: CloudLink | undefined;
   #transport: Promise<RunnerTransport> | undefined;
   #stopBroker: (() => Promise<void>) | undefined;
@@ -188,6 +197,7 @@ export class CloudService {
     )
       return;
     for (const host of hosts.cloud()) hosts.unregister(host.id);
+    this.signIns.clear();
     repositories.setCloudOwner(owner);
     if (!current && sameAccount) repositories.claimUnownedCloudLinks();
   }
@@ -297,6 +307,7 @@ export class CloudService {
     await this.account.forget();
     await this.#closeLink();
     this.options.repositories.setCloudOwner(undefined);
+    this.signIns.clear();
     for (const host of this.options.hosts.cloud())
       this.options.hosts.unregister(host.id);
   }
@@ -534,6 +545,60 @@ export class CloudService {
     await host.writeText(files);
   }
 
+  /**
+   * `daedal open-url` from a cloud session: a page on the allowlist waits for
+   * the user's click; anything else is refused. Exit 0 lets the tool go on
+   * at once, while the page waits.
+   */
+  offerSignIn(hostId: string, sessionId: string, url: string): CommandResult {
+    const cloudId = cloudHostWorkspace(hostId);
+    const checked =
+      cloudId && this.options.repositories.workspaceForCloud(cloudId)
+        ? checkSignInUrl(url, this.options.repositories.cloudSsoHosts(cloudId))
+        : "an unknown host";
+    if (typeof checked === "string")
+      return {
+        exitCode: REFUSED_EXIT_CODE,
+        stdout: "",
+        stderr: `daedal: ${REFUSED_MESSAGE}: ${checked}\n`,
+      };
+    this.signIns.offer(hostId, sessionId, checked);
+    return {
+      exitCode: 0,
+      stdout: `Daedalus offers this sign-in page on ${checked.host}; open it from the session on the Mac.\n`,
+      stderr: "",
+    };
+  }
+
+  /**
+   * The page to open for an offer the user clicked, once. A page whose
+   * redirect goes to a listener in the pod opens in its paste-code form,
+   * where Claude shows the code to paste into the session.
+   */
+  async openSignIn(
+    requestId: string,
+  ): Promise<{ url: string; host: string; paste: boolean }> {
+    const offer = this.signIns.take(requestId);
+    if (!offer)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        "This sign-in page expired or was already opened; ask again in the session",
+      );
+    const session = this.options.repositories.findAgent(offer.sessionId);
+    if (!session || session.hostId !== offer.hostId)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        "The session that asked for this sign-in page is gone",
+      );
+    if (offer.checked.callback)
+      return {
+        url: pasteCodeUrl(offer.checked.url),
+        host: offer.host,
+        paste: true,
+      };
+    return { url: offer.checked.url, host: offer.host, paste: false };
+  }
+
   /** The host a local workspace's cloud sessions run on. */
   async hostId(workspaceReference: string): Promise<string> {
     const workspace =
@@ -602,6 +667,8 @@ export class CloudService {
       repositories: this.options.repositories,
       home: this.options.config.home,
       daedal: this.options.daedal ?? cloudDaedal(this.options.config.home),
+      openUrl: (hostId, sessionId, url) =>
+        this.offerSignIn(hostId, sessionId, url),
     });
     const link = new CloudLink({
       gatewayUrl: signIn.gatewayUrl,

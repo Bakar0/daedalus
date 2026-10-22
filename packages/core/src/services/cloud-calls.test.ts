@@ -308,6 +308,53 @@ describe("cloud daedal calls", () => {
     expect(stdin).toBe(`${MARK}\n\n> The new brief\n> in two lines`);
   });
 
+  test("open-url is offered, never run, and only for a session on the host", async () => {
+    let ran = false;
+    const offered: string[][] = [];
+    const calls = new CloudCalls({
+      repositories,
+      home: "/mac/home",
+      daedal: ["/mac/home/bin/daedal"],
+      run: async () => {
+        ran = true;
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      openUrl: (hostId, sessionId, url) => {
+        offered.push([hostId, sessionId, url]);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+    const base = {
+      cwd: ".",
+      queueable: false,
+      at: new Date().toISOString(),
+    };
+    const url = "https://claude.com/cai/oauth/authorize?state=s";
+    expect(
+      (
+        await calls.answer(HOST, {
+          ...base,
+          callId: "open",
+          env: { DAEDALUS_SESSION_ID: SESSION },
+          argv: ["open-url", url],
+        })
+      ).exitCode,
+    ).toBe(0);
+    expect(offered).toEqual([[HOST, SESSION, url]]);
+    for (const [callId, env, argv] of [
+      ["none", {}, ["open-url", url]],
+      ["local", { DAEDALUS_SESSION_ID: LOCAL_SESSION }, ["open-url", url]],
+      ["two", { DAEDALUS_SESSION_ID: SESSION }, ["open-url", url, url]],
+      ["flag", { DAEDALUS_SESSION_ID: SESSION }, ["open-url", "--x", url]],
+    ] as const)
+      expect(
+        (await calls.answer(HOST, { ...base, callId, env, argv: [...argv] }))
+          .exitCode,
+      ).toBe(REFUSED_EXIT_CODE);
+    expect(offered).toHaveLength(1);
+    expect(ran).toBe(false);
+  });
+
   test("refuses with exit code 77 before anything runs", async () => {
     let ran = false;
     const calls = new CloudCalls({

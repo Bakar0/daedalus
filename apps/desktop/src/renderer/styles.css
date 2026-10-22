@@ -8551,3 +8551,15 @@ dd {
   font-size: 11px;
   margin-top: 4px;
 }
+.cloud-sign-in-bar .routine-bar-text {
+  white-space: normal;
+}
+.session-cloud-signin {
+  background: var(--accent-soft, var(--raised-hover));
+  border: 1px solid var(--accent, var(--line));
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 10px;
+  font-style: normal;
+  padding: 0 6px;
+}

@@ -442,6 +442,8 @@ const remoteStarted = remote.start().catch((error) =>
 // Cloud workspaces: the app holds this Mac's one link to the gateway, and a
 // `daedal` command reaches the runners through it. After the phone's store
 // is open, so both use the one device identity rather than racing to make it.
+// A cloud session asking for a sign-in page shows on its card at once.
+context.cloud.signIns.onChange(() => announce("external"));
 void remoteStarted
   .then(() => context.cloud.hold())
   .catch((error) =>

@@ -56,6 +56,7 @@ import {
 } from "@daedalus/protocol";
 import { LargeFileBar } from "./LargeFileBar";
 import { CloudFirstRunBar } from "./CloudFirstRunBar";
+import { CloudPasteCodeBar, CloudSignInBar } from "./CloudSignInBar";
 import type { DesktopClient } from "./client-types";
 import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import { UpdateBanner } from "./UpdateBanner";
@@ -2940,6 +2941,24 @@ export function WorkspaceApp({
       : view;
   };
 
+  // Sign-in pages cloud sessions asked to open, by session.
+  const signInBySession = new Map(
+    (snapshot?.cloudSignIns ?? []).map((offer) => [offer.sessionId, offer]),
+  );
+  // A page opened in its paste-code form, until the user says it is done.
+  const [pasteCode, setPasteCode] = useState<{
+    sessionId: string;
+    host: string;
+  }>();
+
+  async function openCloudSignIn(requestId: string, sessionId: string) {
+    const opened = await sessionActions.run(
+      client.request.cloudSignInOpen({ requestId }),
+      `signin:${sessionId}`,
+    );
+    if (opened?.paste) setPasteCode({ sessionId, host: opened.host });
+  }
+
   async function wakeCloudSession(session: AgentSessionDto) {
     const revived = await sessionActions.run(
       client.request.cloudSessionWake({ sessionId: session.id }),
@@ -4932,6 +4951,15 @@ export function WorkspaceApp({
                   Cloud
                 </span>
               )}
+              {signInBySession.has(session.id) && (
+                <span
+                  className="session-cloud-signin"
+                  data-testid="session-cloud-signin"
+                  title={`Wants to open a sign-in page on ${signInBySession.get(session.id)!.host}; open the session to allow it`}
+                >
+                  Sign-in
+                </span>
+              )}
               {session.account && (
                 // Only a non-default account is named; Default is the norm.
                 <span
@@ -5726,6 +5754,34 @@ export function WorkspaceApp({
               onCopy={copyCommandText}
             />
           ))}
+      {activeSession && signInBySession.get(activeSession.id) && (
+        <CloudSignInBar
+          busy={sessionActions.pending(`signin:${activeSession.id}`)}
+          color={activeSession.color}
+          offer={signInBySession.get(activeSession.id)!}
+          onDismiss={() =>
+            void sessionActions.run(
+              client.request.cloudSignInDismiss({
+                requestId: signInBySession.get(activeSession.id)!.requestId,
+              }),
+              `signin:${activeSession.id}`,
+            )
+          }
+          onOpen={() =>
+            void openCloudSignIn(
+              signInBySession.get(activeSession.id)!.requestId,
+              activeSession.id,
+            )
+          }
+        />
+      )}
+      {activeSession && pasteCode?.sessionId === activeSession.id && (
+        <CloudPasteCodeBar
+          color={activeSession.color}
+          host={pasteCode.host}
+          onDone={() => setPasteCode(undefined)}
+        />
+      )}
       {activeSession?.hostId &&
         activeSession.kind === "agent" &&
         activeSession.provider === "claude" &&

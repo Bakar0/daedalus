@@ -94,6 +94,8 @@ const ALLOWED: Record<string, Spec> = {
     positionals: { min: 0, max: 0 },
   },
   "agent get": { positionals: { min: 1, max: 1 } },
+  // The pod's BROWSER. Never run as a command: see `CloudCallOptions.openUrl`.
+  "open-url": { positionals: { min: 1, max: 1 } },
 };
 
 /** Commands whose workspace is pinned with `--workspace`. */
@@ -194,6 +196,8 @@ export function decideCall(
     return refuse("the hook event");
   if (command === "attention" && !session)
     return refuse("attention without a session");
+  if (command === "open-url" && !session)
+    return refuse("open-url without a session");
   if (
     (command === "team say" ||
       command === "team chat" ||
@@ -333,6 +337,15 @@ export interface CloudCallOptions {
   daedal: string[];
   run?: typeof runCommand;
   timeoutMs?: number;
+  /**
+   * Answers `daedal open-url` from a session on a host: offers the page for
+   * a click rather than running anything. Without it, open-url is refused.
+   */
+  openUrl?: (
+    hostId: string,
+    sessionId: string,
+    url: string,
+  ) => CommandResult | Promise<CommandResult>;
 }
 
 /**
@@ -375,6 +388,10 @@ export class CloudCalls {
       env: call.env ?? {},
     });
     if (!decision.allowed) return refused(decision.reason);
+    if (decision.argv[0] === "open-url")
+      return this.options.openUrl && decision.sessionId
+        ? this.options.openUrl(hostId, decision.sessionId, decision.argv[1]!)
+        : refused("'open-url'");
     const workspaceId = this.options.repositories.workspaceForCloud(
       cloudHostWorkspace(hostId)!,
     )!;

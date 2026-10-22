@@ -540,7 +540,11 @@ export function createDesktopRequestHandlers(
   };
 
   return {
-    snapshot: () => result(() => desktopSnapshot(readModel)),
+    snapshot: () =>
+      result(async () => ({
+        ...(await desktopSnapshot(readModel)),
+        cloudSignIns: context.cloud.signIns.list(),
+      })),
     sessionUpdate: ({ sessionId, name, pinned, color, autoRebirthPercent }) =>
       mutate(async () => {
         if (name !== undefined) await context.agents.rename(sessionId, name);
@@ -878,6 +882,21 @@ export function createDesktopRequestHandlers(
         if ((await context.agents.get(sessionId)).status !== "lost")
           await context.agents.reconcile();
         return agentDto(await context.agents.reviveLost(sessionId));
+      }),
+    cloudSignInOpen: ({ requestId }) =>
+      result(async () => {
+        const page = await context.cloud.openSignIn(requestId);
+        if (!openExternal(page.url))
+          throw new DaedalusError(
+            "DEPENDENCY",
+            "The browser did not open; ask for the sign-in page again in the session",
+          );
+        return { host: page.host, paste: page.paste };
+      }),
+    cloudSignInDismiss: ({ requestId }) =>
+      result(() => {
+        context.cloud.signIns.dismiss(requestId);
+        return null;
       }),
     remoteGet: () => result(() => remote.state()),
     remoteSetEnabled: ({ enabled }) => mutate(() => remote.setEnabled(enabled)),
