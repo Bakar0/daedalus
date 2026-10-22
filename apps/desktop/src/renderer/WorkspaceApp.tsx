@@ -5789,7 +5789,16 @@ export function WorkspaceApp({
           <CloudFirstRunBar
             color={activeSession.color}
             hostId={activeSession.hostId}
-            key={activeSession.hostId}
+            key={`${activeSession.hostId}:${activeSession.account ?? ""}`}
+            kind={
+              activeSession.account
+                ? (snapshot?.settings.accounts.find(
+                    (item) =>
+                      item.provider === "claude" &&
+                      item.account === activeSession.account,
+                  )?.kind ?? "login")
+                : "default"
+            }
           />
         )}
       {activeSession ? (
