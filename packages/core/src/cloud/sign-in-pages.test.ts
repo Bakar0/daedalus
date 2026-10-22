@@ -87,6 +87,27 @@ describe("checkSignInUrl", () => {
       expect(checkSignInUrl(url, SSO)).toBe(reason);
   });
 
+  test("refuses a repeated parameter, and a Claude page without its redirect and state (S-1)", () => {
+    expect(
+      checkSignInUrl(
+        `${claude("http://localhost:4000/callback")}&scope=other`,
+        SSO,
+      ),
+    ).toBe("a URL that repeats a parameter");
+    expect(
+      checkSignInUrl(
+        "https://claude.com/cai/oauth/authorize?client_id=c&state=s",
+        SSO,
+      ),
+    ).toBe("a sign-in page without a redirect_uri and a state");
+    expect(
+      checkSignInUrl(
+        `https://claude.com/cai/oauth/authorize?redirect_uri=${encodeURIComponent("http://localhost:4000/callback")}`,
+        SSO,
+      ),
+    ).toBe("a sign-in page without a redirect_uri and a state");
+  });
+
   test("the paste-code version keeps everything but the redirect", () => {
     const pasted = new URL(
       pasteCodeUrl(claude("http://localhost:4000/callback")),

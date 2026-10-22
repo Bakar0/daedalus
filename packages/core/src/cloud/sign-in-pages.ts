@@ -97,6 +97,18 @@ export function checkSignInUrl(
   else if (ssoHosts.includes(host) && AWS_START_PATHS.has(url.pathname))
     kind = "aws";
   else return `a page on ${host} that is not a sign-in page`;
+  // A server may honour the last copy of a parameter, and only the first
+  // is checked here, so no parameter may come twice.
+  const keys = [...url.searchParams.keys()];
+  if (new Set(keys).size !== keys.length)
+    return "a URL that repeats a parameter";
+  // Claude's pages always name where the browser comes back to, and the
+  // state the listener checks.
+  if (
+    kind === "claude" &&
+    (!url.searchParams.has("redirect_uri") || !url.searchParams.has("state"))
+  )
+    return "a sign-in page without a redirect_uri and a state";
   const redirect = url.searchParams.get("redirect_uri");
   let callback: SignInCallback | undefined;
   if (redirect !== null) {
