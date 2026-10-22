@@ -1,9 +1,11 @@
+import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { TmuxClient } from "@daedalus/platform";
 import type { RunnerLaunch } from "@daedalus/remote-protocol";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { cloudHostId, createApplicationContext } from "../index";
+import { claudeStatePath } from "../services/folder-trust";
 import type { RunnerTransport } from "./link";
 import { RemoteSessionHost } from "./remote-session-host";
 
@@ -47,6 +49,7 @@ class FakePod {
   screen = "Claude Code v2.1.303\nshift+tab to cycle";
   readonly typed: string[] = [];
   readonly keys: string[][] = [];
+  readonly commands: string[][] = [];
 
   readonly transport: RunnerTransport = {
     unavailable: async () => undefined,
@@ -86,6 +89,12 @@ class FakePod {
               stdout: "",
               stderr: "",
             };
+          if (p.executable === "chmod" || p.executable === "rm") {
+            this.commands.push([p.executable as string, ...args]);
+            if (p.executable === "rm")
+              for (const path of args.slice(2)) this.files.delete(path);
+            return { exitCode: 0, stdout: "", stderr: "" };
+          }
           throw new Error(`unexpected command ${String(p.executable)}`);
         }
         case "fs.read": {
@@ -123,11 +132,15 @@ aws_access_key_id = AKIAEXAMPLE
 aws_secret_access_key = secret
 `;
 
-const setUp = async (home: string) => {
+const setUp = async (
+  home: string,
+  logs?: { event: string; fields?: Record<string, unknown> }[],
+) => {
   const context = await createApplicationContext({
     env: { DAEDALUS_HOME: home },
     tmux: new NoTmux(),
     cloud: {
+      ...(logs ? { log: (event, fields) => logs.push({ event, fields }) } : {}),
       awsConfig: async () => AWS_CONFIG,
       apiKey: async (profile) =>
         profile.name === "Keys" ? "sk-ant-test-key" : undefined,
@@ -164,14 +177,16 @@ describe("cloud launch seeding", () => {
         hasCompletedOnboarding: true,
         projects: { "/workspace": { hasTrustDialogAccepted: true } },
       });
+      // Daedalus turns its writing style on by default, and the pod gets it.
       expect(JSON.parse(pod.files.get(".home/.claude/settings.json")!)).toEqual(
-        { theme: "dark" },
+        { theme: "dark", outputStyle: "Unslop" },
       );
-      expect(pod.writes).toBe(1);
+      // The built-in files, then the user's setup (claude-sync-seeder.ts).
+      expect(pod.writes).toBe(2);
 
       // A second launch finds it all there and writes nothing.
       await context.agents.spawn({ workspace: workspace.id, host: hostId });
-      expect(pod.writes).toBe(1);
+      expect(pod.writes).toBe(2);
       context.close();
     });
   });
@@ -223,6 +238,98 @@ describe("cloud launch seeding", () => {
       expect(session.status).toBe("running");
       expect(seen).toEqual([`${hostId} false undefined`]);
       expect(pod.files.get(".home/.claude/skills/x/SKILL.md")).toBe("x");
+      context.close();
+    });
+  });
+
+  test("the user's skills, commands and remote MCP servers reach the pod, and no secret does", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const logs: { event: string; fields?: Record<string, unknown> }[] = [];
+      const { context, workspace, pod, hostId } = await setUp(home, logs);
+      const claude = context.config.claudeHome;
+      // The test run shares one stand-in for ~/.claude; leave it as found.
+      const cleanUp = () =>
+        Promise.all(
+          ["skills", "commands", ".credentials.json", "settings.json"]
+            .map((name) =>
+              rm(join(claude, name), { recursive: true, force: true }),
+            )
+            .concat(rm(claudeStatePath(context.config), { force: true })),
+        );
+      try {
+        await Bun.write(join(claude, "skills/review/SKILL.md"), "review");
+        await Bun.write(join(claude, "skills/review/run.sh"), "echo hi");
+        await Bun.$`chmod 755 ${join(claude, "skills/review/run.sh")}`;
+        await Bun.write(join(claude, "commands/commit-msg.md"), "commit");
+        await Bun.write(join(claude, ".credentials.json"), '{"secret":1}');
+        await Bun.write(
+          join(claude, "settings.json"),
+          JSON.stringify({
+            env: { TOKEN: "secret" },
+            permissions: { allow: ["Bash"] },
+            apiKeyHelper: "/Users/x/key.sh",
+          }),
+        );
+        await Bun.write(
+          claudeStatePath(context.config),
+          JSON.stringify({
+            mcpServers: {
+              docs: { type: "http", url: "https://mcp.example.com/" },
+              keyed: {
+                type: "http",
+                url: "https://k.example.com/",
+                headers: { Authorization: "secret" },
+              },
+              local: { type: "stdio", command: "npx" },
+            },
+          }),
+        );
+        await context.agents.spawn({ workspace: workspace.id, host: hostId });
+        expect(pod.files.get(".home/.claude/skills/review/SKILL.md")).toBe(
+          "review",
+        );
+        expect(pod.files.get(".home/.claude/commands/commit-msg.md")).toBe(
+          "commit",
+        );
+        expect(pod.commands).toContainEqual([
+          "chmod",
+          "+x",
+          "--",
+          ".home/.claude/skills/review/run.sh",
+        ]);
+        expect(
+          JSON.parse(pod.files.get(".home/.claude.json")!).mcpServers,
+        ).toEqual({ docs: { type: "http", url: "https://mcp.example.com/" } });
+        for (const [path, text] of pod.files) {
+          expect(path).not.toContain(".credentials.json");
+          expect(text).not.toContain("secret");
+        }
+        const settings = JSON.parse(
+          pod.files.get(".home/.claude/settings.json")!,
+        );
+        expect(settings.env).toBeUndefined();
+        expect(settings.permissions).toBeUndefined();
+        expect(settings.apiKeyHelper).toBeUndefined();
+        const line = logs.find((one) => one.event === "cloud_claude_sync");
+        expect(line?.fields).toMatchObject({
+          mcpServers: ["docs"],
+          mcpLeftOut: [
+            "keyed: has headers, which may hold a secret",
+            "local: a local command",
+          ],
+        });
+
+        // Removed on the Mac, removed in the pod; nothing else written.
+        await Bun.$`rm ${join(claude, "commands/commit-msg.md")}`;
+        const writes = pod.writes;
+        await context.agents.spawn({ workspace: workspace.id, host: hostId });
+        expect(pod.files.has(".home/.claude/commands/commit-msg.md")).toBe(
+          false,
+        );
+        expect(pod.writes).toBe(writes + 1);
+      } finally {
+        await cleanUp();
+      }
       context.close();
     });
   });

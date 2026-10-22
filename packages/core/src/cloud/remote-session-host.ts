@@ -13,6 +13,9 @@ import type { RunnerTransport } from "./link";
 /** A start waits for the provider's first screen, so it gets longer. */
 const START_TIMEOUT_MS = 60_000;
 const LIST_TIMEOUT_MS = 5_000;
+/** Raw bytes per `fs.write`: base64 makes it 4 MiB, half the relay's frame. */
+const WRITE_BATCH_BYTES = 3 * 1024 * 1024;
+const WRITE_TIMEOUT_MS = 60_000;
 /** The runner gives the tool 10 seconds; the relay adds its own time. */
 const AUTH_CALLBACK_TIMEOUT_MS = 20_000;
 /** A few MiB each way through the relay. */
@@ -147,17 +150,11 @@ export class RemoteSessionHost implements SessionHost {
 
   /** Writes text files in the pod, each replaced whole. */
   async writeText(files: { path: string; text: string }[]): Promise<void> {
-    if (!files.length) return;
-    await this.transport.request(
-      this.workspaceId,
-      "fs.write",
-      {
-        files: files.map((file) => ({
-          path: file.path,
-          base64: Buffer.from(file.text).toString("base64"),
-        })),
-      },
-      LIST_TIMEOUT_MS,
+    await this.writeFiles(
+      files.map((file) => ({
+        path: file.path,
+        contents: Buffer.from(file.text),
+      })),
     );
   }
 
@@ -203,22 +200,37 @@ export class RemoteSessionHost implements SessionHost {
     );
   }
 
-  /** Writes files in the pod, each replaced whole. */
+  /**
+   * Writes files in the pod, each replaced whole, in requests of at most
+   * `WRITE_BATCH_BYTES` so each fits the relay's frame.
+   */
   async writeFiles(
     files: { path: string; contents: Uint8Array }[],
   ): Promise<void> {
-    if (!files.length) return;
-    await this.transport.request(
-      this.workspaceId,
-      "fs.write",
-      {
-        files: files.map((file) => ({
-          path: file.path,
-          base64: Buffer.from(file.contents).toString("base64"),
-        })),
-      },
-      FILE_TIMEOUT_MS,
-    );
+    let batch: typeof files = [];
+    let size = 0;
+    const send = async () => {
+      if (!batch.length) return;
+      await this.transport.request(
+        this.workspaceId,
+        "fs.write",
+        {
+          files: batch.map((file) => ({
+            path: file.path,
+            base64: Buffer.from(file.contents).toString("base64"),
+          })),
+        },
+        WRITE_TIMEOUT_MS,
+      );
+      batch = [];
+      size = 0;
+    };
+    for (const file of files) {
+      if (size && size + file.contents.length > WRITE_BATCH_BYTES) await send();
+      batch.push(file);
+      size += file.contents.length;
+    }
+    await send();
   }
 
   async isLive(session: string): Promise<boolean> {

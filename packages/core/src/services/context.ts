@@ -31,6 +31,7 @@ import { IntegratedTerminalService } from "./integrated-terminals";
 import { NotificationService } from "./notifications";
 import { PresenceService } from "./presence";
 import { ShutdownService } from "./shutdown";
+import { claudeSyncSeeder } from "../cloud/claude-sync-seeder";
 import { CloudService, type CloudServiceOptions } from "../cloud/cloud-service";
 import { CLOUD_LAUNCH_SECRETS } from "./cloud-launch";
 import { SessionMoves } from "./session-move";
@@ -124,7 +125,13 @@ export interface ApplicationContextOptions {
   /** Injected so tests reach a fake gateway, with no Keychain. */
   cloud?: Pick<
     CloudServiceOptions,
-    "fetch" | "account" | "identity" | "connect" | "awsConfig" | "apiKey"
+    | "fetch"
+    | "account"
+    | "identity"
+    | "connect"
+    | "awsConfig"
+    | "apiKey"
+    | "log"
   >;
   /** Injected so tests never reach the real Notification Center. */
   sendNativeNotification?: (
@@ -249,17 +256,24 @@ export async function createApplicationContext(
     hosts.local,
     config,
   );
+  const logger = new JsonLogger(config.logsDirectory);
+  const cloudLog =
+    options.cloud?.log ??
+    ((event: string, fields?: Record<string, unknown>) =>
+      void logger.write("info", event, fields));
   const cloud = new CloudService({
     config,
     repositories,
     workspaces,
     hosts,
     ...options.cloud,
+    log: cloudLog,
   });
   agents.onCloudLaunch((session) => cloud.prepareLaunch(session));
+  // The user's skills, commands, plugins and remote MCP servers.
+  cloud.addLaunchSeeder(claudeSyncSeeder({ config, log: cloudLog }));
   agents.onCloudReady((session, launch) => cloud.autoSignIn(session, launch));
   const events = new EventBus();
-  const logger = new JsonLogger(config.logsDirectory);
   const workspaceWatch = new WorkspaceWatchService(
     workspaces,
     events,
