@@ -544,6 +544,7 @@ export function createDesktopRequestHandlers(
       result(async () => ({
         ...(await desktopSnapshot(readModel)),
         cloudSignIns: context.cloud.signIns.list(),
+        sessionMoves: context.moves.list(),
         cloudPreparing: context.cloud.preparing(),
       })),
     sessionUpdate: ({ sessionId, name, pinned, color, autoRebirthPercent }) =>
@@ -884,6 +885,22 @@ export function createDesktopRequestHandlers(
           await context.agents.reconcile();
         return agentDto(await context.agents.reviveLost(sessionId));
       }),
+    agentMove: ({ sessionId, to, approved }) =>
+      mutate(async () => {
+        const moved = await context.moves.move({
+          sessionId,
+          to,
+          ...(approved ? { approved } : {}),
+        });
+        return moved.status === "moved"
+          ? { status: "moved" as const, session: agentDto(moved.session) }
+          : moved;
+      }),
+    agentMoveCancel: ({ sessionId }) =>
+      result(() => {
+        context.moves.cancel(sessionId);
+        return null;
+      }),
     cloudSignInOpen: ({ requestId }) =>
       result(async () => {
         const page = await context.cloud.openSignIn(requestId);
@@ -894,16 +911,6 @@ export function createDesktopRequestHandlers(
           );
         return { host: page.host, paste: page.paste };
       }),
-    // The move itself is @move's (artifacts/cloud-sessions/move-design.md);
-    // until it lands these say so.
-    agentMove: () =>
-      result(() => {
-        throw new DaedalusError(
-          "DEPENDENCY",
-          "Moving a session between this Mac and the cloud is not in this build yet",
-        );
-      }),
-    agentMoveCancel: () => result(() => null),
     cloudSignInDismiss: ({ requestId, sessionId }) =>
       result(() => {
         context.cloud.signIns.dismiss({

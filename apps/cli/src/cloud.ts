@@ -19,6 +19,7 @@ export const cloudHelp = `Cloud workspace commands:
   daedal cloud delete <workspace> --force
   daedal cloud spawn <workspace> [--terminal] [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>]
   daedal cloud spawn <workspace> --team <lead> [--task <task-ref>] [--name <name>] [--model <model>] [--message <instructions>]
+  daedal cloud move <agent-id> --to cloud|local [--approve]
 
 A cloud workspace is a local workspace with a pod of its own on a Daedalus
 gateway: sessions run there, and this Mac keeps the board, the database and
@@ -35,6 +36,14 @@ from the same workspace; team messages are typed into it at its prompt.
 Its hooks and its 'daedal' calls come back to this Mac, which runs only the
 commands a session needs to report on itself and work its own workspace's
 tasks.
+
+'move' carries a Claude session to its workspace's pod, or back to this
+Mac, once its current turn ends: its conversation, and its repositories'
+commits, staged, unstaged and untracked changes (never ignored files). It
+resumes there with the same history. Moving back lists files changed in the
+pod that steer an agent or run on open, such as .claude/, CLAUDE.md or
+.envrc, and stops there unless --approve accepts them. On a failure the
+session runs where it was.
 
 'sleep' removes the pod and keeps its volume; the sessions running there end,
 and 'daedal agent revive' resumes them after 'wake'. 'delete' removes the pod,
@@ -177,6 +186,41 @@ export async function cloudCommand(
           ? await cloud.sleep(reference)
           : await cloud.wake(reference);
     printResult(workspace, json, () => printWorkspace(workspace));
+    return 0;
+  }
+  if (action === "move") {
+    const parsed = parseArguments(args, ["to"], ["approve"]);
+    expectPositionals(
+      parsed.positionals,
+      1,
+      "daedal cloud move <agent-id> --to cloud|local [--approve]",
+    );
+    const to = parsed.values.to;
+    if (to !== "cloud" && to !== "local")
+      throw new DaedalusError("VALIDATION", "--to is cloud or local");
+    const sessionId = (await context.agents.get(parsed.positionals[0]!)).id;
+    let result = await context.moves.move({ sessionId, to });
+    if (result.status === "needsApproval" && parsed.flags.has("approve"))
+      result = await context.moves.move({
+        sessionId,
+        to,
+        approved: result.paths,
+      });
+    if (result.status === "needsApproval") {
+      printResult(result, json, () => {
+        console.log(
+          "These files changed in the cloud and steer an agent or run on open; move again with --approve to take them:",
+        );
+        for (const path of result.paths) console.log(`  ${path}`);
+      });
+      return 1;
+    }
+    const session = result.session;
+    printResult(session, json, () =>
+      console.log(
+        `Moved ${session.id} to ${to === "cloud" ? "the cloud" : "this Mac"}`,
+      ),
+    );
     return 0;
   }
   if (action === "spawn") {

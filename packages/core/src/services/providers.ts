@@ -67,6 +67,11 @@ export interface ResumeInput {
   workingDirectory: string;
   /** The account's environment for those commands. */
   env: Record<string, string>;
+  /**
+   * Claude only: the permission mode to resume in, for a session that moved
+   * between hosts. Otherwise left out, as `permissionModeArgs` explains.
+   */
+  permissionMode?: string;
 }
 
 export interface ProviderLaunch {
@@ -936,6 +941,8 @@ class ConfiguredProvider implements AgentProvider {
         : permissionModeArgs(this.name, this.definition.permissionMode)),
       ...(model ? ["--model", model] : []),
     ];
+    if (input.resume?.permissionMode)
+      args.push("--permission-mode", input.resume.permissionMode);
     if (input.resume) args.push("--resume", input.resume.nativeId!);
     else if (input.sessionId) {
       args.push("--session-id", input.sessionId);
@@ -969,7 +976,13 @@ class ConfiguredProvider implements AgentProvider {
           "CONFLICT",
           "This session predates native resume support and cannot be resumed safely",
         );
-      return ["--resume", id];
+      return [
+        ...(resume.permissionMode
+          ? ["--permission-mode", resume.permissionMode]
+          : []),
+        "--resume",
+        id,
+      ];
     }
     // Codex from here: only Claude and Codex take a prompt argument, and
     // `buildLaunch` refuses a resume for any provider that does not.

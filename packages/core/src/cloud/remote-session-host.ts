@@ -1,4 +1,4 @@
-import type { CommandResult } from "@daedalus/remote-protocol";
+import type { CommandResult, RunnerCommand } from "@daedalus/remote-protocol";
 import { DaedalusError } from "../errors";
 import { cloudHostId } from "../services/cloud-launch";
 import type {
@@ -18,6 +18,10 @@ const WRITE_BATCH_BYTES = 3 * 1024 * 1024;
 const WRITE_TIMEOUT_MS = 60_000;
 /** The runner gives the tool 10 seconds; the relay adds its own time. */
 const AUTH_CALLBACK_TIMEOUT_MS = 20_000;
+/** A few MiB each way through the relay. */
+const FILE_TIMEOUT_MS = 60_000;
+/** The runner's own limit for a command with no `timeoutMs`. */
+const RUN_TIMEOUT_MS = 10 * 60_000;
 const MAX_SESSIONS = 10_000;
 const MAX_CAPTURE = 1024 * 1024;
 
@@ -147,7 +151,52 @@ export class RemoteSessionHost implements SessionHost {
   /** Writes text files in the pod, each replaced whole. */
   async writeText(files: { path: string; text: string }[]): Promise<void> {
     await this.writeFiles(
-      files.map((file) => ({ path: file.path, bytes: Buffer.from(file.text) })),
+      files.map((file) => ({
+        path: file.path,
+        contents: Buffer.from(file.text),
+      })),
+    );
+  }
+
+  /**
+   * A one-shot command in the pod, not in tmux. The reply is the pod's, so
+   * only its exit code and two strings are kept.
+   */
+  async run(command: RunnerCommand): Promise<CommandResult> {
+    const result: unknown = await this.transport.request(
+      this.workspaceId,
+      "host.run",
+      command,
+      (command.timeoutMs ?? RUN_TIMEOUT_MS) + LIST_TIMEOUT_MS * 6,
+    );
+    const { exitCode, stdout, stderr } = (result ?? {}) as Partial<
+      Record<keyof CommandResult, unknown>
+    >;
+    if (
+      typeof exitCode !== "number" ||
+      typeof stdout !== "string" ||
+      typeof stderr !== "string"
+    )
+      throw malformed("host.run");
+    return { exitCode, stdout, stderr };
+  }
+
+  /** A file in the pod, or undefined when it is not there; at most 8 MiB. */
+  async readFile(path: string): Promise<Uint8Array | undefined> {
+    const file: unknown = await this.transport.request(
+      this.workspaceId,
+      "fs.read",
+      { path },
+      FILE_TIMEOUT_MS,
+    );
+    if (file === null) return undefined;
+    if (
+      typeof file !== "object" ||
+      typeof (file as { base64?: unknown }).base64 !== "string"
+    )
+      throw malformed("fs.read");
+    return new Uint8Array(
+      Buffer.from((file as { base64: string }).base64, "base64"),
     );
   }
 
@@ -156,7 +205,7 @@ export class RemoteSessionHost implements SessionHost {
    * `WRITE_BATCH_BYTES` so each fits the relay's frame.
    */
   async writeFiles(
-    files: { path: string; bytes: Uint8Array }[],
+    files: { path: string; contents: Uint8Array }[],
   ): Promise<void> {
     let batch: typeof files = [];
     let size = 0;
@@ -168,7 +217,7 @@ export class RemoteSessionHost implements SessionHost {
         {
           files: batch.map((file) => ({
             path: file.path,
-            base64: Buffer.from(file.bytes).toString("base64"),
+            base64: Buffer.from(file.contents).toString("base64"),
           })),
         },
         WRITE_TIMEOUT_MS,
@@ -177,24 +226,11 @@ export class RemoteSessionHost implements SessionHost {
       size = 0;
     };
     for (const file of files) {
-      if (size && size + file.bytes.length > WRITE_BATCH_BYTES) await send();
+      if (size && size + file.contents.length > WRITE_BATCH_BYTES) await send();
       batch.push(file);
-      size += file.bytes.length;
+      size += file.contents.length;
     }
     await send();
-  }
-
-  /** A one-shot command in the pod, at the workspace root; not in tmux. */
-  async run(executable: string, args: string[]): Promise<CommandResult> {
-    const result: unknown = await this.transport.request(
-      this.workspaceId,
-      "host.run",
-      { cwd: ".", executable, args, timeoutMs: 30_000 },
-      WRITE_TIMEOUT_MS,
-    );
-    if (typeof (result as { exitCode?: unknown } | null)?.exitCode !== "number")
-      throw malformed("host.run");
-    return result as CommandResult;
   }
 
   async isLive(session: string): Promise<boolean> {

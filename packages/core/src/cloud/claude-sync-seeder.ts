@@ -104,17 +104,19 @@ export function claudeSyncSeeder(options: {
     const isManifest = (file: { path: string }) =>
       file.path === SYNC_MANIFEST_PATH;
     // The manifest goes last, after everything it lists.
-    await host.writeFiles([
-      ...plan.writes.filter((file) => !isManifest(file)),
-      ...merged,
-      ...plan.writes.filter(isManifest),
-    ]);
+    await host.writeFiles(
+      [
+        ...plan.writes.filter((file) => !isManifest(file)),
+        ...merged,
+        ...plan.writes.filter(isManifest),
+      ].map((file) => ({ path: file.path, contents: file.bytes })),
+    );
     // fs.write makes plain files; scripts in skills and plugins need to run.
     // Neither command stops a launch: the files are in place either way.
     const failed: string[] = [];
     const run = async (executable: string, args: string[]) => {
       const result = await host
-        .run(executable, args)
+        .run({ cwd: ".", executable, args, timeoutMs: 30_000 })
         .catch((error: unknown) => ({
           exitCode: -1,
           stdout: "",

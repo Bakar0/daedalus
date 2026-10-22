@@ -1,0 +1,366 @@
+import { DaedalusError } from "../errors";
+import { must, type MoveSide } from "./move-side";
+
+/**
+ * A repository's state as a move carries it: the commit checked out, and two
+ * commits on top of it made without touching the worktree or its index. One
+ * holds the index (staged changes), the other the working tree with its
+ * untracked files; ignored files are in neither.
+ */
+export interface RepositorySnapshot {
+  head: string;
+  index: string;
+  work: string;
+}
+
+const IDENTITY = {
+  GIT_AUTHOR_NAME: "Daedalus",
+  GIT_AUTHOR_EMAIL: "daedalus@localhost",
+  GIT_COMMITTER_NAME: "Daedalus",
+  GIT_COMMITTER_EMAIL: "daedalus@localhost",
+};
+
+const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+
+/** Where a move keeps its refs; `<sessionId>` is a UUID. */
+const outgoing = (sessionId: string) => `refs/daedalus/move/${sessionId}`;
+const moves = (sessionId: string) => `refs/daedalus/moves/${sessionId}`;
+/** The working-tree commit both sides last agreed on. */
+export const lastRef = (sessionId: string) => `${moves(sessionId)}/last`;
+
+const objectId = (value: string, what: string): string => {
+  if (!OBJECT_ID.test(value))
+    throw new DaedalusError("DEPENDENCY", `git gave no ${what}`);
+  return value;
+};
+
+const git = (
+  side: MoveSide,
+  dir: string,
+  args: string[],
+  env?: Record<string, string>,
+) => must(side, dir, "git", args, env);
+
+/** Whether `dir` on `side` is the top of a git worktree. */
+export async function isRepository(
+  side: MoveSide,
+  dir: string,
+): Promise<boolean> {
+  // A command cannot even start in a folder that is not there.
+  if ((await side.run(".", "test", ["-d", side.absolute(dir)])).exitCode !== 0)
+    return false;
+  const result = await side.run(dir, "git", ["rev-parse", "--show-prefix"]);
+  return result.exitCode === 0 && result.stdout.trim() === "";
+}
+
+/** Snapshots a repository without changing it, its index or its refs. */
+export async function snapshotRepository(
+  side: MoveSide,
+  dir: string,
+): Promise<RepositorySnapshot> {
+  const head = objectId(
+    await git(side, dir, ["rev-parse", "--verify", "HEAD^{commit}"]),
+    "HEAD",
+  );
+  // Fails while a merge has conflicts, which is the right answer: such a
+  // state does not survive being carried.
+  const indexTree = objectId(await git(side, dir, ["write-tree"]), "tree");
+  const index = objectId(
+    await git(
+      side,
+      dir,
+      ["commit-tree", indexTree, "-p", head, "-m", "Daedalus move: staged"],
+      IDENTITY,
+    ),
+    "commit",
+  );
+  const temporary = await git(side, dir, [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-path",
+    `daedalus-move-index-${crypto.randomUUID()}`,
+  ]);
+  const scratch = { ...IDENTITY, GIT_INDEX_FILE: temporary };
+  try {
+    await git(side, dir, ["read-tree", indexTree], scratch);
+    await git(side, dir, ["add", "-A", "--", "."], scratch);
+    const workTree = objectId(
+      await git(side, dir, ["write-tree"], scratch),
+      "tree",
+    );
+    const work = objectId(
+      await git(
+        side,
+        dir,
+        ["commit-tree", workTree, "-p", head, "-m", "Daedalus move: work"],
+        IDENTITY,
+      ),
+      "commit",
+    );
+    return { head, index, work };
+  } finally {
+    await side.run(dir, "rm", ["-f", "--", temporary]).catch(() => undefined);
+  }
+}
+
+/** The commit a ref names on this side, or undefined. */
+export async function resolveRef(
+  side: MoveSide,
+  dir: string,
+  ref: string,
+): Promise<string | undefined> {
+  const result = await side.run(dir, "git", [
+    "rev-parse",
+    "--verify",
+    "--quiet",
+    `${ref}^{commit}`,
+  ]);
+  const id = result.stdout.trim();
+  return result.exitCode === 0 && OBJECT_ID.test(id) ? id : undefined;
+}
+
+/**
+ * Writes a bundle of a snapshot to `file`. Commits named in `bases` that this
+ * side has are left out, so a repository that moved before sends only what
+ * is new.
+ */
+export async function writeBundle(
+  side: MoveSide,
+  dir: string,
+  sessionId: string,
+  snapshot: RepositorySnapshot,
+  bases: string[],
+  file: string,
+): Promise<void> {
+  const prefix = outgoing(sessionId);
+  await git(side, dir, ["update-ref", `${prefix}/index`, snapshot.index]);
+  await git(side, dir, ["update-ref", `${prefix}/work`, snapshot.work]);
+  const known: string[] = [];
+  for (const base of new Set(bases))
+    if (
+      OBJECT_ID.test(base) &&
+      (await side.run(dir, "git", ["cat-file", "-e", `${base}^{commit}`]))
+        .exitCode === 0
+    )
+      known.push(`^${base}`);
+  try {
+    await git(side, dir, [
+      "bundle",
+      "create",
+      side.absolute(file),
+      `${prefix}/index`,
+      `${prefix}/work`,
+      ...known,
+    ]);
+  } finally {
+    await side
+      .run(dir, "git", ["update-ref", "-d", `${prefix}/index`])
+      .catch(() => undefined);
+    await side
+      .run(dir, "git", ["update-ref", "-d", `${prefix}/work`])
+      .catch(() => undefined);
+  }
+}
+
+/**
+ * Takes a bundle the other side wrote into this repository's objects, and
+ * reads the snapshot from it. The bundle is not trusted: git checks every
+ * object it fetches, only the two refs this move named are taken, they land
+ * under this session's own ref folder, and both commits must sit right on
+ * one common parent.
+ */
+export async function fetchBundle(
+  side: MoveSide,
+  dir: string,
+  sessionId: string,
+  file: string,
+): Promise<RepositorySnapshot> {
+  const from = outgoing(sessionId);
+  const to = moves(sessionId);
+  await git(side, dir, ["bundle", "verify", "--quiet", side.absolute(file)]);
+  await git(side, dir, [
+    "-c",
+    "transfer.fsckObjects=true",
+    "-c",
+    "fetch.fsckObjects=true",
+    "fetch",
+    "--quiet",
+    "--no-tags",
+    "--no-write-fetch-head",
+    side.absolute(file),
+    `+${from}/index:${to}/incoming-index`,
+    `+${from}/work:${to}/incoming-work`,
+  ]);
+  const index = await resolveRef(side, dir, `${to}/incoming-index`);
+  const work = await resolveRef(side, dir, `${to}/incoming-work`);
+  if (!index || !work)
+    throw new DaedalusError("DEPENDENCY", "The move's bundle is incomplete");
+  const parents = async (commit: string) =>
+    (await git(side, dir, ["rev-list", "--parents", "-n", "1", commit]))
+      .split(" ")
+      .slice(1);
+  const [workParents, indexParents] = [
+    await parents(work),
+    await parents(index),
+  ];
+  if (
+    workParents.length !== 1 ||
+    indexParents.length !== 1 ||
+    workParents[0] !== indexParents[0]
+  )
+    throw new DaedalusError(
+      "DEPENDENCY",
+      "The move's bundle is not a snapshot Daedalus made",
+    );
+  return { head: objectId(workParents[0]!, "commit"), index, work };
+}
+
+/** Paths whose contents differ between two commits' trees. */
+export async function changedPaths(
+  side: MoveSide,
+  dir: string,
+  from: string,
+  to: string,
+): Promise<string[]> {
+  const result = await side.run(dir, "git", [
+    "diff",
+    "--name-only",
+    "-z",
+    "--no-renames",
+    from,
+    to,
+  ]);
+  if (result.exitCode !== 0)
+    throw new DaedalusError(
+      "DEPENDENCY",
+      `git diff failed on ${side.label}: ${result.stderr.trim()}`,
+    );
+  return result.stdout.split("\0").filter(Boolean);
+}
+
+/**
+ * Whether the copy on this side is as the session left it: the commit and
+ * working tree it last sent or received. A side with no record of the
+ * session has not been agreed on, so it counts as changed.
+ */
+export async function unchangedSince(
+  side: MoveSide,
+  dir: string,
+  sessionId: string,
+): Promise<boolean> {
+  const last = await resolveRef(side, dir, lastRef(sessionId));
+  if (!last) return false;
+  const now = await snapshotRepository(side, dir);
+  const [lastTree, nowTree, lastHead] = await Promise.all([
+    git(side, dir, ["rev-parse", `${last}^{tree}`]),
+    git(side, dir, ["rev-parse", `${now.work}^{tree}`]),
+    git(side, dir, ["rev-parse", `${last}^1`]),
+  ]);
+  return lastTree === nowTree && lastHead === now.head;
+}
+
+/** Records the working tree both sides now agree on. */
+export async function markLast(
+  side: MoveSide,
+  dir: string,
+  sessionId: string,
+  work: string,
+): Promise<void> {
+  await git(side, dir, ["update-ref", lastRef(sessionId), work]);
+}
+
+/**
+ * Lays a fetched snapshot down in `dir`: the branch at its commit, the
+ * working tree with staged, unstaged and untracked changes as they were, and
+ * the index as it was. Files the side had untracked at `previous` and the
+ * snapshot no longer has are removed.
+ */
+export async function applySnapshot(
+  side: MoveSide,
+  dir: string,
+  branch: string,
+  snapshot: RepositorySnapshot,
+  previous?: string,
+): Promise<void> {
+  const gone = previous
+    ? (
+        await side.run(dir, "git", [
+          "diff",
+          "--name-only",
+          "-z",
+          "--no-renames",
+          "--diff-filter=D",
+          previous,
+          snapshot.work,
+        ])
+      ).stdout
+        .split("\0")
+        .filter(Boolean)
+    : [];
+  await git(side, dir, ["check-ref-format", "--branch", branch]);
+  await git(side, dir, [
+    "checkout",
+    "--quiet",
+    "-f",
+    "-B",
+    branch,
+    snapshot.head,
+  ]);
+  await git(side, dir, [
+    "restore",
+    `--source=${snapshot.work}`,
+    "--worktree",
+    "--",
+    ".",
+  ]);
+  await git(side, dir, ["read-tree", snapshot.index]);
+  // `checkout -f` left untracked files alone; those the other side deleted
+  // go too, through git so nothing outside the worktree is touched.
+  if (gone.length) {
+    const untracked = new Set(
+      (
+        await git(side, dir, [
+          "ls-files",
+          "-z",
+          "--others",
+          "--exclude-standard",
+        ])
+      )
+        .split("\0")
+        .filter(Boolean),
+    );
+    const remove = gone.filter((path) => untracked.has(path));
+    for (let start = 0; start < remove.length; start += 200)
+      await git(side, dir, [
+        "clean",
+        "-f",
+        "-q",
+        "--",
+        ...remove.slice(start, start + 200).map((path) => `:(literal)${path}`),
+      ]);
+  }
+}
+
+/** Whether a repository path steers an agent or runs when it is opened. */
+export function steersAgent(path: string): boolean {
+  const parts = path.split("/");
+  const name = parts.at(-1) ?? "";
+  const folders = parts.slice(0, -1);
+  return (
+    folders.some((folder) =>
+      [".claude", ".husky", ".githooks", ".vscode", ".devcontainer"].includes(
+        folder,
+      ),
+    ) ||
+    [
+      "CLAUDE.md",
+      "CLAUDE.local.md",
+      "AGENTS.md",
+      ".mcp.json",
+      ".envrc",
+    ].includes(name) ||
+    [".claude", ".husky", ".githooks", ".vscode", ".devcontainer"].includes(
+      name,
+    )
+  );
+}
