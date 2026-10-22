@@ -55,7 +55,10 @@ data:
       name: workspaces
     spec:
       hard:
-        {{- toYaml .Values.tenant.quota | nindent 8 }}
+        # Two PVCs (data and state) per workspace the gateway lets a user
+        # have, so the quota never refuses a workspace the limit allows.
+        persistentvolumeclaims: {{ mul 2 (int .Values.gateway.limits.workspacesPerUser) | quote }}
+        {{- toYaml (omit .Values.tenant.quota "persistentvolumeclaims") | nindent 8 }}
   serviceaccount.yaml: |
     apiVersion: v1
     kind: ServiceAccount

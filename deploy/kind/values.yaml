@@ -13,7 +13,7 @@ workspace:
 tenant:
   quota:
     pods: "6"
-    persistentvolumeclaims: "6"
+    # PVCs: 2 x gateway.limits.workspacesPerUser, set by the chart.
     requests.storage: 20Gi
     requests.ephemeral-storage: 10Gi
     requests.cpu: "2"

@@ -30,10 +30,10 @@ workspace:
 tenant:
   # Each workspace has 2 PVCs (data and state) and a runner container that
   # requests 50m CPU, 64Mi memory and 64Mi ephemeral storage. Size the quota for
-  # gateway.limits.workspacesPerUser workspaces: 5 x 2 PVCs, 5 x (20Gi + 1Gi).
+  # gateway.limits.workspacesPerUser workspaces: 5 x (20Gi + 1Gi). The PVC count
+  # is not set here: the chart makes it 2 x workspacesPerUser.
   quota:
     pods: "10"
-    persistentvolumeclaims: "10"
     requests.storage: 110Gi
     requests.ephemeral-storage: 20Gi
     requests.cpu: "8"
