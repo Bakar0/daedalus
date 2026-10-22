@@ -214,6 +214,36 @@ describe("GitStatusMonitor", () => {
           state: "ahead",
           changedFiles: 0,
         });
+
+        // What git ignores never reaches git: a build writing under an
+        // ignored folder starts no pass at all once the tree's listing is in.
+        await Bun.write(join(worktree.path, ".gitignore"), "dist/\n");
+        counted.noteFilesChanged(
+          workspace.id,
+          [{ path: `${relativeRoot}/.gitignore` }],
+          false,
+        );
+        await statusBecomes(1);
+        // The first report asks git for the tree's ignored paths.
+        await Bun.write(join(worktree.path, "dist", "app.js"), "built\n");
+        counted.noteFilesChanged(
+          workspace.id,
+          [{ path: `${relativeRoot}/dist/app.js` }],
+          false,
+        );
+        await Bun.sleep(1_000);
+        await counted.settleGitStatus();
+        expect(
+          await measured(async () => {
+            counted.noteFilesChanged(
+              workspace.id,
+              [{ path: `${relativeRoot}/dist/app.js` }],
+              false,
+            );
+            await Bun.sleep(1_000);
+            await counted.settleGitStatus();
+          }),
+        ).toEqual({ status: 0, changedFiles: 0, changes: 0 });
         counted.close();
         context.close();
       });

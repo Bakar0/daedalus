@@ -122,6 +122,13 @@ export interface WatchFileTreeOptions {
   onError?: (error: Error) => void;
   /** Directory names dropped wherever they appear in a path. */
   ignored?: readonly string[];
+  /**
+   * Any other path to drop, relative to the root with `/` separators. Asked
+   * for every raw event before it counts toward `overflowLimit`, so it must
+   * be cheap, and a build writing thousands of ignored files then never
+   * overflows the window.
+   */
+  ignorePath?: (relativePath: string) => boolean;
   /** How long a quiet period ends a window. Defaults to 150ms. */
   debounceMs?: number;
   /**
@@ -177,6 +184,7 @@ export function watchFileTree(options: WatchFileTreeOptions): FileTreeWatcher {
     onChanges,
     onError,
     ignored = DEFAULT_IGNORED_DIRECTORIES,
+    ignorePath,
     debounceMs = 150,
     overflowLimit = 512,
     now = Date.now,
@@ -217,7 +225,12 @@ export function watchFileTree(options: WatchFileTreeOptions): FileTreeWatcher {
     watcher = watch(root, { recursive: true }, (_type, filename) => {
       if (closed || !filename) return;
       const relativePath = String(filename).split("\\").join("/");
-      if (!relativePath || isIgnoredWatchPath(relativePath, ignored)) return;
+      if (
+        !relativePath ||
+        isIgnoredWatchPath(relativePath, ignored) ||
+        ignorePath?.(relativePath)
+      )
+        return;
       rawEvents += 1;
       // Past the limit the individual paths stop being worth holding: the
       // batch is going to be an overflow whatever else arrives.

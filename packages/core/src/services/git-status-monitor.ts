@@ -17,6 +17,7 @@ import type {
 } from "../domain";
 import type { SqliteRepositories } from "../repositories";
 import { GH_EXECUTABLE_FALLBACKS } from "./git-commands";
+import { IgnoredPaths } from "./git-ignored";
 import type { WorkspaceService } from "./workspaces";
 
 // The branch a working tree is on now, or `null` on a detached HEAD. Daedalus
@@ -649,6 +650,8 @@ export class GitStatusMonitor {
    * age. Kept in step with the sessions by every pass.
    */
   private readonly treeWatchers = new Map<string, FileTreeWatcher>();
+  /** What git ignores in each tree, so changes there cost no pass. */
+  private readonly ignored = new IgnoredPaths();
   /** Workspaces whose file changes are waiting out `FILE_CHANGE_SETTLE_MS`. */
   private readonly settlingWorkspaces = new Map<
     string,
@@ -753,7 +756,9 @@ export class GitStatusMonitor {
         overflow ||
         changes.some(
           (change) =>
-            change.path === root || change.path.startsWith(`${root}/`),
+            change.path === root ||
+            (change.path.startsWith(`${root}/`) &&
+              !this.ignored.matches(key, change.path.slice(root.length + 1))),
         )
       )
         this.markTreeChanged(key, workspaceId);
@@ -804,6 +809,7 @@ export class GitStatusMonitor {
       if (!wanted.has(key)) {
         watcher.close();
         this.treeWatchers.delete(key);
+        this.ignored.forget(key);
       }
     for (const [key, worktree] of wanted) {
       if (this.treeWatchers.has(key)) continue;
@@ -812,7 +818,11 @@ export class GitStatusMonitor {
           key,
           watchFileTree({
             root: worktree.path,
-            // Any change at all, or a burst too big to describe, means the
+            // What git ignores never changes a status, and dropping it here,
+            // before the overflow count, keeps a build's output from
+            // starting a pass.
+            ignorePath: (path) => this.ignored.matches(key, path),
+            // Any other change, or a burst too big to describe, means the
             // tree is worth measuring; which file does not matter here.
             onChanges: () => this.markTreeChanged(key, worktree.workspaceId),
             // A tree that cannot be watched still has its maximum age.
@@ -1344,5 +1354,6 @@ export class GitStatusMonitor {
     if (!this.statusRefresh && workspaceId !== undefined)
       this.scheduleRefresh(workspaceId, true);
     while (this.statusRefresh) await this.statusRefresh;
+    await this.ignored.settle();
   }
 }
