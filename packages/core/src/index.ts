@@ -24,6 +24,7 @@ export * from "./services/cloud-calls";
 export * from "./services/cloud-mark";
 export * from "./cloud/broker";
 export * from "./cloud/cloud-account";
+export * from "./cloud/cloud-seed";
 export * from "./cloud/cloud-service";
 export * from "./cloud/gateway-client";
 export * from "./cloud/link";

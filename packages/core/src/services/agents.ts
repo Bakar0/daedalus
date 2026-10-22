@@ -418,6 +418,13 @@ export const startupQuestion = (provider: string, screen: string): boolean =>
 const startupQuestionReason = (session: AgentSession): string =>
   `${providerLabel(session.provider)} is asking something before it starts. Answer it in the session's terminal.`;
 
+/** What a cloud launch adds for its account. */
+export interface CloudLaunchExtras {
+  env?: Record<string, string>;
+  /** In place of the workspace's launch secrets, when set. */
+  secrets?: Record<string, string>;
+}
+
 export class AgentService {
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -760,6 +767,20 @@ export class AgentService {
     workspaceId: string,
   ) => Promise<Record<string, string>> = async () => ({});
 
+  private cloudLaunch: (session: AgentSession) => Promise<CloudLaunchExtras> =
+    async () => ({});
+
+  /**
+   * Readies a cloud Claude session's pod before each launch: the files that
+   * skip Claude's first-run screens, and what its account adds to the
+   * launch. Set by the context, from the cloud service.
+   */
+  onCloudLaunch(
+    prepare: (session: AgentSession) => Promise<CloudLaunchExtras>,
+  ): void {
+    this.cloudLaunch = prepare;
+  }
+
   /** Reads the secrets a cloud session is launched with; set by the context. */
   onCloudSecrets(
     read: (workspaceId: string) => Promise<Record<string, string>>,
@@ -931,20 +952,26 @@ export class AgentService {
     const task = session.taskId
       ? this.repositories.findTask(session.taskId)
       : undefined;
+    const extras =
+      session.kind === "agent" ? await this.cloudLaunch(session) : {};
     await host.start({
       session: session.tmuxSession,
       cwd: session.workingDirectory,
       executable: session.command,
       args: session.args,
-      env: cloudEnvironment({
-        sessionId: session.id,
-        workspaceId: session.workspaceId,
-        workingDirectory: session.workingDirectory,
-        task,
-      }),
+      env: {
+        ...cloudEnvironment({
+          sessionId: session.id,
+          workspaceId: session.workspaceId,
+          workingDirectory: session.workingDirectory,
+          task,
+        }),
+        ...extras.env,
+      },
       secrets:
         session.kind === "agent"
-          ? await this.cloudSecrets(session.workspaceId).catch(() => ({}))
+          ? (extras.secrets ??
+            (await this.cloudSecrets(session.workspaceId).catch(() => ({}))))
           : undefined,
     });
   }

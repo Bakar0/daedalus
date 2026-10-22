@@ -15,7 +15,16 @@ import { defaultVault, RemoteStore } from "../services/remote-store";
 import type { SessionHosts } from "../services/session-hosts";
 import type { WorkspaceService } from "../services/workspaces";
 import { BrokerTransport, brokerAvailable, serveBroker } from "./broker";
+import type { AgentSession } from "../domain";
+import type { CloudLaunchExtras } from "../services/agents";
 import { CloudAccount, type CloudSignIn } from "./cloud-account";
+import {
+  CLOUD_SEED_PATHS,
+  mergeAwsConfig,
+  seedClaudeSettings,
+  seedClaudeState,
+  type AwsSsoCopy,
+} from "./cloud-seed";
 import { GatewayClient } from "./gateway-client";
 import {
   CloudLink,
@@ -400,6 +409,54 @@ export class CloudService {
             lostReason: lostReason ?? null,
           });
     });
+  }
+
+  /**
+   * Readies the pod for a cloud Claude launch: the files that skip Claude's
+   * first-run screens, merged into what the pod already has. A pod that
+   * cannot be read or written still gets the launch, with those screens.
+   */
+  async prepareLaunch(session: AgentSession): Promise<CloudLaunchExtras> {
+    const host = this.options.hosts.find(session.hostId);
+    // A host of another kind (a test's) has no files to seed.
+    if (host instanceof RemoteSessionHost)
+      await this.#seed(host, { bedrock: false }).catch((error: unknown) =>
+        this.options.log?.("cloud_seed_failed", {
+          workspaceId: host.workspaceId,
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    return {};
+  }
+
+  async #seed(
+    host: RemoteSessionHost,
+    options: { bedrock: boolean; awsSections?: AwsSsoCopy["sections"] },
+  ): Promise<void> {
+    const files: { path: string; text: string }[] = [];
+    const put = (path: string, text: string | undefined) => {
+      if (text !== undefined) files.push({ path, text });
+    };
+    put(
+      CLOUD_SEED_PATHS.claudeState,
+      seedClaudeState(await host.readText(CLOUD_SEED_PATHS.claudeState)),
+    );
+    put(
+      CLOUD_SEED_PATHS.claudeSettings,
+      seedClaudeSettings(
+        await host.readText(CLOUD_SEED_PATHS.claudeSettings),
+        options,
+      ),
+    );
+    if (options.awsSections)
+      put(
+        CLOUD_SEED_PATHS.awsConfig,
+        mergeAwsConfig(
+          await host.readText(CLOUD_SEED_PATHS.awsConfig),
+          options.awsSections,
+        ),
+      );
+    await host.writeText(files);
   }
 
   /** The host a local workspace's cloud sessions run on. */

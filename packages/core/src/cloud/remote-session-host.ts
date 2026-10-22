@@ -74,6 +74,41 @@ export class RemoteSessionHost implements SessionHost {
     );
   }
 
+  /** A text file in the pod, or undefined when it is not there. */
+  async readText(path: string): Promise<string | undefined> {
+    const file: unknown = await this.transport.request(
+      this.workspaceId,
+      "fs.read",
+      { path },
+      LIST_TIMEOUT_MS,
+    );
+    if (file === null) return undefined;
+    if (
+      typeof file !== "object" ||
+      typeof (file as { base64?: unknown }).base64 !== "string"
+    )
+      throw malformed("fs.read");
+    return Buffer.from((file as { base64: string }).base64, "base64").toString(
+      "utf8",
+    );
+  }
+
+  /** Writes text files in the pod, each replaced whole. */
+  async writeText(files: { path: string; text: string }[]): Promise<void> {
+    if (!files.length) return;
+    await this.transport.request(
+      this.workspaceId,
+      "fs.write",
+      {
+        files: files.map((file) => ({
+          path: file.path,
+          base64: Buffer.from(file.text).toString("base64"),
+        })),
+      },
+      LIST_TIMEOUT_MS,
+    );
+  }
+
   async isLive(session: string): Promise<boolean> {
     const live: unknown = await this.transport.request(
       this.workspaceId,

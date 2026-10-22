@@ -1,0 +1,149 @@
+import { describe, expect, test } from "vitest";
+import type { TmuxClient } from "@daedalus/platform";
+import type { RunnerLaunch } from "@daedalus/remote-protocol";
+import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
+import { cloudHostId, createApplicationContext } from "../index";
+import type { RunnerTransport } from "./link";
+import { RemoteSessionHost } from "./remote-session-host";
+
+class NoTmux implements TmuxClient {
+  openPty() {
+    return { start: async () => {}, write() {}, resize() {}, close() {} };
+  }
+  async pinWindowSize() {}
+  async unpinWindowSize() {}
+  async probe() {
+    return "tmux 3.7c";
+  }
+  async createSession() {}
+  async hasSession() {
+    return false;
+  }
+  async listSessions() {
+    return [];
+  }
+  async attach() {
+    return 0;
+  }
+  async capture() {
+    return "";
+  }
+  async sendKeys() {}
+  async send() {}
+  async stop() {}
+  async killServer() {
+    return false;
+  }
+}
+
+/** A pod's runner in memory: its files, its sessions and their launches. */
+class FakePod {
+  readonly files = new Map<string, string>();
+  readonly launches: RunnerLaunch[] = [];
+  readonly live = new Set<string>();
+  writes = 0;
+
+  readonly transport: RunnerTransport = {
+    unavailable: async () => undefined,
+    request: (async (_workspaceId: string, method: string, params: never) => {
+      const p = params as Record<string, unknown>;
+      switch (method) {
+        case "host.probe":
+          return { version: "test" };
+        case "host.start": {
+          const launch = params as RunnerLaunch;
+          this.launches.push(launch);
+          this.live.add(launch.session);
+          return null;
+        }
+        case "host.isLive":
+          return this.live.has(p.session as string);
+        case "host.listLive":
+          return [...this.live];
+        case "host.capture":
+          return "Claude Code v2.1.303\nshift+tab to cycle";
+        case "host.send":
+        case "host.sendKeys":
+        case "host.stop":
+          return null;
+        case "fs.read": {
+          const text = this.files.get(p.path as string);
+          return text === undefined
+            ? null
+            : { base64: Buffer.from(text).toString("base64") };
+        }
+        case "fs.write":
+          this.writes += 1;
+          for (const file of p.files as { path: string; base64: string }[])
+            this.files.set(
+              file.path,
+              Buffer.from(file.base64, "base64").toString("utf8"),
+            );
+          return null;
+      }
+      throw new Error(`unexpected ${method}`);
+    }) as RunnerTransport["request"],
+  };
+}
+
+const setUp = async (home: string) => {
+  const context = await createApplicationContext({
+    env: { DAEDALUS_HOME: home },
+    tmux: new NoTmux(),
+  });
+  const workspace = await context.workspaces.create({ name: "Cloud" });
+  const cloudId = crypto.randomUUID();
+  context.repositories.setCloudOwner({
+    gatewayUrl: "https://gateway.test",
+    userId: "u1",
+  });
+  context.repositories.linkCloudWorkspace(workspace.id, cloudId);
+  const pod = new FakePod();
+  context.hosts.register(new RemoteSessionHost(cloudId, pod.transport));
+  return { context, workspace, pod, hostId: cloudHostId(cloudId) };
+};
+
+describe("cloud launch seeding", () => {
+  test("a cloud Claude starts with onboarding done and the workspace trusted", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, workspace, pod, hostId } = await setUp(home);
+      pod.files.set(
+        ".home/.claude.json",
+        JSON.stringify({ oauthAccount: { emailAddress: "a@b.c" } }),
+      );
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        host: hostId,
+      });
+      expect(session.status).toBe("running");
+      const state = JSON.parse(pod.files.get(".home/.claude.json")!);
+      expect(state).toMatchObject({
+        oauthAccount: { emailAddress: "a@b.c" },
+        hasCompletedOnboarding: true,
+        projects: { "/workspace": { hasTrustDialogAccepted: true } },
+      });
+      expect(JSON.parse(pod.files.get(".home/.claude/settings.json")!)).toEqual(
+        { theme: "dark" },
+      );
+      expect(pod.writes).toBe(1);
+
+      // A second launch finds it all there and writes nothing.
+      await context.agents.spawn({ workspace: workspace.id, host: hostId });
+      expect(pod.writes).toBe(1);
+      context.close();
+    });
+  });
+
+  test("a terminal is not seeded", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, workspace, pod, hostId } = await setUp(home);
+      await context.agents.spawn({
+        workspace: workspace.id,
+        host: hostId,
+        terminal: true,
+      });
+      expect(pod.files.size).toBe(0);
+      context.close();
+    });
+  });
+});
