@@ -963,17 +963,27 @@ export interface CloudSignInDto {
 }
 
 /**
+ * A workspace's cloud copy while a new cloud session waits for it:
+ * `creating` the first time, `waking` when it slept, `starting` while its
+ * pod starts and its runner connects.
+ */
+export interface CloudPreparingDto {
+  workspaceId: string;
+  phase: "creating" | "waking" | "starting";
+}
+
+/**
  * A session moving between this Mac and its workspace's cloud pod
- * (`agentMove`). The card shows it as moving until the entry goes; a
- * `failed` one stays 30 seconds with `message`, and the session runs where
- * it was.
+ * (artifacts/cloud-sessions/move-design.md). The card shows it moving
+ * while an entry exists and is not `failed`; Cancel only while `waiting`.
  */
 export interface SessionMoveDto {
   sessionId: string;
   to: "cloud" | "local";
   phase: "waiting" | "stopping" | "copying" | "starting" | "failed";
-  /** For under the card: "Waiting for the turn to end", "Copying daedalus". */
+  /** Shown under the card: "Waiting for the turn to end", "Copying daedalus (12 MB)". */
   detail?: string;
+  /** Set when `failed`; the entry stays 30 s so the card can show it. */
   message?: string;
 }
 
@@ -1090,7 +1100,9 @@ export interface DesktopSnapshotDto {
   largeFiles?: LargeFileDto[];
   /** Sign-in pages cloud sessions asked to open; absent outside the app. */
   cloudSignIns?: CloudSignInDto[];
-  /** Sessions moving between this Mac and the cloud; absent outside the app. */
+  /** Workspaces whose cloud copy a new session waits for. */
+  cloudPreparing?: CloudPreparingDto[];
+  /** Sessions moving between this Mac and the cloud. */
   sessionMoves?: SessionMoveDto[];
   settings: DesktopSettingsDto;
 }
@@ -1221,20 +1233,18 @@ export interface DesktopRpcSchema {
         { host: string; paste: boolean }
       >;
       /**
-       * Moves a Claude session to its workspace's cloud pod or back to this
-       * Mac, after its current turn ends, with its conversation and its
-       * repositories' commits and uncommitted changes. Resolves when the
-       * move ends. `needsApproval` lists files changed in the pod that
-       * steer an agent or run on open; nothing has stopped, and calling
-       * again with them in `approved` goes ahead. On an error the session
-       * runs where it was.
+       * Moves a Claude session between this Mac and its workspace's cloud
+       * pod; resolves when the move ends. `needsApproval` lists files that
+       * steer an agent or run on open, changed in the pod: ask the user,
+       * then call again with them as `approved`. On failure it throws and
+       * the session keeps running where it was.
        */
       agentMove: Request<
         { sessionId: string; to: "cloud" | "local"; approved?: string[] },
         | { status: "moved"; session: AgentSessionDto }
         | { status: "needsApproval"; paths: string[] }
       >;
-      /** Only while the move waits for the turn to end. */
+      /** Only while the move waits for the session's turn to end. */
       agentMoveCancel: Request<{ sessionId: string }, null>;
       cloudSignInDismiss: Request<
         { requestId?: string; sessionId?: string },

@@ -8599,3 +8599,126 @@ dd {
   max-width: 260px;
   white-space: normal;
 }
+.session-opening-steps {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  text-align: left;
+}
+.session-opening-steps li {
+  color: var(--muted);
+  font-size: 12px;
+  padding-left: 18px;
+  position: relative;
+}
+.session-opening-steps li::before {
+  content: "○";
+  left: 0;
+  position: absolute;
+}
+.session-opening-steps li[data-state="done"] {
+  color: var(--secondary);
+}
+.session-opening-steps li[data-state="done"]::before {
+  color: var(--success);
+  content: "✓";
+}
+.session-opening-steps li[data-state="now"] {
+  color: var(--text);
+}
+.session-opening-steps li[data-state="now"]::before {
+  content: "●";
+}
+/* The new session dialog's first line: where the session runs. */
+.session-runs-on {
+  display: grid;
+  gap: 8px;
+}
+.session-runs-on-row {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+.session-runs-on-label {
+  color: var(--secondary);
+  font-size: 12px;
+}
+.session-runs-on-value {
+  color: var(--text);
+  font-size: 12px;
+}
+.session-runs-on-setup {
+  font-size: 12px;
+  margin-left: auto;
+}
+.session-runs-on-signin {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.session-runs-on-signin input {
+  flex: 1 1 160px;
+  font-size: 12px;
+  height: 30px;
+  padding: 0 10px;
+}
+.session-runs-on-signin button {
+  height: 30px;
+}
+.session-runs-on-signin .accounts-error {
+  flex-basis: 100%;
+}
+/* A workspace's cloud copy: an icon on its header, its dot the status. */
+.workspace-cloud-icon {
+  display: inline-flex;
+  position: relative;
+}
+.workspace-cloud-icon svg {
+  height: 15px;
+  width: 15px;
+}
+.workspace-cloud-icon::after {
+  background: var(--success);
+  border: 1.5px solid var(--surface, var(--raised));
+  border-radius: 50%;
+  bottom: -1px;
+  content: "";
+  height: 6px;
+  position: absolute;
+  right: -2px;
+  width: 6px;
+}
+.workspace-cloud-icon[data-status="sleeping"]::after {
+  background: var(--muted);
+}
+.workspace-cloud-icon[data-status="starting"]::after {
+  background: var(--warning, var(--accent));
+}
+.workspace-cloud-icon[data-status="failed"]::after {
+  background: var(--danger);
+}
+.menu-cloud-reason {
+  color: var(--secondary);
+  font-size: 11px;
+  line-height: 1.4;
+  margin: 0 10px 6px;
+  max-width: 260px;
+  white-space: normal;
+}
+/* The cloud icon always shows, beside the +, so the row keeps room for both. */
+.workspace-group
+  > .workspace-card:has(.workspace-cloud-menu)
+  > .workspace-item {
+  padding-right: 52px;
+}
+.workspace-group .workspace-card-actions > .workspace-cloud-menu,
+.workspace-cloud-menu > summary.session-card-action {
+  align-items: center;
+  display: flex;
+  height: 22px;
+  justify-content: center;
+  width: 22px;
+}

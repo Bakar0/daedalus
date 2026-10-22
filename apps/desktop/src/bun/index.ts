@@ -445,6 +445,7 @@ const remoteStarted = remote.start().catch((error) =>
 // A cloud session asking for a sign-in page shows on its card at once.
 context.cloud.signIns.onChange(() => announce("external"));
 context.moves.onChange(() => announce("external"));
+context.cloud.onPreparingChange(() => announce("external"));
 void remoteStarted
   .then(() => context.cloud.hold())
   .catch((error) =>

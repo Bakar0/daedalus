@@ -78,6 +78,31 @@ const WAKE_RUNNER_MS = 180_000;
 
 export type CloudConnection = "signed-out" | "connecting" | "online" | "error";
 
+/**
+ * Where a workspace's cloud copy stands while a session waits for it:
+ * `creating` (the first time), `waking` (it slept), `starting` (its pod is
+ * starting and its runner connecting).
+ */
+export type CloudPreparePhase = "creating" | "waking" | "starting";
+
+export interface CloudPreparing {
+  /** The local workspace. */
+  workspaceId: string;
+  phase: CloudPreparePhase;
+}
+
+/** What a launch seeder gets: the pod to write to, and whose launch it is. */
+export interface CloudLaunchSeedContext {
+  host: RemoteSessionHost;
+  session: AgentSession;
+  /** The session's Claude account, or undefined for the default one. */
+  profile: AccountProfile | undefined;
+}
+
+export type CloudLaunchSeeder = (
+  context: CloudLaunchSeedContext,
+) => Promise<void>;
+
 /** A cloud workspace made from a local one, without its runner key. */
 export interface LinkedCloudWorkspace {
   /** The local workspace. */
@@ -131,6 +156,10 @@ export class CloudService {
   /** Sign-in pages cloud sessions asked to open, waiting for a click. */
   readonly signIns = new SignInOffers();
   readonly #signInListeners = new Set<SignInListener>();
+  readonly #preparing = new Map<string, CloudPreparing>();
+  readonly #preparingListeners = new Set<() => void>();
+  readonly #preparations = new Map<string, Promise<string>>();
+  readonly #seeders: CloudLaunchSeeder[] = [];
   #link: CloudLink | undefined;
   #transport: Promise<RunnerTransport> | undefined;
   #stopBroker: (() => Promise<void>) | undefined;
@@ -289,31 +318,106 @@ export class CloudService {
    */
   async wakeForSessions(workspaceReference: string): Promise<CloudWorkspace> {
     const woken = await this.wake(workspaceReference);
-    const workspaceId = woken.workspaceId;
-    if (this.#link) {
-      if (!(await this.#link.waitForRunner(workspaceId, WAKE_RUNNER_MS)))
-        throw new DaedalusError(
-          "DEPENDENCY",
-          "The cloud workspace woke, but its runner did not connect in time; try again in a minute",
-        );
-      return woken;
-    }
+    await this.#waitForRunner(woken.workspaceId);
+    return woken;
+  }
+
+  /**
+   * Until a cloud workspace's runner can take sessions: linked to this Mac
+   * when this process holds the link, else online at the gateway. A pod that
+   * fails says why at once rather than at the deadline.
+   */
+  async #waitForRunner(cloudId: string): Promise<void> {
     const client = await this.#client();
     const deadline = Date.now() + WAKE_RUNNER_MS;
-    for (let current = woken; ;) {
-      if (current.runnerOnline) return current;
-      if (current.status === "failed")
+    for (;;) {
+      if (this.#link?.linked(cloudId)) return;
+      const current = await client.getWorkspace(cloudId).catch(() => undefined);
+      if (current?.status === "failed")
         throw new DaedalusError(
           "DEPENDENCY",
           current.reason ?? "The cloud workspace failed to start",
         );
+      if (!this.#link && current?.runnerOnline) return;
       if (Date.now() > deadline)
         throw new DaedalusError(
           "DEPENDENCY",
-          "The cloud workspace woke, but its runner did not connect in time; try again in a minute",
+          "The cloud workspace started, but its runner did not connect in time; try again in a minute",
         );
       await Bun.sleep(1_000);
-      current = await client.getWorkspace(workspaceId);
+    }
+  }
+
+  /** Workspaces whose cloud copy is being made or woken for a session. */
+  preparing(): CloudPreparing[] {
+    return [...this.#preparing.values()].map((item) => ({ ...item }));
+  }
+
+  /** Told when a workspace's preparation moves on, so a window can redraw. */
+  onPreparingChange(listener: () => void): () => void {
+    this.#preparingListeners.add(listener);
+    return () => this.#preparingListeners.delete(listener);
+  }
+
+  #setPreparing(workspaceId: string, phase: CloudPreparePhase | undefined) {
+    if (phase) this.#preparing.set(workspaceId, { workspaceId, phase });
+    else this.#preparing.delete(workspaceId);
+    for (const listener of this.#preparingListeners) {
+      try {
+        listener();
+      } catch {
+        // A listener's failure is its own.
+      }
+    }
+  }
+
+  /**
+   * Readies a local workspace's cloud copy for a new session and returns the
+   * host to start it on: made the first time, woken when asleep, and waited
+   * for until its runner can take the session. There is no separate step to
+   * enable the cloud. Two sessions asking at once share one preparation.
+   */
+  prepareForSession(workspaceReference: string): Promise<string> {
+    return (async () => {
+      if (!(await this.account.signIn()))
+        throw new DaedalusError(
+          "DEPENDENCY",
+          "Sign in to a cloud gateway in Settings › Cloud to run sessions in the cloud",
+        );
+      const workspace =
+        await this.options.workspaces.getActive(workspaceReference);
+      const pending = this.#preparations.get(workspace.id);
+      if (pending) return pending;
+      const preparation = this.#prepare(workspace.id).finally(() =>
+        this.#preparations.delete(workspace.id),
+      );
+      this.#preparations.set(workspace.id, preparation);
+      return preparation;
+    })();
+  }
+
+  async #prepare(workspaceId: string): Promise<string> {
+    try {
+      let cloudId = this.options.repositories.cloudWorkspaceId(workspaceId);
+      if (!cloudId) {
+        this.#setPreparing(workspaceId, "creating");
+        cloudId = (await this.create(workspaceId)).workspaceId;
+      } else {
+        const current = await this.get(cloudId);
+        if (current.status === "sleeping") {
+          this.#setPreparing(workspaceId, "waking");
+          await this.wake(cloudId);
+        } else if (current.status === "failed")
+          throw new DaedalusError(
+            "DEPENDENCY",
+            current.reason ?? "The cloud workspace failed to start",
+          );
+      }
+      this.#setPreparing(workspaceId, "starting");
+      await this.#waitForRunner(cloudId);
+      return cloudHostId(cloudId);
+    } finally {
+      this.#setPreparing(workspaceId, undefined);
     }
   }
 
@@ -458,6 +562,41 @@ export class CloudService {
    * cannot be read or written still gets the launch, with those screens.
    */
   async prepareLaunch(session: AgentSession): Promise<CloudLaunchExtras> {
+    const extras = await this.#accountLaunch(session);
+    await this.#runSeeders(session);
+    return extras;
+  }
+
+  /**
+   * Adds a step to every cloud Claude launch, after the files above: the
+   * way to bring more of the user's setup into the pod (skills, commands).
+   * Steps run in the order added; one that fails is logged and the launch
+   * goes on.
+   */
+  addLaunchSeeder(seeder: CloudLaunchSeeder): void {
+    this.#seeders.push(seeder);
+  }
+
+  async #runSeeders(session: AgentSession): Promise<void> {
+    const host = this.options.hosts.find(session.hostId);
+    // A host of another kind (a test's) has no files to seed.
+    if (!(host instanceof RemoteSessionHost)) return;
+    const profile = accountProfile(
+      this.options.config,
+      "claude",
+      session.account,
+    );
+    for (const seeder of this.#seeders)
+      await seeder({ host, session, profile }).catch((error: unknown) =>
+        this.options.log?.("cloud_seed_failed", {
+          hostId: session.hostId,
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
+  }
+
+  /** The files and launch values a session's account needs in the pod. */
+  async #accountLaunch(session: AgentSession): Promise<CloudLaunchExtras> {
     const host = this.options.hosts.find(session.hostId);
     const profile = accountProfile(
       this.options.config,

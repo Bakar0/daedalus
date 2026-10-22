@@ -6,7 +6,7 @@ import type { AgentActivity, AgentSession, SessionWorktree } from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import type { AgentService } from "./agents";
-import { cloudHostId, cloudHostWorkspace } from "./cloud-launch";
+import { cloudHostWorkspace } from "./cloud-launch";
 import {
   applySnapshot,
   changedPaths,
@@ -60,8 +60,11 @@ export type SessionMoveResult =
 
 /** What the cloud service does for a move; `CloudService` has it. */
 export interface MoveCloud {
-  create(workspaceReference: string): Promise<{ workspaceId: string }>;
-  wakeForSessions(workspaceReference: string): Promise<unknown>;
+  /**
+   * Makes or wakes the workspace's cloud copy and waits for its runner;
+   * returns its host id.
+   */
+  prepareForSession(workspaceReference: string): Promise<string>;
 }
 
 export interface SessionMovesOptions {
@@ -208,11 +211,8 @@ export class SessionMoves {
       }));
 
     this.#update(state, { detail: "Starting the cloud workspace" });
-    const cloudId =
-      repositories.cloudWorkspaceId(workspace.id) ??
-      (await cloud.create(workspace.id)).workspaceId;
-    await cloud.wakeForSessions(cloudId);
-    const pod = this.#pod(cloudHostId(cloudId));
+    const hostId = await cloud.prepareForSession(workspace.id);
+    const pod = this.#pod(hostId);
 
     // The pod's copy must be what this session left there, or nothing.
     for (const { worktree, pod: dir } of worktrees) {
@@ -315,7 +315,7 @@ export class SessionMoves {
       const moved = await agents.resumeAfterMove(
         {
           ...stopped,
-          hostId: cloudHostId(cloudId),
+          hostId,
           workingDirectory: folder,
         },
         permissionMode,
@@ -376,7 +376,11 @@ export class SessionMoves {
         );
 
     this.#update(state, { detail: "Waking the cloud workspace" });
-    await cloud.wakeForSessions(cloudId);
+    if ((await cloud.prepareForSession(workspace.id)) !== agent.hostId)
+      throw new DaedalusError(
+        "CONFLICT",
+        "This session's cloud workspace is no longer this workspace's",
+      );
     const pod = this.#pod(agent.hostId!);
 
     // Asked before the session stops: what in the pod would steer an agent

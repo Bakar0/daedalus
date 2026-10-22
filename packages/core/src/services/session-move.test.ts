@@ -195,10 +195,7 @@ async function setup(options: { big?: boolean } = {}): Promise<Setup> {
     } as unknown as WorkspaceService,
     agents,
     hosts: { get: () => pod } as unknown as SessionHosts,
-    cloud: {
-      create: async () => ({ workspaceId: CLOUD }),
-      wakeForSessions: async () => undefined,
-    },
+    cloud: { prepareForSession: async () => cloudHostId(CLOUD) },
     activity: async () => turn.activity,
     pollMs: 5,
     turnTimeoutMs: 2_000,
