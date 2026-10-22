@@ -172,7 +172,7 @@ async function gitDirectories(
  * branches and remote refs, the worktree's own for its HEAD. Both are read,
  * as are the loose-ref files, so either format is seen.
  */
-async function gitMetadataFingerprint(
+export async function gitMetadataFingerprint(
   path: string,
   baseBranch: string | null,
 ): Promise<string | undefined> {
@@ -190,6 +190,19 @@ async function gitMetadataFingerprint(
     join(commonDir, "reftable", "tables.list"),
     join(commonDir, "packed-refs"),
     ...(branchRef ? [join(commonDir, branchRef)] : []),
+    // The branch as `origin` last showed it, which a push moves. A pull
+    // request is opened after a push, so this is what asks `gh` again.
+    ...(branchRef?.startsWith("refs/heads/")
+      ? [
+          join(
+            commonDir,
+            "refs",
+            "remotes",
+            "origin",
+            branchRef.slice("refs/heads/".length),
+          ),
+        ]
+      : []),
     ...(baseBranch
       ? [join(commonDir, "refs", "remotes", "origin", baseBranch)]
       : []),
@@ -588,6 +601,7 @@ export function pullRequestDue(
         checkedAt: number;
         value?: Pick<PullRequestRef, "state">;
         fingerprint?: string;
+        movedAt?: number;
       }
     | undefined,
   fingerprint: string | undefined,
@@ -600,6 +614,10 @@ export function pullRequestDue(
     (cached.value?.state === "OPEN" ||
       fingerprint === undefined ||
       cached.fingerprint !== fingerprint ||
+      // The refs moved lately, as a push does just before `gh pr create`:
+      // the check that ran in between must not hold the next one off.
+      (cached.movedAt !== undefined &&
+        now - cached.movedAt < QUIET_PULL_REQUEST_REFRESH_MS) ||
       age >= QUIET_PULL_REQUEST_REFRESH_MS)
   );
 }
@@ -753,6 +771,8 @@ export class GitStatusMonitor {
       landedHead?: string;
       /** The tree's git metadata fingerprint when `gh` was asked. */
       fingerprint?: string;
+      /** When an answer first saw that fingerprint, so when the refs moved. */
+      movedAt?: number;
     }
   >();
   private statusRefresh?: Promise<void>;
@@ -1264,6 +1284,8 @@ export class GitStatusMonitor {
           // Still the merged HEAD: nothing to ask, and nothing to ask again
           // for another minute.
           cached.checkedAt = Date.now();
+          if (cached.fingerprint !== check.fingerprint)
+            cached.movedAt = cached.checkedAt;
           cached.fingerprint = check.fingerprint;
           return;
         }
@@ -1357,9 +1379,16 @@ export class GitStatusMonitor {
       const landed =
         Boolean(git && check.head && value?.state === "MERGED") &&
         (await pullRequestAnswerHoldsHead(git!, check.path, answer!));
+      const now = Date.now();
+      // A first answer is not a move: at startup every branch has one.
+      const movedAt =
+        !cached || cached.fingerprint === check.fingerprint
+          ? cached?.movedAt
+          : now;
       this.pullRequestCache.set(check.key, {
-        checkedAt: Date.now(),
+        checkedAt: now,
         fingerprint: check.fingerprint,
+        ...(movedAt === undefined ? {} : { movedAt }),
         ...(value ? { value } : {}),
         ...(landed ? { landedHead: check.head } : {}),
       });

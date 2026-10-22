@@ -15,6 +15,7 @@ import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { createApplicationContext } from "../index";
 import {
   gitMeasure,
+  gitMetadataFingerprint,
   branchPullRequestQuery,
   chooseBranchPullRequest,
   keptPullRequest,
@@ -724,6 +725,15 @@ describe("pullRequestDue", () => {
     const closed = { ...cached, value: { state: "CLOSED" as const } };
     expect(pullRequestDue(closed, "a", 2 * minute)).toBe(false);
   });
+  test("keeps asking every minute for a while after the refs moved", () => {
+    // Checked right after a push, before `gh pr create` ran.
+    const pushed = { checkedAt: 0, fingerprint: "b", movedAt: 0 };
+    expect(pullRequestDue(pushed, "b", minute)).toBe(true);
+    expect(pullRequestDue(pushed, "b", 4 * minute)).toBe(true);
+    // Long after the move, back to the quiet cadence.
+    const settled = { checkedAt: 6 * minute, fingerprint: "b", movedAt: 0 };
+    expect(pullRequestDue(settled, "b", 7 * minute)).toBe(false);
+  });
   test("asks again within the minute once the refs move, as after a push", () => {
     const cached = { checkedAt: 0, fingerprint: "a" };
     expect(pullRequestDue(cached, "b", minute - 1)).toBe(false);
@@ -900,5 +910,32 @@ describe("queryBranchPullRequests", () => {
           await queryBranchPullRequests(gh, remote, ["one"], tmpdir()),
         ).toBeUndefined();
       });
+  });
+});
+
+describe("gitMetadataFingerprint", () => {
+  test("moves when the branch's remote-tracking ref does, as a push moves it", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "daedalus-fingerprint-"));
+    try {
+      const git = (...args: string[]) =>
+        runCommand("git", [
+          "-C",
+          repo,
+          "-c",
+          "user.name=t",
+          "-c",
+          "user.email=t@t",
+          ...args,
+        ]);
+      await git("init", "-q", "-b", "work", "--ref-format=files");
+      await git("commit", "-q", "--allow-empty", "-m", "one");
+      await git("update-ref", "refs/remotes/origin/main", "HEAD");
+      const before = await gitMetadataFingerprint(repo, "main");
+      // `git push` records where origin's copy of the branch now is.
+      await git("update-ref", "refs/remotes/origin/work", "HEAD");
+      expect(await gitMetadataFingerprint(repo, "main")).not.toBe(before);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
   });
 });
