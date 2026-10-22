@@ -2960,6 +2960,15 @@ dd {
 .workspace-worktree-row:hover {
   background: var(--raised);
 }
+/* The focused session's working trees, with their files and commits, sit on
+   the same wash as its selected card in the session list. */
+.workspace-worktree-group.focused {
+  background: var(--accent-wash);
+  border-radius: 6px;
+}
+.workspace-worktree-group.focused .workspace-worktree-row strong {
+  color: var(--accent);
+}
 .workspace-worktree-row.empty {
   color: var(--muted);
   font-size: 9px;

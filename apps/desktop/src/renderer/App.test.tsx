@@ -1069,6 +1069,24 @@ describe("desktop application shell", () => {
     expect(column).toContain("workspace-repository-group");
   });
 
+  test("tints the focused session's working trees in the side panel", () => {
+    const render = (activeAgentId?: string) =>
+      renderToStaticMarkup(
+        <App
+          injectedClient={client}
+          initialSnapshot={demoSnapshot}
+          initialWorkspaceView="session"
+          initialPanelTab="git"
+          initialWorkspaceContent={demoContent}
+          {...(activeAgentId ? { initialActiveAgentId: activeAgentId } : {})}
+        />,
+      );
+    expect(render("session-12345678")).toContain(
+      "workspace-worktree-group focused",
+    );
+    expect(render()).not.toContain("workspace-worktree-group focused");
+  });
+
   test("opens the selected task in the center, beside the side panel", () => {
     const html = renderToStaticMarkup(
       <App

@@ -4,7 +4,6 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import {
   lazy,
-  Fragment,
   Suspense,
   useCallback,
   useContext,
@@ -4503,8 +4502,14 @@ export function WorkspaceApp({
               const unfoldable = Boolean(
                 changes && (changes.files.length > 0 || commitsAhead > 0),
               );
+              // The focused session's trees are tinted, so its changes can be
+              // told apart from every other session's in a long list.
+              const focused = worktree.sessionId === highlightedSessionId;
               return (
-                <Fragment key={key}>
+                <div
+                  className={`workspace-worktree-group ${focused ? "focused" : ""}`}
+                  key={key}
+                >
                   <div className="workspace-worktree-row">
                     <button
                       aria-expanded={changes ? !folded : undefined}
@@ -4643,7 +4648,7 @@ export function WorkspaceApp({
                       workspaceId={workspace.id}
                     />
                   )}
-                </Fragment>
+                </div>
               );
             })}
       </div>
