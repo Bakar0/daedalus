@@ -22,6 +22,8 @@ import {
   BUNDLED_TMUX_VARIABLE,
   isInheritedSessionVariable,
   pathExists,
+  runCommandsOn,
+  startCommandWorker,
 } from "@daedalus/platform";
 import type {
   DesktopCommand,
@@ -86,6 +88,17 @@ if (await pathExists(bundledTmux))
 // session; dropping them here keeps them out of everything else the host runs.
 for (const key of Object.keys(process.env))
   if (isInheritedSessionVariable(key)) delete process.env[key];
+
+// Every child the host runs for its output (git, gh, tmux and the rest) is
+// launched from a worker thread, because launching one blocks the launching
+// thread and this is the thread that relays terminal output to the window.
+// A worker that dies hands launching back here; the failure is logged once
+// the context, and its logger, exist.
+let commandWorkerFailure: Error | undefined;
+let reportCommandWorkerFailure = (error: Error): void => {
+  commandWorkerFailure = error;
+};
+runCommandsOn(startCommandWorker((error) => reportCommandWorkerFailure(error)));
 
 // The window is the only surface that can draw a toast, so the host is the
 // only adapter that may claim it; everywhere else a toast waits in the queue.
@@ -898,6 +911,12 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
 // Anything parked while the app was down is dropped rather than delivered:
 // it is already stale, and the badge that outlived it is the durable signal.
 context.notifications.discardPending("desktop");
+
+reportCommandWorkerFailure = (error) =>
+  void context.logger
+    .write("error", "command_worker_failed", { message: error.message })
+    .catch(() => undefined);
+if (commandWorkerFailure) reportCommandWorkerFailure(commandWorkerFailure);
 
 await context.logger.write("info", "desktop_started", {
   terminalTransport: "loopback_websocket",
