@@ -127,6 +127,42 @@ export interface TmuxTerminalTarget {
  */
 const HYPERLINKS_FEATURE_INDEX = 99;
 
+/** Next to the hyperlinks slot, for the same reason. */
+const SYNC_FEATURE_INDEX = 98;
+
+/**
+ * tmux's own copy-mode wheel bindings, which scroll five lines a report. The
+ * Daedalus terminal sends one report per line the trackpad moved, so these
+ * become one line a report: see `CommandTmuxClient.scrollCopyModeByLine`.
+ */
+const COPY_MODE_WHEEL_DEFAULTS = ["copy-mode", "copy-mode-vi"].flatMap(
+  (table) =>
+    (
+      [
+        ["WheelUpPane", "scroll-up"],
+        ["WheelDownPane", "scroll-down"],
+      ] as const
+    ).map(([key, command]) => ({ table, key, command })),
+);
+
+/**
+ * Whether `list-keys -T <table>` shows tmux's default binding for `key`.
+ * tmux 3.7 prints nothing when asked for a single key, so the whole table is
+ * read and the key's own line picked out.
+ */
+export const isDefaultCopyModeWheelBinding = (
+  listed: string,
+  key: string,
+  command: string,
+): boolean =>
+  listed
+    .split("\n")
+    .some(
+      (line) =>
+        line.split(/\s+/)[3] === key &&
+        line.trim().endsWith(`select-pane \\; send-keys -X -N 5 ${command}`),
+    );
+
 export const tmuxPtyArguments = (target: TmuxTerminalTarget): string[] =>
   terminalArgs(
     target.socketName,
@@ -146,6 +182,16 @@ export const tmuxPtyArguments = (target: TmuxTerminalTarget): string[] =>
     "-s",
     "focus-events",
     "on",
+    ";",
+    // tmux repaints the whole pane for every step a fullscreen program
+    // scrolls, about 14 KB written over 14 ms. Without `sync` xterm.js drew
+    // whatever part had arrived by the next frame, so nearly every frame of a
+    // scroll was half old screen and half new. With it, tmux brackets each
+    // repaint in synchronized output and xterm.js draws only whole ones.
+    "set-option",
+    "-s",
+    `terminal-features[${SYNC_FEATURE_INDEX}]`,
+    "xterm*:sync",
     ";",
     "set-option",
     "-t",
@@ -264,6 +310,35 @@ export class CommandTmuxClient implements TmuxClient {
    * the server, and the server hands its environment to every session after.
    */
   private readonly environment: Record<string, string>;
+
+  /** Set once the copy-mode wheel bindings have been looked at. */
+  private copyModeByLine: Promise<void> | undefined;
+
+  /**
+   * Makes copy mode scroll one line per wheel report, where tmux's default
+   * scrolls five, because the Daedalus terminal sends a report per line. Only
+   * a binding that is still tmux's default is replaced, so one from the user's
+   * `~/.tmux.conf` stays as they wrote it. Bindings are server-wide: a plain
+   * `tmux attach` to this socket from another terminal scrolls by line too.
+   */
+  async scrollCopyModeByLine(): Promise<void> {
+    for (const { table, key, command } of COPY_MODE_WHEEL_DEFAULTS) {
+      const listed = await this.run(["list-keys", "-T", table]);
+      if (
+        listed.exitCode === 0 &&
+        isDefaultCopyModeWheelBinding(listed.stdout, key, command)
+      )
+        await this.run([
+          "bind-key",
+          "-T",
+          table,
+          key,
+          "send-keys",
+          "-X",
+          command,
+        ]);
+    }
+  }
 
   private args(...args: string[]): string[] {
     return ["-L", this.socketName, ...args];
@@ -492,6 +567,7 @@ export class CommandTmuxClient implements TmuxClient {
     size: TerminalSize | undefined,
     onOutput: (output: Uint8Array) => void,
   ): TmuxPty {
+    this.copyModeByLine ??= this.scrollCopyModeByLine().catch(() => {});
     return new TmuxPtyBridge(
       onOutput,
       { socketName: this.socketName, session },

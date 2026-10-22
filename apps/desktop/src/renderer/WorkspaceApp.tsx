@@ -64,6 +64,7 @@ import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import { UpdateBanner } from "./UpdateBanner";
 import { runWithConcurrency } from "./concurrency";
 import { wholeLinkRows, type LinkRange } from "./terminal-links";
+import { WheelLines, wheelToReports } from "./terminal-wheel";
 import { findPathCandidates } from "./terminal-file-links";
 import { repositoryFuzzyScore } from "./repository-search";
 import { ReorderGroup } from "./ReorderGroup";
@@ -1450,6 +1451,36 @@ function TerminalSurface({
           // Not base64: nothing a program meant to copy.
         }
         return true;
+      });
+      // Whether the program reads mouse reports in SGR form, the only form
+      // the wheel handler below writes. tmux asks for it with its mouse on.
+      let sgrMouse = false;
+      for (const final of ["h", "l"])
+        terminal.parser.registerCsiHandler({ prefix: "?", final }, (params) => {
+          if (params.includes(1006)) sgrMouse = final === "h";
+          return false;
+        });
+      // A wheel over a program that takes the mouse scrolls it a line per
+      // line the trackpad moved, as a browser scrolls a page; see WheelLines.
+      // Anything else, Shift and the wheel included, is left to xterm.
+      const wheelLines = new WheelLines();
+      terminal.attachCustomWheelEventHandler((event) => {
+        const current = terminal;
+        const screen = linkLayer.parentElement;
+        const wheel =
+          current && screen
+            ? wheelToReports(wheelLines, event, {
+                sgrMouse,
+                mouseTracking: current.modes.mouseTrackingMode !== "none",
+                cols: current.cols,
+                rows: current.rows,
+                bounds: screen.getBoundingClientRect(),
+              })
+            : undefined;
+        if (!wheel) return true;
+        if (wheel.consumed) event.preventDefault();
+        if (wheel.reports) current?.input(wheel.reports, true);
+        return false;
       });
       terminal.open(container);
       container.querySelector(".xterm-screen")?.append(linkLayer);

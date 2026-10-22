@@ -144,6 +144,67 @@ describe("claudeDaedalusSettingsArgs", () => {
     });
   });
 
+  test("turns Claude's wheel acceleration off unless the user set it", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const claudeHome = join(home, "claude");
+      const config = await loadConfig({
+        DAEDALUS_HOME: home,
+        CLAUDE_CONFIG_DIR: claudeHome,
+      });
+      const acceleration = async (args: string[]) =>
+        JSON.parse(
+          settingsValue(await claudeDaedalusSettingsArgs(config, args)),
+        ).wheelScrollAccelerationEnabled;
+      expect(await acceleration(["run"])).toBe(false);
+      expect(
+        await acceleration([
+          "run",
+          "--settings",
+          JSON.stringify({ wheelScrollAccelerationEnabled: true }),
+        ]),
+      ).toBe(true);
+      await mkdir(claudeHome, { recursive: true });
+      await writeFile(
+        join(claudeHome, "settings.json"),
+        JSON.stringify({ wheelScrollAccelerationEnabled: true }),
+      );
+      expect(await acceleration(["run"])).toBeUndefined();
+    });
+  });
+
+  test("keeps a choice in the project's settings and sets nothing over an unreadable file", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const claudeHome = join(home, "claude");
+      const project = join(home, "project");
+      const config = await loadConfig({
+        DAEDALUS_HOME: home,
+        CLAUDE_CONFIG_DIR: claudeHome,
+      });
+      const launched = async () =>
+        JSON.parse(
+          settingsValue(
+            await claudeDaedalusSettingsArgs(config, ["run"], undefined, {
+              workingDirectory: project,
+            }),
+          ),
+        );
+      await mkdir(join(project, ".claude"), { recursive: true });
+      await writeFile(
+        join(project, ".claude", "settings.local.json"),
+        JSON.stringify({ wheelScrollAccelerationEnabled: true }),
+      );
+      expect(await launched()).toMatchObject({ tui: "fullscreen" });
+      expect(await launched()).not.toHaveProperty(
+        "wheelScrollAccelerationEnabled",
+      );
+      await mkdir(claudeHome, { recursive: true });
+      await writeFile(join(claudeHome, "settings.json"), "{ not json");
+      const settings = await launched();
+      expect(settings).not.toHaveProperty("tui");
+      expect(settings).not.toHaveProperty("wheelScrollAccelerationEnabled");
+    });
+  });
+
   test("leaves an unreadable --settings value exactly as the user wrote it", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const config = await loadConfig({ DAEDALUS_HOME: home });

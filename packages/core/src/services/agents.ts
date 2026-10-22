@@ -921,6 +921,7 @@ export class AgentService {
           model,
           acceptPeerMessages:
             Boolean(team) || abilities.includes("orchestration"),
+          workingDirectory: prepared.workingDirectory,
           additionalDirectories: sessionDirectories(
             workspace.path,
             prepared.references.map(
@@ -1830,6 +1831,7 @@ export class AgentService {
         acceptPeerMessages:
           Boolean(agent.teamId) ||
           Boolean(this.abilities.held(agent.id, "orchestration")),
+        workingDirectory: agent.workingDirectory,
         additionalDirectories: sessionDirectories(
           workspace.path,
           this.repositories

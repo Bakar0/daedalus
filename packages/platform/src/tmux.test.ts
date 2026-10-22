@@ -104,7 +104,7 @@ test("tmux PTYs drop an agent shell's terminal state and identity", () => {
     expect(environment).not.toHaveProperty(key);
 });
 
-test("tmux PTYs use native mouse scrolling, pass OSC 8 links and focus", () => {
+test("tmux PTYs use native mouse scrolling, sync repaints, pass OSC 8 links and focus", () => {
   expect(
     tmuxPtyArguments({ socketName: "isolated", session: "daedalus_123" }),
   ).toEqual([
@@ -120,6 +120,11 @@ test("tmux PTYs use native mouse scrolling, pass OSC 8 links and focus", () => {
     "-s",
     "focus-events",
     "on",
+    ";",
+    "set-option",
+    "-s",
+    "terminal-features[98]",
+    "xterm*:sync",
     ";",
     "set-option",
     "-t",
@@ -140,6 +145,71 @@ test("tmux PTYs use native mouse scrolling, pass OSC 8 links and focus", () => {
 });
 
 describe("CommandTmuxClient", () => {
+  test("scrolls copy mode a line per wheel report unless the user bound the wheel", async () => {
+    const userBinding =
+      "bind-key -T copy-mode-vi WheelUpPane send-keys -X -N 3 scroll-up";
+    const calls: string[][] = [];
+    const defaults = (table: string) =>
+      ["WheelDownPane scroll-down", "WheelUpPane scroll-up"]
+        .map((entry) => {
+          const [key, verb] = entry.split(" ");
+          return `bind-key  -T ${table} ${key}     select-pane \\; send-keys -X -N 5 ${verb}`;
+        })
+        .join("\n");
+    const command = vi.fn(async (_executable: string, args: string[]) => {
+      calls.push(args);
+      const table = args[4]!;
+      return {
+        exitCode: 0,
+        stdout:
+          args[2] !== "list-keys"
+            ? ""
+            : table === "copy-mode-vi"
+              ? `${defaults(table).split("\n")[0]}\n${userBinding}\n`
+              : `${defaults(table)}\n`,
+        stderr: "",
+      };
+    });
+    await new CommandTmuxClient(
+      "isolated",
+      "tmux",
+      command,
+    ).scrollCopyModeByLine();
+    expect(
+      calls
+        .filter((args) => args[2] === "bind-key")
+        .map((args) => args.slice(2)),
+    ).toEqual([
+      [
+        "bind-key",
+        "-T",
+        "copy-mode",
+        "WheelUpPane",
+        "send-keys",
+        "-X",
+        "scroll-up",
+      ],
+      [
+        "bind-key",
+        "-T",
+        "copy-mode",
+        "WheelDownPane",
+        "send-keys",
+        "-X",
+        "scroll-down",
+      ],
+      [
+        "bind-key",
+        "-T",
+        "copy-mode-vi",
+        "WheelDownPane",
+        "send-keys",
+        "-X",
+        "scroll-down",
+      ],
+    ]);
+  });
+
   test("remembers a successful version probe and asks again after a failure", async () => {
     let installed = false;
     const command = vi.fn(async () => ({

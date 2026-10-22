@@ -40,6 +40,8 @@ export interface LaunchInput {
   acceptPeerMessages?: boolean;
   /** Carry on an existing conversation rather than start a new one. */
   resume?: ResumeInput;
+  /** Where the session runs, whose project settings Claude reads. */
+  workingDirectory?: string;
 }
 
 /** The conversation a relaunched session carries on. */
@@ -145,7 +147,7 @@ export async function claudeDaedalusSettingsArgs(
   config: DaedalusConfig,
   existingArgs: string[],
   sessionId?: string,
-  options: { acceptPeerMessages?: boolean } = {},
+  options: { acceptPeerMessages?: boolean; workingDirectory?: string } = {},
 ): Promise<string[]> {
   // Every Claude session gets an inbox, so routines granted later reach it
   // without typing. A pipe that cannot be made leaves the session without
@@ -173,12 +175,16 @@ export async function claudeDaedalusSettingsArgs(
       : await parseClaudeSettingsArgument(existingValue);
   if (existingValue !== undefined && !parsed) return [...existingArgs];
   const merged = parsed ? mergeClaudeSettings(parsed, daedalus) : daedalus;
-  // Settings passed here override the user's own file, so the renderer is
-  // only a default: a user who chose one in either place keeps it.
-  const settings =
-    "tui" in merged || (await userSetsClaudeRenderer(config))
-      ? merged
-      : { ...merged, tui: CLAUDE_DEFAULT_RENDERER };
+  // Settings passed here override the user's and the project's own files, so
+  // each of these is only a default: a value chosen anywhere is kept.
+  const chosen = await claudeKeysChosenElsewhere(
+    config,
+    options.workingDirectory,
+  );
+  const settings: ClaudeSettings = { ...merged };
+  if (chosen)
+    for (const [key, value] of Object.entries(CLAUDE_DEFAULT_SETTINGS))
+      if (!(key in merged) && !chosen.has(key)) settings[key] = value;
   return [
     ...withoutSettingsArgument(existingArgs),
     "--settings",
@@ -197,14 +203,47 @@ export async function claudeDaedalusSettingsArgs(
  */
 export const CLAUDE_DEFAULT_RENDERER = "fullscreen";
 
-/** Whether the user's own Claude settings choose a renderer. */
-async function userSetsClaudeRenderer(
+/**
+ * What a Claude session starts with when the user has not set the key.
+ *
+ * Wheel acceleration is off because the Daedalus terminal already sends one
+ * wheel report per line the trackpad moved, and macOS has already applied its
+ * own acceleration and momentum to that movement. Claude's ramp on top of it
+ * scrolled a medium trackpad drag 2.5 times as far as the finger went, while a
+ * slow one crawled; without it the transcript follows the finger line for line.
+ */
+const CLAUDE_DEFAULT_SETTINGS: ClaudeSettings = {
+  tui: CLAUDE_DEFAULT_RENDERER,
+  wheelScrollAccelerationEnabled: false,
+};
+
+/**
+ * The keys set in the Claude settings files `--settings` takes precedence
+ * over: the user's own, and the project's shared and local files in the
+ * session's working directory. `undefined` when one of them exists but cannot
+ * be read, so no default lands on top of a choice Daedalus cannot see.
+ */
+async function claudeKeysChosenElsewhere(
   config: DaedalusConfig,
-): Promise<boolean> {
-  const settings = await parseClaudeSettingsArgument(
+  workingDirectory: string | undefined,
+): Promise<Set<string> | undefined> {
+  const paths = [
     claudeSettingsPath(config),
-  );
-  return settings !== undefined && "tui" in settings;
+    ...(workingDirectory
+      ? ["settings.json", "settings.local.json"].map((name) =>
+          join(workingDirectory, ".claude", name),
+        )
+      : []),
+  ];
+  const keys = new Set<string>();
+  for (const path of paths) {
+    if (!(await Bun.file(path).exists())) continue;
+    const settings = await parseClaudeSettingsArgument(path);
+    if (!settings || typeof settings !== "object" || Array.isArray(settings))
+      return undefined;
+    for (const key of Object.keys(settings)) keys.add(key);
+  }
+  return keys;
 }
 
 /**
@@ -858,7 +897,10 @@ class ConfiguredProvider implements AgentProvider {
           this.config,
           args,
           input.sessionId,
-          { acceptPeerMessages: input.acceptPeerMessages },
+          {
+            acceptPeerMessages: input.acceptPeerMessages,
+            workingDirectory: input.workingDirectory,
+          },
         )),
       );
     if (input.resume) {
