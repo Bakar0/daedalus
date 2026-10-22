@@ -203,6 +203,30 @@ describe("cloud launch seeding", () => {
     });
   });
 
+  test("added launch seeders run after the built-in files, and a failing one is only logged", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, workspace, pod, hostId } = await setUp(home);
+      const seen: string[] = [];
+      context.cloud.addLaunchSeeder(async ({ host, session, profile }) => {
+        seen.push(`${host.id} ${session.id === undefined} ${profile}`);
+        await host.writeText([
+          { path: ".home/.claude/skills/x/SKILL.md", text: "x" },
+        ]);
+      });
+      context.cloud.addLaunchSeeder(async () => {
+        throw new Error("broken");
+      });
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        host: hostId,
+      });
+      expect(session.status).toBe("running");
+      expect(seen).toEqual([`${hostId} false undefined`]);
+      expect(pod.files.get(".home/.claude/skills/x/SKILL.md")).toBe("x");
+      context.close();
+    });
+  });
+
   test("a terminal is not seeded", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const { context, workspace, pod, hostId } = await setUp(home);

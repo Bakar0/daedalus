@@ -91,6 +91,18 @@ export interface CloudPreparing {
   phase: CloudPreparePhase;
 }
 
+/** What a launch seeder gets: the pod to write to, and whose launch it is. */
+export interface CloudLaunchSeedContext {
+  host: RemoteSessionHost;
+  session: AgentSession;
+  /** The session's Claude account, or undefined for the default one. */
+  profile: AccountProfile | undefined;
+}
+
+export type CloudLaunchSeeder = (
+  context: CloudLaunchSeedContext,
+) => Promise<void>;
+
 /** A cloud workspace made from a local one, without its runner key. */
 export interface LinkedCloudWorkspace {
   /** The local workspace. */
@@ -147,6 +159,7 @@ export class CloudService {
   readonly #preparing = new Map<string, CloudPreparing>();
   readonly #preparingListeners = new Set<() => void>();
   readonly #preparations = new Map<string, Promise<string>>();
+  readonly #seeders: CloudLaunchSeeder[] = [];
   #link: CloudLink | undefined;
   #transport: Promise<RunnerTransport> | undefined;
   #stopBroker: (() => Promise<void>) | undefined;
@@ -549,6 +562,41 @@ export class CloudService {
    * cannot be read or written still gets the launch, with those screens.
    */
   async prepareLaunch(session: AgentSession): Promise<CloudLaunchExtras> {
+    const extras = await this.#accountLaunch(session);
+    await this.#runSeeders(session);
+    return extras;
+  }
+
+  /**
+   * Adds a step to every cloud Claude launch, after the files above: the
+   * way to bring more of the user's setup into the pod (skills, commands).
+   * Steps run in the order added; one that fails is logged and the launch
+   * goes on.
+   */
+  addLaunchSeeder(seeder: CloudLaunchSeeder): void {
+    this.#seeders.push(seeder);
+  }
+
+  async #runSeeders(session: AgentSession): Promise<void> {
+    const host = this.options.hosts.find(session.hostId);
+    // A host of another kind (a test's) has no files to seed.
+    if (!(host instanceof RemoteSessionHost)) return;
+    const profile = accountProfile(
+      this.options.config,
+      "claude",
+      session.account,
+    );
+    for (const seeder of this.#seeders)
+      await seeder({ host, session, profile }).catch((error: unknown) =>
+        this.options.log?.("cloud_seed_failed", {
+          hostId: session.hostId,
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
+  }
+
+  /** The files and launch values a session's account needs in the pod. */
+  async #accountLaunch(session: AgentSession): Promise<CloudLaunchExtras> {
     const host = this.options.hosts.find(session.hostId);
     const profile = accountProfile(
       this.options.config,
