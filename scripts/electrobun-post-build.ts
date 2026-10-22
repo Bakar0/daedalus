@@ -29,7 +29,10 @@ if (
   process.exit(0);
 }
 
-const bundle = join(buildDirectory, `${appName}.app`);
+// Electrobun 2 passes the bare app name; the bundle on disk still carries the
+// channel suffix of a non-stable build ("Daedalus-dev.app").
+const bundleName = channel === "stable" ? appName : `${appName}-${channel}`;
+const bundle = join(buildDirectory, `${bundleName}.app`);
 console.log(`postBuild: added ${await installLauncher(bundle)}`);
 
 const source = resolve(import.meta.dir, "..", "build", "tmux", arch, "tmux");

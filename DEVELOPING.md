@@ -3,7 +3,7 @@
 ## Requirements
 
 - macOS 14 or newer with the Xcode Command Line Tools
-- Bun **1.4.2**
+- Bun **1.4.3**
 - tmux **3.7c** or newer on `PATH`, for the test suite
 
 The app itself bundles tmux, built by `scripts/build-tmux.ts`, so `bun run build` does not need a tmux installed.

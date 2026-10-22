@@ -9,8 +9,9 @@ describe("desktop build configuration", () => {
   });
 
   test("bundles the bun Electrobun ships, not a newer one", () => {
-    // Electrobun 1.18.1's page-to-host bridge breaks on bun 1.4: requests the
-    // page sends before its socket opens are dropped, and terminals stay black.
+    // A bun ahead of the one Electrobun's native bridge is written against
+    // drops requests the page sends before its socket opens, and terminals
+    // stay black.
     expect("bunVersion" in config.build).toBe(false);
   });
 

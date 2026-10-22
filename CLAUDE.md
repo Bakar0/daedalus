@@ -54,7 +54,7 @@ needs no administrator rights. It refuses while Daedalus is running.
 ## What the bundle carries
 
 The app must run on a Mac with nothing installed, so it ships its own bun
-(Electrobun's, 1.3.13; never pin `build.bunVersion` ahead of Electrobun, see
+(Electrobun's, 1.4.0; never pin `build.bunVersion` ahead of Electrobun, see
 electrobun.config.ts) and its own tmux (`scripts/build-tmux.ts`, copied
 into `Contents/MacOS` by `scripts/electrobun-post-build.ts`). The app and the
 bundled CLI export that tmux as `DAEDALUS_TMUX`; resolve tmux with
@@ -66,14 +66,15 @@ Releases, the update feed, signing and the Homebrew cask are in
 
 ## Electrobun
 
-Pinned to **1.18.1**. Do not move to 2.x: its Hutch/Cottontail toolchain cannot
-package on this machine — every subcommand evaluates `electrobun.config.ts`
-through Cottontail, which will not start without a native wrapper that the
-toolchain never installs, and supplying it by hand starts an AppKit event loop
-instead of loading the config. Electrobun's own `hello-world` template fails the
-same way, so it is upstream, not this repository. 2.x adds multi-language main
-processes, uninstallers, screen capture and its own DOM renderer — none of which
-this app uses.
+Pinned to **2.0.4**. Electrobun 2 is a bootstrap npm package: `bun install`
+puts no SDK in `node_modules`. `electrobun prepare` (CI runs it) downloads the
+Hutch toolchain and projects the SDK and its types into `.hutch/devkit`, which is
+gitignored. `tsconfig.json` maps `electrobun`, `electrobun/bun` and
+`electrobun/view` there, so typecheck needs `prepare` first. The hooks get
+`ELECTROBUN_APP_NAME` without the channel suffix, so
+`scripts/electrobun-post-build.ts` adds it to find `Daedalus-dev.app`. 1.18.x
+could not package on this machine because Cottontail would not start; 2.0.4
+packages here.
 
 `views://` URLs resolve as resource paths, so they take **no query string and no
 fragment**; either makes the page fail to load. Renderer parameters travel over

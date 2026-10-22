@@ -34,12 +34,12 @@ Before uploading, the build job checks that the bundle's tmux links only system 
 
 ## What the app bundles
 
-| Path in `Daedalus.app/Contents`    | Why                                                              |
-| ---------------------------------- | ---------------------------------------------------------------- |
-| `MacOS/bun` (1.3.13, Electrobun's) | the app's runtime, and the one the `daedal` shim runs the CLI on |
-| `MacOS/tmux` (3.7c)                | every session; built by `scripts/build-tmux.ts`                  |
-| `Resources/app/cli/daedal.js`      | the CLI; the app writes a shim to `~/.daedalus/bin/daedal`       |
-| `Resources/bin/daedal`             | the launcher the cask links onto PATH; runs the CLI above        |
+| Path in `Daedalus.app/Contents`   | Why                                                              |
+| --------------------------------- | ---------------------------------------------------------------- |
+| `MacOS/bun` (1.4.0, Electrobun's) | the app's runtime, and the one the `daedal` shim runs the CLI on |
+| `MacOS/tmux` (3.7c)               | every session; built by `scripts/build-tmux.ts`                  |
+| `Resources/app/cli/daedal.js`     | the CLI; the app writes a shim to `~/.daedalus/bin/daedal`       |
+| `Resources/bin/daedal`            | the launcher the cask links onto PATH; runs the CLI above        |
 
 `scripts/build-tmux.ts` builds tmux from pinned, checksummed sources with libevent and utf8proc linked in, so the binary needs only `/usr/lib`. `scripts/electrobun-post-build.ts` copies it into `Contents/MacOS`, where Electrobun signs it with everything else. The app exports its path as `DAEDALUS_TMUX` and the bundled CLI sets the same variable, so the app, the CLI and every session use the same tmux. A Mac that also has Homebrew's tmux keeps it; the two talk to each other's servers.
 

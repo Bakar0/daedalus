@@ -43,7 +43,7 @@ Verify the install:
 
 ```console
 $ daedal doctor
-✓ bun: 1.3.13
+✓ bun: 1.4.0
   runtime bundled with Daedalus.app
 ✓ tmux: tmux 3.7c
   /Applications/Daedalus.app/Contents/MacOS/tmux (verified minimum 3.7c)

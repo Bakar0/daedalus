@@ -1,12 +1,12 @@
 import packageJson from "../package.json";
 
 const expected = {
-  electrobun: "1.18.1",
-  react: "19.3.0",
-  "react-dom": "19.3.0",
+  electrobun: "2.0.4",
+  react: "19.3.1",
+  "react-dom": "19.3.1",
   typescript: "7.0.2",
-  vite: "8.3.0",
-  vitest: "5.0.0",
+  vite: "8.3.5",
+  vitest: "5.0.5",
 } as const;
 
 for (const [name, version] of Object.entries(expected)) {
@@ -21,6 +21,6 @@ for (const [name, version] of Object.entries(expected)) {
     );
 }
 
-if (Bun.version !== "1.4.2")
-  throw new Error(`Bun: expected 1.4.2, found ${Bun.version}`);
+if (Bun.version !== "1.4.3")
+  throw new Error(`Bun: expected 1.4.3, found ${Bun.version}`);
 console.log("Verified direct dependency pins and Bun runtime.");
