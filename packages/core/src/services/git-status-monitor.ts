@@ -945,10 +945,13 @@ export class GitStatusMonitor {
         // Due only because the watcher saw a file change: HEAD, the index and
         // the refs are as they were, so the branch and the distance from the
         // base are too, and only the count of changed paths can have moved.
-        // While an agent writes files this is most passes, and it is one git
-        // process instead of three to five. The record keeps its time, so the
-        // full measurement still comes round at the maximum age.
-        const filesOnly =
+        // That is one git process instead of three to five. The record keeps
+        // its time, so the full measurement still comes round at the maximum
+        // age. An agent's edit is often followed at once by `git add` and
+        // `git commit`, so the fingerprint is read again after the count: if
+        // the metadata moved meanwhile, the full measurement runs instead of
+        // an answer that is already behind.
+        let filesOnly =
           due &&
           !force &&
           previous &&
@@ -958,6 +961,12 @@ export class GitStatusMonitor {
           Date.now() - record.at < maxAge
             ? await this.measure.changedFiles(target.path)
             : undefined;
+        if (
+          filesOnly !== undefined &&
+          (await gitMetadataFingerprint(target.path, target.baseBranch)) !==
+            fingerprint
+        )
+          filesOnly = undefined;
         if (filesOnly !== undefined && previous && record) {
           status = {
             ...previous,
