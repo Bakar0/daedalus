@@ -1,5 +1,14 @@
 import { isAbsolute, join } from "node:path";
-import { readdir, stat, unlink, utimes } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  readdir,
+  rm,
+  stat,
+  unlink,
+  utimes,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { describe, expect, test } from "vitest";
 import { runCommand } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
@@ -8,6 +17,9 @@ import {
   gitMeasure,
   branchPullRequestQuery,
   chooseBranchPullRequest,
+  keptPullRequest,
+  pullRequestViewAnswer,
+  queryBranchPullRequests,
   parseGitHubRemote,
   pullRequestDue,
   type GitMeasure,
@@ -783,5 +795,110 @@ describe("chooseBranchPullRequest", () => {
       chooseBranchPullRequest([pull(5, "CLOSED", "me")], "me")?.number,
     ).toBe(5);
     expect(chooseBranchPullRequest([], "me")).toBeUndefined();
+  });
+});
+
+describe("pullRequestViewAnswer", () => {
+  test("tells no pull request apart from no answer", () => {
+    expect(
+      pullRequestViewAnswer({ exitCode: 0, stdout: "{}", stderr: "" }),
+    ).toBe("{}");
+    expect(
+      pullRequestViewAnswer({
+        exitCode: 1,
+        stdout: "",
+        stderr: 'no pull requests found for branch "work"',
+      }),
+    ).toBeNull();
+    expect(
+      pullRequestViewAnswer({
+        exitCode: 1,
+        stdout: "",
+        stderr: "HTTP 403: API rate limit exceeded",
+      }),
+    ).toBeUndefined();
+    expect(pullRequestViewAnswer(undefined)).toBeUndefined();
+  });
+});
+
+describe("keptPullRequest", () => {
+  test("keeps a link through a failed answer, moving only the time", () => {
+    const cached = {
+      checkedAt: 1,
+      fingerprint: "a",
+      value: {
+        number: 7,
+        url: "https://github.com/o/r/pull/7",
+        state: "OPEN" as const,
+        isDraft: false,
+      },
+    };
+    expect(keptPullRequest(cached, 99)).toEqual({ ...cached, checkedAt: 99 });
+    expect(keptPullRequest(undefined, 99)).toEqual({ checkedAt: 99 });
+  });
+});
+
+describe("queryBranchPullRequests", () => {
+  const remote = { host: "github.com", owner: "o", name: "r" };
+  const withFakeGh = async (
+    output: string,
+    exitCode: number,
+    run: (gh: string) => Promise<void>,
+  ) => {
+    const folder = await mkdtemp(join(tmpdir(), "daedalus-fake-gh-"));
+    try {
+      const gh = join(folder, "gh");
+      await Bun.write(join(folder, "out.json"), output);
+      await Bun.write(
+        gh,
+        `#!/bin/sh\ncat "${join(folder, "out.json")}"\nexit ${exitCode}\n`,
+      );
+      await chmod(gh, 0o755);
+      await run(gh);
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  };
+  const pull = {
+    number: 3,
+    state: "OPEN",
+    headRepositoryOwner: { login: "o" },
+  };
+  test("answers each branch, null where there is no pull request", async () => {
+    await withFakeGh(
+      JSON.stringify({
+        data: {
+          repository: {
+            isFork: false,
+            b0: { nodes: [pull] },
+            b1: { nodes: [] },
+          },
+        },
+      }),
+      0,
+      async (gh) => {
+        const answers = await queryBranchPullRequests(
+          gh,
+          remote,
+          ["one", "two"],
+          tmpdir(),
+        );
+        expect(answers?.[0] && JSON.parse(answers[0]).number).toBe(3);
+        expect(answers?.[1]).toBeNull();
+      },
+    );
+  });
+  test("gives up on a fork, a failure or a partial answer, so gh pr view is asked", async () => {
+    const cases: Array<[unknown, number]> = [
+      [{ data: { repository: { isFork: true, b0: { nodes: [pull] } } } }, 0],
+      [{ errors: [{ message: "rate limited" }] }, 1],
+      [{ data: { repository: { isFork: false, b0: null } } }, 0],
+    ];
+    for (const [output, exitCode] of cases)
+      await withFakeGh(JSON.stringify(output), exitCode, async (gh) => {
+        expect(
+          await queryBranchPullRequests(gh, remote, ["one"], tmpdir()),
+        ).toBeUndefined();
+      });
   });
 });

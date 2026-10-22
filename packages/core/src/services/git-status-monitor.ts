@@ -5,6 +5,7 @@ import {
   pathExists,
   runCommand,
   watchFileTree,
+  type CommandResult,
   type FileTreeWatcher,
 } from "@daedalus/platform";
 import type {
@@ -478,7 +479,7 @@ export function branchPullRequestQuery(count: number): string {
       `states: [OPEN, CLOSED, MERGED]) { nodes { number url state isDraft ` +
       `headRefOid title mergedAt headRepositoryOwner { login } } }`,
   ).join(" ");
-  return `query($owner: String!, $name: String!, ${variables}) { repository(owner: $owner, name: $name) { ${fields} } }`;
+  return `query($owner: String!, $name: String!, ${variables}) { repository(owner: $owner, name: $name) { isFork ${fields} } }`;
 }
 
 /**
@@ -502,15 +503,16 @@ export function chooseBranchPullRequest(
 
 /**
  * Asks GitHub about several branches of one repository in one request. Each
- * answer is in `gh pr view --json` form, or undefined when the branch has no
- * pull request. The whole result is undefined when the request failed.
+ * answer is in `gh pr view --json` form, or null when the branch has no pull
+ * request. The whole result is undefined when the request failed, and for a
+ * fork, where `gh pr view` looks in the repository it was forked from.
  */
-async function queryBranchPullRequests(
+export async function queryBranchPullRequests(
   gh: string,
   remote: GitHubRemote,
   branches: readonly string[],
   cwd: string,
-): Promise<Array<string | undefined> | undefined> {
+): Promise<Array<string | null> | undefined> {
   const response = await runCommand(
     gh,
     [
@@ -529,27 +531,54 @@ async function queryBranchPullRequests(
     { cwd, env: { GH_PROMPT_DISABLED: "1" } },
   ).catch(() => undefined);
   if (!response || response.exitCode !== 0) return undefined;
-  let repository: Record<string, { nodes?: unknown } | null> | undefined;
+  let repository: Record<string, unknown> | undefined;
   try {
     repository = (
       JSON.parse(response.stdout) as {
-        data?: { repository?: Record<string, { nodes?: unknown } | null> };
+        data?: { repository?: Record<string, unknown> };
       }
     ).data?.repository;
   } catch {
     return undefined;
   }
-  if (!repository) return undefined;
-  return branches.map((_, index) => {
-    const nodes = repository[`b${index}`]?.nodes;
-    const chosen = Array.isArray(nodes)
-      ? chooseBranchPullRequest(
-          nodes as Record<string, unknown>[],
-          remote.owner,
-        )
-      : undefined;
-    return chosen ? JSON.stringify(chosen) : undefined;
-  });
+  if (!repository || repository.isFork !== false) return undefined;
+  const answers: Array<string | null> = [];
+  for (let index = 0; index < branches.length; index += 1) {
+    const nodes = (repository[`b${index}`] as { nodes?: unknown } | null)
+      ?.nodes;
+    // A branch the answer leaves out is not known to have no pull request.
+    if (!Array.isArray(nodes)) return undefined;
+    const chosen = chooseBranchPullRequest(
+      nodes as Record<string, unknown>[],
+      remote.owner,
+    );
+    answers.push(chosen ? JSON.stringify(chosen) : null);
+  }
+  return answers;
+}
+
+/**
+ * What `gh pr view --json` said: its output, null when it reported that the
+ * branch has no pull request, or undefined when it could not say (offline,
+ * rate limited, signed out).
+ */
+export function pullRequestViewAnswer(
+  result: CommandResult | undefined,
+): string | null | undefined {
+  if (!result) return undefined;
+  if (result.exitCode === 0) return result.stdout;
+  return /no pull requests? found/i.test(result.stderr) ? null : undefined;
+}
+
+/**
+ * The cache entry after `gh` could not answer: the pull request and landed
+ * HEAD it had stay, and only the time it was asked moves on.
+ */
+export function keptPullRequest<T extends { checkedAt: number }>(
+  cached: T | undefined,
+  now: number,
+): T | { checkedAt: number } {
+  return cached ? { ...cached, checkedAt: now } : { checkedAt: now };
 }
 
 /** Whether a branch's pull request is worth asking `gh` about again. */
@@ -1254,9 +1283,9 @@ export class GitStatusMonitor {
     );
     if (!gh || asking.length === 0) return changed;
 
-    // What `gh pr view --json` would have printed for each branch, or
-    // undefined for no answer.
-    const answers = new Map<PullRequestCheck, string | undefined>();
+    // What `gh pr view --json` would have printed for each branch: its
+    // output, null for no pull request, or undefined when nobody could say.
+    const answers = new Map<PullRequestCheck, string | null | undefined>();
     const groups = new Map<
       string,
       { remote: GitHubRemote; checks: Array<(typeof asking)[number]> }
@@ -1264,12 +1293,14 @@ export class GitStatusMonitor {
     const alone: Array<(typeof asking)[number]> = [];
     for (const check of asking) {
       const remote = check.worktree && this.githubRemote(check.worktree);
-      if (!remote) {
+      // Only github.com is asked in a batch. Any other host, an SSH alias
+      // such as `github-work` included, is one `gh` resolves through its
+      // own configuration, so it is left to `gh pr view`.
+      if (!remote || remote.host.toLowerCase() !== "github.com") {
         alone.push(check);
         continue;
       }
-      const name =
-        `${remote.host}/${remote.owner}/${remote.name}`.toLowerCase();
+      const name = `${remote.owner}/${remote.name}`.toLowerCase();
       const group = groups.get(name) ?? { remote, checks: [] };
       group.checks.push(check);
       groups.set(name, group);
@@ -1287,31 +1318,42 @@ export class GitStatusMonitor {
           batch.map((check) => check.branchName),
           batch[0]!.path,
         );
-        batch.forEach((check, index) => answers.set(check, found?.[index]));
+        // A request that failed, or a fork, whose pull requests live on the
+        // repository it was forked from, is asked branch by branch as before.
+        if (!found) alone.push(...batch);
+        else batch.forEach((check, index) => answers.set(check, found[index]));
       }
-    for (const check of alone) {
-      const response = await runCommand(
-        gh,
-        [
-          "pr",
-          "view",
-          check.branchName,
-          "--json",
-          "number,url,state,isDraft,headRefOid,title,mergedAt",
-        ],
-        { cwd: check.path, env: { GH_PROMPT_DISABLED: "1" } },
-      ).catch(() => undefined);
+    for (const check of alone)
       answers.set(
         check,
-        response && response.exitCode === 0 ? response.stdout : undefined,
+        pullRequestViewAnswer(
+          await runCommand(
+            gh,
+            [
+              "pr",
+              "view",
+              check.branchName,
+              "--json",
+              "number,url,state,isDraft,headRefOid,title,mergedAt",
+            ],
+            { cwd: check.path, env: { GH_PROMPT_DISABLED: "1" } },
+          ).catch(() => undefined),
+        ),
       );
-    }
 
     for (const check of asking) {
       const cached = this.pullRequestCache.get(check.key);
       const answer = answers.get(check);
-      const value =
-        answer === undefined ? undefined : parsePullRequestView(answer);
+      if (answer === undefined) {
+        // Rate limited, offline or signed out: what was known stays known,
+        // and the branch is asked again at the usual time.
+        this.pullRequestCache.set(
+          check.key,
+          keptPullRequest(cached, Date.now()),
+        );
+        continue;
+      }
+      const value = answer === null ? undefined : parsePullRequestView(answer);
       const landed =
         Boolean(git && check.head && value?.state === "MERGED") &&
         (await pullRequestAnswerHoldsHead(git!, check.path, answer!));
