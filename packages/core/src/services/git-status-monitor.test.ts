@@ -253,6 +253,59 @@ describe("GitStatusMonitor", () => {
       // It waits out the rate limit and the file-change settle on purpose.
     }, 20_000);
 
+    test("an unmeasurable tree is never given a status from its count alone", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const { context, content, session, workspace, relativeRoot } =
+          await lazyFixture(home);
+        await content.settleGitStatus();
+        const counts = { status: 0, changedFiles: 0 };
+        // git answers the count but not the comparison, as when the base
+        // branch's remote ref is missing.
+        const unavailable: GitMeasure = {
+          status: async () => {
+            counts.status += 1;
+            return {
+              state: "unavailable",
+              changedFiles: 0,
+              ahead: 0,
+              behind: 0,
+            };
+          },
+          changedFiles: async () => {
+            counts.changedFiles += 1;
+            return 2;
+          },
+          changes: (path) => gitMeasure.changes(path),
+        };
+        const measured = new WorkspaceContentService(
+          context.repositories,
+          context.workspaces,
+          context.config,
+          () => {},
+          async () => {},
+          unavailable,
+        );
+        await context.agents.stop(session.id, true);
+        measured.remeasureWorkspace(workspace.id);
+        await measured.settleGitStatus();
+        const before = { ...counts };
+        measured.noteFilesChanged(
+          workspace.id,
+          [{ path: `${relativeRoot}/EDIT.md` }],
+          false,
+        );
+        await Bun.sleep(1_000);
+        await measured.settleGitStatus();
+        expect(counts.changedFiles - before.changedFiles).toBe(0);
+        expect(counts.status - before.status).toBe(1);
+        expect(
+          (await measured.get(workspace.id)).worktrees[0]?.gitStatus?.state,
+        ).toBe("unavailable");
+        measured.close();
+        context.close();
+      });
+    }, 20_000);
+
     test("sees an edit nothing reports in a live session's worktree", async () => {
       await withTemporaryDaedalusHome(async (home) => {
         const { context, content, worktree, statusBecomes } =

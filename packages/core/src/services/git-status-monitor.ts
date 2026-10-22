@@ -1088,6 +1088,9 @@ export class GitStatusMonitor {
           due &&
           !force &&
           previous &&
+          // A tree git could not measure has no distance from its base to
+          // keep, so it is measured in full until it can be.
+          previous.state !== "unavailable" &&
           record &&
           fingerprint !== undefined &&
           record.fingerprint === fingerprint &&
