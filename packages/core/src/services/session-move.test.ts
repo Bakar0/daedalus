@@ -498,12 +498,26 @@ describe("move rules", () => {
       ".githooks/post-checkout",
       ".vscode/tasks.json",
       ".devcontainer/devcontainer.json",
+      ".gitattributes",
+      "sub/.lfsconfig",
+      ".gitmodules",
+      ".cursor/rules/a.mdc",
+      ".codex/config.toml",
+      ".windsurf/rules.md",
+      ".github/copilot-instructions.md",
+      ".github/instructions/a.instructions.md",
+      "GEMINI.md",
       // The Kelvin sign folds to k, and a decomposed é to a composed one.
       ".githoo\u212As/pre-commit",
       "docs/AGENTS.md".normalize("NFD"),
     ])
       expect(steersAgent(path)).toBe(true);
-    for (const path of ["src/claude.ts", "README.md", "claude/notes.md"])
+    for (const path of [
+      "src/claude.ts",
+      "README.md",
+      "claude/notes.md",
+      ".github/workflows/ci.yml",
+    ])
       expect(steersAgent(path)).toBe(false);
   });
 

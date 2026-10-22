@@ -350,19 +350,37 @@ export async function applySnapshot(
 export const foldPath = (path: string): string =>
   path.normalize("NFKC").toUpperCase().toLowerCase().normalize("NFKC");
 
+/** Folders whose files steer an agent or run on open, at any depth. */
 const STEERING_FOLDERS = [
   ".claude",
   ".husky",
   ".githooks",
   ".vscode",
   ".devcontainer",
+  // Other agents' configuration.
+  ".cursor",
+  ".codex",
+  ".windsurf",
+  ".gemini",
 ];
+/** Files that do, by name at any depth. */
 const STEERING_FILES = [
   "claude.md",
   "claude.local.md",
   "agents.md",
+  "gemini.md",
   ".mcp.json",
   ".envrc",
+  ".cursorrules",
+  ".windsurfrules",
+  // Tool managers act on these when a shell enters the folder.
+  ".mise.toml",
+  ".tool-versions",
+  // git's own: filters (git-lfs and the like) run on checkout, and
+  // submodules can be fetched with it.
+  ".gitattributes",
+  ".lfsconfig",
+  ".gitmodules",
 ];
 
 /** Whether a repository path steers an agent or runs when it is opened. */
@@ -371,7 +389,15 @@ export function steersAgent(path: string): boolean {
   const name = parts.at(-1) ?? "";
   return (
     parts.some((part) => STEERING_FOLDERS.includes(part)) ||
-    STEERING_FILES.includes(name)
+    STEERING_FILES.includes(name) ||
+    // Copilot's instructions live under .github, beside files that do not.
+    parts.some(
+      (part, index) =>
+        part === ".github" &&
+        (parts[index + 1] === "instructions" ||
+          (parts[index + 1] === "copilot-instructions.md" &&
+            index + 2 === parts.length)),
+    )
   );
 }
 
