@@ -2962,15 +2962,17 @@ export function WorkspaceApp({
 
   /**
    * The workspace header's cloud action: a cloud that moves the workspace
-   * there, lit while it is there, where a click brings it home. Signed out,
-   * a workspace on this Mac has none.
+   * there when pinned, lit while it is there, where a click brings it home.
+   * Signed out, a workspace on this Mac has none.
    */
   const workspaceCloudAction = (item: WorkspaceDto) => {
     const inCloud = item.place === "cloud";
     const signedIn = Boolean(cloudState.data?.signedIn);
-    const move = moveByWorkspace.get(item.id);
-    if (!inCloud && !signedIn && !move) return null;
     const moving = workspaceMoving(item);
+    // Lit while in the cloud or moving, whether pinned or not; otherwise on
+    // the header only when pinned, like the others.
+    if (!inCloud && !moving && !(signedIn && pins.workspace.has("cloud")))
+      return null;
     const failure = cloudByWorkspace.get(item.id);
     return (
       <button
@@ -4227,25 +4229,15 @@ export function WorkspaceApp({
   }
 
   /**
-   * Moves a whole workspace to the cloud or back to this Mac, after asking.
+   * Moves a whole workspace to the cloud or back to this Mac. No question
+   * first: the move's steps show on the workspace, and Cancel stops it
+   * while it waits for turns.
    * The host may answer with a question (files that steer agents, sessions
    * that wait on the user) and is asked again with the answer, or with why
    * it cannot move (sessions the cloud cannot run, something too big),
    * which the window shows and stops at.
    */
   async function moveWorkspace(item: WorkspaceDto, to: "cloud" | "mac") {
-    const sure = await askConfirm({
-      title:
-        to === "cloud"
-          ? `Move ${item.name} to the cloud?`
-          : `Move ${item.name} back to this Mac?`,
-      message:
-        to === "cloud"
-          ? "Its sessions finish their turns and stop, the workspace is copied to its cloud pod, and they resume there. New sessions, terminals and files are there too. This Mac keeps its folder as it is now, as a backup."
-          : "Its sessions finish their turns and stop, the workspace's changes come back to this Mac, and the sessions resume here in ask mode. The cloud copy is kept asleep.",
-      confirmLabel: to === "cloud" ? "Move to cloud" : "Move to this Mac",
-    });
-    if (!sure) return;
     setMoveErrors(({ [item.id]: _gone, ...rest }) => rest);
     let approved: string[] | undefined;
     let stopWorking = false;
@@ -6637,6 +6629,37 @@ export function WorkspaceApp({
                               disabled: busy,
                               run: () => setSecretsWorkspace(item),
                             },
+                            ...(item.place === "cloud" ||
+                            cloudState.data?.signedIn
+                              ? [
+                                  {
+                                    id: "cloud",
+                                    icon: (
+                                      <CloudActionIcon
+                                        home={item.place === "cloud"}
+                                      />
+                                    ),
+                                    label:
+                                      item.place === "cloud"
+                                        ? "Move to this Mac"
+                                        : "Move to cloud",
+                                    pinned: pins.workspace.has("cloud"),
+                                    onPin: (on: boolean) =>
+                                      pin("workspace", "cloud", on),
+                                    disabled:
+                                      workspaceMoving(item) ||
+                                      !cloudState.data?.signedIn ||
+                                      !item.available,
+                                    run: () =>
+                                      void moveWorkspace(
+                                        item,
+                                        item.place === "cloud"
+                                          ? "mac"
+                                          : "cloud",
+                                      ),
+                                  },
+                                ]
+                              : []),
                             {
                               id: "archive",
                               icon: <ArchiveIcon />,
@@ -6672,7 +6695,7 @@ export function WorkspaceApp({
                       const moveError = moveErrors[item.id];
                       return (
                         <>
-                          {move && move.phase !== "moved" ? (
+                          {move ? (
                             <WorkspaceMoveState
                               move={move}
                               name={item.name}

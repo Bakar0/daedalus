@@ -115,7 +115,7 @@ await withBrowser({ port: 41764, page: "cloud-test.html" }, async (browser) => {
     `[...document.querySelectorAll('.menu-popover:popover-open .menu-pin-row')].map((row) => ({ id: row.dataset.action, icon: Boolean(row.querySelector('.menu-item-icon svg')) }))`,
   );
   expect(
-    rows.length === 3 && rows.every((row) => row.icon),
+    rows.length === 4 && rows.every((row) => row.icon),
     `a Settings action has no icon: ${JSON.stringify(rows)}`,
   );
   await closeMenus(browser);

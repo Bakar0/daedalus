@@ -6,7 +6,7 @@ import { useCallback, useState } from "react";
  * this window's storage. Settings and the workspace's + are always there and
  * are not listed.
  */
-export type WorkspaceActionId = "terminal" | "secrets" | "archive";
+export type WorkspaceActionId = "terminal" | "secrets" | "cloud" | "archive";
 export type SessionActionId = "rebirth" | "archive";
 
 export interface Pins {
@@ -24,6 +24,7 @@ const KEY = "daedalus.pins";
 const WORKSPACE_IDS: readonly WorkspaceActionId[] = [
   "terminal",
   "secrets",
+  "cloud",
   "archive",
 ];
 const SESSION_IDS: readonly SessionActionId[] = ["rebirth", "archive"];

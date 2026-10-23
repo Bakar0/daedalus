@@ -52,9 +52,26 @@ const ready = async (browser: Browser) => {
   await Bun.sleep(400);
 };
 
-const startMove = async (browser: Browser, name: string, confirm: string) => {
-  await browser.evaluate(`${action(name)}.click()`);
-  return answer(browser, confirm);
+const openSettings = async (browser: Browser, name: string) => {
+  await browser.evaluate(
+    `document.querySelector('summary[aria-label="Settings of ${name}"]').click()`,
+  );
+  await browser.waitFor(
+    "document.querySelector('.menu-popover:popover-open [data-testid=\"menu-action-cloud\"]')",
+    `the ${name} move item`,
+  );
+};
+
+/** From the workspace's Settings; a move asks nothing first. */
+const startMove = async (browser: Browser, name: string) => {
+  await openSettings(browser, name);
+  await browser.evaluate(
+    "document.querySelector('.menu-popover:popover-open [data-testid=\"menu-action-cloud\"]').click()",
+  );
+  await browser.waitFor(
+    "window.requests.some((one) => 'workspaceMove' in one)",
+    "the move call",
+  );
 };
 
 const fits = async (browser: Browser, testId: string) => {
@@ -86,21 +103,19 @@ await withBrowser(
     const seen = await browser.evaluate<{
       cloudLit: boolean;
       cloudShown: boolean;
-      localLit: boolean;
-      localShown: boolean;
+      local: boolean;
     }>(`({
       cloudLit: ${action("Cloud project")}.dataset.cloudLit === 'true',
       cloudShown: ${action("Cloud project")}.offsetParent !== null,
-      localLit: ${action("Plain local")}.dataset.cloudLit === 'true',
-      localShown: ${action("Plain local")}.offsetParent !== null,
+      local: Boolean(${action("Plain local")}),
     })`);
     expect(
       seen.cloudLit && seen.cloudShown,
       `a workspace in the cloud does not show a lit cloud action: ${JSON.stringify(seen)}`,
     );
     expect(
-      !seen.localLit && !seen.localShown,
-      `a workspace on this Mac shows its cloud action without hover: ${JSON.stringify(seen)}`,
+      !seen.local,
+      "an unpinned cloud action is on the header of a workspace on this Mac",
     );
     const order = await browser.evaluate<string[]>(
       `[...${action("Cloud project")}.parentElement.children].map((one) => one.matches('.workspace-card-menu') ? 'settings' : one.matches('.workspace-session-create') ? 'new' : one.matches('.workspace-cloud-action') ? 'cloud' : 'other')`,
@@ -111,20 +126,70 @@ await withBrowser(
     );
     await browser.screenshot("cloud-move-header");
 
-    // Asks first; Cancel moves nothing.
-    await browser.evaluate(`${action("Plain local")}.click()`);
-    const text = await answer(browser, "Cancel");
+    // Settings has the move with its icon, unpinned; a pin puts it on the
+    // header like the others.
+    await openSettings(browser, "Plain local");
+    browser.scope = ".menu-popover:popover-open";
     expect(
-      text.includes("Move Plain local to the cloud?") &&
-        text.includes("backup"),
-      `the question reads "${text}"`,
+      (await browser.evaluate<boolean>(
+        "Boolean(document.querySelector('.menu-popover:popover-open [data-action=\"cloud\"] .menu-item-icon svg'))",
+      )) &&
+        (await browser.text("menu-action-cloud")) === "Move to cloud" &&
+        (await browser.attribute("pin-cloud", "aria-pressed")) === "false",
+      "Move to cloud is not in Settings with its icon, unpinned",
     );
-    expect(!(await moves(browser)).length, "Cancel moved the workspace");
+    await browser.click("pin-cloud");
+    browser.scope = "";
+    await browser.evaluate(
+      `document.querySelectorAll('details.menu[open]').forEach((one) => { one.open = false; })`,
+    );
+    await browser.waitFor(
+      `${action("Plain local")}`,
+      "the pinned cloud action",
+    );
+    expect(
+      (await browser.evaluate<boolean>(
+        `${action("Plain local")}.offsetParent === null`,
+      )) &&
+        (await browser.evaluate<boolean>(
+          `${action("Cloud project")}.offsetParent !== null`,
+        )),
+      "a pinned, unlit cloud action shows without hover, or the lit one hides",
+    );
 
-    await startMove(browser, "Plain local", "Move to cloud");
+    await startMove(browser, "Plain local");
     await browser.waitFor(
       `${group("Plain local")}.querySelector('[data-testid="workspace-move"][data-phase="copying"]')`,
       "the moving state",
+    );
+    expect(
+      !(await browser.evaluate<boolean>(
+        "Boolean(document.querySelector('.modal'))",
+      )),
+      "the move asked first",
+    );
+    const scene = await browser.evaluate<{
+      to: string;
+      dots: number;
+      step: string;
+      animated: boolean;
+    }>(`(() => {
+      const strip = ${group("Plain local")}.querySelector('[data-testid="workspace-move"]');
+      const scene = strip.querySelector('[data-testid="workspace-move-scene"]');
+      const dot = scene.querySelector('.workspace-move-track i');
+      return {
+        to: scene.dataset.to,
+        dots: scene.querySelectorAll('.workspace-move-track i').length,
+        step: strip.querySelector('[data-testid="workspace-move-step"]').textContent,
+        animated: getComputedStyle(dot).animationName === 'workspace-move-flow' && getComputedStyle(dot).animationDuration === '1.5s',
+      };
+    })()`);
+    expect(
+      scene.to === "cloud" &&
+        scene.dots === 3 &&
+        scene.step === "Copying repos/app" &&
+        scene.animated,
+      `the moving picture reads ${JSON.stringify(scene)}`,
     );
     const moving = await browser.evaluate<{
       label: string;
@@ -137,7 +202,7 @@ await withBrowser(
       const strip = ${group("Plain local")}.querySelector('[data-testid="workspace-move"]');
       return {
         label: strip.querySelector('.workspace-move-label').textContent,
-        detail: strip.querySelector('[data-testid="workspace-move-detail"]').textContent,
+        detail: strip.querySelector('[data-testid="workspace-move-step"]').textContent,
         done: strip.querySelectorAll('li[data-state="done"]').length,
         now: strip.querySelectorAll('li[data-state="now"]').length,
         createOff: document.querySelector('[aria-label="Create session in Plain local"]').disabled,
@@ -163,6 +228,12 @@ await withBrowser(
     await browser.screenshot("cloud-move-moving");
 
     await browser.evaluate("window.cloudFixture.releaseMove()");
+    // It settles, the cloud lit, then goes.
+    await browser.waitFor(
+      `${group("Plain local")}.querySelector('[data-testid="workspace-move-scene"][data-settled]')`,
+      "the settled picture",
+    );
+    await browser.screenshot("cloud-move-settled");
     await browser.waitFor(
       `${action("Plain local")}.dataset.cloudLit === 'true' && !${group("Plain local")}.querySelector('[data-testid="workspace-move"]')`,
       "the workspace to be in the cloud",
@@ -178,12 +249,7 @@ await withBrowser(
 // Home, with the notice it leaves.
 await withBrowser({ port: 41822, page: "cloud-test.html" }, async (browser) => {
   await ready(browser);
-  const text = await startMove(browser, "Cloud project", "Move to this Mac");
-  expect(
-    text.includes("Move Cloud project back to this Mac?") &&
-      text.includes("ask mode"),
-    `the question reads "${text}"`,
-  );
+  await startMove(browser, "Cloud project");
   await browser.waitFor(
     "document.querySelector('[data-testid=\"workspace-move-notice\"]')",
     "the moved notice",
@@ -191,7 +257,7 @@ await withBrowser({ port: 41822, page: "cloud-test.html" }, async (browser) => {
   expect(
     (await browser.text("workspace-move-notice")).includes("ask mode") &&
       !(await browser.evaluate<boolean>(
-        `${action("Cloud project")}.dataset.cloudLit === 'true'`,
+        `${action("Cloud project")}?.dataset.cloudLit === 'true'`,
       )),
     "the notice does not say it resumes in ask mode, or the action stays lit",
   );
@@ -217,7 +283,7 @@ await withBrowser(
   { port: 41824, page: "cloud-test.html", query: "moveAsk=approval" },
   async (browser) => {
     await ready(browser);
-    await startMove(browser, "Cloud project", "Move to this Mac");
+    await startMove(browser, "Cloud project");
     await browser.waitFor(dialogButton("Move with them"), "the approval");
     const lines = await browser.evaluate<string[]>(
       "[...document.querySelectorAll('[data-testid=\"dialog-lines\"] li')].map((one) => one.textContent)",
@@ -247,7 +313,7 @@ await withBrowser(
   { port: 41826, page: "cloud-test.html", query: "moveAsk=busy" },
   async (browser) => {
     await ready(browser);
-    await startMove(browser, "Plain local", "Move to cloud");
+    await startMove(browser, "Plain local");
     const text = await answer(browser, "Stop them and move");
     expect(text.includes("s-local"), `the question reads "${text}"`);
     await browser.waitFor(
@@ -271,7 +337,7 @@ for (const [port, ask, says] of [
     { port, page: "cloud-test.html", query: `moveAsk=${ask}` },
     async (browser) => {
       await ready(browser);
-      await startMove(browser, "Plain local", "Move to cloud");
+      await startMove(browser, "Plain local");
       const text = await answer(browser, "OK");
       expect(text.includes(says), `the ${ask} message reads "${text}"`);
       await Bun.sleep(300);
@@ -288,7 +354,7 @@ await withBrowser(
   { port: 41832, page: "cloud-test.html", query: "moveAsk=fail" },
   async (browser) => {
     await ready(browser);
-    await startMove(browser, "Plain local", "Move to cloud");
+    await startMove(browser, "Plain local");
     await browser.waitFor(
       `${group("Plain local")}.querySelector('[data-testid="workspace-move"][data-phase="failed"]')`,
       "the failure under the workspace",
@@ -313,7 +379,7 @@ await withBrowser(
   async (browser) => {
     await ready(browser);
     expect(
-      (await browser.text("workspace-move-detail")) ===
+      (await browser.text("workspace-move-step")) ===
         "Waiting for 2 sessions to end their turns",
       "the waiting state does not say what it waits for",
     );

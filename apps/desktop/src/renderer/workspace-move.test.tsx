@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   byteSize,
   moveLabel,
+  moveStepLabel,
   pathLines,
   sessionLines,
   tooBigLines,
@@ -125,5 +126,40 @@ describe("WorkspaceNotice", () => {
     expect(markup).toContain("…");
     expect(markup).not.toContain("x".repeat(401));
     expect(markup).toContain('data-testid="workspace-notice-dismiss"');
+  });
+});
+
+describe("the move's picture", () => {
+  test("flows toward where the workspace goes and names the step", () => {
+    const home = renderToStaticMarkup(
+      <WorkspaceMoveState
+        move={{ workspaceId: "w", to: "mac", phase: "starting" }}
+        name="app"
+        onCancel={() => {}}
+        onDismiss={() => {}}
+      />,
+    );
+    expect(home).toContain('data-to="mac"');
+    expect(home).not.toContain("data-settled");
+    expect(home).toContain("Starting on this Mac");
+    expect(
+      moveStepLabel({ workspaceId: "w", to: "cloud", phase: "starting" }),
+    ).toBe("Starting in the cloud");
+    expect(
+      moveStepLabel({ workspaceId: "w", to: "cloud", phase: "waiting" }),
+    ).toBe("Waiting for sessions");
+  });
+
+  test("settles when the move ends well", () => {
+    const moved = renderToStaticMarkup(
+      <WorkspaceMoveState
+        move={{ workspaceId: "w", to: "cloud", phase: "moved" }}
+        name="app"
+        onCancel={() => {}}
+        onDismiss={() => {}}
+      />,
+    );
+    expect(moved).toContain('data-settled="true"');
+    expect(moved).toContain("In the cloud");
   });
 });
