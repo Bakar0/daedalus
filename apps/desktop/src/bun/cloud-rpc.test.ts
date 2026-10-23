@@ -6,6 +6,7 @@ import {
   CLOUD_SLEEP_REASON,
   cloudHostId,
   CLOUD_COLLECTED_NOTICE,
+  COLLECTED_CONFIRM_MS,
   CLOUD_COLLECTED_REASON,
   createApplicationContext,
   type ApplicationContext,
@@ -249,6 +250,7 @@ async function withCloud(
   await withTemporaryDaedalusHome(async (home) => {
     const gateway = new FakeGateway();
     const relay = new FakeRelay();
+    clock.now = Date.now();
     const context = await createApplicationContext({
       env: { ...process.env, DAEDALUS_HOME: home },
       tmux: new NoTmux(),
@@ -261,6 +263,7 @@ async function withCloud(
           publicKey: "mac-public",
           secretKey: "mac-secret",
         }),
+        now: () => clock.now,
       },
     });
     try {
@@ -270,6 +273,9 @@ async function withCloud(
     }
   });
 }
+
+/** The cloud service's clock, which a test moves on. */
+const clock = { now: Date.now() };
 
 /** The workspace lives in the cloud: its sessions run there. */
 const inCloud = (
@@ -794,6 +800,16 @@ describe("cloud RPC", () => {
       // 30 days asleep: the gateway's collection deleted it.
       gateway.workspaces.delete(cloudId);
 
+      // One answer is not enough: the link stays, the workspace with it.
+      expect((await rpc.cloudState({})).ok).toBe(true);
+      expect(context.repositories.cloudWorkspaceId(workspace.id)).toBe(cloudId);
+      expect((await context.workspaces.get(workspace.id)).place).toBe("cloud");
+      clock.now += COLLECTED_CONFIRM_MS - 60_000;
+      await rpc.cloudState({});
+      expect(context.repositories.cloudWorkspaceId(workspace.id)).toBe(cloudId);
+
+      // Gone again an hour after it was first missed.
+      clock.now += 60_000;
       const state = await rpc.cloudState({});
       expect(state.ok && state.data.workspaces).toEqual([]);
       expect(
