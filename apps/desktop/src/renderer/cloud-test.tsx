@@ -612,6 +612,15 @@ const client = {
       announce();
       return ok(null);
     },
+    terminalCreate: async (params: Record<string, unknown>) => {
+      record("terminalCreate", params);
+      return ok({
+        id: `t-${window.requests.length}`,
+        name: String(params.name ?? "terminal"),
+        workingDirectory: "/tmp",
+        status: "running",
+      });
+    },
     agentSpawn: async (params: Record<string, unknown>) => {
       record("agentSpawn", params);
       const created = session(

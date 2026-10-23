@@ -375,6 +375,48 @@ await withBrowser(
   },
 );
 
+// A terminal for a workspace in the cloud runs in its pod, as a terminal
+// session; one on this Mac stays an integrated terminal.
+await withBrowser({ port: 41842, page: "cloud-test.html" }, async (browser) => {
+  await ready(browser);
+  const openTerminal = async (name: string) => {
+    await browser.evaluate(
+      `document.querySelector('summary[aria-label="Settings of ${name}"]').click()`,
+    );
+    await browser.waitFor(
+      "document.querySelector('.menu-popover:popover-open [data-testid=\"menu-action-terminal\"]')",
+      `the ${name} terminal item`,
+    );
+    await browser.evaluate(
+      "document.querySelector('.menu-popover:popover-open [data-testid=\"menu-action-terminal\"]').click()",
+    );
+  };
+  await openTerminal("Cloud project");
+  await browser.waitFor(
+    "window.requests.some((one) => 'agentSpawn' in one)",
+    "the pod terminal",
+  );
+  const spawned = (await browser.requests()).find(
+    (one) => "agentSpawn" in one,
+  )?.agentSpawn;
+  expect(
+    JSON.stringify(spawned) ===
+      '{"workspace":"cloud-ws","name":"Cloud project","terminal":true}' &&
+      !(await browser.requests()).some((one) => "terminalCreate" in one),
+    `a cloud workspace's terminal sent ${JSON.stringify(await browser.requests())}`,
+  );
+  await openTerminal("Plain local");
+  await browser.waitFor(
+    "window.requests.some((one) => 'terminalCreate' in one)",
+    "the integrated terminal on this Mac",
+  );
+  expect(
+    (await browser.requests()).filter((one) => "agentSpawn" in one).length ===
+      1,
+    "a terminal on this Mac went to agentSpawn",
+  );
+});
+
 // Signed out: only a workspace in the cloud has the action, and it is off.
 await withBrowser(
   { port: 41840, page: "cloud-test.html", query: "signedIn=0" },

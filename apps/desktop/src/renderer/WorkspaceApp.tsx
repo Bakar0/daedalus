@@ -4633,10 +4633,28 @@ export function WorkspaceApp({
     });
   }
 
+  /**
+   * A terminal for a workspace in the cloud: a terminal session in its pod,
+   * at the workspace's root there, opened like any session. This Mac's
+   * folder is its backup while it is in the cloud, so no shell runs in it.
+   */
+  async function createCloudTerminal(workspaceItem: WorkspaceDto) {
+    const created = await perform(
+      client.request.agentSpawn({
+        workspace: workspaceItem.id,
+        name: workspaceItem.name,
+        terminal: true,
+      }),
+    );
+    if (created) showSession(created.id, workspaceItem.id);
+  }
+
   async function createIntegratedTerminal(
     workspaceItem?: WorkspaceDto,
     location?: { name: string; workingDirectory: string },
   ) {
+    if (workspaceItem?.place === "cloud")
+      return createCloudTerminal(workspaceItem);
     setTerminalPanelOpen(true);
     const created = await perform(
       client.request.terminalCreate({
@@ -4648,8 +4666,13 @@ export function WorkspaceApp({
     if (created) setActiveTerminalId(created.id);
   }
 
-  /** A terminal in the workspace's folder, in a center tab of its own. */
+  /**
+   * A terminal in the workspace's folder, in a center tab of its own; in
+   * the pod while the workspace is in the cloud.
+   */
   async function createTerminalTab(workspaceItem: WorkspaceDto) {
+    if (workspaceItem.place === "cloud")
+      return createCloudTerminal(workspaceItem);
     const created = await perform(
       client.request.terminalCreate({
         workspace: workspaceItem.id,
