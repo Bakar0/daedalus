@@ -28,6 +28,7 @@ export * from "./cloud/cloud-seed";
 export { cloudMcpChoices, setCloudMcpServer } from "./cloud/cloud-mcp";
 export * from "./cloud/sign-in-pages";
 export * from "./cloud/cloud-service";
+export * from "./cloud/cloud-sessions";
 export * from "./cloud/gateway-client";
 export * from "./cloud/link";
 export * from "./cloud/remote-session-host";

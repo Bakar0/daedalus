@@ -3047,6 +3047,23 @@ export function WorkspaceApp({
     );
   }
 
+  /**
+   * Whether opening a cloud session resumes it: asleep with its workspace,
+   * or lost with a workspace that is awake again (woken from its menu, or
+   * by another of its sessions).
+   */
+  const resumesOnOpen = (session: AgentSessionDto): boolean => {
+    const sleep = cloudSleep(session);
+    return (
+      sleep === "sleeping" ||
+      (sleep === undefined &&
+        Boolean(session.hostId) &&
+        session.status === "lost" &&
+        !session.archivedAt &&
+        !sessionActions.pending(session.id))
+    );
+  };
+
   async function wakeCloudSession(session: AgentSessionDto) {
     const revived = await sessionActions.run(
       client.request.cloudSessionWake({ sessionId: session.id }),
@@ -5006,8 +5023,7 @@ export function WorkspaceApp({
           data-session-id={session.id}
           onClick={() => {
             showSession(session.id, session.workspaceId);
-            if (cloudSleep(session) === "sleeping")
-              void wakeCloudSession(session);
+            if (resumesOnOpen(session)) void wakeCloudSession(session);
           }}
           // What the three rows leave out, or cut short.
           title={[
@@ -5184,7 +5200,7 @@ export function WorkspaceApp({
                 className="session-card-action"
                 disabled={sessionActions.pending(session.id)}
                 onClick={() =>
-                  void (cloudSleep(session) === "sleeping"
+                  void (session.hostId
                     ? wakeCloudSession(session)
                     : reviveSession(session))
                 }

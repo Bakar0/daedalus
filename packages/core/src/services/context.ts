@@ -35,6 +35,7 @@ import { claudeSyncSeeder } from "../cloud/claude-sync-seeder";
 import { CloudService, type CloudServiceOptions } from "../cloud/cloud-service";
 import { CLOUD_LAUNCH_SECRETS } from "./cloud-launch";
 import { SessionMoves } from "./session-move";
+import { CloudSessions } from "../cloud/cloud-sessions";
 import { LocalSessionHost } from "./session-host";
 import { SessionHosts } from "./session-hosts";
 import { TaskHistoryService } from "./task-history";
@@ -101,6 +102,8 @@ export interface ApplicationContext {
   cloud: CloudService;
   /** Moving sessions between this Mac and their workspace's cloud pod. */
   moves: SessionMoves;
+  /** Waking a cloud workspace and resuming the sessions its sleep ended. */
+  cloudSessions: CloudSessions;
   close(): void;
 }
 
@@ -390,6 +393,7 @@ export async function createApplicationContext(
     tmux,
     hosts,
     cloud,
+    cloudSessions: new CloudSessions({ repositories, agents, cloud }),
     moves: new SessionMoves({
       config,
       repositories,
