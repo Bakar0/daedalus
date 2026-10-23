@@ -8825,3 +8825,13 @@ dd {
   overflow-wrap: anywhere;
   padding-left: 18px;
 }
+
+/* The explorer when its folder cannot be listed, such as a cloud workspace
+   that is asleep. */
+.file-tree-unavailable {
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 10px 12px;
+  white-space: normal;
+}

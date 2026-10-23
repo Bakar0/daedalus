@@ -612,6 +612,11 @@ const client = {
       announce();
       return ok(null);
     },
+    // A pod asleep is never woken by browsing its files.
+    workspaceDirectoryList: async ({ workspace }: { workspace: string }) =>
+      withCloud(workspace)?.status === "sleeping"
+        ? fail("The cloud workspace is asleep; open a session to wake it")
+        : ok([]),
     terminalCreate: async (params: Record<string, unknown>) => {
       record("terminalCreate", params);
       return ok({

@@ -417,6 +417,31 @@ await withBrowser({ port: 41842, page: "cloud-test.html" }, async (browser) => {
   );
 });
 
+// The explorer of an asleep cloud workspace says so instead of a tree.
+await withBrowser({ port: 41844, page: "cloud-test.html" }, async (browser) => {
+  await ready(browser);
+  await browser.evaluate(
+    `${group("Sleepy project")}.querySelector('.workspace-item').click()`,
+  );
+  await browser.waitFor(
+    "document.querySelector('[aria-label=\"Files\"]')",
+    "the Files tab",
+  );
+  await browser.evaluate(
+    "document.querySelector('[aria-label=\"Files\"]').click()",
+  );
+  await browser.waitFor(
+    "document.querySelector('[data-testid=\"file-tree-unavailable\"]')",
+    "the asleep message in the explorer",
+  );
+  expect(
+    (await browser.text("file-tree-unavailable")) ===
+      "The cloud workspace is asleep; open a session to wake it",
+    `the explorer reads "${await browser.text("file-tree-unavailable")}"`,
+  );
+  await browser.screenshot("cloud-explorer-asleep");
+});
+
 // Signed out: only a workspace in the cloud has the action, and it is off.
 await withBrowser(
   { port: 41840, page: "cloud-test.html", query: "signedIn=0" },
