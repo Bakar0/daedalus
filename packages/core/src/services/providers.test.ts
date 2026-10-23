@@ -580,6 +580,20 @@ describe("buildLaunch resume", () => {
     });
   });
 
+  test("Claude starts a conversation never written under its id instead of resuming it", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await isolated(home);
+      const { adapter } = resolveProvider(config, { provider: "claude" });
+      const launch = await adapter.buildLaunch({
+        sessionId: "daedalus-session",
+        resume: { ...resume(home), fresh: true },
+      });
+      expect(launch.args.slice(-2)).toEqual(["--session-id", nativeId]);
+      expect(launch.args).not.toContain("--resume");
+      expect(launch.providerSessionId).toBe(nativeId);
+    });
+  });
+
   test("Claude refuses to resume a session with no conversation id", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const config = await isolated(home);
@@ -927,6 +941,30 @@ describe("buildLaunch on a cloud host", () => {
       await expect(
         cloud(home, { resume: { ...resume, nativeId: undefined } }),
       ).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+  });
+
+  test("a session with no conversation yet starts one under its id", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const launch = await cloud(home, {
+        resume: {
+          nativeId: "c1",
+          startedAt: new Date().toISOString(),
+          archived: false,
+          workingDirectory: ".",
+          env: {},
+          permissionMode: "default",
+          fresh: true,
+        },
+      });
+      expect(launch.args.slice(-4)).toEqual([
+        "--permission-mode",
+        "default",
+        "--session-id",
+        "c1",
+      ]);
+      expect(launch.args).not.toContain("--resume");
+      expect(launch.providerSessionId).toBe("c1");
     });
   });
 
