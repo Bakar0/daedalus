@@ -8759,3 +8759,41 @@ dd {
   color: var(--accent) !important;
   opacity: 1;
 }
+/* A dialog's choices from outside this Mac: plain lines, cut short. */
+.app-dialog-options {
+  display: grid;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.app-dialog-option {
+  align-items: center;
+  display: flex;
+  font-size: 12px;
+  gap: 8px;
+  min-width: 0;
+}
+.app-dialog-option-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-dialog-option small,
+.app-dialog-count {
+  color: var(--muted);
+  font-size: 11px;
+}
+.app-dialog-count[data-over] {
+  color: var(--danger);
+}
+.app-dialog-lines {
+  color: var(--secondary);
+  font-size: 12px;
+  margin: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  padding-left: 18px;
+}
