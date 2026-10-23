@@ -13,6 +13,21 @@ export const cloudHostId = (workspaceId: string): string => `ws:${workspaceId}`;
 export const cloudHostWorkspace = (hostId: string): string | undefined =>
   hostId.startsWith("ws:") ? hostId.slice(3) : undefined;
 
+/** Why a session whose cloud workspace went to sleep is lost. */
+export const CLOUD_SLEEP_REASON = "The cloud workspace went to sleep";
+
+/** Whether a session is lost only because its cloud workspace sleeps. */
+export const asleepInCloud = (session: {
+  hostId: string | null;
+  status: string;
+  lostReason: string | null;
+  archivedAt: string | null;
+}): boolean =>
+  Boolean(session.hostId) &&
+  session.status === "lost" &&
+  session.lostReason === CLOUD_SLEEP_REASON &&
+  !session.archivedAt;
+
 /** The working directory of a cloud session: the workspace root. */
 export const CLOUD_WORKING_DIRECTORY = ".";
 

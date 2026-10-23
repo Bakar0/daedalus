@@ -3,8 +3,12 @@ import type { AgentSession } from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import type { AgentService } from "../services/agents";
-import { cloudHostId, cloudHostWorkspace } from "../services/cloud-launch";
-import { CLOUD_SLEEP_REASON, type CloudService } from "./cloud-service";
+import {
+  asleepInCloud,
+  cloudHostId,
+  cloudHostWorkspace,
+} from "../services/cloud-launch";
+import type { CloudService } from "./cloud-service";
 
 export interface CloudSessionsOptions {
   repositories: SqliteRepositories;
@@ -18,14 +22,30 @@ export interface CloudSessionsOptions {
  * brings them back with their conversations.
  */
 export class CloudSessions {
-  constructor(private readonly options: CloudSessionsOptions) {}
+  /** Wakes and resumes one session at a time, however many ask for it. */
+  readonly #waking = new Map<string, Promise<AgentSession>>();
+
+  constructor(private readonly options: CloudSessionsOptions) {
+    // A message for a session whose workspace sleeps wakes it first.
+    options.agents.onCloudAsleep((sessionId) => this.wake(sessionId));
+  }
 
   /**
    * Opening a cloud session: wakes its workspace if it sleeps and resumes
    * the session. A workspace already awake (woken from its menu, or by
    * another of its sessions) only resumes it.
    */
-  async wake(sessionId: string): Promise<AgentSession> {
+  wake(sessionId: string): Promise<AgentSession> {
+    const pending = this.#waking.get(sessionId);
+    if (pending) return pending;
+    const waking = this.#wake(sessionId).finally(() =>
+      this.#waking.delete(sessionId),
+    );
+    this.#waking.set(sessionId, waking);
+    return waking;
+  }
+
+  async #wake(sessionId: string): Promise<AgentSession> {
     const { agents, cloud, repositories } = this.options;
     const session = await agents.get(sessionId);
     const cloudId = session.hostId
@@ -75,8 +95,7 @@ export class CloudSessions {
             !session.archivedAt &&
             (session.status === "running" ||
               session.status === "starting" ||
-              (session.status === "lost" &&
-                session.lostReason === CLOUD_SLEEP_REASON)),
+              asleepInCloud(session)),
         )
         .map((session) => session.id),
     );

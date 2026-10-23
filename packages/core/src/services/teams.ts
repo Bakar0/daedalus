@@ -543,8 +543,12 @@ export class TeamService {
     };
     if (!claim.pending.length)
       return { ...base, delivered: false, error: null };
-    if ("skipped" in claim)
+    if ("skipped" in claim) {
+      // Asleep with its cloud workspace: woken and resumed, after which the
+      // session running again delivers these.
+      void this.agents.wakeIfAsleep(reader.session).catch(() => undefined);
       return { ...base, delivered: false, error: claim.cursor.lastError };
+    }
     const claimed = claim.pending.at(-1)!.id;
     try {
       await this.transport.deliver({

@@ -19,7 +19,7 @@ import {
 import { authCallback } from "./auth-callback";
 import type { SessionBackend, Terminal } from "./backend";
 import { RunnerError } from "./errors";
-import { IdleTracker } from "./idle";
+import { IdleTracker, WorkingSessions } from "./idle";
 import type { EventQueue } from "./queue";
 import {
   MAC_FACING_METHODS,
@@ -108,6 +108,9 @@ export class Runner {
   readonly #exited: { session: string; exitCode: number | null }[] = [];
   #draining = false;
   readonly #idle: IdleTracker;
+  readonly #working = new WorkingSessions();
+  /** The Mac typed into a terminal since the last tick. */
+  #typed = false;
   #sleepAskedAt: number | undefined;
 
   constructor(options: RunnerOptions) {
@@ -309,9 +312,10 @@ export class Runner {
       case "term.client": {
         const terminal = this.#terminals.get(message.ch);
         if (!terminal) return;
-        if (message.message.type === "input")
+        if (message.message.type === "input") {
+          this.#typed = true;
           terminal.write(message.message.data);
-        else terminal.resize(message.message.cols, message.message.rows);
+        } else terminal.resize(message.message.cols, message.message.rows);
         return;
       }
       case "term.close":
@@ -432,6 +436,7 @@ export class Runner {
    * the Mac being offline; any other call fails with exit code 75.
    */
   async daedalCall(call: DaedalCall): Promise<CommandResult> {
+    if (call.queueable) this.#observeHook(call);
     if (this.#channel && (!call.queueable || this.#o.queue.length === 0)) {
       try {
         return await this.#request<CommandResult>("daedal.call", call);
@@ -455,6 +460,22 @@ export class Runner {
       stdout: "",
       stderr: `${OFFLINE_MESSAGE}\n`,
     };
+  }
+
+  /** What a hook event says about its session working, for idle sleep. */
+  #observeHook(call: DaedalCall): void {
+    const event = call.argv[2];
+    const sessionId = call.env.DAEDALUS_SESSION_ID;
+    if (!event || !sessionId) return;
+    let payload: Record<string, unknown> = {};
+    try {
+      const parsed: unknown = call.stdin ? JSON.parse(call.stdin) : {};
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+        payload = parsed as Record<string, unknown>;
+    } catch {
+      // The event name alone still says most of it.
+    }
+    this.#working.observe(sessionId, event, payload, this.#now());
   }
 
   /** Sends queued events to the Mac oldest first, one at a time. */
@@ -542,8 +563,13 @@ export class Runner {
     for (const session of [...this.#reported])
       if (!liveSet.has(session)) this.#reported.delete(session);
     const running = live.filter((session) => !dead.has(session));
-    const active = running.length > 0 || this.#terminals.size > 0;
     const now = this.#now();
+    // Working: a Claude in a turn, or a terminal the Mac typed into. A
+    // Claude at its prompt or at a question keeps nothing awake, nor does a
+    // terminal only watched.
+    const active =
+      (running.length > 0 && this.#working.any(now)) || this.#typed;
+    this.#typed = false;
     if (!this.#idle.observe(active, now)) return;
     if (
       this.#sleepAskedAt !== undefined &&
@@ -551,6 +577,8 @@ export class Runner {
     )
       return;
     this.#sleepAskedAt = now;
+    // The Mac first, so its sessions read as asleep at once.
+    if (this.#channel) this.#send({ t: "workspace.sleeping" });
     await this.#askToSleep();
   }
 

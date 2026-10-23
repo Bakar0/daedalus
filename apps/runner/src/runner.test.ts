@@ -334,13 +334,25 @@ test("terminals open on a live session, take input and close with the link", asy
   );
 });
 
-test("asks the gateway to sleep after the idle period, not while a session lives", async () => {
+const hook = (event: string, payload: Record<string, unknown> = {}) =>
+  runner.daedalCall({
+    callId: crypto.randomUUID(),
+    argv: ["agent", "event", event],
+    cwd: ".",
+    env: { DAEDALUS_SESSION_ID: "agent-1" },
+    stdin: JSON.stringify(payload),
+    queueable: true,
+    at: "2026-10-19T00:00:00Z",
+  });
+
+test("asks the gateway to sleep after the idle period, not while a session works", async () => {
   tmux.sessions.add("s1");
+  await hook("UserPromptSubmit");
   await runner.tick();
   now += 31 * 60_000;
   await runner.tick();
   expect(sleeps).toEqual([]);
-  tmux.sessions.delete("s1");
+  await hook("Stop");
   await runner.tick();
   now += 29 * 60_000;
   await runner.tick();
@@ -351,6 +363,77 @@ test("asks the gateway to sleep after the idle period, not while a session lives
     "POST /v1/workspaces/ws-1/sleep Bearer runner-token",
   ]);
   await runner.tick();
+  expect(sleeps.length).toBe(1);
+});
+
+test("a Claude waiting at a question or its prompt keeps nothing awake", async () => {
+  tmux.sessions.add("s1");
+  await hook("PreToolUse", { tool_name: "Bash" });
+  await hook("PermissionRequest", { tool_name: "Bash" });
+  await runner.tick();
+  now += 31 * 60_000;
+  await runner.tick();
+  expect(sleeps.length).toBe(1);
+});
+
+test("a long tool call works until its result, and a subagent after Stop works too", async () => {
+  tmux.sessions.add("s1");
+  await hook("PreToolUse", { tool_name: "Bash" });
+  await runner.tick();
+  now += 3 * 60 * 60_000;
+  await runner.tick();
+  expect(sleeps).toEqual([]);
+  await hook("Stop");
+  await hook("PostToolUse", { agent_id: "sub-1", tool_name: "Read" });
+  now += 31 * 60_000;
+  await runner.tick();
+  expect(sleeps).toEqual([]);
+  // An interrupted tool ends the turn with no Stop.
+  await hook("PostToolUseFailure", { is_interrupt: true });
+  await runner.tick();
+  now += 31 * 60_000;
+  await runner.tick();
+  expect(sleeps.length).toBe(1);
+});
+
+test("a working session whose Claude is gone keeps nothing awake", async () => {
+  await hook("UserPromptSubmit");
+  await runner.tick();
+  now += 31 * 60_000;
+  await runner.tick();
+  expect(sleeps.length).toBe(1);
+});
+
+test("typing into a terminal keeps the pod awake; a terminal only open does not", async () => {
+  tmux.sessions.add("s1");
+  macOnline(true);
+  mac.sendSecure({ t: "term.open", ch: 1, session: "s1", cols: 80, rows: 24 });
+  await tick();
+  await runner.tick();
+  now += 20 * 60_000;
+  mac.sendSecure({
+    t: "term.client",
+    ch: 1,
+    message: { type: "input", data: "ls\r" },
+  });
+  await tick();
+  await runner.tick();
+  // 49 minutes open, but typed into 29 minutes ago.
+  now += 29 * 60_000;
+  await runner.tick();
+  expect(sleeps).toEqual([]);
+  now += 31 * 60_000;
+  await runner.tick();
+  expect(sleeps.length).toBe(1);
+});
+
+test("tells the Mac before it asks the gateway to sleep", async () => {
+  macOnline(true);
+  await tick();
+  await runner.tick();
+  now += 31 * 60_000;
+  await runner.tick();
+  expect(mac.received).toContainEqual({ t: "workspace.sleeping" });
   expect(sleeps.length).toBe(1);
 });
 

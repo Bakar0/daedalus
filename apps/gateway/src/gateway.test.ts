@@ -460,7 +460,7 @@ describe("controller", () => {
       { name: RUNNER_ENV.workspaceId, value: WS_A },
       { name: RUNNER_ENV.macId, value: MAC_A },
       { name: RUNNER_ENV.macKey, value: key(1) },
-      { name: RUNNER_ENV.idleMinutes, value: "30" },
+      { name: RUNNER_ENV.idleMinutes, value: "15" },
     ]);
     expect(session!.env).toEqual([]);
     expect(pod.spec.volumes).toEqual([

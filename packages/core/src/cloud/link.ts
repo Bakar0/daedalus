@@ -123,6 +123,8 @@ export interface CloudLinkOptions {
   ): void;
   /** A runner's secure channel came up or went away. */
   onRunner?(workspaceId: string, linked: boolean): void;
+  /** A runner is about to ask the gateway to sleep its idle workspace. */
+  onWorkspaceSleeping?(workspaceId: string): void;
   connect?: ConnectRelay;
   log?: (event: string, fields?: Record<string, unknown>) => void;
   backoff?: { initialMs: number; maxMs: number };
@@ -516,6 +518,9 @@ export class CloudLink implements RunnerTransport {
           message.session,
           message.exitCode,
         );
+        return;
+      case "workspace.sleeping":
+        this.#o.onWorkspaceSleeping?.(workspaceId);
         return;
       case "term.server": {
         const terminal = state.terminals.get(message.ch);

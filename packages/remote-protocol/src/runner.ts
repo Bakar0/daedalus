@@ -149,6 +149,12 @@ export type RunnerSecureMessage =
   | { t: "err"; id: number; code: string; message: string }
   /** A tmux session ended. */
   | { t: "session.exited"; session: string; exitCode: number | null }
+  /**
+   * Runner to Mac: nothing in the pod worked for the idle period, and the
+   * runner is about to ask the gateway to sleep the workspace. The Mac ends
+   * the workspace's sessions as lost, to be resumed when it wakes.
+   */
+  | { t: "workspace.sleeping" }
   /** Opens a terminal on a session; output arrives as kind-1 frames. */
   | {
       t: "term.open";
