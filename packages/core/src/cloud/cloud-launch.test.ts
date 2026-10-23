@@ -1,5 +1,5 @@
 import { rm } from "node:fs/promises";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { TmuxClient } from "@daedalus/platform";
 import type { RunnerLaunch } from "@daedalus/remote-protocol";
@@ -190,7 +190,12 @@ describe("cloud launch seeding", () => {
       expect(state).toMatchObject({
         oauthAccount: { emailAddress: "a@b.c" },
         hasCompletedOnboarding: true,
-        projects: { "/workspace": { hasTrustDialogAccepted: true } },
+        projects: {
+          "/workspace": { hasTrustDialogAccepted: true },
+          [posix.join("/workspace", session.workingDirectory)]: {
+            hasClaudeMdExternalIncludesApproved: true,
+          },
+        },
       });
       // Daedalus turns its writing style on by default, and the pod gets it.
       expect(JSON.parse(pod.files.get(".home/.claude/settings.json")!)).toEqual(
@@ -199,9 +204,9 @@ describe("cloud launch seeding", () => {
       // The built-in files, then the user's setup (claude-sync-seeder.ts).
       expect(pod.writes).toBe(2);
 
-      // A second launch finds it all there and writes nothing.
+      // A second session finds it all there but its own folder's trust.
       await context.agents.spawn({ workspace: workspace.id });
-      expect(pod.writes).toBe(2);
+      expect(pod.writes).toBe(3);
       context.close();
     });
   });
@@ -344,14 +349,15 @@ describe("cloud launch seeding", () => {
         await setCloudMcpServer(context.config, "docs", false);
         expect(context.config.cloudMcpServers).toEqual({});
 
-        // Removed on the Mac, removed in the pod; nothing else written.
+        // Removed on the Mac, removed in the pod; nothing else written but
+        // the new session's folder trust.
         await Bun.$`rm ${join(claude, "commands/commit-msg.md")}`;
         const writes = pod.writes;
         await context.agents.spawn({ workspace: workspace.id });
         expect(pod.files.has(".home/.claude/commands/commit-msg.md")).toBe(
           false,
         );
-        expect(pod.writes).toBe(writes + 1);
+        expect(pod.writes).toBe(writes + 2);
       } finally {
         await cleanUp();
       }

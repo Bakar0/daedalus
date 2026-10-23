@@ -60,26 +60,45 @@ function parseObject(text: string | undefined): Json {
 const render = (value: Json) => `${JSON.stringify(value, null, 2)}\n`;
 
 /**
- * `.claude.json` with onboarding done and the workspace trusted, or
- * undefined when it already says both. Every other key is kept, the account
- * Claude records after a sign-in among them.
+ * `.claude.json` with onboarding done and the workspace trusted, with the
+ * session's own folder when it has one, or undefined when it already says
+ * all that. A session folder's CLAUDE.md imports the workspace's AGENTS.md,
+ * so without its own entry Claude stops on asking to allow that import.
+ * Every other key is kept, the account Claude records after a sign-in
+ * among them.
  */
-export function seedClaudeState(text: string | undefined): string | undefined {
+export function seedClaudeState(
+  text: string | undefined,
+  folder = POD_WORKSPACE,
+): string | undefined {
   const state = parseObject(text);
   const projects = isObject(state.projects) ? state.projects : {};
-  const project = isObject(projects[POD_WORKSPACE])
-    ? projects[POD_WORKSPACE]
-    : {};
-  const done =
-    state.hasCompletedOnboarding === true &&
-    Object.entries(TRUST_FLAGS).every(([key, value]) => project[key] === value);
-  if (done) return undefined;
+  const folders = [...new Set([POD_WORKSPACE, folder])];
+  const trusted = (path: string) => {
+    const project = projects[path];
+    return (
+      isObject(project) &&
+      Object.entries(TRUST_FLAGS).every(
+        ([key, value]) => project[key] === value,
+      )
+    );
+  };
+  if (state.hasCompletedOnboarding === true && folders.every(trusted))
+    return undefined;
   return render({
     ...state,
     hasCompletedOnboarding: true,
     projects: {
       ...projects,
-      [POD_WORKSPACE]: { ...project, ...TRUST_FLAGS },
+      ...Object.fromEntries(
+        folders.map((path) => [
+          path,
+          {
+            ...(isObject(projects[path]) ? projects[path] : {}),
+            ...TRUST_FLAGS,
+          },
+        ]),
+      ),
     },
   });
 }
