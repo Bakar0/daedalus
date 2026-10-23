@@ -35,6 +35,7 @@ import { claudeSyncSeeder } from "../cloud/claude-sync-seeder";
 import { CloudService, type CloudServiceOptions } from "../cloud/cloud-service";
 import { CLOUD_LAUNCH_SECRETS } from "./cloud-launch";
 import { SessionMoves } from "./session-move";
+import { WorkspaceMoves } from "./workspace-move";
 import { CloudSessions } from "../cloud/cloud-sessions";
 import { SessionArchive } from "./session-archive";
 import { LocalSessionHost } from "./session-host";
@@ -103,6 +104,8 @@ export interface ApplicationContext {
   cloud: CloudService;
   /** Moving sessions between this Mac and their workspace's cloud pod. */
   moves: SessionMoves;
+  /** Moving whole workspaces between this Mac and their cloud copy. */
+  workspaceMoves: WorkspaceMoves;
   /** Waking a cloud workspace and resuming the sessions its sleep ended. */
   cloudSessions: CloudSessions;
   /** Archiving and deleting where the cloud is involved. */
@@ -379,6 +382,18 @@ export async function createApplicationContext(
       (await activity.binding(sessionId))?.activity ??
       activity.get(sessionId)?.activity,
   });
+  const workspaceMoves = new WorkspaceMoves({
+    config,
+    repositories,
+    workspaces,
+    agents,
+    hosts,
+    cloud,
+    terminals,
+    activity: async (sessionId) =>
+      (await activity.binding(sessionId))?.activity ??
+      activity.get(sessionId)?.activity,
+  });
 
   return {
     config,
@@ -412,6 +427,7 @@ export async function createApplicationContext(
     cloud,
     cloudSessions: new CloudSessions({ repositories, agents, cloud }),
     moves,
+    workspaceMoves,
     archive: new SessionArchive({
       repositories,
       agents,

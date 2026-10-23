@@ -564,6 +564,7 @@ export function createDesktopRequestHandlers(
         ...(await desktopSnapshot(readModel)),
         cloudSignIns: context.cloud.signIns.list(),
         sessionMoves: context.moves.list(),
+        workspaceMoves: context.workspaceMoves.list(),
         cloudPreparing: context.cloud.preparing(),
       })),
     sessionUpdate: ({ sessionId, name, pinned, color, autoRebirthPercent }) =>
@@ -760,6 +761,43 @@ export function createDesktopRequestHandlers(
               workspace: workspaceDto(archived.workspace),
             }
           : archived;
+      }),
+    workspaceMove: ({ reference, to, approved, stopWorking }) =>
+      mutate(async () => {
+        const moved = await context.workspaceMoves.move({
+          workspace: reference,
+          to,
+          ...(approved ? { approved } : {}),
+          ...(stopWorking ? { stopWorking } : {}),
+        });
+        return moved.status === "moved"
+          ? {
+              status: "moved" as const,
+              workspace: workspaceDto(moved.workspace),
+              ...(moved.notice ? { notice: moved.notice } : {}),
+            }
+          : moved;
+      }),
+    workspaceMoveCancel: ({ reference }) =>
+      result(async () => {
+        context.workspaceMoves.cancel(
+          (await context.workspaces.get(reference)).id,
+        );
+        return null;
+      }),
+    workspaceMoveDismiss: ({ reference }) =>
+      result(async () => {
+        context.workspaceMoves.dismiss(
+          (await context.workspaces.get(reference)).id,
+        );
+        return null;
+      }),
+    workspaceNoticeDismiss: ({ reference }) =>
+      mutate(async () => {
+        context.repositories.dismissWorkspaceNotice(
+          (await context.workspaces.get(reference)).id,
+        );
+        return null;
       }),
     workspaceRestore: ({ reference }) =>
       mutate(async () =>

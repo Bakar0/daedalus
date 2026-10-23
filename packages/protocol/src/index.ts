@@ -48,6 +48,17 @@ export interface WorkspaceDto {
   /** The account each provider's sessions start on; null is the default. */
   defaultClaudeAccount: string | null;
   defaultCodexAccount: string | null;
+  /**
+   * `cloud` while the workspace lives in its cloud copy: every session,
+   * terminal and file is there. Absent while it is on this Mac.
+   */
+  place?: "cloud";
+  /**
+   * Shown on the workspace until `workspaceNoticeDismiss`: it came back to
+   * this Mac from its backup because the cloud copy was deleted after 30
+   * days asleep, or what came home when it was archived.
+   */
+  cloudNotice?: string;
 }
 
 export interface TaskDto {
@@ -987,6 +998,55 @@ export interface CloudPreparingDto {
 }
 
 /**
+ * A workspace moving between this Mac and its cloud copy
+ * (artifacts/cloud-sessions/workspace-move-design.md). The workspace shows
+ * it moving while an entry exists and is not `failed` or `moved`; Cancel
+ * only while `waiting`.
+ */
+export interface WorkspaceMoveDto {
+  workspaceId: string;
+  to: "cloud" | "mac";
+  /**
+   * `moved`: done, with a `notice` the workspace shows as a one-line banner
+   * until `workspaceMoveDismiss`.
+   */
+  phase: "waiting" | "stopping" | "copying" | "starting" | "failed" | "moved";
+  /** "Waiting for 2 sessions to end their turns", "Copying repos/app". */
+  detail?: string;
+  /** Set when `failed`; the entry stays 30 s so the header can show it. */
+  message?: string;
+  notice?: string;
+}
+
+/** A session a move names: id and name, the name shown as plain text. */
+export interface MoveSessionNameDto {
+  id: string;
+  name: string;
+}
+
+/**
+ * How a workspace move ended when it did not throw. Nothing changed unless
+ * `moved`.
+ * - `needsApproval`: moving home brings files that steer agents or run on
+ *   this Mac (paths relative to the workspace, from the pod: plain text);
+ *   ask, then call again with them as `approved`.
+ * - `busy`: these sessions wait on the user's answer, so their turn will not
+ *   end; ask, then call again with `stopWorking`.
+ * - `needsStopped`: Codex or custom sessions run, which the cloud cannot
+ *   run; the user stops them first.
+ * - `needsSmaller`: what is over its cap, in bytes.
+ */
+export type WorkspaceMoveResultDto =
+  | { status: "moved"; workspace: WorkspaceDto; notice?: string }
+  | { status: "needsApproval"; paths: string[] }
+  | { status: "busy"; sessions: MoveSessionNameDto[] }
+  | { status: "needsStopped"; sessions: MoveSessionNameDto[] }
+  | {
+      status: "needsSmaller";
+      items: { what: string; bytes: number; maxBytes: number }[];
+    };
+
+/**
  * A session moving between this Mac and its workspace's cloud pod
  * (artifacts/cloud-sessions/move-design.md). The card shows it moving
  * while an entry exists and is not `failed`; Cancel only while `waiting`.
@@ -1138,6 +1198,8 @@ export interface DesktopSnapshotDto {
   cloudPreparing?: CloudPreparingDto[];
   /** Sessions moving between this Mac and the cloud. */
   sessionMoves?: SessionMoveDto[];
+  /** Workspaces moving between this Mac and the cloud. */
+  workspaceMoves?: WorkspaceMoveDto[];
   settings: DesktopSettingsDto;
 }
 
@@ -1409,6 +1471,28 @@ export interface DesktopRpcSchema {
          */
         | { status: "needsCloudDecision"; lost: string[] }
       >;
+      /**
+       * Moves a whole workspace between this Mac and its cloud copy;
+       * resolves when the move ends (progress is `workspaceMoves` in the
+       * snapshot). Working sessions are waited for, up to 30 minutes,
+       * unless `stopWorking`. On failure it throws and the workspace stays
+       * where it was, its sessions resumed.
+       */
+      workspaceMove: Request<
+        {
+          reference: string;
+          to: "cloud" | "mac";
+          approved?: string[];
+          stopWorking?: boolean;
+        },
+        WorkspaceMoveResultDto
+      >;
+      /** Only while the move waits for turns to end. */
+      workspaceMoveCancel: Request<{ reference: string }, null>;
+      /** Clears a `moved` entry's notice. */
+      workspaceMoveDismiss: Request<{ reference: string }, null>;
+      /** Clears `WorkspaceDto.cloudNotice`. */
+      workspaceNoticeDismiss: Request<{ reference: string }, null>;
       workspaceRestore: Request<{ reference: string }, WorkspaceDto>;
       /** Archived workspaces only; deletes the folder and everything in it. */
       workspaceDelete: Request<{ reference: string }, WorkspaceDto>;

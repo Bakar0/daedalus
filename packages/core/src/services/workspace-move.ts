@@ -531,7 +531,7 @@ export class WorkspaceMoves {
       }
       return {
         status: "moved",
-        workspace,
+        workspace: await this.options.workspaces.getActive(workspace.id),
         ...(failed.length
           ? { notice: `Did not start in the cloud: ${failed.join("; ")}` }
           : {}),
@@ -860,7 +860,7 @@ export class WorkspaceMoves {
       void cloud.sleep(workspace.id).catch(() => undefined);
       return {
         status: "moved",
-        workspace,
+        workspace: await this.options.workspaces.getActive(workspace.id),
         notice: [
           MOVED_HOME_NOTICE,
           ...(failed.length

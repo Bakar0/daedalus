@@ -130,6 +130,8 @@ const commandHelp: Record<string, string> = {
       [--default-codex-account <account>|default]
   daedal workspace archive <workspace> [--without-cloud-changes]
       [--delete-cloud-copy|--keep-cloud-copy]
+  daedal workspace move <workspace> --to cloud|mac [--approve <path>,...]
+      [--stop-working]
   daedal workspace restore <workspace>
   daedal workspace delete <workspace> --force
   daedal workspace remove <workspace> [--delete-files] --force
@@ -153,7 +155,19 @@ context passes that percent of the window; see 'agent continue'. 'default'
 (the default) takes the app's global setting, which is off until set in
 Settings > Sessions; 'off' turns it off for this workspace whatever that
 says. A session can override it with 'daedal session rebirth-at'. The
-desktop app runs the check about once a second.`,
+desktop app runs the check about once a second.
+
+'move' takes the whole workspace to its cloud copy, or home to this Mac:
+every repository worktree (commits, staged, unstaged and untracked changes,
+never ignored files), the other files of the folder, and every Claude
+conversation. It waits for working sessions to end their turns (up to 30
+minutes) unless --stop-working stops them at once, then resumes them on the
+other side. In the cloud, every session and terminal of the workspace runs
+there, and this Mac keeps its folder as it was, as a backup. Moving home
+lists files changed in the cloud that steer an agent or run on this Mac,
+such as .claude/, CLAUDE.md or .envrc, and stops unless --approve names
+them; sessions come home asking before they act. On a failure the
+workspace stays where it was.`,
   task: `Task commands:
   daedal task create [--workspace <workspace>] --title <title> [--description <text> | --description-file <path|->] [--priority <priority>]
   daedal task list [--workspace <workspace>] [--status <status>]
@@ -654,6 +668,62 @@ async function workspaceCommand(
     printResult(result, json, () =>
       console.log(`Archived workspace ${result.slug}`),
     );
+    return 0;
+  }
+  if (action === "move") {
+    const usage =
+      "daedal workspace move <workspace> --to cloud|mac [--approve <path>,...] [--stop-working]";
+    const parsed = parseArguments(args, ["to", "approve"], ["stop-working"]);
+    expectPositionals(parsed.positionals, 1, usage);
+    const to = parsed.values.to;
+    if (to !== "cloud" && to !== "mac")
+      throw new DaedalusError("VALIDATION", "--to is cloud or mac");
+    const approved = parsed.values.approve
+      ?.split(",")
+      .map((path) => path.trim())
+      .filter(Boolean);
+    const result = await context.workspaceMoves.move({
+      workspace: parsed.positionals[0]!,
+      to,
+      ...(approved?.length ? { approved } : {}),
+      ...(parsed.flags.has("stop-working") ? { stopWorking: true } : {}),
+    });
+    if (result.status !== "moved") {
+      printResult(result, json, () => {
+        if (result.status === "needsApproval") {
+          console.log(
+            "These files changed in the cloud and steer an agent or run on this Mac; move again with --approve <path>,... naming them:",
+          );
+          for (const path of result.paths) console.log(`  ${path}`);
+        } else if (result.status === "busy") {
+          console.log(
+            "These sessions wait for an answer, so their turns will not end; answer them, or move again with --stop-working:",
+          );
+          for (const session of result.sessions)
+            console.log(`  ${session.name} (${session.id})`);
+        } else if (result.status === "needsStopped") {
+          console.log(
+            "These Codex or custom sessions run, and the cloud cannot run them; stop them first:",
+          );
+          for (const session of result.sessions)
+            console.log(`  ${session.name} (${session.id})`);
+        } else {
+          console.log("Too big to move:");
+          for (const item of result.items)
+            console.log(
+              `  ${item.what}: ${item.bytes} bytes, at most ${item.maxBytes}`,
+            );
+        }
+      });
+      return 1;
+    }
+    context.workspaceMoves.dismiss(result.workspace.id);
+    printResult(result.workspace, json, () => {
+      console.log(
+        `Moved workspace ${result.workspace.slug} to ${to === "cloud" ? "the cloud" : "this Mac"}`,
+      );
+      if (result.notice) console.log(result.notice);
+    });
     return 0;
   }
   if (action === "restore") {

@@ -62,7 +62,16 @@ interface WorkspaceRow {
   account_models: string;
   default_claude_account: string | null;
   default_codex_account: string | null;
+  /** From `workspace_places`, joined. */
+  place: string | null;
+  place_notice: string | null;
 }
+
+/** A workspace with where it lives. */
+const WORKSPACES = `SELECT workspaces.*, workspace_places.place AS place,
+  workspace_places.notice AS place_notice
+  FROM workspaces LEFT JOIN workspace_places
+  ON workspace_places.workspace_id = workspaces.id`;
 
 interface TaskIdRow {
   task_number: number;
@@ -203,7 +212,12 @@ const workspaceFromRow = (row: WorkspaceRow): Workspace => {
     defaultClaudeAccount: row.default_claude_account,
     defaultCodexAccount: row.default_codex_account,
   };
-  return { ...workspace, defaultModel: derivedDefaultModel(workspace) };
+  return {
+    ...workspace,
+    defaultModel: derivedDefaultModel(workspace),
+    ...(row.place === "cloud" ? { place: "cloud" as const } : {}),
+    ...(row.place_notice ? { cloudNotice: row.place_notice } : {}),
+  };
 };
 
 const taskFromRow = (row: TaskRow): Task => ({
@@ -473,7 +487,7 @@ export class SqliteRepositories {
 
   listWorkspaces(): Workspace[] {
     return this.database
-      .query<WorkspaceRow, []>("SELECT * FROM workspaces ORDER BY position, id")
+      .query<WorkspaceRow, []>(`${WORKSPACES} ORDER BY position, id`)
       .all()
       .map(workspaceFromRow);
   }
@@ -504,13 +518,13 @@ export class SqliteRepositories {
 
   findWorkspace(reference: string): Workspace | undefined {
     const byId = this.database
-      .query<WorkspaceRow, [string]>("SELECT * FROM workspaces WHERE id = ?")
+      .query<WorkspaceRow, [string]>(`${WORKSPACES} WHERE workspaces.id = ?`)
       .get(reference);
     const row =
       byId ??
       this.database
         .query<WorkspaceRow, [string]>(
-          "SELECT * FROM workspaces WHERE slug = ?",
+          `${WORKSPACES} WHERE workspaces.slug = ?`,
         )
         .get(reference);
     return row ? workspaceFromRow(row) : undefined;
