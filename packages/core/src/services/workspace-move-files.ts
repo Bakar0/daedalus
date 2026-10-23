@@ -1,8 +1,15 @@
-import { lstat, mkdir, readdir, readFile, rm } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+} from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { writeFileAtomic } from "@daedalus/platform";
 import { DaedalusError } from "../errors";
-import { steersAgent } from "./move-git";
+import { foldPath, steersAgent } from "./move-git";
 import { must, type LocalMoveSide, type PodMoveSide } from "./move-side";
 import { sha256 } from "./move-transcript";
 
@@ -128,14 +135,44 @@ export async function macHash(path: string): Promise<string | undefined> {
   }
 }
 
-/** Whether a workspace-relative path is one a move may write on this Mac. */
+/**
+ * Whether a workspace-relative path is one a move may write on this Mac.
+ * Every part is compared as this Mac's file system compares names
+ * (`foldPath`): `.GIT/config` lands in `.git/config` here, and git runs what
+ * a config names (`core.fsmonitor`) on the next `git status`.
+ */
 export function safeWorkspacePath(path: string): boolean {
   if (!path || path.startsWith("/") || path.includes("\0")) return false;
   const parts = path.split("/");
-  if (parts.some((part) => !part || part === "." || part === ".."))
+  const folded = parts.map(foldPath);
+  if (
+    [...parts, ...folded].some(
+      (part) =>
+        !part ||
+        part === "." ||
+        part === ".." ||
+        part === ".git" ||
+        part === ".daedalus",
+    )
+  )
     return false;
-  if (parts.includes(".git")) return false;
-  return !MAC_OWNED.has(parts[0]!) && !POD_OWNED.has(parts[0]!);
+  return !MAC_OWNED.has(folded[0]!) && !POD_OWNED.has(folded[0]!);
+}
+
+/**
+ * Whether `path` is one of `folders` (worktrees and reference checkouts,
+ * which travel as git) or inside one, compared folded as `safeWorkspacePath`.
+ */
+export function insideFolders(
+  path: string,
+  folders: ReadonlySet<string>,
+): boolean {
+  const folded = foldPath(path);
+  for (const folder of folders) {
+    const prefix = foldPath(folder);
+    if (folded === prefix || folded.startsWith(`${prefix}/`)) return true;
+  }
+  return false;
 }
 
 /**
@@ -236,12 +273,15 @@ export async function packInPod(
 /**
  * Unpacks an archive from the pod into `scratch` and returns its files. Only
  * regular files with paths a move may write are taken: anything else in the
- * archive fails the move, before anything is extracted.
+ * archive fails the move, before anything is extracted. With `expected`,
+ * the pod's listing as this Mac filtered it, the archive may hold nothing
+ * else; nothing may be at or inside `skip`, which travels as git.
  */
 export async function unpackFromPod(
   local: LocalMoveSide,
   archive: string,
   scratch: string,
+  limits: { expected?: ReadonlySet<string>; skip?: ReadonlySet<string> } = {},
 ): Promise<string[]> {
   const listing = await must(local, scratch, "tar", [
     "-t",
@@ -259,7 +299,12 @@ export async function unpackFromPod(
     );
   for (const [index, line] of lines.entries()) {
     const path = paths[index]!;
-    if (!line.startsWith("-") || !safeWorkspacePath(path))
+    if (
+      !line.startsWith("-") ||
+      !safeWorkspacePath(path) ||
+      (limits.expected && !limits.expected.has(path)) ||
+      (limits.skip && insideFolders(path, limits.skip))
+    )
       throw new DaedalusError(
         "CONFLICT",
         `The cloud workspace sent ${JSON.stringify(path.slice(0, 200))}, which is not a plain file Daedalus takes`,
@@ -268,9 +313,13 @@ export async function unpackFromPod(
   await mkdir(scratch, { recursive: true, mode: 0o700 });
   // bsdtar refuses `..`, absolute paths and writing through links already.
   await must(local, scratch, "tar", ["-x", "-f", archive, "-C", scratch]);
+  const inside = `${await realpath(scratch)}${sep}`;
   for (const path of paths) {
     const stats = await lstat(join(scratch, path));
-    if (!stats.isFile())
+    if (
+      !stats.isFile() ||
+      !(await realpath(join(scratch, path))).startsWith(inside)
+    )
       throw new DaedalusError(
         "CONFLICT",
         `The cloud workspace sent ${path} as something other than a file`,
@@ -282,14 +331,23 @@ export async function unpackFromPod(
 /**
  * Lays the files unpacked in `scratch` down in the workspace folder and
  * removes the Mac's own files (`before`) the pod no longer has. A parent
- * that is a link or a file is never written through.
+ * that is a link or a file is never written through, and nothing lands in
+ * `.git`, Daedalus's folders or `skip`, checked here again.
  */
 export async function applyFromPod(
   root: string,
   scratch: string,
   paths: string[],
   before: WorkspaceFile[],
+  skip: ReadonlySet<string> = new Set(),
 ): Promise<void> {
+  for (const path of paths)
+    if (!safeWorkspacePath(path) || insideFolders(path, skip))
+      throw new DaedalusError(
+        "CONFLICT",
+        `The cloud workspace sent ${JSON.stringify(path.slice(0, 200))}, which is not a plain file Daedalus takes`,
+      );
+  const inside = `${await realpath(root)}${sep}`;
   const keep = new Set(paths);
   for (const { path } of before)
     if (!keep.has(path)) await rm(join(root, path), { force: true });
@@ -306,6 +364,11 @@ export async function applyFromPod(
           `${relative(root, dir)} on this Mac is not a folder, so ${path} cannot come home`,
         );
     }
+    if (!`${await realpath(dir)}${sep}`.startsWith(inside))
+      throw new DaedalusError(
+        "CONFLICT",
+        `${path} would land outside the workspace folder`,
+      );
     const target = join(root, path);
     const existing = await lstat(target).catch(() => undefined);
     if (existing && !existing.isFile())
