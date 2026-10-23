@@ -7,7 +7,10 @@
  * start: `modal=settings|session`, `signedIn=0`, `holdSignIn=1`,
  * `holdWake=1`, `session=<id>` to open a session's view,
  * `archive=approval|big` for a cloud workspace's archive that asks or is
- * refused.
+ * refused, `wsmove=<phase>` for Cloud project moving home in that phase,
+ * `moveAsk=approval|busy|stopped|big|fail` for a move that asks, is refused
+ * or fails, `holdMove=1` to hold a move until `releaseMove()`, and
+ * `notice=1` for Sleepy project back from its backup.
  *
  * Every call a click should make is recorded in `window.requests`. The
  * replies carry a token and a runner key the real host never sends, so the
@@ -39,6 +42,7 @@ declare global {
     cloudFixture: {
       releaseSignIn: () => void;
       releaseWake: () => void;
+      releaseMove: () => void;
       setCloudStatus: (
         workspaceId: string,
         status: CloudWorkspaceDto["status"],
@@ -114,13 +118,39 @@ const snapshot = {
   workspaces: [
     workspace("local-ws", "Plain local", 1),
     { ...workspace("cloud-ws", "Cloud project", 2), place: "cloud" },
-    { ...workspace("sleepy-ws", "Sleepy project", 3), place: "cloud" },
+    query.get("notice") === "1"
+      ? {
+          ...workspace("sleepy-ws", "Sleepy project", 3),
+          cloudNotice:
+            "Back on this Mac from its backup of 20 September: the cloud copy was deleted after 30 days asleep.",
+        }
+      : { ...workspace("sleepy-ws", "Sleepy project", 3), place: "cloud" },
     { ...workspace("other-ws", "Other account", 4), place: "cloud" },
   ],
   tasks: [],
   // A sign-in page the cloud Claude session asked to open. The URL never
   // reaches the window, only its host. `signin=claude|aws`, `paste=1` for
   // the paste-code form.
+  // Cloud project on its way home, in the phase the query names.
+  workspaceMoves: query.get("wsmove")
+    ? [
+        {
+          workspaceId: "cloud-ws",
+          to: "mac" as const,
+          phase: query.get("wsmove") as "waiting",
+          detail: "Waiting for 2 sessions to end their turns",
+          ...(query.get("wsmove") === "failed"
+            ? { message: "The pod did not answer." }
+            : {}),
+          ...(query.get("wsmove") === "moved"
+            ? {
+                notice:
+                  "Moved back to this Mac. Its sessions resume in ask mode; switch the permission mode back when you are ready.",
+              }
+            : {}),
+        },
+      ]
+    : [],
   cloudSignIns: query.get("signin")
     ? [
         {
@@ -282,9 +312,11 @@ const gate = () => {
 };
 const signInGate = gate();
 const wakeGate = gate();
+const moveGate = gate();
 window.cloudFixture = {
   releaseSignIn: signInGate.release,
   releaseWake: wakeGate.release,
+  releaseMove: moveGate.release,
   setCloudStatus: (workspaceId, status) => {
     const found = cloud.workspaces.find(
       (item) => item.workspaceId === workspaceId,
@@ -475,6 +507,110 @@ const client = {
         status: "archived" as const,
         workspace: structuredClone(found),
       });
+    },
+    workspaceMove: async (params: {
+      reference: string;
+      to: "cloud" | "mac";
+      approved?: string[];
+      stopWorking?: boolean;
+    }) => {
+      record("workspaceMove", params);
+      const found = snapshot.workspaces.find(
+        (item) => item.id === params.reference,
+      )!;
+      const asks = query.get("moveAsk");
+      if (asks === "approval" && !params.approved)
+        return ok({
+          status: "needsApproval" as const,
+          paths: [".claude/settings.json", "CLAUDE.md\u001b[2J"],
+        });
+      if (asks === "busy" && !params.stopWorking)
+        return ok({
+          status: "busy" as const,
+          sessions: [{ id: "s-local", name: "s-local" }],
+        });
+      if (asks === "stopped")
+        return ok({
+          status: "needsStopped" as const,
+          sessions: [{ id: "s-local", name: "codex helper" }],
+        });
+      if (asks === "big")
+        return ok({
+          status: "needsSmaller" as const,
+          items: [
+            {
+              what: "repos/app",
+              bytes: 1_610_612_736,
+              maxBytes: 1_073_741_824,
+            },
+          ],
+        });
+      if (asks === "fail") return fail("The gateway refused the move.");
+      snapshot.workspaceMoves = [
+        {
+          workspaceId: found.id,
+          to: params.to,
+          phase: "copying",
+          detail: "Copying repos/app",
+        },
+      ];
+      announce();
+      if (query.get("holdMove") === "1") await moveGate.promise;
+      if (params.to === "cloud") {
+        found.place = "cloud";
+        if (!withCloud(found.id))
+          cloud.workspaces.push({
+            workspaceId: found.id,
+            cloudId: `c-new-${found.id}`,
+            status: "running",
+            runnerOnline: true,
+            reason: null,
+            createdAt: new Date().toISOString(),
+          });
+      } else delete found.place;
+      const notice =
+        params.to === "mac"
+          ? "Moved back to this Mac. Its sessions resume in ask mode."
+          : undefined;
+      snapshot.workspaces = snapshot.workspaces.map((item) =>
+        item.id === found.id ? { ...found } : item,
+      );
+      snapshot.workspaceMoves = [
+        {
+          workspaceId: found.id,
+          to: params.to,
+          phase: "moved",
+          ...(notice ? { notice } : {}),
+        },
+      ];
+      announce();
+      return ok({
+        status: "moved" as const,
+        workspace: structuredClone(found),
+        ...(notice ? { notice } : {}),
+      });
+    },
+    workspaceMoveCancel: async (params: { reference: string }) => {
+      record("workspaceMoveCancel", params);
+      snapshot.workspaceMoves = [];
+      announce();
+      return ok(null);
+    },
+    workspaceMoveDismiss: async (params: { reference: string }) => {
+      record("workspaceMoveDismiss", params);
+      snapshot.workspaceMoves = [];
+      announce();
+      return ok(null);
+    },
+    workspaceNoticeDismiss: async (params: { reference: string }) => {
+      record("workspaceNoticeDismiss", params);
+      snapshot.workspaces = snapshot.workspaces.map((item) => {
+        if (item.id !== params.reference) return item;
+        const { cloudNotice: _read, ...rest } = item;
+        return rest;
+      });
+      announce();
+      return ok(null);
     },
     agentSpawn: async (params: Record<string, unknown>) => {
       record("agentSpawn", params);

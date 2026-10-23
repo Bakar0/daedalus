@@ -1,0 +1,129 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, test } from "vitest";
+import {
+  byteSize,
+  moveLabel,
+  pathLines,
+  sessionLines,
+  tooBigLines,
+  WorkspaceMoveState,
+  WorkspaceNotice,
+} from "./workspace-move";
+
+describe("byteSize", () => {
+  test("uses binary units with one decimal under ten", () => {
+    expect(byteSize(0)).toBe("0 bytes");
+    expect(byteSize(1_073_741_824)).toBe("1 GB");
+    expect(byteSize(1_610_612_736)).toBe("1.5 GB");
+    expect(byteSize(268_435_456)).toBe("256 MB");
+    expect(byteSize(1_536)).toBe("1.5 KB");
+    expect(byteSize(12_800)).toBe("13 KB");
+  });
+});
+
+describe("lines from the pod", () => {
+  test("are plain, cut short, and capped at twelve", () => {
+    const lines = pathLines([
+      "CLAUDE.md\u001b[31m",
+      "x".repeat(300),
+      ...Array.from({ length: 20 }, (_, index) => `file-${index}`),
+    ]);
+    expect(lines[0]).toBe("CLAUDE.md [31m");
+    expect(lines[1]!.length).toBe(120);
+    expect(lines[1]!.endsWith("…")).toBe(true);
+    expect(lines).toHaveLength(12);
+    expect(lines.at(-1)).toBe("and 11 more");
+  });
+
+  test("name what is over its cap with its size", () => {
+    expect(
+      tooBigLines([
+        { what: "repos/app", bytes: 1_610_612_736, maxBytes: 1_073_741_824 },
+      ]),
+    ).toEqual(["repos/app: 1.5 GB, at most 1 GB"]);
+  });
+
+  test("name sessions by name only", () => {
+    expect(sessionLines([{ id: "s1", name: "server\nwork" }])).toEqual([
+      "server work",
+    ]);
+  });
+});
+
+describe("moveLabel", () => {
+  test("says where the workspace is going", () => {
+    expect(moveLabel({ workspaceId: "w", to: "cloud", phase: "copying" })).toBe(
+      "Moving to the cloud…",
+    );
+    expect(moveLabel({ workspaceId: "w", to: "mac", phase: "moved" })).toBe(
+      "Moved to this Mac",
+    );
+    expect(moveLabel({ workspaceId: "w", to: "mac", phase: "failed" })).toBe(
+      "Move failed",
+    );
+  });
+});
+
+describe("WorkspaceMoveState", () => {
+  const render = (props: Partial<Parameters<typeof WorkspaceMoveState>[0]>) =>
+    renderToStaticMarkup(
+      <WorkspaceMoveState
+        name="app"
+        onCancel={() => {}}
+        onDismiss={() => {}}
+        {...props}
+      />,
+    );
+
+  test("marks the steps done and now, and offers Cancel only while waiting", () => {
+    const copying = render({
+      move: {
+        workspaceId: "w",
+        to: "cloud",
+        phase: "copying",
+        detail: "Copying repos/app",
+      },
+    });
+    expect(copying).toContain('data-phase="copying"');
+    expect(copying.match(/data-state="done"/g)).toHaveLength(2);
+    expect(copying.match(/data-state="now"/g)).toHaveLength(1);
+    expect(copying).toContain("Copying repos/app");
+    expect(copying).not.toContain("workspace-move-cancel");
+    const waiting = render({
+      move: { workspaceId: "w", to: "mac", phase: "waiting" },
+    });
+    expect(waiting).toContain('data-testid="workspace-move-cancel"');
+  });
+
+  test("a failure says why, as plain text, and that nothing moved", () => {
+    const failed = render({
+      move: {
+        workspaceId: "w",
+        to: "cloud",
+        phase: "failed",
+        message: "<b>The pod</b> did not answer",
+      },
+    });
+    expect(failed).toContain('data-phase="failed"');
+    expect(failed).toContain("&lt;b&gt;The pod&lt;/b&gt; did not answer");
+    expect(failed).toContain("stays where it was");
+    expect(failed).not.toContain("workspace-move-steps");
+    const early = render({ error: "The gateway refused the move" });
+    expect(early).toContain('data-testid="workspace-move-dismiss"');
+  });
+});
+
+describe("WorkspaceNotice", () => {
+  test("cuts a long notice short", () => {
+    const markup = renderToStaticMarkup(
+      <WorkspaceNotice
+        onDismiss={() => {}}
+        testId="workspace-notice"
+        text={"x".repeat(900)}
+      />,
+    );
+    expect(markup).toContain("…");
+    expect(markup).not.toContain("x".repeat(401));
+    expect(markup).toContain('data-testid="workspace-notice-dismiss"');
+  });
+});

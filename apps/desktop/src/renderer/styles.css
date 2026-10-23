@@ -8665,6 +8665,110 @@ dd {
   gap: 2px;
 }
 
+/* The workspace header's cloud action comes in on hover with the pinned
+   ones, but stays while the workspace is in the cloud or moving, lit. */
+.workspace-group .workspace-cloud-action {
+  display: none !important;
+}
+.workspace-group
+  > .workspace-card:is(:hover, :focus-within)
+  .workspace-cloud-action,
+.workspace-group .workspace-cloud-action:is([data-cloud-lit], [data-moving]) {
+  display: flex !important;
+}
+.workspace-cloud-action[data-cloud-lit] {
+  color: var(--accent) !important;
+}
+.workspace-cloud-action[data-moving] svg {
+  animation: workspace-moving 1.4s ease-in-out infinite;
+}
+@keyframes workspace-moving {
+  50% {
+    opacity: 0.35;
+  }
+}
+.workspace-group
+  > .workspace-card:has(
+    .workspace-cloud-action:is([data-cloud-lit], [data-moving])
+  )
+  .workspace-card-name {
+  padding-right: 74px;
+}
+/* A moving workspace, under its card. */
+.workspace-move,
+.workspace-notice {
+  border-top: 1px solid var(--line);
+  display: grid;
+  font-size: 11px;
+  gap: 4px;
+  padding: 6px 10px 7px 30px;
+}
+.workspace-move-row {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+.workspace-move-label {
+  color: var(--text);
+  flex: 1;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-move[data-phase="failed"] .workspace-move-label {
+  color: var(--danger);
+}
+.workspace-move-cancel {
+  font-size: 11px !important;
+  padding: 1px 6px !important;
+}
+.workspace-move-steps {
+  display: grid;
+  gap: 3px;
+  grid-template-columns: repeat(4, 1fr);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.workspace-move-steps li {
+  background: var(--line);
+  border-radius: 2px;
+  height: 3px;
+}
+.workspace-move-steps li[data-state="done"] {
+  background: var(--accent);
+}
+.workspace-move-steps li[data-state="now"] {
+  animation: workspace-moving 1.4s ease-in-out infinite;
+  background: var(--accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .workspace-cloud-action[data-moving] svg,
+  .workspace-move-steps li[data-state="now"] {
+    animation: none;
+  }
+}
+.workspace-move-detail {
+  color: var(--secondary);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.workspace-notice {
+  align-items: start;
+  color: var(--secondary);
+  grid-template-columns: 1fr auto;
+  line-height: 1.4;
+}
+.workspace-notice > span {
+  overflow-wrap: anywhere;
+}
+.workspace-notice > button {
+  font-size: 11px !important;
+  padding: 1px 6px !important;
+}
 /* A card action in its menu: the action, and its pin to the card. */
 .menu-pin-row {
   align-items: center;
@@ -8712,34 +8816,6 @@ dd {
   opacity: 1;
 }
 /* A dialog's choices from outside this Mac: plain lines, cut short. */
-.app-dialog-options {
-  display: grid;
-  gap: 6px;
-  max-height: 260px;
-  overflow-y: auto;
-}
-.app-dialog-option {
-  align-items: center;
-  display: flex;
-  font-size: 12px;
-  gap: 8px;
-  min-width: 0;
-}
-.app-dialog-option-label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.app-dialog-option small,
-.app-dialog-count {
-  color: var(--muted);
-  font-size: 11px;
-}
-.app-dialog-count[data-over] {
-  color: var(--danger);
-}
 .app-dialog-lines {
   color: var(--secondary);
   font-size: 12px;

@@ -86,8 +86,20 @@ import {
 } from "./cost-format";
 import { TaskActionBar } from "./TaskActionBar";
 import { ConfirmButton } from "./ConfirmButton";
-import { askChoice, askConfirm, askText, DialogHost } from "./dialogs";
-import { pathLines, tooBigLines } from "./workspace-move";
+import {
+  askChoice,
+  askConfirm,
+  askText,
+  DialogHost,
+  plainLine,
+} from "./dialogs";
+import {
+  pathLines,
+  sessionLines,
+  tooBigLines,
+  WorkspaceMoveState,
+  WorkspaceNotice,
+} from "./workspace-move";
 import { TaskActionIcon } from "./task-action-icons";
 import {
   type FileOpenRequest,
@@ -514,7 +526,8 @@ function RebirthIcon() {
 }
 
 /** A cloud with an arrow up: the session's move to the cloud and back. */
-function CloudActionIcon() {
+/** A cloud with an arrow: up into it, or down out of it to this Mac. */
+function CloudActionIcon({ home = false }: { home?: boolean }) {
   return (
     <svg
       aria-hidden="true"
@@ -527,7 +540,11 @@ function CloudActionIcon() {
     >
       <path d="M7 18.5h10a4 4 0 0 0 .6-7.96A5.5 5.5 0 0 0 7 9.2 4.7 4.7 0 0 0 7 18.5Z" />
       <path d="M12 15.5v-5" />
-      <path d="m9.8 12.6 2.2-2.2 2.2 2.2" />
+      {home ? (
+        <path d="m9.8 13.3 2.2 2.2 2.2-2.2" />
+      ) : (
+        <path d="m9.8 12.6 2.2-2.2 2.2 2.2" />
+      )}
     </svg>
   );
 }
@@ -2064,6 +2081,19 @@ export function WorkspaceApp({
     [cloudState.data],
   );
   const [error, setError] = useState<string>();
+  // Workspace moves, by workspace id. A move can take minutes, and its
+  // progress comes with the snapshot; a call that failed before the host
+  // had an entry to show leaves its message here instead.
+  const workspaceMoveActions = useMutation({
+    // A failure is the workspace's to show, under its card.
+    onSettled: async () => {
+      await refresh();
+      await cloudState.refresh();
+    },
+  });
+  const [moveErrors, setMoveErrors] = useState<Record<string, string>>({});
+  const noteMoveError = (workspaceId: string, message: string) =>
+    setMoveErrors((current) => ({ ...current, [workspaceId]: message }));
   const [theme, setTheme] = useState<AppTheme>("dark");
   const [workspaceForm, setWorkspaceForm] = useState({
     name: "",
@@ -2899,6 +2929,79 @@ export function WorkspaceApp({
   const attentionById = new Map(
     (snapshot?.attention ?? []).map((item) => [item.sessionId, item]),
   );
+  // Workspaces on their way to or from the cloud, and ones just moved.
+  const moveByWorkspace = new Map(
+    (snapshot?.workspaceMoves ?? []).map((move) => [move.workspaceId, move]),
+  );
+  // The host's own failed entry says it now; the window's copy would come
+  // back once that entry goes.
+  const failedMoves = (snapshot?.workspaceMoves ?? [])
+    .filter((move) => move.phase === "failed")
+    .map((move) => move.workspaceId)
+    .join(" ");
+  useEffect(() => {
+    if (!failedMoves) return;
+    const failed = new Set(failedMoves.split(" "));
+    setMoveErrors((current) =>
+      Object.keys(current).some((id) => failed.has(id))
+        ? Object.fromEntries(
+            Object.entries(current).filter(([id]) => !failed.has(id)),
+          )
+        : current,
+    );
+  }, [failedMoves]);
+  const workspaceMoving = (item: WorkspaceDto) => {
+    const move = moveByWorkspace.get(item.id);
+    return (
+      (move !== undefined &&
+        move.phase !== "failed" &&
+        move.phase !== "moved") ||
+      workspaceMoveActions.pending(item.id)
+    );
+  };
+
+  /**
+   * The workspace header's cloud action: a cloud that moves the workspace
+   * there, lit while it is there, where a click brings it home. Signed out,
+   * a workspace on this Mac has none.
+   */
+  const workspaceCloudAction = (item: WorkspaceDto) => {
+    const inCloud = item.place === "cloud";
+    const signedIn = Boolean(cloudState.data?.signedIn);
+    const move = moveByWorkspace.get(item.id);
+    if (!inCloud && !signedIn && !move) return null;
+    const moving = workspaceMoving(item);
+    const failure = cloudByWorkspace.get(item.id);
+    return (
+      <button
+        aria-label={
+          inCloud
+            ? `Move ${item.name} to this Mac`
+            : `Move ${item.name} to cloud`
+        }
+        className="session-card-action workspace-cloud-action"
+        data-cloud-lit={inCloud ? "true" : undefined}
+        data-moving={moving ? "true" : undefined}
+        data-testid="workspace-cloud-action"
+        disabled={moving || !signedIn || !item.available}
+        onClick={() => void moveWorkspace(item, inCloud ? "mac" : "cloud")}
+        title={
+          moving
+            ? "Moving…"
+            : !signedIn
+              ? "In the cloud. Sign in to its cloud account in Settings › Cloud to reach it or bring it home."
+              : inCloud
+                ? failure?.status === "failed"
+                  ? `In the cloud, where its pod failed: ${plainLine(failure.reason ?? "no reason given", 160)}. Click to bring it back to this Mac.`
+                  : "In the cloud: its sessions, terminals and files are in its pod. Click to bring it back to this Mac."
+                : "Move to cloud: its sessions stop, the workspace is copied to its cloud pod, and they resume there"
+        }
+        type="button"
+      >
+        <CloudActionIcon home={inCloud} />
+      </button>
+    );
+  };
   const telemetryById = new Map(
     (snapshot?.sessionTelemetry ?? []).map((item) => [item.sessionId, item]),
   );
@@ -4124,6 +4227,94 @@ export function WorkspaceApp({
   }
 
   /**
+   * Moves a whole workspace to the cloud or back to this Mac, after asking.
+   * The host may answer with a question (files that steer agents, sessions
+   * that wait on the user) and is asked again with the answer, or with why
+   * it cannot move (sessions the cloud cannot run, something too big),
+   * which the window shows and stops at.
+   */
+  async function moveWorkspace(item: WorkspaceDto, to: "cloud" | "mac") {
+    const sure = await askConfirm({
+      title:
+        to === "cloud"
+          ? `Move ${item.name} to the cloud?`
+          : `Move ${item.name} back to this Mac?`,
+      message:
+        to === "cloud"
+          ? "Its sessions finish their turns and stop, the workspace is copied to its cloud pod, and they resume there. New sessions, terminals and files are there too. This Mac keeps its folder as it is now, as a backup."
+          : "Its sessions finish their turns and stop, the workspace's changes come back to this Mac, and the sessions resume here in ask mode. The cloud copy is kept asleep.",
+      confirmLabel: to === "cloud" ? "Move to cloud" : "Move to this Mac",
+    });
+    if (!sure) return;
+    setMoveErrors(({ [item.id]: _gone, ...rest }) => rest);
+    let approved: string[] | undefined;
+    let stopWorking = false;
+    for (let round = 0; round < 4; round++) {
+      const answer = await workspaceMoveActions.run(
+        client.request
+          .workspaceMove({
+            reference: item.id,
+            to,
+            ...(approved ? { approved } : {}),
+            ...(stopWorking ? { stopWorking } : {}),
+          })
+          .then(
+            (response) => {
+              if (!response.ok) noteMoveError(item.id, response.error.message);
+              return response;
+            },
+            (cause: unknown) => {
+              noteMoveError(
+                item.id,
+                cause instanceof Error ? cause.message : "The move failed",
+              );
+              throw cause;
+            },
+          ),
+        item.id,
+      );
+      if (!answer) return;
+      if (answer.status === "moved") return;
+      if (answer.status === "needsApproval") {
+        if (!(await askBringChanges(item.name, answer.paths, "Move with them")))
+          return;
+        approved = answer.paths;
+        continue;
+      }
+      if (answer.status === "busy") {
+        const stop = await askChoice({
+          title: "Stop sessions that wait for you?",
+          message: `These sessions in ${item.name} wait for your answer, so their turns will not end. Stop them now? They resume after the move.`,
+          lines: sessionLines(answer.sessions),
+          choices: [{ id: "stop", label: "Stop them and move", danger: true }],
+        });
+        if (stop !== "stop") return;
+        stopWorking = true;
+        continue;
+      }
+      await askChoice({
+        title:
+          answer.status === "needsStopped"
+            ? "Stop these sessions first"
+            : to === "cloud"
+              ? "Too big for the cloud"
+              : "Too big to come home",
+        message:
+          answer.status === "needsStopped"
+            ? `Codex and custom sessions cannot run in the cloud. Stop them, then move ${item.name}.`
+            : `${item.name} did not move. This is over its cap:`,
+        lines:
+          answer.status === "needsStopped"
+            ? sessionLines(answer.sessions)
+            : tooBigLines(answer.items),
+        choices: [],
+        cancelLabel: "OK",
+      });
+      return;
+    }
+  }
+
+  /**
    * Files that steer agents changed in the cloud: bring them, or stop. The
    * paths come from the pod, so they are listed as plain, short lines.
    */
@@ -4137,7 +4328,8 @@ export function WorkspaceApp({
         title: "Bring these changes to this Mac?",
         message: `In the cloud, sessions in ${name} changed files that steer agents or run when a folder opens:`,
         lines: pathLines(paths),
-        choices: [{ id: "bring", label: confirmLabel }],
+        // A security question: Enter must not answer it.
+        choices: [{ id: "bring", label: confirmLabel, danger: true }],
       })) === "bring"
     );
   }
@@ -6385,13 +6577,16 @@ export function WorkspaceApp({
                             <ArchiveIcon />
                           </ConfirmButton>
                         )}
+                        {workspaceCloudAction(item)}
                         {/* Settings and the + always show, so the pinned
                           ones that come in on hover open to their left. */}
                         <button
                           aria-label={`Create session in ${item.name}`}
                           className="session-card-action workspace-session-create"
                           disabled={
-                            !item.available || !snapshot?.settings.tmuxAvailable
+                            !item.available ||
+                            !snapshot?.settings.tmuxAvailable ||
+                            workspaceMoving(item)
                           }
                           onClick={() => openSessionModal(undefined, item)}
                           title="New session"
@@ -6449,6 +6644,68 @@ export function WorkspaceApp({
                         />
                       </span>
                     </div>
+                    {(() => {
+                      const move = moveByWorkspace.get(item.id);
+                      const moveError = moveErrors[item.id];
+                      return (
+                        <>
+                          {move && move.phase !== "moved" ? (
+                            <WorkspaceMoveState
+                              move={move}
+                              name={item.name}
+                              onCancel={() =>
+                                void workspaceMoveActions.run(
+                                  client.request.workspaceMoveCancel({
+                                    reference: item.id,
+                                  }),
+                                  `cancel:${item.id}`,
+                                )
+                              }
+                              onDismiss={() => undefined}
+                            />
+                          ) : !move && moveError ? (
+                            <WorkspaceMoveState
+                              error={moveError}
+                              name={item.name}
+                              onCancel={() => undefined}
+                              onDismiss={() =>
+                                setMoveErrors(
+                                  ({ [item.id]: _gone, ...rest }) => rest,
+                                )
+                              }
+                            />
+                          ) : null}
+                          {move?.phase === "moved" && move.notice && (
+                            <WorkspaceNotice
+                              onDismiss={() =>
+                                void workspaceMoveActions.run(
+                                  client.request.workspaceMoveDismiss({
+                                    reference: item.id,
+                                  }),
+                                  `notice:${item.id}`,
+                                )
+                              }
+                              testId="workspace-move-notice"
+                              text={move.notice}
+                            />
+                          )}
+                          {item.cloudNotice && (
+                            <WorkspaceNotice
+                              onDismiss={() =>
+                                void workspaceMoveActions.run(
+                                  client.request.workspaceNoticeDismiss({
+                                    reference: item.id,
+                                  }),
+                                  `notice:${item.id}`,
+                                )
+                              }
+                              testId="workspace-cloud-notice"
+                              text={item.cloudNotice}
+                            />
+                          )}
+                        </>
+                      );
+                    })()}
                     {expanded && sessionList && (
                       <div id={`workspace-sessions-${item.id}`}>
                         {sessionList}

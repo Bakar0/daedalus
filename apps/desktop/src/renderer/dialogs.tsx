@@ -34,32 +34,15 @@ type Request = { id: number } & (
       resolve: (answer: string | null) => void;
     }
   | {
-      kind: "choose";
-      title: string;
-      message: string;
-      options: ChooseOption[];
-      initial: string[];
-      /** At most this many may be chosen. */
-      limit?: number;
-      confirmLabel: string;
-      resolve: (answer: string[] | null) => void;
-    }
-  | {
       kind: "choice";
       title: string;
       message: string;
       lines: string[];
       choices: { id: string; label: string; danger?: boolean }[];
+      cancelLabel: string;
       resolve: (answer: string | null) => void;
     }
 );
-
-export interface ChooseOption {
-  id: string;
-  label: string;
-  /** A second, quieter part of the row, such as a size. */
-  detail?: string;
-}
 
 /**
  * Text that may come from outside this Mac, such as a pod, cut to a length
@@ -123,34 +106,6 @@ export function askText(options: {
   });
 }
 
-/**
- * Resolves to the ids chosen, or `null` when cancelled. With `limit`, the
- * confirm button stays off while more than that are chosen.
- */
-export function askChoose(options: {
-  title: string;
-  message: string;
-  options: ChooseOption[];
-  initial?: string[];
-  limit?: number;
-  confirmLabel?: string;
-}): Promise<string[] | null> {
-  return new Promise((resolve) => {
-    queue.push({
-      id: nextId++,
-      kind: "choose",
-      title: options.title,
-      message: options.message,
-      options: options.options,
-      initial: options.initial ?? [],
-      ...(options.limit !== undefined ? { limit: options.limit } : {}),
-      confirmLabel: options.confirmLabel ?? "OK",
-      resolve,
-    });
-    announce();
-  });
-}
-
 /** One of several answers, by id, or `null` when cancelled. */
 export function askChoice(options: {
   title: string;
@@ -158,6 +113,8 @@ export function askChoice(options: {
   /** Listed under the message, one per line, as plain text. */
   lines?: string[];
   choices: { id: string; label: string; danger?: boolean }[];
+  /** "OK" when there is nothing to choose, only something to read. */
+  cancelLabel?: string;
 }): Promise<string | null> {
   return new Promise((resolve) => {
     queue.push({
@@ -167,6 +124,7 @@ export function askChoice(options: {
       message: options.message,
       lines: options.lines ?? [],
       choices: options.choices,
+      cancelLabel: options.cancelLabel ?? "Cancel",
       resolve,
     });
     announce();
@@ -176,7 +134,6 @@ export function askChoice(options: {
 export function DialogHost() {
   const [request, setRequest] = useState<Request | undefined>(queue[0]);
   const [text, setText] = useState("");
-  const [chosen, setChosen] = useState<Set<string>>(new Set());
   useEffect(() => {
     const listener = () => setRequest(queue[0]);
     listeners.add(listener);
@@ -187,7 +144,6 @@ export function DialogHost() {
   }, []);
   useEffect(() => {
     if (request?.kind === "text") setText(request.initial);
-    if (request?.kind === "choose") setChosen(new Set(request.initial));
   }, [request]);
   if (!request) return null;
 
@@ -195,14 +151,6 @@ export function DialogHost() {
     queue.shift();
     if (request.kind === "confirm") request.resolve(accepted);
     else if (request.kind === "text") request.resolve(accepted ? text : null);
-    else if (request.kind === "choose")
-      request.resolve(
-        accepted
-          ? request.options
-              .map((option) => option.id)
-              .filter((id) => chosen.has(id))
-          : null,
-      );
     else request.resolve(null);
     announce();
   };
@@ -212,10 +160,6 @@ export function DialogHost() {
     request.resolve(id);
     announce();
   };
-  const overLimit =
-    request.kind === "choose" &&
-    request.limit !== undefined &&
-    chosen.size > request.limit;
 
   return (
     <div
@@ -260,41 +204,6 @@ export function DialogHost() {
               value={text}
             />
           )}
-          {request.kind === "choose" && (
-            <div className="app-dialog-options" data-testid="dialog-options">
-              {request.options.map((option) => (
-                <label className="app-dialog-option" key={option.id}>
-                  <input
-                    checked={chosen.has(option.id)}
-                    data-option={option.id}
-                    onChange={(event) =>
-                      setChosen((current) => {
-                        const next = new Set(current);
-                        if (event.target.checked) next.add(option.id);
-                        else next.delete(option.id);
-                        return next;
-                      })
-                    }
-                    type="checkbox"
-                  />
-                  <span className="app-dialog-option-label">
-                    {plainLine(option.label, 80)}
-                  </span>
-                  {option.detail && (
-                    <small>{plainLine(option.detail, 40)}</small>
-                  )}
-                </label>
-              ))}
-              {request.limit !== undefined && (
-                <small
-                  className="app-dialog-count"
-                  data-over={overLimit ? "true" : undefined}
-                >
-                  {chosen.size} of at most {request.limit} chosen
-                </small>
-              )}
-            </div>
-          )}
           {request.kind === "choice" && request.lines.length > 0 && (
             <ul className="app-dialog-lines" data-testid="dialog-lines">
               {request.lines.map((line, index) => (
@@ -307,10 +216,11 @@ export function DialogHost() {
               <button
                 className="quiet"
                 data-dialog-answer="cancel"
+                autoFocus={request.choices.length === 0}
                 onClick={() => answer(false)}
                 type="button"
               >
-                Cancel
+                {request.cancelLabel}
               </button>
               {request.choices.map((choice, index) => (
                 <button
@@ -351,7 +261,6 @@ export function DialogHost() {
                     : undefined
                 }
                 data-dialog-answer="confirm"
-                disabled={overLimit}
                 type="submit"
               >
                 {request.confirmLabel}
