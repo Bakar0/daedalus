@@ -17,12 +17,18 @@ import {
   gitMeasure,
   gitMetadataFingerprint,
   branchPullRequestQuery,
-  chooseBranchPullRequest,
+  checksState,
+  choosePullRequest,
+  headRelation,
   keptPullRequest,
-  pullRequestViewAnswer,
+  parsePorcelainStatus,
+  parsePullRequestNode,
+  pullRequestHeadLanded,
   queryBranchPullRequests,
   parseGitHubRemote,
   pullRequestDue,
+  upstreamState,
+  type PullRequestCandidate,
   type GitMeasure,
 } from "./git-status-monitor";
 import { WorkspaceContentService } from "./workspace-content";
@@ -369,6 +375,9 @@ describe("GitStatusMonitor", () => {
           changedFiles: 0,
           ahead: 0,
           behind: 0,
+          unpushed: 0,
+          // Started from the base branch and never pushed under its own name.
+          upstream: "none",
         });
 
         // One commit on top, plus one uncommitted file.
@@ -407,6 +416,7 @@ describe("GitStatusMonitor", () => {
           filesAhead: 1,
           // Never pushed, so the one commit exists only here.
           unpushed: 1,
+          upstream: "none",
         });
 
         // The board reads the same measurement for every workspace at once,
@@ -706,8 +716,11 @@ describe("GitStatusMonitor", () => {
 
 describe("pullRequestDue", () => {
   const minute = 60_000;
-  test("asks about a branch never asked about", () => {
+  test("asks about a branch never asked about, or asked about another branch", () => {
     expect(pullRequestDue(undefined, "a")).toBe(true);
+    const cached = { checkedAt: 0, fingerprint: "a", branch: "one" };
+    expect(pullRequestDue(cached, "a", 1, { branch: "two" })).toBe(true);
+    expect(pullRequestDue(cached, "a", 1, { branch: "one" })).toBe(false);
   });
   test("follows an open pull request every minute", () => {
     const cached = {
@@ -718,27 +731,171 @@ describe("pullRequestDue", () => {
     expect(pullRequestDue(cached, "a", minute - 1)).toBe(false);
     expect(pullRequestDue(cached, "a", minute)).toBe(true);
   });
-  test("asks less often about a branch where nothing moves", () => {
+  test("asks a live branch with no pull request every five minutes", () => {
     const cached = { checkedAt: 0, fingerprint: "a" };
-    expect(pullRequestDue(cached, "a", minute)).toBe(false);
+    expect(pullRequestDue(cached, "a", 4 * minute)).toBe(false);
     expect(pullRequestDue(cached, "a", 5 * minute)).toBe(true);
-    const closed = { ...cached, value: { state: "CLOSED" as const } };
-    expect(pullRequestDue(closed, "a", 2 * minute)).toBe(false);
   });
-  test("keeps asking every minute for a while after the refs moved", () => {
+  test("asks about merged, closed and ended branches only now and then", () => {
+    const merged = {
+      checkedAt: 0,
+      fingerprint: "a",
+      value: { state: "MERGED" as const },
+    };
+    expect(pullRequestDue(merged, "a", 29 * minute)).toBe(false);
+    expect(pullRequestDue(merged, "a", 30 * minute)).toBe(true);
+    const ended = { checkedAt: 0, fingerprint: "a" };
+    expect(pullRequestDue(ended, "a", 10 * minute, { live: false })).toBe(
+      false,
+    );
+  });
+  test("asks again within seconds once the refs move, as after a push", () => {
+    const cached = { checkedAt: 0, fingerprint: "a" };
+    expect(pullRequestDue(cached, "b", 14_000)).toBe(false);
+    expect(pullRequestDue(cached, "b", 15_000)).toBe(true);
+    expect(pullRequestDue(cached, undefined, 15_000)).toBe(true);
+  });
+  test("keeps asking for a while after the refs moved", () => {
     // Checked right after a push, before `gh pr create` ran.
     const pushed = { checkedAt: 0, fingerprint: "b", movedAt: 0 };
-    expect(pullRequestDue(pushed, "b", minute)).toBe(true);
+    expect(pullRequestDue(pushed, "b", 20_000)).toBe(true);
     expect(pullRequestDue(pushed, "b", 4 * minute)).toBe(true);
     // Long after the move, back to the quiet cadence.
     const settled = { checkedAt: 6 * minute, fingerprint: "b", movedAt: 0 };
     expect(pullRequestDue(settled, "b", 7 * minute)).toBe(false);
   });
-  test("asks again within the minute once the refs move, as after a push", () => {
-    const cached = { checkedAt: 0, fingerprint: "a" };
-    expect(pullRequestDue(cached, "b", minute - 1)).toBe(false);
-    expect(pullRequestDue(cached, "b", minute)).toBe(true);
-    expect(pullRequestDue(cached, undefined, minute)).toBe(true);
+});
+
+describe("parsePorcelainStatus", () => {
+  const z = (...fields: string[]) =>
+    fields.map((field) => `${field}\0`).join("");
+  test("counts each change once, a rename included, and reads the branch", () => {
+    const status = parsePorcelainStatus(
+      z(
+        "# branch.oid abc",
+        "# branch.head topic",
+        "# branch.upstream origin/topic",
+        "# branch.ab +2 -1",
+        "1 .M N... 100644 100644 100644 a a src/edit.ts",
+        "2 R. N... 100644 100644 100644 a a R100 src/new.ts",
+        "src/old.ts",
+        "? notes/one.md",
+        "? notes/two.md",
+      ),
+    );
+    expect(status).toEqual({
+      changedFiles: 4,
+      branch: "topic",
+      upstream: "origin/topic",
+      upstreamAhead: 2,
+      upstreamBehind: 1,
+    });
+  });
+  test("reads a detached HEAD and a branch whose upstream is gone", () => {
+    expect(parsePorcelainStatus(z("# branch.head (detached)")).branch).toBe(
+      null,
+    );
+    const gone = parsePorcelainStatus(
+      z("# branch.head topic", "# branch.upstream origin/topic"),
+    );
+    expect(upstreamState(gone, "main")).toBe("gone");
+  });
+  test("calls the base branch an upstream of no branch but itself", () => {
+    const started = parsePorcelainStatus(
+      z(
+        "# branch.head topic",
+        "# branch.upstream origin/main",
+        "# branch.ab +3 -0",
+      ),
+    );
+    expect(upstreamState(started, "main")).toBe("none");
+    const base = parsePorcelainStatus(
+      z(
+        "# branch.head main",
+        "# branch.upstream origin/main",
+        "# branch.ab +0 -2",
+      ),
+    );
+    expect(upstreamState(base, "main")).toBe("tracking");
+    expect(
+      upstreamState(parsePorcelainStatus(z("# branch.head topic")), "main"),
+    ).toBe("none");
+  });
+});
+
+describe("parsePullRequestNode", () => {
+  const node = {
+    number: 9,
+    url: "https://github.com/o/r/pull/9",
+    state: "OPEN",
+    isDraft: false,
+    title: "Fix it",
+    headRefOid: "a".repeat(40),
+    reviewDecision: "CHANGES_REQUESTED",
+    headRepositoryOwner: { login: "o" },
+  };
+  test("reads GraphQL's rollup and gh pr list's checks the same way", () => {
+    expect(
+      parsePullRequestNode({
+        ...node,
+        commits: {
+          nodes: [{ commit: { statusCheckRollup: { state: "FAILURE" } } }],
+        },
+      }),
+    ).toEqual({
+      ref: {
+        number: 9,
+        url: "https://github.com/o/r/pull/9",
+        state: "OPEN",
+        isDraft: false,
+        title: "Fix it",
+        checks: "failing",
+        review: "changes_requested",
+      },
+      headRefOid: "a".repeat(40),
+      owner: "o",
+    });
+    expect(
+      parsePullRequestNode({
+        ...node,
+        statusCheckRollup: [
+          { status: "COMPLETED", conclusion: "SUCCESS" },
+          { status: "IN_PROGRESS", conclusion: "" },
+        ],
+      })?.ref.checks,
+    ).toBe("pending");
+  });
+  test("drops checks and review once the pull request is not open", () => {
+    const merged = parsePullRequestNode({
+      ...node,
+      state: "MERGED",
+      mergedAt: "2026-10-22T10:00:00Z",
+      statusCheckRollup: [{ status: "COMPLETED", conclusion: "FAILURE" }],
+    });
+    expect(merged?.ref.checks).toBeUndefined();
+    expect(merged?.ref.review).toBeUndefined();
+    expect(merged?.ref.mergedAt).toBe("2026-10-22T10:00:00Z");
+  });
+  test("refuses an incomplete answer", () => {
+    expect(parsePullRequestNode({ number: 1, state: "OPEN" })).toBeUndefined();
+  });
+});
+
+describe("checksState", () => {
+  test("combines checks into one state", () => {
+    expect(checksState([])).toBeUndefined();
+    expect(checksState([{ state: "SUCCESS" }])).toBe("passing");
+    expect(checksState([{ state: "PENDING" }, { state: "SUCCESS" }])).toBe(
+      "pending",
+    );
+    expect(
+      checksState([
+        { status: "IN_PROGRESS", conclusion: "" },
+        { status: "COMPLETED", conclusion: "TIMED_OUT" },
+      ]),
+    ).toBe("failing");
+    expect(checksState({ state: "SUCCESS" })).toBe("passing");
+    expect(checksState(null)).toBeUndefined();
   });
 });
 
@@ -763,7 +920,7 @@ describe("parseGitHubRemote", () => {
       name: "app",
     });
   });
-  test("leaves anything else to gh pr view", () => {
+  test("leaves anything else to gh pr list", () => {
     expect(parseGitHubRemote("/tmp/source/product")).toBeUndefined();
     expect(parseGitHubRemote("file:///tmp/source/product")).toBeUndefined();
   });
@@ -778,56 +935,62 @@ describe("branchPullRequestQuery", () => {
   });
 });
 
-describe("chooseBranchPullRequest", () => {
-  const pull = (number: number, state: string, login: string) => ({
-    number,
-    state,
-    headRepositoryOwner: { login },
+describe("choosePullRequest", () => {
+  const pull = (
+    number: number,
+    state: "OPEN" | "CLOSED" | "MERGED",
+    owner: string,
+    relation: "related" | "unrelated" | "unknown",
+    byOwnName = true,
+  ) => ({
+    ref: { number, url: `https://x/${number}`, state, isDraft: false },
+    owner,
+    relation,
+    byOwnName,
   });
-  test("prefers this repository's own branch, then an open pull request", () => {
+  test("prefers this repository's own branch, then a related head, then open", () => {
     expect(
-      chooseBranchPullRequest(
+      choosePullRequest(
         [
-          pull(3, "CLOSED", "me"),
-          pull(2, "OPEN", "me"),
-          pull(1, "MERGED", "me"),
+          pull(3, "CLOSED", "me", "related"),
+          pull(2, "OPEN", "me", "related"),
+          pull(1, "MERGED", "me", "related"),
         ],
         "Me",
-      )?.number,
+      )?.ref.number,
     ).toBe(2);
     expect(
-      chooseBranchPullRequest(
-        [pull(4, "OPEN", "fork"), pull(3, "MERGED", "me")],
+      choosePullRequest(
+        [
+          pull(4, "OPEN", "fork", "related"),
+          pull(3, "MERGED", "me", "related"),
+        ],
         "me",
-      )?.number,
+      )?.ref.number,
     ).toBe(3);
     expect(
-      chooseBranchPullRequest([pull(5, "CLOSED", "me")], "me")?.number,
+      choosePullRequest(
+        [pull(6, "OPEN", "me", "unknown"), pull(5, "MERGED", "me", "related")],
+        "me",
+      )?.ref.number,
     ).toBe(5);
-    expect(chooseBranchPullRequest([], "me")).toBeUndefined();
+    expect(choosePullRequest([], "me")).toBeUndefined();
   });
-});
-
-describe("pullRequestViewAnswer", () => {
-  test("tells no pull request apart from no answer", () => {
+  test("never shows an older pull request that reused the branch name", () => {
     expect(
-      pullRequestViewAnswer({ exitCode: 0, stdout: "{}", stderr: "" }),
-    ).toBe("{}");
-    expect(
-      pullRequestViewAnswer({
-        exitCode: 1,
-        stdout: "",
-        stderr: 'no pull requests found for branch "work"',
-      }),
-    ).toBeNull();
-    expect(
-      pullRequestViewAnswer({
-        exitCode: 1,
-        stdout: "",
-        stderr: "HTTP 403: API rate limit exceeded",
-      }),
+      choosePullRequest([pull(7, "MERGED", "me", "unrelated")], "me"),
     ).toBeUndefined();
-    expect(pullRequestViewAnswer(undefined)).toBeUndefined();
+  });
+  test("takes an unchecked head only under the branch's own name", () => {
+    // A branch tracking a parent feature branch: the parent's pull request
+    // is listed under the upstream's name, and its head is not here.
+    expect(
+      choosePullRequest([pull(8, "MERGED", "me", "unknown", false)], "me"),
+    ).toBeUndefined();
+    expect(
+      choosePullRequest([pull(8, "MERGED", "me", "unknown", true)], "me")?.ref
+        .number,
+    ).toBe(8);
   });
 });
 
@@ -843,8 +1006,15 @@ describe("keptPullRequest", () => {
         isDraft: false,
       },
     };
-    expect(keptPullRequest(cached, 99)).toEqual({ ...cached, checkedAt: 99 });
-    expect(keptPullRequest(undefined, 99)).toEqual({ checkedAt: 99 });
+    expect(keptPullRequest(cached, 99)).toEqual({
+      ...cached,
+      checkedAt: 99,
+      stale: true,
+    });
+    expect(keptPullRequest(undefined, 99)).toEqual({
+      checkedAt: 99,
+      stale: true,
+    });
   });
 });
 
@@ -874,7 +1044,7 @@ describe("queryBranchPullRequests", () => {
     state: "OPEN",
     headRepositoryOwner: { login: "o" },
   };
-  test("answers each branch, null where there is no pull request", async () => {
+  test("lists each branch's pull requests, empty where there are none", async () => {
     await withFakeGh(
       JSON.stringify({
         data: {
@@ -893,12 +1063,12 @@ describe("queryBranchPullRequests", () => {
           ["one", "two"],
           tmpdir(),
         );
-        expect(answers?.[0] && JSON.parse(answers[0]).number).toBe(3);
-        expect(answers?.[1]).toBeNull();
+        expect(answers?.[0]?.[0]?.number).toBe(3);
+        expect(answers?.[1]).toEqual([]);
       },
     );
   });
-  test("gives up on a fork, a failure or a partial answer, so gh pr view is asked", async () => {
+  test("gives up on a fork, a failure or a partial answer, so gh pr list is asked", async () => {
     const cases: Array<[unknown, number]> = [
       [{ data: { repository: { isFork: true, b0: { nodes: [pull] } } } }, 0],
       [{ errors: [{ message: "rate limited" }] }, 1],
@@ -937,5 +1107,102 @@ describe("gitMetadataFingerprint", () => {
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
+  });
+});
+
+describe("pull request heads against real history", () => {
+  const git = async (path: string, ...args: string[]) => {
+    const result = await runCommand("git", [
+      "-C",
+      path,
+      "-c",
+      "user.name=Daedalus Test",
+      "-c",
+      "user.email=test@daedalus.local",
+      ...args,
+    ]);
+    expect(result.exitCode).toBe(0);
+    return result.stdout.trim();
+  };
+  const commit = async (path: string, file: string) => {
+    await Bun.write(join(path, file), `${file}\n`);
+    await git(path, "add", file);
+    await git(path, "commit", "-qm", file);
+    return git(path, "rev-parse", "HEAD");
+  };
+  const merged = (head: string): PullRequestCandidate => ({
+    ref: { number: 1, url: "https://x/1", state: "MERGED", isDraft: false },
+    headRefOid: head,
+  });
+  // main: A. topic: B, C (the pull request's head). Then a squash merge
+  // lands S on main, which is where `origin/main` points.
+  const fixture = async (
+    run: (path: string, head: string) => Promise<void>,
+  ) => {
+    const path = await mkdtemp(join(tmpdir(), "daedalus-landed-"));
+    try {
+      await createRepository(path);
+      await git(path, "checkout", "-qb", "topic");
+      await commit(path, "b.txt");
+      const head = await commit(path, "c.txt");
+      await git(path, "checkout", "-q", "main");
+      await commit(path, "squash.txt");
+      await git(path, "update-ref", "refs/remotes/origin/main", "HEAD");
+      await git(path, "checkout", "-q", "topic");
+      await run(path, head);
+    } finally {
+      await rm(path, { recursive: true, force: true });
+    }
+  };
+
+  test("a squash-merged head, or HEAD behind it, has landed", async () => {
+    await fixture(async (path, head) => {
+      expect(
+        await pullRequestHeadLanded("git", path, merged(head), "main"),
+      ).toBe(true);
+      await git(path, "checkout", "-q", "HEAD~1");
+      expect(
+        await pullRequestHeadLanded("git", path, merged(head), "main"),
+      ).toBe(true);
+    });
+  });
+  test("the base merged in after the merge still has landed", async () => {
+    await fixture(async (path, head) => {
+      await git(path, "merge", "-q", "--no-edit", "main");
+      expect(
+        await pullRequestHeadLanded("git", path, merged(head), "main"),
+      ).toBe(true);
+    });
+  });
+  test("work committed after the merge has not landed", async () => {
+    await fixture(async (path, head) => {
+      await commit(path, "d.txt");
+      expect(
+        await pullRequestHeadLanded("git", path, merged(head), "main"),
+      ).toBe(false);
+      expect(
+        await pullRequestHeadLanded(
+          "git",
+          path,
+          { ...merged(head), ref: { ...merged(head).ref, state: "OPEN" } },
+          "main",
+        ),
+      ).toBe(false);
+    });
+  });
+  test("tells a head this work holds from an older branch's and a missing one", async () => {
+    await fixture(async (path, head) => {
+      expect(await headRelation("git", path, merged(head))).toBe("related");
+      await git(path, "checkout", "-q", "--orphan", "other");
+      const unrelated = await commit(path, "other.txt");
+      await git(path, "checkout", "-q", "topic");
+      expect(await headRelation("git", path, merged(unrelated))).toBe(
+        "unrelated",
+      );
+      // Not in this clone, and no `origin` to fetch it from.
+      expect(await headRelation("git", path, merged("f".repeat(40)))).toBe(
+        "unknown",
+      );
+    });
   });
 });

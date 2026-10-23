@@ -4,6 +4,7 @@ import type {
   AgentSessionDto,
   DesktopSnapshotDto,
   WorkspaceContentDto,
+  SessionWorktreeDto,
 } from "@daedalus/protocol";
 import { App, MarkdownPreview } from "./App";
 import type { DesktopClient } from "./client-types";
@@ -1085,6 +1086,74 @@ describe("desktop application shell", () => {
       "workspace-worktree-group focused",
     );
     expect(render()).not.toContain("workspace-worktree-group focused");
+  });
+
+  test("shows each working tree's pull request and git indicators under its branch", () => {
+    const render = (worktree: Partial<SessionWorktreeDto>) =>
+      renderToStaticMarkup(
+        <App
+          injectedClient={client}
+          initialSnapshot={demoSnapshot}
+          initialWorkspaceView="board"
+          initialPanelTab="git"
+          initialWorkspaceContent={{
+            ...demoContent,
+            worktrees: demoContent.worktrees.map((item) => ({
+              ...item,
+              ...worktree,
+            })),
+          }}
+        />,
+      );
+    const open = render({
+      gitStatus: {
+        state: "diverged",
+        changedFiles: 0,
+        ahead: 2,
+        behind: 14,
+        unpushed: 2,
+        upstream: "tracking",
+      },
+      pullRequest: {
+        number: 156,
+        url: "https://github.com/o/r/pull/156",
+        state: "OPEN",
+        isDraft: false,
+        checks: "passing",
+        review: "changes_requested",
+      },
+    });
+    expect(open).toContain("workspace-worktree-status");
+    expect(open).toContain("pr-chip state-open");
+    expect(open).toContain("checks-passing");
+    expect(open).toContain("review-changes_requested");
+    expect(open).toContain("↑2");
+    expect(open).toContain("↓14");
+    expect(open).not.toContain("workspace-worktree-group  settled");
+
+    const merged = render({
+      gitStatus: {
+        state: "diverged",
+        changedFiles: 0,
+        ahead: 2,
+        behind: 5,
+        unpushed: 2,
+        upstream: "gone",
+        detached: true,
+      },
+      landed: true,
+      pullRequestStale: true,
+      pullRequest: {
+        number: 148,
+        url: "https://github.com/o/r/pull/148",
+        state: "MERGED",
+        isDraft: false,
+      },
+    });
+    expect(merged).toContain("pr-chip state-merged stale");
+    expect(merged).toContain("settled");
+    expect(merged).toContain("worktree-detached");
+    expect(merged).not.toContain("not pushed");
   });
 
   test("opens the selected task in the center, beside the side panel", () => {

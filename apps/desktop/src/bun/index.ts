@@ -778,6 +778,19 @@ setInterval(() => {
   void context.presence.keepAlive().catch(() => undefined);
 }, 1_200);
 
+// Git status and pull requests are measured on a clock of their own: a
+// commit, a push or a pull request merged on GitHub otherwise waited for
+// something unrelated to ask. Base branches are fetched in the background,
+// each clone at most every ten minutes, so "behind" stays true; the first
+// round waits for startup to settle.
+context.workspaceContent.startGitStatusClock();
+setTimeout(() => {
+  void context.workspaceContent.fetchBaseBranches().catch(() => undefined);
+  setInterval(() => {
+    void context.workspaceContent.fetchBaseBranches().catch(() => undefined);
+  }, 60_000);
+}, 20_000);
+
 let checkingForExternalChanges = false;
 setInterval(async () => {
   if (checkingForExternalChanges) return;

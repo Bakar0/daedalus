@@ -960,6 +960,15 @@ export function createDesktopRequestHandlers(
           await context.workspaceContent.attachRepository(params),
         ),
       ),
+    // Nothing stored changes here; the measurements announce themselves.
+    repositoriesRefresh: () =>
+      result(async () => {
+        void context.workspaceContent
+          .fetchBaseBranches(2 * 60_000)
+          .catch(() => undefined);
+        context.workspaceContent.refreshGitStatusNow();
+        return null;
+      }),
     workspaceRepositoryFetch: ({ id }) =>
       mutate(async () =>
         workspaceRepositoryDto(

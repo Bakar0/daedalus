@@ -241,8 +241,10 @@ export interface GitStatusDto {
   behind: number;
   /** Files the commits ahead of base touch; present only when `ahead > 0`. */
   filesAhead?: number;
-  /** Commits no branch on `origin` holds; present only when `ahead > 0`. */
+  /** Commits not on the branch's upstream, or on no branch of `origin`. */
   unpushed?: number;
+  upstream?: "tracking" | "none" | "gone";
+  detached?: boolean;
 }
 
 /** What one fetch did to one workspace checkout. */
@@ -268,6 +270,8 @@ export interface PullRequestRefDto {
   title?: string;
   /** GitHub's merge time, present once merged. */
   mergedAt?: string;
+  checks?: "passing" | "failing" | "pending";
+  review?: "approved" | "changes_requested" | "review_required";
 }
 
 /** A merged pull request, remembered after its worktree is gone. */
@@ -292,8 +296,10 @@ export interface SessionWorktreeDto {
   gitStatus?: GitStatusDto;
   /** Absent when `gh` is missing, signed out, or found nothing. */
   pullRequest?: PullRequestRefDto;
-  /** The merged pull request holds this tree's HEAD: nothing here to push. */
+  /** The merged pull request holds this tree's work: nothing here to push. */
   landed?: boolean;
+  /** GitHub could not be asked last time; `pullRequest` is the last answer. */
+  pullRequestStale?: boolean;
 }
 
 export interface ChangedFileDto {
@@ -1482,6 +1488,12 @@ export interface DesktopRpcSchema {
         WorkspaceRepositoryDto
       >;
       workspaceRepositorySync: Request<{ id: string }, WorkspaceRepositoryDto>;
+      /**
+       * The window came to the front: base branches not fetched in the last
+       * two minutes are fetched in the background, and every working tree is
+       * looked at again. Answers at once.
+       */
+      repositoriesRefresh: Request<Record<string, never>, null>;
       /** Fetches, and moves the workspace checkout to the fetched tip. */
       workspaceRepositoryFetch: Request<{ id: string }, WorkspaceRepositoryDto>;
       /**

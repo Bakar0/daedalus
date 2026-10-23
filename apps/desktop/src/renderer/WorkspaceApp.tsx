@@ -30,6 +30,7 @@ import type {
   DesktopCommand,
   DesktopSnapshotDto,
   GitStatusDto,
+  PullRequestRefDto,
   RepositoryFetchOutcomeDto,
   IntegratedTerminalDto,
   ProviderModelCatalogDto,
@@ -703,13 +704,18 @@ function repositoryStatusText(
 }
 
 // What a working tree holds, in the order it reads: what is uncommitted here,
-// then whether its commits still need anything. "↑" counts only commits no
-// branch on origin has, which is what is waiting to be pushed. Counting every
-// commit ahead of the base branch showed work that was pushed and merged
-// long ago as if it were still to push.
+// what is waiting to be pushed, and how far the base branch has moved on.
+// Each part is shown only when it is not zero, so a clean tree that is up to
+// date shows nothing and the pull request chip beside it says the rest. "↑"
+// counts commits the branch's upstream lacks; "⇡" is a branch that has no
+// upstream of its own, or whose upstream was deleted. Once the pull request
+// holds the work, neither is shown: after a squash merge those commits are on
+// no remote branch, and calling them unpushed was the panel's oldest lie.
 export function gitStatusParts(
   status: GitStatusDto | undefined,
   landed = false,
+  /** The length of the file list shown under the row, when it is loaded. */
+  changedFiles = status?.changedFiles ?? 0,
 ) {
   if (!status || status.state === "unavailable") return [];
   const parts: Array<{
@@ -718,46 +724,75 @@ export function gitStatusParts(
     text: string;
     title?: string;
   }> = [];
-  if (status.changedFiles)
+  const plural = (count: number, one: string, many = `${one}s`) =>
+    `${count} ${count === 1 ? one : many}`;
+  if (changedFiles)
     parts.push({
       key: "changed",
       tone: "modified",
-      text: `~${status.changedFiles}`,
-      title: `${status.changedFiles} uncommitted ${status.changedFiles === 1 ? "change" : "changes"}`,
+      text: `✎${changedFiles}`,
+      title: `${plural(changedFiles, "uncommitted file")}`,
     });
-  const unpushed = status.unpushed ?? status.ahead;
-  if (landed)
+  if (landed) return parts;
+  const unpushed = status.unpushed ?? 0;
+  if (unpushed > 0 && status.upstream === "tracking")
     parts.push({
-      key: "merged",
-      tone: "merged",
-      text: "merged",
-      title:
-        "Its pull request is merged, so these commits are on the base branch",
+      key: "unpushed",
+      tone: "ahead",
+      text: `↑${unpushed}`,
+      title: `${plural(unpushed, "commit")} not pushed to its branch on origin`,
     });
   else if (unpushed > 0)
     parts.push({
-      key: "ahead",
+      key: "unpublished",
       tone: "ahead",
-      text: `↑${unpushed}`,
-      title: `${unpushed} ${unpushed === 1 ? "commit" : "commits"} not on origin yet`,
+      text: `⇡${unpushed} not pushed`,
+      title:
+        status.upstream === "gone"
+          ? `${plural(unpushed, "commit")} on no branch of origin: the branch it tracked was deleted there`
+          : `${plural(unpushed, "commit")} on no branch of origin: this branch was never pushed`,
     });
-  else if (status.ahead > 0)
-    parts.push({
-      key: "pushed",
-      tone: "clean",
-      text: "pushed",
-      title: `${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} ahead of the base branch, all on origin`,
-    });
-  if (status.behind && !landed)
+  if (status.behind)
     parts.push({
       key: "behind",
       tone: "behind",
       text: `↓${status.behind}`,
-      title: `${status.behind} ${status.behind === 1 ? "commit" : "commits"} on the base branch since this tree branched`,
+      title: `${plural(status.behind, "commit")} on the base branch since this tree branched`,
     });
-  if (parts.length === 0)
-    parts.push({ key: "clean", tone: "clean", text: "clean" });
   return parts;
+}
+
+/** What a pull request chip says, in words for its tooltip and its label. */
+export function pullRequestSummary(pull: PullRequestRefDto, stale = false) {
+  const state =
+    pull.state === "OPEN" && pull.isDraft ? "draft" : pull.state.toLowerCase();
+  const checks =
+    pull.checks === "passing"
+      ? "checks passing"
+      : pull.checks === "failing"
+        ? "checks failing"
+        : pull.checks === "pending"
+          ? "checks running"
+          : undefined;
+  const review =
+    pull.review === "approved"
+      ? "approved"
+      : pull.review === "changes_requested"
+        ? "changes requested"
+        : pull.review === "review_required"
+          ? "review required"
+          : undefined;
+  const title = [
+    `Pull request #${pull.number}${pull.title ? `: ${pull.title}` : ""}`,
+    [state, checks, review].filter(Boolean).join(" · "),
+    ...(stale
+      ? [
+          "Not confirmed: GitHub could not be reached, so this is the last answer",
+        ]
+      : []),
+    "Click to open it on GitHub",
+  ].join("\n");
+  return { state, checks, review, title };
 }
 
 /**
@@ -1035,6 +1070,57 @@ export function worktreeDiscardLabel(
     ...(unpushed > 0 ? [plural(unpushed, "commit")] : []),
   ];
   return parts.length ? `Discard ${parts.join(", ")}` : undefined;
+}
+
+/**
+ * A worktree's pull request: its number and state, coloured as GitHub
+ * colours it, with its checks and review when it is open. Opens it on
+ * GitHub. A chip GitHub could not confirm last time is faded.
+ */
+function PullRequestChip({
+  pull,
+  stale,
+  onOpen,
+}: {
+  pull: PullRequestRefDto;
+  stale: boolean;
+  onOpen: (url: string) => void;
+}) {
+  const summary = pullRequestSummary(pull, stale);
+  return (
+    <button
+      className={`pr-chip state-${summary.state} ${stale ? "stale" : ""}`}
+      onClick={() => onOpen(pull.url)}
+      title={summary.title}
+      type="button"
+    >
+      <svg aria-hidden="true" viewBox="0 0 16 16">
+        <circle cx="4" cy="3.5" r="1.6" />
+        <circle cx="4" cy="12.5" r="1.6" />
+        <circle cx="12" cy="12.5" r="1.6" />
+        <path d="M4 5.1v5.8M12 10.9V6.5a2 2 0 0 0-2-2H7.5M9 3l-1.5 1.5L9 6" />
+      </svg>
+      #{pull.number}
+      <span className="pr-chip-state">{summary.state}</span>
+      {pull.checks && (
+        <span
+          aria-label={summary.checks}
+          className={`pr-chip-checks checks-${pull.checks}`}
+        >
+          {pull.checks === "passing"
+            ? "✓"
+            : pull.checks === "failing"
+              ? "✗"
+              : "●"}
+        </span>
+      )}
+      {(pull.review === "approved" || pull.review === "changes_requested") && (
+        <span className={`pr-chip-review review-${pull.review}`}>
+          {pull.review === "approved" ? "approved" : "changes"}
+        </span>
+      )}
+    </button>
+  );
 }
 
 function Modal({
@@ -2656,6 +2742,20 @@ export function WorkspaceApp({
       document.removeEventListener("visibilitychange", publish);
     };
   }, [activeSessionId, client, workspaceId]);
+  // Coming back to the window is when the user looks at the Repositories
+  // panel again, so the host fetches stale base branches and looks at every
+  // tree then, rather than at its next scheduled pass.
+  useEffect(() => {
+    const refresh = () => {
+      try {
+        void client.request.repositoriesRefresh?.({});
+      } catch {
+        // A refresh is a nicety; the host's own clock still runs.
+      }
+    };
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [client]);
   const runDesktopCommand = useCallback(
     (command: DesktopCommand) => {
       if (command === "view-board") setView("board");
@@ -4505,9 +4605,18 @@ export function WorkspaceApp({
               // The focused session's trees are tinted, so its changes can be
               // told apart from every other session's in a long list.
               const focused = worktree.sessionId === highlightedSessionId;
+              const pullRequest = worktree.pullRequest;
+              const indicators = gitStatusParts(
+                worktree.gitStatus,
+                worktree.landed,
+                changes?.files.length,
+              );
+              // Merged with nothing left here: the row steps back.
+              const settled =
+                worktree.landed === true && indicators.length === 0;
               return (
                 <div
-                  className={`workspace-worktree-group ${focused ? "focused" : ""}`}
+                  className={`workspace-worktree-group ${focused ? "focused" : ""} ${settled ? "settled" : ""}`}
                   key={key}
                 >
                   <div className="workspace-worktree-row">
@@ -4539,47 +4648,17 @@ export function WorkspaceApp({
                           ? sessionName(session)
                           : worktree.sessionId.slice(0, 8)}
                       </strong>
-                      <small title={worktree.path}>{worktree.branchName}</small>
-                    </span>
-                    <span className="workspace-worktree-status">
-                      {worktree.pullRequest && (
-                        <button
-                          className={`pr-chip state-${worktree.pullRequest.isDraft && worktree.pullRequest.state === "OPEN" ? "draft" : worktree.pullRequest.state.toLowerCase()}`}
-                          onClick={() =>
-                            openTerminalLink(worktree.pullRequest!.url)
-                          }
-                          title={`Pull request #${worktree.pullRequest.number}${worktree.pullRequest.title ? `: ${worktree.pullRequest.title}` : ""}\n${worktree.pullRequest.isDraft && worktree.pullRequest.state === "OPEN" ? "Draft" : worktree.pullRequest.state.toLowerCase()} · open on GitHub`}
-                          type="button"
-                        >
-                          <svg aria-hidden="true" viewBox="0 0 16 16">
-                            <circle cx="4" cy="3.5" r="1.6" />
-                            <circle cx="4" cy="12.5" r="1.6" />
-                            <circle cx="12" cy="12.5" r="1.6" />
-                            <path d="M4 5.1v5.8M12 10.9V6.5a2 2 0 0 0-2-2H7.5M9 3l-1.5 1.5L9 6" />
-                          </svg>
-                          #{worktree.pullRequest.number}
-                        </button>
-                      )}
-                      {changes && changes.files.length > 0 && (
-                        <em
-                          className="git-part tone-changes"
-                          title={`${changes.files.length} uncommitted ${changes.files.length === 1 ? "change" : "changes"}, as git status shows them`}
-                        >
-                          {changes.files.length}{" "}
-                          {changes.files.length === 1 ? "file" : "files"}
-                        </em>
-                      )}
-                      {gitStatusParts(worktree.gitStatus, worktree.landed).map(
-                        (part) => (
-                          <em
-                            className={`git-part tone-${part.tone}`}
-                            key={part.key}
-                            title={part.title}
+                      <small title={worktree.path}>
+                        {worktree.gitStatus?.detached && (
+                          <span
+                            className="worktree-detached"
+                            title="HEAD is not on a branch; this is the branch it was last on"
                           >
-                            {part.text}
-                          </em>
-                        ),
-                      )}
+                            detached ·{" "}
+                          </span>
+                        )}
+                        {worktree.branchName}
+                      </small>
                     </span>
                     <button
                       aria-label={`Open ${worktree.branchName} in integrated terminal`}
@@ -4626,6 +4705,26 @@ export function WorkspaceApp({
                       );
                     })()}
                   </div>
+                  {(pullRequest || indicators.length > 0) && (
+                    <div className="workspace-worktree-status">
+                      {pullRequest && (
+                        <PullRequestChip
+                          onOpen={openTerminalLink}
+                          pull={pullRequest}
+                          stale={worktree.pullRequestStale === true}
+                        />
+                      )}
+                      {indicators.map((part) => (
+                        <em
+                          className={`git-part tone-${part.tone}`}
+                          key={part.key}
+                          title={part.title}
+                        >
+                          {part.text}
+                        </em>
+                      ))}
+                    </div>
+                  )}
                   {changes && changes.files.length > 0 && !folded && (
                     <ChangedFileList
                       onOpenDiff={(target, options) =>
@@ -4640,6 +4739,7 @@ export function WorkspaceApp({
                       client={client}
                       count={commitsAhead}
                       landed={worktree.landed === true}
+                      revision={`${changes.base ?? ""}:${worktree.gitStatus?.unpushed ?? ""}:${worktree.gitStatus?.upstream ?? ""}`}
                       onOpenDiff={(target, options) =>
                         openFromPanel({ ...options, diff: target })
                       }

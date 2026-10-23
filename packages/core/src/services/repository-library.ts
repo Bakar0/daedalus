@@ -249,9 +249,20 @@ export function requireReady(
  * of them under each workspace's `repos/`: adding, fetching, attaching,
  * synchronizing and detaching.
  */
+/**
+ * How old a clone's base branch may get before a background fetch brings it
+ * up to date. "Behind" and the merge-base every worktree is compared from
+ * are read from `refs/remotes/origin/<base>`, which otherwise moved only when
+ * someone pressed Fetch or a worktree was created.
+ */
+export const BASE_FETCH_INTERVAL_MS = 10 * 60_000;
+
 export class RepositoryLibrary {
   /** In-flight preparations, so a shutdown or a test can wait for them. */
   private readonly preparations = new Map<string, Promise<void>>();
+  /** When each clone's base branches were last fetched in the background. */
+  private readonly baseFetchedAt = new Map<string, number>();
+  private fetchingBaseBranches?: Promise<void>;
 
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -617,6 +628,95 @@ export class RepositoryLibrary {
     if (options.remeasure ?? true)
       this.gitStatus.remeasureWorkspace(repository.workspaceId);
     return measured;
+  }
+
+  /**
+   * Fetches only the base branch of each shared clone that a session
+   * worktree uses, when it is older than `maxAgeMs`, so "behind" stays true
+   * without anyone pressing Fetch. Only `refs/remotes/origin/<base>` moves:
+   * no other remote branch is pruned or added, and no checkout moves, which
+   * is what Fetch and Pull are for. One clone at a time; a clone that fails
+   * (offline, a fetch already running) is tried again next time. Trees whose
+   * base moved are measured again through their fingerprint.
+   */
+  fetchBaseBranches(maxAgeMs = BASE_FETCH_INTERVAL_MS): Promise<void> {
+    this.fetchingBaseBranches ??= this.fetchStaleBaseBranches(maxAgeMs).finally(
+      () => {
+        this.fetchingBaseBranches = undefined;
+      },
+    );
+    return this.fetchingBaseBranches;
+  }
+
+  private async fetchStaleBaseBranches(maxAgeMs: number): Promise<void> {
+    const git = findExecutable("git");
+    if (!git) return;
+    const used = new Set(
+      this.repositories
+        .listSessionWorktrees({})
+        .map((item) => item.repositoryId),
+    );
+    const clones = new Map<
+      string,
+      { gitDirectory: string; branches: Set<string>; workspaces: Set<string> }
+    >();
+    for (const repository of this.repositories.listWorkspaceRepositories()) {
+      if (
+        repository.status !== "ready" ||
+        !repository.libraryRepositoryId ||
+        !repository.baseBranch ||
+        !used.has(repository.id)
+      )
+        continue;
+      const entry = this.repositories.findRepositoryLibraryEntry(
+        repository.libraryRepositoryId,
+      );
+      if (!entry) continue;
+      const clone = clones.get(entry.id) ?? {
+        gitDirectory: entry.gitDirectory,
+        branches: new Set<string>(),
+        workspaces: new Set<string>(),
+      };
+      clone.branches.add(repository.baseBranch);
+      clone.workspaces.add(repository.workspaceId);
+      clones.set(entry.id, clone);
+    }
+    const moved = new Set<string>();
+    for (const [id, clone] of clones) {
+      if (Date.now() - (this.baseFetchedAt.get(id) ?? 0) < maxAgeMs) continue;
+      this.baseFetchedAt.set(id, Date.now());
+      const branches = [...clone.branches];
+      const heads = async () =>
+        (
+          await runCommand(git, [
+            "--git-dir",
+            clone.gitDirectory,
+            "rev-parse",
+            ...branches.map((branch) => `refs/remotes/origin/${branch}`),
+          ])
+        ).stdout;
+      const before = await heads();
+      const fetched = await runCommand(
+        git,
+        [
+          "--git-dir",
+          clone.gitDirectory,
+          "fetch",
+          "--no-tags",
+          "--no-write-fetch-head",
+          "--quiet",
+          "origin",
+          ...branches.map(
+            (branch) => `+refs/heads/${branch}:refs/remotes/origin/${branch}`,
+          ),
+        ],
+        { env: GIT_NETWORK_ENVIRONMENT },
+      ).catch(() => undefined);
+      if (fetched?.exitCode === 0 && (await heads()) !== before)
+        for (const workspaceId of clone.workspaces) moved.add(workspaceId);
+    }
+    for (const workspaceId of moved)
+      this.gitStatus.scheduleRefresh(workspaceId, false, true);
   }
 
   /**

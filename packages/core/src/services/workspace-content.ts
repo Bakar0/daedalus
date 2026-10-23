@@ -693,6 +693,22 @@ export class WorkspaceContentService {
     return this.gitStatus.close(...args);
   }
 
+  /** Looks at every working tree now, measuring the ones that moved. */
+  refreshGitStatusNow() {
+    return this.gitStatus.scheduleRefresh(null, false, true);
+  }
+
+  /** Starts the git status clock; for the desktop app, never the CLI. */
+  startGitStatusClock() {
+    return this.gitStatus.start();
+  }
+
+  fetchBaseBranches(
+    ...args: Parameters<RepositoryLibrary["fetchBaseBranches"]>
+  ) {
+    return this.library.fetchBaseBranches(...args);
+  }
+
   // RepositoryLibrary
 
   reconcilePreparations(
