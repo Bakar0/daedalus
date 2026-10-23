@@ -1058,9 +1058,13 @@ export class CloudService {
     };
     const ready = async (workspaceId: string) => {
       const chosen = await transport();
-      // A link this process just opened needs a moment for the runner to
-      // answer the Mac coming online.
-      if (chosen instanceof CloudLink)
+      // A link a command just opened needs a moment for the runner to answer
+      // the Mac coming online. The app's link has been up all along, so a
+      // runner that is not linked is asleep or gone, and waiting for it
+      // would hold up every snapshot (each reconciles every cloud host).
+      // Steps that need a runner wait for it themselves (prepareForSession,
+      // wakeForSessions).
+      if (chosen instanceof CloudLink && !this.#holder)
         await chosen.waitForRunner(workspaceId, RUNNER_WAIT_MS);
       return chosen;
     };

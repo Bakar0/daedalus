@@ -827,4 +827,28 @@ describe("cloud RPC", () => {
       else await Bun.write(statePath, before);
     });
   });
+
+  test("in the app, a runner that is not linked costs a snapshot nothing", async () => {
+    await withCloud(async (rpc, context, gateway) => {
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://localhost:8080",
+        email: "dev@example.com",
+      });
+      const workspace = await context.workspaces.create({ name: "Pods" });
+      await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
+      const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
+      // Asleep, so its runner never links; the app holds the link.
+      gateway.workspaces.get(cloudId)!.status = "sleeping";
+      gateway.workspaces.get(cloudId)!.runnerOnline = false;
+      await context.cloud.hold();
+      const host = context.hosts.find(cloudHostId(cloudId))!;
+      let started = Date.now();
+      await expect(host.listLive()).rejects.toThrow("not connected");
+      expect(Date.now() - started).toBeLessThan(2_000);
+      started = Date.now();
+      const snapshot = await rpc.snapshot({});
+      expect(snapshot.ok).toBe(true);
+      expect(Date.now() - started).toBeLessThan(2_000);
+    });
+  });
 });

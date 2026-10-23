@@ -1716,15 +1716,18 @@ export class AgentService {
     // does not answer (its workspace asleep, the Mac offline) settles none of
     // its sessions.
     const cloud = new Map<string, ReadonlySet<string>>();
-    for (const host of this.hosts.cloud()) {
-      // The set is made inside the catch, so a host whose answer cannot be
-      // read settles nothing rather than ending the whole pass.
-      const live = await host
-        .listLive()
-        .then((names) => new Set(names))
-        .catch(() => undefined);
-      if (live) cloud.set(host.id, live);
-    }
+    // All at once: a slow or unreachable host must not hold up the others.
+    await Promise.all(
+      this.hosts.cloud().map(async (host) => {
+        // The set is made inside the catch, so a host whose answer cannot be
+        // read settles nothing rather than ending the whole pass.
+        const live = await host
+          .listLive()
+          .then((names) => new Set(names))
+          .catch(() => undefined);
+        if (live) cloud.set(host.id, live);
+      }),
+    );
     if (!local && cloud.size === 0) return;
     const now = new Date().toISOString();
     const launching = (agent: AgentSession) =>
