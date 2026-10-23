@@ -1,7 +1,8 @@
 /**
  * Moving a session between this Mac and the cloud, in a real browser against
- * `cloud-test.tsx`: the card menu offers Move to cloud on a local Claude
- * session and Move to this Mac on a cloud one; a moving card says so, with
+ * `cloud-test.tsx`: the card's cloud action moves a local Claude session to
+ * the cloud, and is lit on a cloud one, where it moves it back to this Mac
+ * (the menu has no move items); a moving card says so, with
  * Cancel while it waits for the turn; a move back that changed files which
  * steer agents asks first, then sends them as approved.
  *
@@ -27,6 +28,30 @@ const openCardMenu = async (browser: Browser, session: string) => {
   browser.scope = ".menu-popover:popover-open";
 };
 
+const cardAction = (session: string) =>
+  `document.querySelector('[data-session-id="${session}"]').closest('.session-card').querySelector('[data-testid="session-cloud-action"]')`;
+
+const action = (browser: Browser, session: string) =>
+  browser.evaluate<{
+    to: string | null;
+    lit: boolean;
+    disabled: boolean;
+    label: string;
+  } | null>(`(() => {
+    const button = ${cardAction(session)};
+    return button
+      ? {
+          to: button.dataset.moveTo ?? null,
+          lit: button.hasAttribute('data-cloud-lit'),
+          disabled: button.disabled,
+          label: button.getAttribute('aria-label'),
+        }
+      : null;
+  })()`);
+
+const clickAction = (browser: Browser, session: string) =>
+  browser.evaluate(`${cardAction(session)}.click()`);
+
 const moves = async (browser: Browser) =>
   (await browser.requests())
     .filter((one) => "agentMove" in one)
@@ -35,15 +60,21 @@ const moves = async (browser: Browser) =>
 await withBrowser({ port: 41790, page: "cloud-test.html" }, async (browser) => {
   await Bun.sleep(400);
 
-  // A local Claude session moves to the cloud.
+  // A local Claude session moves to the cloud from its card's cloud action.
+  const local = await action(browser, "s-local");
+  expect(
+    local?.to === "cloud" &&
+      !local.lit &&
+      local.label === "Move s-local to cloud",
+    `a local session's cloud action: ${JSON.stringify(local)}`,
+  );
   await openCardMenu(browser, "s-local");
   expect(
-    (await browser.attribute("session-move", "data-move-to")) === "cloud" &&
-      (await browser.text("session-move")) === "Move to cloud",
-    "a local session should offer Move to cloud",
+    !(await browser.has("session-move")),
+    "the card menu still has a move item",
   );
-  await browser.screenshot("cloud-move-menu-local");
-  await browser.click("session-move");
+  browser.scope = "";
+  await clickAction(browser, "s-local");
   await browser.waitFor(
     "window.requests.some((one) => 'agentMove' in one)",
     "the move call",
@@ -53,19 +84,19 @@ await withBrowser({ port: 41790, page: "cloud-test.html" }, async (browser) => {
     `Move to cloud sent ${(await moves(browser))[0]}`,
   );
 
-  // A cloud session moves to this Mac.
-  await openCardMenu(browser, "s-cloud");
+  // A cloud session's action is lit, and moves it back.
+  const cloud = await action(browser, "s-cloud");
   expect(
-    (await browser.attribute("session-move", "data-move-to")) === "local" &&
-      (await browser.text("session-move")) === "Move to this Mac",
-    "a cloud session should offer Move to this Mac",
+    cloud?.to === "local" && cloud.lit && !cloud.disabled,
+    `a cloud session's cloud action: ${JSON.stringify(cloud)}`,
   );
+  await browser.screenshot("cloud-move-actions");
 
-  // One in another cloud account cannot move anywhere from here.
-  await openCardMenu(browser, "s-other");
+  // One in another cloud account is lit but cannot move from here.
+  const other = await action(browser, "s-other");
   expect(
-    !(await browser.has("session-move")),
-    "a session of another cloud account offers a move",
+    other?.lit === true && other.disabled && !other.to,
+    `a session of another cloud account: ${JSON.stringify(other)}`,
   );
 });
 
@@ -74,8 +105,7 @@ await withBrowser(
   { port: 41792, page: "cloud-test.html", query: "move=approval" },
   async (browser) => {
     await Bun.sleep(400);
-    await openCardMenu(browser, "s-cloud");
-    await browser.click("session-move");
+    await clickAction(browser, "s-cloud");
     browser.scope = "";
     await browser.waitFor(
       "[...document.querySelectorAll('.modal button')].some((one) => one.textContent.trim() === 'Move back')",
@@ -119,14 +149,9 @@ await withBrowser(
         )) === "moving to this Mac",
       "the moving card does not say it is moving",
     );
-    await openCardMenu(browser, "s-cloud");
     expect(
-      !(await browser.has("session-move")),
+      (await action(browser, "s-cloud"))?.disabled === true,
       "a moving session offers another move",
-    );
-    browser.scope = "";
-    await browser.evaluate(
-      "document.querySelectorAll('details.menu[open]').forEach((one) => { one.open = false; })",
     );
     await browser.screenshot("cloud-move-waiting");
     await browser.click("session-move-cancel");

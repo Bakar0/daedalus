@@ -880,7 +880,8 @@ button:not(
 .workspace-sessions
   .session-card:is(:hover, :focus-within)
   .session-card-hover-action,
-.workspace-sessions .session-rebirth-action[data-rebirth-requested] {
+.workspace-sessions .session-rebirth-action[data-rebirth-requested],
+.workspace-sessions .session-cloud-action[data-cloud-lit] {
   display: flex !important;
 }
 .workspace-sessions
@@ -8737,4 +8738,37 @@ dd {
 }
 .session-move-notice .routine-bar-text {
   white-space: normal;
+}
+
+/* A session in the cloud keeps its cloud action lit, as a requested rebirth. */
+.session-cloud-action[data-cloud-lit] {
+  color: var(--accent) !important;
+}
+.session-cloud-action svg {
+  display: block;
+  height: 16px;
+  width: 16px;
+}
+/* A lit cloud action always shows, so the title row keeps clear of it, and
+   of the revive button as well when both are there. */
+.workspace-sessions
+  .session-card:has(.session-cloud-action[data-cloud-lit])
+  .session-card-main
+  .session-card-title {
+  padding-right: 50px;
+}
+.workspace-sessions
+  .session-card:has(.session-cloud-action[data-cloud-lit]):has(
+    [aria-label^="Revive"]
+  )
+  .session-card-main
+  .session-card-title {
+  padding-right: 74px;
+}
+.workspace-sessions
+  .session-card:has(.session-cloud-action[data-cloud-lit])
+  .session-card-main
+  .session-card-title
+  > strong {
+  padding-right: 0;
 }

@@ -512,6 +512,25 @@ function RebirthIcon() {
   );
 }
 
+/** A cloud with an arrow up: the session's move to the cloud and back. */
+function CloudActionIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.7"
+      viewBox="0 0 24 24"
+    >
+      <path d="M7 18.5h10a4 4 0 0 0 .6-7.96A5.5 5.5 0 0 0 7 9.2 4.7 4.7 0 0 0 7 18.5Z" />
+      <path d="M12 15.5v-5" />
+      <path d="m9.8 12.6 2.2-2.2 2.2 2.2" />
+    </svg>
+  );
+}
+
 /** A folder: one workspace, beside its name in the left column (#55). */
 /** A page served from this Mac, such as a dev server, for a web tab. */
 export const isLocalWebUrl = (url: string) => {
@@ -3000,6 +3019,49 @@ export function WorkspaceApp({
     return cloudState.data?.signedIn ? "cloud" : undefined;
   };
 
+  /**
+   * The session's cloud action, beside rebirth: a cloud that moves a local
+   * session to the cloud, lit while the session runs there, where a click
+   * moves it back to this Mac.
+   */
+  const cloudActionFor = (session: AgentSessionDto) => {
+    const inCloud = Boolean(session.hostId);
+    if (
+      session.kind !== "agent" ||
+      session.provider !== "claude" ||
+      (!inCloud && !cloudState.data?.signedIn)
+    )
+      return null;
+    const to = moveTarget(session);
+    return (
+      <button
+        aria-label={
+          inCloud
+            ? `Move ${sessionName(session)} to this Mac`
+            : `Move ${sessionName(session)} to cloud`
+        }
+        className="session-card-action session-card-hover-action session-cloud-action"
+        data-cloud-lit={inCloud ? "true" : undefined}
+        data-move-to={to}
+        data-testid="session-cloud-action"
+        disabled={!to || sessionActions.pending(`move:${session.id}`)}
+        onClick={() => to && void moveSession(session, to)}
+        title={
+          moveBySession.has(session.id)
+            ? "Moving…"
+            : inCloud
+              ? to
+                ? "Runs in the cloud. Click to move it back to this Mac, with its changes."
+                : "Runs in the cloud, in a workspace this Mac cannot reach now"
+              : "Move to cloud: carry on with this conversation in the workspace's cloud pod, with its changes"
+        }
+        type="button"
+      >
+        <CloudActionIcon />
+      </button>
+    );
+  };
+
   async function moveSession(
     session: AgentSessionDto,
     to: "cloud" | "local",
@@ -5041,15 +5103,6 @@ export function WorkspaceApp({
                 the live status. What the agent last said is in the tooltip. */}
             <span className="session-card-title">
               <strong>{sessionName(session)}</strong>
-              {session.hostId && (
-                <span
-                  className="session-cloud-badge"
-                  data-testid="session-cloud-badge"
-                  title="Runs in this workspace's cloud pod"
-                >
-                  Cloud
-                </span>
-              )}
               {signInBySession.get(session.id)?.phase === "waiting" && (
                 <span
                   className="session-cloud-signin"
@@ -5230,6 +5283,7 @@ export function WorkspaceApp({
                 <RebirthIcon />
               </button>
             )}
+          {cloudActionFor(session)}
           <ConfirmButton
             aria-label={`Archive ${sessionName(session)} session`}
             armedTitle={
@@ -5271,12 +5325,6 @@ export function WorkspaceApp({
             }
             pinned={Boolean(session.pinnedAt)}
             routines={holdsRoutines}
-            move={(() => {
-              const to = moveTarget(session);
-              return to
-                ? { to, onMove: () => void moveSession(session, to) }
-                : undefined;
-            })()}
           />
         </span>
       </div>

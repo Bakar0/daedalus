@@ -1,6 +1,6 @@
 /**
  * Session cards in a real browser, against `cloud-test.tsx`: the cloud
- * badge, the quiet sleeping state, opening a sleeping session (which wakes
+ * action lit on a cloud session, the quiet sleeping state, opening a sleeping session (which wakes
  * its workspace and revives it through one call), and the unavailable state
  * for a session of another cloud account or while this Mac is signed out,
  * which offers neither wake nor revive.
@@ -27,7 +27,7 @@ const cards = async (browser: Browser) =>
         id: card.querySelector('.session-card-main').dataset.sessionId,
         cloud: card.getAttribute('data-cloud'),
         state: card.getAttribute('data-cloud-state'),
-        badge: Boolean(card.querySelector('[data-testid="session-cloud-badge"]')),
+        badge: Boolean(card.querySelector('[data-testid="session-cloud-action"][data-cloud-lit]')),
         label: card.innerText.replace(/\\s+/g, ' ').trim(),
         revive: Boolean(card.querySelector('[aria-label^="Revive "]')),
       }))`)
@@ -56,12 +56,16 @@ const fits = async (browser: Browser) => {
       const bad = [];
       for (const card of document.querySelectorAll('.session-card[data-cloud]')) {
         const box = card.getBoundingClientRect();
-        const badge = card.querySelector('[data-testid="session-cloud-badge"]').getBoundingClientRect();
-        if (badge.left < box.left - 1 || badge.right > box.right + 1 || badge.top < box.top - 1 || badge.bottom > box.bottom + 1)
-          bad.push('badge outside its card');
+        const action = card.querySelector('[data-testid="session-cloud-action"][data-cloud-lit]')?.getBoundingClientRect();
+        if (action && (action.left < box.left - 1 || action.right > box.right + 1 || action.top < box.top - 1 || action.bottom > box.bottom + 1))
+          bad.push('cloud action outside its card');
         const revive = card.querySelector('[aria-label^="Revive "]')?.getBoundingClientRect();
-        if (revive && badge.right > revive.left + 1 && badge.left < revive.right && badge.bottom > revive.top && badge.top < revive.bottom)
-          bad.push('badge overlaps the revive button');
+        if (action && revive && action.right > revive.left + 1 && action.left < revive.right && action.bottom > revive.top && action.top < revive.bottom)
+          bad.push('cloud action overlaps the revive button');
+        // What the title row shows (its children), not its padded box.
+        const shown = [...(card.querySelector('.session-card-title')?.children ?? [])].map((one) => one.getBoundingClientRect());
+        if (action && shown.some((one) => one.width && one.right > action.left + 1 && one.top < action.bottom && one.bottom > action.top))
+          bad.push('the title runs under the cloud action');
         if (card.scrollWidth > card.clientWidth + 1) bad.push('card overflows sideways');
       }
       if (document.documentElement.scrollWidth > window.innerWidth + 1) bad.push('page scrolls sideways');
