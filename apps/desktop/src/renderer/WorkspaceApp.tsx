@@ -3148,6 +3148,7 @@ export function WorkspaceApp({
       openSession(moved.session.id);
       return;
     }
+    if (moved.status !== "needsApproval") return;
     // Files that steer an agent or run when opened changed in the pod: the
     // user decides before they come to this Mac.
     const yes = await askConfirm({

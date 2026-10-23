@@ -19,7 +19,7 @@ export const cloudHelp = `Cloud workspace commands:
   daedal cloud delete <workspace> --force
   daedal cloud spawn <workspace> [--terminal] [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>]
   daedal cloud spawn <workspace> --team <lead> [--task <task-ref>] [--name <name>] [--model <model>] [--message <instructions>]
-  daedal cloud move <agent-id> --to cloud|local [--approve]
+  daedal cloud move <agent-id> --to cloud|local [--approve] [--repositories <name>,...]
 
 A cloud workspace is a local workspace with a pod of its own on a Daedalus
 gateway: sessions run there, and this Mac keeps the board, the database and
@@ -189,22 +189,28 @@ export async function cloudCommand(
     return 0;
   }
   if (action === "move") {
-    const parsed = parseArguments(args, ["to"], ["approve"]);
+    const parsed = parseArguments(args, ["to", "repositories"], ["approve"]);
     expectPositionals(
       parsed.positionals,
       1,
-      "daedal cloud move <agent-id> --to cloud|local [--approve]",
+      "daedal cloud move <agent-id> --to cloud|local [--approve] [--repositories <name>,...]",
     );
     const to = parsed.values.to;
     if (to !== "cloud" && to !== "local")
       throw new DaedalusError("VALIDATION", "--to is cloud or local");
     const sessionId = (await context.agents.get(parsed.positionals[0]!)).id;
-    let result = await context.moves.move({ sessionId, to });
+    const chosen = parsed.values.repositories
+      ?.split(",")
+      .map((name) => name.trim())
+      .filter(Boolean);
+    const repositories = chosen?.length ? { repositories: chosen } : {};
+    let result = await context.moves.move({ sessionId, to, ...repositories });
     if (result.status === "needsApproval" && parsed.flags.has("approve"))
       result = await context.moves.move({
         sessionId,
         to,
         approved: result.paths,
+        ...repositories,
       });
     if (result.status === "needsApproval") {
       printResult(result, json, () => {
@@ -212,6 +218,17 @@ export async function cloudCommand(
           "These files changed in the cloud and steer an agent or run on open; move again with --approve to take them:",
         );
         for (const path of result.paths) console.log(`  ${path}`);
+      });
+      return 1;
+    }
+    if (result.status === "needsRepositories") {
+      const listed = result.repositories;
+      printResult(result, json, () => {
+        console.log(
+          `This session has more repositories in the cloud than come home at once (at most ${result.maxCount}, ${result.maxBytes} bytes in all); move again with --repositories <name>,... to choose:`,
+        );
+        for (const repository of listed)
+          console.log(`  ${repository.name} (${repository.bytes} bytes)`);
       });
       return 1;
     }

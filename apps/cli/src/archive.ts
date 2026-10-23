@@ -30,6 +30,11 @@ export function archivedOrExplain(
       "CONFLICT",
       `Coming home from the cloud, this session would bring files that steer agents: ${archived.paths.join(", ")}. Look at them, then run 'daedal agent archive ${reference} --approve ${archived.paths.join(",")}'`,
     );
+  if (archived.status === "needsRepositories")
+    throw new DaedalusError(
+      "CONFLICT",
+      `${tooMany(archived)} Choose with 'daedal agent archive ${reference} --repositories <name>,...'`,
+    );
   throw new DaedalusError(
     "CONFLICT",
     `This session cannot come home from the cloud: ${archived.reason}. To archive it with only what this Mac has, leaving the cloud's changes behind, run 'daedal agent archive ${reference} --without-cloud-changes'`,
@@ -47,8 +52,30 @@ export function workspaceArchivedOrExplain(
       "CONFLICT",
       `Cloud session ${archived.sessionId} would bring back files that steer agents: ${archived.paths.join(", ")}. Look at them, archive that session with 'daedal agent archive ${archived.sessionId} --approve ${archived.paths.join(",")}', then archive the workspace again`,
     );
+  if (archived.status === "needsRepositories")
+    throw new DaedalusError(
+      "CONFLICT",
+      `${tooMany(archived)} Archive that session with 'daedal agent archive ${archived.sessionId} --repositories <name>,...', then archive the workspace again`,
+    );
+  if (archived.status === "needsCloudDecision")
+    throw new DaedalusError(
+      "CONFLICT",
+      `Deleting the workspace's cloud copy would lose: ${archived.lost.join("; ")}. Run 'daedal workspace archive ${reference} --delete-cloud-copy' to delete it anyway, or '--keep-cloud-copy' to keep it asleep`,
+    );
   throw new DaedalusError(
     "CONFLICT",
     `Cloud session ${archived.sessionId} cannot come home: ${archived.reason}. To archive the workspace with only what this Mac has, leaving the cloud's changes behind, run 'daedal workspace archive ${reference} --without-cloud-changes'`,
   );
+}
+
+/** Says which repositories wait in the cloud, and the limits. */
+function tooMany(archived: {
+  repositories: { name: string; bytes: number }[];
+  maxCount: number;
+  maxBytes: number;
+}): string {
+  const listed = archived.repositories
+    .map(({ name, bytes }) => `${name} (${Math.ceil(bytes / 1048576)} MB)`)
+    .join(", ");
+  return `More repositories wait in the cloud than come home at once (at most ${archived.maxCount}, ${Math.round(archived.maxBytes / 1048576)} MB in all): ${listed}.`;
 }

@@ -418,6 +418,7 @@ export async function createApplicationContext(
       workspaces,
       moves,
       cloud,
+      hosts,
     }),
     // Watchers are kernel resources held outside the database, so they are
     // released here rather than left to the process exiting.

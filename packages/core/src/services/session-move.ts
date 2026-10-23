@@ -68,9 +68,31 @@ export interface SessionMoveState {
   notice?: string;
 }
 
+/** A repository a session born in the cloud could bring home. */
+export interface HomeRepository {
+  name: string;
+  /** Estimated from its folder in the pod, ignored files and all. */
+  bytes: number;
+}
+
 export type SessionMoveResult =
   | { status: "moved"; session: AgentSession; notice?: string }
-  | { status: "needsApproval"; paths: string[] };
+  | { status: "needsApproval"; paths: string[] }
+  /**
+   * A session born in the cloud has more repositories than come home at
+   * once, or more bytes: choose which, then move again with `repositories`.
+   */
+  | {
+      status: "needsRepositories";
+      repositories: HomeRepository[];
+      maxCount: number;
+      maxBytes: number;
+    };
+
+/** How many repositories a session born in the cloud brings home at most. */
+export const MAX_HOME_REPOSITORIES = 20;
+/** And how many bytes of them in all, as estimated and as bundled. */
+export const MAX_HOME_BYTES = 512 * 1024 * 1024;
 
 /** What the cloud service does for a move; `CloudService` has it. */
 export interface MoveCloud {
@@ -235,6 +257,11 @@ export class SessionMoves {
     sessionId: string;
     to: MoveTarget;
     approved?: string[];
+    /**
+     * For a session born in the cloud: the repositories to bring home, by
+     * the names a `needsRepositories` answer listed.
+     */
+    repositories?: string[];
   }): Promise<SessionMoveResult> {
     const { sessionId, to } = input;
     if (to !== "cloud" && to !== "local")
@@ -257,7 +284,12 @@ export class SessionMoves {
       const result =
         to === "cloud"
           ? await this.#toCloud(sessionId, state)
-          : await this.#toLocal(sessionId, state, input.approved ?? []);
+          : await this.#toLocal(
+              sessionId,
+              state,
+              input.approved ?? [],
+              input.repositories,
+            );
       if (result.status === "moved" && result.notice)
         this.#update(state, {
           phase: "moved",
@@ -435,6 +467,7 @@ export class SessionMoves {
     sessionId: string,
     state: SessionMoveState & { cancel: AbortController },
     approved: string[],
+    chosen?: string[],
   ): Promise<SessionMoveResult> {
     const { repositories, workspaces, agents, cloud } = this.options;
     const agent = this.#movable(await agents.get(sessionId));
@@ -446,7 +479,8 @@ export class SessionMoves {
       );
     const record = await this.#record(sessionId);
     const workspace = await workspaces.getActive(agent.workspaceId);
-    if (!record) return this.#bornHome(agent, workspace, state, approved);
+    if (!record)
+      return this.#bornHome(agent, workspace, state, approved, chosen);
     const worktrees = repositories
       .listSessionWorktrees({ sessionId })
       .map((worktree) => ({
@@ -655,6 +689,7 @@ export class SessionMoves {
     workspace: Workspace,
     state: SessionMoveState & { cancel: AbortController },
     approved: string[],
+    chosen?: string[],
   ): Promise<SessionMoveResult> {
     const { repositories, agents, cloud, content } = this.options;
     if (!content || agent.workingDirectory !== CLOUD_WORKING_DIRECTORY)
@@ -671,10 +706,43 @@ export class SessionMoves {
       );
     const pod = this.#pod(agent.hostId!);
     const attached = repositories.listWorkspaceRepositories(workspace.id);
-    const { found, others } = await this.#podRepositories(
+    const listed = await this.#podRepositories(pod, agent.workingDirectory);
+    let others = listed.others;
+    const sizes = await this.#podSizes(
       pod,
       agent.workingDirectory,
+      listed.found.map(({ name }) => name),
     );
+    const offered: HomeRepository[] = listed.found.map(({ name }) => ({
+      name,
+      bytes: sizes.get(name) ?? 0,
+    }));
+    // The names come back from the window: only ones the pod listed.
+    if (chosen)
+      for (const name of chosen)
+        if (!listed.found.some((item) => item.name === name))
+          throw new DaedalusError(
+            "VALIDATION",
+            "A repository chosen to come home is not one the cloud workspace has",
+          );
+    const found = chosen
+      ? listed.found.filter(({ name }) => chosen.includes(name))
+      : listed.found;
+    if (found.length < listed.found.length) others = true;
+    const estimated = found.reduce(
+      (sum, { name }) => sum + (sizes.get(name) ?? 0),
+      0,
+    );
+    if (found.length > MAX_HOME_REPOSITORIES || estimated > MAX_HOME_BYTES) {
+      this.#moves.delete(sessionId);
+      this.#changed();
+      return {
+        status: "needsRepositories",
+        repositories: offered,
+        maxCount: MAX_HOME_REPOSITORIES,
+        maxBytes: MAX_HOME_BYTES,
+      };
+    }
     const bases = new Map<string, string>();
     for (const { name } of found) {
       const repository = homeRepository(attached, name);
@@ -733,6 +801,7 @@ export class SessionMoves {
         branch: string;
         snapshot: RepositorySnapshot;
       }[] = [];
+      let bundled = 0;
       for (const [index, { name, dir }] of found.entries()) {
         this.#update(state, { detail: `Copying ${name}` });
         const snapshot = await snapshotRepository(pod, dir);
@@ -746,10 +815,11 @@ export class SessionMoves {
             "DEPENDENCY",
             "The cloud workspace wrote no bundle",
           );
-        if (bytes.length > MAX_BUNDLE_BYTES)
+        bundled += bytes.length;
+        if (bytes.length > MAX_BUNDLE_BYTES || bundled > MAX_HOME_BYTES)
           throw new DaedalusError(
             "CONFLICT",
-            `${name}'s bundle is ${bytes.length} bytes; a move carries at most ${MAX_BUNDLE_BYTES}`,
+            `The repositories coming home come to more than ${MAX_HOME_BYTES} bytes; bring fewer of them`,
           );
         const bundle = join(localScratch, `${index}.bundle`);
         await this.#local.writeFile(bundle, bytes);
@@ -865,9 +935,13 @@ export class SessionMoves {
       return {
         status: "moved",
         session: moved,
-        notice: others
-          ? `${MOVED_BACK_NOTICE} ${LEFT_IN_CLOUD_NOTICE}`
-          : MOVED_BACK_NOTICE,
+        notice: [
+          MOVED_BACK_NOTICE,
+          found.length
+            ? `Came home: ${found.map(({ name }) => name).join(", ")}.`
+            : "No git repositories came home.",
+          ...(others ? [LEFT_IN_CLOUD_NOTICE] : []),
+        ].join(" "),
       };
     } catch (error) {
       for (const repository of madeWorktrees)
@@ -913,6 +987,26 @@ export class SessionMoves {
       else others = true;
     }
     return { found, others };
+  }
+
+  /** Each folder's size in the pod, as `du` estimates it. */
+  async #podSizes(
+    pod: PodMoveSide,
+    folder: string,
+    names: string[],
+  ): Promise<Map<string, number>> {
+    const sizes = new Map<string, number>();
+    if (!names.length) return sizes;
+    const result = await pod.run(folder, "du", ["-sk", "--", ...names]);
+    for (const line of result.stdout.split("\n")) {
+      const [kilobytes, name] = line.split("\t");
+      if (name && names.includes(name) && /^\d+$/.test(kilobytes ?? ""))
+        sizes.set(name, Number(kilobytes) * 1024);
+    }
+    // One du could not read counts as too big to guess, not as nothing.
+    for (const name of names)
+      if (!sizes.has(name)) sizes.set(name, MAX_HOME_BYTES + 1);
+    return sizes;
   }
 
   /** The pod's branch, if this Mac would take it as one, else a new name. */

@@ -841,4 +841,43 @@ describe("moving home a session born in the cloud", () => {
       "obey the pod\n",
     );
   });
+
+  test("more repositories than come home at once asks which, and lists what came", async () => {
+    const s = await bornSetup();
+    for (let index = 0; index < 20; index += 1) {
+      const dir = join(s.podRoot, `extra-${index}`);
+      await mkdir(dir);
+      await git(dir, "init", "-q", "-b", "main");
+      await writeFile(join(dir, "x.txt"), `${index}\n`);
+      await git(dir, "add", "-A");
+      await git(dir, "commit", "-q", "-m", "x");
+    }
+    const asked = await s.moves.move({ sessionId: SESSION, to: "local" });
+    expect(asked.status).toBe("needsRepositories");
+    if (asked.status !== "needsRepositories") return;
+    expect(asked.repositories).toHaveLength(22);
+    expect(asked.maxCount).toBe(20);
+    expect(asked.repositories.every((item) => item.bytes > 0)).toBe(true);
+    expect(s.starts).toEqual([]);
+
+    await expect(
+      s.moves.move({
+        sessionId: SESSION,
+        to: "local",
+        repositories: ["app", "../etc"],
+      }),
+    ).rejects.toThrow("not one the cloud workspace has");
+
+    const moved = await s.moves.move({
+      sessionId: SESSION,
+      to: "local",
+      repositories: ["app", "extra-3"],
+    });
+    expect(moved.status).toBe("moved");
+    if (moved.status !== "moved") return;
+    expect(moved.notice).toContain("Came home: app, extra-3.");
+    expect(moved.notice).toContain("stayed in the cloud copy");
+    expect(await exists(join(s.macFolder, "extra-3", "x.txt"))).toBe(true);
+    expect(await exists(join(s.macFolder, "notes"))).toBe(false);
+  });
 });

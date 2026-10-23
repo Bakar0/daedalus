@@ -589,9 +589,20 @@ describe("cloud RPC", () => {
         (await context.workspaces.get(workspace.id)).archivedAt,
       ).toBeNull();
 
+      // Archived without coming home, its conversation is only in the cloud
+      // copy: deleting that is asked about.
+      const lost = await rpc.workspaceArchive({
+        reference: workspace.id,
+        withoutCloudChanges: true,
+      });
+      expect(lost.ok && lost.data.status).toBe("needsCloudDecision");
+      if (!lost.ok || lost.data.status !== "needsCloudDecision") return;
+      expect(lost.data.lost[0]).toMatch(/archived without coming home/);
+      expect(gateway.workspaces.has(cloudId)).toBe(true);
       const archived = await rpc.workspaceArchive({
         reference: workspace.id,
         withoutCloudChanges: true,
+        cloudCopy: "delete",
       });
       expect(archived.ok && archived.data.status).toBe("archived");
       expect(gateway.workspaces.has(cloudId)).toBe(false);

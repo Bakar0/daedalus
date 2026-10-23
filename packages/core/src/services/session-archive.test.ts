@@ -1,10 +1,15 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { runCommand } from "@daedalus/platform";
 import type { AgentSession } from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import type { AgentService } from "./agents";
 import { cloudHostId } from "./cloud-launch";
 import { SessionArchive } from "./session-archive";
+import type { SessionHosts } from "./session-hosts";
 import type { SessionMoveResult, SessionMoves } from "./session-move";
 import type { WorkspaceService } from "./workspaces";
 
@@ -63,7 +68,13 @@ function setup(move: () => Promise<SessionMoveResult>) {
     agents,
     workspaces: {} as WorkspaceService,
     moves,
-    cloud: { delete: async () => {} },
+    cloud: {
+      delete: async () => {},
+      prepareForSession: async () => cloudHostId(CLOUD),
+      sleep: async () => {},
+      get: async () => ({}),
+    },
+    hosts: {} as SessionHosts,
   });
   return { archive, calls, row: () => row };
 }
@@ -127,5 +138,137 @@ describe("archiving a cloud session", () => {
       workingDirectory: MAC_FOLDER,
       status: "lost",
     });
+  });
+});
+
+describe("archiving a workspace with a cloud copy", () => {
+  let pod: string;
+  beforeEach(async () => {
+    pod = await mkdtemp(join(tmpdir(), "daedalus-archive-pod-"));
+  });
+  afterEach(async () => {
+    await rm(pod, { recursive: true, force: true });
+  });
+
+  const git = (cwd: string, ...args: string[]) =>
+    runCommand("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+      cwd,
+    });
+
+  async function repository(name: string, cameHome: boolean) {
+    const dir = join(pod, name);
+    await mkdir(dir, { recursive: true });
+    await git(dir, "init", "-q");
+    await writeFile(join(dir, "f.txt"), "x\n");
+    await git(dir, "add", "-A");
+    await git(dir, "commit", "-q", "-m", "x");
+    if (cameHome)
+      await git(dir, "update-ref", `refs/daedalus/moves/${CLOUD}/last`, "HEAD");
+  }
+
+  function setup(options: { gone?: boolean } = {}) {
+    const calls: string[] = [];
+    let linked = true;
+    let archivedAt: string | null = null;
+    const archive = new SessionArchive({
+      repositories: {
+        cloudWorkspaceId: () => (linked ? CLOUD : undefined),
+        listAgents: () => [
+          {
+            id: "s9",
+            name: "Old\u0007 one",
+            hostId: cloudHostId(CLOUD),
+            archivedAt: "earlier",
+          },
+        ],
+      } as unknown as SqliteRepositories,
+      agents: {} as AgentService,
+      workspaces: {
+        get: async () => ({ id: "w1", archivedAt }),
+        archive: async () => {
+          calls.push("archive workspace");
+          archivedAt = "now";
+          return { id: "w1", archivedAt };
+        },
+      } as unknown as WorkspaceService,
+      moves: {} as SessionMoves,
+      cloud: {
+        delete: async () => {
+          calls.push("delete copy");
+          linked = false;
+        },
+        prepareForSession: async () => cloudHostId(CLOUD),
+        sleep: async () => {
+          calls.push("sleep copy");
+        },
+        get: async () => {
+          if (options.gone)
+            throw new DaedalusError("NOT_FOUND", "gone", {
+              gatewayCode: "NOT_FOUND",
+            });
+          return {};
+        },
+      },
+      hosts: {
+        get: () => ({
+          run: async ({
+            executable,
+            args,
+          }: {
+            executable: string;
+            args: string[];
+          }) => runCommand(executable, args, { cwd: pod }),
+          readFile: async () => undefined,
+          writeFiles: async () => {},
+        }),
+      } as unknown as SessionHosts,
+    });
+    return { archive, calls };
+  }
+
+  test("asks before deleting work nothing brought home, naming it", async () => {
+    await repository("app", true);
+    await repository("scratch", false);
+    await writeFile(join(pod, "notes.txt"), "loose\n");
+    await mkdir(join(pod, ".home"));
+    await mkdir(join(pod, "worktrees"));
+    const s = setup();
+    const asked = await s.archive.archiveWorkspace({ reference: "w1" });
+    expect(asked).toEqual({
+      status: "needsCloudDecision",
+      lost: [
+        'the conversation of "Old? one", archived without coming home',
+        "the repository scratch, which did not come home",
+        "notes.txt outside git in the cloud workspace",
+      ],
+    });
+    expect(s.calls).toEqual([]);
+
+    const kept = await s.archive.archiveWorkspace({
+      reference: "w1",
+      cloudCopy: "keep",
+    });
+    expect(kept.status).toBe("archived");
+    expect(s.calls).toEqual(["sleep copy", "archive workspace"]);
+  });
+
+  test("deletes at once when everything came home, or the copy is gone", async () => {
+    await repository("app", true);
+    const s = setup({ gone: false });
+    // Only the conversation of the session archived without coming home.
+    const asked = await s.archive.archiveWorkspace({ reference: "w1" });
+    expect(asked.status).toBe("needsCloudDecision");
+    const deleted = await s.archive.archiveWorkspace({
+      reference: "w1",
+      cloudCopy: "delete",
+    });
+    expect(deleted.status).toBe("archived");
+    expect(s.calls).toEqual(["delete copy", "archive workspace"]);
+
+    const gone = setup({ gone: true });
+    expect(
+      (await gone.archive.archiveWorkspace({ reference: "w1" })).status,
+    ).toBe("archived");
+    expect(gone.calls).toEqual(["delete copy", "archive workspace"]);
   });
 });

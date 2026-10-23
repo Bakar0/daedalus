@@ -739,12 +739,20 @@ export function createDesktopRequestHandlers(
           workspaceDto(workspace),
         ),
       ),
-    workspaceArchive: ({ reference, approved, withoutCloudChanges }) =>
+    workspaceArchive: ({
+      reference,
+      approved,
+      withoutCloudChanges,
+      repositories,
+      cloudCopy,
+    }) =>
       mutate(async () => {
         const archived = await context.archive.archiveWorkspace({
           reference,
           ...(approved ? { approved } : {}),
           ...(withoutCloudChanges ? { withoutCloudChanges } : {}),
+          ...(repositories ? { repositories } : {}),
+          ...(cloudCopy ? { cloudCopy } : {}),
         });
         return archived.status === "archived"
           ? {
@@ -900,12 +908,13 @@ export function createDesktopRequestHandlers(
       }),
     cloudSessionWake: ({ sessionId }) =>
       mutate(async () => agentDto(await context.cloudSessions.wake(sessionId))),
-    agentMove: ({ sessionId, to, approved }) =>
+    agentMove: ({ sessionId, to, approved, repositories }) =>
       mutate(async () => {
         const moved = await context.moves.move({
           sessionId,
           to,
           ...(approved ? { approved } : {}),
+          ...(repositories ? { repositories } : {}),
         });
         return moved.status === "moved"
           ? {
@@ -1283,16 +1292,27 @@ export function createDesktopRequestHandlers(
       mutate(async () =>
         (await context.agents.reorder(workspace, sessionIds)).map(agentDto),
       ),
-    agentArchive: ({ id, force, approved, withoutCloudChanges }) =>
+    agentArchive: ({
+      id,
+      force,
+      approved,
+      withoutCloudChanges,
+      repositories,
+    }) =>
       mutate(async () => {
         const archived = await context.archive.archiveSession({
           sessionId: id,
           ...(force !== undefined ? { force } : {}),
           ...(approved ? { approved } : {}),
           ...(withoutCloudChanges ? { withoutCloudChanges } : {}),
+          ...(repositories ? { repositories } : {}),
         });
         return archived.status === "archived"
-          ? { status: "archived" as const, session: agentDto(archived.session) }
+          ? {
+              status: "archived" as const,
+              session: agentDto(archived.session),
+              ...(archived.notice ? { notice: archived.notice } : {}),
+            }
           : archived;
       }),
     agentRestore: ({ id }) =>

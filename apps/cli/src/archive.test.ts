@@ -57,4 +57,27 @@ describe("archiving from the CLI", () => {
       ),
     ).toThrow("'daedal workspace archive ops --without-cloud-changes'");
   });
+
+  test("too many repositories and a cloud copy with work name their flags", () => {
+    const tooMany = {
+      status: "needsRepositories" as const,
+      repositories: [{ name: "app", bytes: 3 * 1048576 }],
+      maxCount: 20,
+      maxBytes: 512 * 1048576,
+    };
+    expect(() => archivedOrExplain(tooMany, "s1")).toThrow(
+      "More repositories wait in the cloud than come home at once (at most 20, 512 MB in all): app (3 MB). Choose with 'daedal agent archive s1 --repositories <name>,...'",
+    );
+    expect(() =>
+      workspaceArchivedOrExplain({ ...tooMany, sessionId: "s2" }, "ops"),
+    ).toThrow("'daedal agent archive s2 --repositories <name>,...'");
+    expect(() =>
+      workspaceArchivedOrExplain(
+        { status: "needsCloudDecision", lost: ["notes.txt outside git"] },
+        "ops",
+      ),
+    ).toThrow(
+      "Deleting the workspace's cloud copy would lose: notes.txt outside git. Run 'daedal workspace archive ops --delete-cloud-copy' to delete it anyway, or '--keep-cloud-copy' to keep it asleep",
+    );
+  });
 });

@@ -139,6 +139,18 @@ export type AutoRebirthDto = number | "off" | null;
  * out of a session, early enough that the note is written before the window
  * fills.
  */
+/**
+ * A session born in the cloud has more repositories, or more bytes, than
+ * come home at once. Names and sizes come from the pod: shown as plain
+ * text, and only listed names may be sent back as `repositories`.
+ */
+export interface NeedsRepositoriesDto {
+  status: "needsRepositories";
+  repositories: { name: string; bytes: number }[];
+  maxCount: number;
+  maxBytes: number;
+}
+
 export const DEFAULT_AUTO_REBIRTH_PERCENT = 85;
 
 /**
@@ -1268,9 +1280,15 @@ export interface DesktopRpcSchema {
        * the session keeps running where it was.
        */
       agentMove: Request<
-        { sessionId: string; to: "cloud" | "local"; approved?: string[] },
+        {
+          sessionId: string;
+          to: "cloud" | "local";
+          approved?: string[];
+          repositories?: string[];
+        },
         | { status: "moved"; session: AgentSessionDto; notice?: string }
         | { status: "needsApproval"; paths: string[] }
+        | NeedsRepositoriesDto
       >;
       /** Only while the move waits for the session's turn to end. */
       agentMoveCancel: Request<{ sessionId: string }, null>;
@@ -1376,10 +1394,20 @@ export interface DesktopRpcSchema {
           reference: string;
           approved?: Record<string, string[]>;
           withoutCloudChanges?: boolean;
+          repositories?: Record<string, string[]>;
+          /** What to do with a cloud copy that holds work: see `needsCloudDecision`. */
+          cloudCopy?: "delete" | "keep";
         },
         | { status: "archived"; workspace: WorkspaceDto }
         | { status: "needsApproval"; sessionId: string; paths: string[] }
         | { status: "needsConfirmation"; sessionId: string; reason: string }
+        | (NeedsRepositoriesDto & { sessionId: string })
+        /**
+         * The cloud copy holds work nothing brought home (`lost`, plain
+         * lines from the pod): call again with `cloudCopy` "delete", or
+         * "keep" to archive the workspace and only put the copy to sleep.
+         */
+        | { status: "needsCloudDecision"; lost: string[] }
       >;
       workspaceRestore: Request<{ reference: string }, WorkspaceDto>;
       /** Archived workspaces only; deletes the folder and everything in it. */
@@ -1857,10 +1885,12 @@ export interface DesktopRpcSchema {
           force?: boolean;
           approved?: string[];
           withoutCloudChanges?: boolean;
+          repositories?: string[];
         },
-        | { status: "archived"; session: AgentSessionDto }
+        | { status: "archived"; session: AgentSessionDto; notice?: string }
         | { status: "needsApproval"; paths: string[] }
         | { status: "needsConfirmation"; reason: string }
+        | NeedsRepositoriesDto
       >;
       agentRestore: Request<{ id: string }, AgentSessionDto>;
       /**
