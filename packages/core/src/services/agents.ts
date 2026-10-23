@@ -508,6 +508,32 @@ export class AgentService {
   }
 
   /**
+   * A cloud session read as lost whose tmux session still lives in its pod,
+   * because the sleep it was lost to did not happen: running again, as it
+   * was. Undefined when it is not live there.
+   */
+  async reclaimLiveCloud(id: string): Promise<AgentSession | undefined> {
+    const agent = await this.get(id);
+    if (!agent.hostId || agent.status !== "lost" || agent.archivedAt)
+      return undefined;
+    const live = await this.hosts
+      .get(agent.hostId)
+      .isLive(agent.tmuxSession)
+      .catch(() => false);
+    if (!live) return undefined;
+    const running: AgentSession = {
+      ...agent,
+      status: "running",
+      endedAt: null,
+      exitCode: null,
+      lostReason: null,
+    };
+    this.repositories.updateAgent(running);
+    await this.sessionRunning(running);
+    return running;
+  }
+
+  /**
    * Wakes and resumes a session its cloud workspace's sleep ended, so a
    * message can reach it; anything else comes back as it is.
    */

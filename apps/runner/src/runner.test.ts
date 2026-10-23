@@ -92,6 +92,7 @@ let connects: { url: string; token: string }[];
 let macIdentity: DeviceIdentity;
 let runnerIdentity: DeviceIdentity;
 let sleeps: string[];
+let sleepStatus = 200;
 let backend: FakeBackend;
 let now: number;
 let token = "runner-token";
@@ -106,6 +107,7 @@ beforeEach(async () => {
   runnerIdentity = createIdentity();
   connects = [];
   sleeps = [];
+  sleepStatus = 200;
   now = 1_000_000;
   const socket: RelaySocket = {
     send: (frame) => mac.receive(frame),
@@ -131,7 +133,7 @@ beforeEach(async () => {
       sleeps.push(
         `${init.method} ${url.pathname} ${(init.headers as Record<string, string>).authorization}`,
       );
-      return new Response(null, { status: 200 });
+      return new Response(null, { status: sleepStatus });
     }) as unknown as typeof fetch,
     handshakeRetryMs: 10_000,
   });
@@ -427,14 +429,20 @@ test("typing into a terminal keeps the pod awake; a terminal only open does not"
   expect(sleeps.length).toBe(1);
 });
 
-test("tells the Mac before it asks the gateway to sleep", async () => {
+test("tells the Mac once the gateway took the sleep, and not when it refused", async () => {
   macOnline(true);
   await tick();
+  sleepStatus = 409;
   await runner.tick();
   now += 31 * 60_000;
   await runner.tick();
-  expect(mac.received).toContainEqual({ t: "workspace.sleeping" });
   expect(sleeps.length).toBe(1);
+  expect(mac.received).not.toContainEqual({ t: "workspace.sleeping" });
+  sleepStatus = 200;
+  now += 10 * 60_000;
+  await runner.tick();
+  expect(sleeps.length).toBe(2);
+  expect(mac.received).toContainEqual({ t: "workspace.sleeping" });
 });
 
 test("reconnects with backoff after the gateway drops", async () => {

@@ -2,6 +2,7 @@ import { unlink } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import {
   CloudAccount,
+  CLOUD_SLEEP_REASON,
   cloudHostId,
   createApplicationContext,
   type ApplicationContext,
@@ -697,6 +698,40 @@ describe("cloud RPC", () => {
       );
       expect(host.launches).toHaveLength(launches + 1);
       expect(host.launches.at(-1)!.args).toContain("--resume");
+    });
+  });
+
+  test("a sleep that did not happen: the session is taken back as it runs, not relaunched", async () => {
+    await withCloud(async (rpc, context) => {
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://localhost:8080",
+        email: "dev@example.com",
+      });
+      const workspace = await context.workspaces.create({ name: "Pods" });
+      await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
+      const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
+      const host = new FakeCloudHost(cloudHostId(cloudId));
+      context.hosts.register(host);
+      const spawned = await rpc.agentSpawn({
+        workspace: workspace.id,
+        cloud: true,
+      });
+      if (!spawned.ok) throw new Error("spawn failed");
+      // Read as asleep, but the gateway refused the sleep: the pod and its
+      // Claude still run.
+      const session = await context.agents.get(spawned.data.id);
+      context.repositories.updateAgent({
+        ...session,
+        status: "lost",
+        lostReason: CLOUD_SLEEP_REASON,
+        endedAt: new Date().toISOString(),
+      });
+
+      const sent = await rpc.agentSend({ id: session.id, text: "still here?" });
+      expect(sent.ok).toBe(true);
+      expect((await context.agents.get(session.id)).status).toBe("running");
+      expect(host.launches).toHaveLength(1);
+      expect(host.sent).toEqual(["still here?"]);
     });
   });
 

@@ -1006,6 +1006,19 @@ export class CloudService {
       // Its sessions end with the pod; opening one wakes and resumes it.
       onWorkspaceSleeping: (workspaceId) =>
         this.#endSessions(workspaceId, "lost", CLOUD_SLEEP_REASON),
+      // The gateway drops a runner as it sleeps the pod, often before the
+      // runner can say so: a runner gone from an asleep workspace took its
+      // sessions with it.
+      onRunner: (workspaceId, linked) => {
+        if (linked) return;
+        void (async () => {
+          const current = await (
+            await this.#client()
+          ).getWorkspace(workspaceId);
+          if (current.status === "sleeping")
+            this.#endSessions(workspaceId, "lost", CLOUD_SLEEP_REASON);
+        })().catch(() => undefined);
+      },
       ...(this.options.connect ? { connect: this.options.connect } : {}),
       ...(this.options.log ? { log: this.options.log } : {}),
     });
