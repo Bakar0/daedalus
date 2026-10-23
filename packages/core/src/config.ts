@@ -279,15 +279,51 @@ export function channelHome(channel: string | undefined, home: string): string {
 
 export const STABLE_APP_IDENTIFIER = "dev.daedalus.app";
 
+/** Electrobun's build channels besides stable; see `channelHome`. */
+const NON_STABLE_CHANNELS = ["dev", "canary"];
+
+const homeBasename = (home: string): string =>
+  home
+    .replace(/[/\\]+$/, "")
+    .split(/[/\\]/)
+    .pop()!
+    .toLowerCase();
+
 /**
- * Which channel owns this home: `stable`, or the suffix of a channelled one.
+ * Which channel owns this home: `stable`, or a name unique to the home.
  * Anything a channel writes outside its own home has to be named with this, or
  * two installed builds end up fighting over one record.
+ *
+ * `~/.daedalus` is stable. `~/.daedalus-<name>` is `<name>`, whole: a dev build
+ * run with `DAEDALUS_HOME=~/.daedalus-cloudtest` lands in
+ * `~/.daedalus-cloudtest-dev` (see `channelHome`), and naming that one `dev`
+ * would make it fight the real `~/.daedalus-dev`. Reading it as stable was
+ * worse: it relinked the stable app's skills to its own CLI, so every stable
+ * session's rebirth ran a CLI that did not know the session.
+ *
+ * Any other home is stable only when nothing says a non-stable build made it.
+ * Such a build always ends its home in `-<channel>`, so a home ending in a
+ * build channel's suffix is named after its folder. The rest is a stable
+ * build's chosen home, or an unpackaged run's.
  */
 export function channelName(home: string): string {
-  return (
-    /[/\\]\.daedalus-([a-z0-9]+)$/i.exec(home)?.[1]?.toLowerCase() ?? "stable"
-  );
+  const base = homeBasename(home);
+  if (base === ".daedalus") return "stable";
+  const named = /^\.daedalus-([a-z0-9][a-z0-9-]*)$/.exec(base)?.[1];
+  if (named) return named;
+  const channelled = new RegExp(`-(${NON_STABLE_CHANNELS.join("|")})$`);
+  if (!channelled.test(base)) return "stable";
+  return base.replace(/^\.+/, "").replace(/[^a-z0-9-]+/g, "-");
+}
+
+/**
+ * The channel of the build that owns this home: `stable`, `dev`, and so on.
+ * Unlike `channelName` it does not tell two dev homes apart, because both
+ * belong to the same app.
+ */
+export function buildChannel(home: string): string {
+  const name = channelName(home);
+  return name === "stable" ? name : name.slice(name.lastIndexOf("-") + 1);
 }
 
 /**
@@ -298,10 +334,10 @@ export function channelName(home: string): string {
  * confusion the channels exist to prevent.
  */
 export function channelIdentifier(home: string): string {
-  const match = /[/\\]\.daedalus-([a-z0-9]+)$/i.exec(home);
-  return match
-    ? `${STABLE_APP_IDENTIFIER}.${match[1]!.toLowerCase()}`
-    : STABLE_APP_IDENTIFIER;
+  const channel = buildChannel(home);
+  return channel === "stable"
+    ? STABLE_APP_IDENTIFIER
+    : `${STABLE_APP_IDENTIFIER}.${channel}`;
 }
 
 /** The settings `updateSettings` may change; each is a field of the config. */

@@ -1,7 +1,10 @@
 import { describe, expect, test } from "vitest";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
+  buildChannel,
   channelHome,
+  channelIdentifier,
+  channelName,
   DEFAULT_REMOTE_RELAY,
   loadConfig,
   updateSettings,
@@ -173,5 +176,38 @@ test("keeps non-stable channels out of the stable home", () => {
   // Re-applying the suffix must not stack it.
   expect(channelHome("dev", "/Users/x/.daedalus-dev")).toBe(
     "/Users/x/.daedalus-dev",
+  );
+});
+
+test("names every home other than the stable one apart from the rest", () => {
+  expect(channelName("/Users/x/.daedalus")).toBe("stable");
+  expect(channelName("/Users/x/.daedalus-dev")).toBe("dev");
+  // A dev build run with DAEDALUS_HOME=~/.daedalus-cloudtest. Read as stable,
+  // it took over the stable app's skill links and pointed them at its own CLI.
+  // Read as dev, it would fight the real ~/.daedalus-dev the same way.
+  const cloudtest = channelHome("dev", "/Users/x/.daedalus-cloudtest");
+  expect(channelName(cloudtest)).toBe("cloudtest-dev");
+  expect(channelName("/Users/x/.daedalus-lifecycle-try-dev")).toBe(
+    "lifecycle-try-dev",
+  );
+  expect(channelName("/Users/x/.daedalus-dev/")).toBe("dev");
+  // A dev build pointed somewhere else entirely still ends its home in -dev.
+  expect(channelName("/tmp/scratch/home-dev")).toBe("home-dev");
+  // A stable build's own choice of home, or an unpackaged run's.
+  expect(channelName("/tmp/scratch/home")).toBe("stable");
+});
+
+test("raises the app that owns a home, however that home is named", () => {
+  expect(buildChannel("/Users/x/.daedalus")).toBe("stable");
+  expect(buildChannel("/Users/x/.daedalus-cloudtest-dev")).toBe("dev");
+  expect(channelIdentifier("/Users/x/.daedalus")).toBe("dev.daedalus.app");
+  expect(channelIdentifier("/Users/x/.daedalus-dev")).toBe(
+    "dev.daedalus.app.dev",
+  );
+  expect(channelIdentifier("/Users/x/.daedalus-cloudtest-dev")).toBe(
+    "dev.daedalus.app.dev",
+  );
+  expect(channelIdentifier("/Users/x/.daedalus-canary")).toBe(
+    "dev.daedalus.app.canary",
   );
 });

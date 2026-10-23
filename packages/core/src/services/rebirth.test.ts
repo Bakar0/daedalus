@@ -398,4 +398,80 @@ describe("automatic rebirth", () => {
       ).toEqual([]);
     });
   });
+  test("a request that goes unanswered is made again, once the agent is idle", async () => {
+    await withRebirthContext(async (context, tmux) => {
+      const { workspace, first } = await startedTask(context);
+      await context.workspaces.update(workspace.id, {
+        autoRebirthPercent: 85,
+      });
+      const full = [{ sessionId: first.id, context: { usedPercent: 90 } }];
+      expect(await context.agents.sweepAutoRebirths(full)).toHaveLength(1);
+      expect(tmux.sent).toHaveLength(1);
+      const setActivity = (activity: "working" | "idle" | "needs_input") =>
+        context.repositories.saveAgentActivity({
+          sessionId: first.id,
+          activity,
+          detail: null,
+          since: new Date().toISOString(),
+          observedAt: new Date().toISOString(),
+          source: "hook",
+          notifiedActivity: null,
+          notifiedAt: null,
+        });
+      const requestedAgo = async (minutes: number) =>
+        context.repositories.updateAgent({
+          ...(await context.agents.get(first.id)),
+          rebirthRequestedAt: new Date(
+            Date.now() - minutes * 60_000,
+          ).toISOString(),
+        });
+      // Idle soon after the request: give the line time to land.
+      setActivity("idle");
+      await requestedAgo(5);
+      expect(await context.agents.sweepAutoRebirths(full)).toEqual([]);
+      // Long since, but working, perhaps on its note: leave it be.
+      await requestedAgo(20);
+      setActivity("working");
+      expect(await context.agents.sweepAutoRebirths(full)).toEqual([]);
+      // Asking the user something is the user's moment, not ours.
+      setActivity("needs_input");
+      expect(await context.agents.sweepAutoRebirths(full)).toEqual([]);
+      expect(tmux.sent).toHaveLength(1);
+      // Back at its prompt with the request still standing: the continue
+      // failed or the line was lost, so it is asked again.
+      setActivity("idle");
+      const again = await context.agents.sweepAutoRebirths(full);
+      expect(again.map((item) => item.id)).toEqual([first.id]);
+      expect(tmux.sent).toHaveLength(2);
+      // And the clock starts over, so the next tick does not nag.
+      expect(
+        Date.now() - Date.parse(again[0]!.rebirthRequestedAt!),
+      ).toBeLessThan(60_000);
+      expect(await context.agents.sweepAutoRebirths(full)).toEqual([]);
+    });
+  });
+
+  test("a continue that cannot start a successor takes back its mark", async () => {
+    await withRebirthContext(async (context, tmux) => {
+      const { first } = await startedTask(context);
+      tmux.createSession = async () => {
+        throw new Error("tmux refused");
+      };
+      await expect(
+        context.agents.continueSession({ id: first.id }),
+      ).rejects.toThrow();
+      expect(
+        (await context.agents.get(first.id)).rebirthRequestedAt,
+      ).toBeNull();
+      // A request Daedalus made keeps its time, so the sweep's retry clock
+      // still runs from it rather than asking again on the next tick.
+      const requested = await context.agents.requestRebirth(first.id);
+      await expect(
+        context.agents.continueSession({ id: first.id }),
+      ).rejects.toThrow();
+      expect((await context.agents.get(first.id)).rebirthRequestedAt).toBe(
+        requested.rebirthRequestedAt,
+      );
+    });
+  });
 });

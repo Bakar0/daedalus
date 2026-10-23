@@ -63,6 +63,8 @@ const CODEX_ROLLOUT_FILE =
   /([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.jsonl$/i;
 const CODEX_WRITER_LOCK =
   /^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.lock$/i;
+// How long a rebirth request may go unanswered before it is made again.
+const REBIRTH_RETRY_MS = 15 * 60_000;
 const SESSION_RECOVERY_WINDOW_MS = 60_000;
 const SESSION_RECOVERY_UNIQUENESS_MS = 2_000;
 const PROVIDER_STARTUP_TIMEOUT_MS = 30_000;
@@ -1146,9 +1148,16 @@ export class AgentService {
 
   /**
    * Asks every running session whose context has passed its threshold (see
-   * `autoRebirthThreshold`) to be reborn. Once per session: a request already made stands
+   * `autoRebirthThreshold`) to be reborn. A request already made stands
    * until the successor archives it, so the agent is not nagged every tick
    * while it writes the note.
+   *
+   * A request can still go nowhere: the line was lost, or the agent ran
+   * `daedal agent continue` and it failed. The session then sits at its
+   * prompt with a full context and the mark set, and nothing would ever ask
+   * again. So a request older than `REBIRTH_RETRY_MS` is made again, but only
+   * while the session waits at its prompt; one that is working may be writing
+   * its note, and one asking the user something is the user's.
    */
   async sweepAutoRebirths(
     telemetry: ReadonlyArray<{
@@ -1165,6 +1174,7 @@ export class AgentService {
       telemetry.map((item) => [item.sessionId, item.context?.usedPercent]),
     );
     const requested: AgentSession[] = [];
+    const now = Date.now();
     for (const agent of this.repositories.listAgents()) {
       const threshold = resolveAutoRebirth(
         agent.autoRebirthPercent,
@@ -1179,7 +1189,7 @@ export class AgentService {
         agent.kind !== "agent" ||
         agent.status !== "running" ||
         agent.archivedAt ||
-        agent.rebirthRequestedAt ||
+        (agent.rebirthRequestedAt && !this.rebirthUnanswered(agent, now)) ||
         (agent.provider !== "claude" && agent.provider !== "codex") ||
         // A session running routines drains its runs first, and is reborn
         // under the delivery rule; the routine clock decides.
@@ -1194,6 +1204,14 @@ export class AgentService {
       }
     }
     return requested;
+  }
+
+  /** A rebirth request that has had its time and left the agent idle. */
+  private rebirthUnanswered(agent: AgentSession, now: number): boolean {
+    const requestedAt = Date.parse(agent.rebirthRequestedAt ?? "");
+    if (!(now - requestedAt >= REBIRTH_RETRY_MS)) return false;
+    const activity = this.repositories.findAgentActivity(agent.id)?.activity;
+    return activity === "idle" || activity === "done" || activity === "error";
   }
 
   /**
@@ -1268,6 +1286,16 @@ export class AgentService {
       message: input.message,
       continueFrom: predecessor,
       note: Boolean(note),
+    }).catch(async (error: unknown) => {
+      // No successor, so the mark this call set would claim a rebirth that is
+      // not happening; a request Daedalus made keeps its own time, and the
+      // sweep asks again once that has passed.
+      if (!predecessor.rebirthRequestedAt)
+        this.repositories.updateAgent({
+          ...(await this.get(predecessor.id)),
+          rebirthRequestedAt: null,
+        });
+      throw error;
     });
     // Abilities move with the work, so the routine clock follows the
     // successor, and archiving the predecessor below does not pause them. A

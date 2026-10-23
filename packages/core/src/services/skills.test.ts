@@ -7,12 +7,13 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { pathExists } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { createApplicationContext } from "../index";
 import {
+  ensureSkillLink,
   parseSkillFrontmatter,
   removeMarkedBlock,
   styleBody,
@@ -733,5 +734,60 @@ describe("marked blocks", () => {
   test("cutting a block leaves a file that never had one untouched", () => {
     const markers = { begin: "<!-- a -->", end: "<!-- b -->" };
     expect(removeMarkedBlock("# Mine\n", markers)).toBe("# Mine\n");
+  });
+});
+
+test("a skill link into another live home is not taken over", async () => {
+  await withTemporaryDaedalusHome(async (root) => {
+    const stable = join(root, ".daedalus", "skills", "daedalus-rebirth");
+    const other = join(
+      root,
+      ".daedalus-cloudtest-dev",
+      "skills",
+      "daedalus-rebirth",
+    );
+    await mkdir(stable, { recursive: true });
+    await mkdir(other, { recursive: true });
+    const link = join(root, "claude", "skills", "daedalus-rebirth");
+    await mkdir(dirname(link), { recursive: true });
+    await symlink(stable, link, "dir");
+    // The build that took over the stable app's links in the first place.
+    expect(await ensureSkillLink(link, other)).toBe(false);
+    expect(await readlink(link)).toBe(stable);
+    // The stable app takes its own names back from whoever holds them.
+    await rm(link);
+    await symlink(other, link, "dir");
+    expect(await ensureSkillLink(link, stable, { reclaim: true })).toBe(true);
+    expect(await readlink(link)).toBe(stable);
+    // A home that is gone, such as a renamed one, owns nothing.
+    await rm(join(root, ".daedalus"), { recursive: true });
+    expect(await ensureSkillLink(link, other)).toBe(true);
+    expect(await readlink(link)).toBe(other);
+  });
+});
+
+test("a dev build in a named home keeps off the stable and dev names", async () => {
+  await withTemporaryDaedalusHome(async (root) => {
+    const home = join(root, ".daedalus-cloudtest-dev");
+    const claudeHome = join(root, "claude");
+    const context = await createApplicationContext({
+      env: {
+        DAEDALUS_HOME: home,
+        CLAUDE_CONFIG_DIR: claudeHome,
+        CODEX_HOME: join(root, "codex"),
+        DAEDALUS_AGENTS_HOME: join(root, "agents"),
+        DAEDALUS_CURSOR_HOME: join(root, "cursor"),
+      },
+      reconcile: false,
+    });
+    try {
+      await context.skills.setEnabled("unslop", true, "always");
+      const skills = await readdir(join(claudeHome, "skills"));
+      expect(skills).toContain("unslop-cloudtest-dev");
+      expect(skills).not.toContain("unslop");
+      expect(skills).not.toContain("unslop-dev");
+    } finally {
+      context.close();
+    }
   });
 });
