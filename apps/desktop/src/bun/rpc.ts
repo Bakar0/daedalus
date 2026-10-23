@@ -872,7 +872,7 @@ export function createDesktopRequestHandlers(
       }),
     cloudWorkspaceWake: ({ workspace }) =>
       mutate(async () => {
-        await context.cloud.wake(await context.cloud.linkedCloudId(workspace));
+        await context.cloudSessions.wakeWorkspace(workspace);
         return cloudStateDto(await context.cloud.overview());
       }),
     cloudWorkspaceDelete: ({ workspace, force }) =>
@@ -888,28 +888,7 @@ export function createDesktopRequestHandlers(
         return cloudStateDto(await context.cloud.overview());
       }),
     cloudSessionWake: ({ sessionId }) =>
-      mutate(async () => {
-        const session = await context.agents.get(sessionId);
-        const cloudId = session.hostId
-          ? cloudHostWorkspace(session.hostId)
-          : undefined;
-        if (!cloudId)
-          throw new DaedalusError(
-            "VALIDATION",
-            "This session runs on this Mac, not in a cloud workspace",
-          );
-        if (!context.repositories.workspaceForCloud(cloudId))
-          throw new DaedalusError(
-            "DEPENDENCY",
-            "This session's cloud workspace is not in the cloud account this Mac is signed in to",
-          );
-        if ((await context.cloud.get(cloudId)).status === "sleeping")
-          await context.cloud.wakeForSessions(cloudId);
-        // A session the pod's idle sleep ended may still read as running.
-        if ((await context.agents.get(sessionId)).status !== "lost")
-          await context.agents.reconcile();
-        return agentDto(await context.agents.reviveLost(sessionId));
-      }),
+      mutate(async () => agentDto(await context.cloudSessions.wake(sessionId))),
     agentMove: ({ sessionId, to, approved }) =>
       mutate(async () => {
         const moved = await context.moves.move({

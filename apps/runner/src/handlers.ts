@@ -33,6 +33,7 @@ const RUNNER_OWNED_VARIABLES = new Set([
   "SHELL",
   "BROWSER",
   "XDG_RUNTIME_DIR",
+  "DISABLE_AUTOUPDATER",
 ]);
 
 /** What `sessiond` serves: every Mac method but those the runner answers. */

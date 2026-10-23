@@ -41,6 +41,9 @@ const daemon = new SessionDaemon({
       LANG: "C.UTF-8",
       // Sign-in pages open on the Mac: `daedal open-url`, then a click there.
       BROWSER: RUNNER_PATHS.browser,
+      // Claude's version is the image's; an update in the pod fails (root owns
+      // the install) and says so in every session.
+      DISABLE_AUTOUPDATER: "1",
       ...(runtime ? { XDG_RUNTIME_DIR: runtime } : {}),
     },
   }),

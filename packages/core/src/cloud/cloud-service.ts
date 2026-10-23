@@ -143,6 +143,9 @@ export interface CloudServiceOptions {
   log?: (event: string, fields?: Record<string, unknown>) => void;
 }
 
+/** Why a session the Mac put to sleep with its workspace is lost. */
+export const CLOUD_SLEEP_REASON = "The cloud workspace went to sleep";
+
 /**
  * Cloud workspaces on this Mac: the gateway sign-in, the workspaces made
  * from local ones, and the hosts their sessions run on.
@@ -516,7 +519,7 @@ export class CloudService {
   async sleep(workspaceReference: string): Promise<CloudWorkspace> {
     const workspaceId = await this.#workspaceId(workspaceReference);
     const result = await (await this.#client()).sleepWorkspace(workspaceId);
-    this.#endSessions(workspaceId, "lost", "The cloud workspace went to sleep");
+    this.#endSessions(workspaceId, "lost", CLOUD_SLEEP_REASON);
     return result;
   }
 

@@ -51,21 +51,31 @@ test("host.start resolves cwd, merges secrets into env and owns PATH and HOME", 
   expect(started).toEqual(["daedalus_1"]);
 });
 
-test("the Mac cannot set BROWSER or XDG_RUNTIME_DIR, even when the pod has none", async () => {
+test("the Mac cannot set BROWSER, XDG_RUNTIME_DIR or DISABLE_AUTOUPDATER, even when the pod has none", async () => {
   const handlers = make({
-    baseEnv: { PATH: "/usr/bin", BROWSER: "/usr/local/bin/daedal-browser" },
+    baseEnv: {
+      PATH: "/usr/bin",
+      BROWSER: "/usr/local/bin/daedal-browser",
+      DISABLE_AUTOUPDATER: "1",
+    },
   });
   await handlers["host.start"]({
     session: "daedalus_2",
     cwd: ".",
     executable: "claude",
     args: [],
-    env: { BROWSER: "/tmp/evil", XDG_RUNTIME_DIR: "/tmp/shared", FOO: "1" },
+    env: {
+      BROWSER: "/tmp/evil",
+      XDG_RUNTIME_DIR: "/tmp/shared",
+      DISABLE_AUTOUPDATER: "0",
+      FOO: "1",
+    },
   });
   expect(tmux.launches[0]!.env).toEqual({
     FOO: "1",
     PATH: "/usr/bin",
     BROWSER: "/usr/local/bin/daedal-browser",
+    DISABLE_AUTOUPDATER: "1",
   });
 });
 

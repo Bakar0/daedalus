@@ -429,6 +429,74 @@ describe("cloud RPC", () => {
     });
   });
 
+  test("waking a workspace from its menu resumes the sessions its sleep ended", async () => {
+    await withCloud(async (rpc, context) => {
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://localhost:8080",
+        email: "dev@example.com",
+      });
+      const workspace = await context.workspaces.create({ name: "Pods" });
+      await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
+      const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
+      const host = new FakeCloudHost(cloudHostId(cloudId));
+      context.hosts.register(host);
+      const first = await rpc.agentSpawn({
+        workspace: workspace.id,
+        cloud: true,
+      });
+      const second = await rpc.agentSpawn({
+        workspace: workspace.id,
+        cloud: true,
+      });
+      if (!first.ok || !second.ok) throw new Error("spawn failed");
+
+      await rpc.cloudWorkspaceSleep({ workspace: workspace.id });
+      host.sessions.clear();
+      const woken = await rpc.cloudWorkspaceWake({ workspace: workspace.id });
+      expect(woken.ok).toBe(true);
+      for (const id of [first.data.id, second.data.id])
+        expect((await context.agents.get(id)).status).toBe("running");
+      expect(host.launches).toHaveLength(4);
+      expect(
+        host.launches.slice(2).every((l) => l.args.includes("--resume")),
+      ).toBe(true);
+    });
+  });
+
+  test("opening a session after its workspace woke resumes it", async () => {
+    await withCloud(async (rpc, context, gateway) => {
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://localhost:8080",
+        email: "dev@example.com",
+      });
+      const workspace = await context.workspaces.create({ name: "Pods" });
+      await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
+      const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
+      const host = new FakeCloudHost(cloudHostId(cloudId));
+      context.hosts.register(host);
+      const spawned = await rpc.agentSpawn({
+        workspace: workspace.id,
+        cloud: true,
+      });
+      if (!spawned.ok) throw new Error("spawn failed");
+
+      await rpc.cloudWorkspaceSleep({ workspace: workspace.id });
+      host.sessions.clear();
+      // Woken by something that resumes nothing, as the CLI does.
+      await context.cloud.wake(workspace.id);
+      expect(gateway.workspaces.get(cloudId)!.status).toBe("running");
+      expect((await context.agents.get(spawned.data.id)).status).toBe("lost");
+
+      const opened = await rpc.cloudSessionWake({ sessionId: spawned.data.id });
+      expect(opened.ok && opened.data.status).toBe("running");
+      expect(host.launches.at(-1)!.args).toContain("--resume");
+      // A second open while it runs leaves it as it is.
+      const again = await rpc.cloudSessionWake({ sessionId: spawned.data.id });
+      expect(again.ok && again.data.status).toBe("running");
+      expect(host.launches).toHaveLength(2);
+    });
+  });
+
   test("a session on this Mac is not woken as a cloud one", async () => {
     await withCloud(async (rpc, context) => {
       const workspace = await context.workspaces.create({ name: "Here" });
