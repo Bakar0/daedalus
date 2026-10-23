@@ -36,6 +36,15 @@ export interface CloudOwner {
   userId: string;
 }
 
+/**
+ * Where a workspace lives, and what the user is told about the last change
+ * of place until they dismiss it.
+ */
+export interface WorkspacePlace {
+  place: "mac" | "cloud";
+  notice: string | null;
+}
+
 interface WorkspaceRow {
   id: string;
   slug: string;
@@ -1060,6 +1069,62 @@ export class SqliteRepositories {
 
   deleteAgent(id: string): void {
     this.database.query("DELETE FROM agent_sessions WHERE id = ?").run(id);
+  }
+
+  /** Where a workspace lives; `mac` when nothing moved it. */
+  workspacePlace(workspaceId: string): WorkspacePlace {
+    const row = this.database
+      .query<{ place: string; notice: string | null }, [string]>(
+        "SELECT place, notice FROM workspace_places WHERE workspace_id = ?",
+      )
+      .get(workspaceId);
+    return {
+      place: row?.place === "cloud" ? "cloud" : "mac",
+      notice: row?.notice ?? null,
+    };
+  }
+
+  /** The workspaces that live in the cloud now. */
+  cloudPlacedWorkspaces(): string[] {
+    return this.database
+      .query<{ workspace_id: string }, []>(
+        "SELECT workspace_id FROM workspace_places WHERE place = 'cloud'",
+      )
+      .all()
+      .map((row) => row.workspace_id);
+  }
+
+  /**
+   * Moves a workspace and each of its sessions to their new places in one
+   * transaction: a finished workspace move, or the fallback to the backup.
+   */
+  setWorkspacePlace(
+    workspaceId: string,
+    place: WorkspacePlace,
+    sessions: {
+      id: string;
+      hostId: string | null;
+      workingDirectory: string;
+    }[] = [],
+  ): void {
+    this.transaction(() => {
+      this.database
+        .query(
+          `INSERT INTO workspace_places (workspace_id, place, notice)
+           VALUES (?, ?, ?)
+           ON CONFLICT (workspace_id) DO UPDATE SET place = excluded.place,
+             notice = excluded.notice`,
+        )
+        .run(workspaceId, place.place, place.notice);
+      for (const session of sessions) this.setAgentPlace(session.id, session);
+    });
+  }
+
+  /** Clears the workspace's notice, leaving its place. */
+  dismissWorkspaceNotice(workspaceId: string): void {
+    this.database
+      .query("UPDATE workspace_places SET notice = NULL WHERE workspace_id = ?")
+      .run(workspaceId);
   }
 
   /** The gateway account this Mac is signed in to, as cloud links name it. */
