@@ -765,17 +765,23 @@ export class WorkspaceMoves {
       await mkdir(unpacked, { recursive: true, mode: 0o700 });
       const arrived = await unpackFromPod(this.#local, archive, unpacked);
       const macInstructions = sessionInstructionsTemplate(workspace.path);
+      // Daedalus's own, as the approval left them out: a session born in the
+      // cloud has no copy here to compare with.
+      const own = new Set<string>();
       for (const path of arrived)
         if (
           SESSION_INSTRUCTIONS.test(path) &&
           (await readFile(join(unpacked, path), "utf8")) ===
             podSessionInstructions()
-        )
+        ) {
           await writeFile(join(unpacked, path), macInstructions);
+          own.add(path);
+        }
       for (const path of arrived)
         if (
           steersAgent(path) &&
           !allowed.has(path) &&
+          !own.has(path) &&
           !(await sameFile(join(workspace.path, path), join(unpacked, path)))
         )
           throw new DaedalusError(
