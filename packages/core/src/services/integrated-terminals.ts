@@ -4,6 +4,7 @@ import type { DaedalusConfig } from "../config";
 import type { IntegratedTerminal } from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
+import { IN_CLOUD_MESSAGE } from "./cloud-launch";
 import type { SessionHost } from "./session-host";
 import type { WorkspaceService } from "./workspaces";
 
@@ -68,6 +69,10 @@ export class IntegratedTerminalService {
     const workspace = input.workspace
       ? await this.workspaces.getActive(input.workspace)
       : undefined;
+    // Its folder here is the backup nothing writes while it is in the
+    // cloud; a terminal there is a terminal session in its pod.
+    if (workspace?.place === "cloud")
+      throw new DaedalusError("CONFLICT", IN_CLOUD_MESSAGE);
     const shell =
       findExecutable(process.env.SHELL ?? "") ??
       findExecutable("/bin/zsh") ??
