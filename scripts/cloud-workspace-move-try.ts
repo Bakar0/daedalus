@@ -158,7 +158,6 @@ try {
     const cloudId = repositories.cloudWorkspaceId(workspace.id)!;
     const shell = await rpc.agentSpawn({
       workspace: workspace.id,
-      provider: "claude",
       terminal: true,
     });
     if (!shell.ok) fail(`terminal: ${shell.error.message}`);
