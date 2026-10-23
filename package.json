@@ -40,6 +40,7 @@
     "test:board-ui": "bun run scripts/board-ui-check.ts",
     "test:cloud-settings-ui": "bun run scripts/cloud-settings-ui-check.ts",
     "test:cloud-workspace-ui": "bun run scripts/cloud-workspace-ui-check.ts",
+    "test:cloud-archive-ui": "bun run scripts/cloud-archive-ui-check.ts",
     "test:cloud-move-ui": "bun run scripts/cloud-move-ui-check.ts",
     "test:pins-ui": "bun run scripts/pins-ui-check.ts",
     "test:cloud-dialog-ui": "bun run scripts/cloud-dialog-ui-check.ts",

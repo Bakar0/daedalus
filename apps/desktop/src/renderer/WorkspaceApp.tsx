@@ -4300,16 +4300,62 @@ export function WorkspaceApp({
     archivingStartedAt.current = new Date().toISOString();
     setArchivingSessionIds((current) => new Set(current).add(session.id));
     if (wasActive) setActiveSessionId(undefined);
-    const archived = await sessionActions.run(
-      client.request.agentArchive({ id: session.id, force: false }),
-      session.id,
-    );
+    // A cloud session moves home first; the host may ask about files that
+    // steer agents, or about archiving without the cloud's work.
+    let approved: string[] | undefined;
+    let withoutCloudChanges = false;
+    let archived = false;
+    for (let round = 0; round < 3; round++) {
+      const answer = await sessionActions.run(
+        client.request.agentArchive({
+          id: session.id,
+          force: false,
+          ...(approved ? { approved } : {}),
+          ...(withoutCloudChanges ? { withoutCloudChanges } : {}),
+        }),
+        session.id,
+      );
+      if (!answer) break;
+      if (answer.status === "archived") {
+        archived = true;
+        break;
+      }
+      if (answer.status === "needsApproval") {
+        if (!(await askBringChanges(sessionName(session), answer.paths))) break;
+        approved = answer.paths;
+      } else {
+        if (
+          !(await askArchiveWithoutCloud(sessionName(session), answer.reason))
+        )
+          break;
+        withoutCloudChanges = true;
+      }
+    }
     setArchivingSessionIds((current) => {
       const next = new Set(current);
       next.delete(session.id);
       return next;
     });
     if (!archived && wasActive) setActiveSessionId(session.id);
+  }
+
+  /** Files that steer agents changed in the cloud: bring them, or stop. */
+  function askBringChanges(name: string, paths: string[]) {
+    return askConfirm({
+      title: "Bring these changes to this Mac?",
+      message: `In the cloud, ${name} changed files that steer agents or run when a folder opens:\n\n${paths.map((path) => `• ${path}`).join("\n")}\n\nArchive it with them?`,
+      confirmLabel: "Archive with them",
+    });
+  }
+
+  /** The cloud copy cannot be reached: archive what this Mac has, or stop. */
+  function askArchiveWithoutCloud(name: string, reason: string) {
+    return askConfirm({
+      title: "Archive without the cloud's changes?",
+      message: `${name}'s cloud workspace can't be reached (${reason}). Archiving now keeps only what this Mac has: the session's work in the cloud since it moved there stays in the cloud copy until that is removed.`,
+      confirmLabel: "Archive anyway",
+      danger: true,
+    });
   }
 
   // The button runs the same thing as `/daedalus-rebirth`: a running agent
@@ -4540,9 +4586,35 @@ export function WorkspaceApp({
       setSelectedTaskId(undefined);
       setActiveSessionId(undefined);
     }
-    const archived = await perform(
-      client.request.workspaceArchive({ reference: item.id }),
-    );
+    // Its cloud sessions move home first, each of which may ask; one
+    // "without the cloud's changes" answer covers the whole workspace.
+    const approved: Record<string, string[]> = {};
+    let withoutCloudChanges = false;
+    let archived = false;
+    for (let round = 0; round < 20; round++) {
+      const answer = await perform(
+        client.request.workspaceArchive({
+          reference: item.id,
+          ...(Object.keys(approved).length ? { approved } : {}),
+          ...(withoutCloudChanges ? { withoutCloudChanges } : {}),
+        }),
+      );
+      if (!answer) break;
+      if (answer.status === "archived") {
+        archived = true;
+        break;
+      }
+      const name = sessionsById.get(answer.sessionId)
+        ? sessionName(sessionsById.get(answer.sessionId)!)
+        : "A cloud session";
+      if (answer.status === "needsApproval") {
+        if (!(await askBringChanges(name, answer.paths))) break;
+        approved[answer.sessionId] = answer.paths;
+      } else {
+        if (!(await askArchiveWithoutCloud(name, answer.reason))) break;
+        withoutCloudChanges = true;
+      }
+    }
     setArchivingWorkspaceIds((current) => {
       const next = new Set(current);
       next.delete(item.id);

@@ -23,9 +23,11 @@ const openSession = async (browser: Browser, id: string) => {
 };
 
 /**
- * Waits until an element has been there for a second straight: opening a
- * session redraws its view once while it settles, and an assertion made in
- * between reads the wrong frame.
+ * Waits until an element has been there for a second straight. The first
+ * session opened after the page loads is drawn in the center's loading
+ * placeholder until the lazily loaded editor arrives, then drawn again in
+ * it, so for a moment it is gone. The test page loads fresh every run, so
+ * every run opens its first session.
  */
 const steady = async (browser: Browser, testId: string) => {
   let seen = 0;

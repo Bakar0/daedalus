@@ -6,7 +6,8 @@
  * to another cloud account) and a session in each. Query parameters pick the
  * start: `modal=settings|session`, `signedIn=0`, `holdSignIn=1`,
  * `holdWake=1`, `session=<id>` to open a session's view, `moving=<phase>`
- * for s-cloud moving to this Mac, `move=approval` for a move back that asks.
+ * for s-cloud moving to this Mac, `move=approval` for a move back that asks,
+ * `archive=approval|unreachable` for a cloud session's archive that asks.
  *
  * Every call a click should make is recorded in `window.requests`. The
  * replies carry a token and a runner key the real host never sends, so the
@@ -450,6 +451,54 @@ const client = {
       found.status = "running";
       announce();
       return ok(structuredClone(found));
+    },
+    agentArchive: async (params: {
+      id: string;
+      approved?: string[];
+      withoutCloudChanges?: boolean;
+    }) => {
+      record("agentArchive", params);
+      const found = snapshot.agents.find((item) => item.id === params.id)!;
+      const asks = found.hostId ? query.get("archive") : null;
+      if (asks === "approval" && !params.approved)
+        return ok({
+          status: "needsApproval" as const,
+          paths: [".claude/settings.json"],
+        });
+      if (asks === "unreachable" && !params.withoutCloudChanges)
+        return ok({
+          status: "needsConfirmation" as const,
+          reason: "the pod did not answer",
+        });
+      found.archivedAt = new Date().toISOString();
+      found.status = "exited";
+      announce();
+      return ok({
+        status: "archived" as const,
+        session: structuredClone(found),
+      });
+    },
+    workspaceArchive: async (params: {
+      reference: string;
+      approved?: Record<string, string[]>;
+      withoutCloudChanges?: boolean;
+    }) => {
+      record("workspaceArchive", params);
+      if (query.get("archive") === "unreachable" && !params.withoutCloudChanges)
+        return ok({
+          status: "needsConfirmation" as const,
+          sessionId: "s-cloud",
+          reason: "the pod did not answer",
+        });
+      const found = snapshot.workspaces.find(
+        (item) => item.id === params.reference,
+      )!;
+      found.archivedAt = new Date().toISOString();
+      announce();
+      return ok({
+        status: "archived" as const,
+        workspace: structuredClone(found),
+      });
     },
     agentMove: async (params: {
       sessionId: string;
