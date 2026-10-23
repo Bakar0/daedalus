@@ -652,3 +652,193 @@ describe("move rules", () => {
     expect(safeTranscriptPath("a/b/c/d")).toBe(false);
   });
 });
+
+describe("moving home a session born in the cloud", () => {
+  async function bornSetup() {
+    const workspacePath = join(root, "workspace");
+    const podRoot = join(root, "pod");
+    const macProjects = join(root, "claude", "projects");
+    const canonical = join(root, "canonical-app");
+    await mkdir(canonical, { recursive: true });
+    await mkdir(podRoot, { recursive: true });
+    await git(canonical, "init", "-q", "-b", "main");
+    await writeFile(join(canonical, "a.txt"), "base\n");
+    await git(canonical, "add", "-A");
+    await git(canonical, "commit", "-q", "-m", "base");
+    // The pod's own clone of the attached repository, with work of its own.
+    await git(podRoot, "clone", "-q", canonical, "app");
+    const podApp = join(podRoot, "app");
+    await git(podApp, "checkout", "-q", "-b", "feature-x");
+    await writeFile(join(podApp, "a.txt"), "base\ncloud\n");
+    await git(podApp, "commit", "-q", "-am", "cloud commit");
+    await writeFile(join(podApp, "untracked.txt"), "from the pod\n");
+    // A repository the workspace does not have, and a loose file.
+    const podNotes = join(podRoot, "notes");
+    await mkdir(podNotes);
+    await git(podNotes, "init", "-q", "-b", "main");
+    await writeFile(join(podNotes, "n.md"), "notes\n");
+    await git(podNotes, "add", "-A");
+    await git(podNotes, "commit", "-q", "-m", "notes");
+    await writeFile(join(podRoot, "loose.txt"), "stays\n");
+    const project = join(
+      podRoot,
+      ".home/.claude/projects",
+      claudeProjectKey("/workspace"),
+    );
+    await mkdir(project, { recursive: true });
+    await writeFile(
+      join(project, `${SESSION}.jsonl`),
+      [
+        JSON.stringify({ type: "user", cwd: "/workspace", message: "hi" }),
+        JSON.stringify({ type: "user", cwd: "/workspace/app", message: "a" }),
+      ].join("\n") + "\n",
+    );
+
+    let current = {
+      id: SESSION,
+      workspaceId: "w1",
+      kind: "agent",
+      provider: "claude",
+      status: "running",
+      hostId: cloudHostId(CLOUD),
+      workingDirectory: ".",
+      providerSessionId: SESSION,
+      archivedAt: null,
+      tmuxSession: "daedalus_x",
+    } as unknown as AgentSession;
+    const starts: { hostId: string | null; cwd: string; mode?: string }[] = [];
+    const worktrees: SessionWorktree[] = [];
+    const macFolder = join(
+      workspacePath,
+      "worktrees",
+      "unassigned",
+      "claude-b",
+    );
+    const moves = new SessionMoves({
+      config: {
+        home: join(root, "home"),
+        agents: {},
+      } as unknown as DaedalusConfig,
+      repositories: {
+        listSessionWorktrees: () => [],
+        listWorkspaceRepositories: () => [
+          {
+            id: "r1",
+            name: "app",
+            access: "write",
+            status: "ready",
+            canonicalPath: canonical,
+            baseCommit: null,
+          },
+        ],
+        cloudWorkspaceId: () => CLOUD,
+        findAgent: () => current,
+      } as unknown as SqliteRepositories,
+      workspaces: {
+        getActive: async () => ({ id: "w1", path: workspacePath }),
+      } as unknown as WorkspaceService,
+      agents: {
+        get: async () => current,
+        stopForMove: async () => (current = { ...current, status: "exited" }),
+        resumeAfterMove: async (agent: AgentSession, mode?: string) => {
+          starts.push({
+            hostId: agent.hostId ?? null,
+            cwd: agent.workingDirectory,
+            ...(mode ? { mode } : {}),
+          });
+          current = { ...agent, status: "running" };
+          return current;
+        },
+        claudeProjectsDirectory: () => macProjects,
+      } as unknown as AgentService,
+      hosts: { get: () => fakePod(podRoot) } as unknown as SessionHosts,
+      cloud: { prepareForSession: async () => cloudHostId(CLOUD) },
+      content: {
+        prepareSession: async () => {
+          await mkdir(macFolder, { recursive: true });
+          return { workingDirectory: macFolder };
+        },
+        createSessionWorktree: async ({ branch, folder }) => {
+          const path = join(folder!, "app");
+          await git(canonical, "worktree", "add", "-q", "-b", branch!, path);
+          const worktree: SessionWorktree = {
+            sessionId: SESSION,
+            repositoryId: "r1",
+            path,
+            branchName: branch!,
+            createdAt: new Date().toISOString(),
+          };
+          worktrees.push(worktree);
+          return worktree;
+        },
+        removeSessionWorktree: async () => worktrees[0]!,
+      },
+      activity: async () => "idle",
+      pollMs: 5,
+      turnTimeoutMs: 2_000,
+      podRoot,
+    });
+    return { moves, starts, worktrees, macFolder, macProjects, podRoot };
+  }
+
+  test("brings its conversation and git repositories, and leaves the pod its copies", async () => {
+    const s = await bornSetup();
+    const moved = await s.moves.move({ sessionId: SESSION, to: "local" });
+    expect(moved.status).toBe("moved");
+    if (moved.status !== "moved") return;
+    expect(moved.notice).toContain(
+      "Files outside its git repositories stayed in the cloud copy.",
+    );
+    expect(s.starts).toEqual([
+      { hostId: null, cwd: s.macFolder, mode: "default" },
+    ]);
+
+    // The attached repository is a session worktree on the pod's branch.
+    const app = join(s.macFolder, "app");
+    expect(s.worktrees.map((w) => w.branchName)).toEqual(["feature-x"]);
+    expect(await git(app, "branch", "--show-current")).toBe("feature-x");
+    expect(await git(app, "log", "-1", "--format=%s")).toBe("cloud commit");
+    expect(await readFile(join(app, "untracked.txt"), "utf8")).toBe(
+      "from the pod\n",
+    );
+    // Any other repository is a folder of its own.
+    const notes = join(s.macFolder, "notes");
+    expect(await git(notes, "log", "-1", "--format=%s")).toBe("notes");
+    expect(await exists(join(s.macFolder, "loose.txt"))).toBe(false);
+
+    const transcript = await readFile(
+      join(s.macProjects, claudeProjectKey(s.macFolder), `${SESSION}.jsonl`),
+      "utf8",
+    );
+    expect(transcript).toContain(`"cwd":"${s.macFolder}"`);
+    expect(transcript).toContain(`"cwd":"${s.macFolder}/app"`);
+    expect(transcript).not.toContain(`"cwd":"/workspace`);
+
+    // A copy: the pod keeps its repositories for other cloud sessions.
+    expect(await exists(join(s.podRoot, "app", "untracked.txt"))).toBe(true);
+    expect(await exists(join(s.podRoot, "notes", "n.md"))).toBe(true);
+  });
+
+  test("asks about files that steer an agent, measured from this Mac's copy", async () => {
+    const s = await bornSetup();
+    await writeFile(join(s.podRoot, "app", "CLAUDE.md"), "obey the pod\n");
+    await writeFile(join(s.podRoot, "notes", "AGENTS.md"), "and this\n");
+    const asked = await s.moves.move({ sessionId: SESSION, to: "local" });
+    expect(asked).toEqual({
+      status: "needsApproval",
+      paths: ["app/CLAUDE.md", "notes/AGENTS.md"],
+    });
+    expect(s.starts).toEqual([]);
+    expect(await exists(s.macFolder)).toBe(false);
+
+    const moved = await s.moves.move({
+      sessionId: SESSION,
+      to: "local",
+      approved: ["app/CLAUDE.md", "notes/AGENTS.md"],
+    });
+    expect(moved.status).toBe("moved");
+    expect(await readFile(join(s.macFolder, "app", "CLAUDE.md"), "utf8")).toBe(
+      "obey the pod\n",
+    );
+  });
+});
