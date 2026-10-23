@@ -31,6 +31,7 @@ import {
   cloudHostWorkspace,
 } from "../services/cloud-launch";
 import { defaultVault, RemoteStore } from "../services/remote-store";
+import type { SessionHost } from "../services/session-host";
 import type { SessionHosts } from "../services/session-hosts";
 import type { WorkspaceService } from "../services/workspaces";
 import { BrokerTransport, brokerAvailable, serveBroker } from "./broker";
@@ -358,6 +359,21 @@ export class CloudService {
         );
       await Bun.sleep(1_000);
     }
+  }
+
+  /**
+   * The host of a local workspace's cloud copy while its runner can take
+   * calls, by the same test as `#waitForRunner`; undefined when asleep or
+   * unlinked. Never wakes it: browsing files must not start a pod.
+   */
+  async awakeHost(workspaceId: string): Promise<SessionHost | undefined> {
+    const cloudId = this.options.repositories.cloudWorkspaceId(workspaceId);
+    if (!cloudId) return undefined;
+    const online = this.#link
+      ? this.#link.linked(cloudId)
+      : (await (await this.#client()).getWorkspace(cloudId).catch(() => null))
+          ?.runnerOnline;
+    return online ? this.options.hosts.find(cloudHostId(cloudId)) : undefined;
   }
 
   /** Workspaces whose cloud copy is being made or woken for a session. */

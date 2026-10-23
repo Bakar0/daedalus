@@ -16,8 +16,16 @@ import { sha256 } from "./move-transcript";
 
 /** Folders at the root that are never workspace content. */
 const MAC_OWNED = new Set([".daedalus"]);
-/** In the pod's root too: Claude's home and a move's scratch. */
-const POD_OWNED = new Set([".daedalus", ".home", ".daedalus-move"]);
+/**
+ * In the pod's root too: Claude's home, a move's scratch and the explorer's
+ * trash, which a move home leaves behind.
+ */
+const POD_OWNED = new Set([
+  ".daedalus",
+  ".home",
+  ".daedalus-move",
+  ".daedalus-trash",
+]);
 
 /** One regular file, by its path relative to the workspace folder. */
 export interface WorkspaceFile {
