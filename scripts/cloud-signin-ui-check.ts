@@ -22,6 +22,20 @@ const openSession = async (browser: Browser, id: string) => {
   await Bun.sleep(300);
 };
 
+/**
+ * Waits until an element has been there for a second straight: opening a
+ * session redraws its view once while it settles, and an assertion made in
+ * between reads the wrong frame.
+ */
+const steady = async (browser: Browser, testId: string) => {
+  let seen = 0;
+  for (let tries = 0; tries < 50 && seen < 5; tries++) {
+    seen = (await browser.has(testId)) ? seen + 1 : 0;
+    await Bun.sleep(200);
+  }
+  expect(seen >= 5, `${testId} never held still`);
+};
+
 const fits = async (browser: Browser, testId: string) => {
   for (const height of [820, 560]) {
     await browser.resize(height);
@@ -96,6 +110,7 @@ await withBrowser(
       "document.querySelector('[data-testid=\"cloud-signin-bar\"]')",
       "the sign-in bar",
     );
+    await steady(browser, "cloud-signin-bar");
     expect(
       (await browser.attribute("cloud-signin-bar", "data-kind")) === "claude",
       "the bar is not marked as a Claude sign-in",
@@ -163,6 +178,7 @@ await withBrowser(
       "document.querySelector('[data-testid=\"cloud-signin-bar\"]')",
       "the sign-in bar",
     );
+    await steady(browser, "cloud-signin-bar");
     expect(
       (await browser.attribute("cloud-signin-bar", "data-kind")) === "aws" &&
         (await browser.text("cloud-signin-host")) ===
@@ -199,6 +215,7 @@ await withBrowser(
       "document.querySelector('[data-testid=\"cloud-signin-paste\"]')",
       "the paste-code bar",
     );
+    await steady(browser, "cloud-signin-paste");
     expect(
       (await browser.text("cloud-signin-paste")).includes("claude.com") &&
         !(await browser.has("cloud-signin-bar")),
