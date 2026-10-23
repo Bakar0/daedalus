@@ -108,8 +108,8 @@ export class SessionArchive {
       repositories.updateAgent(archived);
       return archived;
     }
-    repositories.updateAgent({
-      ...ended,
+    repositories.updateAgent(ended);
+    repositories.setAgentPlace(agent.id, {
       hostId: null,
       workingDirectory: folder,
     });
