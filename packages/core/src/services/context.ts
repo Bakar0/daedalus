@@ -35,6 +35,7 @@ import { claudeSyncSeeder } from "../cloud/claude-sync-seeder";
 import { CloudService, type CloudServiceOptions } from "../cloud/cloud-service";
 import { CLOUD_LAUNCH_SECRETS } from "./cloud-launch";
 import { WorkspaceMoves } from "./workspace-move";
+import { CloudWorktrees } from "./cloud-worktrees";
 import { CloudSessions } from "../cloud/cloud-sessions";
 import { SessionArchive } from "./session-archive";
 import { LocalSessionHost } from "./session-host";
@@ -367,6 +368,9 @@ export async function createApplicationContext(
     await activity.restore();
     await activity.decay();
   }
+  workspaceContent.useCloudWorktrees(
+    new CloudWorktrees({ config, repositories, workspaces, hosts }),
+  );
   const workspaceMoves = new WorkspaceMoves({
     config,
     repositories,

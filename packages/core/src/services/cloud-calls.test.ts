@@ -83,9 +83,68 @@ describe("cloud daedal calls", () => {
       ["secret", "get", "TOKEN"],
       ["repo", "add", "/Users/me/private"],
       ["workspace", "list"],
-      ["agent", "continue"],
+      ["workspace", "move", LOCAL, "--to", "mac"],
     ])
       expect(decide(argv)).toMatchObject({ allowed: false });
+  });
+
+  test("a session's own worktrees and rebirth, never another's", () => {
+    expect(
+      decide([
+        "repo",
+        "worktree",
+        "create",
+        "--repository",
+        "api",
+        "--branch",
+        "fix/x",
+      ]),
+    ).toMatchObject({
+      allowed: true,
+      argv: [
+        "repo",
+        "worktree",
+        "create",
+        "--repository",
+        "api",
+        "--branch",
+        "fix/x",
+        "--session",
+        SESSION,
+      ],
+    });
+    expect(
+      decide([
+        "repo",
+        "worktree",
+        "push",
+        "--session",
+        SESSION,
+        "--repository",
+        "api",
+      ]),
+    ).toMatchObject({ allowed: true });
+    for (const argv of [
+      [
+        "repo",
+        "worktree",
+        "push",
+        "--session",
+        LOCAL_SESSION,
+        "--repository",
+        "api",
+      ],
+      ["repo", "worktree", "open", "--session", SESSION, "--repository", "api"],
+      ["repo", "worktree", "create", "--repository", "api", "--path", "/tmp"],
+      ["agent", "continue", LOCAL_SESSION],
+      ["agent", "continue", "--note-file", "/etc/passwd"],
+      ["agent", "continue", "--provider", "codex"],
+    ])
+      expect(decide(argv)).toMatchObject({ allowed: false });
+    expect(decide(["agent", "continue", "--note-file", "-"])).toMatchObject({
+      allowed: true,
+      sessionId: SESSION,
+    });
   });
 
   test("refuses a session on another host or this Mac", () => {

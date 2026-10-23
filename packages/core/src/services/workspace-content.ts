@@ -29,6 +29,7 @@ import {
   gitMeasure,
   type GitMeasure,
 } from "./git-status-monitor";
+import type { CloudWorktrees } from "./cloud-worktrees";
 import { RepositoryLibrary, pathSegment } from "./repository-library";
 import { SessionWorktrees } from "./session-worktrees";
 import { WorkspaceFiles } from "./workspace-files";
@@ -408,6 +409,7 @@ export class WorkspaceContentService {
   private readonly gitStatus: GitStatusMonitor;
   private readonly library: RepositoryLibrary;
   private readonly worktrees: SessionWorktrees;
+  private cloudWorktrees: CloudWorktrees | undefined;
 
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -754,16 +756,56 @@ export class WorkspaceContentService {
 
   // SessionWorktrees
 
-  createSessionWorktree(
-    ...args: Parameters<SessionWorktrees["createSessionWorktree"]>
-  ) {
-    return this.worktrees.createSessionWorktree(...args);
+  /**
+   * Set by the context: a session in the cloud has its worktrees in its
+   * pod, where `cloud` makes, pushes and removes them.
+   */
+  useCloudWorktrees(cloud: CloudWorktrees): void {
+    this.cloudWorktrees = cloud;
   }
 
-  pushSessionWorktree(
+  async createSessionWorktree(
+    ...args: Parameters<SessionWorktrees["createSessionWorktree"]>
+  ) {
+    const [input] = args;
+    const placed = this.#inCloud(input.session, input.repository);
+    if (!placed) return this.worktrees.createSessionWorktree(...args);
+    const { session, repository, worktree, cloud } = placed;
+    const branch = input.branch?.trim();
+    if (worktree) {
+      if (branch && branch !== worktree.branchName)
+        throw new DaedalusError(
+          "CONFLICT",
+          `This session already has a worktree for ${repository.name} on branch '${worktree.branchName}'. Leave out --branch to get it.`,
+        );
+      return worktree;
+    }
+    if (session.kind !== "agent")
+      throw new DaedalusError(
+        "CONFLICT",
+        "Repository worktrees can only be created for agent sessions",
+      );
+    if (!branch)
+      throw new DaedalusError(
+        "VALIDATION",
+        "--branch <name> is required. Name the branch for the change, for example fix/login-timeout, and follow the repository's branch naming convention if its AGENTS.md or CLAUDE.md sets one.",
+      );
+    return cloud.create({ session, repository, branch });
+  }
+
+  async pushSessionWorktree(
     ...args: Parameters<SessionWorktrees["pushSessionWorktree"]>
   ) {
-    return this.worktrees.pushSessionWorktree(...args);
+    const [input] = args;
+    const placed = this.#inCloud(input.session, input.repository);
+    if (!placed) return this.worktrees.pushSessionWorktree(...args);
+    const { session, repository, worktree, cloud } = placed;
+    if (!worktree)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Session '${session.id}' has no ${repository.name} working tree`,
+      );
+    return cloud.push({ session, repository, worktree });
   }
 
   openSessionWorktree(
@@ -772,10 +814,42 @@ export class WorkspaceContentService {
     return this.worktrees.openSessionWorktree(...args);
   }
 
-  removeSessionWorktree(
+  async removeSessionWorktree(
     ...args: Parameters<SessionWorktrees["removeSessionWorktree"]>
   ) {
-    return this.worktrees.removeSessionWorktree(...args);
+    const [input] = args;
+    const placed = this.#inCloud(input.session, input.repository);
+    if (!placed) return this.worktrees.removeSessionWorktree(...args);
+    const { session, repository, worktree, cloud } = placed;
+    if (!worktree)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Session '${session.id}' has no ${repository.name} working tree`,
+      );
+    return cloud.remove({
+      session,
+      repository,
+      worktree,
+      ...(input.force ? { force: true } : {}),
+    });
+  }
+
+  /** A cloud session's repository and worktree, or undefined for this Mac's. */
+  #inCloud(sessionId: string, reference: string) {
+    const session = this.repositories.findAgent(sessionId);
+    if (!session?.hostId || !this.cloudWorktrees) return undefined;
+    const repository = this.repositories
+      .listWorkspaceRepositories(session.workspaceId)
+      .find((item) => item.id === reference || item.name === reference);
+    if (!repository)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Repository '${reference}' is not attached to this session's workspace`,
+      );
+    const worktree = this.repositories
+      .listSessionWorktrees({ sessionId: session.id })
+      .find((item) => item.repositoryId === repository.id);
+    return { session, repository, worktree, cloud: this.cloudWorktrees };
   }
 
   releaseSessionWorktrees(

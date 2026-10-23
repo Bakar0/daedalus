@@ -12,6 +12,7 @@ import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import type { AgentService } from "./agents";
 import { podSessionInstructions } from "./cloud-folder";
+import { podLibrary } from "./cloud-worktrees";
 import { cloudHostWorkspace } from "./cloud-launch";
 import {
   applySnapshot,
@@ -1380,10 +1381,6 @@ const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const SESSION_INSTRUCTIONS = /^worktrees\/[^/]+\/[^/]+\/AGENTS\.md$/;
 /** The workspace's metadata, which the pod gets but never sends back. */
 const WORKSPACE_METADATA = ".daedalus/workspace.json";
-
-/** The pod's bare library for an attached repository. */
-const podLibrary = (repository: WorkspaceRepository): string =>
-  `.daedalus/library/${repository.id}.git`;
 
 const referenceKey = (repository: WorkspaceRepository): string =>
   `ref-${repository.id}`;

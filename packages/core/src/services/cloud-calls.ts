@@ -94,6 +94,30 @@ const ALLOWED: Record<string, Spec> = {
     positionals: { min: 0, max: 0 },
   },
   "agent get": { positionals: { min: 1, max: 1 } },
+  // The session's own worktrees, made in its pod; pushed from this Mac.
+  "repo worktree create": {
+    values: [SESSION_FLAG, "repository", "branch"],
+    positionals: { min: 0, max: 0 },
+  },
+  "repo worktree push": {
+    values: [SESSION_FLAG, "repository"],
+    positionals: { min: 0, max: 0 },
+  },
+  "repo worktree remove": {
+    values: [SESSION_FLAG, "repository"],
+    flags: ["force"],
+    positionals: { min: 0, max: 0 },
+  },
+  "repo worktree list": {
+    values: [SESSION_FLAG],
+    positionals: { min: 0, max: 0 },
+  },
+  // Its own rebirth, its note read from standard input.
+  "agent continue": {
+    values: ["note-file", "model", "message"],
+    flags: ["self"],
+    positionals: { min: 0, max: 1 },
+  },
   // The pod's BROWSER. Never run as a command: see `CloudCallOptions.openUrl`.
   "open-url": { positionals: { min: 1, max: 1 } },
 };
@@ -174,9 +198,11 @@ export function decideCall(
   const argv = call.argv.filter((argument) => argument !== "--json");
   const json = argv.length !== call.argv.length;
   const command =
-    argv[0] === "agent" || argv[0] === "team" || argv[0] === "task"
-      ? `${argv[0]} ${argv[1] ?? ""}`
-      : (argv[0] ?? "");
+    argv[0] === "repo" && argv[1] === "worktree"
+      ? `repo worktree ${argv[2] ?? ""}`
+      : argv[0] === "agent" || argv[0] === "team" || argv[0] === "task"
+        ? `${argv[0]} ${argv[1] ?? ""}`
+        : (argv[0] ?? "");
   const spec = ALLOWED[command];
   if (!spec) return refuse(`'${command.trim() || "daedal"}'`);
   const rest = argv.slice(command.split(" ").length);
@@ -192,6 +218,14 @@ export function decideCall(
   if (parsed.values.has(SESSION_FLAG) && !session)
     return refuse("an unknown session");
 
+  if (command.startsWith("repo worktree ") && !session)
+    return refuse("a worktree without its session");
+  if (command === "agent continue") {
+    if (!session) return refuse("a rebirth without its session");
+    const named = parsed.positionals[0];
+    if (named !== undefined && named !== session.id)
+      return refuse("another session's rebirth");
+  }
   if (command === "agent event" && !HOOK_EVENT.test(parsed.positionals[0]!))
     return refuse("the hook event");
   if (command === "attention" && !session)
@@ -215,6 +249,8 @@ export function decideCall(
     parsed.values.get("description-file") !== "-"
   )
     return refuse("a description file on this Mac");
+  if (parsed.values.has("note-file") && parsed.values.get("note-file") !== "-")
+    return refuse("a note file on this Mac");
   if (
     command === "task get" ||
     command === "task update" ||
@@ -257,7 +293,9 @@ export function decideCall(
   const pinned =
     WORKSPACE_PINNED.has(command) && !parsed.values.has("workspace")
       ? ["--workspace", workspaceId]
-      : [];
+      : command.startsWith("repo worktree ") && !parsed.values.has(SESSION_FLAG)
+        ? ["--session", session!.id]
+        : [];
   // Rebuilt from what was parsed, so the command reads exactly what was
   // checked whatever its own parser makes of an unusual spelling.
   return {

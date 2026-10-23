@@ -3,6 +3,7 @@ import {
   CLOUD_CALLER_VARIABLE,
   CLOUD_MARK_VARIABLE,
   cloudMark,
+  podWorkingDirectory,
   createApplicationContext,
   DaedalusError,
   ingestHook,
@@ -36,7 +37,7 @@ import {
   secretHelp,
 } from "./secrets";
 import { findTmuxExecutable, probeVersion } from "@daedalus/platform";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import type { DoctorCheck } from "@daedalus/protocol";
 import packageJson from "../../../package.json";
 
@@ -2065,7 +2066,17 @@ async function repositoryCommand(
       repository: required(parsed.values.repository, "--repository"),
       branch: parsed.values.branch,
     });
-    printResult(result, json, () => console.log(result.path));
+    // A session in the cloud works in the pod, at the pod's path.
+    const owner = await context.agents.get(result.sessionId);
+    const path = owner.hostId
+      ? podWorkingDirectory(
+          relative(
+            (await context.workspaces.get(owner.workspaceId)).path,
+            result.path,
+          ),
+        )
+      : result.path;
+    printResult({ ...result, path }, json, () => console.log(path));
     return 0;
   }
   throw new DaedalusError(
