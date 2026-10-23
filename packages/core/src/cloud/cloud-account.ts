@@ -26,6 +26,8 @@ interface AccountFile {
   token?: string;
   /** Workspace id to its runner's static key, as first seen. */
   pins: Record<string, string>;
+  /** Workspace id to when the gateway first said it was gone (ISO time). */
+  missing?: Record<string, string>;
 }
 
 export interface CloudSignIn {
@@ -162,6 +164,33 @@ export class CloudAccount {
       ...data,
       pins: { ...data.pins, [workspaceId]: runnerKey },
     });
+  }
+
+  /**
+   * When the gateway first said a linked workspace was gone: `now` the
+   * first time, kept until `found` clears it.
+   */
+  async missingSince(workspaceId: string, now: number): Promise<number> {
+    const data = await this.#read();
+    if (!data) return now;
+    const since = Date.parse(data.missing?.[workspaceId] ?? "");
+    if (Number.isFinite(since)) return since;
+    await this.#write({
+      ...data,
+      missing: {
+        ...data.missing,
+        [workspaceId]: new Date(now).toISOString(),
+      },
+    });
+    return now;
+  }
+
+  /** Forgets that a workspace was missing: it answered again, or is gone. */
+  async found(workspaceId: string): Promise<void> {
+    const data = await this.#read();
+    if (!data?.missing || !(workspaceId in data.missing)) return;
+    const { [workspaceId]: _back, ...missing } = data.missing;
+    await this.#write({ ...data, missing });
   }
 
   /** Drops a pin, when the workspace is deleted. */

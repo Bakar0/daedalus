@@ -53,7 +53,9 @@ const fakePod = (podRoot: string): PodAccess => ({
   run: async ({ cwd, executable, args, env }) => {
     const result = await runCommand(executable, args, {
       cwd: join(podRoot, cwd),
-      ...(env ? { env } : {}),
+      // This Mac's tar stands in for the pod's GNU tar, which writes no
+      // `._` entries for extended attributes.
+      env: { ...env, COPYFILE_DISABLE: "1" },
     });
     return {
       exitCode: result.exitCode,

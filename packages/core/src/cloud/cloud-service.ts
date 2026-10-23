@@ -150,7 +150,16 @@ export interface CloudServiceOptions {
   awsConfig?: () => Promise<string | undefined>;
   apiKey?: (profile: AccountProfile) => Promise<string | undefined>;
   log?: (event: string, fields?: Record<string, unknown>) => void;
+  /** The clock, so a test can let `COLLECTED_CONFIRM_MS` pass. */
+  now?: () => number;
 }
+
+/**
+ * How long apart the gateway must say a linked copy is gone, twice, before
+ * the workspace falls back to its backup. One answer could be a gateway
+ * restored from an old store, or a bug, and the fallback drops the link.
+ */
+export const COLLECTED_CONFIRM_MS = 60 * 60 * 1000;
 
 /**
  * Cloud workspaces on this Mac: the gateway sign-in, the workspaces made
@@ -560,7 +569,10 @@ export class CloudService {
   ): Promise<void> {
     const present = new Set(listed.map((item) => item.workspaceId));
     for (const cloudId of linked) {
-      if (present.has(cloudId)) continue;
+      if (present.has(cloudId)) {
+        await this.account.found(cloudId);
+        continue;
+      }
       // Asked on its own, so a list that left one out cannot drop its link.
       const gone = await this.#client()
         .then((client) => client.getWorkspace(cloudId))
@@ -570,7 +582,15 @@ export class CloudService {
             error instanceof DaedalusError &&
             error.details?.gatewayCode === "NOT_FOUND",
         );
-      if (!gone) continue;
+      if (!gone) {
+        await this.account.found(cloudId);
+        continue;
+      }
+      // Gone twice, an hour apart at least; the link stays until then.
+      const now = this.options.now?.() ?? Date.now();
+      const since = await this.account.missingSince(cloudId, now);
+      if (now - since < COLLECTED_CONFIRM_MS) continue;
+      await this.account.found(cloudId);
       this.#endSessions(cloudId, "lost", CLOUD_COLLECTED_REASON);
       for (const session of this.options.repositories.listAgents({
         status: "lost",

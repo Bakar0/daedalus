@@ -55,6 +55,7 @@ import {
 import type { SessionHosts } from "./session-hosts";
 import {
   applyFromPod,
+  insideFolders,
   changedSteering,
   listMacFiles,
   listPodFiles,
@@ -627,7 +628,10 @@ export class WorkspaceMoves {
       for (const path of await steeringIn(pod, tree.path, base, now))
         steering.add(`${tree.path}/${path}`);
     }
-    const podFiles = (await listPodFiles(pod, skip)).filter(safeWorkspacePath);
+    // The pod's find compares names exactly; this Mac folds them.
+    const podFiles = (await listPodFiles(pod, skip)).filter(
+      (path) => safeWorkspacePath(path) && !insideFolders(path, skip),
+    );
     const hashes = await podHashes(pod, podFiles.filter(steersAgent));
     // Daedalus's own session instructions, as the pod got them, come home
     // as this Mac's: nothing to ask about.
@@ -763,7 +767,11 @@ export class WorkspaceMoves {
       await this.#local.writeFile(archive, contents);
       const unpacked = join(localScratch, "files");
       await mkdir(unpacked, { recursive: true, mode: 0o700 });
-      const arrived = await unpackFromPod(this.#local, archive, unpacked);
+      const arrived = await unpackFromPod(this.#local, archive, unpacked, {
+        expected: new Set(podFiles),
+        skip,
+        maxBytes: MAX_FILES_BYTES,
+      });
       const macInstructions = sessionInstructionsTemplate(workspace.path);
       // Daedalus's own, as the approval left them out: a session born in the
       // cloud has no copy here to compare with.
@@ -865,6 +873,7 @@ export class WorkspaceMoves {
         unpacked,
         arrived,
         await listMacFiles(workspace.path, skip),
+        skip,
       );
       for (const { projects, key, files } of conversations)
         await writeTranscript(this.#local, projects, key, files);

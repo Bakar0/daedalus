@@ -73,6 +73,15 @@ describe("cloud account", () => {
 });
 
 describe("gateway client", () => {
+  test("remembers when a workspace was first missing, until it is found", async () => {
+    const account = new CloudAccount(await newHome(), memoryVault());
+    await account.save({ gatewayUrl: "http://g:8080", user, token: "t" });
+    expect(await account.missingSince("w1", 1_000)).toBe(1_000);
+    expect(await account.missingSince("w1", 5_000)).toBe(1_000);
+    await account.found("w1");
+    expect(await account.missingSince("w1", 9_000)).toBe(9_000);
+  });
+
   test("sends the bearer token and reads gateway errors", async () => {
     const seen: Array<{
       url: string;

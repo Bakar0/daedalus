@@ -1,13 +1,14 @@
 /**
  * Waking a sleeping cloud workspace for one of its sessions, end to end on
- * the kind cluster, with this Mac's real code: a Claude conversation moves to
- * its workspace's pod, and after each sleep Claude must come back with its
- * history: opened while asleep, woken from the workspace menu, and opened
- * after a wake that resumed nothing. Claude in the pod must also run with
- * DISABLE_AUTOUPDATER=1. The run deletes its cloud workspace at the end.
+ * the kind cluster, with this Mac's real code: a workspace with a Claude
+ * conversation moves to the cloud, and after each sleep Claude must come
+ * back with its history: opened while asleep, woken from the workspace menu,
+ * opened after a wake that resumed nothing, and sent a message. Claude in
+ * the pod must also run with DISABLE_AUTOUPDATER=1. The run deletes its
+ * cloud workspace at the end.
  *
- *   bun run scripts/cloud-wake-try.ts run       # sleep, wake, resume, three ways
- *   bun run scripts/cloud-wake-try.ts cleanup   # deletes the pod, its volume and the sessions
+ *   bun run scripts/cloud-wake-try.ts run       # sleep, wake, resume, four ways
+ *   bun run scripts/cloud-wake-try.ts cleanup   # deletes the pods, volumes and sessions runs left
  *
  * It runs from a home of its own (~/.daedalus-wake-try-dev, file vault), as
  * user wake-try@test.com on the gateway at http://localhost:8080, and holds
@@ -27,7 +28,6 @@ process.env.DAEDALUS_REMOTE_VAULT = "file";
 const HOME = join(homedir(), ".daedalus-wake-try-dev");
 const GATEWAY = process.env.GATEWAY_URL ?? "http://localhost:8080";
 const EMAIL = "wake-try@test.com";
-const WORKSPACE = "wake-try";
 
 const mode = process.argv[2];
 if (mode !== "run" && mode !== "cleanup") {
@@ -65,23 +65,27 @@ try {
     say(`signed in to ${GATEWAY} as ${EMAIL}`);
   }
   await cloud.hold();
-  const workspace = await context.workspaces
-    .get(WORKSPACE)
-    .catch(() => context.workspaces.create({ name: WORKSPACE }));
 
   if (mode === "cleanup") {
-    for (const session of repositories.listAgents({
-      workspaceId: workspace.id,
-    })) {
-      if (session.status === "running")
-        await agents.stop(session.id, true).catch(() => undefined);
+    for (const workspace of repositories.listWorkspaces()) {
+      for (const session of repositories.listAgents({
+        workspaceId: workspace.id,
+      }))
+        if (session.status === "running")
+          await agents.stop(session.id, true).catch(() => undefined);
+      if (repositories.cloudWorkspaceId(workspace.id)) {
+        await cloud.delete(workspace.id);
+        say(`deleted ${workspace.name}'s cloud workspace, pod and volume`);
+      }
     }
-    if (repositories.cloudWorkspaceId(workspace.id)) {
-      await cloud.delete(workspace.id);
-      say("deleted the cloud workspace, its pod and its volume");
-    } else say("no cloud workspace to delete");
     process.exit(0);
   }
+
+  // A workspace of its own each run: a moved one stays in the cloud.
+  const workspace = await context.workspaces.create({
+    name: `wake-try-${Date.now().toString(36)}`,
+  });
+  const rpc = createDesktopRequestHandlers(context);
 
   // A conversation with something to remember, moved to the pod.
   const word = `HERON${Math.floor(Math.random() * 9000 + 1000)}`;
@@ -92,20 +96,20 @@ try {
     message: `Remember this word for later: ${word}. Reply with just OK and do nothing else.`,
   });
   await waitIdle(session.id, "first turn");
-  const moved = await context.moves.move({
-    sessionId: session.id,
+  const moved = await rpc.workspaceMove({
+    reference: workspace.id,
     to: "cloud",
   });
-  if (moved.status !== "moved")
-    fail("the move to the cloud asked for approval");
+  if (!moved.ok) fail(`move: ${moved.error.message}`);
+  if (moved.ok && moved.data.status !== "moved")
+    fail(`the move to the cloud asked first: ${JSON.stringify(moved.data)}`);
   const cloudId = repositories.cloudWorkspaceId(workspace.id)!;
   const inCloud = await agents.get(session.id);
   check(inCloud.hostId === cloudHostId(cloudId), "the session is in the pod");
   const host = context.hosts.get(inCloud.hostId!) as RemoteSessionHost;
   check(await host.isLive(inCloud.tmuxSession), "Claude runs in the pod");
 
-  // The app's handlers, with the window's snapshot poll beside them.
-  const rpc = createDesktopRequestHandlers(context);
+  // The window's snapshot poll beside the app's handlers.
   let polling = true;
   const poll = (async () => {
     while (polling) {
@@ -188,9 +192,19 @@ try {
     "a plain wake leaves the session lost",
   );
   await timed("opened after a plain wake", open);
+
+  // A message to the sleeping session wakes the workspace and resumes it.
+  await sleep();
+  await timed("sent a message", async () => {
+    const sent = await rpc.agentSend({
+      id: session.id,
+      text: `The word was ${word}`,
+    });
+    if (!sent.ok) fail(`send: ${sent.error.message}`);
+  });
   polling = false;
   await poll;
-  say("PASS: slept, opened, and Claude resumed with its history");
+  say("PASS: slept, woke four ways, and Claude resumed with its history");
   await agents.stop(session.id, true).catch(() => undefined);
   // The next run starts from a new pod and volume.
   await cloud.delete(workspace.id);

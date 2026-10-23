@@ -19,6 +19,7 @@ import { join, relative } from "node:path";
 import { runCommand } from "@daedalus/platform";
 import {
   CLOUD_COLLECTED_REASON,
+  COLLECTED_CONFIRM_MS,
   claudeProjectKey,
   cloudHostId,
   createApplicationContext,
@@ -57,8 +58,11 @@ const git = async (cwd: string, ...args: string[]) => {
   return result.stdout.trim();
 };
 
+/** The cloud service's clock: the fallback run lets an hour pass. */
+let skipped = 0;
 const context = await createApplicationContext({
   env: { ...process.env, DAEDALUS_HOME: HOME },
+  cloud: { now: () => Date.now() + skipped },
 });
 const { cloud, agents, repositories, workspaceContent } = context;
 const rpc = createDesktopRequestHandlers(context);
@@ -166,8 +170,14 @@ try {
     await new GatewayClient(signIn.gatewayUrl, signIn.token).deleteWorkspace(
       cloudId,
     );
-    const state = await rpc.cloudState({});
-    check(state.ok, "the Mac asked the gateway for its cloud workspaces");
+    check((await rpc.cloudState({})).ok, "the Mac asked the gateway");
+    check(
+      repositories.cloudWorkspaceId(workspace.id) === cloudId &&
+        (await context.workspaces.get(workspace.id)).place === "cloud",
+      "one answer that it is gone keeps the workspace in the cloud",
+    );
+    skipped += COLLECTED_CONFIRM_MS;
+    check((await rpc.cloudState({})).ok, "the Mac asked again an hour later");
     const back = await context.workspaces.get(workspace.id);
     check(back.place !== "cloud", "the workspace lives on this Mac again");
     check(

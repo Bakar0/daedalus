@@ -142,6 +142,7 @@ export interface ApplicationContextOptions {
     | "awsConfig"
     | "apiKey"
     | "log"
+    | "now"
   >;
   /** Injected so tests never reach the real Notification Center. */
   sendNativeNotification?: (
