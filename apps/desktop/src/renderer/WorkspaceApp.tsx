@@ -56,7 +56,6 @@ import {
   type AutoRebirthDto,
 } from "@daedalus/protocol";
 import { LargeFileBar } from "./LargeFileBar";
-import { CloudFirstRunBar } from "./CloudFirstRunBar";
 import { CloudPasteCodeBar, CloudSignInPanel } from "./CloudSignInBar";
 import { SessionOpening } from "./SessionOpening";
 import { rememberedRunsOn, rememberRunsOn, RunsOn } from "./RunsOn";
@@ -5915,27 +5914,6 @@ export function WorkspaceApp({
             color={activeSession.color}
             host={signInBySession.get(activeSession.id)!.host ?? ""}
             onDone={() => dismissCloudSignIn(activeSession.id)}
-          />
-        )}
-      {activeSession?.hostId &&
-        activeSession.kind === "agent" &&
-        activeSession.provider === "claude" &&
-        sessionIsLive(activeSession) &&
-        // The sign-in itself shows over the terminal meanwhile.
-        !signInBySession.has(activeSession.id) && (
-          <CloudFirstRunBar
-            color={activeSession.color}
-            hostId={activeSession.hostId}
-            key={`${activeSession.hostId}:${activeSession.account ?? ""}`}
-            kind={
-              activeSession.account
-                ? (snapshot?.settings.accounts.find(
-                    (item) =>
-                      item.provider === "claude" &&
-                      item.account === activeSession.account,
-                  )?.kind ?? "login")
-                : "default"
-            }
           />
         )}
       {activeSession ? (

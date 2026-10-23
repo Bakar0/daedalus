@@ -8539,9 +8539,6 @@ dd {
 .session-card[data-cloud-state="waking"] .session-status-label {
   font-style: italic;
 }
-.cloud-first-run-bar .routine-bar-text {
-  white-space: normal;
-}
 .session-card[data-cloud-state="unavailable"] .session-card-main {
   opacity: 0.6;
 }
