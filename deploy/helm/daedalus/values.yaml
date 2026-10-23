@@ -26,7 +26,7 @@ workspace:
   # The most a user may ask for when creating a workspace.
   maxResources: { cpu: "4", memory: 8Gi }
   runtimeClassName: "" # "gvisor" to sandbox workspace pods
-  idleMinutes: 30 # runner asks the gateway to sleep it after this
+  idleMinutes: 15 # runner asks the gateway to sleep it after this long with nothing working
 tenant:
   # Each workspace has 2 PVCs (data and state) and a runner container that
   # requests 50m CPU, 64Mi memory and 64Mi ephemeral storage. Size the quota for

@@ -1,6 +1,7 @@
 import type { SessionHost } from "./session-host";
 import type { SessionHosts } from "./session-hosts";
 import {
+  asleepInCloud,
   cloudEnvironment,
   cloudHostId,
   CLOUD_SHELL,
@@ -493,6 +494,27 @@ export class AgentService {
    */
   onSessionRunning(run: (session: AgentSession) => Promise<unknown>): void {
     this.sessionRunning = run;
+  }
+
+  private cloudAsleep:
+    ((sessionId: string) => Promise<AgentSession>) | undefined;
+
+  /**
+   * How a session lost to its cloud workspace's sleep is woken and resumed,
+   * for a message to it: `CloudSessions`, which knows the cloud.
+   */
+  onCloudAsleep(wake: (sessionId: string) => Promise<AgentSession>): void {
+    this.cloudAsleep = wake;
+  }
+
+  /**
+   * Wakes and resumes a session its cloud workspace's sleep ended, so a
+   * message can reach it; anything else comes back as it is.
+   */
+  async wakeIfAsleep(agent: AgentSession): Promise<AgentSession> {
+    return asleepInCloud(agent) && this.cloudAsleep
+      ? this.cloudAsleep(agent.id)
+      : agent;
   }
 
   /** Raises the badge for a session that stopped on a question at startup. */
@@ -1896,6 +1918,8 @@ export class AgentService {
         "VALIDATION",
         "Agent input text must not be empty",
       );
+    // A session asleep with its cloud workspace wakes for the message.
+    await this.wakeIfAsleep(await this.get(id));
     const agent = await this.requireRunning(id);
     await this.sessionHost(agent).send(agent.tmuxSession, text);
     return agent;

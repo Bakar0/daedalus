@@ -55,5 +55,5 @@ test("config needs the in-cluster URL and namespace", () => {
   });
   expect(config.devLogin).toBe(false);
   expect(config.serviceAccount).toBe("daedalus-gateway");
-  expect(config.workspace.idleMinutes).toBe("30");
+  expect(config.workspace.idleMinutes).toBe("15");
 });

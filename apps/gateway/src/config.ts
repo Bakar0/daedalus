@@ -101,7 +101,7 @@ export function loadConfig(env: Record<string, string | undefined>) {
       cacheSize: get("DAEDALUS_WORKSPACE_CACHE_SIZE", "2Gi"),
       tmpSize: get("DAEDALUS_WORKSPACE_TMP_SIZE", "1Gi"),
       runtimeClass: get("DAEDALUS_WORKSPACE_RUNTIME_CLASS"),
-      idleMinutes: get("DAEDALUS_WORKSPACE_IDLE_MINUTES", "30"),
+      idleMinutes: get("DAEDALUS_WORKSPACE_IDLE_MINUTES", "15"),
     },
     tenantDir: get("DAEDALUS_TENANT_DIR", "/etc/daedalus/tenant"),
   };

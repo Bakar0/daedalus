@@ -56,7 +56,7 @@ async function main(): Promise<void> {
   const workspaceId = required(RUNNER_ENV.workspaceId);
   const macId = required(RUNNER_ENV.macId);
   const macKey = required(RUNNER_ENV.macKey);
-  const idleMinutes = Number(process.env[RUNNER_ENV.idleMinutes] ?? 30);
+  const idleMinutes = Number(process.env[RUNNER_ENV.idleMinutes] ?? 15);
 
   mkdirSync(RUNNER_PATHS.state, { recursive: true, mode: 0o700 });
   const identity = await loadOrCreateIdentity(RUNNER_PATHS.state);
@@ -71,7 +71,7 @@ async function main(): Promise<void> {
     backend: new SessiondClient(RUNNER_PATHS.sessionSocket),
     queue: new EventQueue(join(RUNNER_PATHS.state, "queue.jsonl")),
     connect: connectRelay,
-    idleMinutes: Number.isFinite(idleMinutes) ? idleMinutes : 30,
+    idleMinutes: Number.isFinite(idleMinutes) ? idleMinutes : 15,
     log,
   });
 

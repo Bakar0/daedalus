@@ -23,7 +23,11 @@ import {
   SIGN_IN_OFFER_MS,
   SignInOffers,
 } from "./sign-in-pages";
-import { cloudHostId, cloudHostWorkspace } from "../services/cloud-launch";
+import {
+  CLOUD_SLEEP_REASON,
+  cloudHostId,
+  cloudHostWorkspace,
+} from "../services/cloud-launch";
 import { defaultVault, RemoteStore } from "../services/remote-store";
 import type { SessionHosts } from "../services/session-hosts";
 import type { WorkspaceService } from "../services/workspaces";
@@ -143,9 +147,6 @@ export interface CloudServiceOptions {
   apiKey?: (profile: AccountProfile) => Promise<string | undefined>;
   log?: (event: string, fields?: Record<string, unknown>) => void;
 }
-
-/** Why a session the Mac put to sleep with its workspace is lost. */
-export const CLOUD_SLEEP_REASON = "The cloud workspace went to sleep";
 
 /**
  * Cloud workspaces on this Mac: the gateway sign-in, the workspaces made
@@ -528,7 +529,16 @@ export class CloudService {
   /** Deletes the pod, its volume and its token; the local workspace stays. */
   async delete(workspaceReference: string): Promise<void> {
     const workspaceId = await this.#workspaceId(workspaceReference);
-    await (await this.#client()).deleteWorkspace(workspaceId);
+    try {
+      await (await this.#client()).deleteWorkspace(workspaceId);
+    } catch (error) {
+      // Gone already, from the gateway or another Mac: only the link is left.
+      if (
+        !(error instanceof DaedalusError) ||
+        error.details?.gatewayCode !== "NOT_FOUND"
+      )
+        throw error;
+    }
     this.#endSessions(workspaceId, "exited");
     await this.account.unpin(workspaceId);
     this.options.repositories.unlinkCloudWorkspace(workspaceId);
@@ -993,6 +1003,9 @@ export class CloudService {
       identity: await this.identity(),
       runnerKey: (workspaceId) => this.#runnerKey(workspaceId, signIn),
       answer: (hostId, call) => calls.answer(hostId, call),
+      // Its sessions end with the pod; opening one wakes and resumes it.
+      onWorkspaceSleeping: (workspaceId) =>
+        this.#endSessions(workspaceId, "lost", CLOUD_SLEEP_REASON),
       ...(this.options.connect ? { connect: this.options.connect } : {}),
       ...(this.options.log ? { log: this.options.log } : {}),
     });

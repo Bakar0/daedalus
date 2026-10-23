@@ -91,7 +91,10 @@ const open = (channel: SecureChannel, payload: Uint8Array) => {
   return plain.message as unknown as RunnerSecureMessage;
 };
 
-const setUp = async (runnerKey?: string) => {
+const setUp = async (
+  runnerKey?: string,
+  onWorkspaceSleeping?: (workspaceId: string) => void,
+) => {
   await sodiumReady();
   const mac = createIdentity();
   const runner = createIdentity();
@@ -108,6 +111,7 @@ const setUp = async (runnerKey?: string) => {
     },
     connect: relay.connect,
     requestTimeoutMs: 2_000,
+    ...(onWorkspaceSleeping ? { onWorkspaceSleeping } : {}),
   });
   await cloudLink.start();
   await Bun.sleep(1);
@@ -123,6 +127,19 @@ describe("cloud link", () => {
     expect(url.pathname).toBe("/v1/connect");
     expect(url.searchParams.get("macId")).toBe(mac.id);
     expect(relay.token).toBe("user-token");
+    cloudLink.stop();
+  });
+
+  test("a runner about to sleep its workspace says so to the Mac", async () => {
+    const sleeping: string[] = [];
+    const { relay, mac, runner, cloudLink } = await setUp(undefined, (id) =>
+      sleeping.push(id),
+    );
+    const channel = await link(relay, runner, mac);
+    await Bun.sleep(5);
+    relay.fromRunner(sealed(channel, { t: "workspace.sleeping" }));
+    await Bun.sleep(5);
+    expect(sleeping).toEqual([WS]);
     cloudLink.stop();
   });
 

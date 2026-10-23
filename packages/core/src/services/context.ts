@@ -36,6 +36,7 @@ import { CloudService, type CloudServiceOptions } from "../cloud/cloud-service";
 import { CLOUD_LAUNCH_SECRETS } from "./cloud-launch";
 import { SessionMoves } from "./session-move";
 import { CloudSessions } from "../cloud/cloud-sessions";
+import { SessionArchive } from "./session-archive";
 import { LocalSessionHost } from "./session-host";
 import { SessionHosts } from "./session-hosts";
 import { TaskHistoryService } from "./task-history";
@@ -104,6 +105,8 @@ export interface ApplicationContext {
   moves: SessionMoves;
   /** Waking a cloud workspace and resuming the sessions its sleep ended. */
   cloudSessions: CloudSessions;
+  /** Archiving and deleting where the cloud is involved. */
+  archive: SessionArchive;
   close(): void;
 }
 
@@ -363,6 +366,19 @@ export async function createApplicationContext(
     await activity.restore();
     await activity.decay();
   }
+  const moves = new SessionMoves({
+    config,
+    repositories,
+    workspaces,
+    agents,
+    hosts,
+    cloud,
+    // Read from disk: a hook's event may have come through another process.
+    activity: async (sessionId) =>
+      (await activity.binding(sessionId))?.activity ??
+      activity.get(sessionId)?.activity,
+  });
+
   return {
     config,
     logger,
@@ -394,17 +410,13 @@ export async function createApplicationContext(
     hosts,
     cloud,
     cloudSessions: new CloudSessions({ repositories, agents, cloud }),
-    moves: new SessionMoves({
-      config,
+    moves,
+    archive: new SessionArchive({
       repositories,
-      workspaces,
       agents,
-      hosts,
+      workspaces,
+      moves,
       cloud,
-      // Read from disk: a hook's event may have come through another process.
-      activity: async (sessionId) =>
-        (await activity.binding(sessionId))?.activity ??
-        activity.get(sessionId)?.activity,
     }),
     // Watchers are kernel resources held outside the database, so they are
     // released here rather than left to the process exiting.
