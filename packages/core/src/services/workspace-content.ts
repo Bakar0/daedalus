@@ -456,11 +456,15 @@ export class WorkspaceContentService {
 
   async get(workspaceReference: string): Promise<WorkspaceContent> {
     const workspace = await this.workspaces.get(workspaceReference);
-    await ensureWorkspaceContentFiles(
-      workspace.path,
-      this.config.home,
-      this.config.workspaceInstructionFilesEnabled,
-    );
+    // A cloud workspace's files are in its pod; this Mac's folder is a
+    // leftover that must not be written.
+    const inPod = await this.files.podContent(workspace);
+    if (!inPod)
+      await ensureWorkspaceContentFiles(
+        workspace.path,
+        this.config.home,
+        this.config.workspaceInstructionFilesEnabled,
+      );
     const repositories = this.repositories.listWorkspaceRepositories(
       workspace.id,
     );
@@ -469,9 +473,11 @@ export class WorkspaceContentService {
     });
     const content: WorkspaceContent = {
       workspaceId: workspace.id,
-      brief: await readTextFile(join(workspace.path, "BRIEF.md")),
-      journal: await readTextFile(join(workspace.path, "JOURNAL.md")),
-      files: await this.files.listDirectory(workspace.id),
+      ...(inPod ?? {
+        brief: await readTextFile(join(workspace.path, "BRIEF.md")),
+        journal: await readTextFile(join(workspace.path, "JOURNAL.md")),
+        files: await this.files.listDirectory(workspace.id),
+      }),
       // Status comes from the cache, never from git on this path. Reading it
       // inline cost 200–800 ms per call — dominated by the size of the working
       // trees rather than their number — and every one of those milliseconds
@@ -752,6 +758,11 @@ export class WorkspaceContentService {
 
   detachRepository(...args: Parameters<RepositoryLibrary["detachRepository"]>) {
     return this.library.detachRepository(...args);
+  }
+
+  /** Set by the context: how to reach a cloud workspace's files. */
+  usePod(...args: Parameters<WorkspaceFiles["usePod"]>) {
+    this.files.usePod(...args);
   }
 
   // SessionWorktrees

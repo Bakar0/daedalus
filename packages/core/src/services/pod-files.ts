@@ -25,6 +25,11 @@ const POD_HIDDEN = new Set([
   ".daedalus-move",
   ".daedalus-trash",
 ]);
+/**
+ * The largest file the explorer moves through the runner in one call: above
+ * the biggest it opens (20 MB images) or copies in (50 MB).
+ */
+export const MAX_EXPLORER_BYTES = 64 * 1024 * 1024;
 /** Where a removed entry waits in the pod, for `restore`. */
 const POD_TRASH = ".daedalus-trash";
 

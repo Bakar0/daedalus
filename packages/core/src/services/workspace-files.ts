@@ -230,6 +230,41 @@ export class WorkspaceFiles {
     return this.podFor(workspace);
   }
 
+  /**
+   * A cloud workspace's brief, journal and top folder, read in its pod, or
+   * undefined while the workspace is on this Mac. A pod asleep gives them
+   * empty, so the rest of the workspace view still shows.
+   */
+  async podContent(
+    workspace: Workspace,
+  ): Promise<
+    { brief: string; journal: string; files: WorkspaceFileEntry[] } | undefined
+  > {
+    if (workspace.place !== "cloud") return undefined;
+    let pod: PodMoveSide;
+    try {
+      pod = (await this.pod(workspace))!;
+    } catch (error) {
+      if (error instanceof DaedalusError && error.code === "CONFLICT")
+        return { brief: "", journal: "", files: [] };
+      throw error;
+    }
+    const text = (path: string) =>
+      this.podFiles.readFile(pod, path).then(
+        (file) => file.content,
+        (error: unknown) => {
+          if (error instanceof DaedalusError && error.code === "NOT_FOUND")
+            return "";
+          throw error;
+        },
+      );
+    return {
+      brief: await text("BRIEF.md"),
+      journal: await text("JOURNAL.md"),
+      files: await this.podFiles.listDirectory(workspace, pod, ""),
+    };
+  }
+
   async listDirectory(
     workspaceReference: string,
     requestedPath = "",

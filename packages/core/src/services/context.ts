@@ -10,6 +10,7 @@ import {
 } from "@daedalus/platform";
 import { channelIdentifier, loadConfig, type DaedalusConfig } from "../config";
 import type { AgentSession } from "../domain";
+import { DaedalusError } from "../errors";
 import { EventBus } from "../events";
 import { JsonLogger } from "../logging";
 import { runMigrations } from "../repositories/migrations";
@@ -36,6 +37,8 @@ import { CloudService, type CloudServiceOptions } from "../cloud/cloud-service";
 import { CLOUD_LAUNCH_SECRETS } from "./cloud-launch";
 import { WorkspaceMoves } from "./workspace-move";
 import { CloudWorktrees } from "./cloud-worktrees";
+import { isPodAccess, PodMoveSide } from "./move-side";
+import { MAX_EXPLORER_BYTES } from "./pod-files";
 import { CloudSessions } from "../cloud/cloud-sessions";
 import { SessionArchive } from "./session-archive";
 import { LocalSessionHost } from "./session-host";
@@ -371,6 +374,16 @@ export async function createApplicationContext(
   workspaceContent.useCloudWorktrees(
     new CloudWorktrees({ config, repositories, workspaces, hosts }),
   );
+  // The explorer browses an awake pod only; opening a session wakes it.
+  workspaceContent.usePod(async (workspace) => {
+    const host = await cloud.awakeHost(workspace.id);
+    if (!isPodAccess(host))
+      throw new DaedalusError(
+        "CONFLICT",
+        "The cloud workspace is asleep; open a session to wake it",
+      );
+    return new PodMoveSide(host, MAX_EXPLORER_BYTES);
+  });
   const workspaceMoves = new WorkspaceMoves({
     config,
     repositories,
