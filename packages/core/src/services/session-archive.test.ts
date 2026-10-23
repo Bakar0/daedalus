@@ -1,297 +1,144 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { runCommand } from "@daedalus/platform";
-import type { AgentSession } from "../domain";
-import { DaedalusError } from "../errors";
+import { describe, expect, test } from "vitest";
+import type { Workspace } from "../domain";
 import type { SqliteRepositories } from "../repositories";
 import type { AgentService } from "./agents";
-import { cloudHostId } from "./cloud-launch";
 import { SessionArchive } from "./session-archive";
-import type { SessionHosts } from "./session-hosts";
-import type { SessionMoveResult, SessionMoves } from "./session-move";
+import type { WorkspaceMoveResult, WorkspaceMoves } from "./workspace-move";
 import type { WorkspaceService } from "./workspaces";
 
-const CLOUD = "11111111-1111-4111-8111-111111111111";
-const MAC_FOLDER = "/w/worktrees/unassigned/claude-1";
-
-function setup(move: () => Promise<SessionMoveResult>) {
-  let row = {
-    id: "s1",
-    workspaceId: "w1",
-    hostId: cloudHostId(CLOUD),
-    status: "running",
-    workingDirectory: "worktrees/unassigned/claude-1",
-    archivedAt: null,
-  } as unknown as AgentSession;
+function setup(options: {
+  place?: "cloud";
+  linked?: boolean;
+  move?: () => Promise<WorkspaceMoveResult>;
+}) {
   const calls: string[] = [];
-  const agents = {
-    get: async () => row,
-    archive: async (id: string, force?: boolean) => {
-      calls.push(`archive ${id} force=${force} host=${row.hostId}`);
-      row = { ...row, archivedAt: "now" };
-      return row;
-    },
-  } as unknown as AgentService;
-  const moves = {
-    move: async (input: { approved?: string[] }) => {
-      calls.push(`move ${input.approved?.join(",") ?? ""}`);
-      const result = await move();
-      if (result.status === "moved") row = { ...result.session };
+  let workspace = {
+    id: "w1",
+    name: "Shop",
+    slug: "shop",
+    archivedAt: null,
+    ...(options.place ? { place: options.place } : {}),
+  } as unknown as Workspace;
+  const workspaceMoves = {
+    move: async (input: {
+      to: string;
+      stopWorking?: boolean;
+      approved?: string[];
+    }) => {
+      calls.push(
+        `move ${input.to} stop=${input.stopWorking} approved=${input.approved?.join(",") ?? ""}`,
+      );
+      const result = await options.move!();
+      if (result.status === "moved") {
+        const { place: _place, ...home } = workspace;
+        workspace = home as Workspace;
+      }
       return result;
     },
     dismiss: () => calls.push("dismiss"),
-    movedFrom: async () => MAC_FOLDER,
-    forget: async () => {
-      calls.push("forget");
-    },
-  } as unknown as SessionMoves;
+  } as unknown as WorkspaceMoves;
   const archive = new SessionArchive({
     repositories: {
-      // As the database does: host and folder change only through
-      // setAgentPlace.
-      updateAgent: (agent: AgentSession) => {
-        row = {
-          ...agent,
-          hostId: row.hostId,
-          workingDirectory: row.workingDirectory,
-        };
-      },
-      setAgentPlace: (
-        _id: string,
-        place: { hostId: string | null; workingDirectory: string },
-      ) => {
-        row = { ...row, ...place };
-      },
+      cloudWorkspaceId: () => (options.linked ? "c1" : undefined),
     } as unknown as SqliteRepositories,
-    agents,
-    workspaces: {} as WorkspaceService,
-    moves,
+    agents: {
+      archive: async (id: string) => {
+        calls.push(`archive session ${id}`);
+        return { id };
+      },
+    } as unknown as AgentService,
+    workspaces: {
+      get: async () => workspace,
+      archive: async () => {
+        calls.push(`archive workspace place=${workspace.place ?? "mac"}`);
+        workspace = { ...workspace, archivedAt: "now" };
+        return workspace;
+      },
+    } as unknown as WorkspaceService,
+    workspaceMoves,
     cloud: {
-      delete: async () => {},
-      prepareForSession: async () => cloudHostId(CLOUD),
-      sleep: async () => {},
-      get: async () => ({}),
-      markDisposable: async () => {},
+      delete: async () => {
+        calls.push("delete cloud copy");
+      },
     },
-    hosts: {} as SessionHosts,
   });
-  return { archive, calls, row: () => row };
+  return { archive, calls };
 }
 
-describe("archiving a cloud session", () => {
-  test("moves it home first, then archives it as this Mac's", async () => {
-    const s = setup(async () => ({
-      status: "moved",
-      session: {
-        id: "s1",
-        hostId: null,
-        workingDirectory: MAC_FOLDER,
-      } as unknown as AgentSession,
-    }));
-    const result = await s.archive.archiveSession({ sessionId: "s1" });
-    expect(result.status).toBe("archived");
+describe("archiving where the cloud is involved", () => {
+  test("a workspace in the cloud comes home, its copy is deleted, then it is archived", async () => {
+    const s = setup({
+      place: "cloud",
+      linked: true,
+      move: async () => ({
+        status: "moved",
+        workspace: {} as Workspace,
+        notice: "Back on this Mac.",
+      }),
+    });
+    expect((await s.archive.archiveWorkspace({ reference: "w1" })).status).toBe(
+      "archived",
+    );
     expect(s.calls).toEqual([
-      "move ",
+      "move mac stop=true approved=",
       "dismiss",
-      "archive s1 force=undefined host=null",
+      "delete cloud copy",
+      "archive workspace place=mac",
     ]);
   });
 
-  test("files that steer an agent are asked about, and nothing is archived", async () => {
-    const s = setup(async () => ({
+  test("steering files are asked about, and nothing is archived or deleted", async () => {
+    const s = setup({
+      place: "cloud",
+      linked: true,
+      move: async () => ({ status: "needsApproval", paths: ["CLAUDE.md"] }),
+    });
+    expect(await s.archive.archiveWorkspace({ reference: "w1" })).toEqual({
       status: "needsApproval",
-      paths: ["app/CLAUDE.md"],
-    }));
-    expect(await s.archive.archiveSession({ sessionId: "s1" })).toEqual({
-      status: "needsApproval",
-      paths: ["app/CLAUDE.md"],
+      paths: ["CLAUDE.md"],
     });
-    expect(s.row().archivedAt).toBeNull();
+    expect(s.calls).toEqual(["move mac stop=true approved="]);
+
+    const t = setup({
+      place: "cloud",
+      linked: true,
+      move: async () => ({ status: "moved", workspace: {} as Workspace }),
+    });
+    await t.archive.archiveWorkspace({
+      reference: "w1",
+      approved: ["CLAUDE.md"],
+    });
+    expect(t.calls[0]).toBe("move mac stop=true approved=CLAUDE.md");
   });
 
-  test("a pod that cannot be reached asks, then archives what this Mac has", async () => {
-    const s = setup(async () => {
-      throw new DaedalusError(
-        "DEPENDENCY",
-        "The cloud workspace started, but its runner did not connect in time",
-      );
-    });
-    expect(await s.archive.archiveSession({ sessionId: "s1" })).toEqual({
-      status: "needsConfirmation",
-      reason:
-        "The cloud workspace started, but its runner did not connect in time",
-    });
-    expect(s.row().archivedAt).toBeNull();
-
-    const result = await s.archive.archiveSession({
-      sessionId: "s1",
-      withoutCloudChanges: true,
-    });
-    expect(result.status).toBe("archived");
-    expect(s.calls.slice(-2)).toEqual([
-      "forget",
-      "archive s1 force=true host=null",
-    ]);
-    expect(s.row()).toMatchObject({
-      hostId: null,
-      workingDirectory: MAC_FOLDER,
-      status: "lost",
-    });
-  });
-});
-
-describe("archiving a workspace with a cloud copy", () => {
-  let pod: string;
-  beforeEach(async () => {
-    pod = await mkdtemp(join(tmpdir(), "daedalus-archive-pod-"));
-  });
-  afterEach(async () => {
-    await rm(pod, { recursive: true, force: true });
-  });
-
-  const git = (cwd: string, ...args: string[]) =>
-    runCommand("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], {
-      cwd,
-    });
-
-  async function repository(name: string, cameHome: boolean) {
-    const dir = join(pod, name);
-    await mkdir(dir, { recursive: true });
-    await git(dir, "init", "-q");
-    await writeFile(join(dir, "f.txt"), "x\n");
-    await git(dir, "add", "-A");
-    await git(dir, "commit", "-q", "-m", "x");
-    if (cameHome)
-      await git(dir, "update-ref", `refs/daedalus/moves/${CLOUD}/last`, "HEAD");
-  }
-
-  function setup(options: { gone?: boolean; noSessions?: boolean } = {}) {
-    const calls: string[] = [];
-    let linked = true;
-    let archivedAt: string | null = null;
-    const archive = new SessionArchive({
-      repositories: {
-        cloudWorkspaceId: () => (linked ? CLOUD : undefined),
-        listAgents: () =>
-          options.noSessions
-            ? []
-            : [
-                {
-                  id: "s9",
-                  name: "Old\u0007\u0085\u202e one",
-                  hostId: cloudHostId(CLOUD),
-                  archivedAt: "earlier",
-                },
-              ],
-      } as unknown as SqliteRepositories,
-      agents: {} as AgentService,
-      workspaces: {
-        get: async () => ({ id: "w1", archivedAt }),
-        archive: async () => {
-          calls.push("archive workspace");
-          archivedAt = "now";
-          return { id: "w1", archivedAt };
-        },
-      } as unknown as WorkspaceService,
-      moves: {} as SessionMoves,
-      cloud: {
-        delete: async () => {
-          calls.push("delete copy");
-          linked = false;
-        },
-        prepareForSession: async () => cloudHostId(CLOUD),
-        sleep: async () => {
-          calls.push("sleep copy");
-        },
-        markDisposable: async () => {
-          calls.push("mark disposable");
-        },
-        get: async () => {
-          if (options.gone)
-            throw new DaedalusError("NOT_FOUND", "gone", {
-              gatewayCode: "NOT_FOUND",
-            });
-          return {};
-        },
+  test("a workspace that cannot come home is not archived, and its copy stays", async () => {
+    const s = setup({
+      place: "cloud",
+      linked: true,
+      move: async () => {
+        throw new Error("The runner is offline");
       },
-      hosts: {
-        get: () => ({
-          run: async ({
-            executable,
-            args,
-          }: {
-            executable: string;
-            args: string[];
-          }) => runCommand(executable, args, { cwd: pod }),
-          readFile: async () => undefined,
-          writeFiles: async () => {},
-        }),
-      } as unknown as SessionHosts,
     });
-    return { archive, calls };
-  }
-
-  test("asks before deleting work nothing brought home, naming it", async () => {
-    await repository("app", true);
-    await repository("scratch", false);
-    await writeFile(join(pod, "notes.txt"), "loose\n");
-    await mkdir(join(pod, ".home"));
-    await mkdir(join(pod, "worktrees"));
-    const s = setup();
-    const asked = await s.archive.archiveWorkspace({ reference: "w1" });
-    expect(asked).toEqual({
-      status: "needsCloudDecision",
-      lost: [
-        'the conversation of "Old??? one", archived without coming home',
-        "the repository scratch, which did not come home",
-        "notes.txt outside git in the cloud workspace",
-      ],
-    });
-    expect(s.calls).toEqual([]);
-
-    const kept = await s.archive.archiveWorkspace({
-      reference: "w1",
-      cloudCopy: "keep",
-    });
-    expect(kept.status).toBe("archived");
-    expect(s.calls).toEqual(["sleep copy", "archive workspace"]);
+    await expect(
+      s.archive.archiveWorkspace({ reference: "w1" }),
+    ).rejects.toThrow(
+      "Shop could not come home from the cloud, so it is not archived: The runner is offline",
+    );
+    expect(s.calls).toEqual(["move mac stop=true approved="]);
   });
 
-  test("deletes at once when everything came home, or the copy is gone", async () => {
-    await repository("app", true);
-    const s = setup({ gone: false });
-    // Only the conversation of the session archived without coming home.
-    const asked = await s.archive.archiveWorkspace({ reference: "w1" });
-    expect(asked.status).toBe("needsCloudDecision");
-    const deleted = await s.archive.archiveWorkspace({
-      reference: "w1",
-      cloudCopy: "delete",
-    });
-    expect(deleted.status).toBe("archived");
-    expect(s.calls).toEqual(["delete copy", "archive workspace"]);
-
-    const gone = setup({ gone: true });
-    expect(
-      (await gone.archive.archiveWorkspace({ reference: "w1" })).status,
-    ).toBe("archived");
-    expect(gone.calls).toEqual(["delete copy", "archive workspace"]);
+  test("a workspace on this Mac with a cloud copy asleep has it deleted, unasked", async () => {
+    const s = setup({ linked: true });
+    await s.archive.archiveWorkspace({ reference: "w1" });
+    expect(s.calls).toEqual([
+      "delete cloud copy",
+      "archive workspace place=mac",
+    ]);
   });
 
-  test("a copy with nothing left in it is marked disposable, silently", async () => {
-    await repository("app", true);
-    const clean = setup({ noSessions: true });
-    expect(await clean.archive.markIfDisposable("w1")).toBe(true);
-    expect(clean.calls).toEqual(["mark disposable"]);
-
-    await writeFile(join(pod, "notes.txt"), "loose\n");
-    const loose = setup({ noSessions: true });
-    expect(await loose.archive.markIfDisposable("w1")).toBe(false);
-    // A conversation only in the copy keeps it too.
-    await rm(join(pod, "notes.txt"));
-    const kept = setup();
-    expect(await kept.archive.markIfDisposable("w1")).toBe(false);
-    expect([...loose.calls, ...kept.calls]).toEqual([]);
+  test("a session archives where it runs", async () => {
+    const s = setup({});
+    await s.archive.archiveSession({ sessionId: "s1" });
+    expect(s.calls).toEqual(["archive session s1"]);
   });
 });

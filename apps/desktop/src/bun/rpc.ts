@@ -122,6 +122,14 @@ async function result<T>(
   }
 }
 
+/** What the retired per-session move answers. */
+function sessionsDoNotMove(): never {
+  throw new DaedalusError(
+    "VALIDATION",
+    "Sessions no longer move one by one; move the workspace instead",
+  );
+}
+
 // DTO conversion is explicit so persistence/domain objects never leak implicitly.
 const workspaceDto = (
   workspace: Workspace,
@@ -563,7 +571,6 @@ export function createDesktopRequestHandlers(
       result(async () => ({
         ...(await desktopSnapshot(readModel)),
         cloudSignIns: context.cloud.signIns.list(),
-        sessionMoves: context.moves.list(),
         workspaceMoves: context.workspaceMoves.list(),
         cloudPreparing: context.cloud.preparing(),
       })),
@@ -740,20 +747,11 @@ export function createDesktopRequestHandlers(
           workspaceDto(workspace),
         ),
       ),
-    workspaceArchive: ({
-      reference,
-      approved,
-      withoutCloudChanges,
-      repositories,
-      cloudCopy,
-    }) =>
+    workspaceArchive: ({ reference, approved }) =>
       mutate(async () => {
         const archived = await context.archive.archiveWorkspace({
           reference,
           ...(approved ? { approved } : {}),
-          ...(withoutCloudChanges ? { withoutCloudChanges } : {}),
-          ...(repositories ? { repositories } : {}),
-          ...(cloudCopy ? { cloudCopy } : {}),
         });
         return archived.status === "archived"
           ? {
@@ -946,37 +944,9 @@ export function createDesktopRequestHandlers(
       }),
     cloudSessionWake: ({ sessionId }) =>
       mutate(async () => agentDto(await context.cloudSessions.wake(sessionId))),
-    agentMove: ({ sessionId, to, approved, repositories }) =>
-      mutate(async () => {
-        const moved = await context.moves.move({
-          sessionId,
-          to,
-          ...(approved ? { approved } : {}),
-          ...(repositories ? { repositories } : {}),
-        });
-        // Home, perhaps the last one: its copy may now be disposable.
-        if (moved.status === "moved" && to === "local")
-          void context.archive
-            .markIfDisposable(moved.session.workspaceId)
-            .catch(() => undefined);
-        return moved.status === "moved"
-          ? {
-              status: "moved" as const,
-              session: agentDto(moved.session),
-              ...(moved.notice ? { notice: moved.notice } : {}),
-            }
-          : moved;
-      }),
-    agentMoveCancel: ({ sessionId }) =>
-      result(() => {
-        context.moves.cancel(sessionId);
-        return null;
-      }),
-    agentMoveDismiss: ({ sessionId }) =>
-      result(() => {
-        context.moves.dismiss(sessionId);
-        return null;
-      }),
+    agentMove: () => result(() => sessionsDoNotMove()),
+    agentMoveCancel: () => result(() => sessionsDoNotMove()),
+    agentMoveDismiss: () => result(() => sessionsDoNotMove()),
     cloudSignInOpen: ({ requestId }) =>
       result(async () => {
         const page = await context.cloud.openSignIn(requestId);
@@ -1289,24 +1259,15 @@ export function createDesktopRequestHandlers(
       ),
     accountSignOut: ({ provider, account }) =>
       mutate(() => context.accounts.signOut(provider, account)),
-    agentSpawn: ({ teamId, cloud, ...params }) =>
-      mutate(async () => {
-        // The first cloud session makes the workspace's cloud copy; a
-        // sleeping one is woken. The window shows how far it got.
-        const host = cloud
-          ? await context.cloud.prepareForSession(
-              teamId
-                ? context.teams.get(teamId).lead.workspaceId
-                : params.workspace,
-            )
-          : undefined;
-        return agentDto(
+    agentSpawn: ({ teamId, ...params }) =>
+      // A workspace in the cloud runs the session there; the workspace says.
+      mutate(async () =>
+        agentDto(
           teamId
             ? (
                 await context.teams.spawnMember({
                   team: teamId,
                   addedBy: "user",
-                  ...(host ? { host } : {}),
                   instructions: params.message ?? "",
                   ...(params.name ? { name: params.name } : {}),
                   ...(params.taskId ? { taskId: params.taskId } : {}),
@@ -1317,12 +1278,9 @@ export function createDesktopRequestHandlers(
                     : {}),
                 })
               ).session
-            : await context.agents.spawn({
-                ...params,
-                ...(host ? { host } : {}),
-              }),
-        );
-      }),
+            : await context.agents.spawn(params),
+        ),
+      ),
     agentSend: ({ id, text }) =>
       mutate(async () => agentDto(await context.agents.send(id, text))),
     agentStop: ({ id, force }) =>
@@ -1335,29 +1293,16 @@ export function createDesktopRequestHandlers(
       mutate(async () =>
         (await context.agents.reorder(workspace, sessionIds)).map(agentDto),
       ),
-    agentArchive: ({
-      id,
-      force,
-      approved,
-      withoutCloudChanges,
-      repositories,
-    }) =>
-      mutate(async () => {
-        const archived = await context.archive.archiveSession({
-          sessionId: id,
-          ...(force !== undefined ? { force } : {}),
-          ...(approved ? { approved } : {}),
-          ...(withoutCloudChanges ? { withoutCloudChanges } : {}),
-          ...(repositories ? { repositories } : {}),
-        });
-        return archived.status === "archived"
-          ? {
-              status: "archived" as const,
-              session: agentDto(archived.session),
-              ...(archived.notice ? { notice: archived.notice } : {}),
-            }
-          : archived;
-      }),
+    agentArchive: ({ id, force }) =>
+      mutate(async () => ({
+        status: "archived" as const,
+        session: agentDto(
+          await context.archive.archiveSession({
+            sessionId: id,
+            ...(force !== undefined ? { force } : {}),
+          }),
+        ),
+      })),
     agentRestore: ({ id }) =>
       mutate(async () => agentDto(await context.agents.restore(id))),
     agentRevive: ({ id }) =>

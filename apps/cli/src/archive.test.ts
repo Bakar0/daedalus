@@ -1,10 +1,6 @@
 import { describe, expect, test } from "vitest";
-import type { AgentSession, Workspace } from "@daedalus/core";
-import {
-  approvedPaths,
-  archivedOrExplain,
-  workspaceArchivedOrExplain,
-} from "./archive";
+import type { Workspace } from "@daedalus/core";
+import { approvedPaths, workspaceArchivedOrExplain } from "./archive";
 
 describe("archiving from the CLI", () => {
   test("--approve takes a comma list", () => {
@@ -16,11 +12,7 @@ describe("archiving from the CLI", () => {
     expect(approvedPaths(",")).toBeUndefined();
   });
 
-  test("an archived session or workspace comes back as it is", () => {
-    const session = { id: "s1" } as AgentSession;
-    expect(archivedOrExplain({ status: "archived", session }, "s1")).toBe(
-      session,
-    );
+  test("an archived workspace comes back as it is", () => {
     const workspace = { id: "w1" } as Workspace;
     expect(
       workspaceArchivedOrExplain({ status: "archived", workspace }, "w1"),
@@ -29,55 +21,23 @@ describe("archiving from the CLI", () => {
 
   test("what the app would ask names the flag that answers it", () => {
     expect(() =>
-      archivedOrExplain(
-        { status: "needsApproval", paths: ["app/CLAUDE.md", "app/.envrc"] },
-        "s1",
-      ),
-    ).toThrow(
-      "Look at them, then run 'daedal agent archive s1 --approve app/CLAUDE.md,app/.envrc'",
-    );
-    expect(() =>
-      archivedOrExplain(
-        { status: "needsConfirmation", reason: "The runner is offline" },
-        "s1",
-      ),
-    ).toThrow(
-      "This session cannot come home from the cloud: The runner is offline. To archive it with only what this Mac has, leaving the cloud's changes behind, run 'daedal agent archive s1 --without-cloud-changes'",
-    );
-    expect(() =>
       workspaceArchivedOrExplain(
-        { status: "needsApproval", sessionId: "s2", paths: ["app/CLAUDE.md"] },
-        "ops",
-      ),
-    ).toThrow("'daedal agent archive s2 --approve app/CLAUDE.md'");
-    expect(() =>
-      workspaceArchivedOrExplain(
-        { status: "needsConfirmation", sessionId: "s2", reason: "gone" },
-        "ops",
-      ),
-    ).toThrow("'daedal workspace archive ops --without-cloud-changes'");
-  });
-
-  test("too many repositories and a cloud copy with work name their flags", () => {
-    const tooMany = {
-      status: "needsRepositories" as const,
-      repositories: [{ name: "app", bytes: 3 * 1048576 }],
-      maxCount: 20,
-      maxBytes: 512 * 1048576,
-    };
-    expect(() => archivedOrExplain(tooMany, "s1")).toThrow(
-      "More repositories wait in the cloud than come home at once (at most 20, 512 MB in all): app (3 MB). Choose with 'daedal agent archive s1 --repositories <name>,...'",
-    );
-    expect(() =>
-      workspaceArchivedOrExplain({ ...tooMany, sessionId: "s2" }, "ops"),
-    ).toThrow("'daedal agent archive s2 --repositories <name>,...'");
-    expect(() =>
-      workspaceArchivedOrExplain(
-        { status: "needsCloudDecision", lost: ["notes.txt outside git"] },
+        { status: "needsApproval", paths: ["CLAUDE.md", "repos/app/.envrc"] },
         "ops",
       ),
     ).toThrow(
-      "Deleting the workspace's cloud copy would lose: notes.txt outside git. Run 'daedal workspace archive ops --delete-cloud-copy' to delete it anyway, or '--keep-cloud-copy' to keep it asleep",
+      "Look at them, then run 'daedal workspace archive ops --approve CLAUDE.md,repos/app/.envrc'",
     );
+    expect(() =>
+      workspaceArchivedOrExplain(
+        {
+          status: "needsSmaller",
+          items: [
+            { what: "app", bytes: 2048 * 1048576, maxBytes: 1024 * 1048576 },
+          ],
+        },
+        "ops",
+      ),
+    ).toThrow("app is 2048 MB, over 1024 MB");
   });
 });

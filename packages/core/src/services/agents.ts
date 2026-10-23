@@ -7,8 +7,10 @@ import {
   CLOUD_SHELL,
   CLOUD_WORKING_DIRECTORY,
 } from "./cloud-launch";
+import { preparePodSession } from "./cloud-folder";
+import { isPodAccess } from "./move-side";
 import { readdir, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, posix, resolve } from "node:path";
 import {
   findExecutable,
   isPathInside,
@@ -853,6 +855,18 @@ export class AgentService {
     this.cloudReady = ready;
   }
 
+  private cloudHost: (workspaceId: string) => Promise<string> = async () => {
+    throw new DaedalusError("DEPENDENCY", "No cloud service is connected");
+  };
+
+  /**
+   * Makes or wakes a workspace's cloud copy for a new session and returns
+   * its host id. Set by the context, from the cloud service.
+   */
+  onCloudHost(prepare: (workspaceId: string) => Promise<string>): void {
+    this.cloudHost = prepare;
+  }
+
   /** Reads the secrets a cloud session is launched with; set by the context. */
   onCloudSecrets(
     read: (workspaceId: string) => Promise<Record<string, string>>,
@@ -876,10 +890,10 @@ export class AgentService {
         "VALIDATION",
         "A cloud session runs on its own workspace's cloud host",
       );
-    if (input.continueFrom || input.draftBrief || input.command)
+    if (input.command)
       throw new DaedalusError(
-        "VALIDATION",
-        "A cloud session cannot continue a session, draft a brief or run a custom command yet",
+        "CONFLICT",
+        "A custom command cannot run in the cloud; move the workspace home to this Mac to run it",
       );
     if (input.terminal && input.provider)
       throw new DaedalusError(
@@ -889,14 +903,22 @@ export class AgentService {
     const provider = input.terminal ? undefined : (input.provider ?? "claude");
     if (provider !== undefined && provider !== "claude")
       throw new DaedalusError(
-        "VALIDATION",
-        "A cloud session runs Claude or a terminal",
+        "CONFLICT",
+        "Only Claude runs in the cloud; move the workspace home to this Mac to start Codex",
       );
+    if (input.draftBrief && !input.taskId)
+      throw new DaedalusError(
+        "VALIDATION",
+        "Drafting a brief needs the task it is for",
+      );
+    const predecessor = input.continueFrom;
     // A terminal has no account. Claude runs on the one asked for, else the
-    // workspace's default; what it brings to the pod is the cloud service's.
+    // previous session's, else the workspace's default; what it brings to
+    // the pod is the cloud service's.
     const requestedAccount = input.terminal
       ? undefined
       : (input.account ??
+        predecessor?.account ??
         (accountProfile(this.config, "claude", workspace.defaultClaudeAccount)
           ? workspace.defaultClaudeAccount
           : undefined));
@@ -918,22 +940,35 @@ export class AgentService {
     const host = this.hosts.get(input.host);
     const unavailable = await host.probe();
     if (unavailable) throw new DaedalusError("DEPENDENCY", unavailable);
-    const abilities = this.abilities.validate(
-      {
-        kind: input.terminal ? "terminal" : "agent",
-        provider: "claude",
-        hostId: host.id,
-      },
-      input.abilities ?? [],
-    );
+    // A successor holds what its predecessor held.
+    const abilities = predecessor
+      ? this.abilities
+          .list(predecessor.id)
+          .filter((row) => row.enabled)
+          .map((row) => row.ability)
+      : this.abilities.validate(
+          {
+            kind: input.terminal ? "terminal" : "agent",
+            provider: "claude",
+            hostId: host.id,
+          },
+          input.abilities ?? [],
+        );
     const id = crypto.randomUUID();
     const name =
       requestedName ||
       task?.title ||
       (input.terminal ? "Terminal" : "Claude session");
-    const team = input.team;
+    const team =
+      predecessor?.teamId && predecessor.teamHandle
+        ? { teamId: predecessor.teamId, handle: predecessor.teamHandle }
+        : input.team;
     const prompt = buildAgentPrompt({
       taskNumber: task?.number,
+      refinement:
+        input.draftBrief && !predecessor
+          ? await this.refinementInvocation("claude")
+          : undefined,
       message: [
         ...this.abilities.launchLines(abilities),
         ...(team ? this.teamLaunchLines(team) : []),
@@ -941,9 +976,25 @@ export class AgentService {
       ]
         .filter(Boolean)
         .join("\n\n"),
-      mode: "execute",
+      mode: predecessor
+        ? "continue"
+        : input.draftBrief
+          ? "draft-brief"
+          : "execute",
       note: input.note,
     });
+    // Its own folder in the pod, as on this Mac; a successor works where
+    // its predecessor did, and a terminal opens at the workspace root.
+    const workingDirectory = predecessor
+      ? predecessor.workingDirectory
+      : input.terminal
+        ? CLOUD_WORKING_DIRECTORY
+        : await preparePodSession(host, {
+            task,
+            sessionId: id,
+            provider: "claude",
+            instructions: this.config.workspaceInstructionFilesEnabled,
+          });
     const { executable, args } = input.terminal
       ? { executable: CLOUD_SHELL, args: ["-l"] }
       : await resolveProvider(this.config, {
@@ -967,7 +1018,7 @@ export class AgentService {
       tmuxSession: `daedalus_${id.replaceAll("-", "")}`,
       command: executable,
       args,
-      workingDirectory: CLOUD_WORKING_DIRECTORY,
+      workingDirectory,
       status: "starting",
       exitCode: null,
       startedAt: new Date().toISOString(),
@@ -979,9 +1030,11 @@ export class AgentService {
       rebirthRequestedAt: null,
       resumeOnStart: false,
       position: this.repositories.nextAgentPosition(workspace.id),
-      pinnedAt: input.pinned ? new Date().toISOString() : null,
-      color: input.color ?? null,
-      autoRebirthPercent: null,
+      pinnedAt:
+        predecessor?.pinnedAt ??
+        (input.pinned ? new Date().toISOString() : null),
+      color: predecessor?.color ?? input.color ?? null,
+      autoRebirthPercent: predecessor?.autoRebirthPercent ?? null,
       account: profile?.id ?? null,
       teamId: team?.teamId ?? null,
       teamHandle: team?.handle ?? null,
@@ -994,9 +1047,12 @@ export class AgentService {
       session.kind === "agent" ? await this.cloudLaunch(session) : {};
     this.repositories.transaction(() => {
       this.repositories.createAgent(session);
-      for (const ability of abilities)
-        this.abilities.grant(session.id, ability, { live: false });
+      if (!predecessor)
+        for (const ability of abilities)
+          this.abilities.grant(session.id, ability, { live: false });
     });
+    if (predecessor)
+      this.repositories.reassignSessionWorktrees(predecessor.id, session.id);
     try {
       const launched = await this.startCloud(host, session, extras);
       const startup = input.terminal
@@ -1191,11 +1247,14 @@ export class AgentService {
     pinned?: boolean;
     /** The team it joins, and its handle there. A successor keeps both. */
     team?: TeamMembership;
-    /** A cloud host to run on (`ws:<workspaceId>`); this Mac when omitted. */
-    host?: string;
   }): Promise<AgentSession> {
-    if (input.host) return this.spawnCloud({ ...input, host: input.host });
     const workspace = await this.workspaces.getActive(input.workspace);
+    // A workspace in the cloud runs every session there.
+    if (workspace.place === "cloud")
+      return this.spawnCloud({
+        ...input,
+        host: await this.cloudHost(workspace.id),
+      });
     const task = input.taskId ? this.tasks.get(input.taskId) : undefined;
     const requestedName = input.name?.trim();
     if (requestedName && requestedName.length > 240)
@@ -1659,7 +1718,20 @@ export class AgentService {
         rebirthRequestedAt: new Date().toISOString(),
       });
     const note = input.note?.trim();
-    if (note)
+    if (note && predecessor.hostId) {
+      const pod = this.hosts.get(predecessor.hostId);
+      if (!isPodAccess(pod))
+        throw new DaedalusError(
+          "DEPENDENCY",
+          "The cloud workspace cannot take files from this Mac",
+        );
+      await pod.writeFiles([
+        {
+          path: posix.join(predecessor.workingDirectory, REBIRTH_FILE),
+          contents: new TextEncoder().encode(`${note}\n`),
+        },
+      ]);
+    } else if (note)
       await writeFile(
         join(predecessor.workingDirectory, REBIRTH_FILE),
         `${note}\n`,
@@ -1722,17 +1794,13 @@ export class AgentService {
         "CONFLICT",
         "Only agent sessions can hand their work to a new session",
       );
-    if (agent.hostId)
-      throw new DaedalusError(
-        "CONFLICT",
-        "A cloud session cannot be reborn yet",
-      );
     if (agent.archivedAt)
       throw new DaedalusError(
         "CONFLICT",
         "An archived session cannot be reborn; restore it first",
       );
-    if (!(await pathExists(agent.workingDirectory)))
+    // A cloud session's folder is in its pod, where its successor runs.
+    if (!agent.hostId && !(await pathExists(agent.workingDirectory)))
       throw new DaedalusError(
         "CONFLICT",
         `Working directory ${agent.workingDirectory} no longer exists`,

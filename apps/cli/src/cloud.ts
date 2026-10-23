@@ -17,37 +17,28 @@ export const cloudHelp = `Cloud workspace commands:
   daedal cloud sleep <workspace>
   daedal cloud wake <workspace>
   daedal cloud delete <workspace> --force
-  daedal cloud spawn <workspace> [--terminal] [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>]
-  daedal cloud spawn <workspace> --team <lead> [--task <task-ref>] [--name <name>] [--model <model>] [--message <instructions>]
-  daedal cloud move <agent-id> --to cloud|local [--approve] [--repositories <name>,...]
 
 A cloud workspace is a local workspace with a pod of its own on a Daedalus
-gateway: sessions run there, and this Mac keeps the board, the database and
-every decision. 'login' signs in with the gateway's dev login, which only a
-gateway installed with gateway.devLogin offers.
+gateway. 'daedal workspace move <workspace> --to cloud' moves the workspace
+there: its sessions, terminals and files then live in the pod, and this Mac
+keeps the board, the database and every decision. 'login' signs in with the
+gateway's dev login, which only a gateway installed with gateway.devLogin
+offers.
 
-'create' makes the pod for a local workspace, under the same id. 'spawn'
-starts Claude in the workspace root of the pod, or a shell with --terminal.
---account picks the Claude account: a login account signs in in the pod, an
-API-key account brings its key, and a Bedrock account brings its AWS SSO
-profile (never credentials) and signs in through SSO there.
-With --team it starts Claude as a member of that lead's team, which must lead
-from the same workspace; team messages are typed into it at its prompt.
-Its hooks and its 'daedal' calls come back to this Mac, which runs only the
-commands a session needs to report on itself and work its own workspace's
-tasks.
-
-'move' carries a Claude session to its workspace's pod, or back to this
-Mac, once its current turn ends: its conversation, and its repositories'
-commits, staged, unstaged and untracked changes (never ignored files). It
-resumes there with the same history. Moving back lists files changed in the
-pod that steer an agent or run on open, such as .claude/, CLAUDE.md or
-.envrc, and stops there unless --approve accepts them. On a failure the
-session runs where it was.
+'create' makes the pod for a local workspace, under the same id. In a
+workspace in the cloud, 'daedal agent spawn' starts Claude, or a shell with
+--terminal, in the pod; Codex and custom commands need the workspace back on
+this Mac. --account picks the Claude account: a login account signs in in
+the pod, an API-key account brings its key, and a Bedrock account brings its
+AWS SSO profile (never credentials) and signs in through SSO there. Its hooks
+and its 'daedal' calls come back to this Mac, which runs only the commands a
+session needs to report on itself and work its own workspace's tasks.
 
 'sleep' removes the pod and keeps its volume; the sessions running there end,
 and 'daedal agent revive' resumes them after 'wake'. 'delete' removes the pod,
-its volume and its token; the local workspace stays.
+its volume and its token; the local workspace stays. The gateway deletes a
+cloud copy asleep for 30 days; a workspace that lived there comes back to
+this Mac as it was when it moved, with a notice.
 
 The Daedalus app holds this Mac's connection to the gateway. With the app
 closed, a command that needs a runner connects for as long as it runs.`;
@@ -186,132 +177,6 @@ export async function cloudCommand(
           ? await cloud.sleep(reference)
           : await cloud.wake(reference);
     printResult(workspace, json, () => printWorkspace(workspace));
-    return 0;
-  }
-  if (action === "move") {
-    const parsed = parseArguments(args, ["to", "repositories"], ["approve"]);
-    expectPositionals(
-      parsed.positionals,
-      1,
-      "daedal cloud move <agent-id> --to cloud|local [--approve] [--repositories <name>,...]",
-    );
-    const to = parsed.values.to;
-    if (to !== "cloud" && to !== "local")
-      throw new DaedalusError("VALIDATION", "--to is cloud or local");
-    const sessionId = (await context.agents.get(parsed.positionals[0]!)).id;
-    const chosen = parsed.values.repositories
-      ?.split(",")
-      .map((name) => name.trim())
-      .filter(Boolean);
-    const repositories = chosen?.length ? { repositories: chosen } : {};
-    let result = await context.moves.move({ sessionId, to, ...repositories });
-    if (result.status === "needsApproval" && parsed.flags.has("approve"))
-      result = await context.moves.move({
-        sessionId,
-        to,
-        approved: result.paths,
-        ...repositories,
-      });
-    if (result.status === "needsApproval") {
-      printResult(result, json, () => {
-        console.log(
-          "These files changed in the cloud and steer an agent or run on open; move again with --approve to take them:",
-        );
-        for (const path of result.paths) console.log(`  ${path}`);
-      });
-      return 1;
-    }
-    if (result.status === "needsRepositories") {
-      const listed = result.repositories;
-      printResult(result, json, () => {
-        console.log(
-          `This session has more repositories in the cloud than come home at once (at most ${result.maxCount}, ${result.maxBytes} bytes in all); move again with --repositories <name>,... to choose:`,
-        );
-        for (const repository of listed)
-          console.log(`  ${repository.name} (${repository.bytes} bytes)`);
-      });
-      return 1;
-    }
-    const { session, notice } = result;
-    context.moves.dismiss(session.id);
-    if (to === "local")
-      await context.archive
-        .markIfDisposable(session.workspaceId)
-        .catch(() => undefined);
-    printResult(session, json, () => {
-      console.log(
-        `Moved ${session.id} to ${to === "cloud" ? "the cloud" : "this Mac"}`,
-      );
-      if (notice) console.log(notice);
-    });
-    return 0;
-  }
-  if (action === "spawn") {
-    const parsed = parseArguments(
-      args,
-      ["task", "name", "model", "message", "team", "account"],
-      ["terminal"],
-    );
-    expectPositionals(
-      parsed.positionals,
-      1,
-      "daedal cloud spawn <workspace> [--terminal | --team <lead>] [--task <task-ref>] [--name <name>] [--model <model>] [--message <text>]",
-    );
-    if (parsed.values.team && parsed.flags.has("terminal"))
-      throw new DaedalusError(
-        "VALIDATION",
-        "A team member runs Claude; leave out --terminal",
-      );
-    const workspace = await context.workspaces.getActive(
-      parsed.positionals[0]!,
-    );
-    const cloudId = context.repositories.cloudWorkspaceId(workspace.id);
-    if (!cloudId)
-      throw new DaedalusError(
-        "NOT_FOUND",
-        `Workspace '${workspace.name}' has no cloud workspace; run 'daedal cloud create'`,
-      );
-    const task = parsed.values.task
-      ? context.tasks.get(parsed.values.task)
-      : undefined;
-    if (parsed.values.team) {
-      const team = context.teams.get(parsed.values.team);
-      if (team.lead.workspaceId !== workspace.id)
-        throw new DaedalusError(
-          "VALIDATION",
-          `Members start in the lead's workspace, '${team.lead.workspaceId}'`,
-        );
-      const result = await context.teams.spawnMember({
-        team: team.id,
-        addedBy: "user",
-        host: cloudHostId(cloudId),
-        ...(task ? { taskId: task.id } : {}),
-        ...(parsed.values.name ? { name: parsed.values.name } : {}),
-        ...(parsed.values.model ? { model: parsed.values.model } : {}),
-        ...(parsed.values.message
-          ? { instructions: parsed.values.message }
-          : {}),
-      });
-      printResult({ ...result.session, teamHandle: result.handle }, json, () =>
-        console.log(
-          `${result.session.id}\t${result.session.name}\t${result.session.status}\t@${result.handle}`,
-        ),
-      );
-      return 0;
-    }
-    const session = await context.agents.spawn({
-      workspace: workspace.id,
-      host: cloudHostId(cloudId),
-      ...(task ? { taskId: task.id } : {}),
-      ...(parsed.values.name ? { name: parsed.values.name } : {}),
-      ...(parsed.values.model ? { model: parsed.values.model } : {}),
-      ...(parsed.values.account ? { account: parsed.values.account } : {}),
-      ...(parsed.values.message ? { message: parsed.values.message } : {}),
-      ...(parsed.flags.has("terminal") ? { terminal: true } : {}),
-    });
-    printResult(session, json, () =>
-      console.log(`${session.id}\t${session.name}\t${session.status}`),
-    );
     return 0;
   }
   throw new DaedalusError("VALIDATION", `Unknown cloud command '${action}'`);

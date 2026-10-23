@@ -24,6 +24,7 @@ import {
   SignInOffers,
 } from "./sign-in-pages";
 import {
+  CLOUD_COLLECTED_NOTICE,
   CLOUD_COLLECTED_REASON,
   CLOUD_SLEEP_REASON,
   cloudHostId,
@@ -37,7 +38,7 @@ import type { AgentSession } from "../domain";
 import type { CloudLaunchExtras } from "../services/agents";
 import { CloudAccount, type CloudSignIn } from "./cloud-account";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { readKeychainPassword } from "@daedalus/platform";
 import type { AccountProfile } from "../config";
 import {
@@ -532,15 +533,6 @@ export class CloudService {
   }
 
   /**
-   * The gateway's word that a copy holds nothing this Mac needs: asleep a
-   * day, the gateway deletes it. Waking it clears the mark.
-   */
-  async markDisposable(workspaceReference: string): Promise<void> {
-    const workspaceId = await this.#workspaceId(workspaceReference);
-    await (await this.#client()).setDisposable(workspaceId, true);
-  }
-
-  /**
    * Links whose copy the gateway no longer has, its collection having
    * deleted it after a long sleep: forgotten, so the next cloud session
    * makes a new copy. A session still in one stays lost and says why.
@@ -574,11 +566,44 @@ export class CloudService {
             ...session,
             lostReason: CLOUD_COLLECTED_REASON,
           });
+      this.#fallBackToBackup(cloudId);
       await this.account.unpin(cloudId).catch(() => undefined);
       this.options.repositories.unlinkCloudWorkspace(cloudId);
       this.options.hosts.unregister(cloudHostId(cloudId));
       this.options.log?.("cloud_workspace_collected", { workspaceId: cloudId });
     }
+  }
+
+  /**
+   * A workspace that lived in a copy the gateway collected lives on this
+   * Mac again, at the folder it left as a backup: its sessions there, lost,
+   * and a notice on it until the user dismisses it.
+   */
+  #fallBackToBackup(cloudId: string): void {
+    const { repositories } = this.options;
+    const workspaceId = repositories.workspaceForCloud(cloudId);
+    if (
+      !workspaceId ||
+      repositories.workspacePlace(workspaceId).place !== "cloud"
+    )
+      return;
+    const workspace = repositories.findWorkspace(workspaceId);
+    if (!workspace) return;
+    const hostId = cloudHostId(cloudId);
+    repositories.setWorkspacePlace(
+      workspaceId,
+      { place: "mac", notice: CLOUD_COLLECTED_NOTICE },
+      repositories
+        .listAgents({ workspaceId })
+        .filter((session) => session.hostId === hostId)
+        .map((session) => ({
+          id: session.id,
+          hostId: null,
+          workingDirectory: isAbsolute(session.workingDirectory)
+            ? session.workingDirectory
+            : join(workspace.path, session.workingDirectory),
+        })),
+    );
   }
 
   /** Deletes the pod, its volume and its token; the local workspace stays. */

@@ -60,7 +60,6 @@ import {
   safeWorkspacePath,
   unpackFromPod,
   unpackInPod,
-  type WorkspaceFile,
 } from "./workspace-move-files";
 import type { WorkspaceService } from "./workspaces";
 
@@ -884,11 +883,12 @@ export class WorkspaceMoves {
     }
   }
 
-  /** The workspace's sessions a move takes: every one not archived. */
+  /**
+   * The workspace's sessions: a move takes every one, archived ones too, so
+   * a session restored later finds its conversation where the workspace is.
+   */
   #sessions(workspace: Workspace): AgentSession[] {
-    return this.options.repositories
-      .listAgents({ workspaceId: workspace.id })
-      .filter((session) => !session.archivedAt);
+    return this.options.repositories.listAgents({ workspaceId: workspace.id });
   }
 
   /**
@@ -1450,5 +1450,3 @@ function withMain(transcript: TranscriptFiles, text: string): TranscriptFiles {
     ],
   };
 }
-
-export type { WorkspaceFile };

@@ -34,7 +34,6 @@ import { ShutdownService } from "./shutdown";
 import { claudeSyncSeeder } from "../cloud/claude-sync-seeder";
 import { CloudService, type CloudServiceOptions } from "../cloud/cloud-service";
 import { CLOUD_LAUNCH_SECRETS } from "./cloud-launch";
-import { SessionMoves } from "./session-move";
 import { WorkspaceMoves } from "./workspace-move";
 import { CloudSessions } from "../cloud/cloud-sessions";
 import { SessionArchive } from "./session-archive";
@@ -102,8 +101,6 @@ export interface ApplicationContext {
   hosts: SessionHosts;
   /** Cloud workspaces: the gateway sign-in and the link to their runners. */
   cloud: CloudService;
-  /** Moving sessions between this Mac and their workspace's cloud pod. */
-  moves: SessionMoves;
   /** Moving whole workspaces between this Mac and their cloud copy. */
   workspaceMoves: WorkspaceMoves;
   /** Waking a cloud workspace and resuming the sessions its sleep ended. */
@@ -279,6 +276,7 @@ export async function createApplicationContext(
     log: cloudLog,
   });
   agents.onCloudLaunch((session) => cloud.prepareLaunch(session));
+  agents.onCloudHost((workspaceId) => cloud.prepareForSession(workspaceId));
   // The user's skills, commands, plugins and remote MCP servers.
   cloud.addLaunchSeeder(claudeSyncSeeder({ config, log: cloudLog }));
   agents.onCloudReady((session, launch) => cloud.autoSignIn(session, launch));
@@ -369,19 +367,6 @@ export async function createApplicationContext(
     await activity.restore();
     await activity.decay();
   }
-  const moves = new SessionMoves({
-    config,
-    repositories,
-    workspaces,
-    agents,
-    hosts,
-    cloud,
-    content: workspaceContent,
-    // Read from disk: a hook's event may have come through another process.
-    activity: async (sessionId) =>
-      (await activity.binding(sessionId))?.activity ??
-      activity.get(sessionId)?.activity,
-  });
   const workspaceMoves = new WorkspaceMoves({
     config,
     repositories,
@@ -426,15 +411,13 @@ export async function createApplicationContext(
     hosts,
     cloud,
     cloudSessions: new CloudSessions({ repositories, agents, cloud }),
-    moves,
     workspaceMoves,
     archive: new SessionArchive({
       repositories,
       agents,
       workspaces,
-      moves,
+      workspaceMoves,
       cloud,
-      hosts,
     }),
     // Watchers are kernel resources held outside the database, so they are
     // released here rather than left to the process exiting.

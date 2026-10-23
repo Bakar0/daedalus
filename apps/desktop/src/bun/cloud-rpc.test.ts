@@ -1,9 +1,12 @@
+import { join } from "node:path";
 import { unlink } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import {
   CloudAccount,
   CLOUD_SLEEP_REASON,
   cloudHostId,
+  CLOUD_COLLECTED_NOTICE,
+  CLOUD_COLLECTED_REASON,
   createApplicationContext,
   type ApplicationContext,
   type ConnectRelay,
@@ -59,6 +62,27 @@ class FakeCloudHost implements SessionHost {
   readonly launches: SessionHostLaunch[] = [];
 
   constructor(readonly id: string) {}
+
+  readonly files = new Map<string, Uint8Array>();
+  /** Every command fails, as a runner that lost its volume would. */
+  broken = false;
+  async run(command: { executable: string; args: string[] }) {
+    if (this.broken)
+      return { exitCode: 1, stdout: "", stderr: "no such volume" };
+    // A folder is free until something writes in it.
+    const free =
+      command.executable === "test" &&
+      ![...this.files.keys()].some((path) =>
+        path.startsWith(`${command.args[1]}/`),
+      );
+    return { exitCode: free ? 1 : 0, stdout: "", stderr: "" };
+  }
+  async readFile(path: string) {
+    return this.files.get(path);
+  }
+  async writeFiles(files: { path: string; contents: Uint8Array }[]) {
+    for (const file of files) this.files.set(file.path, file.contents);
+  }
 
   async probe() {
     return undefined;
@@ -234,6 +258,16 @@ async function withCloud(
   });
 }
 
+/** The workspace lives in the cloud: its sessions run there. */
+const inCloud = (
+  context: Awaited<ReturnType<typeof createApplicationContext>>,
+  workspaceId: string,
+) =>
+  context.repositories.setWorkspacePlace(workspaceId, {
+    place: "cloud",
+    notice: null,
+  });
+
 describe("cloud RPC", () => {
   test("signs in with the dev login, shows the account and signs out", async () => {
     await withCloud(async (rpc) => {
@@ -368,12 +402,12 @@ describe("cloud RPC", () => {
     });
   });
 
-  test("a cloud spawn makes the cloud workspace first, and runs Claude or a terminal", async () => {
+  test("a session in a workspace in the cloud makes its copy first, and only Claude runs there", async () => {
     await withCloud(async (rpc, context, gateway) => {
       const workspace = await context.workspaces.create({ name: "Pods" });
+      inCloud(context, workspace.id);
       const signedOut = await rpc.agentSpawn({
         workspace: workspace.id,
-        cloud: true,
       });
       expect(!signedOut.ok && signedOut.error.message).toBe(
         "Sign in to a cloud gateway in Settings › Cloud to run sessions in the cloud",
@@ -384,11 +418,10 @@ describe("cloud RPC", () => {
       });
       const codex = await rpc.agentSpawn({
         workspace: workspace.id,
-        cloud: true,
         provider: "codex",
       });
       expect(!codex.ok && codex.error.message).toBe(
-        "A cloud session runs Claude or a terminal",
+        "Only Claude runs in the cloud; move the workspace home to this Mac to start Codex",
       );
       // The cloud workspace was made on the way, as for any first session.
       expect(context.repositories.cloudWorkspaceId(workspace.id)).toBeDefined();
@@ -406,6 +439,7 @@ describe("cloud RPC", () => {
         email: "dev@example.com",
       });
       const workspace = await context.workspaces.create({ name: "Pods" });
+      inCloud(context, workspace.id);
       await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
       const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
       const host = new FakeCloudHost(cloudHostId(cloudId));
@@ -413,7 +447,6 @@ describe("cloud RPC", () => {
 
       const spawned = await rpc.agentSpawn({
         workspace: workspace.id,
-        cloud: true,
       });
       expect(spawned.ok).toBe(true);
       if (!spawned.ok) return;
@@ -441,17 +474,16 @@ describe("cloud RPC", () => {
         email: "dev@example.com",
       });
       const workspace = await context.workspaces.create({ name: "Pods" });
+      inCloud(context, workspace.id);
       await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
       const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
       const host = new FakeCloudHost(cloudHostId(cloudId));
       context.hosts.register(host);
       const first = await rpc.agentSpawn({
         workspace: workspace.id,
-        cloud: true,
       });
       const second = await rpc.agentSpawn({
         workspace: workspace.id,
-        cloud: true,
       });
       if (!first.ok || !second.ok) throw new Error("spawn failed");
 
@@ -475,13 +507,13 @@ describe("cloud RPC", () => {
         email: "dev@example.com",
       });
       const workspace = await context.workspaces.create({ name: "Pods" });
+      inCloud(context, workspace.id);
       await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
       const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
       const host = new FakeCloudHost(cloudHostId(cloudId));
       context.hosts.register(host);
       const spawned = await rpc.agentSpawn({
         workspace: workspace.id,
-        cloud: true,
       });
       if (!spawned.ok) throw new Error("spawn failed");
 
@@ -509,13 +541,13 @@ describe("cloud RPC", () => {
         email: "dev@example.com",
       });
       const workspace = await context.workspaces.create({ name: "Pods" });
+      inCloud(context, workspace.id);
       await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
       const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
       const host = new FakeCloudHost(cloudHostId(cloudId));
       context.hosts.register(host);
       const spawned = await rpc.agentSpawn({
         workspace: workspace.id,
-        cloud: true,
       });
       if (!spawned.ok) throw new Error("spawn failed");
 
@@ -532,30 +564,23 @@ describe("cloud RPC", () => {
     });
   });
 
-  test("archiving a session born in the cloud asks first, then keeps it a cloud one", async () => {
+  test("a session in the cloud archives there, unasked", async () => {
     await withCloud(async (rpc, context) => {
       await rpc.cloudSignIn({
         gatewayUrl: "http://localhost:8080",
         email: "dev@example.com",
       });
       const workspace = await context.workspaces.create({ name: "Pods" });
+      inCloud(context, workspace.id);
       await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
       const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
       context.hosts.register(new FakeCloudHost(cloudHostId(cloudId)));
       const spawned = await rpc.agentSpawn({
         workspace: workspace.id,
-        cloud: true,
       });
       if (!spawned.ok) throw new Error("spawn failed");
 
-      const asked = await rpc.agentArchive({ id: spawned.data.id });
-      expect(asked.ok && asked.data.status).toBe("needsConfirmation");
-      expect((await context.agents.get(spawned.data.id)).archivedAt).toBeNull();
-
-      const archived = await rpc.agentArchive({
-        id: spawned.data.id,
-        withoutCloudChanges: true,
-      });
+      const archived = await rpc.agentArchive({ id: spawned.data.id });
       expect(archived.ok && archived.data.status).toBe("archived");
       const session = await context.agents.get(spawned.data.id);
       expect(session.archivedAt).not.toBeNull();
@@ -563,55 +588,45 @@ describe("cloud RPC", () => {
     });
   });
 
-  test("archiving a workspace archives its cloud sessions, then deletes its cloud copy", async () => {
+  test("archiving a workspace brings it home first, then deletes its cloud copy", async () => {
     await withCloud(async (rpc, context, gateway) => {
       await rpc.cloudSignIn({
         gatewayUrl: "http://localhost:8080",
         email: "dev@example.com",
       });
       const workspace = await context.workspaces.create({ name: "Pods" });
+      inCloud(context, workspace.id);
       await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
       const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
-      context.hosts.register(new FakeCloudHost(cloudHostId(cloudId)));
+      const host = new FakeCloudHost(cloudHostId(cloudId));
+      context.hosts.register(host);
       const spawned = await rpc.agentSpawn({
         workspace: workspace.id,
-        cloud: true,
       });
       if (!spawned.ok) throw new Error("spawn failed");
 
-      const asked = await rpc.workspaceArchive({ reference: workspace.id });
-      expect(asked.ok && asked.data).toMatchObject({
-        status: "needsConfirmation",
-        sessionId: spawned.data.id,
-      });
+      // Its copy cannot come home: nothing is archived or deleted.
+      host.broken = true;
+      const refused = await rpc.workspaceArchive({ reference: workspace.id });
+      expect(!refused.ok && refused.error.message).toMatch(
+        /^Pods could not come home from the cloud, so it is not archived: /,
+      );
       expect(gateway.workspaces.has(cloudId)).toBe(true);
       expect(
         (await context.workspaces.get(workspace.id)).archivedAt,
       ).toBeNull();
 
-      // Archived without coming home, its conversation is only in the cloud
-      // copy: deleting that is asked about.
-      const lost = await rpc.workspaceArchive({
-        reference: workspace.id,
-        withoutCloudChanges: true,
+      // Home again, its copy kept asleep: archiving deletes the copy.
+      context.repositories.setWorkspacePlace(workspace.id, {
+        place: "mac",
+        notice: null,
       });
-      expect(lost.ok && lost.data.status).toBe("needsCloudDecision");
-      if (!lost.ok || lost.data.status !== "needsCloudDecision") return;
-      expect(lost.data.lost[0]).toMatch(/archived without coming home/);
-      expect(gateway.workspaces.has(cloudId)).toBe(true);
-      const archived = await rpc.workspaceArchive({
-        reference: workspace.id,
-        withoutCloudChanges: true,
-        cloudCopy: "delete",
-      });
+      const archived = await rpc.workspaceArchive({ reference: workspace.id });
       expect(archived.ok && archived.data.status).toBe("archived");
       expect(gateway.workspaces.has(cloudId)).toBe(false);
       expect(
         context.repositories.cloudWorkspaceId(workspace.id),
       ).toBeUndefined();
-      expect(
-        (await context.agents.get(spawned.data.id)).archivedAt,
-      ).not.toBeNull();
       // Restored, it is local; the next cloud session makes a new copy.
       await rpc.workspaceRestore({ reference: workspace.id });
       expect(
@@ -664,13 +679,13 @@ describe("cloud RPC", () => {
         email: "dev@example.com",
       });
       const workspace = await context.workspaces.create({ name: "Pods" });
+      inCloud(context, workspace.id);
       await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
       const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
       const host = new FakeCloudHost(cloudHostId(cloudId));
       context.hosts.register(host);
       const spawned = await rpc.agentSpawn({
         workspace: workspace.id,
-        cloud: true,
       });
       if (!spawned.ok) throw new Error("spawn failed");
       // Routines are granted on this Mac; a session keeps them when it
@@ -719,13 +734,13 @@ describe("cloud RPC", () => {
         email: "dev@example.com",
       });
       const workspace = await context.workspaces.create({ name: "Pods" });
+      inCloud(context, workspace.id);
       await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
       const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
       const host = new FakeCloudHost(cloudHostId(cloudId));
       context.hosts.register(host);
       const spawned = await rpc.agentSpawn({
         workspace: workspace.id,
-        cloud: true,
       });
       if (!spawned.ok) throw new Error("spawn failed");
       // Read as asleep, but the gateway refused the sleep: the pod and its
@@ -746,20 +761,20 @@ describe("cloud RPC", () => {
     });
   });
 
-  test("a copy the gateway collected is forgotten, and its session says why", async () => {
+  test("a workspace whose copy the gateway collected comes back to this Mac with a notice", async () => {
     await withCloud(async (rpc, context, gateway) => {
       await rpc.cloudSignIn({
         gatewayUrl: "http://localhost:8080",
         email: "dev@example.com",
       });
       const workspace = await context.workspaces.create({ name: "Pods" });
+      inCloud(context, workspace.id);
       await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
       const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
       const host = new FakeCloudHost(cloudHostId(cloudId));
       context.hosts.register(host);
       const spawned = await rpc.agentSpawn({
         workspace: workspace.id,
-        cloud: true,
       });
       if (!spawned.ok) throw new Error("spawn failed");
       await rpc.cloudWorkspaceSleep({ workspace: workspace.id });
@@ -773,8 +788,17 @@ describe("cloud RPC", () => {
       ).toBeUndefined();
       expect(await context.agents.get(spawned.data.id)).toMatchObject({
         status: "lost",
-        lostReason: "Its cloud workspace was deleted after a long sleep",
+        lostReason: CLOUD_COLLECTED_REASON,
+        hostId: null,
+        workingDirectory: join(workspace.path, spawned.data.workingDirectory),
       });
+      const back = await context.workspaces.get(workspace.id);
+      expect(back.place).toBeUndefined();
+      expect(back.cloudNotice).toBe(CLOUD_COLLECTED_NOTICE);
+      await rpc.workspaceNoticeDismiss({ reference: workspace.id });
+      expect(
+        (await context.workspaces.get(workspace.id)).cloudNotice,
+      ).toBeUndefined();
     });
   });
 
@@ -802,13 +826,13 @@ describe("cloud RPC", () => {
         email: "dev@example.com",
       });
       const workspace = await context.workspaces.create({ name: "Pods" });
+      inCloud(context, workspace.id);
       await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
       const first = context.repositories.cloudWorkspaceId(workspace.id)!;
       const host = new FakeCloudHost(cloudHostId(first));
       context.hosts.register(host);
       const spawned = await rpc.agentSpawn({
         workspace: workspace.id,
-        cloud: true,
       });
       if (!spawned.ok) throw new Error(spawned.error.message);
       await rpc.cloudWorkspaceSleep({ workspace: workspace.id });
@@ -1004,13 +1028,13 @@ describe("cloud RPC", () => {
           email: "dev@example.com",
         });
         const workspace = await context.workspaces.create({ name: "Pods" });
+        inCloud(context, workspace.id);
         await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
         const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
         const host = new FakeCloudHost(cloudHostId(cloudId));
         context.hosts.register(host);
         const session = await rpc.agentSpawn({
           workspace: workspace.id,
-          cloud: true,
         });
         if (!session.ok) throw new Error(session.error.message);
         const url =

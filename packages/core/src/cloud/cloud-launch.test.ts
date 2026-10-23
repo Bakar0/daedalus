@@ -46,8 +46,9 @@ class FakePod {
   readonly launches: RunnerLaunch[] = [];
   readonly live = new Set<string>();
   writes = 0;
-  /** What the session's pane shows. */
+  /** What a session's pane shows, until it is sent /login. */
   screen = "Claude Code v2.1.303\nshift+tab to cycle";
+  readonly signingIn = new Set<string>();
   readonly typed: string[] = [];
   readonly keys: string[][] = [];
   readonly commands: string[][] = [];
@@ -70,12 +71,12 @@ class FakePod {
         case "host.listLive":
           return [...this.live];
         case "host.capture":
-          return this.screen;
+          return this.signingIn.has(p.session as string)
+            ? "Select login method:\n❯ 1. Claude account with subscription"
+            : this.screen;
         case "host.send":
           this.typed.push(p.text as string);
-          if (p.text === "/login")
-            this.screen =
-              "Select login method:\n❯ 1. Claude account with subscription";
+          if (p.text === "/login") this.signingIn.add(p.session as string);
           return null;
         case "host.sendKeys":
           this.keys.push(p.keys as string[]);
@@ -90,6 +91,9 @@ class FakePod {
               stdout: "",
               stderr: "",
             };
+          // A session's folder.
+          if (p.executable === "mkdir")
+            return { exitCode: 0, stdout: "", stderr: "" };
           if (p.executable === "chmod" || p.executable === "rm") {
             this.commands.push([p.executable as string, ...args]);
             if (p.executable === "rm")
@@ -105,7 +109,13 @@ class FakePod {
             : { base64: Buffer.from(text).toString("base64") };
         }
         case "fs.write":
-          this.writes += 1;
+          // The seeding's writes; a session's own folder is not counted.
+          if (
+            (p.files as { path: string }[]).some(
+              (file) => !file.path.startsWith("worktrees/"),
+            )
+          )
+            this.writes += 1;
           for (const file of p.files as { path: string; base64: string }[])
             this.files.set(
               file.path,
@@ -154,6 +164,11 @@ const setUp = async (
     userId: "u1",
   });
   context.repositories.linkCloudWorkspace(workspace.id, cloudId);
+  context.repositories.setWorkspacePlace(workspace.id, {
+    place: "cloud",
+    notice: null,
+  });
+  context.agents.onCloudHost(async () => cloudHostId(cloudId));
   const pod = new FakePod();
   context.hosts.register(new RemoteSessionHost(cloudId, pod.transport));
   return { context, workspace, pod, hostId: cloudHostId(cloudId) };
@@ -169,7 +184,6 @@ describe("cloud launch seeding", () => {
       );
       const session = await context.agents.spawn({
         workspace: workspace.id,
-        host: hostId,
       });
       expect(session.status).toBe("running");
       const state = JSON.parse(pod.files.get(".home/.claude.json")!);
@@ -186,7 +200,7 @@ describe("cloud launch seeding", () => {
       expect(pod.writes).toBe(2);
 
       // A second launch finds it all there and writes nothing.
-      await context.agents.spawn({ workspace: workspace.id, host: hostId });
+      await context.agents.spawn({ workspace: workspace.id });
       expect(pod.writes).toBe(2);
       context.close();
     });
@@ -209,7 +223,7 @@ describe("cloud launch seeding", () => {
         join(context.config.claudeHome, "remote-settings-consent.json"),
         JSON.stringify(consent),
       );
-      await context.agents.spawn({ workspace: workspace.id, host: hostId });
+      await context.agents.spawn({ workspace: workspace.id });
       expect(
         JSON.parse(
           pod.files.get(".home/.claude/remote-settings-consent.json")!,
@@ -234,7 +248,6 @@ describe("cloud launch seeding", () => {
       });
       const session = await context.agents.spawn({
         workspace: workspace.id,
-        host: hostId,
       });
       expect(session.status).toBe("running");
       expect(seen).toEqual([`${hostId} false undefined`]);
@@ -286,7 +299,7 @@ describe("cloud launch seeding", () => {
           }),
         );
         await setCloudMcpServer(context.config, "docs", true);
-        await context.agents.spawn({ workspace: workspace.id, host: hostId });
+        await context.agents.spawn({ workspace: workspace.id });
         expect(pod.files.get(".home/.claude/skills/review/SKILL.md")).toBe(
           "review",
         );
@@ -334,7 +347,7 @@ describe("cloud launch seeding", () => {
         // Removed on the Mac, removed in the pod; nothing else written.
         await Bun.$`rm ${join(claude, "commands/commit-msg.md")}`;
         const writes = pod.writes;
-        await context.agents.spawn({ workspace: workspace.id, host: hostId });
+        await context.agents.spawn({ workspace: workspace.id });
         expect(pod.files.has(".home/.claude/commands/commit-msg.md")).toBe(
           false,
         );
@@ -351,7 +364,6 @@ describe("cloud launch seeding", () => {
       const { context, workspace, pod, hostId } = await setUp(home);
       await context.agents.spawn({
         workspace: workspace.id,
-        host: hostId,
         terminal: true,
       });
       expect(pod.files.size).toBe(0);
@@ -370,7 +382,6 @@ describe("cloud accounts", () => {
       });
       const session = await context.agents.spawn({
         workspace: workspace.id,
-        host: hostId,
         account: "Work",
       });
       expect(session.account).not.toBeNull();
@@ -407,7 +418,6 @@ describe("cloud accounts", () => {
       await expect(
         context.agents.spawn({
           workspace: workspace.id,
-          host: hostId,
           account: "Keys",
         }),
       ).rejects.toThrow("does not sign in with AWS SSO");
@@ -429,15 +439,13 @@ describe("cloud accounts", () => {
       await context.accounts.add("claude", "Me", "login");
       await context.agents.spawn({
         workspace: workspace.id,
-        host: hostId,
         account: "Keys",
       });
       await context.agents.spawn({
         workspace: workspace.id,
-        host: hostId,
         account: "Me",
       });
-      await context.agents.spawn({ workspace: workspace.id, host: hostId });
+      await context.agents.spawn({ workspace: workspace.id });
       expect(pod.launches.map((launch) => launch.secrets)).toEqual([
         { ANTHROPIC_API_KEY: "sk-ant-test-key" },
         undefined,
@@ -453,7 +461,6 @@ describe("cloud accounts", () => {
       await expect(
         context.agents.spawn({
           workspace: workspace.id,
-          host: hostId,
           account: "Nobody",
         }),
       ).rejects.toThrow("No Claude account named 'Nobody'");
@@ -468,7 +475,6 @@ describe("automatic sign-in", () => {
       const { context, workspace, pod, hostId } = await setUp(home);
       const session = await context.agents.spawn({
         workspace: workspace.id,
-        host: hostId,
       });
       // The spawn found no sign-in file in the pod, so /login went in.
       for (let tries = 0; tries < 100 && !pod.keys.length; tries++)
@@ -502,13 +508,11 @@ describe("automatic sign-in", () => {
       pod.files.set(".home/.claude/.credentials.json", "{}");
       const plain = await context.agents.spawn({
         workspace: workspace.id,
-        host: hostId,
       });
       await context.cloud.autoSignIn(plain);
       pod.files.delete(".home/.claude/.credentials.json");
       const keyed = await context.agents.spawn({
         workspace: workspace.id,
-        host: hostId,
         account: "Keys",
       });
       await context.cloud.autoSignIn(keyed, { apiKey: true });

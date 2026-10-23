@@ -28,11 +28,7 @@ import { accountChecks, accountCommand, accountHelp } from "./accounts";
 import { routineCommand, routineHelp, sessionCommand } from "./routines";
 import { spawnTeamMember, takeTeamOption, teamCommand, teamHelp } from "./team";
 import { cloudCommand, cloudHelp } from "./cloud";
-import {
-  approvedPaths,
-  archivedOrExplain,
-  workspaceArchivedOrExplain,
-} from "./archive";
+import { approvedPaths, workspaceArchivedOrExplain } from "./archive";
 import {
   execCommand,
   execJsonFlag,
@@ -101,7 +97,7 @@ Usage:
   daedal routine <add|list|get|enable|disable|run|remove|purpose|pause|resume|runs|start|done|fail|report|resolve|reports|feedback> ... [--json]
   daedal team <say|chat|list|goal> ... [--json]
   daedal secret <list|set|remove> ... [--json]
-  daedal cloud <login|status|logout|create|list|get|sleep|wake|delete|spawn> ... [--json]
+  daedal cloud <login|status|logout|create|list|get|sleep|wake|delete> ... [--json]
   daedal exec [--secret <NAME>]... -- <command> [<args>...]
   daedal attention "<reason>" [--session <agent-id>] [--clear] [--json]
   daedal notify "<message>" [--level info|success|error] [--desktop] [--json]
@@ -128,8 +124,7 @@ const commandHelp: Record<string, string> = {
       [--default-model <model>|none] [--auto-rebirth <percent>|off|default]
       [--default-claude-account <account>|default]
       [--default-codex-account <account>|default]
-  daedal workspace archive <workspace> [--without-cloud-changes]
-      [--delete-cloud-copy|--keep-cloud-copy]
+  daedal workspace archive <workspace> [--approve <path>,...]
   daedal workspace move <workspace> --to cloud|mac [--approve <path>,...]
       [--stop-working]
   daedal workspace restore <workspace>
@@ -210,8 +205,7 @@ it was cleared, journal entries whose heading names the task, and done.`,
   daedal agent wait [--session <agent-id>] [--workspace <workspace>] [--for attention|idle] [--timeout <seconds>]
   daedal agent attach <agent-id>
   daedal agent send <agent-id> <text>
-  daedal agent archive <agent-id> [--force] [--approve <path>,...]
-      [--without-cloud-changes] [--repositories <name>,...]
+  daedal agent archive <agent-id> [--force]
   daedal agent rebirth <agent-id>
   daedal agent continue [<agent-id>] [--note-file <path|->] [--provider <codex|claude>] [--model <model>] [--account <account>] [--message <text>]
   daedal agent restore <agent-id>
@@ -635,34 +629,16 @@ async function workspaceCommand(
     return 0;
   }
   if (action === "archive") {
-    const parsed = parseArguments(
-      args,
-      [],
-      ["without-cloud-changes", "delete-cloud-copy", "keep-cloud-copy"],
-    );
+    const parsed = parseArguments(args, ["approve"]);
     expectPositionals(
       parsed.positionals,
       1,
-      "daedal workspace archive <workspace> [--without-cloud-changes] [--delete-cloud-copy|--keep-cloud-copy]",
+      "daedal workspace archive <workspace> [--approve <path>,...]",
     );
-    if (
-      parsed.flags.has("delete-cloud-copy") &&
-      parsed.flags.has("keep-cloud-copy")
-    )
-      throw new DaedalusError(
-        "VALIDATION",
-        "Choose --delete-cloud-copy or --keep-cloud-copy, not both",
-      );
+    const approved = approvedPaths(parsed.values.approve);
     const archived = await context.archive.archiveWorkspace({
       reference: parsed.positionals[0]!,
-      ...(parsed.flags.has("delete-cloud-copy")
-        ? { cloudCopy: "delete" as const }
-        : parsed.flags.has("keep-cloud-copy")
-          ? { cloudCopy: "keep" as const }
-          : {}),
-      ...(parsed.flags.has("without-cloud-changes")
-        ? { withoutCloudChanges: true }
-        : {}),
+      ...(approved ? { approved } : {}),
     });
     const result = workspaceArchivedOrExplain(archived, parsed.positionals[0]!);
     printResult(result, json, () =>
@@ -678,10 +654,7 @@ async function workspaceCommand(
     const to = parsed.values.to;
     if (to !== "cloud" && to !== "mac")
       throw new DaedalusError("VALIDATION", "--to is cloud or mac");
-    const approved = parsed.values.approve
-      ?.split(",")
-      .map((path) => path.trim())
-      .filter(Boolean);
+    const approved = approvedPaths(parsed.values.approve);
     const result = await context.workspaceMoves.move({
       workspace: parsed.positionals[0]!,
       to,
@@ -1195,12 +1168,10 @@ async function agentCommand(
   if (action === "revive") return agentReviveCommand(context, args, json);
   const parsed = parseArguments(
     args,
-    action === "archive" ? ["after-pid", "approve", "repositories"] : [],
-    action === "stop" || action === "delete"
+    action === "archive" ? ["after-pid"] : [],
+    action === "stop" || action === "delete" || action === "archive"
       ? ["force"]
-      : action === "archive"
-        ? ["force", "without-cloud-changes"]
-        : [],
+      : [],
   );
   if (action === "get") {
     expectPositionals(parsed.positionals, 1, "daedal agent get <agent-id>");
@@ -1258,7 +1229,7 @@ async function agentCommand(
     expectPositionals(
       parsed.positionals,
       1,
-      "daedal agent archive <agent-id> [--force] [--approve <path>,...] [--without-cloud-changes] [--repositories <name>,...]",
+      "daedal agent archive <agent-id> [--force]",
     );
     // Undocumented: how `agent continue` archives the session it runs in
     // once it has exited. See `archiveAfterExit`.
@@ -1276,23 +1247,11 @@ async function agentCommand(
       );
       return 0;
     }
-    const approved = approvedPaths(parsed.values.approve);
-    const chosen = approvedPaths(parsed.values.repositories);
-    const archived = await context.archive.archiveSession({
+    const result = await context.archive.archiveSession({
       sessionId: (await context.agents.get(parsed.positionals[0]!)).id,
       force: parsed.flags.has("force"),
-      ...(approved ? { approved } : {}),
-      ...(chosen ? { repositories: chosen } : {}),
-      ...(parsed.flags.has("without-cloud-changes")
-        ? { withoutCloudChanges: true }
-        : {}),
     });
-    const result = archivedOrExplain(archived, parsed.positionals[0]!);
-    printResult(result, json, () => {
-      console.log(`Archived agent ${result.id}`);
-      if (archived.status === "archived" && archived.notice)
-        console.log(archived.notice);
-    });
+    printResult(result, json, () => console.log(`Archived agent ${result.id}`));
     return 0;
   }
   if (action === "rebirth") {

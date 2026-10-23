@@ -81,6 +81,23 @@ class FakeCloudHost implements SessionHost {
 
   constructor(readonly id: string) {}
 
+  readonly files = new Map<string, Uint8Array>();
+  async run(command: { executable: string; args: string[] }) {
+    // A folder is free until something writes in it.
+    const free =
+      command.executable === "test" &&
+      ![...this.files.keys()].some((path) =>
+        path.startsWith(`${command.args[1]}/`),
+      );
+    return { exitCode: free ? 1 : 0, stdout: "", stderr: "" };
+  }
+  async readFile(path: string) {
+    return this.files.get(path);
+  }
+  async writeFiles(files: { path: string; contents: Uint8Array }[]) {
+    for (const file of files) this.files.set(file.path, file.contents);
+  }
+
   async probe() {
     return undefined;
   }
@@ -205,13 +222,18 @@ describe("teams", () => {
         userId: "u1",
       });
       context.repositories.linkCloudWorkspace("shop", cloudId);
+      // The workspace moved to the cloud; its next member runs there.
+      context.repositories.setWorkspacePlace("shop", {
+        place: "cloud",
+        notice: null,
+      });
+      context.agents.onCloudHost(async () => cloudHostId(cloudId));
       const host = new FakeCloudHost(cloudHostId(cloudId));
       context.hosts.register(host);
       const { session, handle } = await context.teams.spawnMember({
         team: team.id,
         addedBy: "user",
         name: "pod worker",
-        host: host.id,
       });
       expect(session.hostId).toBe(host.id);
       // Busy: nothing is typed, and the message waits for the next flush.

@@ -57,6 +57,23 @@ class FakeCloudHost implements SessionHost {
 
   constructor(readonly id: string) {}
 
+  readonly files = new Map<string, Uint8Array>();
+  async run(command: { executable: string; args: string[] }) {
+    // A folder is free until something writes in it.
+    const free =
+      command.executable === "test" &&
+      ![...this.files.keys()].some((path) =>
+        path.startsWith(`${command.args[1]}/`),
+      );
+    return { exitCode: free ? 1 : 0, stdout: "", stderr: "" };
+  }
+  async readFile(path: string) {
+    return this.files.get(path);
+  }
+  async writeFiles(files: { path: string; contents: Uint8Array }[]) {
+    for (const file of files) this.files.set(file.path, file.contents);
+  }
+
   async probe() {
     return this.online ? undefined : "The workspace is asleep";
   }
@@ -105,24 +122,29 @@ const setUp = async (home: string) => {
     userId: "u1",
   });
   context.repositories.linkCloudWorkspace(workspace.id, cloudId);
+  context.repositories.setWorkspacePlace(workspace.id, {
+    place: "cloud",
+    notice: null,
+  });
+  context.agents.onCloudHost(async () => cloudHostId(cloudId));
   const host = new FakeCloudHost(cloudHostId(cloudId));
   context.hosts.register(host);
   return { context, tmux, workspace, host };
 };
 
 describe("cloud sessions", () => {
-  test("spawn runs Claude on the cloud host in the workspace root", async () => {
+  test("spawn runs Claude on the cloud host in a session folder of its own", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const { context, tmux, workspace, host } = await setUp(home);
       context.agents.onCloudSecrets(async () => ({ ANTHROPIC_API_KEY: "k" }));
       const session = await context.agents.spawn({
         workspace: workspace.id,
-        host: host.id,
         message: "Hello",
       });
+      const folder = `worktrees/unassigned/claude-${session.id.slice(0, 8)}`;
       expect(session).toMatchObject({
         hostId: host.id,
-        workingDirectory: ".",
+        workingDirectory: folder,
         status: "running",
         provider: "claude",
         providerSessionId: session.id,
@@ -130,7 +152,13 @@ describe("cloud sessions", () => {
       expect(tmux.launches).toEqual([]);
       const launch = host.launches[0]!;
       expect(launch.executable).toBe("claude");
-      expect(launch.cwd).toBe(".");
+      expect(launch.cwd).toBe(folder);
+      // Its instructions name the pod's paths, not this Mac's.
+      const instructions = new TextDecoder().decode(
+        host.files.get(`${folder}/AGENTS.md`),
+      );
+      expect(instructions).toContain("/workspace/BRIEF.md");
+      expect(instructions).not.toContain(home);
       expect(launch.secrets).toEqual({ ANTHROPIC_API_KEY: "k" });
       expect(launch.env).toMatchObject({
         DAEDALUS_SESSION_ID: session.id,
@@ -162,7 +190,6 @@ describe("cloud sessions", () => {
         await expect(
           context.agents.spawn({
             workspace: workspace.id,
-            host: host.id,
             abilities: [ability],
           }),
         ).rejects.toMatchObject({
@@ -172,7 +199,6 @@ describe("cloud sessions", () => {
       expect(host.launches).toEqual([]);
       const session = await context.agents.spawn({
         workspace: workspace.id,
-        host: host.id,
       });
       for (const ability of ["orchestration", "routines"])
         expect(() =>
@@ -188,7 +214,6 @@ describe("cloud sessions", () => {
       const { context, workspace, host } = await setUp(home);
       const session = await context.agents.spawn({
         workspace: workspace.id,
-        host: host.id,
       });
       expect(session.status).toBe("running");
       expect(host.launches[0]!.secrets).toEqual({});
@@ -196,27 +221,18 @@ describe("cloud sessions", () => {
     });
   });
 
-  test("refuses another workspace's host, other providers and accounts", async () => {
+  test("refuses other providers and custom commands in the cloud", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const { context, workspace, host } = await setUp(home);
-      const other = await context.workspaces.create({ name: "Other" });
       await expect(
-        context.agents.spawn({ workspace: other.id, host: host.id }),
-      ).rejects.toMatchObject({ code: "VALIDATION" });
+        context.agents.spawn({ workspace: workspace.id, provider: "codex" }),
+      ).rejects.toMatchObject({
+        code: "CONFLICT",
+        message: expect.stringContaining("move the workspace home"),
+      });
       await expect(
-        context.agents.spawn({
-          workspace: workspace.id,
-          host: host.id,
-          provider: "codex",
-        }),
-      ).rejects.toMatchObject({ code: "VALIDATION" });
-      await expect(
-        context.agents.spawn({
-          workspace: workspace.id,
-          host: host.id,
-          command: "rm",
-        }),
-      ).rejects.toMatchObject({ code: "VALIDATION" });
+        context.agents.spawn({ workspace: workspace.id, command: "rm" }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
       expect(host.launches).toEqual([]);
       context.close();
     });
@@ -227,7 +243,6 @@ describe("cloud sessions", () => {
       const { context, workspace, host } = await setUp(home);
       const session = await context.agents.spawn({
         workspace: workspace.id,
-        host: host.id,
       });
       host.sessions.clear();
       host.online = false;
@@ -247,7 +262,6 @@ describe("cloud sessions", () => {
       const { context, workspace, host } = await setUp(home);
       const session = await context.agents.spawn({
         workspace: workspace.id,
-        host: host.id,
       });
       host.listLive = async () => ({}) as never;
       await expect(
@@ -265,7 +279,6 @@ describe("cloud sessions", () => {
       const { context, workspace, host } = await setUp(home);
       const session = await context.agents.spawn({
         workspace: workspace.id,
-        host: host.id,
       });
       host.sessions.clear();
       await context.agents.reconcile(new Set());
@@ -283,7 +296,6 @@ describe("cloud sessions", () => {
       const { context, workspace, host } = await setUp(home);
       const session = await context.agents.spawn({
         workspace: workspace.id,
-        host: host.id,
       });
       await expect(context.agents.attach(session.id)).rejects.toMatchObject({
         code: "CONFLICT",
