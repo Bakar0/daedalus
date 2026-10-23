@@ -58,6 +58,33 @@ describe("createRpcQuery", () => {
     expect(results).toEqual([]);
   });
 
+  test("a snapshot fetched before an action never replaces the newer one fetched after it", async () => {
+    // The window asks for a snapshot, the user acts, the window asks again.
+    // The second fetch starts only after the first answered, so the answer
+    // from before the action can never land after the one from after it.
+    const gates = [
+      deferred<RpcResult<string>>(),
+      deferred<RpcResult<string>>(),
+    ];
+    let calls = 0;
+    const applied: string[] = [];
+    const query = createRpcQuery(
+      () => gates[calls++]!.promise,
+      (outcome) => {
+        if ("data" in outcome) applied.push(outcome.data);
+      },
+    );
+    const before = query.refresh();
+    const after = query.refresh();
+    expect(calls).toBe(1);
+    gates[0]!.resolve(ok("before the action"));
+    await before;
+    gates[1]!.resolve(ok("after the action"));
+    await after;
+    expect(applied).toEqual(["before the action", "after the action"]);
+    expect(applied.at(-1)).toBe("after the action");
+  });
+
   test("refreshes faster than the fetch coalesce, and every answer is applied in order", async () => {
     const gates = [
       deferred<RpcResult<string>>(),
