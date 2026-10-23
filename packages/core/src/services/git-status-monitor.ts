@@ -598,6 +598,15 @@ export class GitStatusMonitor {
     private readonly measure: GitMeasure = gitMeasure,
   ) {}
 
+  /**
+   * A cloud workspace's trees are in its pod, and what is left on this Mac
+   * is a backup that `git status` would write to (it refreshes the index).
+   * They are not measured.
+   */
+  private inCloud(workspaceId: string): boolean {
+    return this.repositories.workspacePlace(workspaceId).place === "cloud";
+  }
+
   /** A worktree with whatever status and pull request the cache holds. */
   withMeasurements(worktree: SessionWorktree): SessionWorktree {
     const key = statusKey(worktree.path);
@@ -729,7 +738,11 @@ export class GitStatusMonitor {
     const wanted = new Map<string, { path: string; workspaceId: string }>();
     for (const worktree of this.repositories.listSessionWorktrees({})) {
       const session = this.repositories.findAgent(worktree.sessionId);
-      if (session && this.sessionIsLive(session.id))
+      if (
+        session &&
+        this.sessionIsLive(session.id) &&
+        !this.inCloud(session.workspaceId)
+      )
         wanted.set(statusKey(worktree.path), {
           path: worktree.path,
           workspaceId: session.workspaceId,
@@ -817,8 +830,18 @@ export class GitStatusMonitor {
     force = false,
   ): Promise<void> {
     this.syncTreeWatchers();
-    const repositories = this.repositories.listWorkspaceRepositories(
+    const places = new Map<string, boolean>();
+    const inCloud = (item: WorkspaceRepository) => {
+      if (!places.has(item.workspaceId))
+        places.set(item.workspaceId, this.inCloud(item.workspaceId));
+      return places.get(item.workspaceId)!;
+    };
+    const listed = this.repositories.listWorkspaceRepositories(
       workspaceId ?? undefined,
+    );
+    const repositories = listed.filter((item) => !inCloud(item));
+    const cloudRepositories = new Set(
+      listed.filter(inCloud).map((item) => item.id),
     );
     const baseBranches = new Map(
       repositories.map((item) => [item.id, item.baseBranch]),
@@ -841,6 +864,7 @@ export class GitStatusMonitor {
           }))),
       ...this.repositories
         .listSessionWorktrees(workspaceId ? { workspaceId } : {})
+        .filter((item) => !cloudRepositories.has(item.repositoryId))
         .map((item) => ({
           path: item.path,
           baseBranch: baseBranches.get(item.repositoryId) ?? null,
@@ -1105,6 +1129,7 @@ export class GitStatusMonitor {
   async measureRepository(
     repository: WorkspaceRepository,
   ): Promise<WorkspaceRepository> {
+    if (this.inCloud(repository.workspaceId)) return repository;
     const measured = await this.repositoryWithGitStatus(repository);
     if (repository.referencePath && measured.gitStatus)
       this.gitStatusCache.set(

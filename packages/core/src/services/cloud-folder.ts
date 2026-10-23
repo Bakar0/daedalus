@@ -1,7 +1,6 @@
 import { posix } from "node:path";
 import type { Task, Workspace } from "../domain";
 import { DaedalusError } from "../errors";
-import { IN_CLOUD_MESSAGE } from "./cloud-launch";
 import { isPodAccess, type PodAccess } from "./move-side";
 import {
   sessionDirectoryName,
@@ -12,13 +11,7 @@ import {
 /** The pod's workspace folder, as sessions there see it. */
 export const POD_WORKSPACE = "/workspace";
 
-export { IN_CLOUD_MESSAGE } from "./cloud-launch";
-
-/** Refuses anything that would write this Mac's folder of a cloud workspace. */
-export function requireOnMac(workspace: Pick<Workspace, "place">): void {
-  if (workspace.place === "cloud")
-    throw new DaedalusError("CONFLICT", IN_CLOUD_MESSAGE);
-}
+export { IN_CLOUD_MESSAGE, requireOnMac } from "./cloud-launch";
 
 /** A session's instruction file as the pod holds it: the pod's paths. */
 export const podSessionInstructions = (): string =>
