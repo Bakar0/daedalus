@@ -322,6 +322,10 @@ done`;
 
 /** A name from the pod, safe to show as plain text in a question. */
 function podText(name: string): string {
-  const clean = name.replace(/[\u0000-\u001f\u007f]/g, "?");
+  // C0 and C1 controls, and the marks that reorder or hide text.
+  const clean = name.replace(
+    /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g,
+    "?",
+  );
   return clean.length > 60 ? `${clean.slice(0, 57)}...` : clean;
 }

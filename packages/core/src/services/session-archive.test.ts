@@ -176,7 +176,7 @@ describe("archiving a workspace with a cloud copy", () => {
         listAgents: () => [
           {
             id: "s9",
-            name: "Old\u0007 one",
+            name: "Old\u0007\u0085\u202e one",
             hostId: cloudHostId(CLOUD),
             archivedAt: "earlier",
           },
@@ -237,7 +237,7 @@ describe("archiving a workspace with a cloud copy", () => {
     expect(asked).toEqual({
       status: "needsCloudDecision",
       lost: [
-        'the conversation of "Old? one", archived without coming home',
+        'the conversation of "Old??? one", archived without coming home',
         "the repository scratch, which did not come home",
         "notes.txt outside git in the cloud workspace",
       ],
