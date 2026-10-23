@@ -724,7 +724,7 @@ export function createDesktopRequestHandlers(
       ),
     workspaceRemove: ({ reference, deleteFiles, force }) =>
       mutate(async () => {
-        const removed = await context.workspaces.remove(reference, {
+        const removed = await context.archive.removeWorkspace(reference, {
           deleteFiles,
           force,
         });
@@ -739,17 +739,27 @@ export function createDesktopRequestHandlers(
           workspaceDto(workspace),
         ),
       ),
-    workspaceArchive: ({ reference }) =>
-      mutate(async () =>
-        workspaceDto(await context.workspaces.archive(reference)),
-      ),
+    workspaceArchive: ({ reference, approved, withoutCloudChanges }) =>
+      mutate(async () => {
+        const archived = await context.archive.archiveWorkspace({
+          reference,
+          ...(approved ? { approved } : {}),
+          ...(withoutCloudChanges ? { withoutCloudChanges } : {}),
+        });
+        return archived.status === "archived"
+          ? {
+              status: "archived" as const,
+              workspace: workspaceDto(archived.workspace),
+            }
+          : archived;
+      }),
     workspaceRestore: ({ reference }) =>
       mutate(async () =>
         workspaceDto(await context.workspaces.restore(reference)),
       ),
     workspaceDelete: ({ reference }) =>
       mutate(async () =>
-        workspaceDto(await context.workspaces.deletePermanently(reference)),
+        workspaceDto(await context.archive.deleteWorkspace(reference)),
       ),
     workspaceContentGet: ({ workspace }) =>
       result(async () =>
@@ -1273,8 +1283,18 @@ export function createDesktopRequestHandlers(
       mutate(async () =>
         (await context.agents.reorder(workspace, sessionIds)).map(agentDto),
       ),
-    agentArchive: ({ id, force }) =>
-      mutate(async () => agentDto(await context.agents.archive(id, force))),
+    agentArchive: ({ id, force, approved, withoutCloudChanges }) =>
+      mutate(async () => {
+        const archived = await context.archive.archiveSession({
+          sessionId: id,
+          ...(force !== undefined ? { force } : {}),
+          ...(approved ? { approved } : {}),
+          ...(withoutCloudChanges ? { withoutCloudChanges } : {}),
+        });
+        return archived.status === "archived"
+          ? { status: "archived" as const, session: agentDto(archived.session) }
+          : archived;
+      }),
     agentRestore: ({ id }) =>
       mutate(async () => agentDto(await context.agents.restore(id))),
     agentRevive: ({ id }) =>

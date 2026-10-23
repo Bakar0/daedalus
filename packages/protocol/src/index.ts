@@ -1365,7 +1365,22 @@ export interface DesktopRpcSchema {
        * stands.
        */
       workspaceReorder: Request<{ references: string[] }, WorkspaceDto[]>;
-      workspaceArchive: Request<{ reference: string }, WorkspaceDto>;
+      /**
+       * Moves the workspace's cloud sessions home and archives them, deletes
+       * its cloud copy, then archives it. A cloud session that asks stops it
+       * there: answer, then call again with `approved` (by session id) or
+       * `withoutCloudChanges`, which covers every cloud session.
+       */
+      workspaceArchive: Request<
+        {
+          reference: string;
+          approved?: Record<string, string[]>;
+          withoutCloudChanges?: boolean;
+        },
+        | { status: "archived"; workspace: WorkspaceDto }
+        | { status: "needsApproval"; sessionId: string; paths: string[] }
+        | { status: "needsConfirmation"; sessionId: string; reason: string }
+      >;
       workspaceRestore: Request<{ reference: string }, WorkspaceDto>;
       /** Archived workspaces only; deletes the folder and everything in it. */
       workspaceDelete: Request<{ reference: string }, WorkspaceDto>;
@@ -1829,7 +1844,24 @@ export interface DesktopRpcSchema {
         { workspace: string; sessionIds: string[] },
         AgentSessionDto[]
       >;
-      agentArchive: Request<{ id: string; force?: boolean }, AgentSessionDto>;
+      /**
+       * A cloud session moves home first and is archived as this Mac's.
+       * `needsApproval`: the move would bring files that steer agents; ask,
+       * then call again with `approved`. `needsConfirmation`: its cloud
+       * workspace cannot be reached or the move failed (`reason`); with
+       * `withoutCloudChanges` it is archived with what this Mac has.
+       */
+      agentArchive: Request<
+        {
+          id: string;
+          force?: boolean;
+          approved?: string[];
+          withoutCloudChanges?: boolean;
+        },
+        | { status: "archived"; session: AgentSessionDto }
+        | { status: "needsApproval"; paths: string[] }
+        | { status: "needsConfirmation"; reason: string }
+      >;
       agentRestore: Request<{ id: string }, AgentSessionDto>;
       /**
        * Resumes a session that lost its tmux server, typically to a machine

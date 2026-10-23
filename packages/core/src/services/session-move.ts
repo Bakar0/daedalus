@@ -154,6 +154,22 @@ export class SessionMoves {
     return () => this.#listeners.delete(listener);
   }
 
+  /**
+   * The folder a cloud session left this Mac from, or undefined for one that
+   * never ran here.
+   */
+  async movedFrom(sessionId: string): Promise<string | undefined> {
+    return (await this.#record(sessionId))?.macWorkingDirectory;
+  }
+
+  /**
+   * Gives up the way back for a session that stays on this Mac as it left
+   * it, its cloud work left behind.
+   */
+  async forget(sessionId: string): Promise<void> {
+    await rm(this.#recordPath(sessionId), { force: true });
+  }
+
   /** Clears a finished move's notice from the session. */
   dismiss(sessionId: string): void {
     if (this.#moves.get(sessionId)?.phase !== "moved") return;

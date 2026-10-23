@@ -529,7 +529,16 @@ export class CloudService {
   /** Deletes the pod, its volume and its token; the local workspace stays. */
   async delete(workspaceReference: string): Promise<void> {
     const workspaceId = await this.#workspaceId(workspaceReference);
-    await (await this.#client()).deleteWorkspace(workspaceId);
+    try {
+      await (await this.#client()).deleteWorkspace(workspaceId);
+    } catch (error) {
+      // Gone already, from the gateway or another Mac: only the link is left.
+      if (
+        !(error instanceof DaedalusError) ||
+        error.details?.gatewayCode !== "NOT_FOUND"
+      )
+        throw error;
+    }
     this.#endSessions(workspaceId, "exited");
     await this.account.unpin(workspaceId);
     this.options.repositories.unlinkCloudWorkspace(workspaceId);
