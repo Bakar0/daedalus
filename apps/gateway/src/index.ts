@@ -27,6 +27,22 @@ const servers = [
     port: config.runnerPort,
   }),
 ];
+// Collection: once now, then on a timer, one pass at a time.
+let collecting = false;
+const collect = () => {
+  if (collecting) return;
+  collecting = true;
+  void gateway
+    .collect()
+    .catch((error: unknown) =>
+      console.log(`Collection failed: ${String(error)}`),
+    )
+    .finally(() => {
+      collecting = false;
+    });
+};
+collect();
+setInterval(collect, config.collectMs);
 console.log(
   `Gateway listening on ${config.port}, runners on ${config.runnerPort}${config.devLogin ? ", with dev login" : ""}`,
 );

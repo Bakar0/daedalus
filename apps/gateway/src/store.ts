@@ -27,6 +27,10 @@ export interface WorkspaceRow {
   runnerKey: string | null;
   /** Whether the user asked it to sleep; the pod is gone while it does. */
   sleeping: boolean;
+  /** When it last went to sleep; null while awake. */
+  sleptAt: string | null;
+  /** The Mac said nothing in it is needed; waking clears it. */
+  disposable: boolean;
   createdAt: string;
 }
 
@@ -68,6 +72,8 @@ interface WorkspaceRecord {
   memory: string | null;
   runner_key: string | null;
   sleeping: number;
+  slept_at: string | null;
+  disposable: number;
   created_at: string;
 }
 
@@ -81,6 +87,8 @@ const toWorkspace = (row: WorkspaceRecord): WorkspaceRow => ({
   memory: row.memory,
   runnerKey: row.runner_key,
   sleeping: row.sleeping === 1,
+  sleptAt: row.slept_at,
+  disposable: row.disposable === 1,
   createdAt: row.created_at,
 });
 
@@ -106,6 +114,32 @@ export class Store {
     this.#db.run("PRAGMA journal_mode = WAL");
     this.#db.run("PRAGMA foreign_keys = ON");
     this.#db.run(SCHEMA);
+    this.#addCollectionColumns();
+  }
+
+  /**
+   * The columns collection reads, added to a database from before it. A
+   * workspace already asleep then starts its clock now, not at once.
+   */
+  #addCollectionColumns(): void {
+    const columns = new Set(
+      this.#db
+        .query<{ name: string }, []>("PRAGMA table_info(workspaces)")
+        .all()
+        .map((column) => column.name),
+    );
+    this.#db.transaction(() => {
+      if (!columns.has("slept_at")) {
+        this.#db.run("ALTER TABLE workspaces ADD COLUMN slept_at TEXT");
+        this.#db
+          .query("UPDATE workspaces SET slept_at = ? WHERE sleeping = 1")
+          .run(new Date().toISOString());
+      }
+      if (!columns.has("disposable"))
+        this.#db.run(
+          "ALTER TABLE workspaces ADD COLUMN disposable INTEGER NOT NULL DEFAULT 0",
+        );
+    })();
   }
 
   close(): void {
@@ -165,7 +199,10 @@ export class Store {
    * one with this id already.
    */
   insertWorkspace(
-    workspace: Omit<WorkspaceRow, "runnerKey" | "sleeping">,
+    workspace: Omit<
+      WorkspaceRow,
+      "runnerKey" | "sleeping" | "sleptAt" | "disposable"
+    >,
     runnerToken: string,
   ): boolean {
     return this.#db.transaction(() => {
@@ -219,12 +256,45 @@ export class Store {
       .map(toWorkspace);
   }
 
-  setSleeping(userId: string, workspaceId: string, sleeping: boolean): void {
+  /** Every user's workspaces, for collection. */
+  allWorkspaces(): WorkspaceRow[] {
+    return this.#db
+      .query<WorkspaceRecord, []>(
+        "SELECT * FROM workspaces ORDER BY user_id, created_at, workspace_id",
+      )
+      .all()
+      .map(toWorkspace);
+  }
+
+  /**
+   * Asleep from `at`, or awake. Waking also clears `disposable`: a copy
+   * someone woke is in use again.
+   */
+  setSleeping(
+    userId: string,
+    workspaceId: string,
+    sleeping: boolean,
+    at = new Date(),
+  ): void {
     this.#db
       .query(
-        "UPDATE workspaces SET sleeping = ? WHERE user_id = ? AND workspace_id = ?",
+        sleeping
+          ? "UPDATE workspaces SET sleeping = 1, slept_at = ? WHERE user_id = ? AND workspace_id = ?"
+          : "UPDATE workspaces SET sleeping = 0, slept_at = NULL, disposable = 0 WHERE ? IS NOT NULL AND user_id = ? AND workspace_id = ?",
       )
-      .run(sleeping ? 1 : 0, userId, workspaceId);
+      .run(at.toISOString(), userId, workspaceId);
+  }
+
+  setDisposable(
+    userId: string,
+    workspaceId: string,
+    disposable: boolean,
+  ): void {
+    this.#db
+      .query(
+        "UPDATE workspaces SET disposable = ? WHERE user_id = ? AND workspace_id = ?",
+      )
+      .run(disposable ? 1 : 0, userId, workspaceId);
   }
 
   /**

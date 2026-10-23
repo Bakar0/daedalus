@@ -35,6 +35,8 @@ const ROLE_BINDING = "daedalus-gateway";
 const POD_SECURITY = { level: "restricted", version: "v1.30" } as const;
 
 export const namespaceFor = (userId: string) => `u-${userId}`;
+/** A user id, as the store makes them (the contract allows 20). */
+const USER_ID = /^[a-z0-9]{1,20}$/;
 export const podName = (workspaceId: string) => `ws-${workspaceId}`;
 export const pvcName = (workspaceId: string) => `ws-${workspaceId}`;
 export const statePvcName = (workspaceId: string) => `ws-${workspaceId}-state`;
@@ -259,6 +261,38 @@ export class Controller {
         index === 0,
       );
     }
+  }
+
+  /**
+   * The users whose namespace this gateway made: labelled with their id and
+   * named for it, `u-<userId>`. Any other namespace is not the gateway's to
+   * touch, whatever its name.
+   */
+  async tenants(): Promise<string[]> {
+    const response = await this.kube.request(
+      "GET",
+      `/api/v1/namespaces?labelSelector=${encodeURIComponent(USER_LABEL)}`,
+    );
+    if (response.status >= 300)
+      throw KubeError.from(response, "Listing the users' namespaces");
+    const items =
+      isObject(response.body) && Array.isArray(response.body.items)
+        ? response.body.items
+        : [];
+    const users: string[] = [];
+    for (const item of items) {
+      const metadata =
+        isObject(item) && isObject(item.metadata) ? item.metadata : {};
+      const labels = isObject(metadata.labels) ? metadata.labels : {};
+      const userId = labels[USER_LABEL];
+      if (
+        typeof userId === "string" &&
+        USER_ID.test(userId) &&
+        metadata.name === namespaceFor(userId)
+      )
+        users.push(userId);
+    }
+    return users;
   }
 
   /** Removes the user's namespace and everything left in it. */
