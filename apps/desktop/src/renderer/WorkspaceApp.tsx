@@ -58,7 +58,6 @@ import {
 import { LargeFileBar } from "./LargeFileBar";
 import { CloudPasteCodeBar, CloudSignInPanel } from "./CloudSignInBar";
 import { SessionOpening } from "./SessionOpening";
-import { rememberedRunsOn, rememberRunsOn, RunsOn } from "./RunsOn";
 import { usePins } from "./pins";
 import type { DesktopClient } from "./client-types";
 import { SettingsModal, type SettingsSection } from "./SettingsModal";
@@ -87,7 +86,8 @@ import {
 } from "./cost-format";
 import { TaskActionBar } from "./TaskActionBar";
 import { ConfirmButton } from "./ConfirmButton";
-import { askConfirm, askText, DialogHost } from "./dialogs";
+import { askChoice, askConfirm, askText, DialogHost } from "./dialogs";
+import { pathLines, tooBigLines } from "./workspace-move";
 import { TaskActionIcon } from "./task-action-icons";
 import {
   type FileOpenRequest,
@@ -2095,8 +2095,6 @@ export function WorkspaceApp({
     teamId?: string;
     /** A member's instructions, which it needs. */
     instructions?: string;
-    /** Run in the workspace's cloud pod rather than on this Mac. */
-    cloud?: boolean;
   }>({ name: "" });
   // The Routines drawer on the selected session, and what it last read.
   const [routinesPanel, setRoutinesPanel] = useState<{
@@ -2926,135 +2924,28 @@ export function WorkspaceApp({
     // gateway that did not answer says nothing about which.
     return cloud && cloud.connection !== "error" ? "unavailable" : undefined;
   };
-  // Sessions moving between this Mac and the cloud, by session; a `moved`
-  // entry only carries the notice the session view shows afterwards.
-  const moveBySession = new Map(
-    (snapshot?.sessionMoves ?? [])
-      .filter((move) => move.phase !== "moved")
-      .map((move) => [move.sessionId, move]),
-  );
-  const moveNoticeBySession = new Map(
-    (snapshot?.sessionMoves ?? [])
-      .filter((move) => move.phase === "moved" && move.notice)
-      .map((move) => [move.sessionId, move.notice!]),
-  );
   const statusViewFor = (session: AgentSessionDto): SessionStatusView => {
     const view = sessionStatusView(
       session,
       activityById.get(session.id),
       attentionById.get(session.id),
     );
-    const move = moveBySession.get(session.id);
-    if (move)
-      return {
-        ...view,
-        tone: move.phase === "failed" ? "error" : "working",
-        label:
-          move.phase === "failed"
-            ? "move failed"
-            : move.to === "cloud"
-              ? "moving to cloud"
-              : "moving to this Mac",
-        detail:
-          move.phase === "failed"
-            ? (move.message ??
-              "The move stopped; the session runs where it was.")
-            : (move.detail ?? null),
-        attention: false,
-        reasons: [],
-      };
     const sleep = cloudSleep(session);
-    // Quiet, unlike a lost session: nothing is wrong here that opening the
-    // session or signing in does not fix.
-    // The cloud says something only when it matters to the session.
-    const reason = session.hostId
-      ? cloudByHost.get(session.hostId)?.reason
-      : undefined;
-    return sleep
+    // Quiet, unlike a lost session: opening the session wakes it. Anything
+    // else about the cloud shows on the workspace, not on each card.
+    return sleep === "sleeping" || sleep === "waking"
       ? {
           ...view,
-          tone: sleep === "failed" ? "error" : "ended",
-          label:
-            sleep === "sleeping"
-              ? "cloud asleep"
-              : sleep === "waking"
-                ? "waking…"
-                : sleep === "failed"
-                  ? `cloud error: ${reason ?? "the pod failed"}`
-                  : "unavailable",
+          tone: "ended",
+          label: sleep === "sleeping" ? "cloud asleep" : "waking…",
           detail:
             sleep === "waking"
               ? "Waking the cloud workspace, then resuming this session"
-              : sleep === "sleeping"
-                ? "The cloud workspace is asleep. Open the session to wake it."
-                : sleep === "failed"
-                  ? (reason ?? "The cloud workspace's pod failed.")
-                  : cloudState.data?.signedIn
-                    ? "Its cloud workspace is not in the cloud account this Mac is signed in to, or was deleted."
-                    : "Sign in to its cloud account in Settings › Cloud to reach it.",
+              : "The cloud workspace is asleep. Open the session to wake it.",
           attention: false,
           reasons: [],
         }
       : view;
-  };
-
-  /** Where a session can move to now: a Claude session, not moving. */
-  const moveTarget = (
-    session: AgentSessionDto,
-  ): "cloud" | "local" | undefined => {
-    if (
-      session.kind !== "agent" ||
-      session.provider !== "claude" ||
-      session.archivedAt ||
-      moveBySession.has(session.id)
-    )
-      return undefined;
-    if (session.hostId)
-      return cloudByHost.has(session.hostId) ? "local" : undefined;
-    return cloudState.data?.signedIn ? "cloud" : undefined;
-  };
-
-  /**
-   * The session's cloud action, beside rebirth: a cloud that moves a local
-   * session to the cloud, lit while the session runs there, where a click
-   * moves it back to this Mac.
-   */
-  const cloudActionFor = (session: AgentSessionDto) => {
-    const inCloud = Boolean(session.hostId);
-    if (
-      session.kind !== "agent" ||
-      session.provider !== "claude" ||
-      (!inCloud && !cloudState.data?.signedIn)
-    )
-      return null;
-    const to = moveTarget(session);
-    return (
-      <button
-        aria-label={
-          inCloud
-            ? `Move ${sessionName(session)} to this Mac`
-            : `Move ${sessionName(session)} to cloud`
-        }
-        className="session-card-action session-card-hover-action session-cloud-action"
-        data-cloud-lit={inCloud ? "true" : undefined}
-        data-move-to={to}
-        data-testid="session-cloud-action"
-        disabled={!to || sessionActions.pending(`move:${session.id}`)}
-        onClick={() => to && void moveSession(session, to)}
-        title={
-          moveBySession.has(session.id)
-            ? "Moving…"
-            : inCloud
-              ? to
-                ? "Runs in the cloud. Click to move it back to this Mac, with its changes."
-                : "Runs in the cloud, in a workspace this Mac cannot reach now"
-              : "Move to cloud: carry on with this conversation in the workspace's cloud pod, with its changes"
-        }
-        type="button"
-      >
-        <CloudActionIcon />
-      </button>
-    );
   };
 
   /** A session's card actions, for its menu with their pins. */
@@ -3062,7 +2953,6 @@ export function WorkspaceApp({
     session: AgentSessionDto,
     holdsRoutines: boolean,
   ): MenuAction[] => {
-    const to = moveTarget(session);
     const agent =
       session.kind === "agent" &&
       (session.provider === "claude" || session.provider === "codex");
@@ -3080,19 +2970,6 @@ export function WorkspaceApp({
             },
           ]
         : []),
-      ...(cloudActionFor(session)
-        ? [
-            {
-              id: "cloud",
-              icon: <CloudActionIcon />,
-              label: session.hostId ? "Move to this Mac" : "Move to cloud",
-              pinned: pins.session.has("cloud"),
-              onPin: (on: boolean) => pin("session", "cloud", on),
-              disabled: !to || sessionActions.pending(`move:${session.id}`),
-              run: () => to && void moveSession(session, to),
-            },
-          ]
-        : []),
       {
         id: "archive",
         icon: <ArchiveIcon />,
@@ -3106,35 +2983,6 @@ export function WorkspaceApp({
       },
     ];
   };
-
-  async function moveSession(
-    session: AgentSessionDto,
-    to: "cloud" | "local",
-    approved?: string[],
-  ) {
-    const moved = await sessionActions.run(
-      client.request.agentMove({
-        sessionId: session.id,
-        to,
-        ...(approved ? { approved } : {}),
-      }),
-      `move:${session.id}`,
-    );
-    if (!moved) return;
-    if (moved.status === "moved") {
-      openSession(moved.session.id);
-      return;
-    }
-    if (moved.status !== "needsApproval") return;
-    // Files that steer an agent or run when opened changed in the pod: the
-    // user decides before they come to this Mac.
-    const yes = await askConfirm({
-      title: "Bring these changes to this Mac?",
-      message: `In the cloud, ${sessionName(session)} changed files that steer agents or run when a folder opens:\n\n${moved.paths.map((path) => `• ${path}`).join("\n")}\n\nMove it back with them?`,
-      confirmLabel: "Move back",
-    });
-    if (yes) await moveSession(session, to, moved.paths);
-  }
 
   // Each cloud session's sign-in, by session.
   const signInBySession = new Map(
@@ -3401,16 +3249,8 @@ export function WorkspaceApp({
       : undefined) ??
     workspace;
   // Set when the dialog adds a member from its lead's card.
-  // The cloud workspace the dialog can start the session in, if any.
-  const sessionCloud = sessionWorkspace
-    ? cloudByWorkspace.get(sessionWorkspace.id)
-    : undefined;
-  // Signed in is enough: the first cloud session makes the workspace's cloud
-  // copy, and a sleeping one wakes for it.
-  const cloudSignedIn = Boolean(cloudState.data?.signedIn);
-  const sessionInCloud = Boolean(
-    sessionForm.cloud && cloudSignedIn && sessionCloud?.status !== "failed",
-  );
+  // A workspace in the cloud starts every session in its pod.
+  const sessionInCloud = sessionWorkspace?.place === "cloud";
   const memberTeam = sessionForm.teamId
     ? teamsById.get(sessionForm.teamId)
     : undefined;
@@ -3841,15 +3681,10 @@ export function WorkspaceApp({
   }
 
   function openSessionModal(task?: TaskDto, forWorkspace?: WorkspaceDto) {
-    const opening = task
-      ? task.workspaceId
-      : (forWorkspace?.id ?? workspace?.id);
     setSessionForm({
       name: task?.title ?? "",
       taskId: task?.id,
       workspaceId: forWorkspace?.id,
-      // Where the last new session in this workspace ran.
-      cloud: rememberedRunsOn(opening) === "cloud",
     });
     // The dialog opens on what Start would launch, so "default" means the
     // same thing here and on the board.
@@ -3876,7 +3711,6 @@ export function WorkspaceApp({
       name: "",
       teamId: team.id,
       workspaceId: lead.workspaceId,
-      cloud: rememberedRunsOn(lead.workspaceId) === "cloud",
     });
     setSessionType(lead.provider);
     setSessionModel("");
@@ -3966,12 +3800,10 @@ export function WorkspaceApp({
     const { color, routines, orchestration, teamId, instructions } =
       sessionForm;
     const cloud = sessionInCloud;
-    const abilities = cloud
-      ? []
-      : [
-          ...(routines ? (["routines"] as const) : []),
-          ...(orchestration ? (["orchestration"] as const) : []),
-        ];
+    const abilities = [
+      ...(routines ? (["routines"] as const) : []),
+      ...(orchestration ? (["orchestration"] as const) : []),
+    ];
     const launch: SessionLaunchState = {
       key: crypto.randomUUID(),
       workspaceId: sessionWorkspace.id,
@@ -4032,7 +3864,6 @@ export function WorkspaceApp({
         provider: isTerminal ? undefined : (sessionType as "codex" | "claude"),
         model: isTerminal || !sessionModel ? undefined : sessionModel,
         ...(!isTerminal && sessionAccount ? { account: sessionAccount } : {}),
-        ...(cloud ? { cloud: true } : {}),
         ...(color ? { color } : {}),
         ...(teamId && !isTerminal
           ? {
@@ -4292,13 +4123,23 @@ export function WorkspaceApp({
     if (!archived && wasActive) setActiveSessionId(session.id);
   }
 
-  /** Files that steer agents changed in the cloud: bring them, or stop. */
-  function askBringChanges(name: string, paths: string[]) {
-    return askConfirm({
-      title: "Bring these changes to this Mac?",
-      message: `In the cloud, ${name} changed files that steer agents or run when a folder opens:\n\n${paths.map((path) => `• ${path}`).join("\n")}\n\nArchive it with them?`,
-      confirmLabel: "Archive with them",
-    });
+  /**
+   * Files that steer agents changed in the cloud: bring them, or stop. The
+   * paths come from the pod, so they are listed as plain, short lines.
+   */
+  async function askBringChanges(
+    name: string,
+    paths: string[],
+    confirmLabel: string,
+  ) {
+    return (
+      (await askChoice({
+        title: "Bring these changes to this Mac?",
+        message: `In the cloud, sessions in ${name} changed files that steer agents or run when a folder opens:`,
+        lines: pathLines(paths),
+        choices: [{ id: "bring", label: confirmLabel }],
+      })) === "bring"
+    );
   }
 
   // The button runs the same thing as `/daedalus-rebirth`: a running agent
@@ -4547,11 +4388,14 @@ export function WorkspaceApp({
       }
       if (answer.status === "needsSmaller") {
         setError(
-          `${item.name} is too big to come home from the cloud, so it is not archived: ${answer.items.map((entry) => entry.what).join(", ")}`,
+          `${item.name} is too big to come home from the cloud, so it is not archived. ${tooBigLines(answer.items).join("; ")}`,
         );
         break;
       }
-      if (!(await askBringChanges(item.name, answer.paths))) break;
+      if (
+        !(await askBringChanges(item.name, answer.paths, "Archive with them"))
+      )
+        break;
       approved = answer.paths;
     }
     setArchivingWorkspaceIds((current) => {
@@ -5148,8 +4992,11 @@ export function WorkspaceApp({
         }
         className={`session-card tone-${statusView.tone} ${view === "session" && session.id === highlightedSessionId ? "selected" : ""}`}
         data-cloud={session.hostId ? "true" : undefined}
-        data-cloud-state={cloudSleep(session)}
-        data-move-phase={moveBySession.get(session.id)?.phase}
+        data-cloud-state={
+          cloudSleep(session) === "sleeping" || cloudSleep(session) === "waking"
+            ? cloudSleep(session)
+            : undefined
+        }
         data-color={session.color ?? undefined}
         style={sessionColorStyle(session.color)}
         data-pinned={session.pinnedAt ? "true" : undefined}
@@ -5309,23 +5156,6 @@ export function WorkspaceApp({
           </button>
         )}
         <span className="workspace-card-actions" data-no-drag>
-          {moveBySession.get(session.id)?.phase === "waiting" && (
-            <button
-              aria-label={`Cancel moving ${sessionName(session)}`}
-              className="session-card-action session-move-cancel"
-              data-testid="session-move-cancel"
-              onClick={() =>
-                void sessionActions.run(
-                  client.request.agentMoveCancel({ sessionId: session.id }),
-                  `move-cancel:${session.id}`,
-                )
-              }
-              title="Cancel the move; the session stays where it is"
-              type="button"
-            >
-              ×
-            </button>
-          )}
           {session.status === "lost" &&
             cloudSleep(session) !== "unavailable" && (
               <button
@@ -5380,7 +5210,6 @@ export function WorkspaceApp({
                 <RebirthIcon />
               </button>
             )}
-          {pins.session.has("cloud") && cloudActionFor(session)}
           {pins.session.has("archive") && (
             <ConfirmButton
               aria-label={`Archive ${sessionName(session)} session`}
@@ -6024,38 +5853,6 @@ export function WorkspaceApp({
               onCopy={copyCommandText}
             />
           ))}
-      {activeSession && moveNoticeBySession.get(activeSession.id) && (
-        <section
-          aria-label="About this move"
-          className="routine-bar session-move-notice"
-          data-color={activeSession.color ?? undefined}
-          data-testid="session-move-notice"
-          style={sessionColorStyle(activeSession.color)}
-        >
-          <div className="routine-bar-row">
-            <span className="routine-bar-text">
-              {moveNoticeBySession.get(activeSession.id)}
-            </span>
-            <span className="routine-bar-actions">
-              <button
-                className="quiet"
-                data-testid="session-move-notice-dismiss"
-                onClick={() =>
-                  void sessionActions.run(
-                    client.request.agentMoveDismiss({
-                      sessionId: activeSession.id,
-                    }),
-                    `move-notice:${activeSession.id}`,
-                  )
-                }
-                type="button"
-              >
-                Got it
-              </button>
-            </span>
-          </div>
-        </section>
-      )}
       {activeSession &&
         signInBySession.get(activeSession.id)?.phase === "pasting" && (
           <CloudPasteCodeBar
@@ -7611,33 +7408,6 @@ export function WorkspaceApp({
             }
           >
             <form className="modal-form" onSubmit={createSession}>
-              <RunsOn
-                client={client}
-                cloudUnavailable={
-                  sessionCloud?.status === "failed"
-                    ? (sessionCloud.reason ??
-                      "The cloud workspace failed; see the workspace's cloud icon")
-                    : undefined
-                }
-                onChange={(place) => {
-                  const cloud = place === "cloud";
-                  setSessionForm({ ...sessionForm, cloud });
-                  rememberRunsOn(sessionWorkspace.id, place);
-                  // Codex runs only on this Mac.
-                  if (cloud && sessionType === "codex")
-                    setSessionType("claude");
-                  setSessionAccount("");
-                  setRememberSessionModel(false);
-                }}
-                onSignedIn={async () => {
-                  await cloudState.refresh();
-                  setSessionForm({ ...sessionForm, cloud: true });
-                  rememberRunsOn(sessionWorkspace.id, "cloud");
-                  if (sessionType === "codex") setSessionType("claude");
-                }}
-                signedIn={cloudSignedIn}
-                value={sessionInCloud ? "cloud" : "local"}
-              />
               <label>
                 {memberTeam ? "Member name" : "Session name"}
                 <input
@@ -7656,8 +7426,9 @@ export function WorkspaceApp({
                 />
               </label>
               {/* Claude or Codex; a member's picker starts on its lead's.
-                Plain terminals open as tabs from the center's +. A cloud
-                session is Claude in the pod. */}
+                Plain terminals open as tabs from the center's +, in the pod
+                too while the workspace is in the cloud. A session there is
+                Claude in the pod. */}
               <fieldset className="session-tool-picker">
                 <legend>Choose a tool</legend>
                 <div
@@ -7842,51 +7613,49 @@ export function WorkspaceApp({
                       />
                     </div>
                   )}
-                  {sessionType !== "terminal" &&
-                    !sessionForm.teamId &&
-                    !sessionInCloud && (
-                      // One row per ability the agent can be given at launch.
-                      <fieldset className="session-tool-picker session-abilities">
-                        <legend>Agent abilities</legend>
-                        {(
-                          [
-                            {
-                              key: "routines",
-                              label: "Routines",
-                              description:
-                                "Give the agent the ability to run routines",
-                            },
-                            {
-                              key: "orchestration",
-                              label: "Orchestration",
-                              description:
-                                "Lead a team of sessions toward one goal",
-                            },
-                          ] as const
-                        ).map((ability) => (
-                          <label
-                            className="session-ability-option"
-                            key={ability.key}
-                          >
-                            <span>
-                              <strong>{ability.label}</strong>
-                              <small>{ability.description}</small>
-                            </span>
-                            <input
-                              checked={Boolean(sessionForm[ability.key])}
-                              className="switch"
-                              onChange={(event) =>
-                                setSessionForm({
-                                  ...sessionForm,
-                                  [ability.key]: event.target.checked,
-                                })
-                              }
-                              type="checkbox"
-                            />
-                          </label>
-                        ))}
-                      </fieldset>
-                    )}
+                  {sessionType !== "terminal" && !sessionForm.teamId && (
+                    // One row per ability the agent can be given at launch.
+                    <fieldset className="session-tool-picker session-abilities">
+                      <legend>Agent abilities</legend>
+                      {(
+                        [
+                          {
+                            key: "routines",
+                            label: "Routines",
+                            description:
+                              "Give the agent the ability to run routines",
+                          },
+                          {
+                            key: "orchestration",
+                            label: "Orchestration",
+                            description:
+                              "Lead a team of sessions toward one goal",
+                          },
+                        ] as const
+                      ).map((ability) => (
+                        <label
+                          className="session-ability-option"
+                          key={ability.key}
+                        >
+                          <span>
+                            <strong>{ability.label}</strong>
+                            <small>{ability.description}</small>
+                          </span>
+                          <input
+                            checked={Boolean(sessionForm[ability.key])}
+                            className="switch"
+                            onChange={(event) =>
+                              setSessionForm({
+                                ...sessionForm,
+                                [ability.key]: event.target.checked,
+                              })
+                            }
+                            type="checkbox"
+                          />
+                        </label>
+                      ))}
+                    </fieldset>
+                  )}
                 </details>
               )}
               <div className="modal-actions">

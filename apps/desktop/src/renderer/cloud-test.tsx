@@ -2,12 +2,12 @@
  * The page the `scripts/cloud-*-ui-check.ts` checks drive.
  *
  * A fake host with a small cloud backend: sign-in, four workspaces (a plain
- * local one, one with a running cloud workspace, one asleep, one that belongs
- * to another cloud account) and a session in each. Query parameters pick the
+ * local one, one in the cloud and running, one in the cloud and asleep, one
+ * in another cloud account) and a session in each. Query parameters pick the
  * start: `modal=settings|session`, `signedIn=0`, `holdSignIn=1`,
- * `holdWake=1`, `session=<id>` to open a session's view, `moving=<phase>`
- * for s-cloud moving to this Mac, `move=approval` for a move back that asks,
- * `archive=approval|unreachable` for a cloud session's archive that asks.
+ * `holdWake=1`, `session=<id>` to open a session's view,
+ * `archive=approval|big` for a cloud workspace's archive that asks or is
+ * refused.
  *
  * Every call a click should make is recorded in `window.requests`. The
  * replies carry a token and a runner key the real host never sends, so the
@@ -113,34 +113,14 @@ const session = (
 const snapshot = {
   workspaces: [
     workspace("local-ws", "Plain local", 1),
-    workspace("cloud-ws", "Cloud project", 2),
-    workspace("sleepy-ws", "Sleepy project", 3),
-    workspace("other-ws", "Other account", 4),
+    { ...workspace("cloud-ws", "Cloud project", 2), place: "cloud" },
+    { ...workspace("sleepy-ws", "Sleepy project", 3), place: "cloud" },
+    { ...workspace("other-ws", "Other account", 4), place: "cloud" },
   ],
   tasks: [],
   // A sign-in page the cloud Claude session asked to open. The URL never
   // reaches the window, only its host. `signin=claude|aws`, `paste=1` for
   // the paste-code form.
-  // s-cloud on its way to this Mac, in the phase the query names.
-  sessionMoves: query.get("moving")
-    ? [
-        {
-          sessionId: "s-cloud",
-          to: "local" as const,
-          phase: query.get("moving") as "waiting",
-          detail: "Waiting for the turn to end",
-          ...(query.get("moving") === "failed"
-            ? { message: "The pod did not answer" }
-            : {}),
-          ...(query.get("moving") === "moved"
-            ? {
-                notice:
-                  "Moved back to this Mac. It resumes in ask mode; switch the permission mode back when you are ready.",
-              }
-            : {}),
-        },
-      ]
-    : [],
   cloudSignIns: query.get("signin")
     ? [
         {
@@ -452,24 +432,9 @@ const client = {
       announce();
       return ok(structuredClone(found));
     },
-    agentArchive: async (params: {
-      id: string;
-      approved?: string[];
-      withoutCloudChanges?: boolean;
-    }) => {
+    agentArchive: async (params: { id: string; force?: boolean }) => {
       record("agentArchive", params);
       const found = snapshot.agents.find((item) => item.id === params.id)!;
-      const asks = found.hostId ? query.get("archive") : null;
-      if (asks === "approval" && !params.approved)
-        return ok({
-          status: "needsApproval" as const,
-          paths: [".claude/settings.json"],
-        });
-      if (asks === "unreachable" && !params.withoutCloudChanges)
-        return ok({
-          status: "needsConfirmation" as const,
-          reason: "the pod did not answer",
-        });
       found.archivedAt = new Date().toISOString();
       found.status = "exited";
       announce();
@@ -480,56 +445,36 @@ const client = {
     },
     workspaceArchive: async (params: {
       reference: string;
-      approved?: Record<string, string[]>;
-      withoutCloudChanges?: boolean;
+      approved?: string[];
     }) => {
       record("workspaceArchive", params);
-      if (query.get("archive") === "unreachable" && !params.withoutCloudChanges)
-        return ok({
-          status: "needsConfirmation" as const,
-          sessionId: "s-cloud",
-          reason: "the pod did not answer",
-        });
       const found = snapshot.workspaces.find(
         (item) => item.id === params.reference,
       )!;
+      const asks = found.place === "cloud" ? query.get("archive") : null;
+      if (asks === "approval" && !params.approved)
+        return ok({
+          status: "needsApproval" as const,
+          paths: [".claude/settings.json", "CLAUDE.md"],
+        });
+      if (asks === "big")
+        return ok({
+          status: "needsSmaller" as const,
+          items: [
+            {
+              what: "repos/app",
+              bytes: 1_610_612_736,
+              maxBytes: 1_073_741_824,
+            },
+          ],
+        });
       found.archivedAt = new Date().toISOString();
+      delete found.place;
       announce();
       return ok({
         status: "archived" as const,
         workspace: structuredClone(found),
       });
-    },
-    agentMove: async (params: {
-      sessionId: string;
-      to: "cloud" | "local";
-      approved?: string[];
-    }) => {
-      record("agentMove", params);
-      if (query.get("move") === "approval" && !params.approved)
-        return ok({
-          status: "needsApproval" as const,
-          paths: [".claude/settings.json", "CLAUDE.md"],
-        });
-      const found = snapshot.agents.find(
-        (item) => item.id === params.sessionId,
-      )!;
-      if (params.to === "cloud") found.hostId = "ws:c-run";
-      else found.hostId = null;
-      announce();
-      return ok({ status: "moved" as const, session: structuredClone(found) });
-    },
-    agentMoveDismiss: async (params: { sessionId: string }) => {
-      record("agentMoveDismiss", params);
-      snapshot.sessionMoves = [];
-      announce();
-      return ok(null);
-    },
-    agentMoveCancel: async (params: { sessionId: string }) => {
-      record("agentMoveCancel", params);
-      snapshot.sessionMoves = [];
-      announce();
-      return ok(null);
     },
     agentSpawn: async (params: Record<string, unknown>) => {
       record("agentSpawn", params);
@@ -540,7 +485,9 @@ const client = {
           provider: params.provider === "codex" ? "codex" : "claude",
           kind: params.terminal ? "terminal" : "agent",
           startedAt: new Date().toISOString(),
-          ...(params.cloud
+          // A workspace in the cloud starts every session in its pod.
+          ...(snapshot.workspaces.find((item) => item.id === params.workspace)
+            ?.place === "cloud"
             ? { hostId: `ws:${withCloud(String(params.workspace))?.cloudId}` }
             : {}),
         },

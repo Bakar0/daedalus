@@ -122,14 +122,6 @@ async function result<T>(
   }
 }
 
-/** What the retired per-session move answers. */
-function sessionsDoNotMove(): never {
-  throw new DaedalusError(
-    "VALIDATION",
-    "Sessions no longer move one by one; move the workspace instead",
-  );
-}
-
 // DTO conversion is explicit so persistence/domain objects never leak implicitly.
 const workspaceDto = (
   workspace: Workspace,
@@ -944,9 +936,6 @@ export function createDesktopRequestHandlers(
       }),
     cloudSessionWake: ({ sessionId }) =>
       mutate(async () => agentDto(await context.cloudSessions.wake(sessionId))),
-    agentMove: () => result(() => sessionsDoNotMove()),
-    agentMoveCancel: () => result(() => sessionsDoNotMove()),
-    agentMoveDismiss: () => result(() => sessionsDoNotMove()),
     cloudSignInOpen: ({ requestId }) =>
       result(async () => {
         const page = await context.cloud.openSignIn(requestId);

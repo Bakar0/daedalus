@@ -2,8 +2,8 @@
  * Pinned card actions in a real browser, against `cloud-test.tsx`. A
  * workspace's header always shows Settings and its +; terminal, secrets and
  * archive live in Settings with a pin each, and a pinned one shows on every
- * workspace's card, after a reload too. A session starts with rebirth, its
- * cloud action and archive pinned, and its menu unpins them.
+ * workspace's card, after a reload too. A session starts with rebirth and
+ * archive pinned, has no cloud action, and its menu unpins them.
  *
  *   bun run test:pins-ui
  */
@@ -111,13 +111,13 @@ await withBrowser({ port: 41800, page: "cloud-test.html" }, async (browser) => {
     "the pin was forgotten on reload",
   );
 
-  // Sessions: rebirth, cloud and archive start pinned.
+  // Sessions: rebirth and archive start pinned; there is no cloud action.
   await open(browser, "More actions for s-local");
   expect(
     (await browser.attribute("pin-rebirth", "aria-pressed")) === "true" &&
-      (await browser.attribute("pin-cloud", "aria-pressed")) === "true" &&
+      !(await browser.has("pin-cloud")) &&
       (await browser.attribute("pin-archive", "aria-pressed")) === "true",
-    "a session's rebirth, cloud and archive should start pinned",
+    "a session's rebirth and archive should start pinned, with no cloud",
   );
   await browser.screenshot("pins-session-menu");
   await browser.click("pin-rebirth");

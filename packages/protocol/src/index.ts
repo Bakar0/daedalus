@@ -1007,33 +1007,6 @@ export interface WorkspaceMoveDto {
   notice?: string;
 }
 
-/**
- * @deprecated Sessions no longer move one by one; a workspace moves
- * (`WorkspaceMoveDto`). Never sent; kept until the window stops reading it.
- *
- * A session moving between this Mac and its workspace's cloud pod
- * (artifacts/cloud-sessions/move-design.md). The card shows it moving
- * while an entry exists and is not `failed`; Cancel only while `waiting`.
- */
-export interface SessionMoveDto {
-  sessionId: string;
-  to: "cloud" | "local";
-  /**
-   * `moved`: done, with a `notice` the session view shows as a one-line
-   * banner until `agentMoveDismiss`. The card is not moving then.
-   */
-  phase: "waiting" | "stopping" | "copying" | "starting" | "failed" | "moved";
-  /** Shown under the card: "Waiting for the turn to end", "Copying daedalus (12 MB)". */
-  detail?: string;
-  /** Set when `failed`; the entry stays 30 s so the card can show it. */
-  message?: string;
-  /**
-   * Set when `moved` back to this Mac: it resumed in ask-before-acting mode,
-   * since the cloud wrote part of its conversation.
-   */
-  notice?: string;
-}
-
 /** A session a move names: id and name, the name shown as plain text. */
 export interface MoveSessionNameDto {
   id: string;
@@ -1188,8 +1161,6 @@ export interface DesktopSnapshotDto {
   cloudSignIns?: CloudSignInDto[];
   /** Workspaces whose cloud copy a new session waits for. */
   cloudPreparing?: CloudPreparingDto[];
-  /** @deprecated Never sent: see `SessionMoveDto`. */
-  sessionMoves?: SessionMoveDto[];
   /** Workspaces moving between this Mac and the cloud. */
   workspaceMoves?: WorkspaceMoveDto[];
   settings: DesktopSettingsDto;
@@ -1326,19 +1297,6 @@ export interface DesktopRpcSchema {
         { requestId: string },
         { host: string; paste: boolean }
       >;
-      /**
-       * @deprecated Sessions no longer move one by one: the host refuses
-       * these. Move the workspace with `workspaceMove`.
-       */
-      agentMove: Request<
-        { sessionId: string; to: "cloud" | "local"; approved?: string[] },
-        | { status: "moved"; session: AgentSessionDto; notice?: string }
-        | { status: "needsApproval"; paths: string[] }
-      >;
-      /** @deprecated See `agentMove`. */
-      agentMoveCancel: Request<{ sessionId: string }, null>;
-      /** @deprecated See `agentMove`. */
-      agentMoveDismiss: Request<{ sessionId: string }, null>;
       cloudSignInDismiss: Request<
         { requestId?: string; sessionId?: string },
         null

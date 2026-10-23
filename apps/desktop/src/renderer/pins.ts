@@ -7,7 +7,7 @@ import { useCallback, useState } from "react";
  * are not listed.
  */
 export type WorkspaceActionId = "terminal" | "secrets" | "archive";
-export type SessionActionId = "rebirth" | "cloud" | "archive";
+export type SessionActionId = "rebirth" | "archive";
 
 export interface Pins {
   workspace: ReadonlySet<WorkspaceActionId>;
@@ -16,7 +16,7 @@ export interface Pins {
 
 export const DEFAULT_PINS: Pins = {
   workspace: new Set(),
-  session: new Set(["rebirth", "cloud", "archive"]),
+  session: new Set(["rebirth", "archive"]),
 };
 
 const KEY = "daedalus.pins";
@@ -26,7 +26,7 @@ const WORKSPACE_IDS: readonly WorkspaceActionId[] = [
   "secrets",
   "archive",
 ];
-const SESSION_IDS: readonly SessionActionId[] = ["rebirth", "cloud", "archive"];
+const SESSION_IDS: readonly SessionActionId[] = ["rebirth", "archive"];
 
 export function readPins(): Pins {
   try {

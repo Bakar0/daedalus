@@ -21,18 +21,22 @@ afterAll(() => {
 afterEach(() => store.clear());
 
 describe("pins", () => {
-  test("start with rebirth, cloud and archive on sessions and nothing extra on workspaces", () => {
+  test("start with rebirth and archive on sessions and nothing extra on workspaces", () => {
     expect(readPins()).toEqual(DEFAULT_PINS);
   });
 
   test("keep only the actions they know", () => {
     store.set(
       "daedalus.pins",
-      JSON.stringify({ workspace: ["terminal", "bogus"], session: ["cloud"] }),
+      JSON.stringify({
+        workspace: ["terminal", "bogus"],
+        session: ["cloud", "archive"],
+      }),
     );
     const pins = readPins();
     expect([...pins.workspace]).toEqual(["terminal"]);
-    expect([...pins.session]).toEqual(["cloud"]);
+    // The session cloud action is gone; an old pin of it is dropped.
+    expect([...pins.session]).toEqual(["archive"]);
   });
 
   test("a broken entry falls back to the defaults", () => {
