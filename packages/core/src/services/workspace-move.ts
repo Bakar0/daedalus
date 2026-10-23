@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { pathExists, writeFileAtomic } from "@daedalus/platform";
 import type { DaedalusConfig } from "../config";
@@ -11,6 +11,7 @@ import type {
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import type { AgentService } from "./agents";
+import { podSessionInstructions } from "./cloud-folder";
 import { cloudHostWorkspace } from "./cloud-launch";
 import {
   applySnapshot,
@@ -43,6 +44,7 @@ import {
   rewriteTranscript,
   safeTranscriptPath,
   sentFile,
+  sha256,
   writeTranscript,
   type ClaudePermissionMode,
   type SentTranscriptFile,
@@ -61,6 +63,7 @@ import {
   unpackFromPod,
   unpackInPod,
 } from "./workspace-move-files";
+import { sessionInstructionsTemplate } from "./workspace-content";
 import type { WorkspaceService } from "./workspaces";
 
 export type WorkspacePlaceName = "mac" | "cloud";
@@ -340,6 +343,12 @@ export class WorkspaceMoves {
     const trees = await this.#macTrees(workspace);
     const skip = new Set(trees.map((tree) => tree.path));
     const files = await listMacFiles(workspace.path, skip);
+    // The metadata the session instructions point to goes along.
+    const metadata = await stat(join(workspace.path, WORKSPACE_METADATA)).catch(
+      () => undefined,
+    );
+    if (metadata?.isFile())
+      files.push({ path: WORKSPACE_METADATA, bytes: metadata.size });
     const fileBytes = files.reduce((sum, file) => sum + file.bytes, 0);
     if (fileBytes > MAX_FILES_BYTES)
       return this.#answer(workspace, {
@@ -445,6 +454,20 @@ export class WorkspaceMoves {
         new Uint8Array(await Bun.file(archive).arrayBuffer()),
       );
       await unpackInPod(pod, skip, podArchive);
+      // Daedalus's own session instructions name the folder's paths: the
+      // pod gets them for its own.
+      const macInstructions = sessionInstructionsTemplate(workspace.path);
+      for (const { path } of files)
+        if (
+          SESSION_INSTRUCTIONS.test(path) &&
+          (await readFile(join(workspace.path, path), "utf8").catch(
+            () => undefined,
+          )) === macInstructions
+        )
+          await pod.writeFile(
+            path,
+            new TextEncoder().encode(podSessionInstructions()),
+          );
 
       // Every Claude conversation, its folders rewritten for the pod.
       this.#update(state, { detail: "Copying the conversations" });
@@ -601,10 +624,16 @@ export class WorkspaceMoves {
         steering.add(`${tree.path}/${path}`);
     }
     const podFiles = (await listPodFiles(pod, skip)).filter(safeWorkspacePath);
-    for (const path of await changedSteering(
-      workspace.path,
-      await podHashes(pod, podFiles.filter(steersAgent)),
-    ))
+    const hashes = await podHashes(pod, podFiles.filter(steersAgent));
+    // Daedalus's own session instructions, as the pod got them, come home
+    // as this Mac's: nothing to ask about.
+    const podInstructions = sha256(
+      new TextEncoder().encode(podSessionInstructions()),
+    );
+    for (const [path, hash] of hashes)
+      if (SESSION_INSTRUCTIONS.test(path) && hash === podInstructions)
+        hashes.delete(path);
+    for (const path of await changedSteering(workspace.path, hashes))
       steering.add(path);
     const unapproved = [...steering].filter((path) => !allowed.has(path));
     if (unapproved.length)
@@ -731,6 +760,14 @@ export class WorkspaceMoves {
       const unpacked = join(localScratch, "files");
       await mkdir(unpacked, { recursive: true, mode: 0o700 });
       const arrived = await unpackFromPod(this.#local, archive, unpacked);
+      const macInstructions = sessionInstructionsTemplate(workspace.path);
+      for (const path of arrived)
+        if (
+          SESSION_INSTRUCTIONS.test(path) &&
+          (await readFile(join(unpacked, path), "utf8")) ===
+            podSessionInstructions()
+        )
+          await writeFile(join(unpacked, path), macInstructions);
       for (const path of arrived)
         if (
           steersAgent(path) &&
@@ -1338,6 +1375,11 @@ export class WorkspaceMoves {
 
 /** git's empty tree: what a worktree with no base on this Mac starts from. */
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/** A session folder's instruction file, which Daedalus writes. */
+const SESSION_INSTRUCTIONS = /^worktrees\/[^/]+\/[^/]+\/AGENTS\.md$/;
+/** The workspace's metadata, which the pod gets but never sends back. */
+const WORKSPACE_METADATA = ".daedalus/workspace.json";
 
 /** The pod's bare library for an attached repository. */
 const podLibrary = (repository: WorkspaceRepository): string =>

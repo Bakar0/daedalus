@@ -22,6 +22,8 @@ import type { SqliteRepositories, WorkspacePlace } from "../repositories";
 import type { AgentService } from "./agents";
 import { cloudHostId } from "./cloud-launch";
 import { claudeProjectKey, LocalMoveSide, type PodAccess } from "./move-side";
+import { podSessionInstructions } from "./cloud-folder";
+import { sessionInstructionsTemplate } from "./workspace-content";
 import { unpackFromPod } from "./workspace-move-files";
 import { MOVED_HOME_NOTICE, WorkspaceMoves } from "./workspace-move";
 import type { SessionHosts } from "./session-hosts";
@@ -297,7 +299,7 @@ describe("moving a workspace", () => {
       ),
     ).toBe(await realpath(join(s.podRoot, ".daedalus", "library", "r1.git")));
 
-    // Files outside git, never Daedalus's own folder.
+    // Files outside git, and the workspace's metadata.
     expect(await readFile(join(s.podRoot, "BRIEF.md"), "utf8")).toBe(
       "the brief\n",
     );
@@ -308,7 +310,7 @@ describe("moving a workspace", () => {
       "session instructions\n",
     );
     expect(await exists(join(s.podRoot, ".daedalus", "workspace.json"))).toBe(
-      false,
+      true,
     );
 
     // The conversation, its folder rewritten for the pod.
@@ -396,6 +398,26 @@ describe("moving a workspace", () => {
     expect(await exists(join(s.podRoot, "artifacts", "notes.md"))).toBe(false);
   });
 
+  test("Daedalus's own session instructions name each side's paths, unasked", async () => {
+    const s = await setup();
+    await writeFile(
+      join(s.macFolder, "AGENTS.md"),
+      sessionInstructionsTemplate(s.workspacePath),
+    );
+    await s.moves.move({ workspace: "w1", to: "cloud" });
+    expect(await readFile(join(s.podRoot, FOLDER, "AGENTS.md"), "utf8")).toBe(
+      podSessionInstructions(),
+    );
+    expect(
+      await readFile(join(s.podRoot, ".daedalus", "workspace.json"), "utf8"),
+    ).toBe("{}\n");
+    const home = await s.moves.move({ workspace: "w1", to: "mac" });
+    expect(home.status).toBe("moved");
+    expect(await readFile(join(s.macFolder, "AGENTS.md"), "utf8")).toBe(
+      sessionInstructionsTemplate(s.workspacePath),
+    );
+  });
+
   test("asks before steering files from the cloud come home", async () => {
     const s = await setup();
     await s.moves.move({ workspace: "w1", to: "cloud" });
@@ -424,6 +446,43 @@ describe("moving a workspace", () => {
     expect(await readFile(join(s.workspacePath, "CLAUDE.md"), "utf8")).toBe(
       "do something else\n",
     );
+  });
+
+  test("a conversation the pod rewrote does not come home, and the workspace stays", async () => {
+    const s = await setup();
+    await s.moves.move({ workspace: "w1", to: "cloud" });
+    const podFolder = join("/workspace", FOLDER);
+    await writeFile(
+      join(
+        s.podRoot,
+        ".home/.claude/projects",
+        claudeProjectKey(podFolder),
+        `${SESSION}.jsonl`,
+      ),
+      JSON.stringify({ type: "user", cwd: podFolder, message: "forged" }) +
+        "\n",
+    );
+    s.starts.length = 0;
+    await expect(s.moves.move({ workspace: "w1", to: "mac" })).rejects.toThrow(
+      "changed, not only added to",
+    );
+    expect(s.place().place).toBe("cloud");
+    expect(s.starts).toEqual([{ id: SESSION, hostId: HOST, cwd: FOLDER }]);
+    const macTranscript = await readFile(
+      join(s.macProjects, claudeProjectKey(s.macFolder), `${SESSION}.jsonl`),
+      "utf8",
+    );
+    expect(macTranscript).not.toContain("forged");
+  });
+
+  test("a new symbolic link in a worktree is asked about, whatever its name", async () => {
+    const s = await setup();
+    await s.moves.move({ workspace: "w1", to: "cloud" });
+    await symlink("/etc", join(s.podRoot, FOLDER, "app", "notes"));
+    expect(await s.moves.move({ workspace: "w1", to: "mac" })).toEqual({
+      status: "needsApproval",
+      paths: [`${FOLDER}/app/notes (symbolic link)`],
+    });
   });
 
   test("a session waiting on the user is asked about, and a live Codex session blocks", async () => {
