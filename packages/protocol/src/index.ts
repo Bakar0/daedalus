@@ -927,6 +927,8 @@ export interface CloudWorkspaceDto {
   runnerOnline: boolean;
   /** Why it failed; null otherwise. */
   reason: string | null;
+  /** When the gateway made it, ISO 8601. */
+  createdAt: string;
 }
 
 /**

@@ -112,12 +112,7 @@ import type { DiffTarget } from "./files/EditorArea";
 import { MarkdownPreview } from "./markdown-preview";
 import { buildWorldModel, worldInputFromSnapshot } from "./world/world-model";
 import { TaskPriorityMenu, TaskStatusMenu } from "./TaskStatusMenu";
-import {
-  ColorSwatches,
-  SessionMenu,
-  WorkspaceCloudMenu,
-  WorkspaceMenu,
-} from "./SessionMenu";
+import { ColorSwatches, SessionMenu, WorkspaceMenu } from "./SessionMenu";
 import { useCloudState } from "./CloudPanel";
 import { RoutineBar } from "./routines/RoutineBar";
 import { TeamBar, TeamPanel } from "./teams/TeamPanel";
@@ -2933,13 +2928,18 @@ export function WorkspaceApp({
    */
   const cloudSleep = (
     session: AgentSessionDto,
-  ): "sleeping" | "waking" | "unavailable" | undefined => {
+  ): "sleeping" | "waking" | "failed" | "unavailable" | undefined => {
     if (!session.hostId || session.archivedAt || session.status === "exited")
       return undefined;
     if (sessionActions.pending(`wake:${session.id}`)) return "waking";
     const cloud = cloudState.data;
     const linked = cloudByHost.get(session.hostId);
-    if (linked) return linked.status === "sleeping" ? "sleeping" : undefined;
+    if (linked)
+      return linked.status === "sleeping"
+        ? "sleeping"
+        : linked.status === "failed"
+          ? "failed"
+          : undefined;
     // Signed out, or signed in to an account this workspace is not in. A
     // gateway that did not answer says nothing about which.
     return cloud && cloud.connection !== "error" ? "unavailable" : undefined;
@@ -2984,19 +2984,32 @@ export function WorkspaceApp({
     const sleep = cloudSleep(session);
     // Quiet, unlike a lost session: nothing is wrong here that opening the
     // session or signing in does not fix.
+    // The cloud says something only when it matters to the session.
+    const reason = session.hostId
+      ? cloudByHost.get(session.hostId)?.reason
+      : undefined;
     return sleep
       ? {
           ...view,
-          tone: "ended",
-          label: sleep,
+          tone: sleep === "failed" ? "error" : "ended",
+          label:
+            sleep === "sleeping"
+              ? "cloud asleep"
+              : sleep === "waking"
+                ? "waking…"
+                : sleep === "failed"
+                  ? `cloud error: ${reason ?? "the pod failed"}`
+                  : "unavailable",
           detail:
             sleep === "waking"
               ? "Waking the cloud workspace, then resuming this session"
               : sleep === "sleeping"
                 ? "The cloud workspace is asleep. Open the session to wake it."
-                : cloudState.data?.signedIn
-                  ? "Its cloud workspace is not in the cloud account this Mac is signed in to, or was deleted."
-                  : "Sign in to its cloud account in Settings › Cloud to reach it.",
+                : sleep === "failed"
+                  ? (reason ?? "The cloud workspace's pod failed.")
+                  : cloudState.data?.signedIn
+                    ? "Its cloud workspace is not in the cloud account this Mac is signed in to, or was deleted."
+                    : "Sign in to its cloud account in Settings › Cloud to reach it.",
           attention: false,
           reasons: [],
         }
@@ -6468,36 +6481,6 @@ export function WorkspaceApp({
                         </span>
                       </button>
                       <span className="workspace-card-actions" data-no-drag>
-                        {cloudState.data?.signedIn &&
-                          cloudByWorkspace.get(item.id) && (
-                            <WorkspaceCloudMenu
-                              cloud={{
-                                workspace: cloudByWorkspace.get(item.id)!,
-                                pending: cloudActions.pending(item.id),
-                                error: cloudErrors[item.id],
-                                onSleep: () =>
-                                  runCloudAction(item.id, () =>
-                                    client.request.cloudWorkspaceSleep({
-                                      workspace: item.id,
-                                    }),
-                                  ),
-                                onWake: () =>
-                                  runCloudAction(item.id, () =>
-                                    client.request.cloudWorkspaceWake({
-                                      workspace: item.id,
-                                    }),
-                                  ),
-                                onDelete: () =>
-                                  runCloudAction(item.id, () =>
-                                    client.request.cloudWorkspaceDelete({
-                                      workspace: item.id,
-                                      force: true,
-                                    }),
-                                  ),
-                              }}
-                              name={item.name}
-                            />
-                          )}
                         <button
                           aria-label={`Open ${item.name} in integrated terminal`}
                           className="session-card-action workspace-terminal-action"
@@ -6538,6 +6521,23 @@ export function WorkspaceApp({
                             void updateWorkspace(item, { autoRebirthPercent })
                           }
                           onRename={() => void renameWorkspace(item)}
+                          cloud={
+                            cloudState.data?.signedIn &&
+                            cloudByWorkspace.get(item.id)
+                              ? {
+                                  workspace: cloudByWorkspace.get(item.id)!,
+                                  pending: cloudActions.pending(item.id),
+                                  error: cloudErrors[item.id],
+                                  onRemove: () =>
+                                    runCloudAction(item.id, () =>
+                                      client.request.cloudWorkspaceDelete({
+                                        workspace: item.id,
+                                        force: true,
+                                      }),
+                                    ),
+                                }
+                              : undefined
+                          }
                         />
                         {/* Last, so the ones that come in on hover open to its
                           left and it never moves. */}

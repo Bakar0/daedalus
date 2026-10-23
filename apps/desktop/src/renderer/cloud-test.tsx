@@ -233,6 +233,7 @@ const cloud = {
       status: "running",
       runnerOnline: true,
       reason: null,
+      createdAt: "2026-10-20T10:00:00.000Z",
     },
     {
       workspaceId: "sleepy-ws",
@@ -240,6 +241,7 @@ const cloud = {
       status: "sleeping",
       runnerOnline: false,
       reason: null,
+      createdAt: "2026-10-21T10:00:00.000Z",
     },
   ] as CloudWorkspaceDto[],
 };
@@ -378,6 +380,7 @@ const client = {
         status: "running",
         runnerOnline: true,
         reason: null,
+        createdAt: new Date().toISOString(),
       });
       return ok(cloudState());
     },

@@ -320,6 +320,7 @@ describe("cloud RPC", () => {
           status: "running",
           runnerOnline: true,
           reason: null,
+          createdAt: expect.any(String),
         },
       ]);
       // The runner key the gateway reports stays in the host.

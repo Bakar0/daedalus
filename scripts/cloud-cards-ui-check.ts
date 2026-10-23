@@ -102,7 +102,7 @@ await withBrowser(
     );
     expect(
       seen["s-sleepy"]!.state === "sleeping" &&
-        seen["s-sleepy"]!.label.includes("sleeping") &&
+        seen["s-sleepy"]!.label.includes("cloud asleep") &&
         seen["s-sleepy"]!.revive,
       `the sleeping card reads ${JSON.stringify(seen["s-sleepy"])}`,
     );
@@ -147,7 +147,7 @@ await withBrowser(
     );
     const after = (await cards(browser))["s-sleepy"]!;
     expect(
-      after.label.includes("running") && !after.label.includes("sleeping"),
+      after.label.includes("running") && !after.label.includes("asleep"),
       `after waking the card reads "${after.label}"`,
     );
     const names = (await browser.requests()).map((one) => Object.keys(one)[0]);

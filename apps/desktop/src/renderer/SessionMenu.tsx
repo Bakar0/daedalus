@@ -1,9 +1,8 @@
 /**
  * The menu on a session card: rename, pin, color, rebirth and abilities.
  * Every session has the first three; rebirth and abilities are offered on
- * Claude and Codex agents. A workspace card has a shorter one: rename and
- * the rebirth its sessions default to; its cloud copy has an icon of its own
- * (WorkspaceCloudMenu).
+ * Claude and Codex agents. A workspace card has a shorter one: rename, the
+ * rebirth its sessions default to, and its cloud copy while it has one.
  */
 import {
   customSessionColor,
@@ -365,21 +364,18 @@ export function SessionMenu({
 const CLOUD_STATUS_LABEL: Record<CloudWorkspaceDto["status"], string> = {
   starting: "starting",
   running: "running",
-  sleeping: "sleeping",
+  sleeping: "asleep",
   failed: "failed",
 };
 
-/** What the workspace menu offers for the workspace's cloud twin. */
+/** What the workspace's settings show of its cloud copy. */
 export interface WorkspaceCloudControls {
-  /** Its cloud workspace, or undefined when it has none yet (no items). */
-  workspace?: CloudWorkspaceDto;
-  /** A create, sleep, wake or delete is on its way. */
+  workspace: CloudWorkspaceDto;
+  /** A removal is on its way. */
   pending: boolean;
-  /** Why the last one failed, in the gateway's or Daedalus's words. */
+  /** Why the last removal failed, in the gateway's or Daedalus's words. */
   error?: string;
-  onSleep: () => void;
-  onWake: () => void;
-  onDelete: () => void;
+  onRemove: () => void;
 }
 
 export function WorkspaceMenu({
@@ -388,6 +384,7 @@ export function WorkspaceMenu({
   inheritedRebirth,
   onRename,
   onAutoRebirth,
+  cloud,
 }: {
   name: string;
   /** The workspace's own rebirth threshold; null takes the global one. */
@@ -396,6 +393,8 @@ export function WorkspaceMenu({
   inheritedRebirth: number | null;
   onRename: () => void;
   onAutoRebirth: (value: AutoRebirthDto) => void;
+  /** Its cloud copy, while it has one and this Mac is signed in. */
+  cloud?: WorkspaceCloudControls;
 }) {
   return (
     <Menu
@@ -433,143 +432,63 @@ export function WorkspaceMenu({
         subject="workspace"
         value={autoRebirth}
       />
+      {cloud && <WorkspaceCloudSection cloud={cloud} />}
     </Menu>
-  );
-}
-
-/** Why the last cloud action failed, under the items, as plain text. */
-function CloudError({ error }: { error?: string }) {
-  return error ? (
-    <p className="menu-cloud-error" data-testid="cloud-menu-error" role="alert">
-      {error}
-    </p>
-  ) : null;
-}
-
-/** A small cloud, for a workspace with a cloud copy. */
-function CloudIcon() {
-  return (
-    <svg aria-hidden="true" fill="none" viewBox="0 0 16 16">
-      <path
-        d="M4.6 12.5h7a2.9 2.9 0 0 0 .4-5.77A4 4 0 0 0 4.3 6a3.25 3.25 0 0 0 .3 6.5Z"
-        stroke="currentColor"
-        strokeLinejoin="round"
-        strokeWidth="1.3"
-      />
-    </svg>
   );
 }
 
 /**
- * The cloud icon on a workspace's header, only while the workspace has a
- * cloud copy: its dot says how the copy stands, and a click opens its
- * status with Sleep or Wake, and Delete under a separator.
+ * The workspace settings' Cloud section, while the workspace has a cloud
+ * copy: how it stands, since when, and Remove cloud copy. No Sleep or Wake:
+ * the pod sleeps by itself, and opening a session wakes it.
  */
-export function WorkspaceCloudMenu({
-  name,
-  cloud,
-}: {
-  name: string;
-  cloud: WorkspaceCloudControls & { workspace: CloudWorkspaceDto };
-}) {
-  const status = cloud.workspace.status;
-  return (
-    <Menu
-      align="end"
-      className="session-card-menu workspace-cloud-menu"
-      label={`Cloud workspace of ${name}: ${CLOUD_STATUS_LABEL[status]}`}
-      menuLabel={`Cloud workspace of ${name}`}
-      placement="left"
-      summary={
-        <span
-          className="workspace-cloud-icon"
-          data-status={status}
-          data-testid="workspace-cloud-icon"
-        >
-          <CloudIcon />
-        </span>
-      }
-      summaryClassName="session-card-action workspace-cloud-action"
-      title={`Cloud workspace: ${CLOUD_STATUS_LABEL[status]}`}
-    >
-      <WorkspaceCloudItems cloud={cloud} />
-    </Menu>
-  );
-}
-
-// Sleep and Wake are not menuitems: choosing one would close the popover,
-// and it stays open to show the action running and how it ended.
-export function WorkspaceCloudItems({
+export function WorkspaceCloudSection({
   cloud,
 }: {
   cloud: WorkspaceCloudControls;
 }) {
-  const workspace = cloud.workspace;
-  // No cloud workspace yet: the first cloud session makes one.
-  if (!workspace) return null;
-  const asleep = workspace.status === "sleeping";
+  const { workspace } = cloud;
   return (
     <>
+      <hr className="menu-separator" />
       <span
         className="menu-heading"
         data-status={workspace.status}
         data-testid="cloud-status"
       >
-        Cloud workspace
+        Cloud
         <span className="menu-heading-note">
-          {cloud.pending
-            ? "working…"
-            : `${CLOUD_STATUS_LABEL[workspace.status]}${
-                workspace.status === "running" && !workspace.runnerOnline
-                  ? ", connecting"
-                  : ""
-              }`}
+          {cloud.pending ? "removing…" : CLOUD_STATUS_LABEL[workspace.status]}
         </span>
       </span>
-      {workspace.status === "failed" && workspace.reason && (
-        <p className="menu-cloud-reason" data-testid="cloud-reason">
-          {workspace.reason}
-        </p>
-      )}
-      {asleep ? (
-        <button
-          className="quiet menu-item"
-          data-testid="cloud-wake"
-          disabled={cloud.pending}
-          onClick={cloud.onWake}
-          title="Start its pod again. A session that slept wakes it by itself when you open it."
-          type="button"
-        >
-          <span className="menu-item-label">Wake</span>
-        </button>
-      ) : (
-        <button
-          className="quiet menu-item"
-          data-testid="cloud-sleep"
-          disabled={cloud.pending || workspace.status === "failed"}
-          onClick={cloud.onSleep}
-          title="Remove its pod and keep its volume. The sessions running there end; opening one wakes the workspace again."
-          type="button"
-        >
-          <span className="menu-item-label">Sleep</span>
-        </button>
-      )}
-      <hr className="menu-separator" />
-      {/* Not a menuitem: choosing one closes the popover, and this needs its
+      <p className="menu-cloud-reason" data-testid="cloud-made">
+        {workspace.status === "failed" && workspace.reason
+          ? workspace.reason
+          : `Cloud copy made ${new Date(workspace.createdAt).toLocaleDateString()}`}
+      </p>
+      {/* Not a menuitem: choosing one closes the menu, and this needs its
           second click. */}
       <ConfirmButton
-        armedLabel="Delete"
-        armedTitle="Delete the cloud workspace: its pod, its volume and its token. This workspace stays on this Mac."
+        armedLabel="Remove"
+        armedTitle="Remove the cloud copy: its pod, its volume and its token. This workspace stays on this Mac."
         className="quiet menu-item menu-item-danger"
         data-testid="cloud-delete"
         disabled={cloud.pending}
-        onConfirm={cloud.onDelete}
-        title="Delete the cloud workspace. Asks once more."
+        onConfirm={cloud.onRemove}
+        title="Remove the cloud copy. Asks once more."
         type="button"
       >
-        <span className="menu-item-label">Delete cloud workspace…</span>
+        <span className="menu-item-label">Remove cloud copy…</span>
       </ConfirmButton>
-      <CloudError error={cloud.error} />
+      {cloud.error ? (
+        <p
+          className="menu-cloud-error"
+          data-testid="cloud-menu-error"
+          role="alert"
+        >
+          {cloud.error}
+        </p>
+      ) : null}
     </>
   );
 }

@@ -160,6 +160,7 @@ const cloudStateDto = (overview: CloudOverview): CloudStateDto => ({
     status: workspace.status,
     runnerOnline: workspace.runnerOnline,
     reason: workspace.reason,
+    createdAt: workspace.createdAt,
   })),
 });
 const accountDto = (

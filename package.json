@@ -39,7 +39,7 @@
     "test:status-ui": "bun run scripts/status-ui-check.ts",
     "test:board-ui": "bun run scripts/board-ui-check.ts",
     "test:cloud-settings-ui": "bun run scripts/cloud-settings-ui-check.ts",
-    "test:cloud-header-ui": "bun run scripts/cloud-header-ui-check.ts",
+    "test:cloud-workspace-ui": "bun run scripts/cloud-workspace-ui-check.ts",
     "test:cloud-move-ui": "bun run scripts/cloud-move-ui-check.ts",
     "test:cloud-dialog-ui": "bun run scripts/cloud-dialog-ui-check.ts",
     "test:cloud-cards-ui": "bun run scripts/cloud-cards-ui-check.ts",

@@ -1,10 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
-import {
-  COLOR_GRID,
-  WorkspaceCloudItems,
-  WorkspaceCloudMenu,
-} from "./SessionMenu";
+import { COLOR_GRID, WorkspaceCloudSection } from "./SessionMenu";
 
 describe("COLOR_GRID", () => {
   test("is five rows of ten distinct #rrggbb colors", () => {
@@ -18,92 +14,44 @@ describe("COLOR_GRID", () => {
   });
 });
 
-describe("WorkspaceCloudItems", () => {
-  const actions = {
-    pending: false,
-    onSleep() {},
-    onWake() {},
-    onDelete() {},
-  };
+describe("WorkspaceCloudSection", () => {
   const workspace = {
     workspaceId: "w1",
     cloudId: "c1",
     status: "running" as const,
     runnerOnline: true,
     reason: null,
+    createdAt: "2026-10-20T10:00:00.000Z",
   };
+  const cloud = { workspace, pending: false, onRemove() {} };
 
-  test("offers nothing until the workspace has a cloud workspace", () => {
-    expect(renderToStaticMarkup(<WorkspaceCloudItems cloud={actions} />)).toBe(
-      "",
-    );
-  });
-
-  test("a running one shows its status, Sleep and Delete", () => {
+  test("says how the cloud copy stands and offers only Remove", () => {
     const markup = renderToStaticMarkup(
-      <WorkspaceCloudItems cloud={{ ...actions, workspace }} />,
+      <WorkspaceCloudSection cloud={cloud} />,
     );
     expect(markup).toContain('data-status="running"');
-    expect(markup).toContain('data-testid="cloud-sleep"');
-    expect(markup).not.toContain('data-testid="cloud-wake"');
+    expect(markup).toContain("Cloud copy made");
     expect(markup).toContain('data-testid="cloud-delete"');
-  });
-
-  test("a sleeping one offers Wake instead of Sleep", () => {
-    const markup = renderToStaticMarkup(
-      <WorkspaceCloudItems
-        cloud={{
-          ...actions,
-          workspace: { ...workspace, status: "sleeping", runnerOnline: false },
-        }}
-      />,
-    );
-    expect(markup).toContain("sleeping");
-    expect(markup).toContain('data-testid="cloud-wake"');
+    expect(markup).toContain("Remove cloud copy");
     expect(markup).not.toContain('data-testid="cloud-sleep"');
+    expect(markup).not.toContain('data-testid="cloud-wake"');
   });
 
-  test("a failed action's reason shows in the menu", () => {
+  test("a failed copy says why, and a failed removal too", () => {
     const markup = renderToStaticMarkup(
-      <WorkspaceCloudItems
+      <WorkspaceCloudSection
         cloud={{
-          ...actions,
-          workspace,
-          error: "You may have at most 5 workspaces",
-        }}
-      />,
-    );
-    expect(markup).toContain('data-testid="cloud-menu-error"');
-    expect(markup).toContain("You may have at most 5 workspaces");
-    expect(markup).not.toContain('role="menuitem"');
-  });
-
-  test("a failed one says why, and Delete sits under a separator", () => {
-    const markup = renderToStaticMarkup(
-      <WorkspaceCloudItems
-        cloud={{
-          ...actions,
+          ...cloud,
           workspace: {
             ...workspace,
             status: "failed",
             reason: "The image could not be pulled",
           },
+          error: "You may have at most 5 workspaces",
         }}
       />,
     );
-    expect(markup).toContain('data-testid="cloud-reason"');
     expect(markup).toContain("The image could not be pulled");
-    expect(markup).toMatch(
-      /<hr[^>]*menu-separator[^>]*\/?>(<!-- -->)?<button[^>]*data-testid="cloud-delete"/,
-    );
-  });
-
-  test("the header icon shows the status and opens the same items", () => {
-    const markup = renderToStaticMarkup(
-      <WorkspaceCloudMenu cloud={{ ...actions, workspace }} name="Pods" />,
-    );
-    expect(markup).toContain('data-testid="workspace-cloud-icon"');
-    expect(markup).toContain('data-status="running"');
-    expect(markup).toContain('aria-label="Cloud workspace of Pods: running"');
+    expect(markup).toContain('data-testid="cloud-menu-error"');
   });
 });

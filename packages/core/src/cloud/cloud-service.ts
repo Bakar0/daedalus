@@ -111,6 +111,7 @@ export interface LinkedCloudWorkspace {
   status: CloudWorkspaceStatus;
   runnerOnline: boolean;
   reason: string | null;
+  createdAt: string;
 }
 
 /**
@@ -304,6 +305,7 @@ export class CloudService {
         status: item.status,
         runnerOnline: item.runnerOnline,
         reason: item.reason,
+        createdAt: item.createdAt,
       });
     }
     return {
