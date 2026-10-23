@@ -214,6 +214,12 @@ try {
     if (!archived.ok) fail(`archive: ${archived.error.message}`);
     if (archived.ok && archived.data.status !== "archived")
       fail(`archive asked first: ${JSON.stringify(archived.data)}`);
+    check(
+      archived.ok &&
+        archived.data.status === "archived" &&
+        Boolean(archived.data.notice?.includes("Came home: app, notes.")),
+      "the archive says what came home",
+    );
     say(`archived home in ${Math.round((Date.now() - started) / 1000)} s`);
     const home = await agents.get(session.id);
     check(
@@ -257,9 +263,21 @@ try {
       "its folders are this Mac's",
     );
 
-    // Archiving the workspace deletes its cloud copy.
+    // Archiving the workspace asks about what never came home, then
+    // deletes its cloud copy.
     started = Date.now();
-    const gone = await rpc.workspaceArchive({ reference: workspace.id });
+    const asked = await rpc.workspaceArchive({ reference: workspace.id });
+    if (!asked.ok) fail(`workspace archive: ${asked.error.message}`);
+    check(
+      asked.ok &&
+        asked.data.status === "needsCloudDecision" &&
+        asked.data.lost.some((line) => line.includes("loose.txt")),
+      "the loose file left in the pod is asked about",
+    );
+    const gone = await rpc.workspaceArchive({
+      reference: workspace.id,
+      cloudCopy: "delete",
+    });
     if (!gone.ok) fail(`workspace archive: ${gone.error.message}`);
     check(
       gone.ok && gone.data.status === "archived",
