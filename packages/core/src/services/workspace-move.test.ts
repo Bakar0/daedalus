@@ -465,6 +465,22 @@ describe("moving a workspace", () => {
     );
   });
 
+  test("a session folder made in the cloud comes home with this Mac's instructions, unasked", async () => {
+    const s = await setup();
+    await s.moves.move({ workspace: "w1", to: "cloud" });
+    const born = "worktrees/unassigned/claude-2";
+    await mkdir(join(s.podRoot, born), { recursive: true });
+    await writeFile(
+      join(s.podRoot, born, "AGENTS.md"),
+      podSessionInstructions(),
+    );
+    const home = await s.moves.move({ workspace: "w1", to: "mac" });
+    expect(home.status).toBe("moved");
+    expect(
+      await readFile(join(s.workspacePath, born, "AGENTS.md"), "utf8"),
+    ).toBe(sessionInstructionsTemplate(s.workspacePath));
+  });
+
   test("asks before steering files from the cloud come home", async () => {
     const s = await setup();
     await s.moves.move({ workspace: "w1", to: "cloud" });

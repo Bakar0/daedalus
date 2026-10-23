@@ -30,6 +30,7 @@ import {
   cloudHostId,
   cloudHostWorkspace,
 } from "../services/cloud-launch";
+import { podWorkingDirectory } from "../services/move-side";
 import { defaultVault, RemoteStore } from "../services/remote-store";
 import type { SessionHost } from "../services/session-host";
 import type { SessionHosts } from "../services/session-hosts";
@@ -717,7 +718,10 @@ export class CloudService {
     const seed = (options: Parameters<CloudService["seed"]>[1]) =>
       // A host of another kind (a test's) has no files to seed.
       host instanceof RemoteSessionHost
-        ? this.seed(host, options)
+        ? this.seed(host, {
+            ...options,
+            folder: podWorkingDirectory(session.workingDirectory),
+          })
         : Promise.resolve();
     if (profile?.kind === "bedrock") {
       if (!profile.aws)
@@ -809,6 +813,8 @@ export class CloudService {
       awsSections?: AwsSsoCopy["sections"];
       /** This Mac's approvals of the organization's managed settings. */
       consent?: string;
+      /** The session's folder in the pod, trusted with the workspace. */
+      folder?: string;
     },
   ): Promise<void> {
     const files: { path: string; text: string }[] = [];
@@ -817,7 +823,10 @@ export class CloudService {
     };
     put(
       CLOUD_SEED_PATHS.claudeState,
-      seedClaudeState(await host.readText(CLOUD_SEED_PATHS.claudeState)),
+      seedClaudeState(
+        await host.readText(CLOUD_SEED_PATHS.claudeState),
+        options.folder,
+      ),
     );
     put(
       CLOUD_SEED_PATHS.claudeSettings,
